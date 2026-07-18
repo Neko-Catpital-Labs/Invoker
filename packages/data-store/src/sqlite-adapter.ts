@@ -69,6 +69,7 @@ import {
   readSpoolLinesFromFile,
   readLastSpoolLinesFromFile,
 } from './sqlite-output-spool.js';
+import { SlowQueryAggregator, type SlowQueryShapeStats } from './slow-query-aggregator.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
@@ -186,6 +187,58 @@ export type EphemeralSQLiteAdapterOptions = Pick<
   SQLiteAdapterOptions,
   'outputTailLimit' | 'outputDir' | 'activityLogMaxRows'
 >;
+
+const DEFAULT_SLOW_QUERY_SUMMARY_TOP_N = 10;
+const DEFAULT_SLOW_QUERY_SUMMARY_INTERVAL_MS = 30_000;
+const DEFAULT_SLOW_QUERY_SUMMARY_RECORD_COUNT = 1_000;
+const SLOW_QUERY_SUMMARY_SQL_PREVIEW_LENGTH = 240;
+
+function formatSlowQuerySummaryLine(index: number, stats: SlowQueryShapeStats): string {
+  const maxRows = stats.maxRows === undefined ? '' : ` maxRows=${stats.maxRows}`;
+  const firstSeen = new Date(stats.firstSeenAtMs).toISOString();
+  const lastSeen = new Date(stats.lastSeenAtMs).toISOString();
+  const sql = stats.shape.slice(0, SLOW_QUERY_SUMMARY_SQL_PREVIEW_LENGTH);
+
+  return `${index + 1}. max=${stats.maxMs.toFixed(1)}ms p95=${stats.p95Ms.toFixed(1)}ms ` +
+    `p50=${stats.p50Ms.toFixed(1)}ms count=${stats.count}${maxRows} ` +
+    `seen=${firstSeen}..${lastSeen} sql=${sql}`;
+}
+
+function formatSlowQuerySummary(
+  thresholdMs: number,
+  aggregator: SlowQueryAggregator,
+): string {
+  const topQueries = aggregator.topN(DEFAULT_SLOW_QUERY_SUMMARY_TOP_N);
+  const lines = topQueries.map((stats, index) => formatSlowQuerySummaryLine(index, stats));
+  return [
+    `[SQLiteAdapter] slow query summary threshold=${thresholdMs.toFixed(1)}ms ` +
+      `events=${aggregator.totalCount} shapes=${aggregator.shapeCount} top=${topQueries.length}`,
+    ...lines,
+  ].join('\n');
+}
+
+function createDefaultSlowQuerySink(thresholdMs: number): (info: SlowQueryInfo) => void {
+  const aggregator = new SlowQueryAggregator();
+  let lastSummaryAtMs = 0;
+  let recordsSinceLastSummary = 0;
+
+  return (info) => {
+    aggregator.record(info);
+    recordsSinceLastSummary += 1;
+
+    const now = Date.now();
+    const shouldSummarizeByTime =
+      lastSummaryAtMs === 0 || now - lastSummaryAtMs >= DEFAULT_SLOW_QUERY_SUMMARY_INTERVAL_MS;
+    const shouldSummarizeByCount =
+      recordsSinceLastSummary >= DEFAULT_SLOW_QUERY_SUMMARY_RECORD_COUNT;
+
+    if (!shouldSummarizeByTime && !shouldSummarizeByCount) return;
+
+    console.warn(formatSlowQuerySummary(thresholdMs, aggregator));
+    lastSummaryAtMs = now;
+    recordsSinceLastSummary = 0;
+  };
+}
 
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -621,13 +674,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.slowQueryThresholdMs = options?.slowQueryThresholdMs ?? 25;
     this.onSlowQuery = options?.onSlowQuery
       ?? (this.slowQueryThresholdMs > 0
-        ? (info) => {
-            console.warn(
-              `[SQLiteAdapter] slow query ${info.durationMs.toFixed(1)}ms` +
-                (info.rowCount === undefined ? '' : ` rows=${info.rowCount}`) +
-                `: ${info.sql.slice(0, 200)}`,
-            );
-          }
+        ? createDefaultSlowQuerySink(this.slowQueryThresholdMs)
         : null);
     this.corruptionRecovery = corruptionRecovery;
     this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
