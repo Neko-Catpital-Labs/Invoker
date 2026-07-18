@@ -2730,6 +2730,7 @@ test.describe('Visual proof capture', () => {
     await expect(menu).toBeVisible();
     await expect(page.getByTestId('rail-start-ready-recreate-failed')).toBeVisible();
     await expect(page.getByTestId('rail-start-ready-recreate-failed-and-pending')).toBeVisible();
+    await expect(page.getByTestId('rail-start-ready-recreate-failed-pending-and-running')).toBeVisible();
     await captureScreenshot(page, 'start-ready-recreate-failed-and-pending-menu');
 
     await page.getByTestId('rail-start-ready-recreate-failed-and-pending').click();
@@ -2738,5 +2739,19 @@ test.describe('Visual proof capture', () => {
     await expect(dialog.getByText('Start and recreate failed and pending')).toBeVisible();
     await expect(dialog.getByText('Pending workflows')).toBeVisible();
     await captureScreenshot(page, 'start-ready-recreate-failed-and-pending-dialog');
+  });
+
+  test('start-ready-recreate-failed-pending-and-running — menu option and preview dialog', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await page.getByTestId('rail-start-ready-menu').click();
+    await expect(page.getByTestId('rail-start-ready-recreate-failed-pending-and-running')).toBeVisible();
+    await captureScreenshot(page, 'start-ready-recreate-failed-pending-and-running-menu');
+
+    await page.getByTestId('rail-start-ready-recreate-failed-pending-and-running').click();
+    const dialog = page.getByTestId('start-ready-preview-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Start and recreate failed, pending, and running')).toBeVisible();
+    await expect(dialog.getByText('Running workflows')).toBeVisible();
+    await captureScreenshot(page, 'start-ready-recreate-failed-pending-and-running-dialog');
   });
 });

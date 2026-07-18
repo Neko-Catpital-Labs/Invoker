@@ -76,24 +76,47 @@ function unionWorkflowIds(...groups: readonly (readonly string[])[]): string[] {
   return Array.from(ids);
 }
 
+function workflowIdsToRecreate(
+  request: StartReadyRequest,
+  preview: StartReadyPreview,
+): string[] {
+  if (request.recreateFailedPendingAndRunning) {
+    return unionWorkflowIds(
+      preview.failedWorkflowIds,
+      preview.pendingWorkflowIds,
+      preview.runningWorkflowIds,
+    );
+  }
+  if (request.recreateFailedAndPending) {
+    return unionWorkflowIds(preview.failedWorkflowIds, preview.pendingWorkflowIds);
+  }
+  if (request.recreateFailed) {
+    return [...preview.failedWorkflowIds];
+  }
+  return [];
+}
+
 export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): StartReadyPreview {
   const tasks = orchestrator.getAllTasks();
   const readyTasks = orchestrator.getExecutableReadyTasks();
   const recoverableTasks = collectRecoverableTasks(orchestrator);
   const failedTasks = tasks.filter((task) => task.status === 'failed');
   const pendingTasks = tasks.filter((task) => isPendingOrQueued(task));
+  const runningTasks = tasks.filter((task) => task.status === 'running');
 
   return {
     readyTaskIds: readyTasks.map((task) => task.id),
     recoverableTaskIds: recoverableTasks.map((task) => task.id),
     failedWorkflowIds: uniqueWorkflowIds(failedTasks),
     pendingWorkflowIds: uniqueWorkflowIds(pendingTasks),
+    runningWorkflowIds: uniqueWorkflowIds(runningTasks),
     skipped: {
       awaitingApproval: tasks.filter((task) => task.status === 'awaiting_approval').length,
       reviewReady: tasks.filter((task) => task.status === 'review_ready').length,
       blocked: tasks.filter((task) => task.status === 'blocked' || task.status === 'needs_input').length,
       failedTasks: failedTasks.length,
       pendingTasks: pendingTasks.length,
+      runningTasks: runningTasks.length,
     },
   };
 }
@@ -115,12 +138,7 @@ export function runStartReady(
 
   const started: TaskState[] = [];
   const recreatedWorkflowIds: string[] = [];
-  const workflowIdsToRecreate = request.recreateFailedAndPending
-    ? unionWorkflowIds(preview.failedWorkflowIds, preview.pendingWorkflowIds)
-    : request.recreateFailed
-      ? preview.failedWorkflowIds
-      : [];
-  for (const workflowId of workflowIdsToRecreate) {
+  for (const workflowId of workflowIdsToRecreate(request, preview)) {
     started.push(...orchestrator.recreateWorkflow(workflowId));
     recreatedWorkflowIds.push(workflowId);
   }
