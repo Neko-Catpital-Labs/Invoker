@@ -2201,6 +2201,22 @@ describe('Orchestrator', () => {
       expect(task.execution.startedAt).toBeUndefined();
       expect(task.execution.lastHeartbeatAt).toBeUndefined();
     });
+    it.skip('surfaces deferred tasks as queued instead of pending', () => {
+      orchestrator.loadPlan({
+        name: 'defer-queued-proof',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      const started = orchestrator.startExecution();
+      expect(started.length).toBe(1);
+      expect(orchestrator.getTask('task-a')!.status).toBe('running');
+
+      orchestrator.deferTask('task-a');
+
+      const task = orchestrator.getTask('task-a')!;
+      expect(task.status).toBe('queued');
+      expect(task.execution.startedAt).toBeUndefined();
+      expect(task.execution.lastHeartbeatAt).toBeUndefined();
+    });
 
     it('clears launch claim metadata when deferring a launch-claimed task', () => {
       const launchingOrchestrator = new Orchestrator({
@@ -2380,6 +2396,35 @@ describe('Orchestrator', () => {
       expect(waiting.length).toBeGreaterThan(0);
       expect(waiting.at(-1)?.payload).toMatchObject({ attempts: 1 });
     });
+    it.skip('keeps a parked resource-limit task queued between scheduler polls', () => {
+      const parkOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        logger: consoleLogger,
+        maxConcurrency: 3,
+        deferRunningUntilLaunch: true,
+        launchDeferralBackoffMs: 60_000,
+      });
+      parkOrchestrator.loadPlan({
+        name: 'defer-queued-park-proof',
+        tasks: [{ id: 'task-a', description: 'Task A' }],
+      });
+      const firstStarted = parkOrchestrator.startExecution();
+      expect(firstStarted).toHaveLength(1);
+      const taskId = firstStarted[0].id;
+
+      parkOrchestrator.deferTask(taskId, {
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: parkOrchestrator.getTask(taskId)!.execution.selectedAttemptId,
+        phase: 'launching',
+      });
+      expect(parkOrchestrator.getTask(taskId)!.status).toBe('queued');
+
+      const restarted = parkOrchestrator.startExecution();
+      expect(restarted.map((t) => t.id)).not.toContain(taskId);
+      expect(parkOrchestrator.getTask(taskId)!.status).toBe('queued');
+    });
 
     it('re-dispatches a resource-limit parked task when a slot frees, ignoring the backoff', () => {
       const parkOrchestrator = new Orchestrator({
@@ -2410,6 +2455,38 @@ describe('Orchestrator', () => {
       expect(parkOrchestrator.startExecution().map((t) => t.id)).not.toContain(taskAId);
 
       // A real slot-free (task-b completes) re-dispatches it despite the backoff.
+      parkOrchestrator.handleWorkerResponse(
+        makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
+      );
+      expect(parkOrchestrator.getTask(taskAId)!.status).toBe('running');
+    });
+    it.skip('re-dispatches a queued resource-limit task when a slot frees', () => {
+      const parkOrchestrator = new Orchestrator({
+        persistence,
+        messageBus: bus,
+        logger: consoleLogger,
+        maxConcurrency: 3,
+        launchDeferralBackoffMs: 600_000,
+      });
+      parkOrchestrator.loadPlan({
+        name: 'defer-queued-slotfree-proof',
+        tasks: [
+          { id: 'task-a', description: 'Task A' },
+          { id: 'task-b', description: 'Task B' },
+        ],
+      });
+      const started = parkOrchestrator.startExecution();
+      expect(started).toHaveLength(2);
+      const taskAId = started.find((t) => t.id.endsWith('/task-a'))!.id;
+
+      parkOrchestrator.deferTask(taskAId, {
+        reason: 'resource-limit',
+        message: 'Execution pool "pnpm-ssh" has no member capacity available',
+        attemptId: parkOrchestrator.getTask(taskAId)!.execution.selectedAttemptId,
+      });
+      expect(parkOrchestrator.getTask(taskAId)!.status).toBe('queued');
+      expect(parkOrchestrator.startExecution().map((t) => t.id)).not.toContain(taskAId);
+
       parkOrchestrator.handleWorkerResponse(
         makeResponse({ actionId: 'task-b', status: 'completed', outputs: { exitCode: 0 } }),
       );
