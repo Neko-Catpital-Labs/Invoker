@@ -45,6 +45,30 @@ type ModalState =
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
 
+type SelectionOptions = {
+  recenter?: boolean;
+};
+
+type GraphSelectionScope = 'workflow' | 'task';
+
+type SelectionCameraCommand = {
+  requestId: number;
+  scope: GraphSelectionScope;
+  target: string;
+};
+
+type WorkflowMutationFailedEvent = {
+  workflowId?: string;
+  taskId?: string;
+  message?: string;
+};
+
+type InvokerWithWorkflowMutationFailed = Window['invoker'] & {
+  onWorkflowMutationFailed?: (
+    callback: (event: WorkflowMutationFailedEvent) => void,
+  ) => (() => void) | undefined;
+};
+
 interface WorkflowContextMenuProps {
   x: number;
   y: number;
@@ -247,6 +271,8 @@ export function App() {
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
+  const [selectionCameraCommand, setSelectionCameraCommand] = useState<SelectionCameraCommand | null>(null);
+  const selectionCameraRequestRef = useRef(0);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
   const refreshSystemDiagnostics = useCallback(() => {
@@ -360,6 +386,58 @@ export function App() {
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
 
+  const recenterForSelection = useCallback((_scope: GraphSelectionScope, _target: string) => {
+    selectionCameraRequestRef.current += 1;
+    setSelectionCameraCommand({
+      requestId: selectionCameraRequestRef.current,
+      scope: _scope,
+      target: _target,
+    });
+  }, []);
+
+  const selectWorkflowById = useCallback((workflowId: string, options: SelectionOptions = {}) => {
+    setWorkflowSelectionDismissed(false);
+    setSelectedWorkflowId(workflowId);
+    setSelectedTaskId(null);
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+    if (options.recenter ?? true) {
+      recenterForSelection('workflow', workflowId);
+    }
+  }, [recenterForSelection]);
+
+  const selectTaskById = useCallback((taskId: string, options: SelectionOptions = {}) => {
+    const task = tasks.get(taskId);
+    if (!task) return;
+    setSelectedTaskId(task.id);
+    setWorkflowSelectionDismissed(false);
+    if (task.config.workflowId) {
+      setSelectedWorkflowId(task.config.workflowId);
+    }
+    setInspectorCollapsed(false);
+    setContextMenu(null);
+    setWorkflowContextMenu(null);
+    if (options.recenter ?? true) {
+      recenterForSelection('task', task.id);
+    }
+  }, [recenterForSelection, tasks]);
+
+  useEffect(() => {
+    const unsubscribe = (window.invoker as InvokerWithWorkflowMutationFailed | undefined)
+      ?.onWorkflowMutationFailed?.((event) => {
+        if (event.taskId) {
+          selectTaskById(event.taskId, { recenter: false });
+          return;
+        }
+        if (event.workflowId) {
+          selectWorkflowById(event.workflowId, { recenter: false });
+        }
+      });
+    return () => {
+      unsubscribe?.();
+    };
+  }, [selectTaskById, selectWorkflowById]);
+
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
       setWorkflowSelectionDismissed(false);
@@ -373,8 +451,12 @@ export function App() {
       return;
     }
     const firstWorkflowId = workflows.keys().next().value as string | undefined;
-    setSelectedWorkflowId(firstWorkflowId ?? null);
-  }, [selectedTask, selectedWorkflowId, workflowSelectionDismissed, workflows]);
+    if (firstWorkflowId) {
+      selectWorkflowById(firstWorkflowId, { recenter: false });
+    } else {
+      setSelectedWorkflowId(null);
+    }
+  }, [selectWorkflowById, selectedTask, selectedWorkflowId, workflowSelectionDismissed, workflows]);
 
   const handleStatusClick = useCallback((filterKey: WorkflowStatus, event: React.MouseEvent) => {
     setStatusFilters(prev => {
@@ -402,13 +484,8 @@ export function App() {
 
   // ── DAG interaction ───────────────────────────────────────
   const handleTaskClick = useCallback((task: TaskState) => {
-    setSelectedTaskId(task.id);
-    setWorkflowSelectionDismissed(false);
-    if (task.config.workflowId) {
-      setSelectedWorkflowId(task.config.workflowId);
-    }
-    setWorkflowContextMenu(null);
-  }, []);
+    selectTaskById(task.id);
+  }, [selectTaskById]);
 
   const handleTaskDoubleClick = useCallback(async (task: TaskState) => {
     setSelectedTaskId(task.id);
@@ -433,12 +510,8 @@ export function App() {
   }, []);
 
   const handleWorkflowClick = useCallback((workflowId: string) => {
-    setWorkflowSelectionDismissed(false);
-    setSelectedWorkflowId(workflowId);
-    setSelectedTaskId(null);
-    setContextMenu(null);
-    setWorkflowContextMenu(null);
-  }, []);
+    selectWorkflowById(workflowId);
+  }, [selectWorkflowById]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<HTMLDivElement>, workflowId: string) => {
     event.preventDefault();
@@ -1106,6 +1179,7 @@ export function App() {
                     workflows={workflows}
                     selectedWorkflowId={selectedWorkflow?.id ?? null}
                     statusFilters={statusFilters}
+                    cameraSelection={selectionCameraCommand?.scope === 'workflow' ? selectionCameraCommand : null}
                     onSelectWorkflow={handleWorkflowClick}
                     onWorkflowContextMenu={handleWorkflowContextMenu}
                   />
@@ -1122,6 +1196,7 @@ export function App() {
                         tasks={miniDagTasks}
                         workflows={workflows}
                         selectedTaskId={selectedTaskId}
+                        cameraSelection={selectionCameraCommand?.scope === 'task' ? selectionCameraCommand : null}
                         onTaskClick={handleTaskClick}
                         onTaskDoubleClick={handleTaskDoubleClick}
                         onTaskContextMenu={handleTaskContextMenu}
