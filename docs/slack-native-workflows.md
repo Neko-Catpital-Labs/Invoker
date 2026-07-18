@@ -81,8 +81,13 @@ invoker-cli setup slack
 ```
 
 For the Slack manager daemon, also put owner credentials in `~/.invoker/.slack-owner.env`
-(or set `INVOKER_SLACK_OWNER_ENV`). To configure by hand, put these in `~/.invoker/.env` (canonical, loaded on startup before the Slack
-check) or `<repoRoot>/.env` (fallback), then run `invoker-slack` (or `./run.sh` for the desktop app only):
+(or set `INVOKER_SLACK_OWNER_ENV`). Keep the default harness preset in
+`~/.invoker/config.json`, where `defaultSlackHarnessPreset` is already
+documented. The standalone manager reads that config first, then falls back to
+`INVOKER_SLACK_DEFAULT_PRESET` only when the config leaves the preset unset.
+To configure by hand, put these credential values in `~/.invoker/.env`
+(canonical, loaded on startup before the Slack check) or `<repoRoot>/.env`
+(fallback), then run `invoker-slack` (or `./run.sh` for the desktop app only):
 
 ```
 SLACK_BOT_TOKEN=xoxb-...
