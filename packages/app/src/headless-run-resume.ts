@@ -298,7 +298,7 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     process.stdout.write(`  running workflows: ${preview.runningWorkflowIds.length}\n`);
   }
   if (request.recreateAll) {
-    process.stdout.write(`  completed workflows: ${preview.completedWorkflowIds.length}\n`);
+    process.stdout.write(`  completed workflows: ${preview.completedWorkflowIds?.length ?? 0}\n`);
   }
   process.stdout.write(`  recreated workflows: ${result.recreatedWorkflowIds.length}\n`);
   process.stdout.write(`  started: ${runnable.length}\n`);
