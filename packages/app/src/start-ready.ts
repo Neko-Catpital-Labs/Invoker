@@ -16,6 +16,19 @@ type StartReadyOrchestrator = Pick<
   | 'startExecution'
 >;
 
+type StartReadyRequestExt = StartReadyRequest & {
+  recreateFailedAndPending?: boolean;
+  recreateFailedPendingAndRunning?: boolean;
+};
+
+type StartReadyPreviewExt = StartReadyPreview & {
+  pendingWorkflowIds: string[];
+  runningWorkflowIds: string[];
+  skipped: StartReadyPreview['skipped'] & {
+    pendingTasks: number;
+    runningTasks: number;
+  };
+};
 function collectRecoverableTasks(orchestrator: StartReadyOrchestrator): TaskState[] {
   const activeTaskIds = orchestrator.getPersistedActiveTaskIds();
   return orchestrator
@@ -77,8 +90,8 @@ function unionWorkflowIds(...groups: readonly (readonly string[])[]): string[] {
 }
 
 function workflowIdsToRecreate(
-  request: StartReadyRequest,
-  preview: StartReadyPreview,
+  request: StartReadyRequestExt,
+  preview: StartReadyPreviewExt,
 ): string[] {
   if (request.recreateFailedPendingAndRunning) {
     return unionWorkflowIds(
@@ -104,7 +117,7 @@ export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): 
   const pendingTasks = tasks.filter((task) => isPendingOrQueued(task));
   const runningTasks = tasks.filter((task) => task.status === 'running');
 
-  return {
+  const preview: StartReadyPreviewExt = {
     readyTaskIds: readyTasks.map((task) => task.id),
     recoverableTaskIds: recoverableTasks.map((task) => task.id),
     failedWorkflowIds: uniqueWorkflowIds(failedTasks),
@@ -119,14 +132,16 @@ export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): 
       runningTasks: runningTasks.length,
     },
   };
+  return preview;
 }
 
 export function runStartReady(
   orchestrator: StartReadyOrchestrator,
   request: StartReadyRequest = {},
 ): StartReadyResult {
+  const extendedRequest = request as StartReadyRequestExt;
   orchestrator.syncAllFromDb();
-  const preview = collectStartReadyPreview(orchestrator);
+  const preview = collectStartReadyPreview(orchestrator) as StartReadyPreviewExt;
   if (request.dryRun) {
     return {
       preview,
@@ -138,7 +153,7 @@ export function runStartReady(
 
   const started: TaskState[] = [];
   const recreatedWorkflowIds: string[] = [];
-  for (const workflowId of workflowIdsToRecreate(request, preview)) {
+  for (const workflowId of workflowIdsToRecreate(extendedRequest, preview)) {
     started.push(...orchestrator.recreateWorkflow(workflowId));
     recreatedWorkflowIds.push(workflowId);
   }
