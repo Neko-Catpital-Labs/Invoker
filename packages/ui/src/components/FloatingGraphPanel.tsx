@@ -95,7 +95,7 @@ export function FloatingGraphPanel({
     <div
       ref={panelRef}
       data-testid={testId}
-      className={`absolute h-[280px] w-[420px] rounded border border-gray-700 bg-gray-900/95 overflow-hidden shadow-lg ${className}`}
+      className={`absolute z-10 h-[280px] w-[420px] rounded border border-gray-700 bg-gray-900/95 overflow-hidden shadow-lg ${className}`}
       style={position ? { left: position.left, top: position.top } : { top: PANEL_MARGIN, right: PANEL_MARGIN }}
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}

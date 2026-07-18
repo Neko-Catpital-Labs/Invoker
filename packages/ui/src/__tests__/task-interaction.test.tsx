@@ -130,6 +130,34 @@ describe('Task interaction (component)', () => {
     expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
   });
 
+  it('scopes the selected workflow mini DAG above graph content and below global overlays', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    const surface = screen.getByTestId('workflow-graph-surface');
+    const graphLayer = screen.getByTestId('workflow-graph-content-layer');
+
+    expect(surface).toHaveClass('relative', 'z-0', 'isolate');
+    expect(graphLayer).toHaveClass('relative', 'z-0');
+    expect(panel).toHaveClass('absolute', 'z-10');
+    expect(panel.className).not.toContain('z-[1000]');
+    expect(panel.style.zIndex).toBe('');
+    expect(surface).toContainElement(graphLayer);
+    expect(surface).toContainElement(panel);
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-wf-a'), { clientX: 80, clientY: 90 });
+    const menu = await screen.findByRole('menu');
+
+    expect(menu).toHaveClass('fixed', 'z-50');
+    expect(menu.parentElement).not.toBe(surface);
+  });
+
   it('drags the selected workflow mini DAG by its header', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));

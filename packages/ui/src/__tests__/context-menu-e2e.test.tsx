@@ -46,8 +46,6 @@ const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
 
-const FLOATING_GRAPH_PANEL_Z_INDEX = 1000;
-
 describe('Context menu (component)', () => {
   let mock: MockInvoker;
 
@@ -111,13 +109,17 @@ describe('Context menu (component)', () => {
     await setup();
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
     const panel = await screen.findByTestId('selected-workflow-mini-dag');
+    const surface = screen.getByTestId('workflow-graph-surface');
 
     fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
 
     const menu = await screen.findByRole('menu');
     expect(panel).toBeInTheDocument();
-    expect(menu).toHaveStyle({ zIndex: String(FLOATING_GRAPH_PANEL_Z_INDEX + 100) });
-    expect(Number(menu.style.zIndex)).toBeGreaterThan(FLOATING_GRAPH_PANEL_Z_INDEX);
+    expect(surface).toHaveClass('z-0', 'isolate');
+    expect(panel).toHaveClass('z-10');
+    expect(panel.style.zIndex).toBe('');
+    expect(menu).toHaveClass('fixed');
+    expect(menu).toHaveStyle({ zIndex: '1100' });
   });
 
   it('workflow context menu retries workflow', async () => {
