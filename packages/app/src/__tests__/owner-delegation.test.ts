@@ -85,6 +85,12 @@ describe('headless→owner delegation', () => {
     it('keeps unrelated commands at the default timeout', () => {
       expect(delegationTimeoutMs(['approve', 'wf-123/task-1'], targetLookup)).toBe(5_000);
     });
+
+    it('uses 60s timeout for global start-ready', () => {
+      expect(delegationTimeoutMs(['start-ready'], targetLookup)).toBe(60_000);
+      expect(delegationTimeoutMs(['start-ready', '--recreate-failed-and-pending'], targetLookup)).toBe(60_000);
+      expect(delegationTimeoutMs(['start-ready', '--recreate-all'], targetLookup)).toBe(300_000);
+    });
   });
 
   describe('successful delegation when owner is present', () => {
