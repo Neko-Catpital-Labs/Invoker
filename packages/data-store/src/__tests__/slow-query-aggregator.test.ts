@@ -55,6 +55,34 @@ describe('SlowQueryAggregator', () => {
     ]);
   });
 
+  it('ignores SQL comments when normalizing query shapes', () => {
+    const commentedSql = `
+      SELECT '-- not a comment' AS marker, * FROM attempts -- trace_id='abc-123'
+      WHERE node_id = 'node-a' /* attempt IDs: 1, 2, 3 */ AND attempt_id IN (1, 2)
+    `;
+    const parameterizedSql = `
+      SELECT ? AS marker, * FROM attempts
+      WHERE node_id = ? AND attempt_id IN (?, ?, ?)
+    `;
+    const aggregator = new SlowQueryAggregator();
+
+    expect(normalizeSlowQuerySql(commentedSql)).toBe(normalizeSlowQuerySql(parameterizedSql));
+
+    aggregator.record({ durationMs: 40, sql: commentedSql });
+    aggregator.record({
+      durationMs: 50,
+      sql: 'SELECT ? AS marker, * FROM attempts WHERE node_id = ? AND attempt_id IN (?, ?, ?)',
+    });
+
+    expect(aggregator.topN()).toEqual([
+      expect.objectContaining({
+        shape: 'SELECT ? AS marker, * FROM attempts WHERE node_id = ? AND attempt_id IN (?)',
+        count: 2,
+        maxMs: 50,
+      }),
+    ]);
+  });
+
   it('calculates p50 and p95 durations for each SQL shape', () => {
     const aggregator = new SlowQueryAggregator();
 

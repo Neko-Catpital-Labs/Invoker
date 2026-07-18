@@ -33,7 +33,7 @@ interface MutableSlowQueryShapeStats {
 const DEFAULT_TOP_N = 10;
 
 export function normalizeSlowQuerySql(sql: string): string {
-  const normalized = replaceSqlLiteralsAndParams(sql)
+  const normalized = replaceSqlLiteralsAndParams(stripSqlComments(sql))
     .replace(/\bIN\s*\(\s*\?(?:\s*,\s*\?)+\s*\)/gi, 'IN (?)')
     .replace(/\s+/g, ' ')
     .trim();
@@ -158,11 +158,90 @@ function replaceSqlLiteralsAndParams(sql: string): string {
   return out;
 }
 
+function stripSqlComments(sql: string): string {
+  let out = '';
+  for (let i = 0; i < sql.length;) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+
+    if (ch === '-' && next === '-') {
+      out += ' ';
+      i += 2;
+      while (i < sql.length && sql[i] !== '\n' && sql[i] !== '\r') i += 1;
+      continue;
+    }
+
+    if (ch === '/' && next === '*') {
+      out += ' ';
+      i += 2;
+      while (i < sql.length && !(sql[i] === '*' && sql[i + 1] === '/')) i += 1;
+      i = Math.min(sql.length, i + 2);
+      continue;
+    }
+
+    if (ch === "'") {
+      const end = skipSingleQuotedString(sql, i + 1);
+      out += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    if (ch === '"' || ch === '`') {
+      const end = skipDelimitedSqlIdentifier(sql, i + 1, ch);
+      out += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    if (ch === '[') {
+      const end = skipBracketDelimitedSqlIdentifier(sql, i + 1);
+      out += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    out += ch;
+    i += 1;
+  }
+
+  return out;
+}
+
 function skipSingleQuotedString(sql: string, start: number): number {
   let i = start;
   while (i < sql.length) {
     if (sql[i] === "'") {
       if (sql[i + 1] === "'") {
+        i += 2;
+        continue;
+      }
+      return i + 1;
+    }
+    i += 1;
+  }
+  return i;
+}
+
+function skipDelimitedSqlIdentifier(sql: string, start: number, delimiter: string): number {
+  let i = start;
+  while (i < sql.length) {
+    if (sql[i] === delimiter) {
+      if (sql[i + 1] === delimiter) {
+        i += 2;
+        continue;
+      }
+      return i + 1;
+    }
+    i += 1;
+  }
+  return i;
+}
+
+function skipBracketDelimitedSqlIdentifier(sql: string, start: number): number {
+  let i = start;
+  while (i < sql.length) {
+    if (sql[i] === ']') {
+      if (sql[i + 1] === ']') {
         i += 2;
         continue;
       }
