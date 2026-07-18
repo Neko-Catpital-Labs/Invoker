@@ -96,30 +96,36 @@ function seedTerminalOutputSnapshot(
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
 ): void {
-  const outputSnapshot = session.outputSnapshot;
+  const outputSnapshot = session.outputSnapshot ?? '';
   const seededSnapshot = seededSnapshotRef.current;
-  if (
-    outputSnapshot &&
-    (
-      !seededSnapshot ||
-      seededSnapshot.sessionId !== session.sessionId ||
-      seededSnapshot.snapshot !== outputSnapshot ||
-      seededSnapshot.term !== term
-    )
-  ) {
-    try {
-      term.write(outputSnapshot);
-      seededSnapshotRef.current = {
-        sessionId: session.sessionId,
-        snapshot: outputSnapshot,
-        term,
-      };
-    } catch (err) {
-      console.warn(
-        `Failed to seed output snapshot for planning terminal session ${session.sessionId}:`,
-        err,
-      );
-    }
+  if (seededSnapshot?.sessionId === session.sessionId && seededSnapshot.term === term) {
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      snapshot: outputSnapshot,
+      term,
+    };
+    return;
+  }
+  if (!outputSnapshot) {
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      snapshot: outputSnapshot,
+      term,
+    };
+    return;
+  }
+  try {
+    term.write(outputSnapshot);
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      snapshot: outputSnapshot,
+      term,
+    };
+  } catch (err) {
+    console.warn(
+      `Failed to seed output snapshot for planning terminal session ${session.sessionId}:`,
+      err,
+    );
   }
 }
 
