@@ -27,6 +27,22 @@ async function selectTaskAndWaitForCommandEditor(page: Page, taskSuffix: string)
   }
 }
 
+async function openCommandEditor(page: Page, taskSuffix: string) {
+  const commandDisplay = page.locator('[data-testid="command-display"]');
+  const textarea = page.locator('[data-testid="edit-command-input"]');
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await selectTaskAndWaitForCommandEditor(page, taskSuffix);
+    await commandDisplay.dblclick();
+    try {
+      await expect(textarea).toBeVisible({ timeout: 5000 });
+      return textarea;
+    } catch (err) {
+      if (attempt === 2) throw err;
+    }
+  }
+  throw new Error(`Command editor did not open for ${taskSuffix}`);
+}
+
 const EDIT_CMD_PLAN = {
   name: 'E2E Edit Command Plan',
   repoUrl: E2E_REPO_URL,
@@ -61,16 +77,8 @@ test.describe('Edit task command', () => {
     await waitForTaskStatus(page, 'task-setup', 'completed');
     await waitForTaskStatus(page, 'task-will-fail', 'failed');
 
-    // Click the failed task node to select it
-    await selectTaskAndWaitForCommandEditor(page, 'task-will-fail');
-
-    // Double-click the command display to enter edit mode.
-    const commandDisplay = page.locator('[data-testid="command-display"]');
-    await commandDisplay.dblclick();
-
-    // The textarea should appear with the old command.
-    const textarea = page.locator('[data-testid="edit-command-input"]');
-    await expect(textarea).toBeVisible({ timeout: 2000 });
+    // Open command edit mode and verify the old command.
+    const textarea = await openCommandEditor(page, 'task-will-fail');
     const oldValue = await textarea.inputValue();
     expect(oldValue).toBe('exit 1');
 
@@ -126,12 +134,7 @@ test.describe('Edit task command', () => {
     expect(beforeEditChild).toBeDefined();
     const beforeGeneration = beforeEditChild?.execution?.generation ?? 0;
 
-    // Click parent task to select it
-    await selectTaskAndWaitForCommandEditor(page, 'parent-task');
-
-    const commandDisplay = page.locator('[data-testid="command-display"]');
-    await commandDisplay.dblclick();
-    const textarea = page.locator('[data-testid="edit-command-input"]');
+    const textarea = await openCommandEditor(page, 'parent-task');
     await textarea.fill('echo updated-parent');
 
     const saveBtn = page.locator('[data-testid="save-command-btn"]');

@@ -62,24 +62,20 @@ describe('headless→owner delegation', () => {
   }
 
   describe('delegation timeout policy', () => {
-    it('uses 60s timeout for workflow-scoped rebase', () => {
-      expect(delegationTimeoutMs(['rebase', 'wf-1'], targetLookup)).toBe(60_000);
+    it('uses 60s timeout for workflow-scoped rebase-retry', () => {
+      expect(delegationTimeoutMs(['rebase-retry', 'wf-1'], targetLookup)).toBe(60_000);
     });
 
-    it('uses 60s timeout for workflow-scoped rebase-and-retry', () => {
-      expect(delegationTimeoutMs(['rebase-and-retry', 'wf-1'], targetLookup)).toBe(60_000);
-    });
-
-    it('uses 60s timeout for workflow-scoped recreate-with-rebase', () => {
-      expect(delegationTimeoutMs(['recreate-with-rebase', 'wf-1'], targetLookup)).toBe(60_000);
+    it('uses 60s timeout for workflow-scoped rebase-recreate', () => {
+      expect(delegationTimeoutMs(['rebase-recreate', 'wf-1'], targetLookup)).toBe(60_000);
     });
 
     it('uses 60s timeout for workflow-scoped restart', () => {
       expect(delegationTimeoutMs(['restart', 'wf-123'], targetLookup)).toBe(60_000);
     });
 
-    it('keeps task-scoped rebase at the default timeout', () => {
-      expect(delegationTimeoutMs(['rebase', 'wf-123/task-1'], targetLookup)).toBe(5_000);
+    it('keeps task-scoped rebase-retry at the default timeout', () => {
+      expect(delegationTimeoutMs(['rebase-retry', 'wf-123/task-1'], targetLookup)).toBe(5_000);
     });
 
     it('keeps non-matching workflow ids at the default timeout', () => {
@@ -209,12 +205,12 @@ describe('headless→owner delegation', () => {
       }));
     });
 
-    it('delegates rebase with noTrack so owner can return before workflow settlement', async () => {
+    it('delegates rebase-retry with noTrack so owner can return before workflow settlement', async () => {
       const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(
-        ['rebase', 'wf-1/task-1'],
+        ['rebase-retry', 'wf-1/task-1'],
         messageBus,
         undefined,
         true,
@@ -222,18 +218,18 @@ describe('headless→owner delegation', () => {
 
       expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
-        args: ['rebase', 'wf-1/task-1'],
+        args: ['rebase-retry', 'wf-1/task-1'],
         noTrack: true,
         waitForApproval: undefined,
       }));
     });
 
-    it('delegates recreate-with-rebase command to owner', async () => {
+    it('delegates rebase-recreate command to owner', async () => {
       const ownerHandler = vi.fn(async () => ({ ok: true }));
       messageBus.onRequest('headless.exec', ownerHandler);
 
       const outcome = await tryDelegateExec(
-        ['recreate-with-rebase', 'wf-1'],
+        ['rebase-recreate', 'wf-1'],
         messageBus,
         undefined,
         true,
@@ -241,7 +237,7 @@ describe('headless→owner delegation', () => {
 
       expect(outcome.kind).toBe('delegated');
       expect(ownerHandler).toHaveBeenCalledWith(expect.objectContaining({
-        args: ['recreate-with-rebase', 'wf-1'],
+        args: ['rebase-recreate', 'wf-1'],
         noTrack: true,
         waitForApproval: undefined,
       }));
@@ -280,9 +276,8 @@ describe('headless→owner delegation', () => {
     });
 
     it.each([
-      ['rebase', ['rebase', 'wf-1']],
-      ['rebase-and-retry', ['rebase-and-retry', 'wf-1']],
-      ['recreate-with-rebase', ['recreate-with-rebase', 'wf-1']],
+      ['rebase-retry', ['rebase-retry', 'wf-1']],
+      ['rebase-recreate', ['rebase-recreate', 'wf-1']],
       ['restart workflow', ['restart', 'wf-123']],
     ])('keeps %s pending at 5s and only times out at 60s', async (_label, args) => {
       const delegatedPromise = tryDelegateExec(
@@ -523,6 +518,19 @@ describe('headless→owner delegation', () => {
       messageBus.onRequest('headless.exec', async () => ({ ok: true }));
 
       const outcome = await tryDelegateExec(['approve', 'wf-1/task-1'], messageBus);
+      expect(outcome.kind).toBe('delegated');
+    });
+
+    it('accepts an accepted-acknowledgement that carries a workflowId (no tasks)', async () => {
+      messageBus.onRequest('headless.exec', async () => ({
+        ok: true,
+        accepted: true,
+        intentId: 1,
+        workflowId: 'wf-test',
+        channel: 'headless.exec',
+      }));
+
+      const outcome = await tryDelegateExec(['retry', 'wf-test', '--no-track'], messageBus);
       expect(outcome.kind).toBe('delegated');
     });
 

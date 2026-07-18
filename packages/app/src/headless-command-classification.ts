@@ -8,6 +8,7 @@
 
 import type { PersistenceAdapter } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
+import { findHeadlessCommandDefinition, isMutatingSetSubcommand } from './headless-command-registry.js';
 
 export type HeadlessTargetLookup = Pick<PersistenceAdapter, 'loadWorkflow' | 'listWorkflows' | 'loadTasks'>;
 
@@ -98,36 +99,16 @@ export function resolveHeadlessTargetWorkflowId(
 export function isHeadlessReadOnlyCommand(args: string[]): boolean {
   const command = args[0];
   if (!command || command === '--help' || command === '-h') return true;
-  if (command === 'query') return true;
-  return ['list', 'status', 'task-status', 'queue', 'audit', 'session', 'query-select', 'open-terminal', 'slack', 'watch'].includes(command);
+  return findHeadlessCommandDefinition(command)?.kind === 'read';
 }
 
 export function isHeadlessMutatingCommand(args: string[]): boolean {
   const command = args[0];
   if (!command || command === '--help' || command === '-h') return false;
-  if (command === 'query') return false;
 
   if (command === 'set') {
-    const sub = args[1];
-    return ['command', 'executor', 'agent', 'merge-mode', 'gate-policy'].includes(sub ?? '');
+    return isMutatingSetSubcommand(args[1]);
   }
 
-  if (['list', 'status', 'task-status', 'queue', 'audit', 'session', 'query-select', 'watch'].includes(command)) {
-    return false;
-  }
-
-  if (['open-terminal'].includes(command)) {
-    return false;
-  }
-
-  return [
-    'run', 'resume', 'retry', 'retry-task', 'recreate', 'recreate-task', 'rebase', 'recreate-with-rebase', 'fix', 'resolve-conflict',
-    'detach-workflow',
-    'migrate-compat',
-    'rebase-and-retry',
-    'approve', 'reject', 'input', 'select',
-    'cancel', 'cancel-workflow',
-    'delete', 'delete-workflow', 'delete-all',
-    'edit', 'edit-executor', 'edit-type', 'edit-agent', 'set-merge-mode',
-  ].includes(command);
+  return findHeadlessCommandDefinition(command)?.kind === 'write';
 }

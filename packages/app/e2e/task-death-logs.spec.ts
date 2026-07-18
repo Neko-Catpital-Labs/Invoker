@@ -83,7 +83,7 @@ test.describe('Task death logs', () => {
     await loadPlan(page, DEATH_LOG_PLAN);
     await startPlan(page);
 
-    await waitForTaskStatus(page, 'task-die', 'failed', 10000);
+    await waitForTaskStatus(page, 'task-die', 'failed');
 
     const tasks = await getTasks(page);
     const task = findTaskByIdSuffix(tasks, 'task-die');

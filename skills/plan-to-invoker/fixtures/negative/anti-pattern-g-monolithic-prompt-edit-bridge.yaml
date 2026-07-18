@@ -9,7 +9,7 @@ description: |
   This should now fail decomposition lint because implementation tasks must include
   Layer and Feature state metadata and be split into reviewable dependency slices.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: https://github.com/EdbertChan/Invoker
 baseBranch: master
 featureBranch: plan/anti-pattern-monolithic-prompt-edit-bridge

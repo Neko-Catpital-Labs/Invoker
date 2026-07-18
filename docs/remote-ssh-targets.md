@@ -23,7 +23,6 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "sshKeyPath": "/home/user/.ssh/id_staging",
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     },
     "staging-server-b": {
@@ -33,12 +32,27 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "port": 22,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
-      "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     }
   }
 }
 ```
+Invoker does not run repo bootstrap automatically on managed SSH checkouts. If a repo needs setup such as `pnpm install` or `flutter pub get`, make the task command run that repo-owned step explicitly.
+
+## Owner-host workers
+
+Remote SSH targets execute workflow tasks only. Long-lived operator automation belongs on the Invoker owner host, where the process owns the workflow database and worker registry.
+
+For the supported PR-maintenance setup, enable `prMaintenance` in `~/.invoker/config.json` on the owner host and run the built-in worker kinds from the Workers tab or headless CLI:
+
+```bash
+./run.sh --headless worker status --output text
+./run.sh --headless worker coderabbit-address
+./run.sh --headless worker pr-conflict-rebase
+./run.sh --headless worker pr-ci-failure-scan
+```
+
+Do not install separate cron jobs on SSH targets for these maintenance paths. The workers share the owner process, owner database, and per-kind worker locks; SSH targets stay disposable execution capacity.
 
 ### Fields
 
@@ -50,12 +64,11 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
 | `port` | number | no | SSH port (default: 22) |
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
-| `provisionCommand` | string | no | Command run after worktree creation in managed mode |
 | `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
 
 ## Multiple SSH Targets
 
-You can configure as many remote targets as you want under `remoteTargets`. Each task picks one by `poolMemberId`.
+You can configure as many remote targets as you want under `remoteTargets`. Each task picks one with `poolId`.
 
 ```yaml
 name: "Run tasks on multiple remotes"
@@ -65,17 +78,15 @@ tasks:
   - id: check-a
     description: "Run tests on remote A"
     command: "pnpm test"
-    runnerKind: ssh
-    poolMemberId: staging-server
+    poolId: staging-server
 
   - id: check-b
     description: "Run tests on remote B"
     command: "pnpm test"
-    runnerKind: ssh
-    poolMemberId: staging-server-b
+    poolId: staging-server-b
 ```
 
-This is the supported way to run multiple SSH executors in one workflow: define multiple targets, then attach different tasks to different target IDs.
+This is the simplest way to target specific SSH machines: define multiple `remoteTargets`, then point each task at the target ID it should use. If you need queueing, load balancing, or mixed local/SSH routing, put those target IDs inside `executionPools` and use the pool name as `poolId` instead.
 
 ## Usage in Plans
 
@@ -89,31 +100,28 @@ tasks:
   - id: health-check
     description: "Verify staging server is reachable"
     command: "echo 'OK'; uptime; df -h"
-    runnerKind: ssh
-    poolMemberId: staging-server
+    poolId: staging-server
     dependencies: []
 
   - id: run-migrations
     description: "Run database migrations on staging"
     command: "cd /opt/app && ./migrate.sh"
-    runnerKind: ssh
-    poolMemberId: staging-server
+    poolId: staging-server
     dependencies:
       - health-check
 ```
 
 ### Task fields
 
-- `runnerKind: ssh` — selects the SSH executor
-- `poolMemberId: <id>` — references a key in `remoteTargets` config
+- `poolId: <id>` — references either a `remoteTargets` key directly or an `executionPools` key that contains SSH members
 
-Both fields are required for SSH tasks. The executor validates at runtime that the `poolMemberId` exists in config and throws a clear error if it's missing.
+The executor validates at runtime that the selected target or pool exists and resolves to an SSH-capable execution route.
 
 ## How It Works
 
-1. The plan parser reads `runnerKind` and `poolMemberId` from YAML and carries them through to `TaskConfig`.
-2. When `TaskRunner.selectExecutor()` sees `runnerKind: ssh`, it looks up the `poolMemberId` in the `remoteTargets` config map.
-3. An `SshExecutor` instance is created with the target's connection details.
+1. The plan parser reads `poolId` from YAML and stores it on the task config.
+2. At dispatch time, Invoker resolves that `poolId` either directly to a `remoteTargets` entry or to an `executionPools` member selection.
+3. An `SshExecutor` instance is created with the chosen target's connection details.
 4. The runner spawns: `ssh -i <keyPath> -p <port> -o StrictHostKeyChecking=accept-new -o BatchMode=yes user@host <command>`
 5. For `claude` action types, the Claude CLI command is shell-quoted and executed remotely.
 
@@ -123,6 +131,18 @@ The executor uses these SSH options by default:
 
 - `-o StrictHostKeyChecking=accept-new` — auto-accept new host keys (TOFU), reject changed keys
 - `-o BatchMode=yes` — fail immediately if interactive auth is needed (no password prompts)
+
+## Member Health & Circuit Breaker
+
+When an SSH pool member fails to *start* a task with a transport-level error — connection timed out, connection reset, `exit=255`, broken pipe, banner-exchange / `kex_exchange_identification` failure, or an operation timeout — the runner takes that member **out of rotation** instead of offering it to the next task and eating another connection-timeout stall.
+
+- **Eviction.** The failing member is marked down for a cooldown window and skipped during pool selection (`roundRobin` and `leastLoaded` both honor it). The window backs off exponentially per consecutive failure — 30s, 60s, 120s, … capped at 5 minutes — so a machine that stays offline is retried less and less often.
+- **Failover.** Within the same dispatch, the task immediately retries another healthy SSH member if one exists; the down member simply stops being a candidate for subsequent tasks.
+- **Automatic re-admission.** A member returns to rotation on the first successful start on it, or once its cooldown elapses (a half-open probe attempt). No operator action is required when the machine comes back.
+- **All members down.** If every member is in cooldown, the task defers with a `down <n>s` reason in the pool-capacity message and is retried later — it is never hard-failed for a transient outage. A mixed pool degrades to its local `worktree` member, which is never subject to transport eviction.
+- **Observability.** Each transition emits a `task.executor.member-evicted` / `task.executor.member-readmitted` lifecycle event on the task, and `TaskRunner.getPoolMemberHealthSnapshot()` lists the currently-down members.
+
+Health is in-memory and ephemeral by design: a process restart clears it and re-probes every member. It applies only to SSH members (transport errors are SSH-specific).
 
 ## Terminal Restore
 

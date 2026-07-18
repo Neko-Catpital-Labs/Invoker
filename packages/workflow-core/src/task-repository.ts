@@ -10,7 +10,7 @@
  * inside orchestrator.ts.
  */
 
-import type { TaskState, TaskStateChanges, Attempt, WorkflowDerivedStatus } from '@invoker/workflow-graph';
+import type { TaskState, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-graph';
 
 // ── Workflow value types (inline in OrchestratorPersistence today) ────
 
@@ -19,21 +19,49 @@ export interface WorkflowRecord {
   name: string;
   description?: string;
   visualProof?: boolean;
-  status: WorkflowDerivedStatus;
   createdAt: string;
   updatedAt: string;
   repoUrl?: string;
-  onFinish?: string;
+  intermediateRepoUrl?: string;
+  onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
+  externalDependencies?: ExternalDependency[];
+  externalDependencyChanges?: ExternalDependencyChange[];
+  detachedExternalDependencies?: DetachedExternalDependency[];
 }
 
 export interface WorkflowChanges {
+  name?: string;
+  description?: string;
+  visualProof?: boolean;
+  planFile?: string;
+  repoUrl?: string;
+  intermediateRepoUrl?: string;
+  branch?: string;
+  onFinish?: string;
   updatedAt?: string;
   baseBranch?: string;
+  featureBranch?: string;
   generation?: number;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
+  reviewProvider?: string;
+  /**
+   * Presence semantics: a key explicitly set to `undefined` clears the
+   * stored value (NULL column); an absent key leaves it unchanged.
+   * `detachWorkflowInternal` relies on this to clear a dependent's last
+   * external dependency when the upstream workflow is detached or deleted.
+   */
+  externalDependencies?: ExternalDependency[];
+  /** Same presence semantics as `externalDependencies`. */
+  externalDependencyChanges?: ExternalDependencyChange[];
+  /**
+   * Read-only detach provenance. Same presence semantics as
+   * `externalDependencies`. `detachWorkflowInternal` writes the removed
+   * dependency lineage here while clearing the active dependency.
+   */
+  detachedExternalDependencies?: DetachedExternalDependency[];
 }
 
 export type AttemptChanges = Partial<
@@ -92,6 +120,9 @@ export interface TaskRepository {
 
   /** Apply a partial update to an existing task. */
   updateTask(taskId: string, changes: TaskStateChanges): void;
+
+  /** Delete one task and its task-owned rows. */
+  deleteTask(taskId: string): void;
 
   /** Persist a task lifecycle event for auditing / replay. */
   logEvent(taskId: string, eventType: string, payload?: unknown): void;

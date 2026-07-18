@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getStatusColor, getStatusInlineColors, matchesStatusFilter } from '../lib/colors.js';
+import { getStatusColor, getStatusInlineColors, matchesStatusFilter, formatStatusLabel, getEffectiveVisualStatus } from '../lib/colors.js';
 import { getStatusVisual, STATUS_VISUALS } from '../lib/status-colors.js';
 import type { TaskStatus } from '../types.js';
 
@@ -14,6 +14,7 @@ describe('getStatusColor', () => {
     'fixing_with_ai',
     'completed',
     'failed',
+    'closed',
     'blocked',
     'needs_input',
     'awaiting_approval',
@@ -49,18 +50,18 @@ describe('getStatusColor', () => {
     }
   });
 
-  it('returns unique colors for distinguishable statuses', () => {
+  it('returns unique dots for distinguishable statuses', () => {
     const running = getStatusColor('running');
     const completed = getStatusColor('completed');
     const failed = getStatusColor('failed');
 
-    // In dark card mode, background can be shared; accents must still be distinct
-    expect(running.border).not.toBe(completed.border);
-    expect(completed.border).not.toBe(failed.border);
-    expect(running.border).not.toBe(failed.border);
+    // The dot is the accent that carries status identity; surfaces stay uniform
+    // (border-border, bg-card) to match a sleek neutral chrome.
     expect(running.dot).not.toBe(completed.dot);
     expect(completed.dot).not.toBe(failed.dot);
     expect(running.dot).not.toBe(failed.dot);
+    expect(running.text).not.toBe(completed.text);
+    expect(completed.text).not.toBe(failed.text);
   });
 
   it('returns default for unknown status', () => {
@@ -76,21 +77,61 @@ describe('getStatusColor', () => {
     expect(colors.bg).toBe(defaultColors.bg);
   });
 
+  it('includes closed in every status color map', () => {
+    expect(STATUS_VISUALS).toHaveProperty('closed');
+
+    const closed = getStatusColor('closed');
+    expect(closed.bg.length).toBeGreaterThan(0);
+    expect(closed.border.length).toBeGreaterThan(0);
+    expect(closed.text.length).toBeGreaterThan(0);
+    expect(closed.dot.length).toBeGreaterThan(0);
+
+    // Closed must resolve to its own visual, not the pending/default fallback.
+    const pending = getStatusColor('pending');
+    expect(closed.dot).not.toBe(pending.dot);
+    expect(getStatusInlineColors('closed')).toEqual(getStatusVisual('closed').inline);
+  });
+
+  it('keeps closed visually distinct from failed and review_ready', () => {
+    const closed = getStatusColor('closed');
+    const failed = getStatusColor('failed');
+    const reviewReady = getStatusColor('review_ready');
+
+    expect(closed.dot).not.toBe(failed.dot);
+    expect(closed.text).not.toBe(failed.text);
+    expect(closed.dot).not.toBe(reviewReady.dot);
+    expect(closed.text).not.toBe(reviewReady.text);
+  });
+
   it('uses shared urgency color for fix and input states while keeping approval distinct', () => {
     const fixingWithAI = getStatusColor('fixing_with_ai');
     const needsInput = getStatusColor('needs_input');
     const awaitingApproval = getStatusColor('awaiting_approval');
 
     expect(fixingWithAI.dot).toBe(needsInput.dot);
-    expect(fixingWithAI.border).toBe(needsInput.border);
+    expect(fixingWithAI.text).toBe(needsInput.text);
     expect(awaitingApproval.dot).not.toBe(needsInput.dot);
-    expect(awaitingApproval.border).not.toBe(needsInput.border);
+    expect(awaitingApproval.text).not.toBe(needsInput.text);
+  });
+});
+
+describe('formatStatusLabel', () => {
+  it('formats closed as "Closed"', () => {
+    expect(formatStatusLabel('closed')).toBe('Closed');
+  });
+
+  it('keeps closed label distinct from failed and review_ready labels', () => {
+    expect(formatStatusLabel('closed')).not.toBe(formatStatusLabel('failed'));
+    expect(formatStatusLabel('closed')).not.toBe(formatStatusLabel('review_ready'));
+    expect(formatStatusLabel('failed')).toBe('Failed');
+    expect(formatStatusLabel('review_ready')).toBe('Review Ready');
   });
 });
 
 describe('matchesStatusFilter', () => {
-  it('matches running against both running phases', () => {
-    expect(matchesStatusFilter('running', 'running_launching')).toBe(true);
+  it('keeps assigning separate from the running filter', () => {
+    expect(matchesStatusFilter('running', 'assigning')).toBe(false);
+    expect(matchesStatusFilter('assigning', 'assigning')).toBe(true);
     expect(matchesStatusFilter('running', 'running_executing')).toBe(true);
     expect(matchesStatusFilter('running', 'running')).toBe(true);
   });
@@ -103,5 +144,15 @@ describe('matchesStatusFilter', () => {
   it('does not cross-match unrelated statuses', () => {
     expect(matchesStatusFilter('running', 'completed')).toBe(false);
     expect(matchesStatusFilter('failed', 'running_executing')).toBe(false);
+  });
+});
+
+describe('getEffectiveVisualStatus', () => {
+  it('does not let running-like terminal state mask fix approval', () => {
+    expect(getEffectiveVisualStatus(
+      'awaiting_approval',
+      { pendingFixError: 'tests failed', phase: 'executing' },
+      { runningLike: true },
+    )).toBe('fix_approval');
   });
 });

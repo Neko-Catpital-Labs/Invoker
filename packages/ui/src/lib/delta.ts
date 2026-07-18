@@ -9,22 +9,20 @@
 
 import type { TaskState, TaskDelta } from '../types.js';
 
-export function applyDelta(
-  tasks: Map<string, TaskState>,
+export function applyDeltaInPlace(
+  target: Map<string, TaskState>,
   delta: TaskDelta,
-): Map<string, TaskState> {
-  const next = new Map(tasks);
-
+): void {
   switch (delta.type) {
     case 'created':
-      next.set(delta.task.id, delta.task);
+      target.set(delta.task.id, delta.task);
       break;
 
     case 'updated': {
-      const existing = next.get(delta.taskId);
+      const existing = target.get(delta.taskId);
       if (existing) {
         const { config: cfgChanges, execution: execChanges, ...topLevel } = delta.changes;
-        next.set(delta.taskId, {
+        target.set(delta.taskId, {
           ...existing,
           ...topLevel,
           config: { ...existing.config, ...cfgChanges },
@@ -39,9 +37,30 @@ export function applyDelta(
     }
 
     case 'removed':
-      next.delete(delta.taskId);
+      target.delete(delta.taskId);
       break;
   }
+}
 
+export function applyDelta(
+  tasks: Map<string, TaskState>,
+  delta: TaskDelta,
+): Map<string, TaskState> {
+  const next = new Map(tasks);
+  applyDeltaInPlace(next, delta);
+  return next;
+}
+
+export function applyDeltas(
+  tasks: Map<string, TaskState>,
+  deltas: readonly TaskDelta[],
+): Map<string, TaskState> {
+  if (deltas.length === 0) {
+    return tasks;
+  }
+  const next = new Map(tasks);
+  for (const delta of deltas) {
+    applyDeltaInPlace(next, delta);
+  }
   return next;
 }

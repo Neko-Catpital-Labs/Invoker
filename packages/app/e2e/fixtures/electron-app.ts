@@ -7,68 +7,189 @@
  */
 
 import type { TaskStateChanges } from '@invoker/workflow-core';
+import type { InvokerConfig } from '../../src/config.js';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
+import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
+  guiOwnerMode: string;
+  /** When true, the app's embedded terminal backend throws on spawn (fault injection). */
+  breakTerminalSpawn: boolean;
+  repoConfig: Partial<InvokerConfig>;
   page: Page;
   testDir: string;
 };
 
 const repoRoot = resolveRepoRoot(__dirname);
 
+async function removeTestDir(dir: string): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      lastError = err;
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError;
+}
+
 export const test = base.extend<ElectronFixtures>({
+  guiOwnerMode: [process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui', { option: true }],
+  breakTerminalSpawn: [false, { option: true }],
+  repoConfig: [{ autoFixRetries: 0 }, { option: true }],
+
   testDir: async ({}, use) => {
     const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
     await use(dir);
     if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
-      rmSync(dir, { recursive: true, force: true });
+      await removeTestDir(dir);
     }
   },
 
-  electronApp: async ({ testDir }, use) => {
+  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, repoConfig, testDir }, use) => {
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
     const markerRoot = path.join(testDir, 'e2e-markers');
     const configPath = path.join(testDir, 'e2e-config.json');
     const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
+    const electronUserDataDir = path.join(testDir, 'electron-user-data');
+    const homeDir = path.join(testDir, 'home');
     await fs.mkdir(stubDir, { recursive: true });
     await fs.mkdir(markerRoot, { recursive: true });
-    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
+    await fs.mkdir(electronUserDataDir, { recursive: true });
+    await fs.mkdir(homeDir, { recursive: true });
+    registerTrackedBrowserUserDataDir(electronUserDataDir);
+    writeFileSync(configPath, JSON.stringify(repoConfig), 'utf8');
     try {
       await fs.symlink(claudeMarker, path.join(stubDir, 'claude'));
     } catch {
       // Windows / EPERM: fix path still uses INVOKER_CLAUDE_FIX_COMMAND; prompt tasks may hit real claude.
     }
+    const codexStub = path.join(stubDir, 'codex');
+    // When INVOKER_E2E_CODEX_DEMO=1, resume renders agent-sessions/<id>.jsonl.
+    // Prefer INVOKER_E2E_CODEX_DEMO_RENDERER (website capture copies this in);
+    // otherwise use an inline renderer so Invoker CI needs no extra fixture file.
+    writeFileSync(codexStub, `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${1:-}" == "resume" ]]; then
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "stdin is not a terminal" >&2
+    exit 12
+  fi
+  session_id="\${@: -1}"
+  if [[ "\${INVOKER_E2E_CODEX_DEMO:-}" == "1" ]]; then
+    session_file="\${INVOKER_DB_DIR:-}/agent-sessions/\${session_id}.jsonl"
+    if [[ -n "\${INVOKER_E2E_CODEX_DEMO_RENDERER:-}" && -f "\${INVOKER_E2E_CODEX_DEMO_RENDERER}" ]]; then
+      node "\${INVOKER_E2E_CODEX_DEMO_RENDERER}" "\$session_file" "\$session_id"
+    else
+      node - "\$session_file" "\$session_id" <<'NODE'
+const fs = require('node:fs');
+const [sessionFile, sessionId] = process.argv.slice(2);
+if (!sessionFile || !fs.existsSync(sessionFile)) {
+  console.log('› Resumed Codex session ' + (sessionId || '') + ' (no persisted transcript).');
+  console.log('');
+  console.log('Codex session: ' + (sessionId || ''));
+  process.exit(0);
+}
+const raw = fs.readFileSync(sessionFile, 'utf8');
+for (const line of raw.split('\\n')) {
+  if (!line.trim()) continue;
+  let event;
+  try { event = JSON.parse(line); } catch { continue; }
+  const item = event?.item;
+  if (event?.type === 'item.completed' && item?.text) {
+    if (item.type === 'user_message') console.log('> ' + item.text);
+    else if (item.type === 'agent_message') console.log(item.text);
+  }
+}
+console.log('');
+console.log('Codex session: ' + (sessionId || ''));
+NODE
+    fi
+    # Hold the PTY open so the drawer looks like a live Codex session.
+    sleep "\${INVOKER_E2E_CODEX_DEMO_HOLD_SECS:-20}"
+    exit 0
+  fi
+  sleep 1
+  echo "TTY OK: codex resume \${session_id:-}"
+  exit 0
+fi
+if [[ "\${1:-}" == "exec" ]]; then
+  echo '{"type":"session_configured","session_id":"codex-e2e-exec"}'
+  echo '{"type":"turn_context","cwd":"'"$PWD"'"}'
+  echo '{"type":"task_complete","last_agent_message":"Codex E2E exec complete"}'
+  exit 0
+fi
+echo "unsupported codex args: $*" >&2
+exit 64
+`, 'utf8');
+    chmodSync(codexStub, 0o755);
     const pathEnv = `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`;
+    const forceReadOnlyStatus = guiOwnerMode === 'read-only-status';
+    const forceConnectionLostStatus = guiOwnerMode === 'connection-lost-status';
+    // Playwright's `use.video` option only applies to browser contexts, so the
+    // Electron walkthrough video must be requested at launch time.
+    const recordVideo = process.env.CAPTURE_VIDEO
+      ? { recordVideo: { dir: path.resolve(__dirname, '..', 'test-results', 'videos') } }
+      : {};
     const app = await electron.launch({
+      ...recordVideo,
       args: [
         ...(process.platform === 'linux'
           ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
           : []),
+        `--user-data-dir=${electronUserDataDir}`,
         path.resolve(__dirname, '..', '..', 'dist', 'main.js'),
       ],
       env: {
         ...process.env,
         NODE_ENV: 'test',
+        INVOKER_TEST_WORKFLOW_IDS: '1',
+        INVOKER_DISABLE_SLACK: '1',
         TZ: 'UTC',
+        INVOKER_GUI_OWNER_MODE: (forceReadOnlyStatus || forceConnectionLostStatus) ? 'gui' : guiOwnerMode,
         INVOKER_DB_DIR: testDir,
         INVOKER_IPC_SOCKET: ipcSocketPath,
         INVOKER_ALLOW_DELETE_ALL: '1',
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,
+        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:
+          process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000',
+        INVOKER_EMBEDDED_TERMINAL_BACKEND:
+          process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
         INVOKER_E2E_MARKER_ROOT: markerRoot,
         INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
         INVOKER_CLAUDE_COMMAND: claudeMarker,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+        HOME: homeDir,
+        ...(process.env.INVOKER_E2E_CODEX_DEMO
+          ? { INVOKER_E2E_CODEX_DEMO: process.env.INVOKER_E2E_CODEX_DEMO }
+          : {}),
+        ...(process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS
+          ? { INVOKER_E2E_CODEX_DEMO_HOLD_SECS: process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS }
+          : {}),
+        ...(process.env.INVOKER_E2E_CODEX_DEMO_RENDERER
+          ? { INVOKER_E2E_CODEX_DEMO_RENDERER: process.env.INVOKER_E2E_CODEX_DEMO_RENDERER }
+          : {}),
+        ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
+        ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
+        ...(forceConnectionLostStatus ? { INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS: '1' } : {}),
         PATH: pathEnv,
       },
     });
@@ -91,6 +212,13 @@ export const test = base.extend<ElectronFixtures>({
     await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
 
     await use(page);
+    try {
+      await page.evaluate(async () => {
+        await window.invoker.deleteAllWorkflows();
+      });
+    } catch {
+      // Best-effort cleanup; the test failure itself should remain the signal.
+    }
   },
 });
 
@@ -162,7 +290,7 @@ export async function loadPlan(page: Page, plan: { tasks: readonly { id: string 
     return created?.id ?? workflows[workflows.length - 1]?.id ?? null;
   }, beforeIds);
   await page.waitForFunction(
-    (expectedTaskCount) => window.invoker.getTasks(true).then((result) => {
+    (expectedTaskCount) => window.invoker.getTasks().then((result) => {
       const tasks = Array.isArray(result) ? result : result.tasks;
       const workflows = Array.isArray(result) ? [] : result.workflows ?? [];
       return tasks.length >= expectedTaskCount && workflows.length > 0;
@@ -240,7 +368,7 @@ export async function waitForTaskStatus(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await page.evaluate(() => window.invoker.getTasks(true));
+    const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
     const task = tasks.find((t: any) => matchesTaskId(t.id, taskId));
     if (task && task.status === status) return;
@@ -257,7 +385,7 @@ export async function waitForTaskStarted(
 ): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const result = await page.evaluate(() => window.invoker.getTasks(true));
+    const result = await page.evaluate(() => window.invoker.getTasks());
     const tasks = Array.isArray(result) ? result : result.tasks;
     const task = tasks.find((t: any) => matchesTaskId(t.id, taskId));
     if (task && task.status !== 'pending') return task.status;

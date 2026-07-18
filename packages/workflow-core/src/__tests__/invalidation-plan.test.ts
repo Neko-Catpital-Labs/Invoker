@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createTaskState, type TaskState } from '@invoker/workflow-graph';
 import {
-  INVALIDATION_POLICIES,
   planInvalidation,
   withSchedulerEnqueueCandidates,
 } from '../invalidation-plan.js';
+import { ACTION_SPECS } from '../invalidation-policy.js';
 
 function task(
   id: string,
@@ -23,28 +23,27 @@ function task(
 
 describe('InvalidationPlan policy registry', () => {
   it('registers invalidating recreate/retry and schedule-only policies', () => {
-    expect(INVALIDATION_POLICIES.recreateWorkflow).toMatchObject({
-      action: 'recreateWorkflow',
+    expect(ACTION_SPECS.recreateWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'recreate',
     });
-    expect(INVALIDATION_POLICIES.recreateTask).toMatchObject({
-      action: 'recreateTask',
+    expect(ACTION_SPECS.recreateTask).toMatchObject({
       scope: 'task',
       mode: 'recreate',
     });
-    expect(INVALIDATION_POLICIES.retryWorkflow).toMatchObject({
-      action: 'retryWorkflow',
+    expect(ACTION_SPECS.recreateDownstream).toMatchObject({
+      scope: 'task',
+      mode: 'recreate',
+    });
+    expect(ACTION_SPECS.retryWorkflow).toMatchObject({
       scope: 'workflow',
       mode: 'retry',
     });
-    expect(INVALIDATION_POLICIES.retryTask).toMatchObject({
-      action: 'retryTask',
+    expect(ACTION_SPECS.retryTask).toMatchObject({
       scope: 'task',
       mode: 'retry',
     });
-    expect(INVALIDATION_POLICIES.scheduleOnly).toMatchObject({
-      action: 'scheduleOnly',
+    expect(ACTION_SPECS.scheduleOnly).toMatchObject({
       scope: 'task',
       mode: 'scheduleOnly',
     });
@@ -95,6 +94,66 @@ describe('InvalidationPlan policy registry', () => {
       affectedTaskIds: ['wf-1/child', 'wf-1/grandchild', 'wf-1/root'],
       lockPlan: { workflowIds: ['wf-1'] },
     });
+  });
+
+  it('plans downstream recreate as descendants only, excluding the target', () => {
+    const tasks = [
+      task('wf-1/root', 'wf-1'),
+      task('wf-1/child', 'wf-1', ['wf-1/root']),
+      task('wf-1/grandchild', 'wf-1', ['wf-1/child']),
+      task('wf-1/sibling', 'wf-1'),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/root',
+      tasks,
+    });
+
+    expect(plan).toMatchObject({
+      action: 'recreateDownstream',
+      scope: 'task',
+      mode: 'recreate',
+      affectedWorkflowIds: ['wf-1'],
+      affectedTaskIds: ['wf-1/child', 'wf-1/grandchild'],
+      lockPlan: { workflowIds: ['wf-1'] },
+    });
+    expect(plan.affectedTaskIds).not.toContain('wf-1/root');
+    expect(plan.affectedTaskIds).not.toContain('wf-1/sibling');
+  });
+
+  it('plans downstream recreate on an intermediate node as its descendants only', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/b', 'wf-1', ['wf-1/a']),
+      task('wf-1/c', 'wf-1', ['wf-1/b']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/b',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual(['wf-1/c']);
+  });
+
+  it('plans downstream recreate on a leaf as an empty affected set (no-op)', () => {
+    const tasks = [
+      task('wf-1/a', 'wf-1'),
+      task('wf-1/b', 'wf-1', ['wf-1/a']),
+      task('wf-1/c', 'wf-1', ['wf-1/b']),
+    ];
+
+    const plan = planInvalidation({
+      action: 'recreateDownstream',
+      targetId: 'wf-1/c',
+      tasks,
+    });
+
+    expect(plan.affectedTaskIds).toEqual([]);
+    expect(plan.affectedWorkflowIds).toEqual([]);
+    expect(plan.schedulerEnqueueCandidates).toEqual([]);
   });
 
   it('plans task retry as the task plus non-completed descendants', () => {

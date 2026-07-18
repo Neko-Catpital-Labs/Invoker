@@ -1,8 +1,14 @@
 {
   "name": "@invoker/surfaces",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsup",
     "test": "vitest run",
@@ -10,10 +16,11 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@invoker/workflow-core": "workspace:*",
-    "@invoker/data-store": "workspace:*",
     "@invoker/contracts": "workspace:*",
+    "@invoker/data-store": "workspace:*",
+    "@invoker/execution-engine": "workspace:*",
     "@invoker/transport": "workspace:*",
+    "@invoker/workflow-core": "workspace:*",
     "@slack/bolt": "^4.6.0",
     "yaml": "^2.7.0"
   },

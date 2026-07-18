@@ -126,6 +126,98 @@ export function toReadableText(raw: string): string {
   return messages.map(m => `[${m.role}] ${m.content}`).join('\n');
 }
 
+export interface CodexPlannerStdout {
+  message: string;
+  reasoning: string[];
+}
+
+const CODEX_JSONL_EVENT_TYPES = new Set([
+  'thread.started',
+  'turn.started',
+  'turn.completed',
+  'turn.failed',
+  'item.started',
+  'item.updated',
+  'item.completed',
+  'error',
+  'event_msg',
+  'response_item',
+  'session_meta',
+]);
+
+export function looksLikeCodexJsonl(raw: string): boolean {
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const entry = JSON.parse(trimmed);
+      return Boolean(
+        entry
+        && typeof entry === 'object'
+        && typeof entry.type === 'string'
+        && CODEX_JSONL_EVENT_TYPES.has(entry.type),
+      );
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function formatCodexPlannerStdout(raw: string): CodexPlannerStdout {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { message: '', reasoning: [] };
+  }
+  if (!looksLikeCodexJsonl(trimmed)) {
+    return { message: trimmed, reasoning: [] };
+  }
+
+  const reasoning: string[] = [];
+  const messages: string[] = [];
+
+  for (const line of trimmed.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === 'item.completed' && entry.item) {
+        const item = entry.item;
+        if (item.type === 'reasoning' && typeof item.text === 'string' && item.text.trim()) {
+          reasoning.push(item.text.trim());
+          continue;
+        }
+        if (item.type === 'agent_message' && typeof item.text === 'string' && item.text.trim()) {
+          messages.push(item.text.trim());
+          continue;
+        }
+      }
+
+      const payload = entry.payload;
+      if (
+        entry.type === 'response_item'
+        && payload?.type === 'message'
+        && payload.role === 'assistant'
+      ) {
+        const blocks: Array<string | { type?: string; text?: string }> =
+          Array.isArray(payload.content) ? payload.content : [];
+        const text = blocks
+          .filter((b) => typeof b === 'string' || b?.type === 'output_text')
+          .map((b) => typeof b === 'string' ? b : b.text ?? '')
+          .join('\n')
+          .trim();
+        if (text) messages.push(text);
+      }
+    } catch {
+      // Skip malformed lines
+    }
+  }
+
+  return {
+    message: messages.join('\n\n'),
+    reasoning,
+  };
+}
+
 /**
  * Extract usage events from Codex session JSONL.
  *

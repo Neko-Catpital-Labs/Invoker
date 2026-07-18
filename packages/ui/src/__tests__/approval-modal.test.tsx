@@ -116,6 +116,35 @@ describe('ApprovalModal', () => {
     expect(screen.getByText('Approve AI Fix')).toBeInTheDocument();
   });
 
+  it('keeps the heading pinned and scrolls a large task description', () => {
+    const longDescription = 'Extract workflow task actions. '.repeat(200).trim();
+    render(
+      <ApprovalModal
+        task={makeTask({
+          id: 'wf-1783449124770-10/extract-workflow-task-actions',
+          description: longDescription,
+          execution: { pendingFixError: 'Test failed: expected 1 but got 2' },
+        })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // A large description must live inside the scrollable region so it can
+    // never push the footer action buttons off-screen.
+    const description = screen.getByText(longDescription);
+    expect(description.closest('.overflow-y-auto')).not.toBeNull();
+
+    // The heading stays pinned outside the scroll region.
+    const heading = screen.getByRole('heading', { name: 'Approve AI Fix' });
+    expect(heading.closest('.overflow-y-auto')).toBeNull();
+
+    // Action buttons remain reachable (pinned footer).
+    expect(screen.getByRole('button', { name: 'Approve Fix' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reject Fix' })).toBeInTheDocument();
+  });
+
   it('pre-fills rejection reason with session and error for fix approval', () => {
     render(
       <ApprovalModal
@@ -663,7 +692,7 @@ describe('ApprovalModal', () => {
     );
 
     await waitFor(() => {
-      expect(mockGetEvents).toHaveBeenCalledWith('task-1');
+      expect(mockGetEvents).toHaveBeenCalledWith('task-1', { limit: 50, sortBy: 'desc' });
     });
 
     expect(mockGetAgentSession).not.toHaveBeenCalled();
@@ -794,7 +823,7 @@ describe('ApprovalModal', () => {
     expect(screen.getByRole('heading', { name: 'Confirm Merge' })).toBeInTheDocument();
   });
 
-  it('renders "Confirm Pull Request" heading for merge node with onFinish="pull_request"', () => {
+  it('renders "Confirm Create PR" heading for merge node with onFinish="pull_request"', () => {
     render(
       <ApprovalModal
         task={makeTask({ config: { isMergeNode: true } })}
@@ -804,10 +833,10 @@ describe('ApprovalModal', () => {
         onFinish="pull_request"
       />,
     );
-    expect(screen.getByRole('heading', { name: 'Confirm Pull Request' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Confirm Create PR' })).toBeInTheDocument();
   });
 
-  it('shows "Confirm Merge" button label for merge node with onFinish="merge"', () => {
+  it('shows a "Confirm Merge" *button* matching the heading for onFinish="merge"', () => {
     render(
       <ApprovalModal
         task={makeTask({ config: { isMergeNode: true } })}
@@ -817,7 +846,7 @@ describe('ApprovalModal', () => {
         onFinish="merge"
       />,
     );
-    expect(screen.getByText('Confirm Merge')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm Merge' })).toBeInTheDocument();
   });
 
   it('shows "Confirm Create PR" button label for merge node with onFinish="pull_request"', () => {
@@ -830,6 +859,47 @@ describe('ApprovalModal', () => {
         onFinish="pull_request"
       />,
     );
-    expect(screen.getByText('Confirm Create PR')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm Create PR' })).toBeInTheDocument();
+  });
+
+  it('shows a "Confirm Create PR" heading and button that match for onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    expect(screen.getByRole('heading', { name: 'Confirm Create PR' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Confirm Create PR' })).toBeInTheDocument();
+  });
+
+  it('reject button says "Reject PR" (not "Reject Merge") for onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Reject PR' })).toBeInTheDocument();
+  });
+
+  it('confirm-reject button says "Confirm Reject PR" for onFinish="pull_request"', () => {
+    render(
+      <ApprovalModal
+        task={makeTask({ config: { isMergeNode: true } })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onClose={vi.fn()}
+        onFinish="pull_request"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /reject/i }));
+    expect(screen.getByRole('button', { name: 'Confirm Reject PR' })).toBeInTheDocument();
   });
 });

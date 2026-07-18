@@ -1,44 +1,64 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeWorkflowStatus, workflowStatusVisual } from './workflow-status.js';
+import { getStatusVisual } from './status-colors.js';
 import type { WorkflowStatus } from '../types.js';
+
+const WORKFLOW_STATUSES: readonly WorkflowStatus[] = [
+  'pending',
+  'running',
+  'fixing_with_ai',
+  'completed',
+  'failed',
+  'closed',
+  'blocked',
+  'review_ready',
+  'awaiting_approval',
+  'stale',
+];
 
 describe('workflow-status', () => {
   it('normalizes known statuses and falls back to pending', () => {
-    const statuses: WorkflowStatus[] = [
-      'pending',
-      'running',
-      'completed',
-      'failed',
-      'blocked',
-      'review_ready',
-      'awaiting_approval',
-      'stale',
-    ];
-
-    for (const status of statuses) {
+    for (const status of WORKFLOW_STATUSES) {
       expect(normalizeWorkflowStatus(status)).toBe(status);
     }
     expect(normalizeWorkflowStatus('UNKNOWN')).toBe('pending');
     expect(normalizeWorkflowStatus(undefined)).toBe('pending');
   });
 
-  it('provides visual mapping for every workflow status', () => {
-    const statuses: WorkflowStatus[] = [
-      'pending',
-      'running',
-      'completed',
-      'failed',
-      'blocked',
-      'review_ready',
-      'awaiting_approval',
-      'stale',
-    ];
+  it('normalizes mixed case input to a known workflow status', () => {
+    expect(normalizeWorkflowStatus('REVIEW_READY')).toBe('review_ready');
+    expect(normalizeWorkflowStatus('Fixing_With_AI')).toBe('fixing_with_ai');
+  });
 
-    for (const status of statuses) {
+  it('maps every workflow status to the canonical task palette', () => {
+    for (const status of WORKFLOW_STATUSES) {
       const visual = workflowStatusVisual(status);
-      expect(visual.borderClass.length).toBeGreaterThan(0);
-      expect(visual.railClass.length).toBeGreaterThan(0);
-      expect(visual.textClass.length).toBeGreaterThan(0);
+      const canonical = getStatusVisual(status);
+      expect(visual.borderClass).toBe(canonical.border);
+      expect(visual.railClass).toBe(canonical.rail);
+      expect(visual.textClass).toBe(canonical.text);
+      expect(visual.pulse).toBe(canonical.pulse);
     }
   });
+
+  it('normalizes closed as a supported workflow status', () => {
+    expect(normalizeWorkflowStatus('closed')).toBe('closed');
+    expect(normalizeWorkflowStatus('CLOSED')).toBe('closed');
+    // Closed is terminal-neutral, not a fallback to pending.
+    expect(normalizeWorkflowStatus('closed')).not.toBe('pending');
+  });
+
+  it('gives closed a non-pulsing visual distinct from failed and review_ready', () => {
+    const closed = workflowStatusVisual('closed');
+    const failed = workflowStatusVisual('failed');
+    const reviewReady = workflowStatusVisual('review_ready');
+
+    expect(closed.pulse).toBe(false);
+    // Surfaces (border) stay uniform; identity lives in the rail dot and label text.
+    expect(closed.railClass).not.toBe(failed.railClass);
+    expect(closed.textClass).not.toBe(failed.textClass);
+    expect(closed.railClass).not.toBe(reviewReady.railClass);
+    expect(closed.textClass).not.toBe(reviewReady.textClass);
+  });
+
 });

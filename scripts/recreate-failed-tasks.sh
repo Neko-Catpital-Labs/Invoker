@@ -92,7 +92,10 @@ headless_query() {
 }
 
 headless_mutation() {
-  node "$IPC_HELPER" exec -- "$@"
+  # --no-track is an option to the IPC helper's `exec` subcommand and MUST come
+  # before `--`; anything after `--` is forwarded verbatim as the headless
+  # command, so a leading `--no-track` there is parsed as an unknown command.
+  node "$IPC_HELPER" exec --no-track -- "$@"
 }
 
 headless_workflow_ids() {
@@ -208,7 +211,7 @@ launch_one_workflow() {
     {
       echo "[$wf_id] recreate-task $task_id"
       set +e
-      cmd_out="$(headless_mutation --no-track recreate-task "$task_id" 2>&1)"
+      cmd_out="$(headless_mutation recreate-task "$task_id" 2>&1)"
       code=$?
       set -e
       printf "%s\n" "$cmd_out"

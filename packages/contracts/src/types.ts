@@ -5,6 +5,7 @@
  * Orchestrator writes a WorkRequest; executor runs the action;
  * executor returns a WorkResponse (via callback or IPC).
  */
+import type { FailureClass, ReviewGateArtifact, ReviewGateState, TaskStatus } from '@invoker/workflow-graph';
 
 // ── Action Types ────────────────────────────────────────────
 
@@ -50,10 +51,23 @@ export interface WorkRequestInputs {
   lifecycleTag?: string;
   /** Workflow base branch — worktrees are created from this ref instead of HEAD. */
   baseBranch?: string;
-  /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
+  /** Already-resolved base commit for baseBranch, used to skip redundant base ref resolution. */
+  baseCommit?: string;
+  /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   executionAgent?: string;
+  /** Agent-specific model selector. The selected CLI owns validation. */
+  executionModel?: string;
   /** When true, executors must not reuse existing task worktrees for this run. */
   freshWorkspace?: boolean;
+  /**
+   * Persisted worktree metadata for the same task/action, loaded by the
+   * orchestrator from storage. Executors may validate this against git before
+   * reusing it, but should not infer action identity from branch name patterns.
+   */
+  reusableWorktree?: {
+    branch: string;
+    workspacePath: string;
+  };
 }
 
 export interface WorkRequest {
@@ -94,6 +108,7 @@ export type ResponseStatus =
 export interface WorkResponseOutputs {
   exitCode?: number;
   error?: string;
+  failureClass?: FailureClass;
   summary?: string;
   commitHash?: string;
   agentSessionId?: string;
@@ -107,6 +122,29 @@ export interface WorkResponseOutputs {
   reviewId?: string;
   /** Human-readable review state produced by merge-gate style actions. */
   reviewStatus?: string;
+  /** Typed review-gate artifact state produced by merge-gate style actions. */
+  reviewGate?: ReviewGateState;
+}
+export type ReviewGateSubstate =
+  | 'review_open'
+  | 'ci_pending'
+  | 'ci_failing'
+  | 'merge_conflict'
+  | 'fix_pending'
+  | 'ready_to_land';
+
+
+export interface ReviewGateQueryResponse {
+  workflowId: string;
+  mergeTaskId: string | null;
+  status: TaskStatus | null;
+  activeGeneration: number | null;
+  completion: { required: 'all'; status: 'approved' };
+  ready: boolean;
+  substate?: ReviewGateSubstate | null;
+  artifacts: ReviewGateArtifact[];
+  discardedArtifacts: ReviewGateArtifact[];
+  edges: Array<{ from: string; to: string }>;
 }
 
 export interface SpawnExperimentsRequest {

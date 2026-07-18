@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { accessSync, constants } from 'node:fs';
 import { normalize } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
@@ -8,21 +9,22 @@ import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './proces
 import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import { planManagedWorktree } from './managed-worktree-controller.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
-import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { computeRepoUrlHash, sanitizeBranchForPath } from './git-utils.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { createExecutionBench } from './execution-bench.js';
+import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
-  base64Encode as sshGitB64,
   sshInteractiveCdFragment,
   buildMirrorCloneScript,
   parseBootstrapOutput,
   buildWorktreeListScript,
   buildWorktreeHeadScript,
   buildWorktreeCleanupScript,
+  buildWorktreeSandboxResetScript,
   buildRecordAndPushScript,
   parseRecordAndPushOutput,
   createSshRemoteScriptError,
@@ -40,7 +42,7 @@ export interface SshExecutorConfig {
   agentRegistry?: AgentRegistry;
   /**
    * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
-   * and provision per-task workspaces. When false (default), BYO mode: user provides
+   * then run the task in that checkout. When false (default), BYO mode: user provides
    * pre-cloned repo path and handles all git/setup operations.
    */
   managedWorkspaces?: boolean;
@@ -49,11 +51,10 @@ export interface SshExecutorConfig {
    * Default: ~/.invoker
    */
   remoteInvokerHome?: string;
-  /**
-   * Optional provision command to run in the worktree after creation (e.g., pnpm install).
-   * Only used in managed mode. Default: pnpm install --frozen-lockfile
-   */
-  provisionCommand?: string;
+  /** Opt-in: export agent API keys from secretsFile into remote task shells. */
+  useApiKey?: boolean;
+  /** Optional local secrets file used when useApiKey is true. */
+  secretsFile?: string;
   /**
    * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
    * Default: 30.
@@ -70,9 +71,9 @@ interface SshEntry extends BaseEntry {
  * Executor that executes tasks on a remote machine via SSH key-based auth.
  *
  * Requires `repoUrl` on the work request. Clones / worktrees on the remote
- * under ~/.invoker (mirroring local RepoPool layout), provisions with the same
- * command as WorktreeExecutor, then runs the task (command or Claude) in that
- * directory. Always produces a branch and commits on completion.
+ * under ~/.invoker (mirroring local RepoPool layout), then runs the task
+ * (command or Claude) in that directory. Always produces a branch and commits
+ * on completion.
  */
 export class SshExecutor extends BaseExecutor<SshEntry> {
   readonly type = 'ssh';
@@ -86,7 +87,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly agentRegistry?: AgentRegistry;
   private readonly managedWorkspaces: boolean;
   private readonly remoteInvokerHome: string;
-  private readonly provisionCommand: string;
+  private readonly useApiKey: boolean;
+  private readonly secretsFile: string | undefined;
   private readonly remoteHeartbeatIntervalSeconds: number;
   private readonly remotePath: string;
 
@@ -99,7 +101,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.agentRegistry = config.agentRegistry;
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
-    this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
+    this.useApiKey = config.useApiKey === true;
+    this.secretsFile = config.secretsFile;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
     this.remoteHeartbeatIntervalSeconds =
       typeof configuredRemoteHeartbeatInterval === 'number'
@@ -129,10 +132,19 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     }, { batchMode: false });
   }
 
-  private buildPayloadExecutionScript(payloadB64: string): string {
+  private buildRunnerScript(): string {
     const intervalSeconds = this.remoteHeartbeatIntervalSeconds;
-    return `(
-  echo ${payloadB64} | base64 -d | bash -se
+    return `#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "usage: $0 <payload-script>" >&2
+  exit 2
+fi
+
+PAYLOAD_PATH=$1
+(
+  bash "$PAYLOAD_PATH"
 ) &
 PAYLOAD_PID=$!
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
@@ -154,6 +166,122 @@ fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
 exit "$PAYLOAD_EXIT"
+`;
+  }
+
+
+  private buildPayloadScript(payload: string): string {
+    return `#!/usr/bin/env bash
+set -e
+${payload}
+`;
+  }
+
+  private safePathToken(value: string): string {
+    const token = value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    return token || 'task';
+  }
+
+  private buildStagingDirExpression(executionId: string, actionId: string): string {
+    const safeExecutionId = this.safePathToken(executionId);
+    const safeActionId = this.safePathToken(actionId).slice(0, 80);
+    return `${safeExecutionId}-${safeActionId}`;
+  }
+
+  private createHeredocDelimiter(content: string, label: string): string {
+    const safeLabel = this.safePathToken(label).toUpperCase();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const delimiter = `__INVOKER_${safeLabel}_${randomUUID().replace(/-/g, '')}_${attempt}__`;
+      const pattern = new RegExp(`(^|\\n)${delimiter}(\\n|$)`);
+      if (!pattern.test(content)) return delimiter;
+    }
+    throw new Error(`Unable to create heredoc delimiter for ${label}`);
+  }
+
+  private renderHeredocFile(pathExpression: string, content: string, label: string): string {
+    const delimiter = this.createHeredocDelimiter(content, label);
+    return `cat > ${pathExpression} <<'${delimiter}'
+${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
+`;
+  }
+
+  private remotePathNormalizeFunction(): string {
+    return `normalize_remote_path() {
+  local path="$1"
+  if [[ "$path" == '~' ]]; then
+    printf '%s\\n' "$HOME"
+  elif [[ "\${path:0:2}" == '~/' ]]; then
+    printf '%s/%s\\n' "$HOME" "\${path:2}"
+  else
+    printf '%s\\n' "$path"
+  fi
+}
+`;
+  }
+
+  private buildRuntimeBootstrapScript(options: {
+    executionId: string;
+    actionId: string;
+    workspacePath: string;
+    payload: string;
+    managed: boolean;
+    envExports: string;
+  }): string {
+    const runner = this.buildRunnerScript();
+    const payload = this.buildPayloadScript(options.payload);
+    const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
+    const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
+    const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const runPayloadSection = `echo "[SshExecutor] Running task payload..."
+`;
+
+    return `set -euo pipefail
+${this.remotePathNormalizeFunction()}
+INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
+STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
+RUNNER_PATH="$STAGING_DIR/runner.sh"
+PAYLOAD_PATH="$STAGING_DIR/payload.sh"
+cleanup_runtime() {
+  local status="$1"
+  trap - EXIT HUP INT TERM
+  stop_bootstrap_heartbeat
+  rm -rf "$STAGING_DIR" >/dev/null 2>&1 || true
+  exit "$status"
+}
+BOOTSTRAP_HEARTBEAT_PID=""
+INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
+INVOKER_HEARTBEAT_INTERVAL_SECONDS=${heartbeatIntervalSeconds}
+start_bootstrap_heartbeat() {
+  printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+  (
+    while true; do
+      sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
+      printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    done
+  ) &
+  BOOTSTRAP_HEARTBEAT_PID=$!
+}
+stop_bootstrap_heartbeat() {
+  if [ -n "\${BOOTSTRAP_HEARTBEAT_PID:-}" ]; then
+    kill "$BOOTSTRAP_HEARTBEAT_PID" >/dev/null 2>&1 || true
+    wait "$BOOTSTRAP_HEARTBEAT_PID" 2>/dev/null || true
+    BOOTSTRAP_HEARTBEAT_PID=""
+  fi
+}
+trap 'cleanup_runtime "$?"' EXIT
+trap 'cleanup_runtime 129' HUP
+trap 'cleanup_runtime 130' INT
+trap 'cleanup_runtime 143' TERM
+rm -rf "$STAGING_DIR" 2>/dev/null || true
+mkdir -p "$STAGING_DIR"
+chmod 700 "$STAGING_DIR"
+${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
+WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
+cd "$WT"
+${options.envExports}
+start_bootstrap_heartbeat
+${runPayloadSection}stop_bootstrap_heartbeat
+"$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
 
@@ -254,6 +382,10 @@ exit "$PAYLOAD_EXIT"
 
     let payload: string;
     let agentSessionId: string | undefined;
+    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const effectiveAgentName = request.actionType === 'ai_task'
+      ? (this.agentRegistry ? executionAgent : 'claude')
+      : undefined;
 
     if (request.actionType === 'command') {
       const command = request.inputs.command;
@@ -262,14 +394,15 @@ exit "$PAYLOAD_EXIT"
       bench('SshExecutor.payload.built', { command: true });
     } else if (request.actionType === 'ai_task') {
       if (this.agentRegistry) {
-        const requestedAgent = request.inputs.executionAgent ?? 'claude';
-        const agent = this.agentRegistry.getOrThrow(requestedAgent);
+        const agentName = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+        const agent = this.agentRegistry.getOrThrow(agentName);
+        assertExecutionModelSupported(agent, request.inputs.executionModel);
         const fullPrompt = this.buildFullPrompt(request);
-        const spec = agent.buildCommand(fullPrompt);
+        const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         agentSessionId = spec.sessionId;
         payload = `${spec.cmd} ${spec.args.map(a => this.shellQuote(a)).join(' ')}`;
         bench('SshExecutor.payload.built', {
-          executionAgent: requestedAgent,
+          executionAgent,
           hasAgentSessionId: !!agentSessionId,
         });
       } else {
@@ -296,7 +429,7 @@ exit "$PAYLOAD_EXIT"
           );
         }
         bench('SshExecutor.startManagedWorkspace.before', { repoUrl });
-        const started = await this.startManagedWorkspace(request, handle, repoUrl, payload, agentSessionId);
+        const started = await this.startManagedWorkspace(request, handle, repoUrl, payload, agentSessionId, effectiveAgentName);
         bench('SshExecutor.startManagedWorkspace.after', {
           workspacePath: started.workspacePath,
           branch: started.branch,
@@ -383,20 +516,15 @@ exit "$PAYLOAD_EXIT"
       return handle;
     }
 
-    // Run payload in user-provided directory
-    const payloadB64 = sshGitB64(payload);
-    const wtB64 = sshGitB64(workspacePath);
-    const runScript = `set -euo pipefail
-WT=$(echo ${wtB64} | base64 -d)
-if [[ "$WT" == '~' ]]; then
-  WT="$HOME"
-elif [[ "\${WT:0:2}" == '~/' ]]; then
-  WT="$HOME/\${WT:2}"
-fi
-cd "$WT"
-echo "[SshExecutor BYO] Running task in user-provided workspace: $WT"
-${this.buildPayloadExecutionScript(payloadB64)}
-`;
+    const envExports = buildRemoteAgentEnvExports(this.secretsFile, this.useApiKey);
+    const runScript = this.buildRuntimeBootstrapScript({
+      executionId,
+      actionId: request.actionId,
+      workspacePath,
+      payload,
+      managed: false,
+      envExports,
+    });
 
     bench('SshExecutor.startBYOWorkspace.spawnSshRemoteStdin.before', { workspacePath });
     const started = await this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, undefined);
@@ -413,6 +541,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     repoUrl: string,
     payload: string,
     agentSessionId?: string,
+    effectiveAgentName?: string,
   ): Promise<ExecutorHandle> {
     const bench = createExecutionBench({
       module: 'ssh-executor-start-bench',
@@ -579,6 +708,12 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     }
 
     if (skippedRemotePreserve) {
+      bench('SshExecutor.startManagedWorkspace.sandboxReset.before', { remoteWt });
+      await this.execRemoteCapture(
+        buildWorktreeSandboxResetScript({ worktreePath: remoteWt, toRef: resolvedBaseRef }),
+        'sandbox_reset',
+      );
+      bench('SshExecutor.startManagedWorkspace.sandboxReset.after', { remoteWt });
       bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.before', { remoteWt });
       await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
       bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.after', { remoteWt });
@@ -615,28 +750,22 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     if (!request.inputs.command && !request.inputs.prompt) {
       await this.handleProcessExit(executionId, request, remoteWt, 0, {
         branch: experimentBranch,
+        agentName: effectiveAgentName,
       });
       bench('SshExecutor.startManagedWorkspace.noCommand.returning', { remoteWt });
       return handle;
     }
 
     // Step 5: Provision + run payload in a single SSH session
-    const provB64 = sshGitB64(this.provisionCommand);
-    const payloadB64 = sshGitB64(payload);
-    const wtB64 = sshGitB64(remoteWt);
-    const runScript = `set -euo pipefail
-WT=$(echo ${wtB64} | base64 -d)
-if [[ "$WT" == '~' ]]; then
-  WT="$HOME"
-elif [[ "\${WT:0:2}" == '~/' ]]; then
-  WT="$HOME/\${WT:2}"
-fi
-cd "$WT"
-echo "[SshExecutor] Provisioning remote worktree with: ${this.provisionCommand.slice(0, 50)}..."
-eval "$(echo ${provB64} | base64 -d)"
-echo "[SshExecutor] Running task payload..."
-${this.buildPayloadExecutionScript(payloadB64)}
-`;
+    const envExports = buildRemoteAgentEnvExports(this.secretsFile, this.useApiKey);
+    const runScript = this.buildRuntimeBootstrapScript({
+      executionId,
+      actionId: request.actionId,
+      workspacePath: remoteWt,
+      payload,
+      managed: true,
+      envExports,
+    });
 
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.before', {
       remoteWt,
@@ -646,7 +775,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     const started = await this.spawnSshRemoteStdin(executionId, request, handle, runScript, agentSessionId, {
       worktreePath: handle.workspacePath!,
       branch: experimentBranch,
-    });
+    }, effectiveAgentName);
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.after', {
       remoteWt,
       workspacePath: started.workspacePath,
@@ -679,6 +808,11 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     streamState.remainder = lines.pop() ?? '';
     for (const line of lines) {
       if (line.startsWith(SshExecutor.REMOTE_HEARTBEAT_MARKER)) {
+        const entry = this.entries.get(executionId);
+        console.info(
+          `[ssh-lifecycle] remote heartbeat marker executionId=${executionId} ` +
+            `task=${entry?.request.actionId ?? 'unknown'} marker="${line}"`,
+        );
         this.emitHeartbeat(executionId);
         continue;
       }
@@ -689,6 +823,11 @@ ${this.buildPayloadExecutionScript(payloadB64)}
   private flushOutputRemainder(executionId: string, streamState: { remainder: string }): void {
     if (!streamState.remainder) return;
     if (streamState.remainder.startsWith(SshExecutor.REMOTE_HEARTBEAT_MARKER)) {
+      const entry = this.entries.get(executionId);
+      console.info(
+        `[ssh-lifecycle] remote heartbeat marker executionId=${executionId} ` +
+          `task=${entry?.request.actionId ?? 'unknown'} marker="${streamState.remainder}" source=remainder`,
+      );
       this.emitHeartbeat(executionId);
     } else {
       this.emitOutput(executionId, streamState.remainder);
@@ -771,12 +910,18 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     bashScript: string,
     agentSessionId: string | undefined,
     finalizeRemote: { worktreePath: string; branch: string } | undefined,
+    effectiveAgentName?: string,
   ): ExecutorHandle {
     const child = spawn('ssh', [...this.buildSshArgs(), ...this.buildRemoteCommand()], {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
       env: cleanElectronEnv(),
     });
+    console.info(
+      `[ssh-lifecycle] spawned ssh session task=${request.actionId} executionId=${executionId} ` +
+        `pid=${child.pid ?? 'unknown'} finalizeRemote=${finalizeRemote ? 'yes' : 'no'} ` +
+        `workspace=${handle.workspacePath ?? 'none'} branch=${handle.branch ?? 'none'}`,
+    );
     child.stdin?.write(bashScript);
     child.stdin?.end();
 
@@ -794,8 +939,16 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     };
 
     this.registerEntry(handle, entry);
+    console.info(
+      `[ssh-lifecycle] registered entry task=${request.actionId} executionId=${executionId} ` +
+        `pid=${child.pid ?? 'unknown'} entries=${this.entries.size}`,
+    );
 
     child.on('error', (err) => {
+      console.info(
+        `[ssh-lifecycle] child error task=${request.actionId} executionId=${executionId} ` +
+          `pid=${child.pid ?? 'unknown'} error=${err.message}`,
+      );
       const e = this.entries.get(executionId);
       if (e) e.completed = true;
       const response: WorkResponse = {
@@ -829,6 +982,11 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     });
 
     child.on('close', (code, signal) => {
+      console.info(
+        `[ssh-lifecycle] child close task=${request.actionId} executionId=${executionId} ` +
+          `pid=${child.pid ?? 'unknown'} code=${code ?? 'null'} signal=${signal ?? 'none'} ` +
+          `stderrBytes=${stderrOutput.length}`,
+      );
       void (async () => {
         this.flushOutputRemainder(executionId, stdoutState);
         this.flushOutputRemainder(executionId, stderrState);
@@ -854,6 +1012,10 @@ ${this.buildPayloadExecutionScript(payloadB64)}
           let commitHash: string | undefined;
 
           if (finalizeRemote) {
+            console.info(
+              `[ssh-lifecycle] remote finalize begin task=${request.actionId} executionId=${executionId} ` +
+                `worktree=${finalizeRemote.worktreePath} branch=${finalizeRemote.branch} exitCode=${exitCode}`,
+            );
             this.emitOutput(executionId, '[SshExecutor] Recording task result and pushing branch on remote...\n');
             const fin = await this.remoteGitRecordAndPush(
               executionId,
@@ -868,6 +1030,10 @@ ${this.buildPayloadExecutionScript(payloadB64)}
               if (exitCode === 0) status = 'failed';
               mappedError = fin.error;
             }
+            console.info(
+              `[ssh-lifecycle] remote finalize end task=${request.actionId} executionId=${executionId} ` +
+                `commitHash=${commitHash ?? 'none'} error=${fin.error ?? 'none'}`,
+            );
           }
 
           // When the command fails but no specific error was mapped (exit 30/31),
@@ -884,7 +1050,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
           // Replace local UUID with real backend session/thread ID for resume,
           // then store session locally via driver (matches worktree-executor pattern).
           if (entry.agentSessionId && this.agentRegistry) {
-            const agentName = request.inputs.executionAgent ?? 'claude';
+            const agentName = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
             const driver = this.agentRegistry.getSessionDriver(agentName);
             const rawOutput = e?.outputBuffer.join('') ?? '';
             const realId = driver?.extractSessionId?.(rawOutput);
@@ -906,6 +1072,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
               exitCode: finalExitCode,
               commitHash,
               agentSessionId: entry.agentSessionId,
+              agentName: effectiveAgentName,
               ...(mappedError ? { error: mappedError } : {}),
               ...(finalizeRemote && commitHash
                 ? { summary: `branch=${finalizeRemote.branch} commit=${commitHash}` }
@@ -913,9 +1080,18 @@ ${this.buildPayloadExecutionScript(payloadB64)}
             },
           };
           if (e) e.finalizingAfterClose = false;
+          console.info(
+            `[ssh-lifecycle] emit complete task=${request.actionId} executionId=${executionId} ` +
+              `status=${status} exitCode=${finalExitCode} commitHash=${commitHash ?? 'none'} ` +
+              `agentSessionId=${entry.agentSessionId ?? 'none'}`,
+          );
           this.emitComplete(executionId, response);
         } catch (err) {
           if (e) e.finalizingAfterClose = false;
+          console.info(
+            `[ssh-lifecycle] completion failure task=${request.actionId} executionId=${executionId} ` +
+              `error=${err instanceof Error ? err.message : String(err)}`,
+          );
           const response: WorkResponse = {
             requestId: request.requestId,
             actionId: request.actionId,
@@ -936,33 +1112,6 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     return handle;
   }
 
-  async kill(handle: ExecutorHandle): Promise<void> {
-    const entry = this.entries.get(handle.executionId);
-    if (!entry || entry.completed || !entry.process) return;
-
-    await new Promise<void>((resolve) => {
-      const child = entry.process!;
-
-      const killTimer = setTimeout(() => {
-        if (!entry.completed) {
-          killProcessGroup(child, 'SIGKILL');
-        }
-      }, SIGKILL_TIMEOUT_MS);
-
-      child.on('close', () => {
-        clearTimeout(killTimer);
-        resolve();
-      });
-
-      if (entry.completed) {
-        clearTimeout(killTimer);
-        resolve();
-        return;
-      }
-
-      killProcessGroup(child, 'SIGTERM');
-    });
-  }
 
   sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);
@@ -977,7 +1126,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
       const base = this.buildSshArgsInteractive();
       const userAtHost = base[base.length - 1]!;
       const opts = base.slice(0, -1);
-      const executionAgent = entry.request.inputs.executionAgent ?? 'claude';
+      const executionAgent = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const inner = this.buildRemoteTerminalInner(handle.workspacePath, handle.branch, entry.agentSessionId, executionAgent);
       return {
         command: 'ssh',
@@ -1026,7 +1175,7 @@ ${this.buildPayloadExecutionScript(payloadB64)}
     if (agentSessionId) {
       let resumeCmd: string;
       if (this.agentRegistry) {
-        const resume = this.agentRegistry.getOrThrow(executionAgent ?? 'claude').buildResumeArgs(agentSessionId);
+        const resume = this.agentRegistry.getOrThrow(executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(agentSessionId);
         resumeCmd = [resume.cmd, ...resume.args.map(a => sshGitShellQuote(a))].join(' ');
       } else {
         resumeCmd = `claude --resume ${sshGitShellQuote(agentSessionId)} --dangerously-skip-permissions`;

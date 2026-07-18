@@ -14,6 +14,8 @@ test.describe('Action Graph visual proof', () => {
       return graph.nodes.length > 0;
     });
 
+    await page.getByTestId('graph-more-button').click();
+    await expect(page.getByTestId('graph-more-menu')).toBeVisible();
     await page.getByTestId('rail-action-graph').click();
     await expect(page.getByTestId('action-graph-view')).toBeVisible();
     await expect(

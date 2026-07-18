@@ -24,9 +24,9 @@ export interface OwnerEndpointInfo {
   ownerId: string;
   /**
    * Whether this owner can accept bootstrapped standalone mutations.
-   * True when the owner was started as a detached long-lived process
-   * (the kind `ensureStandaloneOwner` provisions). False for transient
-   * owners that happen to be alive (e.g. an interactive session).
+   * True when the owner has registered the shared mutation delegation
+   * handlers. Both interactive GUI owners and detached standalone owners
+   * are single-writer owners and can serve these delegated mutations.
    *
    * The client uses this to decide whether post-bootstrap delegation
    * should target this owner or whether a fresh bootstrap is needed.
@@ -57,7 +57,7 @@ export async function discoverOwner(
   if (!raw) return null;
   return {
     ownerId: raw.ownerId ?? '',
-    canAcceptStandaloneMutations: raw.mode === 'standalone',
+    canAcceptStandaloneMutations: raw.mode === 'standalone' || raw.mode === 'gui',
   };
 }
 

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl } from '../conflict-resolver.js';
+import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -150,6 +150,42 @@ describe('resolveConflictImpl', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('uses text-form startup merge conflicts to resolve with savedError', async () => {
+    const spawnAgentFix = vi.fn(async () => ({ stdout: '', sessionId: 'sess-text-conflict' }));
+    const execGitIn = vi.fn(async (args: string[]) => {
+      if (args[0] === 'branch') return 'main';
+      if (args[0] === 'merge') throw new Error('conflict reproduced');
+      return '';
+    });
+    const conflictError = 'Executor startup failed (ssh): Merge conflict merging experiment/foo: packages/app/src/headless.ts';
+    const task = {
+      id: 'task-1',
+      status: 'fixing_with_ai',
+      execution: { error: undefined, branch: 'invoker/task-1', workspacePath: createTempWorkspace() },
+      config: {},
+    };
+    const host: ConflictResolverHost = {
+      ...makeHost(task),
+      execGitIn,
+      spawnAgentFix,
+    };
+
+    await expect(
+      resolveConflictImpl(host, 'task-1', conflictError, 'codex'),
+    ).resolves.toBeUndefined();
+
+    expect(execGitIn).toHaveBeenCalledWith(
+      ['merge', '--no-edit', '-m', 'Merge upstream experiment/foo', 'experiment/foo'],
+      task.execution.workspacePath,
+    );
+    expect(spawnAgentFix).toHaveBeenCalledWith(
+      expect.stringContaining('Conflicting files: packages/app/src/headless.ts'),
+      task.execution.workspacePath,
+      'codex',
+      undefined,
+    );
+  });
+
   it('threads agentName="codex" to spawnAgentFix when merge fails', async () => {
     const spawnAgentFix = vi.fn<(prompt: string, cwd: string, agentName?: string) => Promise<{ stdout: string; sessionId: string }>>(
       async () => ({ stdout: '', sessionId: 'sess-conflict-codex' }),
@@ -188,6 +224,46 @@ describe('resolveConflictImpl', () => {
 
     expect(spawnAgentFix).toHaveBeenCalledTimes(1);
     expect(spawnAgentFix.mock.calls[0][2]).toBe('codex');
+  });
+
+  it('threads resolved executionModel to spawnAgentFix when merge fails', async () => {
+    const spawnAgentFix = vi.fn<
+      (prompt: string, cwd: string, agentName?: string, executionModel?: string) => Promise<{ stdout: string; sessionId: string }>
+    >(async () => ({ stdout: '', sessionId: 'sess-conflict-model' }));
+    const conflictError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'invoker/dep-1',
+      conflictFiles: ['src/index.ts'],
+    });
+    const task = {
+      id: 'task-conflict-model',
+      status: 'failed' as const,
+      execution: { error: conflictError, branch: 'invoker/task-conflict-model', workspacePath: createTempWorkspace() },
+      config: {},
+    };
+    const host: ConflictResolverHost = {
+      orchestrator: {
+        getTask: () => task,
+        getAllTasks: () => [],
+      } as unknown as Orchestrator,
+      persistence: {} as any,
+      cwd: '/tmp',
+      execGitReadonly: async () => '',
+      execGitIn: async (args: string[]) => {
+        if (args[0] === 'merge') throw new Error('merge conflict');
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      },
+      createMergeWorktree: async () => '/tmp/wt',
+      removeMergeWorktree: async () => {},
+      spawnAgentFix,
+    };
+
+    await resolveConflictImpl(host, 'task-conflict-model', undefined, 'codex', 'gpt-5.1-codex-max');
+
+    expect(spawnAgentFix).toHaveBeenCalledTimes(1);
+    expect(spawnAgentFix.mock.calls[0][2]).toBe('codex');
+    expect(spawnAgentFix.mock.calls[0][3]).toBe('gpt-5.1-codex-max');
   });
 
   it('threads agentName="claude" to spawnAgentFix by default', async () => {
@@ -658,9 +734,64 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
 
       // Should not throw workspace check - SSH tasks can have remote paths
       // This path will still fail in unit tests because no SSH target exists.
-      await expect(
+    await expect(
         fixWithAgentImpl(host, 'task-ssh', 'error output'),
       ).rejects.not.toThrow(/has no valid workspace/);
     });
+
+    it('uses launch audit poolMemberId for pool-routed SSH task fixes', async () => {
+      const task = {
+        id: 'task-ssh-pool',
+        status: 'failed' as const,
+        execution: {
+          error: 'Test failed',
+          workspacePath: '~/.invoker/worktrees/repo/task-ssh-pool',
+        },
+        config: {
+          command: 'npm test',
+          runnerKind: 'ssh' as const,
+          poolId: 'pnpm-ssh',
+        },
+      };
+      const getRemoteTargetConfig = vi.fn(() => ({
+        host: 'remote.example',
+        user: 'user',
+        sshKeyPath: '/key',
+      }));
+
+      const host: ConflictResolverHost = {
+        ...makeHost(task),
+        persistence: {
+          getEvents: () => [
+            {
+              id: 1,
+              taskId: task.id,
+              eventType: 'task.executor.selected',
+              payload: JSON.stringify({ poolMemberId: 'remote-from-audit' }),
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        } as any,
+        getRemoteTargetConfig,
+        agentRegistry: registerBuiltinAgents(),
+      };
+
+      await expect(
+        fixWithAgentImpl(host, task.id, 'error output'),
+      ).rejects.not.toThrow(/has no valid workspace/);
+      expect(getRemoteTargetConfig).toHaveBeenCalledWith('remote-from-audit');
+    });
+  });
+});
+
+describe('remoteAgentShellInvocation', () => {
+  it('forwards PATH so a bare agent binary resolves on the remote, like task execution', () => {
+    expect(remoteAgentShellInvocation('/opt/stub:/usr/bin')).toEqual([
+      'env', 'PATH=/opt/stub:/usr/bin', 'bash', '-s',
+    ]);
+  });
+
+  it('falls back to a bare bash invocation when no PATH is available', () => {
+    expect(remoteAgentShellInvocation('')).toEqual(['bash', '-s']);
   });
 });
