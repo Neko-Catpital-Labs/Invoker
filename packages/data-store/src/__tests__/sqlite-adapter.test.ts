@@ -1279,6 +1279,21 @@ describe('SQLiteAdapter', () => {
       expect(adapter.loadMessages('ts-1')).toEqual([]);
     });
 
+    it('counts messages for a thread', () => {
+      adapter.saveConversation(makeConversation('ts-1'));
+      adapter.saveConversation(makeConversation('ts-2'));
+
+      expect(adapter.countMessages('ts-1')).toBe(0);
+
+      adapter.appendMessage('ts-1', 'user', '"thread 1 msg"');
+      adapter.appendMessage('ts-2', 'user', '"thread 2 msg"');
+      adapter.appendMessage('ts-1', 'assistant', '"reply to thread 1"');
+
+      expect(adapter.countMessages('ts-1')).toBe(2);
+      expect(adapter.countMessages('ts-2')).toBe(1);
+      expect(adapter.countMessages('missing')).toBe(0);
+    });
+
     it('isolates messages by thread_ts', () => {
       adapter.saveConversation(makeConversation('ts-1'));
       adapter.saveConversation(makeConversation('ts-2'));
