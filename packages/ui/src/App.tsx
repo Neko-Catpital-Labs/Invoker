@@ -207,21 +207,6 @@ function makeInitialPlanningSession(now: string = new Date().toISOString()): Pla
   };
 }
 
-function planningSessionSummaryToView(session: InAppPlanningSessionSummary): PlanningSessionView {
-  return {
-    ...session,
-    messages: session.messages.map((line) => ({
-      id: line.id,
-      text: line.text,
-      role: line.role,
-      ...(line.tone ? { tone: line.tone } : {}),
-    })),
-    input: '',
-    busy: false,
-    conversationKey: session.id,
-  };
-}
-
 function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
   return status === 'waiting_for_answer' || status === 'draft_ready';
 }
@@ -970,33 +955,6 @@ export function App() {
   }, [refreshSystemDiagnostics]);
 
   useEffect(() => {
-    let cancelled = false;
-    window.invoker?.planningChatList?.()
-      .then((response) => {
-        if (cancelled || !response.ok || response.sessions.length === 0) return;
-        const currentSessions = planningSessionsRef.current;
-        const first = currentSessions[0];
-        const onlyInitialPlaceholder = currentSessions.length === 1
-          && first?.id === 'local-planning-session-1'
-          && first.input === ''
-          && first.messages.every((line) => line.role === 'system');
-        if (!onlyInitialPlaceholder) return;
-        const restored = response.sessions.map(planningSessionSummaryToView);
-        const maxLineId = restored.reduce((max, session) => (
-          Math.max(max, ...session.messages.map((line) => line.id))
-        ), 1);
-        nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
-        setPlanningSessions(restored);
-        setActivePlanningSessionId(restored[0]?.id ?? 'local-planning-session-1');
-        setSelectedPlanningPresetKey((current) => current || restored[0]?.presetKey || current);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
     window.invoker?.terminalList?.().then((list) => {
       if (Array.isArray(list) && list.length > 0) {
         setTerminalSessions(list);
@@ -1034,6 +992,7 @@ export function App() {
             ? currentSessionId
             : restored[0]?.id ?? currentSessionId
         ));
+        setSelectedPlanningPresetKey((current) => current || restored[0]?.presetKey || current);
         const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
         nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
       } catch {
