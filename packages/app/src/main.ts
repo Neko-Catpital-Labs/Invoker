@@ -59,7 +59,7 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope, CommandError } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type { InAppPlanningDeleteRequest, WorkResponse } from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
@@ -160,6 +160,12 @@ import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
+import {
+  createInAppPlanningChatSessions,
+  deletePlanningChat,
+  deleteSubmittedPlanningChats,
+  type InAppPlanningSessionStore,
+} from './in-app-planner.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -217,6 +223,7 @@ let commandService: CommandService;
 let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const planningChatSessions = createInAppPlanningChatSessions();
 /**
  * The mutation context for the currently executing workflow mutation.
  * Set by the coordinator dispatch callback before invoking the handler,
@@ -343,6 +350,13 @@ function installPackagedSkills(mode: import('@invoker/contracts').BundledSkillsI
     repoRoot,
     resourcesPath: process.resourcesPath,
   }, mode);
+}
+
+function getPlanningSessionStore(): InAppPlanningSessionStore | undefined {
+  const candidate = persistence as unknown as Partial<InAppPlanningSessionStore>;
+  return typeof candidate.deleteInAppPlanningSession === 'function'
+    ? candidate as InAppPlanningSessionStore
+    : undefined;
 }
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
@@ -2771,6 +2785,27 @@ if (isHeadless) {
         jsonSizeBytes,
       });
       event.returnValue = payload;
+    });
+    const planningConversationRepo = new ConversationRepository(persistence, {
+      info: (message) => logger.info(message, { module: 'planning-chat' }),
+      warn: (message) => logger.warn(message, { module: 'planning-chat' }),
+      error: (message) => logger.error(message, { module: 'planning-chat' }),
+    });
+    registerGuiMutationHandler('invoker:planning-chat-delete', async (request: unknown) => {
+      return deletePlanningChat(request as InAppPlanningDeleteRequest, {
+        sessions: planningChatSessions,
+        planningSessionStore: getPlanningSessionStore(),
+        conversationRepo: planningConversationRepo,
+        logger,
+      });
+    });
+    registerGuiMutationHandler('invoker:planning-chat-delete-submitted', async () => {
+      return deleteSubmittedPlanningChats({
+        sessions: planningChatSessions,
+        planningSessionStore: getPlanningSessionStore(),
+        conversationRepo: planningConversationRepo,
+        logger,
+      });
     });
     registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
       const planText = String(planTextArg);
