@@ -9,6 +9,7 @@ import { Handle, Position } from '@xyflow/react';
 import type { TaskStatus } from '../types.js';
 import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
 import type { MergeGateKind } from '../lib/merge-gate.js';
+import { GitMergeIcon, GitPullRequestIcon } from './icons/index.js';
 
 interface MergeGateNodeData {
   taskId?: string;
@@ -57,28 +58,21 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
   const effectiveGateKind: MergeGateKind = mergeMode === 'external_review' ? 'external_review' : gateKind;
 
   const usePrIcon = effectiveGateKind === 'external_review' || effectiveGateKind === 'pull_request';
-  const icon = usePrIcon ? (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V7a4 4 0 00-4-4H9" />
-    </svg>
-  ) : (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M7 7v10m0-10a2 2 0 11-4 0 2 2 0 014 0zm10 10a2 2 0 104 0 2 2 0 00-4 0zm0 0V9a4 4 0 00-4-4H9" />
-    </svg>
-  );
+  const IconComponent = usePrIcon ? GitPullRequestIcon : GitMergeIcon;
 
   const statusLabel =
-    visualStatus === 'completed' ? 'COMPLETED' :
-    visualStatus === 'fix_approval' ? 'APPROVE FIX' :
-    visualStatus === 'review_ready' ? 'REVIEW READY' :
-    visualStatus === 'awaiting_approval' ? 'APPROVE' :
-    visualStatus === 'running' ? 'RUNNING' :
-    visualStatus === 'failed' ? 'BLOCKED' :
-    'PENDING';
+    visualStatus === 'completed' ? 'Completed' :
+    visualStatus === 'fix_approval' ? 'Approve fix' :
+    visualStatus === 'review_ready' ? 'Review ready' :
+    visualStatus === 'awaiting_approval' ? 'Approve' :
+    visualStatus === 'running' ? 'Running' :
+    visualStatus === 'closed' ? 'Closed' :
+    visualStatus === 'failed' ? 'Blocked' :
+    'Pending';
 
   return (
     <div
-      className={`relative w-[264px] rounded-2xl border border-dashed px-5 py-4 transition-[opacity,box-shadow,border-color] duration-75 shadow-[0_6px_24px_rgba(0,0,0,0.28)] ${colors.bg} ${colors.border} ${selected ? 'ring-2 ring-white/90 ring-offset-2 ring-offset-gray-950 shadow-[0_0_0_1px_rgba(255,255,255,0.25),0_10px_30px_rgba(0,0,0,0.38)]' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}
+      className={`relative w-[167px] rounded-xl border border-dashed px-2 py-2 transition-[opacity,box-shadow,border-color] duration-75 shadow-sm ${colors.bg} ${colors.border} ${selected ? 'ring-1 ring-ring/60 shadow-md' : ''} ${dimmed ? 'opacity-20 pointer-events-none' : ''}`}
       title={label}
       data-selected={selected ? 'true' : 'false'}
     >
@@ -89,25 +83,25 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
       />
 
       <span
-        className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
+        className={`absolute left-0 top-0 bottom-0 w-[2px] rounded-l-xl ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
       />
 
-      <div className={`flex items-center gap-2 pl-3 ${colors.text}`}>
-        {icon}
-        <span className="font-mono text-sm font-semibold" data-testid="merge-gate-primary-label">
+      <div className={`flex items-center gap-1.5 pl-2 ${colors.text}`}>
+        <IconComponent className="w-3 h-3" />
+        <span className="font-mono text-[8px] font-semibold uppercase tracking-wide" data-testid="merge-gate-primary-label">
           {PRIMARY_LABEL[effectiveGateKind]}
         </span>
       </div>
 
-      <div className={`text-2xl font-medium truncate mt-1 pl-3 ${colors.text}`}>
+      <div className={`text-[11px] font-medium truncate mt-0.5 pl-2 text-card-foreground`}>
         {label}
       </div>
 
-      <div className="flex items-center gap-1.5 mt-1 pl-3">
+      <div className="flex items-center gap-1 mt-0.5 pl-2">
         <span
-          className={`w-2 h-2 rounded-full ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
+          className={`w-1 h-1 rounded-full ${colors.dot} ${visualStatus === 'pending' ? 'pulse-strong' : ''}`}
         />
-        <span className={`text-sm uppercase tracking-wide ${colors.text}`}>{statusLabel}</span>
+        <span className={`text-[8px] tracking-wide ${colors.text}`}>{statusLabel}</span>
       </div>
 
       <Handle
