@@ -73,6 +73,7 @@ export type RemoteTargetDisplay = {
   port?: number;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
+  provisionCommand?: string;
   use_api_key?: boolean;
   secretsFile?: string;
   remoteHeartbeatIntervalSeconds?: number;
@@ -657,6 +658,7 @@ export function selectExecutor(
         port: target.port,
         managedWorkspaces: target.managedWorkspaces,
         remoteInvokerHome: target.remoteInvokerHome,
+        provisionCommand: target.provisionCommand,
         use_api_key: target.use_api_key === true,
         secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
         remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
@@ -682,6 +684,8 @@ export function selectExecutor(
         port: target.port,
         agentRegistry: host.executionAgentRegistry,
         managedWorkspaces: target.managedWorkspaces,
+        remoteInvokerHome: target.remoteInvokerHome,
+        provisionCommand: target.provisionCommand,
         useApiKey: target.use_api_key,
         secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
         remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
