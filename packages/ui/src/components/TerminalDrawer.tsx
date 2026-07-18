@@ -1,9 +1,12 @@
+import type { ReactElement, ReactNode } from 'react';
+
 interface TerminalDrawerProps {
   collapsed: boolean;
   onToggle: () => void;
+  children?: ReactNode;
 }
 
-export function TerminalDrawer({ collapsed, onToggle }: TerminalDrawerProps): JSX.Element {
+export function TerminalDrawer({ collapsed, onToggle, children }: TerminalDrawerProps): ReactElement {
   return (
     <div className="border-t border-gray-800 bg-gray-950">
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
@@ -21,8 +24,8 @@ export function TerminalDrawer({ collapsed, onToggle }: TerminalDrawerProps): JS
         </button>
       </div>
       {!collapsed && (
-        <div className="h-40 px-3 py-2 text-xs text-gray-400 overflow-auto">
-          Terminal drawer reserved for embedded shell/log surfaces.
+        <div className="h-64 px-3 py-2 text-xs text-gray-400 overflow-auto">
+          {children ?? 'Terminal drawer reserved for embedded shell/log surfaces.'}
         </div>
       )}
     </div>

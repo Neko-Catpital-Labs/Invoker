@@ -250,6 +250,43 @@ export interface PlanDefinition {
   mergeMode?: 'manual' | 'automatic' | 'external_review';
 }
 
+// ── Planning Chat Drafts ───────────────────────────────────
+
+export interface DraftPlanTaskSummary {
+  id?: string;
+  name?: string;
+  title?: string;
+  description?: string;
+}
+
+export interface DraftPlanTaskGroupSummary {
+  name?: string;
+  taskCount?: number;
+  tasks?: readonly DraftPlanTaskSummary[];
+}
+
+export interface DraftPlanSummary {
+  name: string;
+  taskCount: number;
+  taskGroups?: readonly DraftPlanTaskGroupSummary[];
+  tasks?: readonly DraftPlanTaskSummary[];
+  onFinish?: 'none' | 'merge' | 'pull_request';
+  planText?: string;
+  draftPlanText?: string;
+  yaml?: string;
+  planYaml?: string;
+}
+
+export interface PlanningChatSendResult {
+  sessionId?: string;
+  assistantMessage?: string;
+  draftPlanSummary?: DraftPlanSummary | null;
+  draftPlanText?: string;
+  planText?: string;
+  yaml?: string;
+  planYaml?: string;
+}
+
 // ── Task Replacement ────────────────────────────────────────
 
 export interface TaskReplacementDef {
@@ -266,9 +303,13 @@ export interface TaskReplacementDef {
 // ── IPC Bridge API ──────────────────────────────────────────
 // InvokerAPI is derived from the IPC channel registry in @invoker/contracts.
 
-export type { InvokerAPI, ClaudeMessage, AgentSessionData } from '@invoker/contracts';
+export type { ClaudeMessage, AgentSessionData } from '@invoker/contracts';
 
-import type { InvokerAPI } from '@invoker/contracts';
+import type { InvokerAPI as ContractInvokerAPI } from '@invoker/contracts';
+
+export type InvokerAPI = ContractInvokerAPI & {
+  sendPlanningChatMessage?: (message: string, sessionId?: string | null) => Promise<PlanningChatSendResult>;
+};
 
 // ── Augment global Window ───────────────────────────────────
 

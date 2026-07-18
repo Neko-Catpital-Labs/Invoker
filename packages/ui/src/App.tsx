@@ -11,7 +11,14 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
+import type {
+  DraftPlanSummary,
+  PlanningChatSendResult,
+  TaskState,
+  TaskReplacementDef,
+  ExternalGatePolicyUpdate,
+  WorkflowStatus,
+} from './types.js';
 import type { ActionGraphNode } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -31,6 +38,7 @@ import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { StatusBar } from './components/StatusBar.js';
 import { TerminalDrawer } from './components/TerminalDrawer.js';
+import { InvokerTerminal } from './components/InvokerTerminal.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -218,6 +226,30 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
   }
 }
 
+function firstNonEmptyString(...values: Array<string | undefined | null>): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function extractDraftPlanTextFromSummary(summary: DraftPlanSummary | null): string | null {
+  if (!summary) return null;
+  return firstNonEmptyString(summary.draftPlanText, summary.planText, summary.yaml, summary.planYaml);
+}
+
+function extractDraftPlanText(result: PlanningChatSendResult): string | null {
+  return firstNonEmptyString(
+    result.draftPlanText,
+    result.planText,
+    result.yaml,
+    result.planYaml,
+    extractDraftPlanTextFromSummary(result.draftPlanSummary ?? null),
+  );
+}
+
 export function App() {
   const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
   const invoker = useInvoker();
@@ -230,6 +262,8 @@ export function App() {
   const [hasLoadedPlan, setHasLoadedPlan] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [planName, setPlanName] = useState<string | null>(null);
+  const [draftPlanSummary, setDraftPlanSummary] = useState<DraftPlanSummary | null>(null);
+  const [draftPlanText, setDraftPlanText] = useState<string | null>(null);
   const [onFinish, setOnFinish] = useState<'none' | 'merge' | 'pull_request'>('merge');
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const [selectedActionNode, setSelectedActionNode] = useState<ActionGraphNode | null>(null);
@@ -683,6 +717,35 @@ export function App() {
     [handleLoadPlan],
   );
 
+  const handlePlanningChatSend = useCallback(
+    async (message: string, sessionId?: string | null): Promise<PlanningChatSendResult> => {
+      if (!invoker?.sendPlanningChatMessage) {
+        throw new Error('Planning chat is not available.');
+      }
+      const result = await invoker.sendPlanningChatMessage(message, sessionId);
+      if (result.draftPlanSummary) {
+        setDraftPlanSummary(result.draftPlanSummary);
+        setDraftPlanText(extractDraftPlanText(result));
+      }
+      return result;
+    },
+    [invoker],
+  );
+
+  const handleClearDraftPlan = useCallback(() => {
+    setDraftPlanSummary(null);
+    setDraftPlanText(null);
+  }, []);
+
+  const effectiveDraftPlanText = draftPlanText ?? extractDraftPlanTextFromSummary(draftPlanSummary);
+
+  const handleSubmitDraftPlan = useCallback(async () => {
+    if (!effectiveDraftPlanText) return;
+    await handleLoadPlan(effectiveDraftPlanText);
+    setDraftPlanSummary(null);
+    setDraftPlanText(null);
+  }, [effectiveDraftPlanText, handleLoadPlan]);
+
   const handleStart = useCallback(async () => {
     if (!invoker) return;
     try {
@@ -710,6 +773,8 @@ export function App() {
       setHasLoadedPlan(false);
       setHasStarted(false);
       setPlanName(null);
+      setDraftPlanSummary(null);
+      setDraftPlanText(null);
       setOnFinish('merge');
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
@@ -732,6 +797,8 @@ export function App() {
       setHasLoadedPlan(false);
       setHasStarted(false);
       setPlanName(null);
+      setDraftPlanSummary(null);
+      setDraftPlanText(null);
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
@@ -1143,7 +1210,15 @@ export function App() {
                 <TerminalDrawer
                   collapsed={terminalCollapsed}
                   onToggle={() => setTerminalCollapsed((prev) => !prev)}
-                />
+                >
+                  <InvokerTerminal
+                    draftPlanSummary={draftPlanSummary}
+                    canSubmitDraftPlan={Boolean(effectiveDraftPlanText)}
+                    onPlanningChatSend={handlePlanningChatSend}
+                    onSubmitDraftPlan={handleSubmitDraftPlan}
+                    onClearDraftPlan={handleClearDraftPlan}
+                  />
+                </TerminalDrawer>
               </>
             )}
           </div>

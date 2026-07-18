@@ -65,6 +65,9 @@ export function createMockInvoker(
     onTaskOutput: vi.fn(() => () => {}),
     onActivityLog: vi.fn(() => () => {}),
     loadPlan: vi.fn(async () => {}),
+    sendPlanningChatMessage: vi.fn(async (_message: string, sessionId?: string | null) => ({
+      sessionId: sessionId ?? 'mock-planning-session',
+    })),
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
