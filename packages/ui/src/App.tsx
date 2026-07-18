@@ -2492,9 +2492,7 @@ export function App() {
       if (result.ok) {
         setPlanningSubmitError(null);
         setHasLoadedPlan(true);
-        setSidebarSurface('home');
         setWorkflowSelectionDismissed(false);
-        setViewMode('dag');
         setGraphActionsMenuOpen(false);
         setPlanName(result.planName);
         setSelectedWorkflowId(result.workflowId);
