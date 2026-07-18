@@ -235,3 +235,53 @@ describe('headless query container-id', () => {
     expect(output).toBe('\n');
   });
 });
+
+describe('headless query execution-leases', () => {
+  it('lists live leases as JSON and hides expired rows', async () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'execution-leases', '--output', 'json'],
+      {
+        ...makeQueryDeps(),
+        persistence: {
+          listExecutionResourceLeases: () => [
+            {
+              resourceKey: 'ssh:invoker@shared.example.com:22',
+              resourceType: 'ssh',
+              holderId: 'runner:1:wf-1/t1:attempt',
+              taskId: 'wf-1/t1',
+              poolId: 'pnpm-ssh',
+              poolMemberId: 'remote-shared',
+              acquiredAt: future,
+              lastHeartbeatAt: future,
+              leaseExpiresAt: future,
+            },
+            {
+              resourceKey: 'ssh:invoker@expired.example.com:22',
+              resourceType: 'ssh',
+              holderId: 'dead',
+              acquiredAt: past,
+              lastHeartbeatAt: past,
+              leaseExpiresAt: past,
+            },
+          ],
+        } as unknown as HeadlessQueryDeps['persistence'],
+      },
+    );
+
+    expect(JSON.parse(output)).toEqual([
+      {
+        resourceKey: 'ssh:invoker@shared.example.com:22',
+        resourceType: 'ssh',
+        poolId: 'pnpm-ssh',
+        poolMemberId: 'remote-shared',
+        taskId: 'wf-1/t1',
+        holderId: 'runner:1:wf-1/t1:attempt',
+        acquiredAt: future,
+        lastHeartbeatAt: future,
+        leaseExpiresAt: future,
+      },
+    ]);
+  });
+});
