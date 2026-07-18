@@ -277,6 +277,40 @@ done < <(echo "$WORKTREES_B64" | base64 -d)
 `;
 }
 
+export interface GitWorktreeSandboxResetOpts {
+  worktreePath: string;
+  /** The commit/ref to hard-reset the branch to before execution (e.g. resolvedBaseRef / baseHead). */
+  toRef: string;
+}
+
+/**
+ * Sandbox-reset a reused managed worktree to a known-good state before task execution.
+ *
+ * Removes residual state from a prior (possibly SIGKILL-interrupted) run so that
+ * the task always starts from the declared base ref.
+ *
+ *   1. git reset --hard <toRef>   — force branch tip back to declared base
+ *   2. git clean -fd              — remove untracked/modified files, but keep gitignored
+ *                                   files (e.g. node_modules/, build caches).
+ *
+ * Why -fd and not -fdx:
+ *   Invoker no longer hydrates repos on checkout, so the task payload owns any
+ *   repo bootstrap such as `pnpm install` or `flutter pub get`. Keeping
+ *   gitignored caches alive with -fd makes repeated task-level hydration faster
+ *   without changing tracked files.
+ */
+export function buildWorktreeSandboxResetScript(opts: GitWorktreeSandboxResetOpts): string {
+  const wtB64 = base64Encode(opts.worktreePath);
+  const refB64 = base64Encode(opts.toRef);
+  return `set -euo pipefail
+WT=$(echo ${wtB64} | base64 -d)
+REF=$(echo ${refB64} | base64 -d)
+${bashNormalizeTildePath('WT')}
+git -C "$WT" reset --hard "$REF"
+git -C "$WT" clean -fd
+`;
+}
+
 export interface GitWorktreeRenameBranchOpts {
   worktreePath: string;
   fromBranch: string;
@@ -327,30 +361,25 @@ export function buildRecordAndPushScript(opts: GitRecordAndPushOpts): string {
 WT=$(echo ${wtB} | base64 -d)
 ${bashNormalizeTildePath()}
 cd "$WT"
-git config user.name "$(echo ${userNameB} | base64 -d)"
-git config user.email "$(echo ${userEmailB} | base64 -d)"
 git add -A
 M=$(mktemp)
 trap 'rm -f "$M"' EXIT
+GIT_NAME=$(echo ${userNameB} | base64 -d)
+GIT_EMAIL=$(echo ${userEmailB} | base64 -d)
 if git diff --cached --quiet; then
   echo ${emB} | base64 -d > "$M"
-  git commit --allow-empty -F "$M"
+  GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit --allow-empty -F "$M"
 else
   echo ${chB} | base64 -d > "$M"
-  git commit -F "$M"
+  GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit -F "$M"
 fi
 HASH=$(git rev-parse HEAD)
 BR=$(echo ${brB} | base64 -d)
 PUSH_URL=$(echo ${pushRemoteUrlB} | base64 -d)
 if [ -n "$PUSH_URL" ]; then
-  if git remote get-url invoker-branches >/dev/null 2>&1; then
-    git remote set-url invoker-branches "$PUSH_URL"
-  else
-    git remote add invoker-branches "$PUSH_URL"
-  fi
-  git push -u invoker-branches "$BR"
+  git push "$PUSH_URL" "$BR:refs/heads/$BR"
 else
-  git push -u origin "$BR"
+  git push origin "$BR:refs/heads/$BR"
 fi
 printf "%s" "$HASH"
 `;

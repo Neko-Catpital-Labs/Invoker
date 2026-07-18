@@ -1,81 +1,34 @@
 /**
- * Priority queue with simple maxConcurrency limit for task scheduling.
+ * Priority queue for task scheduling.
  *
- * No I/O, no Docker, no Git — just a sorted queue and concurrency tracking.
- * Higher priority numbers are dequeued first.
+ * CC.3: this used to also track a `running` Set + `maxConcurrency`
+ * gate, but the durable `task_launch_dispatch` outbox is now the
+ * single source of truth for occupancy. The scheduler is reduced to
+ * a sorted enqueue / takeNext priority queue plus inspection
+ * helpers; concurrency is enforced by `claimLaunchDispatchAtomic`
+ * in the SQLite adapter.
+ *
+ * No I/O, no Docker, no Git — just a sorted queue.
+ * Higher priority numbers come out first.
  */
 
 export interface TaskJob {
   taskId: string;
   attemptId?: string;
   priority: number;
-}
-
-interface RunningJob {
-  taskId: string;
-  attemptId: string;
+  // Reserved for replacement-root launches. Normal queued work must pass
+  // dependency readiness at dequeue time.
+  bypassLocalDependencyReadiness?: boolean;
 }
 
 export class TaskScheduler {
   private queue: TaskJob[] = [];
-  private running: Map<string, RunningJob> = new Map();
-  private runningByTaskId: Map<string, Set<string>> = new Map();
-  private maxConcurrency: number;
 
-  constructor(maxConcurrency: number = 3) {
-    this.maxConcurrency = maxConcurrency;
-  }
-
-  private getJobKey(job: TaskJob): string {
-    return job.attemptId ?? job.taskId;
-  }
-
-  private addRunning(job: TaskJob): void {
-    const attemptId = this.getJobKey(job);
-    const runningJob: RunningJob = {
-      taskId: job.taskId,
-      attemptId,
-    };
-
-    this.running.set(attemptId, runningJob);
-
-    const taskIds = this.runningByTaskId.get(job.taskId) ?? new Set<string>();
-    taskIds.add(attemptId);
-    this.runningByTaskId.set(job.taskId, taskIds);
-  }
-
-  private removeRunningAttempt(attemptId: string): boolean {
-    const runningJob = this.running.get(attemptId);
-    if (!runningJob) {
-      return false;
-    }
-
-    this.running.delete(attemptId);
-    const taskIds = this.runningByTaskId.get(runningJob.taskId);
-    if (taskIds) {
-      taskIds.delete(attemptId);
-      if (taskIds.size === 0) {
-        this.runningByTaskId.delete(runningJob.taskId);
-      }
-    }
-
-    return true;
-  }
-
-  private removeRunningTask(taskId: string): number {
-    const attemptIds = this.runningByTaskId.get(taskId);
-    if (!attemptIds || attemptIds.size === 0) {
-      return 0;
-    }
-
-    let removed = 0;
-    for (const attemptId of attemptIds) {
-      if (this.removeRunningAttempt(attemptId)) {
-        removed += 1;
-      }
-    }
-    return removed;
-  }
+  // The constructor still accepts a `maxConcurrency` argument for
+  // backwards compatibility with existing callers (Orchestrator,
+  // tests) — it is reported in `getStatus()` for observability but no
+  // longer gates dispatch.
+  constructor(private readonly maxConcurrency: number = 3) {}
 
   /** Add a job to the queue, sorted by priority (high first). */
   enqueue(job: TaskJob): void {
@@ -95,10 +48,10 @@ export class TaskScheduler {
   }
 
   /**
-   * Remove and return the next queued job without mutating the running set.
+   * Remove and return the next queued job.
    *
-   * Orchestrator uses this when persisted attempt leases, not in-memory state,
-   * are the source of truth for occupancy.
+   * Orchestrator uses this when persisted attempt leases (and, after
+   * Phase B, dispatch leases) are the source of truth for occupancy.
    */
   takeNext(): TaskJob | null {
     if (this.queue.length === 0) {
@@ -108,78 +61,29 @@ export class TaskScheduler {
   }
 
   /**
-   * Remove and return the highest-priority job if under maxConcurrency limit.
-   * Returns null if at capacity or queue empty.
+   * Empty the queue. Returns the number of jobs that were dropped.
+   *
+   * Used by Orchestrator.removeAllWorkflows / deleteAllWorkflows so a
+   * mass delete doesn't leave stale jobs pointing at vanished tasks.
+   * The legacy `killAll()` also cleared the in-process running set;
+   * with CC.3 that set is gone, so this is just a queue drain.
    */
-  dequeue(): TaskJob | null {
-    if (this.queue.length === 0) {
-      return null;
-    }
-
-    if (this.running.size < this.maxConcurrency) {
-      const job = this.queue.shift()!;
-      this.addRunning(job);
-      return {
-        ...job,
-        attemptId: this.getJobKey(job),
-      };
-    }
-
-    return null;
-  }
-
-  /** Mark a job as complete, freeing its slot. */
-  completeJob(taskIdOrAttemptId: string): void {
-    if (this.removeRunningAttempt(taskIdOrAttemptId)) {
-      return;
-    }
-
-    this.removeRunningTask(taskIdOrAttemptId);
-  }
-
-  /** Kill all running jobs and clear the queue. */
-  killAll(): { killedCount: number; clearedCount: number } {
-    const killedCount = this.running.size;
+  clearQueue(): { clearedCount: number } {
     const clearedCount = this.queue.length;
-    this.running.clear();
-    this.runningByTaskId.clear();
     this.queue = [];
-    return { killedCount, clearedCount };
+    return { clearedCount };
   }
 
   /** Get current status. */
-  getStatus(): { queueLength: number; runningCount: number; maxConcurrency: number } {
+  getStatus(): { queueLength: number; maxConcurrency: number } {
     return {
       queueLength: this.queue.length,
-      runningCount: this.running.size,
       maxConcurrency: this.maxConcurrency,
     };
   }
 
-  /** Check if a task is currently running. */
-  isRunning(taskIdOrAttemptId: string): boolean {
-    return this.running.has(taskIdOrAttemptId) || this.runningByTaskId.has(taskIdOrAttemptId);
-  }
-
-  /** Return all attempt IDs currently in the running set. */
-  getRunningAttemptIds(): string[] {
-    return Array.from(this.running.keys());
-  }
-
-  /** Return all task IDs currently in the running set. */
-  getRunningTaskIds(): string[] {
-    const taskIds: string[] = [];
-    const seen = new Set<string>();
-
-    for (const runningJob of this.running.values()) {
-      if (seen.has(runningJob.taskId)) {
-        continue;
-      }
-      seen.add(runningJob.taskId);
-      taskIds.push(runningJob.taskId);
-    }
-
-    return taskIds;
+  replaceQueue(jobs: TaskJob[]): void {
+    this.queue = [...jobs];
   }
 
   /** Return a shallow copy of the internal queue (not-yet-running jobs). */
@@ -187,7 +91,7 @@ export class TaskScheduler {
     return [...this.queue];
   }
 
-  /** Find and remove a job from the queue by taskId. Returns true if found and removed, false otherwise. */
+  /** Find and remove a job from the queue by taskId or attemptId. */
   removeJob(taskIdOrAttemptId: string): boolean {
     const index = this.queue.findIndex(
       job => job.attemptId === taskIdOrAttemptId || job.taskId === taskIdOrAttemptId,
@@ -197,10 +101,5 @@ export class TaskScheduler {
     }
     this.queue.splice(index, 1);
     return true;
-  }
-
-  /** Return running jobs with both task and attempt identity. */
-  getRunningJobs(): Array<{ taskId: string; attemptId: string }> {
-    return Array.from(this.running.values()).map(({ taskId, attemptId }) => ({ taskId, attemptId }));
   }
 }

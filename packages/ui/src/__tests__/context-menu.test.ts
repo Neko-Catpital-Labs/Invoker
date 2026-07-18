@@ -36,6 +36,25 @@ describe('ContextMenu getMenuItems', () => {
       expect(items[0].variant).toBe('primary');
       expect(items[0].action).toBe('onOpenTerminal');
     });
+    it('crash-preserved running task prioritizes restart and disables terminal reopen', () => {
+      const task = makeTask({
+        status: 'running',
+        execution: { crashPreservedAt: new Date('2026-07-13T01:02:03.000Z') },
+      });
+      const items = getMenuItems(task);
+
+      expect(items[0]).toMatchObject({
+        label: 'Restart Task',
+        enabled: true,
+        action: 'onRestart',
+        variant: 'primary',
+      });
+      expect(items[1]).toMatchObject({
+        label: 'Open Terminal',
+        enabled: false,
+        action: 'onOpenTerminal',
+      });
+    });
 
     it('pending task: first item is "Restart Task" (primary)', () => {
       const task = makeTask({ status: 'pending' });
@@ -98,7 +117,7 @@ describe('ContextMenu getMenuItems', () => {
       const taskWithWorkflow = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const itemsWithWorkflow = getMenuItems(taskWithWorkflow);
 
-      const workflowItemIds = ['rebase-retry', 'recreate-rebase', 'retry-workflow', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
+      const workflowItemIds = ['rebase-retry', 'rebase-recreate', 'retry-workflow', 'recreate-workflow', 'cancel-workflow', 'delete-workflow'];
       workflowItemIds.forEach((id) => {
         expect(itemsWithWorkflow.find((i) => i.id === id)).toBeUndefined();
       });
@@ -122,6 +141,36 @@ describe('ContextMenu getMenuItems', () => {
       expect(recreateTask).toBeDefined();
       expect(recreateTask?.action).toBe('onRecreateTask');
     });
+
+    it('shows Recreate Downstream for workflow-owned tasks', () => {
+      const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const recreateDownstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(recreateDownstream).toBeDefined();
+      expect(recreateDownstream).toMatchObject({
+        label: 'Recreate Downstream',
+        enabled: true,
+        action: 'onRecreateDownstream',
+        variant: 'danger',
+      });
+    });
+
+    it('hides Recreate Downstream for non-workflow tasks', () => {
+      const task = makeTask({ status: 'failed' });
+      const items = getMenuItems(task);
+
+      expect(items.find((item) => item.id === 'recreate-downstream')).toBeUndefined();
+    });
+
+    it('disables Recreate Downstream while the task is running', () => {
+      const task = makeTask({ status: 'running', workflowId: 'wf-1' });
+      const items = getMenuItems(task);
+
+      const recreateDownstream = items.find((item) => item.id === 'recreate-downstream');
+      expect(recreateDownstream).toBeDefined();
+      expect(recreateDownstream?.enabled).toBe(false);
+    });
   });
 
   describe('Restart visibility', () => {
@@ -133,12 +182,23 @@ describe('ContextMenu getMenuItems', () => {
       expect(restartItem?.enabled).toBe(true);
     });
 
-    it('disables restart for running tasks', () => {
+    it('disables restart for ordinary running tasks', () => {
       const task = makeTask({ status: 'running' });
       const items = getMenuItems(task);
 
       const restartItem = items.find((item) => item.id === 'restart');
       expect(restartItem?.enabled).toBe(false);
+    });
+
+    it('re-enables restart for running tasks preserved after a crash', () => {
+      const task = makeTask({
+        status: 'running',
+        execution: { crashPreservedAt: new Date('2026-07-13T01:02:03.000Z') },
+      });
+      const items = getMenuItems(task);
+
+      const restartItem = items.find((item) => item.id === 'restart');
+      expect(restartItem?.enabled).toBe(true);
     });
   });
 
@@ -226,7 +286,7 @@ describe('ContextMenu getMenuItems', () => {
       const task = makeTask({ status: 'failed', workflowId: 'wf-1' });
       const items = getMenuItems(task);
 
-      const dangerIds = ['cancel-task', 'recreate-task'];
+      const dangerIds = ['cancel-task', 'recreate-task', 'recreate-downstream', 'delete-task'];
       dangerIds.forEach((id) => {
         const item = items.find((i) => i.id === id);
         expect(item?.variant).toBe('danger');

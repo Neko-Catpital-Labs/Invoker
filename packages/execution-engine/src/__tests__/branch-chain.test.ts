@@ -22,14 +22,11 @@ function createTempRepo(): string {
   execSync('git init -b master', { cwd: dir });
   execSync('git config user.email "test@test.com"', { cwd: dir });
   execSync('git config user.name "Test"', { cwd: dir });
-  // Ignore install output so parallel task branches do not merge-conflict on generated artifacts.
+  // Ignore generated caches so parallel task branches do not merge-conflict on artifacts.
   writeFileSync(
     join(dir, '.gitignore'),
     ['node_modules/', '.pnpm/', '.pnpm-store/', 'pnpm-debug.log*'].join('\n') + '\n',
   );
-  // WorktreeExecutor runs pnpm install in the worktree — minimal manifest so provisioning succeeds.
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'branch-chain-test', version: '1.0.0', private: true }, null, 2));
-  execSync('pnpm install', { cwd: dir, stdio: 'pipe' });
   writeFileSync(join(dir, 'initial.txt'), 'initial');
   execSync('git add -A && git commit -m "initial"', { cwd: dir });
   return dir;

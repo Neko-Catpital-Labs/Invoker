@@ -40,6 +40,8 @@ export interface OwnerResolverDeps {
   refreshMessageBus?: () => Promise<MessageBus>;
   /** Bootstrap a standalone owner process. */
   ensureStandaloneOwner: (bus: MessageBus) => Promise<void>;
+  /** Whether a bootstrap error should be treated as a failed attempt and retried. */
+  isRetryableBootstrapError?: (error: unknown) => boolean;
 }
 
 // ── Configuration ───────────────────────────────────────────
@@ -133,6 +135,13 @@ export function createOwnerResolver(
     return { resolved: true, owner, bus };
   }
 
+  function acceptsOwner(
+    owner: OwnerDiscoveryResult,
+    requireStandalone: boolean,
+  ): owner is OwnerEndpointInfo {
+    return requireStandalone ? isStandaloneCapable(owner) : isOwnerReachable(owner);
+  }
+
   const resolver: OwnerResolver = {
     async discover(): Promise<OwnerResolveResult> {
       const owner = await discoverOwner(currentBus, discoveryTimeoutMs);
@@ -179,18 +188,32 @@ export function createOwnerResolver(
     async resolve(requireStandalone = true): Promise<ResolvedOwner> {
       // Phase 1: Try immediate discovery
       const immediate = await discoverOwner(currentBus, discoveryTimeoutMs);
-      if (requireStandalone ? isStandaloneCapable(immediate) : isOwnerReachable(immediate)) {
-        return { owner: immediate!, bus: currentBus };
+      if (acceptsOwner(immediate, requireStandalone)) {
+        return { owner: immediate, bus: currentBus };
       }
 
       // Phase 2: Refresh and retry
       if (deps.refreshMessageBus) {
         currentBus = await deps.refreshMessageBus();
+        const refreshed = await discoverOwner(currentBus, refreshDiscoveryTimeoutMs);
+        if (acceptsOwner(refreshed, requireStandalone)) {
+          return { owner: refreshed, bus: currentBus };
+        }
       }
 
       // Phase 3: Bootstrap with retry loop
       for (let attempt = 0; attempt < maxBootstrapAttempts; attempt += 1) {
-        await deps.ensureStandaloneOwner(currentBus);
+        try {
+          await deps.ensureStandaloneOwner(currentBus);
+        } catch (error) {
+          if (!deps.isRetryableBootstrapError?.(error)) {
+            throw error;
+          }
+          if (deps.refreshMessageBus) {
+            currentBus = await deps.refreshMessageBus();
+          }
+          continue;
+        }
 
         if (deps.refreshMessageBus) {
           currentBus = await deps.refreshMessageBus();

@@ -22,6 +22,13 @@ if [ -n "${INVOKER_PLAYWRIGHT_ARGS:-}" ]; then
   PLAYWRIGHT_ARGS+=( "${EXTRA_ARGS[@]}" )
 fi
 
+if [ -n "${INVOKER_PLAYWRIGHT_FILES:-}" ]; then
+  # Intentionally split on shell whitespace so CI can pass a static file list,
+  # without expanding glob characters inside each file name.
+  IFS=' ' read -ra PLAYWRIGHT_FILES <<< "${INVOKER_PLAYWRIGHT_FILES}"
+  PLAYWRIGHT_ARGS+=( "${PLAYWRIGHT_FILES[@]}" )
+fi
+
 RUN_LABEL="${INVOKER_PLAYWRIGHT_RUN_LABEL:-playwright-app}"
 if [ -n "${INVOKER_PLAYWRIGHT_SHARD:-}" ]; then
   RUN_LABEL="${RUN_LABEL}-$(sanitize_label "${INVOKER_PLAYWRIGHT_SHARD}")"
