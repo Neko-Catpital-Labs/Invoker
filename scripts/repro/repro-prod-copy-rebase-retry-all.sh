@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Repro/verification for production-shaped bulk recreate-with-rebase.
+# Repro/verification for production-shaped bulk rebase-recreate.
 #
 # Copies the local production DB into an isolated temp INVOKER_DB_DIR, marks
 # copied workflows/tasks failed, then runs the real scripts/rebase-retry-all.sh
@@ -269,7 +269,7 @@ while true; do
         sum(case when status = 'queued' then 1 else 0 end),
         sum(case when status = 'failed' then 1 else 0 end)
       from workflow_mutation_intents
-      where args_json like '%recreate-with-rebase%';
+      where args_json like '%rebase-recreate%';
     " | tr '|' ' '
   )
   NOW_MS="$(now_ms)"
@@ -292,7 +292,7 @@ FINAL_STATUS="$(sqlite3 "$DB_DIR/invoker.db" "
   select coalesce(status, '')
   from workflow_mutation_intents
   where workflow_id = '$FINAL_WORKFLOW_ID'
-    and args_json like '%recreate-with-rebase%'
+    and args_json like '%rebase-recreate%'
   order by id desc
   limit 1;
 ")"
@@ -300,13 +300,13 @@ FINAL_STATUS="$(sqlite3 "$DB_DIR/invoker.db" "
 MAX_INTENT_MS="$(sqlite3 "$DB_DIR/invoker.db" "
   select coalesce(cast(round(max((julianday(completed_at) - julianday(started_at)) * 86400000.0)) as integer), 0)
   from workflow_mutation_intents
-  where args_json like '%recreate-with-rebase%'
+  where args_json like '%rebase-recreate%'
     and started_at is not null
     and completed_at is not null;
 ")"
 
 if [[ "$INTENT_TOTAL" -ne "$WORKFLOW_COUNT" ]]; then
-  echo "FAIL: expected $WORKFLOW_COUNT recreate-with-rebase intents, found $INTENT_TOTAL" >&2
+  echo "FAIL: expected $WORKFLOW_COUNT rebase-recreate intents, found $INTENT_TOTAL" >&2
   exit 1
 fi
 if [[ "$INTENT_COMPLETED" -ne "$WORKFLOW_COUNT" || "$INTENT_RUNNING" -ne 0 || "$INTENT_QUEUED" -ne 0 || "$INTENT_FAILED" -ne 0 ]]; then

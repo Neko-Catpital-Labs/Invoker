@@ -1,0 +1,158 @@
+---
+name: review-compression
+description: >
+  Shape code changes, workflow plans, and PR stacks so each diff is easy to
+  review: one local claim, one safety invariant, clear architectural effect,
+  and an explicit reason for the slice.
+---
+
+# review-compression
+
+Use this skill before authoring implementation workflows, PR stacks, or any
+multi-diff plan. Optimize for reviewer cognition, not smallest total patch.
+
+## Core Rule
+
+Each diff or workflow should make one locally reviewable claim. A tired senior
+engineer should be able to answer:
+
+- What architectural thing changed?
+- Why does this slice exist?
+- Why is it safe?
+- What alternatives were rejected?
+
+## Required Metadata
+
+Every implementation slice should carry these fields in task descriptions and
+PR bodies:
+
+- `Review claim:` one sentence the reviewer is being asked to approve.
+- `Review lane:` exactly one of `behavior`, `refactor`, `proof`, `cleanup`,
+  `policy`, or `docs`.
+- `Safety invariant:` why this slice is safe to review locally.
+- `Slice rationale:` why this work is split here instead of bundled elsewhere.
+- `Architectural effect:` what changed in control flow, data flow, ownership,
+  dependency direction, or public surface.
+- `Alternative considerations:` rejected designs or split shapes.
+- `Non-goals:` what this slice explicitly does not change.
+
+For mechanical slices, these can be terse. For cross-boundary changes, explain
+the before/after architecture and why the split is acceptable. Each slice must
+still contain one conceptual unit; validators infer mixed units from the claim,
+rationale, implementation details, and change-type entries.
+
+## Ordering Rules
+
+- Evidence before change: add repros, benchmarks, or instrumentation before the
+  fix when they prove the problem.
+- Refactor before behavior when the extraction is reusable and behavior-neutral.
+- Foundation before behavior: add schemas, types, helpers, migrations, flags,
+  and dormant code before behavior changes.
+- Compatibility before exposure: include adapters with a lower-level change
+  when needed to preserve existing behavior.
+- Behavior before cleanup: fix correctness or security first; rename and cleanup
+  later.
+- Activate one surface or path per diff.
+- Delete after migration, in a separate deletion slice as soon as safely unused.
+
+## Boundary Rules
+
+Split across architectural boundaries unless the downstream edit is required to
+preserve existing behavior.
+
+Common boundaries:
+
+- DB migration, write path, read/API exposure, UI use, old column deletion.
+- Core behavior, API exposure, UI behavior.
+- Contract, handler, UI.
+- CLI, API, UI.
+- Mechanical rename, module reorganization.
+- Helper extraction, usage migrations.
+
+Exception: directly affected tests and compatibility adapters stay with the
+change that requires them. Unrelated test stabilization and optional cleanup are
+separate slices.
+
+## Grouping Rules
+
+Group changes only when they share the same review claim:
+
+- generated output with the source schema change
+- docs explaining the changed behavior, API, or default
+- visual proof with the UI behavior change
+- dependency bump with required adaptation
+- exact same mechanical migration across many files
+- pure repo-wide import-path rename
+
+Split changes when they introduce a different claim:
+
+- optional cleanup
+- special cases inside a mechanical migration
+- stale unrelated screenshots
+- behavior fix plus rename
+- default flip plus dead-path removal
+- refactor/extraction plus new fields or other behavior changes
+- benchmark/repro/proof harness plus the fix it is meant to justify
+- product code plus planning/policy/docs updates
+- broad mechanical moves too large to inspect comfortably
+- multiple distinct extractions from one file (one top-level symbol move per slice)
+
+## Decomposition & Extraction Refactors
+
+When you split a large file by extracting units into new modules, do one
+refactor at a time: one PR moves exactly ONE top-level symbol. A function move
+is its own PR. A class moves as one PR with its methods riding along — one
+top-level symbol per PR, not method-by-method. Create the target file, move
+that one symbol, re-point its references in the same PR so behavior is
+preserved, and keep the public surface (facade, exports, dispatcher) stable. Do
+not batch several distinct extractions into one diff.
+
+Each move is a separate review claim. Every extraction has its own seam and its
+own "is behavior preserved?" question, so the reviewer checks one move at a
+time. "Extract prepare + dispatch + finalize" is three moves, three claims,
+three slices — not one.
+
+This does NOT contradict grouping the "exact same mechanical migration across
+many files." That rule is one transformation applied to N call sites (one
+claim). Decomposition is N distinct transformations (N claims): different code,
+different seams, different risk.
+
+Dependency-cluster exception: if the moved symbol depends on a private helper in
+the same file that is not part of the public surface, and moving the symbol
+alone would break the build or force a throwaway re-export shim, move that
+minimal helper cluster together in the same PR. Keep the cluster as small as the
+build requires — this is still one cohesive move, not a licence to batch
+unrelated extractions.
+
+Slice shape for one move:
+
+- `Review claim:` "Move <unit> out of <file> into <new module>, behavior
+  unchanged."
+- create the new module and move exactly one top-level symbol into it
+- update imports/facade in the same PR so the public surface is byte-for-byte
+  identical to callers
+- keep directly affected tests with the move; they prove behavior is preserved
+- no behavior change in a move slice (Fowler's "two hats": never refactor and
+  change behavior in the same diff)
+
+Sequence the decomposition stack as:
+
+1. one slice per extracted unit (create-and-move), foundational unit first
+2. re-point remaining callers once a unit is extracted
+3. delete now-dead original code in its own slice, as soon as it is unused
+
+Grounding: Fowler, *Refactoring* — "Move Function" applied as small
+behavior-preserving steps (compile-test-commit each); Beck, *Tidy First?* —
+keep structural changes isolated from behavioral ones, each in its own
+PR/commit; industry guidance (Graphite, Artsy) — one module/class per PR keeps
+diffs near the 50–200 line review sweet spot.
+
+## PR Body Guidance
+
+Do not summarize the patch file-by-file. Compress the human judgment:
+
+- state the review claim
+- state the safety invariant
+- describe architectural effect in plain English
+- call out why this slice exists
+- include alternatives for non-obvious or cross-boundary choices

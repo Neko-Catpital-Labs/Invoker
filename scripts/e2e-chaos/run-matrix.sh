@@ -9,8 +9,23 @@ SEED="${INVOKER_CHAOS_SEED:-20260417}"
 SCENARIO_FILTER="${INVOKER_CHAOS_SCENARIO:-}"
 CASE_TIMEOUT_SECONDS="${INVOKER_CHAOS_CASE_TIMEOUT_SECONDS:-900}"
 RUN_ID="${INVOKER_CHAOS_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}"
-RESULT_ROOT="${INVOKER_CHAOS_RESULT_ROOT:-$ROOT/.git/invoker-chaos/$RUN_ID}"
+GIT_DIR="$(git -C "$ROOT" rev-parse --git-dir)"
+case "$GIT_DIR" in
+  /*) ;;
+  *) GIT_DIR="$ROOT/$GIT_DIR" ;;
+esac
+RESULT_ROOT="${INVOKER_CHAOS_RESULT_ROOT:-$GIT_DIR/invoker-chaos/$RUN_ID}"
 RESULTS_FILE="${INVOKER_CHAOS_RESULTS_FILE:-$RESULT_ROOT/results.jsonl}"
+UI_STALL_REQUIRED_SCENARIOS="
+cancel-downstream-standalone
+reset-race-coalesced
+timeout-deadlock-guard
+retry-vs-recreate-window
+owner-autofix-intent
+owner-approve-delegated
+owner-reject-delegated
+stale-late-completion-both
+"
 
 mkdir -p "$RESULT_ROOT/logs"
 : > "$RESULTS_FILE"
@@ -31,18 +46,18 @@ run_with_timeout() {
 
 catalog() {
   cat <<'EOF'
-fix-approve-standalone|headless-standalone|single|task_failed|approve|autofix_manual|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-1.5-fix-approve.sh
-fix-reject-standalone|headless-standalone|single|task_failed|reject|autofix_manual|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-1.6-fix-reject.sh
-manual-approve-standalone|headless-standalone|single|awaiting_approval|approve|off|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-1.7-manual-approve.sh
-manual-reject-standalone|headless-standalone|single|awaiting_approval|reject|off|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-1.8-manual-reject.sh
-cancel-downstream-standalone|headless-standalone|sequential|running_task|cancel_task|off|overlap|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.10-cancel-downstream.sh
-reset-race-coalesced|headless-standalone|fan-in|failed_upstream|recreate_vs_rebase|off|overlap|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.13-rebase-recreate-coalesced.sh
-timeout-deadlock-guard|headless-standalone|single|owner_timeout_guard|rebase_and_retry|off|timeout_window|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.14-standalone-timeout-deadlock-guard.sh
-retry-vs-recreate-window|headless-standalone|single|late_reset_window|retry_vs_recreate|off|five_second_window|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.16-retry-vs-recreate-five-second-window.sh
-owner-autofix-intent|gui-owner|single|task_failed|autofix_enqueue|autofix_retry_1|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.17-autofix-persists-fix-intent.sh
-owner-approve-delegated|gui-owner|single|awaiting_approval|approve|off|delegated|bash __ROOT__/scripts/e2e-chaos/cases/case-owner-approve-delegated.sh
-owner-reject-delegated|gui-owner|single|awaiting_approval|reject|off|delegated|bash __ROOT__/scripts/e2e-chaos/cases/case-owner-reject-delegated.sh
-stale-late-completion-both|gui-owner|sequential|stale_worker_response|recreate_and_retry_task|off|late_completion|bash __ROOT__/scripts/repro/repro-stale-late-completion-after-reset.sh --mode=both --expect-fixed
+fix-approve-standalone|headless-standalone|single|task_failed|approve|autofix_manual|none|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-1.5-fix-approve.sh
+fix-reject-standalone|headless-standalone|single|task_failed|reject|autofix_manual|none|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-1.6-fix-reject.sh
+manual-approve-standalone|headless-standalone|single|awaiting_approval|approve|off|none|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-1.7-manual-approve.sh
+manual-reject-standalone|headless-standalone|single|awaiting_approval|reject|off|none|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-1.8-manual-reject.sh
+cancel-downstream-standalone|headless-standalone|sequential|running_task|cancel_task|off|overlap|task-delta-overlap|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.10-cancel-downstream.sh
+reset-race-coalesced|headless-standalone|fan-in|failed_upstream|recreate_vs_rebase|off|overlap|delta-reset-coalescing|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.13-rebase-recreate-coalesced.sh
+timeout-deadlock-guard|headless-standalone|single|owner_timeout_guard|rebase_and_retry|off|timeout_window|owner-timeout-liveness|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.14-standalone-timeout-deadlock-guard.sh
+retry-vs-recreate-window|headless-standalone|single|late_reset_window|retry_vs_recreate|off|five_second_window|retry-burst-race|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.16-retry-vs-recreate-five-second-window.sh
+owner-autofix-intent|gui-owner|single|task_failed|autofix_enqueue|autofix_retry_1|none|gui-owner-autofix|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.17-autofix-persists-fix-intent.sh
+owner-approve-delegated|gui-owner|single|awaiting_approval|approve|off|delegated|gui-owner-delegation|bash __ROOT__/scripts/e2e-chaos/cases/case-owner-approve-delegated.sh
+owner-reject-delegated|gui-owner|single|awaiting_approval|reject|off|delegated|gui-owner-delegation|bash __ROOT__/scripts/e2e-chaos/cases/case-owner-reject-delegated.sh
+stale-late-completion-both|gui-owner|sequential|stale_worker_response|recreate_and_retry_task|off|late_completion|late-completion-delta-flow|bash __ROOT__/scripts/repro/repro-stale-late-completion-after-reset.sh --mode=both --expect-fixed
 EOF
 }
 
@@ -59,8 +74,10 @@ seed = int(sys.argv[2])
 lines = [line.strip() for line in os.environ["BASE_LINES"].splitlines() if line.strip()]
 
 high_risk = {
+    "cancel-downstream-standalone",
     "reset-race-coalesced",
     "timeout-deadlock-guard",
+    "retry-vs-recreate-window",
     "owner-autofix-intent",
     "owner-approve-delegated",
     "owner-reject-delegated",
@@ -69,8 +86,8 @@ high_risk = {
 
 entries = []
 for line in lines:
-    parts = line.split("|", 7)
-    if len(parts) != 8:
+    parts = line.split("|", 8)
+    if len(parts) != 9:
         raise SystemExit(f"invalid scenario line: {line}")
     entries.append(parts)
 
@@ -99,10 +116,12 @@ record_result() {
   local recovery_action="$5"
   local auto_fix_policy="$6"
   local race_profile="$7"
-  local log_file="$8"
-  local exit_code="$9"
-  local duration_ms="${10}"
-  python3 - "$RESULTS_FILE" "$scenario_id" "$SEED" "$surface_mode" "$topology" "$failure_mode" "$recovery_action" "$auto_fix_policy" "$race_profile" "$log_file" "$exit_code" "$duration_ms" <<'PY'
+  local ui_stall_profile="$8"
+  local log_file="$9"
+  local exit_code="${10}"
+  local duration_ms="${11}"
+  local case_timeout_seconds="${12}"
+  python3 - "$RESULTS_FILE" "$scenario_id" "$SEED" "$surface_mode" "$topology" "$failure_mode" "$recovery_action" "$auto_fix_policy" "$race_profile" "$ui_stall_profile" "$log_file" "$exit_code" "$duration_ms" "$case_timeout_seconds" <<'PY'
 import json
 import pathlib
 import re
@@ -118,9 +137,11 @@ import sys
     recovery_action,
     auto_fix_policy,
     race_profile,
+    ui_stall_profile,
     log_file,
     exit_code,
     duration_ms,
+    case_timeout_seconds,
 ) = sys.argv[1:]
 
 text = pathlib.Path(log_file).read_text(encoding="utf-8", errors="ignore")
@@ -137,6 +158,8 @@ record = {
     "recoveryAction": recovery_action,
     "autoFixPolicy": auto_fix_policy,
     "raceProfile": race_profile,
+    "uiStallRelevant": ui_stall_profile != "none",
+    "uiStallProfile": ui_stall_profile,
     "result": result,
     "hangDetected": hang_detected,
     "staleRunningTasks": "FAIL: found stale running task" in text,
@@ -145,6 +168,9 @@ record = {
     "workflowIds": workflow_ids,
     "exitCode": int(exit_code),
     "durationMs": int(duration_ms),
+    "thresholds": {
+        "caseTimeoutSeconds": int(case_timeout_seconds),
+    },
     "logFile": log_file,
 }
 with open(results_file, "a", encoding="utf-8") as fh:
@@ -158,18 +184,28 @@ echo "==> chaos results: $RESULTS_FILE"
 total=0
 passed=0
 failed=0
+ui_stall_total=0
+ui_stall_seen=""
 
-while IFS=$'\t' read -r scenario_id surface_mode topology failure_mode recovery_action auto_fix_policy race_profile command; do
+while IFS=$'\t' read -r scenario_id surface_mode topology failure_mode recovery_action auto_fix_policy race_profile ui_stall_profile command; do
   [ -n "$scenario_id" ] || continue
   if [ -n "$SCENARIO_FILTER" ] && [[ "$scenario_id" != *"$SCENARIO_FILTER"* ]]; then
     continue
   fi
 
   total=$((total + 1))
+  if [ "$ui_stall_profile" != "none" ]; then
+    ui_stall_total=$((ui_stall_total + 1))
+    base_scenario_id="${scenario_id%@repeat*}"
+    case " $ui_stall_seen " in
+      *" $base_scenario_id "*) ;;
+      *) ui_stall_seen="$ui_stall_seen $base_scenario_id" ;;
+    esac
+  fi
   log_file="$RESULT_ROOT/logs/${scenario_id//[^A-Za-z0-9._-]/_}.log"
   echo ""
   echo "======== $scenario_id ========"
-  echo "surface=$surface_mode topology=$topology failure=$failure_mode recovery=$recovery_action autofix=$auto_fix_policy race=$race_profile"
+  echo "surface=$surface_mode topology=$topology failure=$failure_mode recovery=$recovery_action autofix=$auto_fix_policy race=$race_profile ui_stall=$ui_stall_profile"
   echo "command=$command"
 
   start_ms="$(python3 - <<'PY'
@@ -189,7 +225,7 @@ PY
   duration_ms=$((end_ms - start_ms))
 
   cat "$log_file"
-  record_result "$scenario_id" "$surface_mode" "$topology" "$failure_mode" "$recovery_action" "$auto_fix_policy" "$race_profile" "$log_file" "$exit_code" "$duration_ms"
+  record_result "$scenario_id" "$surface_mode" "$topology" "$failure_mode" "$recovery_action" "$auto_fix_policy" "$race_profile" "$ui_stall_profile" "$log_file" "$exit_code" "$duration_ms" "$CASE_TIMEOUT_SECONDS"
 
   if [ "$exit_code" -eq 0 ]; then
     passed=$((passed + 1))
@@ -206,7 +242,35 @@ fi
 
 echo ""
 echo "chaos matrix: $passed passed, $failed failed ($total total)"
+echo "ui-stall-relevant scenarios: $ui_stall_total"
+echo "ui-stall-required scenarios:${UI_STALL_REQUIRED_SCENARIOS//$'\n'/ }"
 echo "results jsonl: $RESULTS_FILE"
+
+if [ -z "$SCENARIO_FILTER" ]; then
+  missing_ui_stall=""
+  for required_scenario in $UI_STALL_REQUIRED_SCENARIOS; do
+    case " $ui_stall_seen " in
+      *" $required_scenario "*) ;;
+      *) missing_ui_stall="$missing_ui_stall $required_scenario" ;;
+    esac
+  done
+  if [ -n "$missing_ui_stall" ]; then
+    echo "FAILED: chaos matrix omitted UI-stall-relevant scenario(s):$missing_ui_stall" >&2
+    exit 1
+  fi
+  required_ui_stall_list=" ${UI_STALL_REQUIRED_SCENARIOS//$'\n'/ } "
+  unrequired_ui_stall=""
+  for seen_scenario in $ui_stall_seen; do
+    case "$required_ui_stall_list" in
+      *" $seen_scenario "*) ;;
+      *) unrequired_ui_stall="$unrequired_ui_stall $seen_scenario" ;;
+    esac
+  done
+  if [ -n "$unrequired_ui_stall" ]; then
+    echo "FAILED: chaos matrix has UI-stall-tagged scenario(s) missing from required coverage:$unrequired_ui_stall" >&2
+    exit 1
+  fi
+fi
 
 if [ "$failed" -ne 0 ]; then
   exit 1

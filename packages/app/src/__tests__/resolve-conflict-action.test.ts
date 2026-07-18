@@ -8,14 +8,25 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Orchestrator } from '@invoker/workflow-core';
 import type { TaskRunner } from '@invoker/execution-engine';
 import type { SQLiteAdapter } from '@invoker/data-store';
+
+const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+
+vi.mock('../config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config.js')>();
+  return {
+    ...actual,
+    loadConfig: () => loadConfigMock(),
+  };
+});
+
 import { resolveConflictAction } from '../workflow-actions.js';
 
 describe('resolveConflictAction', () => {
   let orchestrator: {
     getTask: ReturnType<typeof vi.fn>;
-    beginConflictResolution: ReturnType<typeof vi.fn>;
+    beginFixSession: ReturnType<typeof vi.fn>;
     setFixAwaitingApproval: ReturnType<typeof vi.fn>;
-    revertConflictResolution: ReturnType<typeof vi.fn>;
+    revertFixSession: ReturnType<typeof vi.fn>;
     approve?: ReturnType<typeof vi.fn>;
   };
   let persistence: { appendTaskOutput: ReturnType<typeof vi.fn> };
@@ -26,15 +37,16 @@ describe('resolveConflictAction', () => {
   };
 
   beforeEach(() => {
+    loadConfigMock.mockReturnValue({});
     orchestrator = {
       getTask: vi.fn(() => ({
         id: 'task-a',
         status: 'fixing_with_ai',
         execution: { selectedAttemptId: 'att-1', generation: 1 },
       })),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'saved-err' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'saved-err' })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     persistence = { appendTaskOutput: vi.fn() };
     taskExecutor = {
@@ -42,18 +54,58 @@ describe('resolveConflictAction', () => {
     };
   });
 
-  it('runs beginConflictResolution → resolveConflict → setFixAwaitingApproval', async () => {
+  it('runs beginFixSession → resolveConflict → setFixAwaitingApproval', async () => {
     await resolveConflictAction('task-a', {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', undefined);
+    expect(orchestrator.beginFixSession).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', 'saved-err', 'codex', undefined);
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-err');
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
     expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
+  });
+
+  it('applies conflictResolutionAgent and conflictResolutionModel from config', async () => {
+    loadConfigMock.mockReturnValue({
+      conflictResolutionAgent: 'omp',
+      conflictResolutionModel: 'gpt-5-mini',
+    });
+
+    await resolveConflictAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      'saved-err',
+      'omp',
+      'gpt-5-mini',
+    );
+  });
+
+  it('lets an explicit agent override conflictResolutionAgent but still applies the config model', async () => {
+    loadConfigMock.mockReturnValue({
+      conflictResolutionAgent: 'omp',
+      conflictResolutionModel: 'gpt-5-mini',
+    });
+
+    await resolveConflictAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, 'claude');
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      'saved-err',
+      'claude',
+      'gpt-5-mini',
+    );
   });
 
   it('auto-approves after conflict resolution when configured', async () => {
@@ -98,11 +150,7 @@ describe('resolveConflictAction', () => {
       'task-a',
       expect.stringContaining('[Resolve Conflict] Failed:'),
     );
-    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith(
-      'task-a',
-      'saved-err',
-      'claude failed',
-    );
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'saved-err', fixError: 'claude failed' });
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
   });
 });

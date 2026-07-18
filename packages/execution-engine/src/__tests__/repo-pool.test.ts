@@ -48,18 +48,50 @@ describe('RepoPool', () => {
     rmSync(localRepoUrl, { recursive: true, force: true });
   });
 
-  it('ensureClone: clones repo on first call', async () => {
-    const path = await pool.ensureClone(localRepoUrl);
+  it('ensureCloneThroughRepoQueue: clones repo on first call', async () => {
+    const path = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     expect(path).toBeDefined();
     // Verify it's a git repo
     const result = execSync('git rev-parse --is-inside-work-tree', { cwd: path }).toString().trim();
     expect(result).toBe('true');
   });
 
-  it('ensureClone: returns cached path on second call', async () => {
-    const p1 = await pool.ensureClone(localRepoUrl);
-    const p2 = await pool.ensureClone(localRepoUrl);
+  it('ensureCloneThroughRepoQueue: returns cached path on second call', async () => {
+    const p1 = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
+    const p2 = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     expect(p1).toBe(p2);
+  });
+
+  it('uses one cache path for equivalent GitHub SSH and HTTPS URLs', () => {
+    const githubPool = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir: join(tmpDir, 'worktrees') });
+    const httpsUrl = 'https://github.com/Neko-Catpital-Labs/Invoker';
+    const sshUrl = 'git@github.com:Neko-Catpital-Labs/Invoker.git';
+
+    expect(githubPool.getClonePath(httpsUrl)).toBe(githubPool.getClonePath(sshUrl));
+    expect(githubPool.externalWorktreePath(httpsUrl, 'experiment/demo')).toBe(
+      githubPool.externalWorktreePath(sshUrl, 'experiment/demo'),
+    );
+  });
+
+  it('single-flights equivalent GitHub URL spellings without rewriting clone URL', async () => {
+    const githubPool = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir: join(tmpDir, 'worktrees') });
+    const httpsUrl = 'https://github.com/Neko-Catpital-Labs/Invoker';
+    const sshUrl = 'git@github.com:Neko-Catpital-Labs/Invoker.git';
+    const clonePath = githubPool.getClonePath(httpsUrl);
+    const ensureCloneUnqueued = vi
+      .spyOn(githubPool as any, 'ensureCloneUnqueued')
+      .mockImplementation(async (_repoUrl: string) => clonePath);
+
+    const [p1, p2] = await Promise.all([
+      githubPool.ensureCloneThroughRepoQueue(httpsUrl),
+      githubPool.ensureCloneThroughRepoQueue(sshUrl),
+    ]);
+
+    expect(p1).toBe(clonePath);
+    expect(p2).toBe(clonePath);
+    expect(ensureCloneUnqueued).toHaveBeenCalledTimes(1);
+    expect(ensureCloneUnqueued).toHaveBeenCalledWith(httpsUrl);
+    await githubPool.destroyAll();
   });
 
   it('acquireWorktree: creates worktree with feature branch', async () => {
@@ -99,7 +131,7 @@ describe('RepoPool', () => {
   });
 
   it('destroyAll: removes all worktrees but preserves cache', async () => {
-    const clonePath = await pool.ensureClone(localRepoUrl);
+    const clonePath = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     await pool.acquireWorktree(localRepoUrl, 'b1');
     await pool.acquireWorktree(localRepoUrl, 'b2');
     await pool.destroyAll();
@@ -359,17 +391,17 @@ describe('RepoPool', () => {
       );
     }
 
-    it('ensureClone succeeds when fetch --all fails', async () => {
-      await pool.ensureClone(localRepoUrl);
+    it('ensureCloneThroughRepoQueue succeeds when fetch --all fails', async () => {
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
       spyFetchToFail(pool);
 
-      const path = await pool.ensureClone(localRepoUrl);
+      const path = await pool.ensureCloneThroughRepoQueue(localRepoUrl);
       expect(path).toBeDefined();
       expect(existsSync(path)).toBe(true);
     });
 
     it('refreshMirrorForRebase succeeds when fetch --all fails', async () => {
-      await pool.ensureClone(localRepoUrl);
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
       spyFetchToFail(pool);
 
       const dir = await pool.refreshMirrorForRebase(localRepoUrl, 'master');
@@ -377,50 +409,84 @@ describe('RepoPool', () => {
       expect(existsSync(dir)).toBe(true);
     });
 
-    it('concurrent fetches from separate pools sharing cacheDir both succeed', async () => {
-      // Setup: bare repo so multiple clones can fetch concurrently
-      const bareDir = mkdtempSync(join(tmpdir(), 'repo-pool-bare-'));
-      const sourceDir = mkdtempSync(join(tmpdir(), 'repo-pool-src-'));
+    it('skips per-base fetch after a successful full origin ref refresh', async () => {
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
+      const orig = (pool as any).execGit.bind(pool);
+      const execGit = vi.spyOn(pool as any, 'execGit').mockImplementation(
+        (...params: unknown[]) => {
+          const args = params[0] as string[];
+          const cwd = params[1] as string;
+          return orig(args, cwd);
+        },
+      );
+      const timing = {
+        mark: vi.fn(),
+        span: vi.fn(async (_functionName, _metadata, fn) => fn()),
+      };
+
+      const dir = await pool.refreshMirrorForRebase(localRepoUrl, 'plan/missing-branch', timing);
+
+      expect(dir).toBeDefined();
+      expect(execGit).not.toHaveBeenCalledWith(
+        ['fetch', 'origin', 'refs/heads/plan/missing-branch:refs/remotes/origin/plan/missing-branch'],
+        expect.any(String),
+      );
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.doRefreshMirrorForRebase.syncPlanBaseRemoteForRef', 'completed', {
+        dir,
+        baseBranch: 'plan/missing-branch',
+        skipped: true,
+        reason: 'origin-refs-fresh',
+      });
+    });
+
+    it('reuses the base commit resolved by the rebase refresh batch', async () => {
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
+      const orig = (pool as any).execGit.bind(pool);
+      const execGit = vi.spyOn(pool as any, 'execGit').mockImplementation(
+        (...params: unknown[]) => {
+          const args = params[0] as string[];
+          const cwd = params[1] as string;
+          return orig(args, cwd);
+        },
+      );
+      const timing = {
+        mark: vi.fn(),
+        span: vi.fn(async (_functionName, _metadata, fn) => fn()),
+      };
+
+      await pool.refreshMirrorForRebase(localRepoUrl, 'master', timing);
+      execGit.mockClear();
+
+      const commit = await pool.resolveBaseCommit(localRepoUrl, 'master', timing);
+
+      expect(commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(execGit).not.toHaveBeenCalled();
+      expect(timing.mark).toHaveBeenCalledWith('RepoPool.resolveBaseCommit.batched', 'completed', {
+        repoUrl: localRepoUrl,
+        baseBranch: 'master',
+      });
+    });
+
+    it('separate pools sharing cacheDir tolerate fetch failures', async () => {
+      await pool.ensureCloneThroughRepoQueue(localRepoUrl);
+
+      const pool2 = new RepoPool({ cacheDir: tmpDir });
+      const pool3 = new RepoPool({ cacheDir: tmpDir });
+      spyFetchToFail(pool2);
+      spyFetchToFail(pool3);
+
       try {
-        execSync('git init --bare -b master', { cwd: bareDir });
-        execSync(`git clone ${bareDir} .`, { cwd: sourceDir });
-        execSync('git config user.email "t@t.com" && git config user.name "T"', { cwd: sourceDir });
-        execSync('git commit --allow-empty -m "init"', { cwd: sourceDir });
-        execSync('git branch -M master', { cwd: sourceDir });
-        execSync('git push -u origin master', { cwd: sourceDir });
-        for (let i = 0; i < 15; i++) {
-          execSync(`git checkout -b experiment/b-${i} master`, { cwd: sourceDir });
-          execSync(`git commit --allow-empty -m "b${i}" && git push origin experiment/b-${i}`, { cwd: sourceDir });
-        }
-        execSync('git checkout master', { cwd: sourceDir });
-
-        // Initial clone via pool
-        await pool.ensureClone(bareDir);
-
-        // Force-push all branches to create stale tracking refs
-        for (let i = 0; i < 15; i++) {
-          execSync(`git checkout experiment/b-${i}`, { cwd: sourceDir });
-          execSync(`git commit --allow-empty -m "rewrite ${i}" && git push --force origin experiment/b-${i}`, { cwd: sourceDir });
-        }
-
-        // Two separate pools share cacheDir — their fetches race on the same .git dir
-        const pool2 = new RepoPool({ cacheDir: tmpDir });
-        const pool3 = new RepoPool({ cacheDir: tmpDir });
-
         const [r1, r2] = await Promise.all([
-          pool2.ensureClone(bareDir),
-          pool3.ensureClone(bareDir),
+          pool2.ensureCloneThroughRepoQueue(localRepoUrl),
+          pool3.ensureCloneThroughRepoQueue(localRepoUrl),
         ]);
 
         expect(r1).toBe(r2);
         const sha = execSync('git rev-parse origin/master', { cwd: r1 }).toString().trim();
         expect(sha).toBeTruthy();
-
+      } finally {
         await pool2.destroyAll();
         await pool3.destroyAll();
-      } finally {
-        rmSync(bareDir, { recursive: true, force: true });
-        rmSync(sourceDir, { recursive: true, force: true });
       }
     });
   });
@@ -811,8 +877,8 @@ describe('RepoPool', () => {
     });
   });
 
-  it('ensureClone skips network refresh when remoteFetchForPool.enabled is false', async () => {
-    await pool.ensureClone(localRepoUrl);
+  it('ensureCloneThroughRepoQueue skips network refresh when remoteFetchForPool.enabled is false', async () => {
+    await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     const clonePath = pool.getClonePath(localRepoUrl);
     const shaBefore = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
 
@@ -820,12 +886,12 @@ describe('RepoPool', () => {
     execSync('git add -A && git commit -m "upstream advance"', { cwd: localRepoUrl });
 
     remoteFetchForPool.enabled = false;
-    await pool.ensureClone(localRepoUrl);
+    await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     const shaSkipped = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
     expect(shaSkipped).toBe(shaBefore);
 
     remoteFetchForPool.enabled = true;
-    await pool.ensureClone(localRepoUrl);
+    await pool.ensureCloneThroughRepoQueue(localRepoUrl);
     const shaFresh = execSync('git rev-parse origin/master', { cwd: clonePath }).toString().trim();
     expect(shaFresh).not.toBe(shaBefore);
   });

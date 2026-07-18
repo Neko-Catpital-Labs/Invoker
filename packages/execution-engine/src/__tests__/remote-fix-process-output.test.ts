@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnRemoteAgentFixImpl } from '../conflict-resolver.js';
 import type { AgentRegistry } from '../agent-registry.js';
 
@@ -42,6 +45,82 @@ function mockSpawnChildWithStderr(stdoutData: string, stderrData: string, exitCo
 describe('spawnRemoteAgentFixImpl processOutput', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('does not export API keys into the remote fix shell by default', async () => {
+    const { spawn } = await import('node:child_process');
+    const previous = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'ambient-key-that-should-not-forward';
+    const child = mockSpawnChild('ok', 0) as any;
+    vi.mocked(spawn).mockReturnValueOnce(child);
+
+    try {
+      await spawnRemoteAgentFixImpl(
+        'fix the bug',
+        '/home/user/worktree',
+        { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+        'claude',
+      );
+
+      const script = child.stdin.write.mock.calls[0][0] as string;
+      expect(script).not.toContain('ANTHROPIC_API_KEY');
+      expect(script).not.toContain('ambient-key-that-should-not-forward');
+    } finally {
+      if (previous === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previous;
+    }
+  });
+
+  it('exports agent API keys from secrets only when use_api_key is true', async () => {
+    const { spawn } = await import('node:child_process');
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-remote-agent-env-'));
+    const secretsFile = join(dir, 'secrets.env');
+    writeFileSync(
+      secretsFile,
+      [
+        "ANTHROPIC_API_KEY=test-key-with-'quote",
+        'OPENAI_BASE_URL=https://example.test/v1',
+        'MOONSHOT_API_KEY=kimi-key',
+        'BAILIAN_CODING_PLAN_API_KEY=qwen-key',
+        'OPENROUTER_API_KEY=openrouter-key',
+        'QWEN_API_KEY=qwen-direct-key',
+        'DASHSCOPE_API_KEY=dashscope-key',
+        'KIMI_API_KEY=kimi-direct-key',
+        'IGNORED_TOKEN=nope',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
+    const child = mockSpawnChild('ok', 0) as any;
+    vi.mocked(spawn).mockReturnValueOnce(child);
+
+    try {
+      await spawnRemoteAgentFixImpl(
+        'fix the bug',
+        '/home/user/worktree',
+        {
+          host: '1.2.3.4',
+          user: 'invoker',
+          sshKeyPath: '/tmp/key',
+          use_api_key: true,
+          secretsFile,
+        },
+        'claude',
+      );
+
+      const script = child.stdin.write.mock.calls[0][0] as string;
+      expect(script).toContain("export ANTHROPIC_API_KEY='test-key-with-'\\''quote'");
+      expect(script).toContain("export OPENAI_BASE_URL='https://example.test/v1'");
+      expect(script).toContain("export MOONSHOT_API_KEY='kimi-key'");
+      expect(script).toContain("export BAILIAN_CODING_PLAN_API_KEY='qwen-key'");
+      expect(script).toContain("export OPENROUTER_API_KEY='openrouter-key'");
+      expect(script).toContain("export QWEN_API_KEY='qwen-direct-key'");
+      expect(script).toContain("export DASHSCOPE_API_KEY='dashscope-key'");
+      expect(script).toContain("export KIMI_API_KEY='kimi-direct-key'");
+      expect(script).not.toContain('IGNORED_TOKEN');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('calls driver.processOutput with effectiveSessionId and stdout on success', async () => {

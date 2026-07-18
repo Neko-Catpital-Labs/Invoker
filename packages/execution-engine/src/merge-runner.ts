@@ -10,7 +10,7 @@ import { normalize, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 
-import type { Orchestrator, TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import type { Orchestrator, TaskLineageExpectation, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WorkResponse } from '@invoker/contracts';
@@ -18,7 +18,10 @@ import type { TaskRunnerCallbacks } from './task-runner-callbacks.js';
 import type { MergeGateProvider } from './merge-gate-provider.js';
 import type { ReviewProviderRegistry } from './review-provider-registry.js';
 import { normalizeBranchForGithubCli } from './github-branch-ref.js';
-import type { PrAuthoringContext, PrAuthoringTaskEntry } from './pr-authoring.js';
+import { isInvokerRepoUrl, type PrAuthoringContext, type PrAuthoringTaskEntry } from './pr-authoring.js';
+import { isGitRefLockRace } from './git-utils.js';
+type ReviewGateState = NonNullable<TaskState['execution']['reviewGate']>;
+type ReviewGateArtifact = ReviewGateState['artifacts'][number];
 
 // ── Trace logging ────────────────────────────────────────
 
@@ -29,6 +32,23 @@ export function mergeTrace(tag: string, data: Record<string, unknown>): void {
     mkdirSync(resolve(homedir(), '.invoker'), { recursive: true });
     appendFileSync(MERGE_TRACE_LOG, `${new Date().toISOString()} [merge-trace:runner] ${tag} ${JSON.stringify(data)}\n`);
   } catch { /* best effort */ }
+}
+
+type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+function logTaskProgress(
+  host: MergeRunnerHost,
+  taskId: string,
+  level: TaskLogLevel,
+  message: string,
+  detail: Record<string, unknown> = {},
+): void {
+  try {
+    const logger = host.persistence as { logEvent?: (taskId: string, eventType: string, payload?: unknown) => void };
+    logger.logEvent?.(taskId, 'task.log', { level, message, ...detail });
+  } catch {
+    // Best-effort progress telemetry must not fail merge execution.
+  }
 }
 
 /** Unit tests may use partial persistence mocks without {@link SQLiteAdapter.getWorkspacePath}. */
@@ -59,32 +79,67 @@ async function resolveBaseCheckoutRef(
  * Start any newly-ready downstream tasks (e.g., cross-workflow review_ready deps).
  */
 async function startReviewReadyDependents(host: MergeRunnerHost): Promise<void> {
-  const orchestrator = host.orchestrator as unknown as {
-    startExecution?: () => TaskState[];
-  };
-  if (typeof orchestrator.startExecution !== 'function') {
+  const newlyStarted = host.orchestrator.autoStartExternallyUnblockedReadyTasks();
+  if (newlyStarted.length === 0) {
     return;
   }
-  const newlyStarted = orchestrator.startExecution();
-  if (newlyStarted.length > 0) {
-    await host.executeTasks(newlyStarted);
-  }
+  await host.executeTasks(newlyStarted);
 }
 
 function setMergeGateReviewReady(
   host: MergeRunnerHost,
   taskId: string,
   changes: TaskStateChanges,
+  expectedLineage?: TaskLineageExpectation,
 ): void {
-  const orchestrator = host.orchestrator as unknown as {
-    setTaskReviewReady?: (id: string, c?: TaskStateChanges) => void;
-    setTaskAwaitingApproval?: (id: string, c?: TaskStateChanges) => void;
+  host.orchestrator.setTaskReviewReady(taskId, changes, expectedLineage);
+}
+
+function buildSingleArtifactReviewGate(args: {
+  expectedGeneration: number;
+  title: string;
+  url: string;
+  providerId: string | undefined;
+  provider: string;
+  branch: string | undefined;
+  baseBranch: string;
+  nowIso: string;
+}) {
+  return {
+    activeGeneration: args.expectedGeneration,
+    completion: { required: 'all' as const, status: 'approved' as const },
+    artifacts: [{
+      id: args.providerId || 'review',
+      title: args.title,
+      url: args.url,
+      providerId: args.providerId,
+      provider: args.provider,
+      branch: args.branch,
+      baseBranch: args.baseBranch,
+      required: true,
+      status: 'open' as const,
+      generation: args.expectedGeneration,
+      createdAt: args.nowIso,
+    }],
   };
-  if (typeof orchestrator.setTaskReviewReady === 'function') {
-    orchestrator.setTaskReviewReady(taskId, changes);
-    return;
-  }
-  orchestrator.setTaskAwaitingApproval?.(taskId, changes);
+}
+
+function assertReviewGateGenerationsAligned(gate: ReviewGateState): void {
+  const mismatched = gate.artifacts.filter(
+    (artifact) =>
+      artifact.status !== 'discarded'
+      && !artifact.discardedAt
+      && artifact.generation !== gate.activeGeneration,
+  );
+  if (mismatched.length === 0) return;
+  const detail = mismatched
+    .map((artifact) => `${artifact.providerId ?? artifact.id ?? 'unknown'}@${artifact.generation}`)
+    .join(', ');
+  throw new Error(
+    `review gate generation mismatch: activeGeneration=${gate.activeGeneration} `
+      + `but live artifacts at [${detail}]; published artifacts must share the gate generation `
+      + 'or the poller treats them as discarded',
+  );
 }
 
 function buildMergeConflictJson(errorText: string, failedBranch: string): string | undefined {
@@ -130,6 +185,79 @@ async function execGitInMergeSafe(
   return host.execGitIn(args, dir);
 }
 
+async function pushFeatureBranchWithRefLockRetry(
+  host: MergeRunnerHost,
+  dir: string,
+  featureBranch: string,
+): Promise<void> {
+  const pushArgs = ['push', '--force', 'origin', `${featureBranch}:refs/heads/${featureBranch}`];
+  try {
+    await execGitInMergeSafe(host, pushArgs, dir);
+  } catch (err) {
+    if (!isGitRefLockRace(err)) throw err;
+    mergeTrace('GIT_PUSH_REF_LOCK_RACE_RETRY', {
+      featureBranch,
+      dir,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    await execGitInMergeSafe(host, [
+      'fetch',
+      'origin',
+      `+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}`,
+    ], dir);
+    await execGitInMergeSafe(host, pushArgs, dir);
+  }
+  await assertBranchRetrievableOnOrigin(host, dir, featureBranch);
+}
+
+export async function assertBranchRetrievableOnOrigin(
+  host: MergeRunnerHost,
+  dir: string,
+  branch: string,
+): Promise<void> {
+  const localSha = (await execGitInMergeSafe(host, ['rev-parse', '--verify', `${branch}^{commit}`], dir)
+    .catch(() => '')).trim();
+  if (!localSha) return;
+
+  const wantRef = `refs/heads/${branch}`;
+  const lsRemote = (await execGitInMergeSafe(host, ['ls-remote', '--heads', 'origin', '--', branch], dir)).trim();
+  const remoteSha = lsRemote
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
+    .find((parts) => parts[1] === wantRef)?.[0] ?? '';
+
+  if (!remoteSha) {
+    throw new Error(
+      `Push verification failed: branch "${branch}" is not on origin after push. ` +
+      `A later merge/gate step retrieves this branch from origin, so the workflow ` +
+      `must not progress while it is unretrievable. Local tip ${localSha.slice(0, 12)} ` +
+      `was reported pushed, but origin has no ${wantRef}. ` +
+      `Re-run the merge, or check the push remote URL and credentials.`,
+    );
+  }
+  if (remoteSha !== localSha) {
+    throw new Error(
+      `Push verification failed: origin has "${branch}" at ${remoteSha.slice(0, 12)}, but the ` +
+      `push should have advanced it to ${localSha.slice(0, 12)}. Downstream retrieval would get ` +
+      `the wrong commit, so the workflow must not progress.`,
+    );
+  }
+}
+
+async function syncGateWorkspaceToFeatureBranch(
+  host: MergeRunnerHost,
+  gateWorkspacePath: string | undefined,
+  featureBranch: string,
+): Promise<void> {
+  if (!gateWorkspacePath) return;
+  await execGitInMergeSafe(
+    host,
+    ['fetch', 'origin', `+refs/heads/${featureBranch}:refs/heads/${featureBranch}`],
+    gateWorkspacePath,
+  );
+  await execGitInMergeSafe(host, ['checkout', featureBranch], gateWorkspacePath);
+}
+
 // ── Host interface ───────────────────────────────────────
 
 /**
@@ -151,6 +279,17 @@ export interface MergeRunnerHost {
   removeMergeWorktree(dir: string): Promise<void>;
   execGh(args: string[], cwd?: string): Promise<string>;
   execPr(baseBranch: string, featureBranch: string, title: string, body?: string, cwd?: string): Promise<string>;
+  publishReviewStackWithMakePrSkill?(args: {
+    workflowId?: string;
+    mergeNodeTaskId?: string;
+    title: string;
+    baseBranch: string;
+    featureBranch: string;
+    workflowSummary: string;
+    cwd: string;
+    expectedGeneration: number;
+    reviewGate?: ReviewGateState;
+  }): Promise<{ artifacts: ReviewGateArtifact[]; sessionId: string; agentName: string }>;
   authorPrBodyWithSkill?(args: {
     workflowId?: string;
     mergeNodeTaskId?: string;
@@ -160,11 +299,11 @@ export interface MergeRunnerHost {
     workflowSummary: string;
     structuredContext?: PrAuthoringContext;
     cwd: string;
+    repoUrl?: string;
   }): Promise<{ body: string; sessionId: string; agentName: string }>;
   detectDefaultBranch(): Promise<string>;
   gitLogMessage(commitHash: string, cwd?: string): Promise<string>;
   gitDiffStat(branch: string, cwd?: string): Promise<string>;
-  startPrPolling(taskId: string, reviewId: string, workflowId: string): void;
   executeTasks(tasks: TaskState[]): Promise<void>;
   buildMergeSummary(workflowId: string): Promise<string>;
   runVisualProofCapture?(baseBranch: string, featureBranch: string, slug: string, repoUrl?: string): Promise<string | undefined>;
@@ -195,6 +334,7 @@ async function authorPrBodyForMerge(
     workflowSummary: string;
     structuredContext?: PrAuthoringContext;
     cwd: string;
+    repoUrl?: string;
   },
 ): Promise<string> {
   if (!host.authorPrBodyWithSkill) {
@@ -205,6 +345,127 @@ async function authorPrBodyForMerge(
     `[merge] Authored PR body via ${authored.agentName} skill session=${authored.sessionId}`,
   );
   return authored.body;
+}
+async function publishReviewArtifactsForMerge(host: MergeRunnerHost, args: {
+  workflowId?: string;
+  mergeNodeTaskId: string;
+  workflowName: string;
+  baseBranch: string;
+  featureBranch: string;
+  workflowSummary: string;
+  cwd: string;
+  expectedGeneration: number;
+  repoUrl?: string;
+  reviewGate?: ReviewGateState;
+}): Promise<{
+  reviewUrl?: string;
+  reviewId?: string;
+  reviewStatus: 'Awaiting review';
+  reviewGate: ReviewGateState;
+}> {
+  if (isInvokerRepoUrl(args.repoUrl)) {
+    if (!host.publishReviewStackWithMakePrSkill) {
+      throw new Error('make-pr skill is required to publish Invoker review stacks');
+    }
+    logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Publishing review stack with make-pr agent', {
+      featureBranch: args.featureBranch,
+    });
+    const published = await host.publishReviewStackWithMakePrSkill({
+      workflowId: args.workflowId,
+      mergeNodeTaskId: args.mergeNodeTaskId,
+      title: args.workflowName,
+      baseBranch: args.baseBranch,
+      featureBranch: args.featureBranch,
+      workflowSummary: args.workflowSummary,
+      cwd: args.cwd,
+      expectedGeneration: args.expectedGeneration,
+      reviewGate: args.reviewGate,
+    });
+    logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Review stack published', {
+      agentName: published.agentName,
+      artifactCount: published.artifacts.length,
+      reviewUrl: published.artifacts[0]?.url,
+    });
+    const artifacts = published.artifacts.map((artifact) => ({
+      ...artifact,
+      baseBranch: artifact.baseBranch ?? args.baseBranch,
+      required: artifact.required ?? true,
+      status: artifact.status ?? 'open' as const,
+      generation: args.expectedGeneration,
+    }));
+    const reviewGate = {
+      activeGeneration: args.expectedGeneration,
+      completion: { required: 'all' as const, status: 'approved' as const },
+      artifacts,
+    };
+    assertReviewGateGenerationsAligned(reviewGate);
+    const firstArtifact = artifacts[0];
+    console.log(
+      `[merge] Published Invoker review stack via ${published.agentName} skill`,
+    );
+    return {
+      reviewUrl: firstArtifact?.url,
+      reviewId: firstArtifact?.providerId,
+      reviewStatus: 'Awaiting review',
+      reviewGate,
+    };
+  }
+
+  if (!host.mergeGateProvider) {
+    throw new Error('merge review publication requires a configured review provider');
+  }
+
+  logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Authoring PR body', {
+    featureBranch: args.featureBranch,
+  });
+  const structuredContext = args.workflowId
+    ? await buildPrAuthoringContext(host, args.workflowId)
+    : undefined;
+  const prBody = await authorPrBodyForMerge(host, {
+    workflowId: args.workflowId,
+    mergeNodeTaskId: args.mergeNodeTaskId,
+    title: args.workflowName,
+    baseBranch: args.baseBranch,
+    featureBranch: args.featureBranch,
+    workflowSummary: args.workflowSummary,
+    structuredContext,
+    cwd: args.cwd,
+    repoUrl: args.repoUrl,
+  });
+
+  logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Creating review PR', {
+    featureBranch: args.featureBranch,
+  });
+  const result = await host.mergeGateProvider.createReview({
+    baseBranch: args.baseBranch,
+    featureBranch: args.featureBranch,
+    title: args.workflowName,
+    cwd: args.cwd,
+    body: prBody,
+  });
+  logTaskProgress(host, args.mergeNodeTaskId, 'info', 'Review PR created', {
+    reviewUrl: result.url,
+    reviewId: result.identifier,
+  });
+  console.log(`[merge] Created GitHub PR: ${result.url}`);
+
+  const reviewGate = buildSingleArtifactReviewGate({
+    expectedGeneration: args.expectedGeneration,
+    title: args.workflowName,
+    url: result.url,
+    providerId: result.identifier,
+    provider: host.mergeGateProvider.name,
+    branch: args.featureBranch,
+    baseBranch: args.baseBranch,
+    nowIso: new Date().toISOString(),
+  });
+  assertReviewGateGenerationsAligned(reviewGate);
+  return {
+    reviewUrl: result.url,
+    reviewId: result.identifier,
+    reviewStatus: 'Awaiting review',
+    reviewGate,
+  };
 }
 
 /**
@@ -385,20 +646,78 @@ export function collectDirectNonMergeTaskIds(
   return out;
 }
 
+// ── Stale-lineage guard for direct execution-metadata writes ──────────────
+
+// Direct updateTask writes of merge-gate metadata bypass the worker-response
+// lineage guard. A merge-gate run can be long-lived, so if the merge task is
+// relaunched meanwhile, capture the launch lineage up front and gate the write.
+export interface MergeGateLineage {
+  selectedAttemptId: string | undefined;
+  generation: number;
+}
+
+export function captureMergeGateLineage(task: TaskState): MergeGateLineage {
+  return {
+    selectedAttemptId: task.execution.selectedAttemptId,
+    generation: task.execution.generation ?? 0,
+  };
+}
+
+// True when the live merge task still matches the captured launch lineage.
+export function mergeGateLineageIsCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  expected: MergeGateLineage,
+): boolean {
+  const current = host.orchestrator.getTask(taskId);
+  // Task gone from the graph: can't confirm it advanced, so don't suppress.
+  if (!current) return true;
+  const currentAttempt = current.execution.selectedAttemptId;
+  if (currentAttempt !== undefined && currentAttempt !== expected.selectedAttemptId) {
+    return false;
+  }
+  if ((current.execution.generation ?? 0) !== expected.generation) return false;
+  return true;
+}
+
+// Lineage-guarded direct write; skips (and traces) when the task advanced past
+// `expected`. Returns true when the write was applied.
+export function updateMergeGateMetadataIfCurrent(
+  host: MergeRunnerHost,
+  taskId: string,
+  changes: TaskStateChanges,
+  expected: MergeGateLineage,
+): boolean {
+  if (!mergeGateLineageIsCurrent(host, taskId, expected)) {
+    const current = host.orchestrator.getTask(taskId);
+    mergeTrace('DIRECT_WRITE_STALE_LINEAGE_SKIPPED', {
+      taskId,
+      expectedSelectedAttemptId: expected.selectedAttemptId ?? null,
+      expectedGeneration: expected.generation,
+      currentSelectedAttemptId: current?.execution.selectedAttemptId ?? null,
+      currentGeneration: current ? current.execution.generation ?? 0 : null,
+    });
+    return false;
+  }
+  host.persistence.updateTask(taskId, changes);
+  return true;
+}
+
 // ── Extracted functions ──────────────────────────────────
 
 export interface MergeGateActionResult {
   response: WorkResponse;
   taskChanges: TaskStateChanges;
-  reviewIdForPolling?: string;
-  workflowIdForPolling?: string;
 }
 
 export async function runMergeGateActionImpl(
   host: MergeRunnerHost,
   task: TaskState,
-  opts: { gateWorkspacePath?: string } = {},
+  opts: { gateWorkspacePath?: string; lineage?: MergeGateLineage } = {},
 ): Promise<MergeGateActionResult> {
+  // Executor passes the dispatched request's lineage; legacy callers fall back
+  // to the task snapshot.
+  const launchLineage = opts.lineage ?? captureMergeGateLineage(task);
   const workflowId = task.config.workflowId;
   const workflow = workflowId
     ? host.persistence.loadWorkflow(workflowId)
@@ -425,18 +744,24 @@ export async function runMergeGateActionImpl(
     featureBranch: featureBranch ?? null,
     persistedWorkspaceBefore: safeGetWorkspacePath(host.persistence, task.id),
   });
+  logTaskProgress(host, task.id, 'info', 'Starting merge gate', {
+    workflowId,
+    mergeMode,
+    onFinish,
+    featureBranch: featureBranch ?? null,
+  });
   console.log(
     `[merge-gate-workspace] executeMergeNode enter task=${task.id} featureBranch=${featureBranch ?? 'none'} ` +
       `mergeMode=${mergeMode} onFinish=${onFinish} dbWorkspacePath=${safeGetWorkspacePath(host.persistence, task.id) ?? 'NULL'}`,
   );
 
-  host.persistence.updateTask(task.id, {
+  updateMergeGateMetadataIfCurrent(host, task.id, {
     execution: {
       reviewUrl: undefined,
       reviewId: undefined,
       reviewStatus: undefined,
     },
-  });
+  }, launchLineage);
 
   // Create a persistent gate worktree so workspacePath is never the main repo.
   // Use baseBranch as the ref because featureBranch may not exist yet
@@ -444,6 +769,10 @@ export async function runMergeGateActionImpl(
   // `git checkout <branch>` to switch to featureBranch anyway.
   let gateWorkspacePath: string | undefined = opts.gateWorkspacePath;
   if (!gateWorkspacePath && featureBranch) {
+    logTaskProgress(host, task.id, 'info', 'Preparing review workspace', {
+      baseBranch,
+      featureBranch,
+    });
     const baseCheckoutRef = await resolveBaseCheckoutRef(
       host,
       baseBranch,
@@ -454,22 +783,33 @@ export async function runMergeGateActionImpl(
       'gate-' + task.id.replace(/[^a-zA-Z0-9_-]/g, '-'),
       workflow?.repoUrl,
     );
+    logTaskProgress(host, task.id, 'info', 'Review workspace ready', {
+      workspacePath: gateWorkspacePath,
+    });
     mergeTrace('GATE_WS_GATE_CLONE_CREATED', { taskId: task.id, gateWorkspacePath });
     console.log(`[merge-gate-workspace] gate clone created task=${task.id} path=${gateWorkspacePath}`);
   } else {
-    mergeTrace('GATE_WS_GATE_CLONE_SKIPPED', { taskId: task.id, reason: 'no_feature_branch' });
-    console.log(`[merge-gate-workspace] gate clone skipped task=${task.id} (no featureBranch on workflow)`);
+    // Distinguish the two skip reasons: a caller-provided gate workspace vs a
+    // workflow with no feature branch. The label was previously hardcoded to
+    // "no_feature_branch", which misdiagnosed runs that simply reused an
+    // already-provided workspace (e.g. PR #2170's gate).
+    const skipReason = gateWorkspacePath ? 'workspace_already_provided' : 'no_feature_branch';
+    mergeTrace('GATE_WS_GATE_CLONE_SKIPPED', { taskId: task.id, reason: skipReason });
+    console.log(`[merge-gate-workspace] gate clone skipped task=${task.id} (${skipReason})`);
   }
 
   if (featureBranch && (onFinish !== 'none' || mergeMode === 'external_review')) {
-    const effectiveOnFinish = mergeMode === 'automatic' ? onFinish : 'none';
+    const effectiveOnFinish = mergeMode === 'automatic' && onFinish !== 'pull_request' ? onFinish : 'none';
     try {
+      logTaskProgress(host, task.id, 'info', 'Collecting completed task branches', {
+        featureBranch,
+      });
       const baseCheckoutRef = await resolveBaseCheckoutRef(
         host,
         baseBranch,
         mergeMode === 'external_review' || onFinish === 'pull_request',
       );
-      reviewUrl = await host.consolidateAndMerge(
+      await host.consolidateAndMerge(
         effectiveOnFinish,
         baseBranch,
         featureBranch,
@@ -481,7 +821,7 @@ export async function runMergeGateActionImpl(
         baseCheckoutRef,
         task.id,
       );
-      if (mergeMode === 'manual') {
+      if (mergeMode === 'manual' && onFinish !== 'pull_request') {
         mergeTrace('GATE_WS_PATH_MANUAL_AWAIT', { taskId: task.id, gateWorkspacePath: gateWorkspacePath ?? null });
         console.log(
           `[merge-gate-workspace] setTaskReviewReady path=manual branch consolidate ` +
@@ -502,71 +842,54 @@ export async function runMergeGateActionImpl(
           },
         };
       }
-      if (mergeMode === 'external_review') {
-        if (!host.mergeGateProvider) {
-          throw new Error('mergeMode is "external_review" but no review provider configured');
-        }
+      if (mergeMode === 'external_review' || onFinish === 'pull_request') {
+        logTaskProgress(host, task.id, 'info', 'Checking out review branch in gate workspace', {
+          featureBranch,
+        });
+        await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
 
+        const expectedGeneration = task.execution.generation ?? 0;
         let fullSummary = summary;
-        let vpMarkdownCapture: string | undefined;
         if (visualProof && host.runVisualProofCapture) {
           const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
           const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow?.repoUrl);
           if (vpMarkdown) {
-            vpMarkdownCapture = vpMarkdown;
             fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
           }
         }
 
-        // Fetch the feature branch from origin into the gate clone.
-        // consolidateAndMerge() pushed it from a separate (now removed) clone.
-        await host.execGitIn(
-          ['fetch', 'origin', `+refs/heads/${featureBranch}:refs/heads/${featureBranch}`],
-          gateWorkspacePath!,
-        );
-
-        // Route through shared PR-authoring helper for consistent PR bodies.
-        const structuredCtx = workflowId
-          ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture)
-          : undefined;
-        const prBody = await authorPrBodyForMerge(host, {
+        const published = await publishReviewArtifactsForMerge(host, {
           workflowId,
           mergeNodeTaskId: task.id,
-          title: workflow?.name ?? 'Workflow',
-          baseBranch,
-          featureBranch: featureBranch!,
-          workflowSummary: fullSummary ?? '',
-          structuredContext: structuredCtx,
-          cwd: gateWorkspacePath!,
-        });
-
-        // Create PR via provider (consolidation already done above).
-        // Use the gate clone dir so gh CLI resolves the correct GitHub remote.
-        const result = await host.mergeGateProvider.createReview({
+          workflowName: workflow?.name ?? 'Workflow',
           baseBranch,
           featureBranch,
-          title: workflow?.name ?? 'Workflow',
+          workflowSummary: fullSummary ?? '',
           cwd: gateWorkspacePath!,
-          body: prBody,
+          expectedGeneration,
+          repoUrl: workflow?.repoUrl,
+          reviewGate: task.execution.reviewGate,
         });
-        console.log(`[merge] Created GitHub PR: ${result.url}`);
+        reviewUrl = published.reviewUrl;
+        reviewId = published.reviewId;
+        reviewStatus = published.reviewStatus;
+        const reviewGate = published.reviewGate;
 
-        reviewUrl = result.url;
-        reviewId = result.identifier;
-        reviewStatus = 'Awaiting review';
-        mergeTrace('GATE_WS_PATH_EXTERNAL_REVIEW_AWAIT', {
+        mergeTrace('GATE_WS_PATH_REVIEW_PUBLISH_AWAIT', {
           taskId: task.id,
           gateWorkspacePath: gateWorkspacePath ?? null,
-          reviewUrl: result.url,
+          reviewUrl,
+          onFinish,
+          mergeMode,
         });
         console.log(
-          `[merge-gate-workspace] setTaskReviewReady path=external_review ` +
+          `[merge-gate-workspace] setTaskReviewReady path=review_publish ` +
             `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'}`,
         );
         response = {
           requestId: `merge-${task.id}`,
           actionId: task.id,
-          executionGeneration: task.execution.generation ?? 0,
+          executionGeneration: expectedGeneration,
           status: 'review_ready',
           outputs: {
             exitCode: 0,
@@ -575,6 +898,7 @@ export async function runMergeGateActionImpl(
             reviewUrl,
             reviewId,
             reviewStatus,
+            reviewGate,
           },
         };
         return {
@@ -587,10 +911,9 @@ export async function runMergeGateActionImpl(
               reviewUrl,
               reviewId,
               reviewStatus,
+              reviewGate,
             },
           },
-          reviewIdForPolling: reviewId,
-          workflowIdForPolling: workflowId,
         };
       }
       response = {
@@ -601,6 +924,9 @@ export async function runMergeGateActionImpl(
         outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
       };
     } catch (err) {
+      logTaskProgress(host, task.id, 'error', 'Merge gate failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
@@ -613,15 +939,16 @@ export async function runMergeGateActionImpl(
       };
     }
   } else {
-    if (mergeMode === 'manual' || mergeMode === 'external_review') {
+    if (mergeMode === 'manual' || mergeMode === 'external_review' || onFinish === 'pull_request') {
       mergeTrace('GATE_WS_PATH_NO_CONSOLIDATE_AWAIT', {
         taskId: task.id,
         gateWorkspacePath: gateWorkspacePath ?? null,
         mergeMode,
+        onFinish,
       });
       console.log(
         `[merge-gate-workspace] setTaskReviewReady path=no_consolidate_branch ` +
-          `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'} mergeMode=${mergeMode}`,
+          `task=${task.id} gateWorkspacePath=${gateWorkspacePath ?? 'NULL'} mergeMode=${mergeMode} onFinish=${onFinish}`,
       );
       response = {
         requestId: `merge-${task.id}`,
@@ -630,13 +957,13 @@ export async function runMergeGateActionImpl(
         status: 'review_ready',
         outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
       };
-        return {
-          response,
-          taskChanges: {
-            config: { summary },
-            execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
-          },
-        };
+      return {
+        response,
+        taskChanges: {
+          config: { summary },
+          execution: { branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
+        },
+      };
     }
     response = {
       requestId: `merge-${task.id}`,
@@ -691,20 +1018,27 @@ export async function executeMergeNodeImpl(
     config: legacyConfig,
   };
 
-  host.persistence.updateTask(task.id, legacyChanges);
-  host.callbacks.onComplete?.(task.id, response);
+  updateMergeGateMetadataIfCurrent(host, task.id, legacyChanges, captureMergeGateLineage(task));
 
   if (response.status === 'review_ready') {
-    setMergeGateReviewReady(host, task.id, legacyChanges);
+    setMergeGateReviewReady(host, task.id, legacyChanges, {
+      selectedAttemptId: task.execution.selectedAttemptId,
+      generation: task.execution.generation ?? 0,
+    });
     await startReviewReadyDependents(host);
-    if (result.reviewIdForPolling && result.workflowIdForPolling) {
-      host.startPrPolling(task.id, result.reviewIdForPolling, result.workflowIdForPolling);
-    }
   } else {
     const newlyStarted = host.orchestrator.handleWorkerResponse(response) ?? [];
     if (newlyStarted.length > 0) {
       host.executeTasks(newlyStarted);
     }
+  }
+
+  try {
+    host.callbacks.onComplete?.(task.id, response);
+  } catch (err) {
+    console.warn(
+      `[merge] completion callback observer failed for ${task.id}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -729,17 +1063,15 @@ export async function approveMergeImpl(
   const summary = await host.buildMergeSummary(workflowId);
   let fullSummary = summary;
   const visualProof = workflow.visualProof ?? false;
-  let vpMarkdownCapture: string | undefined;
   if (visualProof && host.runVisualProofCapture) {
     const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
     const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow.repoUrl);
     if (vpMarkdown) {
-      vpMarkdownCapture = vpMarkdown;
       fullSummary = summary + '\n\n' + vpMarkdown;
     }
   }
-  const structuredContext = await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture);
   const mergeMessage = workflow.name ?? 'Workflow';
+
 
   // Clean up the persistent gate worktree created by executeMergeNodeImpl
   const mergeTaskId = `__merge__${workflowId}`;
@@ -758,49 +1090,27 @@ export async function approveMergeImpl(
         branchRepoUrl,
       );
       await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
-      mergeTrace('GIT_COMMIT', { mergeMessage });
-      const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
-      await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
-      // Push squash commit directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
-      // Advance the baseBranch ref in the clone so subsequent operations see the updated base
-      const newHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
-      await execGitInMergeSafe(host, ['update-ref', `refs/heads/${baseBranch}`, newHead], worktreeDir);
-      mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
+      const hasChanges = await execGitInMergeSafe(host, ['diff', '--cached', '--quiet'], worktreeDir)
+        .then(() => false)
+        .catch(() => true);
+      if (hasChanges) {
+        mergeTrace('GIT_COMMIT', { mergeMessage });
+        const commitBody = fullSummary ? `${mergeMessage}\n\n${fullSummary}` : mergeMessage;
+        await execGitInMergeSafe(host, ['commit', '-m', commitBody], worktreeDir);
+        // Push squash commit directly to origin (GitHub) from the clone
+        await execGitInMergeSafe(host, ['push', '--force', 'origin', `HEAD:refs/heads/${baseBranch}`], worktreeDir);
+        // Advance the baseBranch ref in the clone so subsequent operations see the updated base
+        const newHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
+        await execGitInMergeSafe(host, ['update-ref', `refs/heads/${baseBranch}`, newHead], worktreeDir);
+        mergeTrace('SQUASH_MERGE_COMPLETE', { featureBranch, baseBranch });
+      } else {
+        mergeTrace('SQUASH_MERGE_NOOP', { featureBranch, baseBranch });
+      }
       console.log(`[merge] Approved: squash-merged ${featureBranch} into ${baseBranch}`);
     } catch (err) {
       mergeTrace('APPROVE_MERGE_ERROR', { workflowId, error: String(err) });
       try { await execGitInMergeSafe(host, ['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }
       throw err;
-    } finally {
-      await host.removeMergeWorktree(worktreeDir);
-      if (gateWorktreePath) {
-        await host.removeMergeWorktree(gateWorktreePath);
-      }
-    }
-  } else if (onFinish === 'pull_request') {
-    const worktreeDir = await host.createMergeWorktree(featureBranch, 'approve-pr-' + workflowId, workflow.repoUrl);
-    try {
-      mergeTrace('GIT_PUSH', { featureBranch, worktreeDir });
-      // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const prBody = await authorPrBodyForMerge(host, {
-        workflowId,
-        mergeNodeTaskId: mergeTaskId,
-        title: mergeMessage,
-        baseBranch,
-        featureBranch,
-        workflowSummary: fullSummary ?? '',
-        structuredContext,
-        cwd: worktreeDir,
-      });
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, mergeMessage, prBody, worktreeDir);
-      mergeTrace('PR_CREATED', { featureBranch, baseBranch, reviewUrl });
-      console.log(`[merge] Approved: created pull request ${reviewUrl}`);
-      host.persistence.updateTask(mergeTaskId, {
-        config: { summary },
-        execution: { reviewUrl },
-      });
     } finally {
       await host.removeMergeWorktree(worktreeDir);
       if (gateWorktreePath) {
@@ -875,6 +1185,9 @@ export async function publishAfterFixImpl(
           fixedIntegrationRecordedAt: undefined,
           fixedIntegrationSource: undefined,
         },
+      }, {
+        selectedAttemptId: task.execution.selectedAttemptId,
+        generation: task.execution.generation ?? 0,
       });
       await startReviewReadyDependents(host);
       return;
@@ -1031,89 +1344,53 @@ export async function publishAfterFixImpl(
     }
 
     // Push feature branch directly to origin (GitHub) from the gate clone
-    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], consolidateDir);
+    logTaskProgress(host, task.id, 'info', 'Pushing feature branch', {
+      featureBranch,
+    });
+    await pushFeatureBranchWithRefLockRetry(host, consolidateDir, featureBranch);
 
     let fullSummary = summary;
-    let vpMarkdownCapture2: string | undefined;
     if (visualProof && host.runVisualProofCapture) {
       const slug = featureBranch.replace(/\//g, '-');
       const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug, workflow?.repoUrl);
       if (vpMarkdown) {
-        vpMarkdownCapture2 = vpMarkdown;
         fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
       }
     }
 
-    if (mergeMode === 'external_review') {
-      if (!host.mergeGateProvider) {
-        throw new Error('mergeMode is "external_review" but no review provider configured');
-      }
-
-      // Route through shared PR-authoring helper for consistent PR bodies.
-      const structuredCtxReview = workflowId
-        ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture2)
-        : undefined;
-      const prBodyReview = await authorPrBodyForMerge(host, {
+    if (mergeMode === 'external_review' || onFinish === 'pull_request') {
+      const published = await publishReviewArtifactsForMerge(host, {
         workflowId,
         mergeNodeTaskId: task.id,
-        title: workflow?.name ?? 'Workflow',
+        workflowName: workflow?.name ?? 'Workflow',
         baseBranch,
         featureBranch,
         workflowSummary: fullSummary ?? '',
-        structuredContext: structuredCtxReview,
         cwd: consolidateDir,
+        expectedGeneration: task.execution.generation ?? 0,
+        repoUrl: workflow?.repoUrl,
+        reviewGate: task.execution.reviewGate,
       });
-
-      const result = await host.mergeGateProvider.createReview({
-        baseBranch,
-        featureBranch,
-        title: workflow?.name ?? 'Workflow',
-        cwd: consolidateDir,
-        body: prBodyReview,
-      });
-      console.log(`[merge] Post-fix: created/updated GitHub PR: ${result.url}`);
-
-
 
       setMergeGateReviewReady(host, task.id, {
         config: { runnerKind: 'worktree', summary },
         execution: {
           branch: featureBranch,
           workspacePath: gateWorkspacePath,
-          reviewUrl: result.url,
-          reviewId: result.identifier,
-          reviewStatus: 'Awaiting review',
+          reviewUrl: published.reviewUrl,
+          reviewId: published.reviewId,
+          reviewStatus: published.reviewStatus,
+          reviewGate: published.reviewGate,
           fixedIntegrationSha: undefined,
           fixedIntegrationRecordedAt: undefined,
           fixedIntegrationSource: undefined,
         },
+      }, {
+        selectedAttemptId: task.execution.selectedAttemptId,
+        generation: task.execution.generation ?? 0,
       });
       await startReviewReadyDependents(host);
-      host.startPrPolling(task.id, result.identifier, workflowId!);
       return;
-    }
-
-    // manual mode with pull_request onFinish
-    if (onFinish === 'pull_request') {
-      const structuredCtx = workflowId
-        ? await buildPrAuthoringContext(host, workflowId, vpMarkdownCapture2)
-        : undefined;
-      const prBody = await authorPrBodyForMerge(host, {
-        workflowId,
-        mergeNodeTaskId: task.id,
-        title: workflow?.name ?? 'Workflow',
-        baseBranch,
-        featureBranch,
-        workflowSummary: fullSummary ?? '',
-        structuredContext: structuredCtx,
-        cwd: consolidateDir,
-      });
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflow?.name ?? 'Workflow', prBody, consolidateDir);
-      console.log(`[merge] Post-fix: created pull request ${reviewUrl}`);
-      host.persistence.updateTask(task.id, {
-        config: { summary },
-        execution: { reviewUrl },
-      });
     }
 
     setMergeGateReviewReady(host, task.id, {
@@ -1125,6 +1402,9 @@ export async function publishAfterFixImpl(
         fixedIntegrationRecordedAt: undefined,
         fixedIntegrationSource: undefined,
       },
+    }, {
+      selectedAttemptId: task.execution.selectedAttemptId,
+      generation: task.execution.generation ?? 0,
     });
     await startReviewReadyDependents(host);
     mergeTrace('PUBLISH_AFTER_FIX_DONE', { taskId: task.id });
@@ -1166,8 +1446,9 @@ export async function buildMergeSummaryImpl(
 
   const completed = workflowTasks.filter((t) => t.status === 'completed');
   const failed = workflowTasks.filter((t) => t.status === 'failed');
+  const closed = workflowTasks.filter((t) => t.status === 'closed');
   const skipped = workflowTasks.filter(
-    (t) => t.status !== 'completed' && t.status !== 'failed',
+    (t) => t.status !== 'completed' && t.status !== 'failed' && t.status !== 'closed',
   );
   const claudeResolved = completed.filter(
     (t) => t.config.isReconciliation,
@@ -1189,7 +1470,7 @@ export async function buildMergeSummaryImpl(
   }
 
   lines.push(
-    `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${skipped.length} skipped`,
+    `${workflowName} — ${completed.length} tasks completed, ${failed.length} failed, ${closed.length} closed, ${skipped.length} skipped`,
   );
   lines.push('');
 
@@ -1258,6 +1539,14 @@ export async function buildMergeSummaryImpl(
     lines.push('');
   }
 
+  if (closed.length > 0) {
+    lines.push('## Closed Tasks');
+    for (const t of closed) {
+      lines.push(`- **${t.id}**: ${t.description}`);
+    }
+    lines.push('');
+  }
+
   if (skipped.length > 0) {
     lines.push('## Skipped Tasks');
     for (const t of skipped) {
@@ -1298,6 +1587,7 @@ export async function consolidateAndMergeImpl(
     'consolidate-' + (workflowId ?? 'default'),
     repoUrlForMerge,
   );
+  const baseHead = (await execGitInMergeSafe(host, ['rev-parse', 'HEAD'], worktreeDir)).trim();
   console.log(`[merge] consolidateAndMerge: featureBranch=${featureBranch}, baseBranch=${baseBranch}, worktree=${worktreeDir}`);
 
   try {
@@ -1382,21 +1672,13 @@ export async function consolidateAndMergeImpl(
     // Push feature branch to origin so other clones (e.g., the gate clone used
     // by external review providers can access it. The consolidation clone is removed
     // in the finally block, so without this push the branch would be lost.
-    await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-
-    if (visualProof && onFinish === 'pull_request' && host.runVisualProofCapture) {
-      const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
-      const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug, repoUrlForMerge);
-      if (vpMarkdown) {
-        body = (body ? body + '\n\n' : '') + vpMarkdown;
-      }
-    }
+    await pushFeatureBranchWithRefLockRetry(host, worktreeDir, featureBranch);
 
     const mergeMessage = workflowName ?? 'Workflow';
 
     if (onFinish === 'merge') {
       // Squash merge in the clone and push result directly to origin (GitHub)
-      await execGitInMergeSafe(host, ['checkout', '--detach', baseBranch], worktreeDir);
+      await execGitInMergeSafe(host, ['checkout', '--detach', baseHead], worktreeDir);
       await execGitInMergeSafe(host, ['merge', '--squash', featureBranch], worktreeDir);
       const hasChanges = await execGitInMergeSafe(host, ['diff', '--cached', '--quiet'], worktreeDir)
         .then(() => false)
@@ -1412,26 +1694,9 @@ export async function consolidateAndMergeImpl(
       } else {
         console.log(`[merge] No changes to commit — ${baseBranch} already up-to-date with ${featureBranch}`);
       }
-    } else if (onFinish === 'pull_request') {
-      // Push feature branch directly to origin (GitHub) from the clone
-      await execGitInMergeSafe(host, ['push', '--force', '-u', 'origin', featureBranch], worktreeDir);
-      const structuredCtx3 = workflowId
-        ? await buildPrAuthoringContext(host, workflowId)
-        : undefined;
-      const prBody = await authorPrBodyForMerge(host, {
-        workflowId,
-        mergeNodeTaskId,
-        title: workflowName ?? 'Workflow',
-        baseBranch,
-        featureBranch,
-        workflowSummary: body ?? '',
-        structuredContext: structuredCtx3,
-        cwd: worktreeDir,
-      });
-      const reviewUrl = await host.execPr(baseBranch, featureBranch, workflowName ?? 'Workflow', prBody, worktreeDir);
-      console.log(`[merge] Created pull request: ${reviewUrl}`);
-      return reviewUrl;
     }
+    return undefined;
+
   } catch (err) {
     console.error(`[merge] consolidateAndMerge FAILED: ${err instanceof Error ? err.message : String(err)}`);
     try { await execGitInMergeSafe(host, ['merge', '--abort'], worktreeDir); } catch { /* no merge in progress */ }

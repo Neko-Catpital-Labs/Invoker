@@ -1,7 +1,7 @@
 /**
  * Rebase-and-retry integration test with real git.
  *
- * Proves that rebaseAndRetry() with taskExecutor refreshes the pool mirror,
+ * Proves that rebaseRecreate() with taskExecutor refreshes the pool mirror,
  * removes managed experiment branches there, then bumps generation so
  * re-execution branches from the updated base (including new commits on master).
  *
@@ -11,7 +11,7 @@
  * Pattern: sandbox git repo + real WorktreeExecutor + real TaskRunner
  * (follows branch-chain.test.ts).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -19,7 +19,7 @@ import { execSync } from 'node:child_process';
 import type { WorkResponse } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import { TaskRunner, ExecutorRegistry, WorktreeExecutor } from '@invoker/execution-engine';
-import { rebaseAndRetry, bumpGenerationAndRecreate } from '../workflow-actions.js';
+import { rebaseRecreate } from '../workflow-actions.js';
 
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'rebase-retry-'));
@@ -82,7 +82,7 @@ function makeTaskState(overrides: {
   } as TaskState;
 }
 
-describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_000 }, () => {
+describe('rebase-recreate: pool mirror cleanup before restart', { timeout: 120_000 }, () => {
   let tmpDir: string;
   let prevCleanupEnv: string | undefined;
 
@@ -156,28 +156,27 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
         }
         return tasks;
       },
-      // Step 12: rebaseAndRetry now delegates through
-      // recreateWorkflowFromFreshBase. Mirror the real orchestrator: drive
-      // the refreshBase callback (so pool prep runs) before reusing the
-      // recreateWorkflow reset path.
-      recreateWorkflowFromFreshBase: async (
-        workflowId: string,
-        options?: { refreshBase?: (workflowId: string) => Promise<unknown> },
-      ): Promise<TaskState[]> => {
-        await options?.refreshBase?.(workflowId);
+      recreateWorkflowFromFreshBase: async (workflowId: string, options?: { refreshBase?: () => Promise<unknown> }): Promise<TaskState[]> => {
+        await options?.refreshBase?.();
         return orchestrator.recreateWorkflow(workflowId);
       },
+      cancelWorkflow: () => ({ cancelled: [], runningCancelled: [] }),
+      cascadeInvalidationToDownstream: () => [],
     };
 
     const repoUrl = `file://${tmpDir}`;
 
     const persistence = {
-      loadWorkflow: () => ({
-        id: 'wf-test',
-        baseBranch: 'master',
-        repoUrl,
-        generation,
-      }),
+      loadWorkflow: (id: string) => (id === 'wf-test'
+        ? {
+          id: 'wf-test',
+          baseBranch: 'master',
+          repoUrl,
+          generation,
+        }
+        : undefined),
+      listWorkflows: () => [{ id: 'wf-test' }],
+      loadTasks: () => tasks,
       updateWorkflow: (_id: string, changes: any) => {
         if (changes.generation !== undefined) {
           generation = changes.generation;
@@ -244,14 +243,20 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
     // Step 2: Add commit Y to master (source repo)
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
 
-    // Step 3: rebaseAndRetry refreshes mirror, removes managed branches, bumps generation
+    // Step 3: rebaseRecreate refreshes mirror, removes managed branches, bumps generation
     const deps = {
       orchestrator: orchestrator as any,
       persistence: persistence as any,
       repoRoot: tmpDir,
       taskExecutor: executor,
+      commandService: {
+        runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<unknown> | unknown) => ({
+          ok: true as const,
+          data: await fn(),
+        })),
+      } as any,
     };
-    await rebaseAndRetry('task-a', deps);
+    await rebaseRecreate('task-a', deps);
 
     // Verify stale execution metadata is cleared (regression: scripts/repro/repro-stale-agent-session-after-rebase.sh)
     expect(task.execution.agentSessionId).toBeUndefined();
@@ -281,10 +286,8 @@ describe('rebase-and-retry: pool mirror cleanup before restart', { timeout: 120_
 
     const commitY = addCommitToMaster(tmpDir, 'new-feature.txt', 'commit Y: new feature');
 
-    bumpGenerationAndRecreate('wf-test', {
-      orchestrator: orchestrator as any,
-      persistence: persistence as any,
-    });
+    persistence.updateWorkflow('wf-test', { generation: 1 });
+    orchestrator.recreateWorkflow('wf-test');
 
     expect(branchExists(clonePath(), branchFirst)).toBe(true);
 

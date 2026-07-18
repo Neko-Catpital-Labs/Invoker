@@ -30,6 +30,7 @@ export interface TrackWorkflowResult {
     total: number;
     completed: number;
     failed: number;
+    closed: number;
     running: number;
     pending: number;
   };
@@ -234,8 +235,8 @@ function workflowHasSettled(
   hasBackgroundWork?: () => boolean,
 ): boolean {
   const settledStatuses = waitForApproval
-    ? new Set(['completed', 'failed', 'needs_input', 'blocked', 'stale'])
-    : new Set(['completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale']);
+    ? new Set(['completed', 'failed', 'closed', 'needs_input', 'blocked', 'stale'])
+    : new Set(['completed', 'failed', 'closed', 'needs_input', 'awaiting_approval', 'review_ready', 'blocked', 'stale']);
   const allSettled = tasks.length > 0 && tasks.every((task) => settledStatuses.has(task.status));
   if (allSettled && !hasBackgroundWork?.()) {
     return true;
@@ -251,6 +252,7 @@ function summarizeWorkflowTasks(tasks: TaskState[]): Pick<TrackWorkflowResult, '
     total: tasks.length,
     completed: tasks.filter((task) => task.status === 'completed').length,
     failed: tasks.filter((task) => task.status === 'failed').length,
+    closed: tasks.filter((task) => task.status === 'closed').length,
     running: tasks.filter((task) => task.status === 'running' || task.status === 'fixing_with_ai').length,
     pending: tasks.filter((task) => task.status === 'pending').length,
   };

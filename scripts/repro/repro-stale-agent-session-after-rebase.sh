@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Regression guard: after rebase-and-retry, pending downstream tasks must NOT keep
+# Regression guard: after rebase-recreate, pending downstream tasks must NOT keep
 # the previous run's agent_session_id (orchestrator restart clears it to NULL before
 # the next executor.start()). A stale UUID is what the GUI can pass to
 # `claude --resume`, which then errors with:
 #   No conversation found with session ID: …
 #
 # This script polls SQLite while reprosess-a is running and reprosess-b is still
-# pending after a headless rebase-and-retry, and passes only if reprosess-b has
+# pending after a headless rebase-recreate, and passes only if reprosess-b has
 # no stale session id in that window.
 #
 # Requirements: python3, git, network (clone test-playground), built app (dist/main.js).
@@ -129,10 +129,10 @@ if [[ -z "$SESSION_BEFORE" ]]; then
 fi
 echo "==> reprosess-b agent_session_id after first run: $SESSION_BEFORE"
 
-echo "==> Starting rebase-and-retry in background (same DB; reprosess-a will sleep again)"
+echo "==> Starting rebase-recreate in background (same DB; reprosess-a will sleep again)"
 (cd "$REPO_ROOT" && INVOKER_HEADLESS_STANDALONE=1 INVOKER_DB_DIR="$INVOKER_DB_DIR" PATH="$STUB_DIR:$PATH" \
   INVOKER_E2E_MARKER_ROOT="$INVOKER_E2E_MARKER_ROOT" \
-  timeout 600 ./run.sh --headless rebase-and-retry reprosess-b) >"$REBASE_LOG" 2>&1 &
+  timeout 600 ./run.sh --headless rebase-recreate reprosess-b) >"$REBASE_LOG" 2>&1 &
 REBASE_PID=$!
 
 echo "==> Polling on-disk DB until reprosess-a is running, reprosess-b pending, and b has no stale session…"
@@ -166,13 +166,13 @@ done
 
 if [[ -n "$FOUND" ]]; then
   echo ""
-  echo "=== [agent-session-trace] from rebase-and-retry subprocess (orchestrator + workflow path) ==="
+  echo "=== [agent-session-trace] from rebase-recreate subprocess (orchestrator + workflow path) ==="
   grep -F '[agent-session-trace]' "$REBASE_LOG" 2>/dev/null || echo "(no matches — see full log at $REBASE_LOG)"
   echo ""
   echo "-------------------------------------------------------------------"
   echo "FIX VERIFIED"
   echo "  While reprosess-a was running and reprosess-b was still pending"
-  echo "  after rebase-and-retry, reprosess-b.agent_session_id was cleared"
+  echo "  after rebase-recreate, reprosess-b.agent_session_id was cleared"
   echo "  (not the pre-rebase value: $SESSION_BEFORE)."
   echo "-------------------------------------------------------------------"
 else
@@ -183,6 +183,6 @@ fi
 
 wait "$REBASE_PID" || true
 REBASE_PID=""
-echo "==> rebase-and-retry subprocess finished."
+echo "==> rebase-recreate subprocess finished."
 
 exit 0

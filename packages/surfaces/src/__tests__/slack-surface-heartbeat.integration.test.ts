@@ -70,10 +70,12 @@ const mockPlanConversation = {
   sendMessage: mockSendMessage,
   submittedPlanText: null as any,
   planSubmitted: false,
+  conversationMode: 'plan' as const,
   init: vi.fn().mockResolvedValue(undefined),
 };
 
-vi.mock('../slack/plan-conversation.js', () => ({
+vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../slack/plan-conversation.js')>()),
   PlanConversation: vi.fn(() => mockPlanConversation),
 }));
 

@@ -2,7 +2,7 @@
   "name": "@invoker/app",
   "productName": "Invoker",
   "desktopName": "invoker.desktop",
-  "version": "0.0.1",
+  "version": "0.0.7",
   "description": "Invoker desktop app",
   "homepage": "https://github.com/Neko-Catpital-Labs/Invoker",
   "author": {
@@ -22,6 +22,10 @@
       {
         "from": "../../skills",
         "to": "skills"
+      },
+      {
+        "from": "../../release/embedded-cli/invoker-cli",
+        "to": "invoker-cli/invoker-cli"
       }
     ],
     "files": [
@@ -36,7 +40,8 @@
     "publish": null,
     "mac": {
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ],
       "category": "public.app-category.developer-tools",
       "icon": "assets/icons/mac/icon.icns"
@@ -60,22 +65,27 @@
     "test": "vitest run",
     "start": "unset ELECTRON_RUN_AS_NODE && node ../../scripts/electron.cjs dist/main.js",
     "dev": "tsup src/main.ts src/preload.ts --format cjs --outDir dist --external electron && unset ELECTRON_RUN_AS_NODE && node ../../scripts/electron.cjs dist/main.js",
-    "test:e2e": "xvfb-run --auto-servernum playwright test"
+    "test:e2e": "sh -c 'if command -v xvfb-run >/dev/null 2>&1; then exec xvfb-run --auto-servernum playwright test \"$@\"; else exec playwright test \"$@\"; fi' --",
+    "test:e2e:visible": "sh -c 'export INVOKER_E2E_HIDE_WINDOW=0; if command -v xvfb-run >/dev/null 2>&1; then exec xvfb-run --auto-servernum playwright test \"$@\"; else exec playwright test \"$@\"; fi' --",
+    "test:e2e:quiet": "pnpm run test:e2e"
   },
   "dependencies": {
-    "@invoker/workflow-core": "workspace:*",
-    "@invoker/execution-engine": "workspace:*",
-    "@invoker/data-store": "workspace:*",
+    "@invoker/cli": "workspace:*",
     "@invoker/contracts": "workspace:*",
+    "@invoker/data-store": "workspace:*",
+    "@invoker/execution-engine": "workspace:*",
     "@invoker/runtime-adapters": "workspace:*",
     "@invoker/runtime-service": "workspace:*",
     "@invoker/surfaces": "workspace:*",
     "@invoker/transport": "workspace:*",
-    "@slack/bolt": "^4.6.0",
+    "@invoker/workflow-core": "workspace:*",
     "dockerode": "^4.0.0",
     "sql.js": "^1.12.0",
     "dotenv": "^16.0.0",
     "yaml": "^2.7.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",

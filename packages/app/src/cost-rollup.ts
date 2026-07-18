@@ -9,7 +9,7 @@
 
 import type { NormalizedCostEvent, CostRollup } from '@invoker/contracts';
 import { rollUpCostEvents } from '@invoker/contracts';
-import type { SessionUsageEvent } from '@invoker/execution-engine';
+import { DEFAULT_EXECUTION_AGENT, type SessionUsageEvent } from '@invoker/execution-engine';
 
 // ── Attribution Context ────────────────────────────────────
 
@@ -177,7 +177,7 @@ export function resolveSessionId(task: CostTaskInfo): string | undefined {
  * 3. 'claude' (default)
  */
 export function resolveAgentName(task: CostTaskInfo): string {
-  return task.agentName ?? task.lastAgentName ?? 'claude';
+  return task.agentName ?? task.lastAgentName ?? DEFAULT_EXECUTION_AGENT;
 }
 
 /**

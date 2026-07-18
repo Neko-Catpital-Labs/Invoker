@@ -19,12 +19,22 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, Attempt, ExternalDependency, TaskStatus } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
-import { createTaskState, createAttempt } from '@invoker/workflow-graph';
+import { createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
 import type { Logger, WorkResponse } from '@invoker/contracts';
+import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 import { normalizeRunnerKind } from '@invoker/workflow-graph';
+import {
+  buildExecutorRoutedPayload,
+  buildHeavyweightRoutingRules,
+  resolveExecutorRouting,
+  type ExecutorRoutingReason,
+  type ExecutorRoutingRule,
+  type HeavyweightCommandRoutingPolicy,
+} from './executor-routing.js';
+import { requireDefaultBranchRemote } from './repo-default-branch.js';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -70,18 +80,93 @@ import {
   assertMergeExperimentDependenciesInvariantImpl,
 } from './graph-mutation.js';
 import type { GraphMutationHost } from './graph-mutation.js';
+import {
+  autoStartReadyTasksImpl,
+  enqueueIfNotScheduledImpl,
+  autoStartExternallyUnblockedReadyTasksImpl,
+  autoStartUnblockedTasksImpl,
+  getPendingLaunchQueueSnapshotImpl,
+  getTaskLaunchReadinessImpl,
+  areLocalDependenciesSatisfiedImpl,
+  getLocalDependencyBlockerImpl,
+  drainSchedulerImpl,
+} from './orchestrator/scheduler-domain.js';
+import type { SchedulerDomainHost } from './orchestrator/scheduler-domain.js';
+import {
+  handleCompletedImpl,
+  finalizeFailedTaskImpl,
+  handleReviewReadyImpl,
+  handleFailedImpl,
+  handleNeedsInputImpl,
+  handleSpawnExperimentsImpl,
+  handleSelectExperimentImpl,
+  checkExperimentCompletionImpl,
+  checkWorkflowCompletionImpl,
+} from './orchestrator/transitions.js';
+import type { TransitionHost } from './orchestrator/transitions.js';
+import {
+  cancelActiveBeforeInvalidationImpl,
+  cancelActiveCandidatesImpl,
+  cancelTaskImpl,
+  cancelWorkflowImpl,
+  deferTaskImpl,
+} from './orchestrator/cancellation.js';
+import type { CancellationHost } from './orchestrator/cancellation.js';
+import {
+  EXPEDITED_PRIORITY as LIFECYCLE_EXPEDITED_PRIORITY,
+  applyRecreateResetImpl,
+  bumpWorkflowGenerationImpl,
+  collectSubgraphTaskIdsImpl,
+  dispatchPostMutationImpl,
+  invalidateLaunchArtifactsForTasksImpl,
+  recreateDownstreamImpl,
+  recreateTaskImpl,
+  recreateWorkflowImpl,
+  resetSubgraphToPendingImpl,
+  restartTaskImpl,
+  retryTaskImpl,
+  retryWorkflowImpl,
+} from './orchestrator/lifecycle.js';
+import type { LifecycleHost } from './orchestrator/lifecycle.js';
+import {
+  editTaskCommandImpl,
+  editTaskPromptImpl,
+  editTaskTypeImpl,
+  editTaskPoolImpl,
+  editTaskAgentImpl,
+  editTaskMergeModeImpl,
+  editTaskFixContextImpl,
+} from './orchestrator/task-edits.js';
+import type { TaskEditHost } from './orchestrator/task-edits.js';
+import {
+  buildTaskUpdateDelta,
+  buildTaskRemoveDelta,
+} from './orchestrator/events.js';
+import {
+  recreateWorkflowFromFreshBaseImpl,
+  getKnownFreshBaseCommitImpl,
+  beginFixSessionImpl,
+  revertFixSessionImpl,
+  reclaimStalledFixSessionImpl,
+  getMergeNodeImpl,
+} from './orchestrator/merge.js';
+import type { MergeHost } from './orchestrator/merge.js';
 import { buildPlanLocalToScopedIdMap, scopePlanTaskId } from './task-id-scope.js';
 import type { TaskRepository } from './task-repository.js';
 import {
   planInvalidation,
-  withSchedulerEnqueueCandidates,
   type InvalidationPlan,
 } from './invalidation-plan.js';
+import {
+  MUTATION_POLICIES,
+  type InvalidationAction,
+} from './invalidation-policy.js';
 import {
   isActiveAttempt,
   isDiscardedAttempt,
   isOutcomeTerminalAttempt,
 } from './attempt-policy.js';
+import { assertResetComplete, buildTaskResetChanges, type TaskResetKind } from './task-reset-policy.js';
 
 // ── Channel Constants ───────────────────────────────────────
 
@@ -97,7 +182,7 @@ function isReplaceableAttemptStatus(status: Attempt['status']): boolean {
 
 function nextWorkflowId(): string {
   workflowCounter += 1;
-  if (process.env.NODE_ENV === 'test') return `wf-test-${workflowCounter}`;
+  if (process.env.INVOKER_TEST_WORKFLOW_IDS === '1') return `wf-test-${workflowCounter}`;
   return `wf-${Date.now()}-${workflowCounter}`;
 }
 
@@ -107,8 +192,7 @@ function workflowTimestamp(): Date {
   }
   return new Date();
 }
-const FIX_FAILURE_PREFIX_RE = /^\[Fix with (?:Claude|Agent) failed\] [^\n]*\n\n/;
-const ATTEMPT_LEASE_MS = 20 * 60 * 1000;
+
 const TRACE_PERSIST_SYNC = process.env.INVOKER_TRACE_PERSIST_SYNC === '1';
 const TRACE_WORKER_RESPONSE = process.env.INVOKER_TRACE_WORKER_RESPONSE === '1';
 const noopLogger: Logger = {
@@ -118,33 +202,6 @@ const noopLogger: Logger = {
   error() {},
   child() { return noopLogger; },
 };
-
-function stripFixFailureWrapper(errorText: string): string {
-  return errorText.replace(FIX_FAILURE_PREFIX_RE, '');
-}
-
-function tryParseJsonObject(value: string | undefined): Record<string, unknown> | undefined {
-  if (!value) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseMergeConflictError(
-  value: string | undefined,
-): { failedBranch: string; conflictFiles: string[] } | undefined {
-  const obj = tryParseJsonObject(value);
-  if (obj?.type !== 'merge_conflict') return undefined;
-
-  const failedBranch = typeof obj.failedBranch === 'string' ? obj.failedBranch : '';
-  const conflictFiles = Array.isArray(obj.conflictFiles)
-    ? obj.conflictFiles.filter((file): file is string => typeof file === 'string')
-    : [];
-  return { failedBranch, conflictFiles };
-}
 
 function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
@@ -165,13 +222,33 @@ export class PlanConflictError extends Error {
 
 // ── Adapter Interfaces ──────────────────────────────────────
 
+export interface LaunchDispatchInvalidationRow {
+  id: number;
+  taskId: string;
+  attemptId: string;
+  workflowId: string;
+  state: string;
+  generation: number;
+}
+
+export interface ExecutionResourceLeaseReleaseRow {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  taskId?: string;
+}
+
+export type TaskLaunchReadiness =
+  | { ready: true; task: TaskState }
+  | { ready: false; reason: string; task?: TaskState };
+export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean };
+
 export interface OrchestratorPersistence {
   saveWorkflow(workflow: {
     id: string;
     name: string;
     description?: string;
     visualProof?: boolean;
-    status: WorkflowDerivedStatus;
     createdAt: string;
     updatedAt: string;
     repoUrl?: string;
@@ -180,8 +257,11 @@ export interface OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -191,9 +271,13 @@ export interface OrchestratorPersistence {
     status: string;
     createdAt: string;
     updatedAt: string;
+    repoUrl?: string;
     baseBranch?: string;
     onFinish?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
@@ -204,9 +288,13 @@ export interface OrchestratorPersistence {
       status: string;
       createdAt: string;
       updatedAt: string;
+      repoUrl?: string;
       baseBranch?: string;
       onFinish?: string;
       mergeMode?: 'manual' | 'automatic' | 'external_review';
+      externalDependencies?: ExternalDependency[];
+      externalDependencyChanges?: ExternalDependencyChange[];
+      detachedExternalDependencies?: DetachedExternalDependency[];
       generation?: number;
     }>;
     tasks: TaskState[];
@@ -217,6 +305,7 @@ export interface OrchestratorPersistence {
   loadAttempts(nodeId: string): Attempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
+  deleteTask?(taskId: string): void;
   failTaskAndAttempt?(
     taskId: string,
     taskChanges: TaskStateChanges,
@@ -235,11 +324,40 @@ export interface OrchestratorPersistence {
     baseBranch?: string;
     featureBranch?: string;
     mergeMode?: 'manual' | 'automatic' | 'external_review';
+    externalDependencies?: ExternalDependency[];
+    externalDependencyChanges?: ExternalDependencyChange[];
+    detachedExternalDependencies?: DetachedExternalDependency[];
+    generation?: number;
   } | undefined;
   /** Delete a single workflow and its tasks from the DB. */
   deleteWorkflow?(workflowId: string): void;
   /** Delete all workflows and tasks from the DB. */
   deleteAllWorkflows?(): void;
+  /**
+   * Optional launch-handoff outbox sink. When provided, `drainScheduler`
+   * writes a durable `task_launch_dispatch` row for each claimed launch.
+   */
+  enqueueLaunchDispatch?(input: {
+    taskId: string;
+    attemptId: string;
+    workflowId: string;
+    priority?: 'high' | 'normal' | 'low';
+    generation: number;
+  }): {
+    id: number;
+    state?: 'enqueued' | 'leased' | 'completed' | 'abandoned';
+    priority?: 'high' | 'normal' | 'low';
+  };
+  abandonLaunchDispatchesForTasks?(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): LaunchDispatchInvalidationRow[];
+  releaseExecutionResourceLeasesForTasks?(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): ExecutionResourceLeaseReleaseRow[];
 }
 
 export interface OrchestratorMessageBus {
@@ -270,15 +388,22 @@ export interface PlanDefinition {
   reviewProvider?: string;
   repoUrl?: string;
   intermediateRepoUrl?: string;
+  externalDependencies?: Array<{
+    workflowId: string;
+    taskId?: string;
+    requiredStatus?: 'completed';
+    gatePolicy?: 'completed' | 'review_ready';
+  }>;
   tasks: Array<{
     id: string;
     description: string;
     command?: string;
     prompt?: string;
     dependencies?: string[];
+    /** @deprecated Cross-workflow dependencies are workflow-owned; parser rejects this for new YAML. */
     externalDependencies?: Array<{
       workflowId: string;
-      taskId: string;
+      taskId?: string;
       requiredStatus?: 'completed';
       gatePolicy?: 'completed' | 'review_ready';
     }>;
@@ -289,6 +414,7 @@ export interface PlanDefinition {
     dockerImage?: string;
     poolId?: string;
     executionAgent?: string;
+    executionModel?: string;
   }>;
 }
 
@@ -400,6 +526,7 @@ export interface TaskReplacementDef {
   dependencies?: string[];
   runnerKind?: RunnerKind;
   executionAgent?: string;
+  executionModel?: string;
 }
 
 export interface ExternalGatePolicyUpdate {
@@ -408,243 +535,13 @@ export interface ExternalGatePolicyUpdate {
   gatePolicy: 'completed' | 'review_ready';
 }
 
-/**
- * A single routing rule that validates task pool placement against command patterns.
- * When a rule matches a task command, the orchestrator validates that the task's
- * pool destination conforms to the rule's requirements.
- */
-export interface ExecutorRoutingRule {
-  /** Substring to match against the task command. */
-  pattern?: string;
-  /** Regular expression matched against the task command; compiled with new RegExp(regex). */
-  regex?: string;
-  /** Required execution pool ID for matching commands. */
-  poolId: string;
-  /**
-   * Rule behavior:
-   * - enforce (default): task must already declare matching executor/destination
-   * - route: auto-apply rule executor/destination when omitted, and reject conflicts
-   */
-  strategy?: 'enforce' | 'route';
-}
-
-export interface CommandRoutingMatcher {
-  pattern?: string;
-  regex?: string;
-}
-
-export interface HeavyweightCommandRoutingPolicy {
-  enabled?: boolean;
-  poolId: string;
-  matchers?: CommandRoutingMatcher[];
-}
-
-const DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS: CommandRoutingMatcher[] = [
-  { regex: '\\bpnpm(?:\\s|$)' },
-];
-
-function validateRoutingDestinationAvailability(
-  taskId: string,
-  command: string,
-  sourceLabel: string,
-  poolId: string | undefined,
-  availablePoolIds: Set<string>,
-): void {
-  if (availablePoolIds.size > 0 && (!poolId || !availablePoolIds.has(poolId))) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
-      `but config poolId="${poolId}" is not defined in executionPools.`,
-    );
-  }
-  if (availablePoolIds.size === 0) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel}, ` +
-      'but no executionPools are configured.',
-    );
-  }
-}
-
-function buildHeavyweightRoutingRules(
-  taskId: string,
-  policy: HeavyweightCommandRoutingPolicy | undefined,
-): ExecutorRoutingRule[] {
-  if (!policy || policy.enabled === false) {
-    return [];
-  }
-
-  const matchers = policy.matchers?.length ? policy.matchers : DEFAULT_HEAVYWEIGHT_COMMAND_MATCHERS;
-  if (!policy.poolId) {
-    throw new Error(
-      `Task "${taskId}" matched heavyweight command routing, ` +
-      'but config is missing destination: set poolId.',
-    );
-  }
-
-  return matchers.map((matcher) => ({
-    pattern: matcher.pattern,
-    regex: matcher.regex,
-    poolId: policy.poolId,
-    strategy: 'route',
-  }));
-}
-
-function applyRoutingRule(
-  taskId: string,
-  command: string,
-  planPoolId: string | undefined,
-  rule: ExecutorRoutingRule,
-  sourceLabel: string,
-  availablePoolIds: Set<string>,
-): { poolId?: string } | undefined {
-  validateRoutingDestinationAvailability(
-    taskId,
-    command,
-    sourceLabel,
-    rule.poolId,
-    availablePoolIds,
-  );
-  if (planPoolId !== undefined && planPoolId !== rule.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" matched ${sourceLabel} and must use ` +
-      `poolId="${rule.poolId}", but plan declares poolId="${planPoolId}"`,
-    );
-  }
-  return {
-    poolId: rule.poolId ?? planPoolId,
-  };
-}
-
-/**
- * Finds the first executor routing rule that matches the given command.
- * A rule matches when `pattern` is a substring of `command`, `regex` compiles and tests
- * true against `command`, or both (either is sufficient).
- * Returns the matching rule or undefined if no rule matches.
- */
-export function findMatchingExecutorRoutingRule(
-  command: string,
-  rules: ExecutorRoutingRule[],
-): ExecutorRoutingRule | undefined {
-  for (const rule of rules) {
-    const patternMatch = rule.pattern !== undefined && command.includes(rule.pattern);
-    const regexMatch = rule.regex !== undefined && new RegExp(rule.regex).test(command);
-    if (patternMatch || regexMatch) {
-      return rule;
-    }
-  }
-  return undefined;
-}
-
-/**
- * Validates that a task's routing conforms to pool routing rules.
- * Returns immediately if the task has no command or no rules are configured.
- * When a rule matches the task command, throws if the task's poolId does not
- * match the rule's requirements.
- */
-export function assertExecutorRoutingConforms(
-  taskId: string,
-  command: string | undefined,
-  planPoolId: string | undefined,
-  rules: ExecutorRoutingRule[],
-): void {
-  if (!command || rules.length === 0) {
-    return;
-  }
-
-  const matchingRule = findMatchingExecutorRoutingRule(command, rules);
-  if (!matchingRule) {
-    return;
-  }
-
-  if (planPoolId !== matchingRule.poolId) {
-    throw new Error(
-      `Task "${taskId}" with command "${command}" requires poolId="${matchingRule.poolId}" ` +
-      `but plan declares poolId="${planPoolId ?? '(undefined)'}"`
-    );
-  }
-}
-
-function resolveExecutorRouting(
-  taskId: string,
-  command: string | undefined,
-  planPoolId: string | undefined,
-  defaultPoolId: string | undefined,
-  rules: ExecutorRoutingRule[],
-  availablePoolIds: Set<string>,
-): { poolId?: string; reason: ExecutorRoutingReason } {
-  if (defaultPoolId && availablePoolIds.size > 0 && !availablePoolIds.has(defaultPoolId)) {
-    throw new Error(
-      `Task "${taskId}" cannot use defaultPoolId="${defaultPoolId}" because it is not defined in executionPools.`,
-    );
-  }
-
-  const initialPoolId = planPoolId ?? defaultPoolId;
-  const initialReason: ExecutorRoutingReason = initialPoolId
-    ? { type: 'poolId', poolId: initialPoolId }
-    : { type: 'defaultWorktree' };
-
-  if (!command || rules.length === 0) {
-    return {
-      poolId: initialPoolId,
-      reason: initialReason,
-    };
-  }
-
-  let effectivePoolId = initialPoolId;
-  let reason: ExecutorRoutingReason = initialReason;
-
-  const routingRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'route');
-  const matchingRoutingRule = findMatchingExecutorRoutingRule(command, routingRules);
-  if (matchingRoutingRule) {
-    const routed = applyRoutingRule(
-      taskId,
-      command,
-      planPoolId,
-      matchingRoutingRule,
-      'routing rule',
-      availablePoolIds,
-    );
-    effectivePoolId = routed?.poolId ?? effectivePoolId;
-    if (routed?.poolId) {
-      reason = {
-        type: 'routingRule',
-        poolId: routed.poolId,
-        ...(matchingRoutingRule.pattern !== undefined ? { pattern: matchingRoutingRule.pattern } : {}),
-        ...(matchingRoutingRule.regex !== undefined ? { regex: matchingRoutingRule.regex } : {}),
-      };
-    }
-  }
-
-  const enforcementRules = rules.filter((rule) => (rule.strategy ?? 'enforce') === 'enforce');
-  assertExecutorRoutingConforms(
-    taskId,
-    command,
-    effectivePoolId,
-    enforcementRules,
-  );
-
-  return {
-    poolId: effectivePoolId,
-    reason,
-  };
-}
-
-type ExecutorRoutingReason =
-  | { type: 'dockerImage' }
-  | { type: 'poolId'; poolId: string }
-  | { type: 'routingRule'; poolId: string; pattern?: string; regex?: string }
-  | { type: 'defaultWorktree' };
-
-function buildExecutorRoutedPayload(
-  runnerKind: RunnerKind,
-  poolId: string | undefined,
-  reason: ExecutorRoutingReason,
-): Record<string, unknown> {
-  return {
-    runnerKind,
-    ...(poolId ? { poolId } : {}),
-    reason,
-  };
-}
+export {
+  findMatchingExecutorRoutingRule,
+  assertExecutorRoutingConforms,
+  type ExecutorRoutingRule,
+  type CommandRoutingMatcher,
+  type HeavyweightCommandRoutingPolicy,
+} from './executor-routing.js';
 
 /**
  * Adapt an OrchestratorPersistence into the TaskRepository port.
@@ -666,6 +563,10 @@ export function taskRepositoryFromPersistence(p: OrchestratorPersistence): TaskR
     deleteAllWorkflows: () => p.deleteAllWorkflows?.(),
     saveTask: (wfId, t) => p.saveTask(wfId, t),
     updateTask: (id, c) => p.updateTask(id, c),
+    deleteTask: (id) => {
+      if (!p.deleteTask) throw new Error('Persistence adapter does not support deleteTask');
+      p.deleteTask(id);
+    },
     logEvent: (id, et, pl) => p.logEvent?.(id, et, pl),
     saveAttempt: (a) => partial.saveAttempt?.(a),
     updateAttempt: (id, c) => partial.updateAttempt?.(id, c),
@@ -691,7 +592,7 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Default auto-fix retry budget for older tasks missing persisted per-task config. */
+  /** Maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables auto-fix. */
   defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
@@ -716,12 +617,36 @@ export interface OrchestratorConfig {
    * scheduler dequeue time).
    */
   deferRunningUntilLaunch?: boolean;
+  /** Resolve the repo default branch. Must throw when no safe branch is known. */
+  resolveRepoDefaultBranch?: (repoUrl: string) => string;
+  /**
+   * Backoff (ms) before a task deferred for a resource limit (no execution-pool
+   * member capacity) is re-dispatched by the periodic scheduler. Default is an
+   * exponential schedule (15s → 5min cap) so a capacity-starved task waits in
+   * line and heartbeats instead of thrashing the launch outbox every poll.
+   * A fixed number overrides the schedule (primarily for tests).
+   */
+  launchDeferralBackoffMs?: number;
+  /**
+   * When the persistence layer implements `enqueueLaunchDispatch`,
+   * `drainScheduler` writes a durable `task_launch_dispatch` row for each
+   * claimed launch and emits a `task.dispatch_enqueued` event.
+   */
 }
 
 // ── Orchestrator ────────────────────────────────────────────
 
+export interface TaskLineageExpectation {
+  taskId?: string;
+  selectedAttemptId?: string;
+  generation?: number;
+}
+
 export class Orchestrator {
-  private static readonly EXPEDITED_PRIORITY = 100;
+  private static readonly EXPEDITED_PRIORITY = LIFECYCLE_EXPEDITED_PRIORITY;
+  private static readonly LAUNCH_DEFERRAL_BASE_BACKOFF_MS = 15_000;
+  private static readonly LAUNCH_DEFERRAL_MAX_BACKOFF_MS = 5 * 60_000;
+  private static readonly LAUNCH_DEFERRAL_HEARTBEAT_MS = 30_000;
 
   private readonly stateMachine: TaskStateMachine;
   private readonly responseHandler: ResponseHandler;
@@ -736,9 +661,19 @@ export class Orchestrator {
   private readonly defaultPoolId: string | undefined;
   private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
+  private readonly launchDeferralBackoffMs?: number;
+  private readonly resolveRepoDefaultBranch: (repoUrl: string) => string;
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
+  /**
+   * Owner-local backoff for tasks deferred due to execution-pool capacity.
+   * Keyed to `deferredTaskIds` membership: the periodic scheduler skips
+   * re-dispatching a parked task until its `until` elapses, while a freed slot
+   * (completion path) still re-enqueues it immediately. Pruned when the task
+   * leaves the deferred set (retry / cancel / recreate / completion / delete).
+   */
+  private launchDeferrals = new Map<string, { until: number; attempts: number; lastHeartbeatAt: number }>();
   private beforeApproveHook?: (task: TaskState) => Promise<void>;
   private lastInvalidationPlan?: InvalidationPlan;
 
@@ -762,31 +697,9 @@ export class Orchestrator {
    */
   private knownFreshBaseCommits = new Map<string, string>();
 
-  private static readonly DETACH_RESET_CHANGES: TaskStateChanges = {
-    status: 'pending',
+  private static readonly DETACH_RESET_CHANGES: TaskStateChanges = buildTaskResetChanges('detach', {
     config: { summary: undefined },
-    execution: {
-      autoFixAttempts: 0,
-      blockedBy: undefined,
-      startedAt: undefined,
-      completedAt: undefined,
-      error: undefined,
-      exitCode: undefined,
-      pendingFixError: undefined,
-      inputPrompt: undefined,
-      lastHeartbeatAt: undefined,
-      isFixingWithAI: false,
-      reviewUrl: undefined,
-      reviewId: undefined,
-      reviewStatus: undefined,
-      reviewProviderId: undefined,
-      fixedIntegrationSha: undefined,
-      fixedIntegrationRecordedAt: undefined,
-      fixedIntegrationSource: undefined,
-      agentSessionId: undefined,
-      containerId: undefined,
-    },
-  };
+  });
 
   constructor(config: OrchestratorConfig) {
     this.maxConcurrency = config.maxConcurrency ?? 3;
@@ -800,8 +713,10 @@ export class Orchestrator {
     ];
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
     this.defaultPoolId = config.defaultPoolId;
-    this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
+    this.defaultAutoFixRetries = Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0));
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
+    this.launchDeferralBackoffMs = config.launchDeferralBackoffMs;
+    this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
@@ -881,30 +796,31 @@ export class Orchestrator {
     return updated;
   }
 
+  private writeResetAndSync(
+    before: TaskState,
+    kind: TaskResetKind,
+    changes: TaskStateChanges,
+    opts?: { skipWorkflowStatusSync?: boolean },
+  ): TaskState {
+    const updated = this.writeAndSync(before.id, changes, opts);
+    assertResetComplete(before, updated, kind, { execution: changes.execution });
+    return updated;
+  }
+
   /**
    * Build an 'updated' TaskDelta with task-state continuity metadata.
    * `before` is the task state before the mutation, `after` is the state
    * returned by writeAndSync.
    */
   private buildUpdateDelta(before: TaskState, after: TaskState, changes: TaskStateChanges): TaskDelta {
-    return {
-      type: 'updated',
-      taskId: after.id,
-      changes,
-      taskStateVersion: after.taskStateVersion,
-      previousTaskStateVersion: before.taskStateVersion,
-    };
+    return buildTaskUpdateDelta(before, after, changes);
   }
 
   /**
    * Build a 'removed' TaskDelta with the task's last known task-state version.
    */
   private buildRemoveDelta(task: TaskState): TaskDelta {
-    return {
-      type: 'removed',
-      taskId: task.id,
-      previousTaskStateVersion: task.taskStateVersion,
-    };
+    return buildTaskRemoveDelta(task);
   }
 
   private touchWorkflow(workflowId: string): void {
@@ -937,26 +853,15 @@ export class Orchestrator {
    * The returned list is de-duplicated and preserves first-seen order.
    */
   private collectSubgraphTaskIds(rootTaskIds: string[]): string[] {
-    const allTasks = this.stateMachine.getAllTasks();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const seen = new Set<string>();
-    const ids: string[] = [];
+    return collectSubgraphTaskIdsImpl(this as unknown as LifecycleHost, rootTaskIds);
+  }
 
-    for (const rootId of rootTaskIds) {
-      if (!taskMap.has(rootId)) continue;
-      if (!seen.has(rootId)) {
-        seen.add(rootId);
-        ids.push(rootId);
-      }
-      const descendantIds = getTransitiveDependents(rootId, taskMap, () => false);
-      for (const id of descendantIds) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        ids.push(id);
-      }
-    }
-
-    return ids;
+  private invalidateLaunchArtifactsForTasks(
+    taskIds: readonly string[],
+    reason: string,
+    now: Date = new Date(),
+  ): void {
+    return invalidateLaunchArtifactsForTasksImpl(this as unknown as LifecycleHost, taskIds, reason, now);
   }
 
   /**
@@ -965,138 +870,24 @@ export class Orchestrator {
    */
   private resetSubgraphToPending(
     rootTaskIds: string[],
+    kind: TaskResetKind,
     resetChanges: TaskStateChanges,
     opts?: { forceResetIds?: Set<string> },
   ): { affectedIds: string[]; readyIds: string[] } {
-    const forceResetIds = opts?.forceResetIds ?? new Set<string>();
-    const affectedIds = this.collectSubgraphTaskIds(rootTaskIds);
-    const affectedSet = new Set(affectedIds);
-    const workflowsToSync = new Set<string>();
-    const pendingTaskDeltas: TaskDelta[] = [];
-
-    this.taskRepository.runInTransaction(() => {
-      for (const id of affectedIds) {
-        const current = this.stateGetTask(id);
-        if (!current) continue;
-        if (current.config.workflowId) {
-          workflowsToSync.add(current.config.workflowId);
-        }
-
-        const selectedAttempt = this.getSelectedAttempt(current);
-        const shouldReset =
-          forceResetIds.has(id)
-          || current.status !== 'pending'
-          || this.isAttemptLeaseActive(selectedAttempt);
-        this.deferredTaskIds.delete(id);
-        if (!shouldReset) {
-          this.clearQueuedSchedulerEntries(id, current.execution.selectedAttemptId);
-          continue;
-        }
-
-        const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
-        const updated = this.writeAndSync(id, changesWithGeneration, { skipWorkflowStatusSync: true });
-        const priorAttemptId = current.execution.selectedAttemptId;
-        this.replaceSelectedAttempt(current, {}, { skipWorkflowStatusSync: true });
-        this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
-        pendingTaskDeltas.push(this.buildUpdateDelta(current, updated, changesWithGeneration));
-
-        this.clearQueuedSchedulerEntries(id, priorAttemptId);
-      }
-
-      for (const workflowId of workflowsToSync) {
-        this.touchWorkflow(workflowId);
-      }
-    });
-
-    for (const delta of pendingTaskDeltas) {
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    }
-
-    const readyIds = this.stateMachine
-      .getReadyTasks()
-      .map((t) => t.id)
-      .filter((id) => affectedSet.has(id));
-    return { affectedIds, readyIds };
+    return resetSubgraphToPendingImpl(this as unknown as LifecycleHost, rootTaskIds, kind, resetChanges, opts);
   }
 
   /**
-   * Cancel-first invariant defense-in-depth (Step 18 of
-   * `docs/architecture/task-invalidation-roadmap.md`, Hard Invariant
-   * from `docs/architecture/task-invalidation-chart.md`).
-   *
-   * Marks any actively-running task in the targeted scope as `failed`
-   * with an explicit cancel marker BEFORE the caller resets state.
-   * This guarantees the chart's "interrupt and cancel all in-flight
-   * work in the affected scope" rule for direct callers of the
-   * orchestrator primitives — notably the `commandService.retryTask`
-   * / `recreateTask` / `retryWorkflow` / `recreateWorkflow` /
-   * `recreateWorkflowFromFreshBase` lifecycle commands wired in
-   * Step 17, which bypass the upstream `applyInvalidation` cancel.
-   *
-   * Calls via `applyInvalidation` already cancel via `cancelInFlight`
-   * (executor kill + orchestrator-side `cancelTask`/`cancelWorkflow`),
-   * so this helper is a defense-in-depth no-op there: by the time the
-   * primitive runs the targeted scope has no active tasks and the
-   * `isActive` filter below skips them all.
-   *
-   * Implementation notes:
-   *   - Only `running` / `fixing_with_ai` tasks are touched. Pending /
-   *     blocked / failed / completed / etc. tasks are left alone so
-   *     the subsequent reset path (`resetSubgraphToPending` /
-   *     `recreateWorkflow` / `replaceSelectedAttempt`) sees the
-   *     expected lineage.
-   *   - The selected attempt's status is intentionally NOT mutated
-   *     here — the subsequent reset's `replaceSelectedAttempt` sees
-   *     it as still `running` and marks it `superseded`, preserving
-   *     the existing attempt-supersession contract that retry/recreate
-   *     primitives (and their tests) rely on.
-   *   - Deferred-set / queued scheduler entries are cleared per
-   *     cancelled task so the slot frees up for the upcoming reset.
+   * Cancel-first invariant defense-in-depth: cancel any actively-running task
+   * in the targeted scope before an invalidation reset. Full contract and
+   * implementation notes live in `orchestrator/cancellation.ts`.
    */
-  private cancelActiveBeforeInvalidation(
-    scope: 'task' | 'workflow',
-    id: string,
-  ): string[] {
-    let candidates: TaskState[];
-    if (scope === 'task') {
-      const root = this.stateGetTask(id);
-      if (!root) return [];
-      const allTasks = this.stateMachine.getAllTasks();
-      const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-      const descendantIds = getTransitiveDependents(
-        id,
-        taskMap,
-        (t) => t.status === 'completed' || t.status === 'stale',
-      );
-      candidates = [
-        root,
-        ...descendantIds
-          .map((d) => taskMap.get(d))
-          .filter((t): t is TaskState => !!t),
-      ];
-    } else {
-      candidates = this.stateMachine
-        .getAllTasks()
-        .filter((t) => t.config.workflowId === id);
-    }
+  private cancelActiveBeforeInvalidation(scope: 'task' | 'workflow', id: string): string[] {
+    return cancelActiveBeforeInvalidationImpl(this as unknown as CancellationHost, scope, id);
+  }
 
-    const cancelled: string[] = [];
-    for (const t of candidates) {
-      if (!isActiveForInvalidation(t.status)) continue;
-      const error = `Cancelled before ${scope}-scope invalidation`;
-      const completedAt = new Date();
-      const changes: TaskStateChanges = {
-        status: 'failed',
-        execution: { error, completedAt },
-      };
-      const updated = this.writeAndSync(t.id, changes);
-      this.persistence.logEvent?.(t.id, 'task.cancelled', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(t, updated, changes));
-      this.deferredTaskIds.delete(t.id);
-      this.clearQueuedSchedulerEntries(t.id, t.execution.selectedAttemptId);
-      cancelled.push(t.id);
-    }
-    return cancelled;
+  private cancelActiveCandidates(candidates: readonly TaskState[], scope: 'task' | 'workflow'): string[] {
+    return cancelActiveCandidatesImpl(this as unknown as CancellationHost, candidates, scope);
   }
 
   private getExecutionGeneration(task: TaskState | undefined): number {
@@ -1112,6 +903,74 @@ export class Orchestrator {
       },
     };
   }
+
+  private buildDiscardReviewGatePatch(
+    task: TaskState,
+    reason: string,
+    nextGeneration: number,
+    now: Date = new Date(),
+  ): Partial<TaskExecution> {
+    const reviewGate = task.execution.reviewGate;
+    if (!reviewGate && !task.execution.reviewId && !task.execution.reviewUrl) return {};
+
+    const discardedAt = now.toISOString();
+    const oldArtifacts = reviewGate?.artifacts ?? [{
+      id: task.execution.reviewId ?? 'review',
+      ...(task.execution.reviewId ? { providerId: task.execution.reviewId } : {}),
+      ...(task.execution.reviewUrl ? { url: task.execution.reviewUrl } : {}),
+      required: true,
+      status: 'discarded' as const,
+      generation: task.execution.generation ?? 0,
+      discardedAt,
+      discardReason: reason,
+    }];
+
+    return {
+      reviewUrl: undefined,
+      reviewId: undefined,
+      reviewStatus: undefined,
+      reviewProviderId: undefined,
+      reviewGate: {
+        activeGeneration: nextGeneration,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: oldArtifacts.map((artifact) =>
+          artifact.discardedAt || artifact.status === 'discarded'
+            ? artifact
+            : {
+                ...artifact,
+                status: 'discarded',
+                discardedAt,
+                discardReason: reason,
+              },
+        ),
+      },
+    };
+  }
+
+  private withBumpedExecutionGenerationAndDiscardedReviewGate(
+    task: TaskState,
+    changes: TaskStateChanges,
+    discardReason: string,
+  ): TaskStateChanges {
+    const bumpedChanges = this.withBumpedExecutionGeneration(task, changes);
+    if (!task.config.isMergeNode) {
+      return bumpedChanges;
+    }
+
+    const discardPatch = this.buildDiscardReviewGatePatch(
+      task,
+      discardReason,
+      bumpedChanges.execution?.generation ?? this.getExecutionGeneration(task) + 1,
+    );
+    return {
+      ...bumpedChanges,
+      execution: {
+        ...bumpedChanges.execution,
+        ...discardPatch,
+      },
+    };
+  }
+
 
   private getSelectedAttempt(task: TaskState | undefined): Attempt | undefined {
     const attemptId = task?.execution.selectedAttemptId;
@@ -1134,23 +993,36 @@ export class Orchestrator {
     return attempt.leaseExpiresAt.getTime() >= now;
   }
 
+  private isAttemptLeaseExpired(attempt: Attempt | undefined, now: number = Date.now()): boolean {
+    if (!attempt) return false;
+    if (isDiscardedAttempt(attempt)) return false;
+    if (attempt.status !== 'claimed' && attempt.status !== 'running') return false;
+    if (!attempt.leaseExpiresAt) return false;
+    return attempt.leaseExpiresAt.getTime() < now;
+  }
+
   private isTaskExecutionActive(
     task: TaskState,
     attempt: Attempt | undefined,
     now: number = Date.now(),
   ): boolean {
+    if (isCrashPreservedExecution(task.execution)) return false;
     if (attempt && this.isAttemptLeaseActive(attempt, now)) {
-      return task.status === 'pending' || task.status === 'running' || task.status === 'fixing_with_ai';
+      return task.status === 'pending' || (task.status as string) === 'queued' || task.status === 'running' || task.status === 'fixing_with_ai';
+    }
+    if (attempt && this.isAttemptLeaseExpired(attempt, now)) {
+      return false;
     }
 
     return task.status === 'running' || task.status === 'fixing_with_ai';
   }
 
   private isExecutableResponseTask(task: TaskState): boolean {
+    if (isCrashPreservedExecution(task.execution)) return false;
     return task.status === 'running'
       || task.status === 'fixing_with_ai'
       || (
-        task.status === 'pending'
+        (task.status === 'pending' || (task.status as string) === 'queued')
         && task.execution.phase === 'launching'
         && !!task.execution.selectedAttemptId
       );
@@ -1253,7 +1125,7 @@ export class Orchestrator {
     if (!task) {
       throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     }
-    if (task.status === 'completed' || task.status === 'failed') {
+    if (task.status === 'completed' || task.status === 'failed' || task.status === 'closed') {
       throw new OrchestratorError(
         OrchestratorErrorCode.TASK_ALREADY_TERMINAL,
         `Task ${task.id} is terminal and cannot be prepared for a new attempt`,
@@ -1281,26 +1153,9 @@ export class Orchestrator {
       supersedesAttemptId: activeAttempt?.id,
     });
 
-    const changes = this.withBumpedExecutionGeneration(task, {
-      status: 'pending',
-      execution: {
-        selectedAttemptId: freshAttempt.id,
-        phase: undefined,
-        startedAt: undefined,
-        completedAt: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        lastHeartbeatAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        inputPrompt: undefined,
-        pendingFixError: undefined,
-        agentSessionId: undefined,
-        workspacePath: undefined,
-        containerId: undefined,
-        isFixingWithAI: false,
-      },
-    });
+    const changes = this.withBumpedExecutionGeneration(task, buildTaskResetChanges('newAttempt', {
+      execution: { selectedAttemptId: freshAttempt.id },
+    }));
 
     let updated!: TaskState;
     this.taskRepository.runInTransaction(() => {
@@ -1308,7 +1163,7 @@ export class Orchestrator {
         this.taskRepository.updateAttempt(activeAttempt.id, { status: 'superseded' });
       }
       this.taskRepository.saveAttempt(freshAttempt);
-      updated = this.writeAndSync(task.id, changes);
+      updated = this.writeResetAndSync(task, 'newAttempt', changes);
     });
     this.clearQueuedSchedulerEntries(task.id, task.execution.selectedAttemptId);
     this.persistence.logEvent?.(task.id, 'task.prepared_for_new_attempt', {
@@ -1357,6 +1212,10 @@ export class Orchestrator {
   loadPlan(plan: PlanDefinition, opts?: { allowGraphMutation?: boolean }): void {
     const workflowId = nextWorkflowId();
     const localToScoped = buildPlanLocalToScopedIdMap(workflowId, plan.tasks);
+    const workflowExternalDependencies = this.normalizePlanExternalDependencies([
+      ...(plan.externalDependencies ?? []),
+      ...plan.tasks.flatMap((task) => task.externalDependencies ?? []),
+    ]);
 
     // ── Conflict check (read-only) ──────────────────────────
     if (!opts?.allowGraphMutation) {
@@ -1424,13 +1283,6 @@ export class Orchestrator {
         }
         return s;
       });
-      const externalDependencies =
-        taskDef.externalDependencies?.map((dep) => ({
-          workflowId: dep.workflowId,
-          taskId: dep.taskId,
-          requiredStatus: dep.requiredStatus ?? 'completed',
-          gatePolicy: dep.gatePolicy ?? this.defaultExternalGatePolicy(dep.taskId),
-        })) ?? [];
       const baseConfig = {
         workflowId,
         command: taskDef.command,
@@ -1440,7 +1292,7 @@ export class Orchestrator {
         requiresManualApproval: taskDef.requiresManualApproval,
         featureBranch: taskDef.featureBranch,
         executionAgent: taskDef.executionAgent,
-        externalDependencies,
+        executionModel: taskDef.executionModel,
         poolId: effectivePoolId,
       } as const;
       let taskConfig: TaskConfig;
@@ -1462,14 +1314,12 @@ export class Orchestrator {
 
     // Validate cross-workflow prerequisites exist before writing anything.
     const missingExternalDeps: string[] = [];
-    for (const taskDef of plan.tasks) {
-      for (const dep of taskDef.externalDependencies ?? []) {
-        if (!this.findExternalDependencyTask(dep.workflowId, dep.taskId)) {
-          const depDisplayId = this.externalDependencyDisplayId(dep.workflowId, dep.taskId);
-          missingExternalDeps.push(
-            `task "${taskDef.id}" references missing external dependency "${depDisplayId}"`,
-          );
-        }
+    for (const dep of workflowExternalDependencies) {
+      if (!this.findExternalDependencyTask(dep.workflowId, dep.taskId)) {
+        const depDisplayId = this.externalDependencyDisplayId(dep.workflowId, dep.taskId);
+        missingExternalDeps.push(
+          `workflow "${plan.name}" references missing external dependency "${depDisplayId}"`,
+        );
       }
     }
     if (missingExternalDeps.length > 0) {
@@ -1500,13 +1350,13 @@ export class Orchestrator {
       name: plan.name,
       description: plan.description,
       visualProof: plan.visualProof,
-      status: 'pending',
       repoUrl: plan.repoUrl,
       intermediateRepoUrl: plan.intermediateRepoUrl,
       onFinish: plan.onFinish,
       baseBranch: plan.baseBranch,
       featureBranch: plan.featureBranch,
       mergeMode: plan.mergeMode,
+      externalDependencies: workflowExternalDependencies.length > 0 ? workflowExternalDependencies : undefined,
       createdAt,
       updatedAt: createdAt,
     });
@@ -1540,24 +1390,31 @@ export class Orchestrator {
    */
   startExecution(): TaskState[] {
     this.refreshFromDb();
+    this.pruneLaunchDeferrals();
 
     const activeAttempts = this.countActivePersistedAttempts();
-    const readyTasks = this.stateMachine
-      .getReadyTasks()
-      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+    const readyTasks = this.getExecutableReadyTasks();
     this.logger.info('[orchestrator] startExecution', {
       ready: readyTasks.length,
       active: activeAttempts,
       maxConcurrency: this.maxConcurrency,
       readyIds: readyTasks.map((task) => task.id),
     });
-    const started: TaskState[] = [];
 
-    for (const task of readyTasks) {
-      this.enqueueIfNotScheduled(task.id);
-    }
+    const launchPollNow = Date.now();
+    const readyTaskIds = readyTasks
+      .filter((task) => {
+        // A task deferred for execution-pool capacity waits in line with a
+        // heartbeat instead of being re-dispatched (and re-deferred) every poll.
+        if (this.isLaunchParked(task.id, launchPollNow)) {
+          this.emitLaunchWaitingHeartbeat(task.id, launchPollNow);
+          return false;
+        }
+        return true;
+      })
+      .map((task) => task.id);
 
-    return this.drainScheduler();
+    return this.autoStartReadyTasks(readyTaskIds);
   }
 
   /**
@@ -1600,7 +1457,6 @@ export class Orchestrator {
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
         if (
-          !response.attemptId &&
           response.executionGeneration !== undefined &&
           response.executionGeneration !== activeGeneration
         ) {
@@ -1711,15 +1567,42 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
   }
 
+  escalateStalledToNeedsInput(taskId: string, prompt: string): void {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task || task.status !== 'failed') return;
+    if (!isLivenessFailureClass(task.execution.failureClass)) return;
+    const id = task.id;
+
+    const changes: TaskStateChanges = {
+      status: 'needs_input',
+      execution: { inputPrompt: prompt, failureClass: undefined },
+    };
+    const updated = this.writeAndSync(id, changes);
+    if (task.execution.selectedAttemptId) {
+      this.taskRepository.updateAttempt(task.execution.selectedAttemptId, { status: 'needs_input' });
+    }
+    const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
+    this.persistence.logEvent?.(id, 'task.needs_input', changes);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  }
+
   private setTaskApprovalStatus(
     taskId: string,
     status: 'awaiting_approval' | 'review_ready',
     eventName: 'task.awaiting_approval' | 'task.review_ready',
     additionalChanges?: TaskStateChanges,
+    expectedLineage?: TaskLineageExpectation,
   ): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) return;
+    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return;
+    // Stale-write guard: lineage (id/attempt/generation) is preserved across a
+    // same-attempt cancellation, so a late approval transition could resurrect a
+    // cancelled/failed task. Only apply the transition while the task is still
+    // executable.
+    if (!this.isExecutableResponseTask(task)) return;
     const id = task.id;
 
     const additionalExecution = additionalChanges?.execution;
@@ -1774,6 +1657,11 @@ export class Orchestrator {
     const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
     this.persistence.logEvent?.(id, eventName, changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+
+    if (task.config.isMergeNode) {
+      this.autoStartExternallyUnblockedReadyTasks();
+      this.checkWorkflowCompletion();
+    }
   }
 
   /**
@@ -1788,14 +1676,23 @@ export class Orchestrator {
    * Transition a running merge gate directly to review_ready.
    * Used by merge-gate execution when output is ready for human review.
    */
-  setTaskReviewReady(taskId: string, additionalChanges?: TaskStateChanges): void {
-    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges);
+  setTaskReviewReady(
+    taskId: string,
+    additionalChanges?: TaskStateChanges,
+    expectedLineage?: TaskLineageExpectation,
+  ): void {
+    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', additionalChanges, expectedLineage);
   }
 
-  setFixAwaitingApproval(taskId: string, originalError: string): void {
+  setFixAwaitingApproval(
+    taskId: string,
+    originalError: string,
+    expectedLineage?: TaskLineageExpectation,
+  ): void {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    if (!this.taskMatchesLineageExpectation(task, expectedLineage)) return;
     const tid = task.id;
     if (task.status !== 'running' && task.status !== 'fixing_with_ai') {
       throw new Error(`Task ${tid} is not running or fixing with AI (status: ${task.status})`);
@@ -1880,7 +1777,7 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'completed',
-      execution: { completedAt: new Date() },
+      execution: { completedAt: new Date(), fixSessionEntryStatus: undefined },
     };
     const updated = this.writeAndSync(taskId, changes);
     this.updateSelectedAttempt(taskId, {
@@ -1929,7 +1826,7 @@ export class Orchestrator {
     const now = new Date();
     const changes: TaskStateChanges = {
       status: 'running',
-      execution: { pendingFixError: undefined, startedAt: now, lastHeartbeatAt: now },
+      execution: { pendingFixError: undefined, fixSessionEntryStatus: undefined, startedAt: now, lastHeartbeatAt: now },
     };
     const updated = this.writeAndSync(taskId, changes);
     this.updateSelectedAttempt(taskId, {
@@ -1953,7 +1850,7 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'failed',
-      execution: { error: reason ?? 'Rejected', completedAt: new Date() },
+      execution: { error: reason ?? 'Rejected', completedAt: new Date(), fixSessionEntryStatus: undefined },
     };
     const updated = this.writeAndSync(taskId, changes);
     this.updateSelectedAttempt(taskId, {
@@ -1968,77 +1865,6 @@ export class Orchestrator {
     this.checkWorkflowCompletion();
   }
 
-  /**
-   * Select a winning experiment for a reconciliation task — **retry-class**
-   * invalidation route per Step 7 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision Table
-   * row "Edit selected experiment" in
-   * `docs/architecture/task-invalidation-chart.md`
-   * (`MUTATION_POLICIES.selectedExperiment` → `retryTask` / task scope).
-   *
-   * Why retry-class (not recreate-class). The chart classifies single
-   * experiment selection as a downstream-input mutation: the
-   * reconciliation task's *result* (its selected branch/commit) is the
-   * execution input that downstream consumers use, so changing the
-   * winner invalidates downstream attempts but does NOT change the
-   * reconciliation task's own spec. The chart's "Why" column reads
-   * "Downstream execution inputs changed". `applyInvalidation('task',
-   * 'retryTask', reconId, deps)` is wired to today's
-   * `Orchestrator.restartTask` via `buildInvalidationDeps` (the
-   * compatibility seam Step 1 introduced; Step 13 will rename
-   * `restartTask` → `retryTask` to close the matrix).
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the
-   * synchronous orchestrator-internal seam — see `invalidation-policy.ts`
-   * and the Step 5/6 `editTaskType` precedent):
-   *   1. **Cancel-first (Hard Invariant).** Compute the transitive
-   *      downstream subgraph of the reconciliation task and cancel any
-   *      member that is actively executing (`running` or
-   *      `fixing_with_ai`) BEFORE we mutate the recon's
-   *      `selectedExperiment`. This is the "any AFFECTED in-flight
-   *      work" guarantee from the chart: stale downstream attempts
-   *      cannot survive a re-selection because they would consume the
-   *      OLD winner's lineage. For the common initial-selection path
-   *      (recon `needs_input` → `completed` with downstream blocked at
-   *      `pending`) this loop is a no-op — there is nothing active.
-   *   2. **Persist new winner.** `writeAndSync` updates
-   *      `execution.selectedExperiment` (and the recon's
-   *      `branch`/`commit` to mirror the winner's lineage) and emits a
-   *      `task.completed` delta. The reconciliation task's status
-   *      transitions to `completed`; this matches the existing
-   *      "Behavior Today" column in the chart ("completes
-   *      reconciliation task and unblocks downstream").
-   *   3. **Retry-class reset of downstream (re-selection only).** When
-   *      the recon was previously completed with a *different* winner,
-   *      every direct downstream consumer is reset via `restartTask`,
-   *      which is the current `retryTask` compatibility wire.
-   *      `restartTask` cascades to its own descendants and bumps each
-   *      affected task's execution generation exactly once via
-   *      `withBumpedExecutionGeneration` (single source of truth for the
-   *      retry reset shape — Step 7 deliberately reuses it instead of
-   *      duplicating the field list here, mirroring Steps 5/6). For
-   *      the initial-selection path no downstream reset is needed
-   *      because nothing has executed yet against the recon's result.
-   *   4. **Auto-start newly ready tasks.** Existing behavior:
-   *      `findNewlyReadyTasks(reconId)` plus `autoStartReadyTasks`
-   *      unblocks downstream that just became ready due to recon
-   *      completing.
-   *
-   * Public surface is unchanged: same `(taskId, experimentId)` signature
-   * returning `TaskState[]` of newly-started tasks. Active downstream is
-   * NO LONGER silently overwritten with a new winner — that's the whole
-   * point of cancel-first per the chart's Hard Invariant. Prior to
-   * Step 7 there was no general active invalidation model for selection
-   * (per the chart's "Behavior Today" column); this method introduces
-   * one.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. Downstream tasks may still hold valid
-   * workspace lineage (their own branch, their own workspacePath) that
-   * the executor can reuse when the new winner's branch is rebased onto
-   * theirs; that is what makes selection retry-class rather than
-   * recreate-class in the chart's Decision Table.
-   */
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
@@ -2097,8 +1923,9 @@ export class Orchestrator {
       const directDownstream = allTasksBefore
         .filter((t) => t.dependencies.includes(reconId))
         .map((t) => t.id);
+      const reselectionAction = MUTATION_POLICIES.selectedExperiment.action;
       for (const dsId of directDownstream) {
-        this.recreateTask(dsId);
+        this.dispatchPostMutation(reselectionAction, dsId);
       }
     }
     const readyTaskIds = this.stateMachine.findNewlyReadyTasks(reconId);
@@ -2112,7 +1939,7 @@ export class Orchestrator {
     return started;
   }
 
-    selectExperiments(
+  selectExperiments(
     taskId: string,
     experimentIds: string[],
     combinedBranch?: string,
@@ -2181,9 +2008,10 @@ export class Orchestrator {
         .getAllTasks()
         .filter((t) => t.dependencies.includes(reconId))
         .map((t) => t.id);
+      const reselectionAction = MUTATION_POLICIES.selectedExperimentSet.action;
       for (const dsId of directDownstreamAfter) {
         if (this.stateGetTask(dsId)) {
-          this.recreateTask(dsId);
+          this.dispatchPostMutation(reselectionAction, dsId);
         }
       }
     }
@@ -2200,477 +2028,37 @@ export class Orchestrator {
   }
 
   restartTask(taskId: string): TaskState[] {
-    this.logger.warn(
-      '[orchestrator] restartTask is deprecated. Routing to recreateTask. Use retryTask() for lineage-preserving reset or recreateTask() for fresh-lineage reset explicitly.',
-      { taskId },
-    );
-    return this.recreateTask(taskId);
+    return restartTaskImpl(this as unknown as LifecycleHost, taskId);
   }
 
   retryTask(taskId: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    const id = task.id;
-
-    // Step 18 (`docs/architecture/task-invalidation-roadmap.md`,
-    // Hard Invariant): cancel any active attempt on this task or its
-    // downstream subgraph BEFORE the reset writes pending state.
-    // Defense-in-depth for direct callers (CommandService.retryTask
-    // wired in Step 17) that bypass `applyInvalidation`'s upstream
-    // cancel; a no-op when invoked through `applyInvalidation`.
-    this.cancelActiveBeforeInvalidation('task', id);
-    let plan = planInvalidation({
-      action: 'retryTask',
-      targetId: id,
-      tasks: this.stateMachine.getAllTasks(),
-    });
-    this.lastInvalidationPlan = plan;
-
-    const prevStatus = task.status;
-    this.logger.info('[orchestrator] retryTask', { taskId: id, previousStatus: prevStatus });
-    if (task.config.isMergeNode) {
-      this.logger.info('[merge-gate-workspace] retryTask before reset', {
-        mergeNode: id,
-        workspacePath: task.execution.workspacePath ?? 'none',
-        note: 'retryTask does not clear workspacePath',
-      });
-      mergeTrace('GATE_WS_RETRY_TASK_MERGE', {
-        taskId: id,
-        workspacePathBefore: task.execution.workspacePath ?? null,
-      });
-    }
-
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
-      config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        lastHeartbeatAt: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        phase: undefined,
-        isFixingWithAI: false,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
-    const t0 = this.stateGetTask(id)!;
-    this.logger.info('[agent-session-trace] retryTask: before writeAndSync', {
-      taskId: id,
-      agentSessionId: t0.execution.agentSessionId ?? 'null',
-      note: 'reset clears agentSessionId/containerId; branch/workspacePath unchanged',
-    });
-    const { affectedIds } = this.resetSubgraphToPending([id], resetChanges, {
-      forceResetIds: new Set([id]),
-    });
-    plan = withSchedulerEnqueueCandidates(plan, affectedIds);
-    this.lastInvalidationPlan = plan;
-    const afterRt = this.stateGetTask(id)!;
-    this.logger.info('[agent-session-trace] retryTask: after writeAndSync', {
-      taskId: id,
-      agentSessionId: afterRt.execution.agentSessionId ?? 'null',
-    });
-    if (afterRt.config.isMergeNode) {
-      this.logger.info('[merge-gate-workspace] retryTask after reset', {
-        mergeNode: id,
-        workspacePath: afterRt.execution.workspacePath ?? 'none',
-      });
-      mergeTrace('GATE_WS_RETRY_TASK_MERGE_AFTER', {
-        taskId: id,
-        workspacePathAfter: afterRt.execution.workspacePath ?? null,
-      });
-    }
-    if (affectedIds.length > 1) {
-      this.logger.info('[orchestrator] retryTask invalidated downstream tasks', {
-        taskId: id,
-        invalidatedCount: affectedIds.length - 1,
-      });
-    }
-
-    const readyTasks = this.stateMachine.getReadyTasks();
-    const isReady = readyTasks.some((t) => t.id === id);
-    this.logger.info('[orchestrator] retryTask ready check', { taskId: id, ready: isReady });
-    if (isReady) {
-      const started = this.autoStartReadyTasks([id], Orchestrator.EXPEDITED_PRIORITY);
-      if (started.some((t) => t.id === id)) return started;
-
-      const current = this.stateGetTask(id);
-      if (current) {
-        const blocker = this.getExternalDependencyBlocker(current);
-        if (blocker !== undefined) {
-          const blockedChanges: TaskStateChanges = {
-            status: 'blocked',
-            execution: { blockedBy: blocker },
-          };
-          const blockedUpdated = this.writeAndSync(id, blockedChanges);
-          const blockedDelta: TaskDelta = this.buildUpdateDelta(current, blockedUpdated, blockedChanges);
-          this.persistence.logEvent?.(id, 'task.blocked', blockedChanges);
-          this.messageBus.publish(TASK_DELTA_CHANNEL, blockedDelta);
-          return [this.stateGetTask(id)!];
-        }
-      }
-    }
-
-    return [this.stateGetTask(id)!];
+    return retryTaskImpl(this as unknown as LifecycleHost, taskId);
   }
 
-  /**
-   * Incremental retry: reset only failed/stuck tasks to pending, preserve completed.
-   * Merge nodes are always reset (they depend on all leaf tasks).
-   * After reset, startExecution() finds newly-ready tasks via getReadyNodes().
-   */
   retryWorkflow(workflowId: string): TaskState[] {
-    const retryStartMs = Date.now();
-    this.refreshWorkflowFromDb(workflowId);
-    const afterRefreshMs = Date.now();
-
-    let allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.config.workflowId === workflowId,
-    );
-    if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
-
-    // Step 18 cancel-first invariant: interrupt any active task in
-    // the workflow scope BEFORE the retry reset. Defense-in-depth
-    // for direct callers (CommandService.retryWorkflow wired in
-    // Step 17); a no-op when invoked through `applyInvalidation`.
-    // Re-snapshot tasks afterwards so the retry filter (which
-    // includes 'failed' in `retryStatuses`) re-picks any newly
-    // cancelled tasks for reset to pending.
-    this.cancelActiveBeforeInvalidation('workflow', workflowId);
-    allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.config.workflowId === workflowId,
-    );
-
-    const retryStatuses: ReadonlySet<TaskStatus> = new Set<TaskStatus>([
-      'failed',
-      'needs_input',
-      'blocked',
-      'stale',
-      'fixing_with_ai',
-      'awaiting_approval',
-      'review_ready',
-    ]);
-    let plan = planInvalidation({
-      action: 'retryWorkflow',
-      targetId: workflowId,
-      tasks: this.stateMachine.getAllTasks(),
-      retryStatuses,
-    });
-    this.lastInvalidationPlan = plan;
-
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
-      config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        pendingFixError: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        isFixingWithAI: false,
-        // Preserve branch/commit/workspacePath — they contain valid work context
-        // Only clear error-related and timing fields
-      },
-    };
-
-    const retryRootIds = allTasks
-      .filter((task) => retryStatuses.has(task.status))
-      .map((task) => task.id);
-    const { affectedIds } = this.resetSubgraphToPending(retryRootIds, resetChanges);
-    plan = withSchedulerEnqueueCandidates(plan, affectedIds);
-    this.lastInvalidationPlan = plan;
-    const afterResetMs = Date.now();
-
-    this.logger.info('[orchestrator] retryWorkflow invalidation', {
-      workflowId,
-      roots: retryRootIds,
-      affected: affectedIds.length,
-    });
-    this.logger.info('[orchestrator] retryWorkflow reset summary', {
-      workflowId,
-      resetCount: affectedIds.length,
-      totalTasks: allTasks.length,
-      rootCount: retryRootIds.length,
-      note: 'preserved completed outside invalidated subgraphs',
-    });
-
-    const readyIds = this.stateMachine
-      .getReadyTasks()
-      .map((t) => t.id)
-      .filter((id) => {
-        const task = this.stateGetTask(id);
-        return !!task
-          && task.config.workflowId === workflowId;
-      });
-    const started = this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
-    const retryEndMs = Date.now();
-    this.logger.info('[orchestrator] retryWorkflow timing', {
-      workflowId,
-      refreshMs: afterRefreshMs - retryStartMs,
-      resetMs: afterResetMs - afterRefreshMs,
-      enqueueDrainMs: retryEndMs - afterResetMs,
-      totalMs: retryEndMs - retryStartMs,
-      started: started.length,
-    });
-    return started;
+    return retryWorkflowImpl(this as unknown as LifecycleHost, workflowId);
   }
 
-  /**
-   * Task-scoped recreate: reset the target task and all downstream dependents
-   * to pending with recreate-style execution clearing, then auto-start newly
-   * ready tasks within that affected subgraph.
-   */
   recreateTask(taskId: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-
-    const rootId = task.id;
-
-    // Step 18 cancel-first invariant: interrupt active attempts on
-    // this task / downstream subgraph BEFORE the recreate reset.
-    // Defense-in-depth for direct callers (CommandService.recreateTask
-    // wired in Step 17); a no-op when invoked through `applyInvalidation`.
-    this.cancelActiveBeforeInvalidation('task', rootId);
-    let plan = planInvalidation({
-      action: 'recreateTask',
-      targetId: rootId,
-      tasks: this.stateMachine.getAllTasks(),
-    });
-    this.lastInvalidationPlan = plan;
-    const toResetIds = plan.affectedTaskIds;
-    const toResetSet = new Set(toResetIds);
-
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
-      config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
-
-    this.logger.info('[orchestrator] recreateTask reset', {
-      taskId: rootId,
-      resetCount: toResetIds.length,
-    });
-
-    for (const id of toResetIds) {
-      const current = this.stateGetTask(id);
-      if (!current) continue;
-      const changesWithGeneration = this.withBumpedExecutionGeneration(current, resetChanges);
-      const recreateUpdated = this.writeAndSync(id, changesWithGeneration);
-      const priorAttemptId = current.execution.selectedAttemptId;
-      this.replaceSelectedAttempt(current);
-      this.persistence.logEvent?.(id, 'task.pending', changesWithGeneration);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(current, recreateUpdated, changesWithGeneration));
-
-      this.deferredTaskIds.delete(id);
-      this.clearQueuedSchedulerEntries(id, priorAttemptId);
-    }
-
-    const readyIds = this.stateMachine
-      .getReadyTasks()
-      .map((t) => t.id)
-      .filter((id) => toResetSet.has(id));
-    plan = withSchedulerEnqueueCandidates(plan, readyIds);
-    this.lastInvalidationPlan = plan;
-    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+    return recreateTaskImpl(this as unknown as LifecycleHost, taskId);
   }
 
-  /**
-   * Reset ALL tasks in a workflow to pending and auto-start ready ones.
-   * Used when a rebase conflicts and the entire DAG needs to re-execute.
-   */
+  private applyRecreateReset(plan: InvalidationPlan, artifactReason: string): TaskState[] {
+    return applyRecreateResetImpl(this as unknown as LifecycleHost, plan, artifactReason);
+  }
+
+  recreateDownstream(taskId: string): TaskState[] {
+    return recreateDownstreamImpl(this as unknown as LifecycleHost, taskId);
+  }
+
+  private bumpWorkflowGeneration(workflowId: string): void {
+    return bumpWorkflowGenerationImpl(this as unknown as LifecycleHost, workflowId);
+  }
+
   recreateWorkflow(workflowId: string): TaskState[] {
-    this.refreshFromDb();
-
-    const allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.config.workflowId === workflowId,
-    );
-    if (allTasks.length === 0) throw new Error(`No tasks found for workflow ${workflowId}`);
-
-    // Step 18 cancel-first invariant: interrupt any active task in
-    // the workflow scope BEFORE the recreate reset. Defense-in-depth
-    // for direct callers (CommandService.recreateWorkflow and
-    // recreateWorkflowFromFreshBase wired in Step 17); a no-op when
-    // invoked through `applyInvalidation`.
-    this.cancelActiveBeforeInvalidation('workflow', workflowId);
-    let plan = planInvalidation({
-      action: 'recreateWorkflow',
-      targetId: workflowId,
-      tasks: this.stateMachine.getAllTasks(),
-    });
-    this.lastInvalidationPlan = plan;
-
-    const resetChanges: TaskStateChanges = {
-      status: 'pending',
-      config: { summary: undefined },
-      execution: {
-        autoFixAttempts: 0,
-        startedAt: undefined,
-        completedAt: undefined,
-        error: undefined,
-        exitCode: undefined,
-        commit: undefined,
-        branch: undefined,
-        workspacePath: undefined,
-        lastHeartbeatAt: undefined,
-        phase: undefined,
-        launchStartedAt: undefined,
-        launchCompletedAt: undefined,
-        reviewUrl: undefined,
-        reviewId: undefined,
-        reviewStatus: undefined,
-        reviewProviderId: undefined,
-        agentSessionId: undefined,
-        containerId: undefined,
-      },
-    };
-
-    this.logger.info('[orchestrator] recreateWorkflow reset', {
-      workflowId,
-      resetCount: allTasks.length,
-    });
-    this.logger.info(
-      '[agent-session-trace] recreateWorkflow: resetChanges.execution clears agentSessionId/containerId (DB NULL before next run)',
-    );
-    for (const task of allTasks) {
-      const prevSess = task.execution.agentSessionId ?? null;
-      const prevCt = task.execution.containerId ?? null;
-      if (task.config.isMergeNode) {
-        this.logger.info('[merge-gate-workspace] recreateWorkflow', {
-          mergeNode: task.id,
-          workspacePath: task.execution.workspacePath ?? 'NULL',
-          note: 'will clear workspace_path',
-        });
-        mergeTrace('GATE_WS_RESTART_WORKFLOW_MERGE', {
-          taskId: task.id,
-          workspacePathBefore: task.execution.workspacePath ?? null,
-        });
-      }
-      this.logger.info('[orchestrator] recreateWorkflow task reset', {
-        taskId: task.id,
-        previousStatus: task.status,
-        branch: task.execution.branch ?? 'none',
-        commit: task.execution.commit?.slice(0, 7) ?? 'none',
-      });
-      this.logger.info('[agent-session-trace] recreateWorkflow: before writeAndSync', {
-        taskId: task.id,
-        agentSessionId: prevSess ?? 'null',
-        containerId: prevCt ?? 'null',
-      });
-      const changesWithGeneration = this.withBumpedExecutionGeneration(task, resetChanges);
-      const after = this.writeAndSync(task.id, changesWithGeneration);
-      const priorAttemptId = task.execution.selectedAttemptId;
-      this.replaceSelectedAttempt(task);
-    this.logger.info('[agent-session-trace] recreateWorkflow: after writeAndSync', {
-      taskId: task.id,
-      agentSessionId: after.execution.agentSessionId ?? 'null',
-      containerId: after.execution.containerId ?? 'null',
-    });
-      const delta: TaskDelta = this.buildUpdateDelta(task, after, changesWithGeneration);
-      this.persistence.logEvent?.(task.id, 'task.pending', changesWithGeneration);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      this.clearQueuedSchedulerEntries(task.id, priorAttemptId);
-    }
-
-    const readyIds = this.stateMachine
-      .getReadyTasks()
-      .map((t) => t.id)
-      .filter((id) => this.stateGetTask(id)?.config.workflowId === workflowId);
-    plan = withSchedulerEnqueueCandidates(plan, readyIds);
-    this.lastInvalidationPlan = plan;
-    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
+    return recreateWorkflowImpl(this as unknown as LifecycleHost, workflowId);
   }
 
-  /**
-   * Workflow-scope **fresh-base** recreate (Step 12 of
-   * `docs/architecture/task-invalidation-roadmap.md`, Decision Table
-   * row "Rebase and retry" + "Repo/base invalidation inconsistency"
-   * in `docs/architecture/task-invalidation-chart.md`).
-   *
-   * This is strictly stronger than `recreateWorkflow`:
-   *
-   *   recreateWorkflow                 — full reset; preserves the
-   *                                      workflow's currently-known
-   *                                      upstream base.
-   *   recreateWorkflowFromFreshBase    — full reset PLUS refreshes
-   *                                      the upstream base (HEAD of
-   *                                      `baseBranch`) before reset.
-   *
-   * The chart's "Repo/base invalidation inconsistency" section called
-   * this distinction out as previously hidden: today the only
-   * primitive carrying the fresh-base semantic is the composite
-   * `rebaseAndRetry()` flow in `packages/app/src/workflow-actions.ts`
-   * (`preparePoolForRebaseRetry → bumpGenerationAndRecreate →
-   * recreateWorkflow`). Step 12 promotes the fresh-base step to a
-   * first-class orchestrator method so the three workflow-scope
-   * paths (`retryWorkflow`, `recreateWorkflow`,
-   * `recreateWorkflowFromFreshBase`) are individually testable and
-   * routed through `applyInvalidation` from
-   * `packages/workflow-core/src/invalidation-policy.ts`.
-   *
-   * The orchestrator deliberately does NOT touch git itself: the
-   * `refreshBase` callback (wired by the app layer to
-   * `taskExecutor.preparePoolForRebaseRetry`) is what actually
-   * refreshes the pool mirror and removes managed branches. The
-   * orchestrator only:
-   *
-   *   1. awaits the optional `refreshBase` callback, and
-   *   2. records any returned `commit` in `knownFreshBaseCommits` and
-   *      any returned `branch` in persistence (`baseBranch`) so the
-   *      effect of the refresh is observable from orchestrator state.
-   *   3. delegates the actual reset to `recreateWorkflow` so all
-   *      lineage-discard behavior (workspace path, branch, commit,
-   *      agent session, container, merge gate workspace, etc.) stays
-   *      single-sourced.
-   *
-   * Cancel-first invariant (`docs/architecture/task-invalidation-chart.md`
-   * → "Hard Invariant"): the chart requires every retry/recreate
-   * route to interrupt and cancel any in-flight work in the affected
-   * scope BEFORE authoritative reset. Two layers cooperate:
-   *
-   *   1. `applyInvalidation`'s `cancelInFlight` dep (built by
-   *      `buildCancelInFlight` in
-   *      `packages/app/src/workflow-actions.ts`) calls
-   *      `Orchestrator.cancelWorkflow` and awaits
-   *      `taskExecutor.killActiveExecution` for each running attempt.
-   *   2. `recreateWorkflow` (delegated to below) additionally invokes
-   *      `cancelActiveBeforeInvalidation('workflow', …)` so direct
-   *      callers (`CommandService.recreateWorkflowFromFreshBase`
-   *      wired in Step 17) that bypass `applyInvalidation` still
-   *      observe the invariant. The helper is idempotent — already
-   *      cancelled tasks are skipped, so layer (2) is a no-op when
-   *      layer (1) ran first. See Step 18 of
-   *      `docs/architecture/task-invalidation-roadmap.md`.
-   */
   async recreateWorkflowFromFreshBase(
     workflowId: string,
     options?: {
@@ -2679,558 +2067,99 @@ export class Orchestrator {
       ) => Promise<{ commit?: string; branch?: string } | undefined | void>;
     },
   ): Promise<TaskState[]> {
-    if (options?.refreshBase) {
-      const fresh = await options.refreshBase(workflowId);
-      if (fresh && typeof fresh === 'object') {
-        if (typeof fresh.commit === 'string' && fresh.commit.length > 0) {
-          this.knownFreshBaseCommits.set(workflowId, fresh.commit);
-          this.logger.info('[orchestrator] recreateWorkflowFromFreshBase fresh base commit', {
-            workflowId,
-            freshBaseCommit: fresh.commit.slice(0, 12),
-          });
-        }
-        if (typeof fresh.branch === 'string' && fresh.branch.length > 0 && this.persistence.updateWorkflow) {
-          this.persistence.updateWorkflow(workflowId, { baseBranch: fresh.branch });
-          this.logger.info('[orchestrator] recreateWorkflowFromFreshBase fresh base branch', {
-            workflowId,
-            freshBaseBranch: fresh.branch,
-          });
-        }
-      }
-    }
-    return this.recreateWorkflow(workflowId);
+    return recreateWorkflowFromFreshBaseImpl(this as unknown as MergeHost, workflowId, options);
   }
 
-  /**
-   * Most recently observed upstream base commit for `workflowId`,
-   * recorded by `recreateWorkflowFromFreshBase` when its `refreshBase`
-   * callback returns a SHA. Returns `undefined` when no fresh-base
-   * recreate has run for the workflow yet.
-   *
-   * This is the orchestrator-side observable for the chart's
-   * `recreateWorkflowFromFreshBase` semantic — see the comment on
-   * `knownFreshBaseCommits` for why this lives on the orchestrator
-   * rather than the executor pool. Tests assert on this getter to
-   * prove the fresh-base step actually advanced.
-   */
   getKnownFreshBaseCommit(workflowId: string): string | undefined {
-    return this.knownFreshBaseCommits.get(workflowId);
+    return getKnownFreshBaseCommitImpl(this as unknown as MergeHost, workflowId);
   }
 
-  /**
-   * Transition a failed task to fixing_with_ai before an async conflict resolution.
-   * Clears terminal failure fields on the row so SQLite does not show stale error/exit/completed.
-   * Returns the saved error string so the caller can revert on failure.
-   */
-  beginConflictResolution(taskId: string): { savedError: string } {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.status !== 'failed') throw new Error(`Task ${taskId} is not failed (status: ${task.status})`);
-
-    const savedError = task.execution.error ?? '';
-    const startedAt = new Date();
-
-    const id = task.id;
-    const changes: TaskStateChanges = {
-      status: 'fixing_with_ai',
-      execution: {
-        error: undefined,
-        exitCode: undefined,
-        completedAt: undefined,
-        mergeConflict: undefined,
-        isFixingWithAI: false,
-        startedAt,
-        lastHeartbeatAt: startedAt,
-      },
-    };
-    const changesWithGeneration = this.withBumpedExecutionGeneration(task, changes);
-    const conflictUpdated = this.writeAndSync(taskId, changesWithGeneration);
-    const attemptId = this.replaceSelectedAttempt(task);
-    this.taskRepository.updateAttempt(attemptId, {
-      status: 'running',
-      startedAt,
-      lastHeartbeatAt: startedAt,
-      branch: task.execution.branch,
-      commit: task.execution.commit,
-      workspacePath: task.execution.workspacePath,
-      agentSessionId: task.execution.agentSessionId,
-      containerId: task.execution.containerId,
-      mergeConflict: undefined,
-      error: undefined,
-      exitCode: undefined,
-    });
-    const delta: TaskDelta = this.buildUpdateDelta(task, conflictUpdated, changesWithGeneration);
-    this.persistence.logEvent?.(id, 'task.fixing_with_ai', changesWithGeneration);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-    return { savedError };
+  beginFixSession(
+    taskId: string,
+    opts: { savedError?: string; expectedLineage?: TaskLineageExpectation } = {},
+  ): { savedError: string } {
+    return beginFixSessionImpl(this as unknown as MergeHost, taskId, opts);
   }
 
-  /**
-   * Revert a conflict resolution attempt: restore the task to failed
-   * with its original error and re-parsed mergeConflict field.
-   */
-  revertConflictResolution(taskId: string, savedError: string, fixError?: string): void {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) {
-      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    }
-    const id = task.id;
+  revertFixSession(
+    taskId: string,
+    opts: {
+      savedError: string;
+      fixError?: string;
+      expectedLineage?: TaskLineageExpectation;
+    },
+  ): void {
+    revertFixSessionImpl(this as unknown as MergeHost, taskId, opts);
+  }
 
-    const normalizedSavedError = stripFixFailureWrapper(savedError);
-    const mergeConflict = parseMergeConflictError(normalizedSavedError);
+  reclaimStalledFixSession(
+    taskId: string,
+    opts: { reason: string; expectedLineage?: TaskLineageExpectation },
+  ): 'reverted' | 'noop' {
+    return reclaimStalledFixSessionImpl(this as unknown as MergeHost, taskId, opts);
+  }
 
-    const displayError = fixError
-      ? `[Fix with Agent failed] ${fixError}\n\n${normalizedSavedError}`
-      : savedError;
-    const completedAt = new Date();
-    const changes: TaskStateChanges = {
-      status: 'failed',
-      execution: {
-        error: displayError,
-        mergeConflict,
-        isFixingWithAI: false,
-        completedAt,
-      },
-    };
-    const revertUpdated = this.writeAndSync(taskId, changes);
-    this.updateSelectedAttempt(taskId, {
-      status: 'failed',
-      error: displayError,
-      mergeConflict,
-      completedAt,
-    });
-    const delta: TaskDelta = this.buildUpdateDelta(task, revertUpdated, changes);
-    this.persistence.logEvent?.(id, 'task.failed', changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+  private dispatchPostMutation(
+    action: InvalidationAction,
+    taskId: string,
+  ): TaskState[] {
+    return dispatchPostMutationImpl(this as unknown as LifecycleHost, action, taskId);
   }
 
   editTaskCommand(taskId: string, newCommand: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
-
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.cancelTask(taskId);
-    }
-
-    const cmdChanges: TaskStateChanges = { config: { command: newCommand } };
-    const cmdBefore = this.stateGetTask(taskId)!;
-    const cmdUpdated = this.writeAndSync(taskId, cmdChanges);
-    const cmdDelta: TaskDelta = this.buildUpdateDelta(cmdBefore, cmdUpdated, cmdChanges);
-    this.persistence.logEvent?.(taskId, 'task.updated', cmdChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, cmdDelta);
-
-    return this.recreateTask(taskId);
+    return editTaskCommandImpl(this as unknown as TaskEditHost, taskId, newCommand);
   }
 
-    editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.config.isMergeNode) throw new Error(`Cannot edit merge node ${taskId}`);
-
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.cancelTask(taskId);
-    }
-
-    const promptChanges: TaskStateChanges = { config: { prompt: newPrompt } };
-    const promptBefore = this.stateGetTask(taskId)!;
-    const promptUpdated = this.writeAndSync(taskId, promptChanges);
-    const promptDelta: TaskDelta = this.buildUpdateDelta(promptBefore, promptUpdated, promptChanges);
-    this.persistence.logEvent?.(taskId, 'task.updated', promptChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, promptDelta);
-
-    return this.recreateTask(taskId);
+  editTaskPrompt(taskId: string, newPrompt: string): TaskState[] {
+    return editTaskPromptImpl(this as unknown as TaskEditHost, taskId, newPrompt);
   }
 
-    editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.config.isMergeNode) throw new Error(`Cannot change executor type of merge node ${taskId}`);
-
-    const effectiveType = normalizeRunnerKind(runnerKind) ?? runnerKind;
-
-    // SSH requires repoUrl on the workflow to clone onto the remote host
-    if (effectiveType === 'ssh' && task.config.workflowId && this.persistence.loadWorkflow) {
-      const wf = this.persistence.loadWorkflow(task.config.workflowId);
-      if (!wf?.repoUrl) {
-        throw new Error(
-          `Cannot switch task "${taskId}" to SSH: workflow has no repoUrl. ` +
-          `Add repoUrl to the plan YAML.`,
-        );
-      }
-    }
-
-    const oldRunnerKind = task.config.runnerKind;
-    const oldPoolMemberId =
-      oldRunnerKind === 'ssh' ? (task.config as { poolMemberId?: string }).poolMemberId : undefined;
-    const newPoolMemberId = effectiveType === 'ssh' ? poolMemberId : undefined;
-    const hostKey = (et: string | undefined, rid: string | undefined): string =>
-      et === 'ssh' ? `ssh:${rid ?? ''}` : 'local';
-    const hostChanged =
-      hostKey(oldRunnerKind, oldPoolMemberId) !==
-      hostKey(effectiveType, newPoolMemberId);
-
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.cancelTask(taskId);
-    }
-
-    const configPatch: Record<string, unknown> = { runnerKind: effectiveType };
-    if (effectiveType === 'ssh') {
-      configPatch.poolMemberId = poolMemberId;
-    } else {
-      configPatch.poolMemberId = undefined;
-    }
-    const typeChanges: TaskStateChanges = { config: configPatch };
-    const typeBefore = this.stateGetTask(taskId)!;
-    const typeUpdated = this.writeAndSync(taskId, typeChanges);
-    const typeDelta: TaskDelta = this.buildUpdateDelta(typeBefore, typeUpdated, typeChanges);
-    this.persistence.logEvent?.(taskId, 'task.updated', typeChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, typeDelta);
-
-    return hostChanged ? this.recreateTask(taskId) : this.retryTask(taskId);
+  editTaskType(taskId: string, runnerKind: string, poolMemberId?: string): TaskState[] {
+    return editTaskTypeImpl(this as unknown as TaskEditHost, taskId, runnerKind, poolMemberId);
   }
 
-    editTaskPool(taskId: string, poolId: string): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.config.isMergeNode) throw new Error(`Cannot change executor pool of merge node ${taskId}`);
-    if (!poolId || !this.availablePoolIds.has(poolId)) {
-      throw new Error(
-        `Cannot switch task "${taskId}" to poolId="${poolId}": pool is not defined in executionPools. ` +
-        `Available: [${[...this.availablePoolIds].join(', ')}]`,
-      );
-    }
-
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.cancelTask(taskId);
-    }
-
-    const poolChanges: TaskStateChanges = {
-      config: {
-        poolId,
-        runnerKind: undefined,
-        poolMemberId: undefined,
-      } as TaskStateChanges['config'],
-    };
-    const poolBefore = this.stateGetTask(taskId)!;
-    const poolUpdated = this.writeAndSync(taskId, poolChanges);
-    const poolDelta: TaskDelta = this.buildUpdateDelta(poolBefore, poolUpdated, poolChanges);
-    this.persistence.logEvent?.(taskId, 'task.updated', poolChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, poolDelta);
-
-    return this.recreateTask(taskId);
+  editTaskPool(taskId: string, poolId: string): TaskState[] {
+    return editTaskPoolImpl(this as unknown as TaskEditHost, taskId, poolId);
   }
 
-    editTaskAgent(taskId: string, agentName: string): TaskState[] {
+    editTaskModel(taskId: string, executionModel: string | null): TaskState[] {
     this.refreshFromDb();
     const task = this.stateGetTask(taskId);
     if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.config.isMergeNode) throw new Error(`Cannot change execution agent of merge node ${taskId}`);
+    if (task.config.isMergeNode) throw new Error(`Cannot change execution model of merge node ${taskId}`);
 
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      this.cancelTask(taskId);
-    }
-
-    const agentChanges: TaskStateChanges = { config: { executionAgent: agentName } };
-    const agentBefore = this.stateGetTask(taskId)!;
-    const agentUpdated = this.writeAndSync(taskId, agentChanges);
-    const agentDelta: TaskDelta = this.buildUpdateDelta(agentBefore, agentUpdated, agentChanges);
-    this.persistence.logEvent?.(taskId, 'task.updated', agentChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, agentDelta);
-
-    return this.recreateTask(taskId);
-  }
-
-  /**
-   * Edit the merge mode of a workflow's merge node — **retry-class**
-   * invalidation route per Step 9 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision
-   * Table row "Change merge mode" in
-   * `docs/architecture/task-invalidation-chart.md`
-   * (`MUTATION_POLICIES.mergeMode` → `retryTask` / task scope, scoped
-   * to the merge node).
-   *
-   * Why retry-class (not recreate-class). The chart classifies a
-   * merge-mode change as a merge-node-only execution-policy change:
-   * the merge node's merge strategy (`manual` / `automatic` /
-   * `external_review`) flips, but downstream branch/workspace lineage
-   * and the upstream leaf results that feed the merge node are still
-   * authoritative. The "Why" column reads "Merge execution policy
-   * changed". `applyInvalidation('task','retryTask', mergeNodeId, deps)`
-   * is wired to today's `Orchestrator.restartTask` via
-   * `buildInvalidationDeps` (the compatibility seam Step 1 introduced;
-   * Step 13 will rename `restartTask` → `retryTask` to close the matrix).
-   *
-   * Why this lives on the orchestrator (Step 9 migration). Prior to
-   * Step 9 the merge-mode mutation surface was an app-layer-only
-   * special case in `setWorkflowMergeMode` that restarted the merge
-   * node *only* when it was already terminal or waiting
-   * (`completed` / `awaiting_approval` / `review_ready`). Per the
-   * chart's "Merge-mode inconsistency" section that left no general
-   * active invalidation rule for an in-flight merge node — a `running`
-   * merge node would silently keep using the old mode. Step 9 lifts
-   * the routing into a proper orchestrator policy seam (this method)
-   * so the Hard Invariant (cancel-first) and the retry-class reset
-   * are enforced uniformly across all merge-node states; the app
-   * wrapper becomes a thin delegate (mirrors Steps 2–6).
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the
-   * synchronous orchestrator-internal seam — see
-   * `invalidation-policy.ts` and the Step 5/7/8 retry-class precedents):
-   *   1. **Same-mode no-op.** If the workflow's persisted `mergeMode`
-   *      already matches the requested value the method returns `[]`
-   *      without canceling, persisting, or bumping the merge node's
-   *      execution generation. This prevents a no-op rewrite from
-   *      invalidating valid in-flight merge work.
-   *   2. **Cancel-first (Hard Invariant).** If the merge node is
-   *      actively executing or waiting on external review
-   *      (`running` / `fixing_with_ai` / `awaiting_approval` /
-   *      `review_ready`) we interrupt it via `cancelTask` BEFORE any
-   *      authoritative state is reset. The chart's "Merge-mode
-   *      inconsistency" section explicitly flags external-review
-   *      waits and in-flight merge runs as scope that the new model
-   *      must invalidate consistently. Inactive states
-   *      (`pending` / `completed` / `failed` / `needs_input` /
-   *      `blocked`) skip the cancel — there is no in-flight work to
-   *      interrupt and `cancelTask` would otherwise mark a `pending`
-   *      merge node as `failed`.
-   *   3. **Persist new mode.** `persistence.updateWorkflow` writes the
-   *      new `mergeMode` so the retried merge attempt picks up the
-   *      new policy when it next runs.
-   *   4. **Retry-class reset.** Delegate to `restartTask`, which is
-   *      the current `retryTask` compatibility wire (Step 13 will
-   *      rename it). `restartTask` resets the merge node to `pending`,
-   *      clears volatile attempt state (`agentSessionId` /
-   *      `containerId` / `error` / `exitCode` / `startedAt` /
-   *      `completedAt`), and bumps execution generation exactly once
-   *      via `withBumpedExecutionGeneration`. Crucially it does NOT
-   *      clear `branch` / `workspacePath` — that lineage (the merge
-   *      node's accumulated workspace) is the artifact the chart
-   *      preserves for retry-class merge-mode mutations.
-   *
-   * Public surface: `(taskId, mergeMode)` returning `TaskState[]` of
-   * newly-started tasks. `taskId` MUST be the merge node id
-   * (`__merge__<workflowId>`); the workflow id is read from
-   * `task.config.workflowId`. Throws if the task does not exist or is
-   * not a merge node — keeping merge-mode mutation scoped to the
-   * single execution policy slot the chart classifies. Backward-
-   * compatible callers continue to use the workflow-scoped
-   * `setWorkflowMergeMode` wrapper which translates `workflowId →
-   * mergeNodeId` and delegates here.
-   *
-   * NOTE: `recreateTask`'s lineage-discarding reset shape is
-   * deliberately NOT used here. A merge-mode flip does not invalidate
-   * the merge node's accumulated workspace (the merged branch lineage
-   * built from upstream leaf results); only the merge execution
-   * policy changed. That distinction is what makes merge-mode the
-   * single retry-class route alongside the other retry-class rows
-   * (`runnerKind`, `selectedExperiment`, `selectedExperimentSet`)
-   * in the chart's Decision Table.
-   */
-  editTaskMergeMode(
-    taskId: string,
-    mergeMode: 'manual' | 'automatic' | 'external_review',
-  ): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (!task.config.isMergeNode) {
-      throw new Error(`Task ${taskId} is not a merge node`);
-    }
-    const workflowId = task.config.workflowId;
-    if (!workflowId) {
-      throw new Error(`Merge node ${taskId} has no workflowId`);
-    }
-
-    // Step 9 same-mode no-op: skip cancel + persist + retry when the
-    // requested mode already matches what's persisted on the workflow.
-    // Without this guard a UI/CLI re-affirm would needlessly cancel
-    // active merge work and bump the merge node's execution generation.
-    const wf = this.persistence.loadWorkflow?.(workflowId);
-    if (wf && wf.mergeMode === mergeMode) {
-      return [];
-    }
-
-    // Step 9 cancel-first (chart Hard Invariant): when the merge node
-    // is actively executing or waiting on external review, interrupt
-    // it BEFORE we mutate the workflow's mergeMode and reset merge
-    // state. Stale merge work (an in-flight merge run, a merge fix
-    // session, or an external review wait) cannot survive a policy
-    // change because the merge attempt's execution input — the merge
-    // mode — just changed. Inactive statuses
-    // (`pending`/`completed`/`failed`/`needs_input`/`blocked`) skip
-    // cancel: there is no in-flight work to interrupt and
-    // `cancelTask` would otherwise mark a `pending` merge node as
-    // `failed`.
     if (isActiveForInvalidation(task.status)) {
       this.cancelTask(taskId);
     }
 
-    // Persist new mode on the workflow record so the retried merge
-    // attempt picks up the new policy when restartTask reschedules it.
-    this.persistence.updateWorkflow?.(workflowId, { mergeMode });
+    const modelChanges: TaskStateChanges = {
+      config: { executionModel: executionModel?.trim() || undefined },
+    };
+    const modelBefore = this.stateGetTask(taskId)!;
+    const modelUpdated = this.writeAndSync(taskId, modelChanges);
+    const modelDelta: TaskDelta = this.buildUpdateDelta(modelBefore, modelUpdated, modelChanges);
+    this.persistence.logEvent?.(taskId, 'task.updated', modelChanges);
+    this.messageBus.publish(TASK_DELTA_CHANNEL, modelDelta);
 
-    // Step 9 retry-class reset: restartTask is today's `retryTask`
-    // compatibility wire (`buildInvalidationDeps` →
-    // `orchestrator.restartTask`). It resets the merge node to
-    // `pending`, clears volatile attempt state, and bumps execution
-    // generation exactly once via `withBumpedExecutionGeneration`
-    // while preserving branch/workspacePath lineage — the chart's
-    // retry-class semantics for merge-mode mutations.
-    return this.retryTask(taskId);
+    return this.dispatchPostMutation(MUTATION_POLICIES.executionModel.action, taskId);
   }
 
-  /**
-   * Edit a task's fix-session prompt and/or context — **retry-class**
-   * invalidation route per Step 10 of
-   * `docs/architecture/task-invalidation-roadmap.md` and the Decision
-   * Table row "Change fix prompt or fix context while `fixing_with_ai`"
-   * in `docs/architecture/task-invalidation-chart.md`
-   * (`MUTATION_POLICIES.fixContext` → `retryTask` / task scope).
-   *
-   * Why this is a migration, not a new policy. Prior to Step 10 the
-   * fix-session mutation surface had **no general policy** at all —
-   * the chart's "Behavior Today" column flags this row as
-   * "only command edit has explicit handling today; no general
-   * fix-context mutation policy" and the chart's "Fix-session
-   * inconsistency" subsection calls out the bespoke
-   * `beginConflictResolution` / `revertConflictResolution` rollback
-   * as "one special active invalidation mechanism, not a general
-   * one". Step 10 lifts that bespoke fix-session handling into a
-   * proper orchestrator policy seam (`Orchestrator.editTaskFixContext`)
-   * so cancel-first + retry-class reset are enforced uniformly across
-   * `failed` and `fixing_with_ai` task states; the app wrapper
-   * (`setTaskFixContext`) becomes a thin async delegate (mirrors
-   * Steps 2–9).
-   *
-   * "Retry from reverted failed state" semantics. The chart's
-   * `Target Action` column for this row reads
-   * `retryTask` from reverted failed state — i.e. when the user
-   * changes `fixPrompt`/`fixContext` mid-fix-session the in-flight
-   * AI fix attempt is dropped, the task lineage falls back to its
-   * `failed` baseline (volatile fix-attempt state — `agentSessionId`,
-   * `containerId`, transient `error`/`exitCode`/timing fields —
-   * cleared by `restartTask`), and a fresh fix attempt is scheduled
-   * with the new prompt/context. Branch / workspacePath lineage
-   * survives because this is the same failed task being retried
-   * through the fix loop, not a new task topology.
-   *
-   * Sequence (mirrors `applyInvalidation`'s contract for the
-   * synchronous orchestrator-internal seam — see
-   * `invalidation-policy.ts` and the Step 9 `editTaskMergeMode`
-   * precedent):
-   *   1. **Same-content no-op.** If neither `fixPrompt` nor
-   *      `fixContext` is changing (omitted keys count as "no
-   *      change"), return `[]` without canceling, persisting, or
-   *      bumping execution generation. Without this guard a UI/CLI
-   *      re-affirm of identical fix context would needlessly cancel
-   *      an active fix session and bump the task's execution
-   *      generation.
-   *   2. **Cancel-first (Hard Invariant).** When the task is
-   *      actively running an AI fix (`fixing_with_ai`) interrupt it
-   *      via `cancelTask` BEFORE the new fix prompt/context is
-   *      persisted or `restartTask` resets the task. A failed task
-   *      (the inactive fix-loop state) skips cancel — there is no
-   *      in-flight fix attempt to interrupt and `cancelTask` would
-   *      otherwise treat the failed task as already settled.
-   *   3. **Persist new fix prompt/context.** `writeAndSync` updates
-   *      `config.fixPrompt` / `config.fixContext` (only the keys
-   *      present in the patch) and emits a `task.updated` delta so
-   *      the retried fix attempt picks up the new prompt/context.
-   *   4. **Retry-class reset.** Delegate to `restartTask` (today's
-   *      `retryTask` compatibility wire — see
-   *      `MUTATION_POLICIES.fixContext` and `buildInvalidationDeps`).
-   *      It resets the task to `pending`, clears volatile attempt
-   *      state (`agentSessionId`, `containerId`, transient
-   *      `error`/`exitCode`/timing fields), and bumps execution
-   *      generation exactly once via
-   *      `withBumpedExecutionGeneration`, preserving branch /
-   *      workspacePath lineage. This is the chart's "retry from
-   *      reverted failed state" baseline.
-   *
-   * Patch shape: `{ fixPrompt?, fixContext? }`. Either or both keys
-   * may be present. Omitted keys leave the existing config field
-   * untouched — same-content detection treats missing keys as "no
-   * change" so a `fix-prompt`-only edit does not clobber an
-   * existing `fixContext`.
-   *
-   * Active states accepted: `failed`, `fixing_with_ai`. Other states
-   * throw — the chart scopes this mutation to the fix loop.
-   *
-   * NOTE: `restartTask` is intentionally used here (not
-   * `recreateTask`) because Step 10 is retry-class — fix
-   * prompt/context changes do NOT change the task's execution-defining
-   * spec (`command` / `prompt` / `executionAgent` / `runnerKind` /
-   * `poolMemberId`); they only redirect the AI fix attempt that
-   * runs against an already-failed task lineage.
-   */
+  editTaskAgent(taskId: string, agentName: string): TaskState[] {
+    return editTaskAgentImpl(this as unknown as TaskEditHost, taskId, agentName);
+  }
+
+  editTaskMergeMode(
+    taskId: string,
+    mergeMode: 'manual' | 'automatic' | 'external_review',
+  ): TaskState[] {
+    return editTaskMergeModeImpl(this as unknown as TaskEditHost, taskId, mergeMode);
+  }
+
   editTaskFixContext(
     taskId: string,
     patch: { fixPrompt?: string; fixContext?: string },
   ): TaskState[] {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
-    if (task.config.isMergeNode) {
-      throw new Error(`Cannot edit fix context of merge node ${taskId}`);
-    }
-    if (task.status !== 'failed' && task.status !== 'fixing_with_ai') {
-      throw new Error(
-        `Cannot edit fix context for task "${taskId}" in status "${task.status}" ` +
-          `(expected: failed | fixing_with_ai)`,
-      );
-    }
-
-    // Step 10 same-content no-op: skip cancel + persist + retry when
-    // neither key in the patch differs from the persisted config.
-    // Omitted keys count as "no change" so a prompt-only edit does
-    // not require the caller to also re-supply the existing context.
-    const hasPromptKey = Object.prototype.hasOwnProperty.call(patch, 'fixPrompt');
-    const hasContextKey = Object.prototype.hasOwnProperty.call(patch, 'fixContext');
-    const promptMatches = !hasPromptKey || patch.fixPrompt === task.config.fixPrompt;
-    const contextMatches = !hasContextKey || patch.fixContext === task.config.fixContext;
-    if (promptMatches && contextMatches) {
-      return [];
-    }
-
-    // Step 10 cancel-first (chart Hard Invariant): when the task is
-    // actively running an AI fix attempt (`fixing_with_ai`) interrupt
-    // it BEFORE we persist the new fix prompt/context and reset the
-    // task via `restartTask`. The in-flight fix attempt's execution
-    // input — the prompt/context — just changed, so it cannot
-    // survive. A failed task (the inactive fix-loop state) skips
-    // cancel: there is no in-flight fix attempt to interrupt.
-    if (task.status === 'fixing_with_ai') {
-      this.cancelTask(taskId);
-    }
-
-    const configPatch: Record<string, unknown> = {};
-    if (hasPromptKey) configPatch.fixPrompt = patch.fixPrompt;
-    if (hasContextKey) configPatch.fixContext = patch.fixContext;
-    const fixContextChanges: TaskStateChanges = { config: configPatch };
-    const fixBefore = this.stateGetTask(taskId)!;
-    const fixUpdated = this.writeAndSync(taskId, fixContextChanges);
-    const fixContextDelta: TaskDelta = this.buildUpdateDelta(fixBefore, fixUpdated, fixContextChanges);
-    this.persistence.logEvent?.(taskId, 'task.updated', fixContextChanges);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, fixContextDelta);
-
-    // Step 10 retry-class reset: restartTask is today's `retryTask`
-    // compatibility wire (`buildInvalidationDeps` →
-    // `orchestrator.restartTask`). It resets the task to `pending`,
-    // clears volatile attempt state (`agentSessionId`, `containerId`,
-    // transient `error`/`exitCode`/timing fields), and bumps
-    // execution generation exactly once via
-    // `withBumpedExecutionGeneration` while preserving branch /
-    // workspacePath lineage — the chart's "retry from reverted
-    // failed state" baseline for fix-context mutations.
-    return this.retryTask(taskId);
+    return editTaskFixContextImpl(this as unknown as TaskEditHost, taskId, patch);
   }
 
   /**
@@ -3273,22 +2202,22 @@ export class Orchestrator {
    * policy router (e.g. a hypothetical fork-class equivalent) gets
    * the same non-invalidating semantics as this method.
    */
-  setTaskExternalGatePolicies(taskId: string, updates: ExternalGatePolicyUpdate[]): TaskState[] {
+  setWorkflowExternalGatePolicies(workflowId: string, updates: ExternalGatePolicyUpdate[]): TaskState[] {
     this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
     this.lastInvalidationPlan = planInvalidation({
       action: 'scheduleOnly',
-      targetId: task.id,
+      targetId: workflowId,
       tasks: this.stateMachine.getAllTasks(),
     });
-    if (task.status === 'running' || task.status === 'fixing_with_ai') {
-      throw new Error(`Cannot edit running task ${taskId}`);
-    }
 
-    const deps = task.config.externalDependencies;
+    const workflow = this.persistence.loadWorkflow?.(workflowId)
+      ?? this.persistence.listWorkflows().find((candidate) => candidate.id === workflowId);
+    if (!workflow) {
+      throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
+    }
+    const deps = workflow.externalDependencies;
     if (!deps || deps.length === 0) {
-      throw new Error(`Task ${taskId} has no external dependencies`);
+      throw new Error(`Workflow ${workflowId} has no external dependencies`);
     }
     if (!updates.length) return [];
 
@@ -3300,7 +2229,7 @@ export class Orchestrator {
     const byKey = new Map<string, ExternalGatePolicyUpdate>();
     for (const update of updates) {
       if (update.gatePolicy !== 'completed' && update.gatePolicy !== 'review_ready') {
-        throw new Error(`Invalid gatePolicy "${String(update.gatePolicy)}" for task ${taskId}`);
+        throw new Error(`Invalid gatePolicy "${String(update.gatePolicy)}" for workflow ${workflowId}`);
       }
       byKey.set(keyOf(update.workflowId, update.taskId), update);
     }
@@ -3317,21 +2246,28 @@ export class Orchestrator {
 
     if (changed === 0) return [];
 
-    const policyChanges: TaskStateChanges = {
-      config: { externalDependencies: nextDeps },
-    };
-    const policyUpdated = this.writeAndSync(taskId, policyChanges);
-    const policyDelta: TaskDelta = this.buildUpdateDelta(task, policyUpdated, policyChanges);
-    this.persistence.logEvent?.(taskId, 'task.external_dependency_policy_updated', {
+    this.taskRepository.updateWorkflow(workflowId, { externalDependencies: nextDeps });
+    const eventTask = this.getMergeNode(workflowId) ?? this.stateMachine.getAllTasks().find((task) => task.config.workflowId === workflowId);
+    if (eventTask) this.persistence.logEvent?.(eventTask.id, 'workflow.external_dependency_policy_updated', {
       updates,
       changed,
     });
-    this.messageBus.publish(TASK_DELTA_CHANNEL, policyDelta);
 
     // Re-evaluate and auto-start anything newly unblocked by this policy change.
     const started = this.autoStartExternallyUnblockedReadyTasks();
     this.checkWorkflowCompletion();
     return started;
+  }
+
+  setTaskExternalGatePolicies(taskId: string, updates: ExternalGatePolicyUpdate[]): TaskState[] {
+    this.refreshFromDb();
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task ${taskId} not found`);
+    const workflowId = task.config.workflowId;
+    if (!workflowId) {
+      throw new Error(`Task ${taskId} has no workflowId`);
+    }
+    return this.setWorkflowExternalGatePolicies(workflowId, updates);
   }
 
   forkWorkflow(workflowId: string, opts?: { autoStart?: boolean }): ForkWorkflowResult {
@@ -3359,7 +2295,6 @@ export class Orchestrator {
       name: sourceMeta && (sourceMeta as { name?: string }).name
         ? `${(sourceMeta as { name: string }).name} (fork of ${workflowId})`
         : `Fork of ${workflowId}`,
-      status: 'running',
       createdAt,
       updatedAt: createdAt,
     };
@@ -3374,6 +2309,12 @@ export class Orchestrator {
       if (typeof m.featureBranch === 'string') baseSaveWf.featureBranch = m.featureBranch;
       if (m.mergeMode === 'manual' || m.mergeMode === 'automatic' || m.mergeMode === 'external_review') {
         baseSaveWf.mergeMode = m.mergeMode;
+      }
+      if (Array.isArray(m.externalDependencies)) {
+        baseSaveWf.externalDependencies = m.externalDependencies as ExternalDependency[];
+      }
+      if (Array.isArray(m.externalDependencyChanges)) {
+        baseSaveWf.externalDependencyChanges = m.externalDependencyChanges as ExternalDependencyChange[];
       }
     }
     this.persistence.saveWorkflow(baseSaveWf);
@@ -3434,6 +2375,10 @@ export class Orchestrator {
     this.messageBus.publish(TASK_DELTA_CHANNEL, { type: 'created', task: newMerge });
 
     this.reconcileMergeLeaves(newWfId);
+
+    // Forking invalidates anything that depended on the source
+    // workflow; cascade against the source workflowId, not the fork.
+    this.cascadeInvalidationToDownstream(workflowId);
 
     const autoStart = opts?.autoStart !== false;
     let started: TaskState[] = [];
@@ -3521,6 +2466,7 @@ export class Orchestrator {
       taskMap,
       (t) => !!t.config.isMergeNode,
     );
+    this.invalidateLaunchArtifactsForTasks([sourceId, ...descendantIds], 'task replacement');
     for (const id of descendantIds) {
       const staleBefore = this.stateGetTask(id);
       if (!staleBefore) continue;
@@ -3553,6 +2499,7 @@ export class Orchestrator {
         command: rt.command,
         prompt: rt.prompt,
         executionAgent: rt.executionAgent ?? task.config.executionAgent,
+        executionModel: rt.executionModel ?? task.config.executionModel,
         poolId: task.config.poolId,
       } as const;
       // Replacement tasks inherit executor config from the parent task.
@@ -3591,7 +2538,85 @@ export class Orchestrator {
         return !hasInternalDeps;
       })
       .map((rt) => scopeLocal(rt.id));
-    return this.autoStartReadyTasks(rootIds);
+    return this.autoStartReadyTasks(rootIds, 0, { bypassLocalDependencyReadiness: true });
+  }
+
+  deleteTask(taskId: string): TaskState[] {
+    this.refreshFromDb();
+
+    const task = this.stateGetTask(taskId);
+    if (!task) throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `Task "${taskId}" not found`);
+    if (task.config.isMergeNode) throw new Error(`Cannot delete merge task "${taskId}"`);
+
+    const workflowId = task.config.workflowId;
+    if (!workflowId) throw new Error(`deleteTask: task ${taskId} has no workflowId`);
+
+    const workflowTasks = this.stateMachine
+      .getAllTasks()
+      .filter((candidate) => candidate.config.workflowId === workflowId);
+    const remainingNonMergeTasks = workflowTasks.filter(
+      (candidate) => candidate.id !== task.id && !candidate.config.isMergeNode,
+    );
+    if (remainingNonMergeTasks.length === 0) {
+      throw new Error(`Cannot delete the last task in workflow "${workflowId}"; delete the workflow instead.`);
+    }
+
+    const directDependents = workflowTasks.filter(
+      (candidate) =>
+        candidate.id !== task.id &&
+        !candidate.config.isMergeNode &&
+        candidate.dependencies.includes(task.id),
+    );
+    const upstreamDeps = task.dependencies;
+    const retargetDeltas: TaskDelta[] = [];
+
+    const retargetDependencies = (dependencies: readonly string[]): string[] => {
+      const next: string[] = [];
+      const seen = new Set<string>();
+      const add = (dependencyId: string) => {
+        if (dependencyId === task.id || dependencyId.length === 0 || seen.has(dependencyId)) return;
+        seen.add(dependencyId);
+        next.push(dependencyId);
+      };
+
+      for (const dependencyId of dependencies) {
+        if (dependencyId === task.id) {
+          for (const upstreamId of upstreamDeps) add(upstreamId);
+        } else {
+          add(dependencyId);
+        }
+      }
+      return next;
+    };
+
+    this.taskRepository.runInTransaction(() => {
+      this.invalidateLaunchArtifactsForTasks([task.id], 'task deletion');
+
+      for (const dependent of directDependents) {
+        const dependencies = retargetDependencies(dependent.dependencies);
+        const changes: TaskStateChanges = { dependencies };
+        const updated = this.writeAndSync(dependent.id, changes);
+        retargetDeltas.push(this.buildUpdateDelta(dependent, updated, changes));
+      }
+
+      this.deferredTaskIds.delete(task.id);
+      this.clearQueuedSchedulerEntries(task.id, task.execution.selectedAttemptId);
+      this.taskRepository.deleteTask(task.id);
+      this.touchWorkflow(workflowId);
+    });
+
+    this.syncAllFromDb();
+
+    for (const delta of retargetDeltas) {
+      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
+    }
+    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildRemoveDelta(task));
+    this.reconcileMergeLeaves(workflowId);
+
+    const readyIds = directDependents
+      .map((dependent) => dependent.id)
+      .filter((id) => this.stateGetTask(id));
+    return this.autoStartReadyTasks(readyIds, Orchestrator.EXPEDITED_PRIORITY);
   }
 
   /**
@@ -3605,9 +2630,15 @@ export class Orchestrator {
   }
 
   /**
-   * Returns true if the workflow has any non-merge task in a live status
+   * Returns true if the workflow has any non-merge task doing live work
    * (`pending`, `running`, `fixing_with_ai`, `needs_input`,
-   * `awaiting_approval`, `review_ready`, `blocked`).
+   * `awaiting_approval`, `review_ready`, or a `blocked` task still held by an
+   * external cross-workflow gate).
+   *
+   * A task left `blocked` by a terminated/failed in-workflow upstream (with no
+   * external gate) is treated as NOT live: it is inert until the upstream is
+   * retried, so it must not keep an otherwise-dead workflow "live" and force
+   * `replaceTask` to fork instead of mutating in place.
    *
    * The merge node is excluded because it stays `pending` for the whole
    * workflow lifetime — including it would make every workflow live
@@ -3615,10 +2646,25 @@ export class Orchestrator {
    * mutations (`replaceTask`).
    */
   private isWorkflowLive(workflowId: string): boolean {
-    const tasks = this.stateMachine
+    const workflowTasks = this.stateMachine
       .getAllTasks()
-      .filter((t) => t.config.workflowId === workflowId && !t.config.isMergeNode);
-    return tasks.some((t) => LIVE_TASK_STATUSES.has(t.status));
+      .filter((t) => t.config.workflowId === workflowId);
+    const tasksById = new Map(workflowTasks.map((t) => [t.id, t]));
+    return workflowTasks.some((t) => {
+      if (t.config.isMergeNode) return false;
+      if (!LIVE_TASK_STATUSES.has(t.status)) return false;
+      // A task left `blocked` behind a terminated/failed in-workflow upstream
+      // is inert: it cannot progress until that upstream is retried, so it does
+      // not keep the workflow "live". A task blocked on an external
+      // cross-workflow gate has all its in-workflow deps satisfied (no failed
+      // path) and stays live. Deriving this from dependency status — instead of
+      // a coarse workflow-scoped heuristic — is precise per task and survives
+      // reloads, because task statuses are persisted.
+      if (t.status === 'blocked' && hasFailedDependencyPath(t, tasksById)) {
+        return false;
+      }
+      return true;
+    });
   }
 
   private assertMergeLeavesInvariant(workflowId: string): void {
@@ -3678,20 +2724,33 @@ export class Orchestrator {
    * Resume a previously persisted workflow by restoring tasks
    * and auto-starting ready tasks.
    */
+  private isRecoverableResumeTask(task: TaskState): boolean {
+    if (task.status === 'running') return true;
+    if ((task.status !== 'pending' && (task.status as string) !== 'queued') || !task.execution.selectedAttemptId) return false;
+    if (task.execution.phase === 'launching') return true;
+
+    return Boolean(
+      task.execution.startedAt
+      || task.execution.launchStartedAt
+      || task.execution.launchCompletedAt
+      || task.execution.lastHeartbeatAt
+      || task.execution.workspacePath
+      || task.execution.agentSessionId
+      || task.execution.containerId
+      || task.execution.error
+      || task.execution.exitCode !== undefined
+      || task.execution.inputPrompt
+      || task.execution.pendingFixError,
+    );
+  }
+
   resumeWorkflow(workflowId: string): TaskState[] {
     this.syncFromDb(workflowId);
     const workflowTaskIds = new Set(this.persistence.loadTasks(workflowId).map((task) => task.id));
     const tasksToRecover = this.stateMachine
       .getAllTasks()
       .filter((task) => task.config.workflowId === workflowId || workflowTaskIds.has(task.id))
-      .filter((task) =>
-        task.status === 'running'
-        || (
-          task.status === 'pending'
-          && task.execution.phase === 'launching'
-          && !!task.execution.selectedAttemptId
-        )
-      );
+      .filter((task) => this.isRecoverableResumeTask(task));
     for (const task of tasksToRecover) {
       this.prepareTaskForNewAttempt(task.id, 'resume_workflow_recovery');
     }
@@ -3722,26 +2781,48 @@ export class Orchestrator {
   removeAllWorkflows(): void {
     this.activeWorkflowIds.clear();
     this.stateMachine.clear();
-    this.scheduler.killAll();
+    this.scheduler.clearQueue();
   }
 
   /**
    * Delete a single workflow: DB first, then scheduler, memory, and publish removal deltas.
    * Follows the same DB→memory→publish pattern as writeAndSync().
    */
+  private resolveDetachDefaultBranch(
+    workflowId: string,
+    workflow: { repoUrl?: string } | undefined,
+  ): string {
+    const repoUrl = workflow?.repoUrl?.trim();
+    if (!repoUrl) {
+      throw new Error(`Cannot detach workflow ${workflowId}: missing repo URL for default branch resolution.`);
+    }
+    return this.resolveRepoDefaultBranch(repoUrl);
+  }
+
   deleteWorkflow(workflowId: string): void {
     this.syncAllFromDb();
 
-    const deletedWorkflow = this.persistence.loadWorkflow?.(workflowId);
 
-    // 1. Detach direct dependents before the delete so they inherit the
-    // deleted workflow's parent branch instead of becoming permanently blocked
-    // on a missing prerequisite.
+    // 1. Detach direct dependents before the delete so they retarget to the
+    // repo default branch instead of becoming permanently blocked on a missing
+    // prerequisite.
     const directDependents = this.collectDirectDependentWorkflowIds(workflowId);
+    const workflowMetadata = this.persistence.listWorkflows();
+    const directDependentBaseBranches = new Map<string, string>();
     for (const dependentWorkflowId of directDependents) {
-      this.detachWorkflowInternal(dependentWorkflowId, workflowId, {
-        upstreamWorkflow: deletedWorkflow,
-      });
+      const dependentWorkflow = this.persistence.loadWorkflow?.(dependentWorkflowId)
+        ?? workflowMetadata.find((candidate) => candidate.id === dependentWorkflowId);
+      directDependentBaseBranches.set(
+        dependentWorkflowId,
+        this.resolveDetachDefaultBranch(dependentWorkflowId, dependentWorkflow),
+      );
+    }
+    for (const dependentWorkflowId of directDependents) {
+      this.detachWorkflowInternal(
+        dependentWorkflowId,
+        workflowId,
+        directDependentBaseBranches.get(dependentWorkflowId)!,
+      );
     }
 
     // 2. Collect affected tasks before DB delete (needed for deltas and scheduler cleanup)
@@ -3769,9 +2850,7 @@ export class Orchestrator {
 
   detachWorkflow(workflowId: string, upstreamWorkflowId: string): void {
     this.syncAllFromDb();
-    this.detachWorkflowInternal(workflowId, upstreamWorkflowId, {
-      upstreamWorkflow: this.persistence.loadWorkflow?.(upstreamWorkflowId),
-    });
+    this.detachWorkflowInternal(workflowId, upstreamWorkflowId);
   }
 
   /**
@@ -3788,7 +2867,7 @@ export class Orchestrator {
     this.persistence.deleteAllWorkflows?.();
 
     // 3. Clear scheduler
-    this.scheduler.killAll();
+    this.scheduler.clearQueue();
 
     // 4. Clear memory
     this.activeWorkflowIds.clear();
@@ -3827,13 +2906,43 @@ export class Orchestrator {
     return alt ? sm.getTask(alt) : undefined;
   }
 
+  private taskMatchesLineageExpectation(task: TaskState, expected?: TaskLineageExpectation): boolean {
+    if (!expected) return true;
+    if (expected.taskId !== undefined && expected.taskId !== task.id) return false;
+    if (expected.selectedAttemptId !== task.execution.selectedAttemptId) return false;
+    if (expected.generation !== undefined && expected.generation !== (task.execution.generation ?? 0)) return false;
+    return true;
+  }
+
   getTask(taskId: string): TaskState | undefined {
     return this.stateGetTask(taskId);
+  }
+
+  recordTaskHeartbeat(
+    taskId: string,
+    options: { at?: Date; source?: TaskHeartbeatSource } = {},
+  ): TaskState | undefined {
+    const task = this.stateGetTask(taskId);
+    if (!task) return undefined;
+
+    const at = options.at ?? new Date();
+    const source = options.source ?? 'executor';
+    const changes: TaskStateChanges = {
+      execution: {
+        lastHeartbeatAt: at,
+        heartbeatSource: source,
+        ...(source === 'remote_workload' ? { remoteHeartbeatAt: at } : {}),
+      },
+    };
+    const updated = this.writeAndSync(task.id, changes, { skipWorkflowStatusSync: true });
+    this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
+    return updated;
   }
 
   getAutoFixRetryBudget(taskId: string): number {
     return this.defaultAutoFixRetries;
   }
+
 
   private isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
     if (task.config.isReconciliation) return false;
@@ -3845,10 +2954,10 @@ export class Orchestrator {
     const task = this.stateGetTask(taskId);
     if (!task) return false;
     if (task.status !== 'failed') return false;
+    // Liveness stalls are requeued by the requeue worker, never AI-auto-fixed.
+    if (isLivenessFailureClass(task.execution.failureClass)) return false;
     if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
-    const max = this.getAutoFixRetryBudget(taskId);
-    if (max <= 0) return false;
-    return (task.execution.autoFixAttempts ?? 0) < max;
+    return this.getAutoFixRetryBudget(taskId) > 0;
   }
 
   getAllTasks(): TaskState[] {
@@ -3863,19 +2972,35 @@ export class Orchestrator {
     return this.stateMachine.getReadyTasks();
   }
 
+  getExecutableReadyTasks(): TaskState[] {
+    const readyTasks = this.stateMachine
+      .getReadyTasks()
+      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
+    const readyTasksById = new Map(readyTasks.map((task) => [task.id, task]));
+    return getPendingLaunchQueueSnapshotImpl(
+      this as unknown as SchedulerDomainHost,
+      readyTasks.map((task) => ({
+        taskId: task.id,
+        attemptId: task.execution.selectedAttemptId,
+        priority: this.loadAttemptById(task.execution.selectedAttemptId)?.queuePriority ?? 0,
+      })),
+    )
+      .map((job) => readyTasksById.get(job.taskId))
+      .filter((task): task is TaskState => task !== undefined);
+  }
+
   /**
    * Find the terminal merge node for a given workflow.
    */
   getMergeNode(workflowId: string): TaskState | undefined {
-    return this.stateMachine.getAllTasks().find(
-      (t) => t.config.workflowId === workflowId && t.config.isMergeNode,
-    );
+    return getMergeNodeImpl(this as unknown as MergeHost, workflowId);
   }
 
   getWorkflowStatus(workflowId?: string): {
     total: number;
     completed: number;
     failed: number;
+    closed: number;
     running: number;
     pending: number;
   } {
@@ -3888,6 +3013,7 @@ export class Orchestrator {
       total: tasks.length,
       completed: tasks.filter((t) => t.status === 'completed').length,
       failed: tasks.filter((t) => t.status === 'failed').length,
+      closed: tasks.filter((t) => t.status === 'closed').length,
       running: tasks.filter((t) => t.status === 'running' || t.status === 'fixing_with_ai').length,
       pending: tasks.filter((t) => t.status === 'pending').length,
     };
@@ -3902,72 +3028,7 @@ export class Orchestrator {
    * Returns cancelled task IDs and which were running (need process kill by caller).
    */
   cancelTask(taskId: string): { cancelled: string[]; runningCancelled: string[] } {
-    this.refreshFromDb();
-
-    const task = this.stateGetTask(taskId);
-    if (!task) throw new OrchestratorError('TASK_NOT_FOUND', `Task "${taskId}" not found`);
-
-    const terminal = new Set(['completed', 'stale']);
-    if (terminal.has(task.status)) {
-      throw new OrchestratorError('TASK_ALREADY_TERMINAL', `Task "${taskId}" is already ${task.status}`);
-    }
-
-    // Find all transitive dependents, skipping completed/stale
-    const rootId = task.id;
-    const upstreamLabel =
-      rootId.includes('/') && !rootId.startsWith('__merge__')
-        ? rootId.slice(rootId.indexOf('/') + 1)
-        : rootId;
-
-    const allTasks = this.stateMachine.getAllTasks();
-    const taskMap = new Map(allTasks.map((t) => [t.id, t]));
-    const descendantIds = getTransitiveDependents(
-      rootId,
-      taskMap,
-      (t) => t.status === 'completed' || t.status === 'stale',
-    );
-
-    const toCancelIds = [rootId, ...descendantIds];
-    const cancelled: string[] = [];
-    const runningCancelled: string[] = [];
-
-    for (const id of toCancelIds) {
-      const t = this.stateGetTask(id);
-      if (!t || t.status === 'completed' || t.status === 'stale') continue;
-
-      const wasRunning = t.status === 'running' || t.status === 'fixing_with_ai';
-
-      // Free scheduler slot and deferred set
-      this.deferredTaskIds.delete(id);
-      if (wasRunning) {
-        runningCancelled.push(id);
-      }
-      this.clearQueuedSchedulerEntries(id, t.execution.selectedAttemptId);
-
-      // Mark as failed
-      const errorMsg =
-        id === rootId
-          ? 'Terminated by user'
-          : `Terminated: upstream task "${upstreamLabel}" was terminated`;
-      const changes: TaskStateChanges = {
-        status: 'failed',
-        execution: { error: errorMsg, completedAt: new Date() },
-      };
-      const cancelUpdated = this.writeAndSync(id, changes);
-      this.updateSelectedAttempt(id, {
-        status: 'failed',
-        error: errorMsg,
-        completedAt: changes.execution?.completedAt,
-      });
-      const delta: TaskDelta = this.buildUpdateDelta(t, cancelUpdated, changes);
-      this.persistence.logEvent?.(id, 'task.cancelled', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-      cancelled.push(id);
-    }
-
-    this.checkWorkflowCompletion();
-    return { cancelled, runningCancelled };
+    return cancelTaskImpl(this as unknown as CancellationHost, taskId);
   }
 
   /**
@@ -3975,134 +3036,154 @@ export class Orchestrator {
    * Terminal tasks (completed/stale) are preserved as-is.
    */
   cancelWorkflow(workflowId: string): { cancelled: string[]; runningCancelled: string[] } {
-    this.refreshWorkflowFromDb(workflowId);
-
-    const allTasks = this.stateMachine.getAllTasks().filter(
-      (t) => t.config.workflowId === workflowId,
-    );
-    if (allTasks.length === 0) {
-      throw new OrchestratorError('WORKFLOW_NOT_FOUND', `No tasks found for workflow ${workflowId}`);
-    }
-
-    const cancellable = new Set([
-      'pending',
-      'running',
-      'fixing_with_ai',
-      'blocked',
-      'needs_input',
-      'review_ready',
-      'awaiting_approval',
-    ]);
-
-    const cancelled: string[] = [];
-    const runningCancelled: string[] = [];
-
-    for (const task of allTasks) {
-      if (!cancellable.has(task.status)) continue;
-
-      const id = task.id;
-      const wasRunning = task.status === 'running' || task.status === 'fixing_with_ai';
-
-      this.deferredTaskIds.delete(id);
-      if (wasRunning) {
-        runningCancelled.push(id);
-      }
-      this.clearQueuedSchedulerEntries(id, task.execution.selectedAttemptId);
-
-      const changes: TaskStateChanges = {
-        status: 'failed',
-        execution: {
-          error: 'Cancelled by user (workflow)',
-          completedAt: new Date(),
-        },
-      };
-      const wfCancelUpdated = this.writeAndSync(id, changes);
-      this.updateSelectedAttempt(id, {
-        status: 'failed',
-        error: 'Cancelled by user (workflow)',
-        completedAt: changes.execution?.completedAt,
-      });
-      this.persistence.logEvent?.(id, 'task.cancelled', changes);
-      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, wfCancelUpdated, changes));
-      cancelled.push(id);
-    }
-
-    this.checkWorkflowCompletion();
-    return { cancelled, runningCancelled };
+    return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId);
   }
 
   /**
    * Defer a running task back to pending when a resource limit is hit.
    * The task is re-enqueued when another task completes and frees a slot.
    */
-  deferTask(taskId: string): void {
-    this.refreshFromDb();
-    const task = this.stateGetTask(taskId);
-    if (!task) return;
-    const id = task.id;
-
-    // Transition running → pending
-    const changes: TaskStateChanges = {
-      status: 'pending',
-      execution: { startedAt: undefined, lastHeartbeatAt: undefined },
-    };
-    const deferUpdated = this.writeAndSync(id, changes);
-    const delta: TaskDelta = this.buildUpdateDelta(task, deferUpdated, changes);
-    this.persistence.logEvent?.(id, 'task.deferred', changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-    // Remove any queued re-dispatch for this task; persisted attempt state now
-    // owns active-slot truth.
-    this.clearQueuedSchedulerEntries(id, task.execution.selectedAttemptId);
-
-    this.replaceSelectedAttempt(task);
-
-    // Park in deferred set — re-enqueued when a task completes
-    this.deferredTaskIds.add(id);
-
-    // Let other ready tasks fill the freed slot
-    this.drainScheduler();
+  deferTask(
+    taskId: string,
+    reason?: {
+      reason?: string;
+      message?: string;
+      attemptId?: string;
+      phase?: string;
+    },
+  ): void {
+    deferTaskImpl(this as unknown as CancellationHost, taskId, reason);
+    if (reason?.reason === 'resource-limit') {
+      this.recordLaunchDeferral(taskId);
+    }
   }
 
   /**
-   * Get detailed queue status with task metadata for display.
+   * Record (or extend) the launch backoff for a task deferred because its
+   * execution pool had no member capacity. Attempts drive an exponential
+   * schedule so a persistently starved task backs off toward the cap.
    */
-  getQueueStatus(): {
+  private recordLaunchDeferral(taskId: string): void {
+    const attempts = (this.launchDeferrals.get(taskId)?.attempts ?? 0) + 1;
+    const backoff = this.computeLaunchBackoffMs(attempts);
+    // lastHeartbeatAt=0 forces a heartbeat on the first parked poll.
+    this.launchDeferrals.set(taskId, { until: Date.now() + backoff, attempts, lastHeartbeatAt: 0 });
+  }
+
+  private computeLaunchBackoffMs(attempts: number): number {
+    if (this.launchDeferralBackoffMs !== undefined) {
+      return Math.max(0, this.launchDeferralBackoffMs);
+    }
+    const scaled = Orchestrator.LAUNCH_DEFERRAL_BASE_BACKOFF_MS * 2 ** Math.max(0, attempts - 1);
+    return Math.min(scaled, Orchestrator.LAUNCH_DEFERRAL_MAX_BACKOFF_MS);
+  }
+
+  /**
+   * True when the task is parked for capacity and its backoff has not elapsed.
+   * Gated on `deferredTaskIds` so any lifecycle transition that clears the
+   * deferred set (retry / cancel / recreate / completion re-enqueue) releases
+   * the park immediately, without a per-transition clear at every call site.
+   */
+  isLaunchParked(taskId: string, now: number = Date.now()): boolean {
+    const deferral = this.launchDeferrals.get(taskId);
+    return deferral !== undefined
+      && this.deferredTaskIds.has(taskId)
+      && deferral.until > now;
+  }
+
+  private pruneLaunchDeferrals(): void {
+    if (this.launchDeferrals.size === 0) return;
+    for (const taskId of [...this.launchDeferrals.keys()]) {
+      if (!this.deferredTaskIds.has(taskId)) {
+        this.launchDeferrals.delete(taskId);
+      }
+    }
+  }
+
+  /**
+   * Emit a throttled `task.launch_waiting` heartbeat proving a parked task is
+   * still alive and in line (replacing the abandon/re-dispatch churn as the
+   * observable signal), carrying the retry attempt count and next retry time.
+   */
+  private emitLaunchWaitingHeartbeat(taskId: string, now: number): void {
+    const deferral = this.launchDeferrals.get(taskId);
+    if (!deferral) return;
+    if (now - deferral.lastHeartbeatAt < Orchestrator.LAUNCH_DEFERRAL_HEARTBEAT_MS) return;
+    deferral.lastHeartbeatAt = now;
+    this.persistence.logEvent?.(taskId, 'task.launch_waiting', {
+      attempts: deferral.attempts,
+      nextRetryAt: new Date(deferral.until),
+    });
+  }
+
+  getQueueStatus(options?: { refresh?: boolean }): {
     maxConcurrency: number;
     runningCount: number;
+    activeExecutionCount: number;
+    launchingCount: number;
     running: Array<{ taskId: string; attemptId?: string; description: string }>;
     queued: Array<{ taskId: string; priority: number; description: string }>;
   } {
-    this.refreshFromDb();
+    if (options?.refresh !== false) {
+      this.refreshFromDb();
+    }
     const tasks = this.stateMachine.getAllTasks();
     const now = Date.now();
     const activeAttempts = tasks
+      .filter((task) =>
+        task.status === 'running'
+        || task.status === 'fixing_with_ai'
+        || ((task.status === 'pending' || (task.status as string) === 'queued') && !!task.execution.selectedAttemptId),
+      )
       .map((task) => {
         const attemptId = task.execution.selectedAttemptId;
         const attempt = this.loadAttemptById(attemptId);
         return { task, attemptId, attempt };
       })
       .filter(({ task, attempt }) => this.isTaskExecutionActive(task, attempt, now));
-    const queuedTasks = this.stateMachine
-      .getReadyTasks()
-      .filter((task) => task.status === 'pending')
-      .filter((task) => this.getExternalDependencyBlocker(task) === undefined)
-      .map((task) => {
-        const attempt = task.execution.selectedAttemptId
-          ? this.loadAttemptById(task.execution.selectedAttemptId)
-          : undefined;
+    const activeTaskIds = new Set(activeAttempts.map(({ task }) => task.id));
+    const workflowBlockerCache = new Map<string, string | undefined>();
+    const isExternallyBlocked = (task: TaskState): boolean => {
+      const workflowId = task.config.workflowId;
+      if (!workflowId) return false;
+      if (!workflowBlockerCache.has(workflowId)) {
+        workflowBlockerCache.set(workflowId, this.getWorkflowDependencyBlocker(workflowId));
+      }
+      return workflowBlockerCache.get(workflowId) !== undefined;
+    };
+    const queuedJobs = getPendingLaunchQueueSnapshotImpl(
+      this as unknown as SchedulerDomainHost,
+      this.stateMachine
+        .getReadyTasks()
+        .filter((task) => task.status === 'pending' || (task.status as string) === 'queued')
+        .filter((task) => !activeTaskIds.has(task.id))
+        .filter((task) => !isExternallyBlocked(task))
+        .map((task) => ({
+          taskId: task.id,
+          attemptId: task.execution.selectedAttemptId,
+          priority: this.loadAttemptById(task.execution.selectedAttemptId)?.queuePriority ?? 0,
+        })),
+    );
+    const queuedTasks = queuedJobs
+      .map((job) => {
+        const task = this.stateGetTask(job.taskId);
+        if (!task || (task.status !== 'pending' && (task.status as string) !== 'queued')) return undefined;
+        if (activeTaskIds.has(task.id) || isExternallyBlocked(task)) return undefined;
         return {
           taskId: task.id,
-          priority: attempt?.queuePriority ?? 0,
+          priority: job.priority,
           description: task.description,
-          createdAt: attempt?.createdAt?.getTime() ?? task.createdAt.getTime(),
         };
       })
-      .sort((a, b) => (b.priority - a.priority) || (a.createdAt - b.createdAt));
-
+      .filter((task): task is { taskId: string; priority: number; description: string } => task !== undefined);
+    const activeExecutionCount = activeAttempts.filter(({ task }) =>
+      task.status === 'running' || task.status === 'fixing_with_ai',
+    ).length;
     return {
       maxConcurrency: this.maxConcurrency,
       runningCount: activeAttempts.length,
+      activeExecutionCount,
+      launchingCount: activeAttempts.length - activeExecutionCount,
       running: activeAttempts.map(({ task, attemptId }) => ({
         taskId: task.id,
         attemptId,
@@ -4122,101 +3203,7 @@ export class Orchestrator {
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'completed' }>,
   ): TaskState[] {
-    const task = this.stateGetTask(taskId);
-    const needsApproval = task?.config.requiresManualApproval === true;
-
-    const execution: {
-      exitCode: number;
-      completedAt: Date;
-      commit?: string;
-      agentSessionId?: string;
-      lastAgentSessionId?: string;
-      lastAgentName?: string;
-      branch?: string;
-      reviewUrl?: string;
-      reviewId?: string;
-      reviewStatus?: string;
-    } = {
-      exitCode: parsed.exitCode,
-      completedAt: new Date(),
-    };
-    if (parsed.commitHash !== undefined) {
-      execution.commit = parsed.commitHash;
-    }
-    if (parsed.agentSessionId !== undefined) {
-      execution.agentSessionId = parsed.agentSessionId;
-      execution.lastAgentSessionId = parsed.agentSessionId;
-      execution.lastAgentName = task?.execution.agentName ?? task?.execution.lastAgentName;
-    }
-    if (parsed.branch !== undefined) {
-      execution.branch = parsed.branch;
-    }
-    if (parsed.reviewUrl !== undefined) {
-      execution.reviewUrl = parsed.reviewUrl;
-    }
-    if (parsed.reviewId !== undefined) {
-      execution.reviewId = parsed.reviewId;
-    }
-    if (parsed.reviewStatus !== undefined) {
-      execution.reviewStatus = parsed.reviewStatus;
-    }
-
-    const changes: TaskStateChanges = {
-      status: needsApproval ? 'awaiting_approval' : 'completed',
-      config: { summary: parsed.summary },
-      execution,
-    };
-    const completedUpdated = this.writeAndSync(taskId, changes);
-    const delta: TaskDelta = this.buildUpdateDelta(task!, completedUpdated, changes);
-    const eventName = needsApproval ? 'task.awaiting_approval' : 'task.completed';
-    this.persistence.logEvent?.(taskId, eventName, changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-    // Dual-write: update current selected attempt to completed (best-effort)
-    try {
-      const currentAttemptId = this.stateGetTask(taskId)?.execution.selectedAttemptId;
-      const currentAttempt = currentAttemptId ? this.persistence.loadAttempt(currentAttemptId) : undefined;
-      if (currentAttempt && currentAttempt.status === 'running') {
-        this.taskRepository.updateAttempt(currentAttempt.id, {
-          status: needsApproval ? 'needs_input' : 'completed',
-          exitCode: parsed.exitCode,
-          completedAt: new Date(),
-          ...(parsed.commitHash !== undefined ? { commit: parsed.commitHash } : {}),
-          ...(parsed.agentSessionId !== undefined ? { agentSessionId: parsed.agentSessionId } : {}),
-        });
-      }
-    } catch { /* best effort */ }
-
-    // If task requires manual approval, don't trigger downstream tasks yet
-    if (needsApproval) return [];
-
-    this.checkExperimentCompletion(taskId);
-
-    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
-    this.logger.info('[orchestrator] handleCompleted', {
-      taskId,
-      newlyReadyCount: readyTaskIds.length,
-      readyTaskIds,
-    });
-    const started = this.autoStartReadyTasks(readyTaskIds);
-    started.push(...this.autoStartUnblockedTasks());
-    started.push(...this.autoStartExternallyUnblockedReadyTasks());
-
-    // Re-enqueue deferred tasks now that a slot freed up
-    if (this.deferredTaskIds.size > 0) {
-      for (const id of this.deferredTaskIds) {
-        const t = this.stateGetTask(id);
-        if (t && t.status === 'pending') {
-          const attemptId = this.ensureCurrentPendingAttempt(t);
-          this.scheduler.enqueue({ taskId: id, attemptId, priority: 0 });
-        }
-      }
-      this.deferredTaskIds.clear();
-      started.push(...this.drainScheduler());
-    }
-
-    this.checkWorkflowCompletion();
-    return started;
+    return handleCompletedImpl(this as unknown as TransitionHost, taskId, parsed);
   }
 
   /**
@@ -4228,202 +3215,50 @@ export class Orchestrator {
     executionFields: {
       exitCode?: number;
       error?: string;
+      agentName?: string;
+      lastAgentName?: string;
       protocolErrorCode?: string;
       protocolErrorMessage?: string;
       mergeConflict?: { failedBranch: string; conflictFiles: string[] };
     },
     eventName: string,
   ): TaskState[] {
-    const existing = this.stateGetTask(taskId);
-    if (!existing) {
-      throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `finalizeFailedTask: task ${taskId} not found in graph`);
-    }
-
-    const changes: TaskStateChanges = {
-      status: 'failed',
-      execution: {
-        ...executionFields,
-        completedAt: new Date(),
-      },
-    };
-
-    // Atomic write for task + attempt via repository
-    this.taskRepository.failTaskAndAttempt(taskId, changes, {
-      status: 'failed',
-      exitCode: executionFields.exitCode,
-      error: executionFields.error,
-      completedAt: new Date(),
-    });
-
-    // Sync to in-memory state (same pattern as writeAndSync)
-    const updated: TaskState = {
-      ...existing,
-      status: 'failed',
-      execution: { ...existing.execution, ...changes.execution },
-      taskStateVersion: existing.taskStateVersion + 1,
-    };
-    this.stateMachine.restoreTask(updated);
-
-    const delta: TaskDelta = this.buildUpdateDelta(existing, updated, changes);
-    this.persistence.logEvent?.(taskId, eventName, changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-
-    this.checkExperimentCompletion(taskId);
-
-    const readyTaskIds = this.stateMachine.findNewlyReadyTasks(taskId);
-    this.logger.info('[orchestrator] finalizeFailedTask', {
-      taskId,
-      eventName,
-      newlyReadyCount: readyTaskIds.length,
-      readyTaskIds,
-    });
-    const started = this.autoStartReadyTasks(readyTaskIds);
-    started.push(...this.autoStartUnblockedTasks());
-    started.push(...this.autoStartExternallyUnblockedReadyTasks());
-
-    // Re-enqueue deferred tasks now that a slot freed up
-    if (this.deferredTaskIds.size > 0) {
-      for (const id of this.deferredTaskIds) {
-        const t = this.stateGetTask(id);
-        if (t && t.status === 'pending') {
-          const attemptId = this.ensureCurrentPendingAttempt(t);
-          this.scheduler.enqueue({ taskId: id, attemptId, priority: 0 });
-        }
-      }
-      this.deferredTaskIds.clear();
-      started.push(...this.drainScheduler());
-    }
-
-    this.checkWorkflowCompletion();
-    return started;
+    return finalizeFailedTaskImpl(this as unknown as TransitionHost, taskId, executionFields, eventName);
   }
 
   private handleReviewReady(
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'review_ready' }>,
   ): TaskState[] {
-    const changes: TaskStateChanges = {
-      config: { summary: parsed.summary },
-      execution: {
-        exitCode: parsed.exitCode,
-        branch: parsed.branch,
-        reviewUrl: parsed.reviewUrl,
-        reviewId: parsed.reviewId,
-        reviewStatus: parsed.reviewStatus,
-      },
-    };
-    this.setTaskApprovalStatus(taskId, 'review_ready', 'task.review_ready', changes);
-
-    const started = this.autoStartUnblockedTasks();
-    started.push(...this.autoStartExternallyUnblockedReadyTasks());
-    this.checkWorkflowCompletion();
-    return started;
+    return handleReviewReadyImpl(this as unknown as TransitionHost, taskId, parsed);
   }
 
   private handleFailed(
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'failed' }>,
   ): TaskState[] {
-    const mergeConflict = parseMergeConflictError(parsed.error);
-    return this.finalizeFailedTask(
-      taskId,
-      {
-        exitCode: parsed.exitCode,
-        error: parsed.error,
-        mergeConflict,
-      },
-      'task.failed',
-    );
+    return handleFailedImpl(this as unknown as TransitionHost, taskId, parsed);
   }
 
   private handleNeedsInput(
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'needs_input' }>,
   ): TaskState[] {
-    const changes: TaskStateChanges = {
-      status: 'needs_input',
-      execution: { inputPrompt: parsed.prompt },
-    };
-    const needsInputBefore = this.stateGetTask(taskId)!;
-    const needsInputUpdated = this.writeAndSync(taskId, changes);
-    const currentAttemptId = needsInputUpdated.execution.selectedAttemptId;
-    if (currentAttemptId) {
-      this.taskRepository.updateAttempt(currentAttemptId, { status: 'needs_input' });
-    }
-    const delta: TaskDelta = this.buildUpdateDelta(needsInputBefore, needsInputUpdated, changes);
-    this.persistence.logEvent?.(taskId, 'task.needs_input', changes);
-    this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-    return [];
+    return handleNeedsInputImpl(this as unknown as TransitionHost, taskId, parsed);
   }
 
   private handleSpawnExperiments(
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'spawn_experiments' }>,
   ): TaskState[] {
-    const parentTask = this.stateGetTask(taskId);
-    const wfId = parentTask?.config.workflowId;
-    if (!wfId) {
-      this.logger.warn('[orchestrator] handleSpawnExperiments: missing workflowId; skipping', {
-        taskId,
-      });
-      return [];
-    }
-    const scopeLocal = (local: string) => scopePlanTaskId(wfId, local);
-
-    const experimentTasks: GraphMutationNodeDef[] = parsed.variants.map((v) => ({
-      id: scopeLocal(v.id),
-      description: v.description ?? `Experiment: ${v.id}`,
-      dependencies: [taskId],
-      workflowId: wfId,
-      parentTask: taskId,
-      experimentPrompt: v.prompt,
-      prompt: v.prompt,
-      command: v.command,
-      runnerKind: parentTask?.config.runnerKind,
-    }));
-
-    const reconciliationId = `${taskId}-reconciliation`;
-    const newNodes: GraphMutationNodeDef[] = [
-      ...experimentTasks,
-      {
-        id: reconciliationId,
-        description: `Review and select winning experiment for ${taskId}`,
-        dependencies: experimentTasks.map((t) => t.id),
-        workflowId: wfId,
-        parentTask: taskId,
-        isReconciliation: true,
-        requiresManualApproval: true,
-      },
-    ];
-
-    const wf =
-      wfId && typeof this.persistence.loadWorkflow === 'function'
-        ? this.persistence.loadWorkflow(wfId)
-        : undefined;
-    const pivotBranch =
-      wf && typeof (wf as { baseBranch?: string }).baseBranch === 'string'
-        ? (wf as { baseBranch: string }).baseBranch.trim()
-        : '';
-    const sourceChanges =
-      pivotBranch !== '' ? { execution: { branch: pivotBranch } } : undefined;
-
-    this.applyGraphMutation({
-      sourceNodeId: taskId,
-      sourceDisposition: 'complete',
-      sourceChanges,
-      newNodes,
-      outputNodeId: reconciliationId,
-    });
-
-    const readyIds = experimentTasks.map((t) => t.id);
-    return this.autoStartReadyTasks(readyIds);
+    return handleSpawnExperimentsImpl(this as unknown as TransitionHost, taskId, parsed);
   }
 
   private handleSelectExperiment(
     taskId: string,
     parsed: Extract<ParsedResponse, { type: 'select_experiment' }>,
   ): TaskState[] {
-    return this.selectExperiment(taskId, parsed.experimentId);
+    return handleSelectExperimentImpl(this as unknown as TransitionHost, taskId, parsed);
   }
 
   // ── Private: Graph Mutation Primitive ─────────────────────
@@ -4444,116 +3279,19 @@ export class Orchestrator {
   // ── Private: Helpers ──────────────────────────────────────
 
   private checkExperimentCompletion(taskId: string): void {
-    for (const recon of this.stateMachine.getAllTasks()) {
-      if (!recon.config.isReconciliation) continue;
-      if (
-        recon.status === 'needs_input' ||
-        recon.status === 'completed' ||
-        recon.status === 'running' ||
-        recon.status === 'fixing_with_ai'
-      ) {
-        continue;
-      }
-      if (!recon.dependencies.includes(taskId)) continue;
-
-      const allReported = recon.dependencies.every((depId) => {
-        const dep = this.stateGetTask(depId);
-        return dep && (dep.status === 'completed' || dep.status === 'failed');
-      });
-
-      if (allReported) {
-        const experimentResults = recon.dependencies.map((depId) => {
-          const dep = this.stateGetTask(depId)!;
-          return {
-            id: depId,
-            status: (dep.status === 'completed' ? 'completed' : 'failed') as 'completed' | 'failed',
-            summary: dep.config.summary,
-            exitCode: dep.execution.exitCode,
-          };
-        });
-
-        // Persist results only; reconciliation stays pending until the scheduler runs it.
-        // TaskRunner then acquires a worktree and emits `needs_input` (open-terminal cwd).
-        const reconChanges: TaskStateChanges = {
-          execution: { experimentResults },
-        };
-        const reconUpdated = this.writeAndSync(recon.id, reconChanges);
-        const delta: TaskDelta = this.buildUpdateDelta(recon, reconUpdated, reconChanges);
-        this.persistence.logEvent?.(recon.id, 'task.experiment_results_recorded', reconChanges);
-        this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
-      }
-    }
+    checkExperimentCompletionImpl(this as unknown as TransitionHost, taskId);
   }
 
   private checkWorkflowCompletion(): void {
-    for (const wfId of this.activeWorkflowIds) {
-      this.touchWorkflow(wfId);
-    }
+    checkWorkflowCompletionImpl(this as unknown as TransitionHost);
   }
 
-  private autoStartReadyTasks(taskIds: string[], priority: number = 0): TaskState[] {
-    for (const taskId of taskIds) {
-      let task = this.stateGetTask(taskId);
-      if (!task) continue;
-      if (this.getExternalDependencyBlocker(task) !== undefined) continue;
-
-      // Unblock: if a blocked task's deps are all complete, it's genuinely ready
-      if (task.status === 'blocked') {
-        this.logger.info('[orchestrator] autoStartReadyTasks: unblocking blocked task', {
-          taskId,
-        });
-        this.replaceSelectedAttempt(task, { status: 'pending' });
-        this.writeAndSync(taskId, {
-          status: 'pending',
-          execution: {
-            startedAt: undefined,
-            completedAt: undefined,
-            lastHeartbeatAt: undefined,
-            launchStartedAt: undefined,
-            launchCompletedAt: undefined,
-            phase: undefined,
-          },
-        });
-        task = this.stateGetTask(taskId);
-        if (!task) continue;
-      }
-
-      this.enqueueIfNotScheduled(taskId, priority);
-    }
-
-    return this.drainScheduler();
+  private autoStartReadyTasks(taskIds: string[], priority: number = 0, opts?: LaunchReadinessOptions): TaskState[] {
+    return autoStartReadyTasksImpl(this as unknown as SchedulerDomainHost, taskIds, priority, opts);
   }
 
-  private enqueueIfNotScheduled(taskId: string, priority: number = 0): void {
-    const task = this.stateGetTask(taskId);
-    if (!task) return;
-
-    const attemptId = this.ensureCurrentPendingAttempt(task);
-    const currentAttempt = this.loadAttemptById(attemptId);
-    if ((currentAttempt?.queuePriority ?? 0) !== priority) {
-      this.taskRepository.updateAttempt(attemptId, { queuePriority: priority });
-    }
-    // A task can be force-set back to blocked/pending by recovery logic while
-    // still carrying a stale selectedAttemptId from an older run. Only skip
-    // re-enqueue when the task is actually active.
-    if (
-      (task.status === 'running' || task.status === 'fixing_with_ai') &&
-      task.execution.selectedAttemptId === attemptId &&
-      this.isAttemptLeaseActive(currentAttempt)
-    ) {
-      return;
-    }
-    const queuedJob = this.scheduler
-      .getQueuedJobs()
-      .find((job) => job.attemptId === attemptId || job.taskId === taskId);
-    if (queuedJob) {
-      if (priority > queuedJob.priority) {
-        this.scheduler.removeJob(queuedJob.attemptId ?? queuedJob.taskId);
-        this.scheduler.enqueue({ taskId, attemptId, priority });
-      }
-      return;
-    }
-    this.scheduler.enqueue({ taskId, attemptId, priority });
+  private enqueueIfNotScheduled(taskId: string, priority: number = 0, opts?: LaunchReadinessOptions): void {
+    enqueueIfNotScheduledImpl(this as unknown as SchedulerDomainHost, taskId, priority, opts);
   }
 
   /**
@@ -4570,54 +3308,28 @@ export class Orchestrator {
    * same chart-mandated unblock-pass without cancelling any
    * in-flight work.
    *
-   * Was `private` before Step 15; exposed publicly so
-   * `applyInvalidation`'s `'scheduleOnly'` dep can invoke it
-   * type-safely. No other behavior changes.
+   * Also rehydrates already-blocked tasks whose external gate has
+   * since cleared; review-ready merge runners use this path after
+   * moving an upstream gate out of `running`.
    */
   autoStartExternallyUnblockedReadyTasks(): TaskState[] {
-    const readyTasks = this.stateMachine
-      .getReadyTasks()
-      .filter((task) => (task.config.externalDependencies?.length ?? 0) > 0)
-      .filter((task) => this.getExternalDependencyBlocker(task) === undefined);
-
-    for (const task of readyTasks) {
-      this.enqueueIfNotScheduled(task.id);
-    }
-    return this.drainScheduler();
+    return autoStartExternallyUnblockedReadyTasksImpl(this as unknown as SchedulerDomainHost);
   }
 
   private autoStartUnblockedTasks(): TaskState[] {
-    for (const task of this.stateMachine.getAllTasks()) {
-      if (task.status !== 'blocked') continue;
-      if (!this.areLocalDependenciesSatisfied(task)) continue;
-      if (this.getExternalDependencyBlocker(task) !== undefined) continue;
+    return autoStartUnblockedTasksImpl(this as unknown as SchedulerDomainHost);
+  }
 
-      this.replaceSelectedAttempt(task, { status: 'pending' });
-      this.writeAndSync(task.id, {
-        status: 'pending',
-        execution: {
-          startedAt: undefined,
-          completedAt: undefined,
-          lastHeartbeatAt: undefined,
-          launchStartedAt: undefined,
-          launchCompletedAt: undefined,
-          phase: undefined,
-        },
-      });
-      this.enqueueIfNotScheduled(task.id);
-    }
-    return this.drainScheduler();
+  getTaskLaunchReadiness(taskId: string, opts?: LaunchReadinessOptions): TaskLaunchReadiness {
+    return getTaskLaunchReadinessImpl(this as unknown as SchedulerDomainHost, taskId, opts);
   }
 
   private areLocalDependenciesSatisfied(task: TaskState): boolean {
-    return task.dependencies.every((depId) => {
-      const dep = this.stateGetTask(depId);
-      if (!dep) return false;
-      if (task.config?.isReconciliation) {
-        return dep.status === 'completed' || dep.status === 'failed' || dep.status === 'stale';
-      }
-      return dep.status === 'completed' || dep.status === 'stale';
-    });
+    return areLocalDependenciesSatisfiedImpl(this as unknown as SchedulerDomainHost, task);
+  }
+
+  private getLocalDependencyBlocker(task: TaskState): string | undefined {
+    return getLocalDependencyBlockerImpl(this as unknown as SchedulerDomainHost, task);
   }
 
   private externalDependencyDisplayId(workflowId: string, taskId?: string): string {
@@ -4632,10 +3344,40 @@ export class Orchestrator {
     return normalizedTaskId === '__merge__' ? 'completed' : 'review_ready';
   }
 
+  private normalizePlanExternalDependencies(
+    deps: Array<{
+      workflowId: string;
+      taskId?: string;
+      requiredStatus?: 'completed';
+      gatePolicy?: 'completed' | 'review_ready';
+    }>,
+  ): ExternalDependency[] {
+    const byKey = new Map<string, ExternalDependency>();
+    for (const dep of deps) {
+      const workflowId = dep.workflowId?.trim();
+      if (!workflowId) continue;
+      const taskId = dep.taskId?.trim() || '__merge__';
+      const key = `${workflowId}::${taskId}`;
+      const existing = byKey.get(key);
+      const gatePolicy =
+        existing?.gatePolicy === 'completed' || dep.gatePolicy === 'completed'
+          ? 'completed'
+          : dep.gatePolicy ?? this.defaultExternalGatePolicy(taskId);
+      byKey.set(key, {
+        workflowId,
+        taskId,
+        requiredStatus: dep.requiredStatus ?? 'completed',
+        gatePolicy,
+      });
+    }
+    return Array.from(byKey.values());
+  }
+
   private findExternalDependencyTask(workflowId: string, taskId?: string): TaskState | undefined {
     const normalizedTaskId = taskId?.trim() || '__merge__';
     if (normalizedTaskId === '__merge__') {
-      return this.getMergeNode(workflowId);
+      return this.getMergeNode(workflowId)
+        ?? this.persistence.loadTasks(workflowId).find((t) => t.config.isMergeNode);
     }
     const tasks = this.persistence.loadTasks(workflowId);
     if (normalizedTaskId.includes('/')) {
@@ -4645,8 +3387,14 @@ export class Orchestrator {
     return tasks.find((t) => t.id === scopedId || t.id === normalizedTaskId);
   }
 
-  private getExternalDependencyBlocker(task: TaskState): string | undefined {
-    const deps = task.config.externalDependencies;
+  private getWorkflowExternalDependencies(workflowId: string): ExternalDependency[] {
+    const workflow = this.persistence.loadWorkflow?.(workflowId)
+      ?? this.persistence.listWorkflows().find((candidate) => candidate.id === workflowId);
+    return workflow?.externalDependencies ?? [];
+  }
+
+  private getWorkflowDependencyBlocker(workflowId: string): string | undefined {
+    const deps = this.getWorkflowExternalDependencies(workflowId);
     if (!deps || deps.length === 0) return undefined;
 
     for (const dep of deps) {
@@ -4673,18 +3421,22 @@ export class Orchestrator {
     return undefined;
   }
 
+  private getExternalDependencyBlocker(task: TaskState): string | undefined {
+    const workflowId = task.config.workflowId;
+    if (!workflowId) return undefined;
+    return this.getWorkflowDependencyBlocker(workflowId);
+  }
+
   private collectWorkflowDependencyEdges(): Map<string, Set<string>> {
     const edges = new Map<string, Set<string>>();
-    for (const task of this.stateMachine.getAllTasks()) {
-      const workflowId = task.config.workflowId;
-      if (!workflowId) continue;
-      for (const dep of task.config.externalDependencies ?? []) {
+    for (const workflow of this.persistence.listWorkflows()) {
+      for (const dep of workflow.externalDependencies ?? []) {
         let dependents = edges.get(dep.workflowId);
         if (!dependents) {
           dependents = new Set<string>();
           edges.set(dep.workflowId, dependents);
         }
-        dependents.add(workflowId);
+        dependents.add(workflow.id);
       }
     }
     return edges;
@@ -4711,15 +3463,74 @@ export class Orchestrator {
     return descendants;
   }
 
+  /**
+   * Cascade an upstream invalidation to every transitive downstream
+   * workflow. For each downstream workflow:
+   *   1. Cancel any in-flight task (`cancelActiveBeforeInvalidation`).
+   *   2. Reset every task in the workflow to `pending` (with bumped
+   *      execution generation to supersede prior attempts) using the
+   *      same shape as `detachWorkflowInternal`'s reset payload.
+   *
+   * The downstream's existing external-dependency gate
+   * (`getExternalDependencyBlocker`) re-evaluates at scheduling time
+   * and holds the now-pending tasks until the upstream re-completes,
+   * so this method does not start anything itself.
+   *
+   * Wired by `applyInvalidation` (via the `cascadeDownstream` dep on
+   * `InvalidationDeps`) so every invalidating action — `recreateTask`,
+   * `retryTask`, `recreateWorkflow`, `retryWorkflow`,
+   * `recreateWorkflowFromFreshBase`, `workflowFork` — propagates.
+   * Non-invalidating actions (`scheduleOnly`, `fixApprove`,
+   * `fixReject`, `none`) skip the cascade per `MUTATION_POLICIES`.
+   */
+  cascadeInvalidationToDownstream(workflowId: string): TaskState[] {
+    this.refreshFromDb();
+    const downstreamWorkflowIds = this.collectDownstreamWorkflowIds(workflowId);
+    if (downstreamWorkflowIds.length === 0) return [];
+
+    this.logger.info('[orchestrator] cascadeInvalidationToDownstream', {
+      upstreamWorkflowId: workflowId,
+      downstreamCount: downstreamWorkflowIds.length,
+      downstreamWorkflowIds,
+    });
+
+    for (const dwfId of downstreamWorkflowIds) {
+      this.cancelActiveBeforeInvalidation('workflow', dwfId);
+    }
+
+    const affectedTaskIds = downstreamWorkflowIds.flatMap((dwfId) =>
+      this.stateMachine
+        .getAllTasks()
+        .filter((task) => task.config.workflowId === dwfId)
+        .map((task) => task.id),
+    );
+    if (affectedTaskIds.length === 0) return [];
+
+    const forceResetIds = new Set(affectedTaskIds);
+    const { affectedIds } = this.resetSubgraphToPending(
+      affectedTaskIds,
+      'detach',
+      Orchestrator.DETACH_RESET_CHANGES,
+      { forceResetIds },
+    );
+
+    for (const taskId of affectedIds) {
+      this.persistence.logEvent?.(taskId, 'task.invalidated_by_upstream', {
+        upstreamWorkflowId: workflowId,
+        downstreamWorkflowIds,
+      });
+    }
+
+    return affectedIds
+      .map((id) => this.stateGetTask(id))
+      .filter((t): t is TaskState => !!t);
+  }
+
+
   private detachWorkflowInternal(
     workflowId: string,
     upstreamWorkflowId: string,
-    opts?: {
-      upstreamWorkflow?: {
-        baseBranch?: string;
-        featureBranch?: string;
-      };
-    },
+    baseBranchAfterDetach?: string,
   ): void {
     if (workflowId === upstreamWorkflowId) {
       throw new Error(`Cannot detach workflow ${workflowId} from itself`);
@@ -4732,23 +3543,12 @@ export class Orchestrator {
       throw new OrchestratorError(OrchestratorErrorCode.WORKFLOW_NOT_FOUND, `Workflow ${workflowId} not found`);
     }
 
-    let removedDependency = false;
-    for (const task of targetTasks) {
-      const deps = task.config.externalDependencies ?? [];
-      const nextDeps = deps.filter((dep) => dep.workflowId !== upstreamWorkflowId);
-      if (nextDeps.length === deps.length) continue;
-
-      removedDependency = true;
-      const changes: TaskStateChanges = {
-        config: { externalDependencies: nextDeps.length > 0 ? nextDeps : undefined },
-      };
-      const updated = this.writeAndSync(task.id, changes);
-      this.persistence.logEvent?.(task.id, 'task.external_dependency_detached', {
-        workflowId,
-        upstreamWorkflowId,
-      });
-      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
-    }
+    const targetWorkflow = this.persistence.loadWorkflow?.(workflowId)
+      ?? this.persistence.listWorkflows().find((candidate) => candidate.id === workflowId);
+    const deps = targetWorkflow?.externalDependencies ?? [];
+    const removedDeps = deps.filter((dep) => dep.workflowId === upstreamWorkflowId);
+    const nextDeps = deps.filter((dep) => dep.workflowId !== upstreamWorkflowId);
+    const removedDependency = removedDeps.length > 0;
 
     if (!removedDependency) {
       throw new Error(
@@ -4756,18 +3556,65 @@ export class Orchestrator {
       );
     }
 
-    const upstreamFeatureBranch = opts?.upstreamWorkflow?.featureBranch?.trim();
-    const upstreamBaseBranch = opts?.upstreamWorkflow?.baseBranch?.trim();
-    const targetWorkflow = this.persistence.loadWorkflow?.(workflowId);
-    const targetBaseBranch = targetWorkflow?.baseBranch?.trim();
-    if (
-      upstreamFeatureBranch
-      && upstreamBaseBranch
-      && targetBaseBranch
-      && targetBaseBranch === upstreamFeatureBranch
-    ) {
-      this.taskRepository.updateWorkflow(workflowId, { baseBranch: upstreamBaseBranch });
+    const now = workflowTimestamp().toISOString();
+    const existingChanges = targetWorkflow?.externalDependencyChanges ?? [];
+    const dependencyChanges: ExternalDependencyChange[] = [...existingChanges];
+    for (const dep of removedDeps) {
+      const taskId = dep.taskId?.trim() || '__merge__';
+      dependencyChanges.push({
+        before: { ...dep, taskId },
+        changedAt: now,
+      });
     }
+
+    // Preserve read-only provenance for the dependencies this detach removes.
+    // Active `externalDependencies` are dropped above so scheduling no longer
+    // waits on the upstream, but the lineage is recorded here so the UI can
+    // distinguish a detached edge from a genuinely-independent workflow.
+    // Dedup by upstream identity (workflowId + taskId + requiredStatus +
+    // gatePolicy) so repeated detach attempts or sync/reload cycles never
+    // append the same provenance entry twice.
+    const existingProvenance = targetWorkflow?.detachedExternalDependencies ?? [];
+    const provenanceKey = (dep: { workflowId: string; taskId?: string; requiredStatus: 'completed'; gatePolicy?: 'completed' | 'review_ready' }) =>
+      `${dep.workflowId} ${dep.taskId?.trim() ?? ''} ${dep.requiredStatus} ${dep.gatePolicy ?? ''}`;
+    const seenProvenance = new Set(existingProvenance.map(provenanceKey));
+    const detachedProvenance: DetachedExternalDependency[] = [...existingProvenance];
+    for (const dep of removedDeps) {
+      const key = provenanceKey(dep);
+      if (seenProvenance.has(key)) continue;
+      seenProvenance.add(key);
+      const entry: DetachedExternalDependency = {
+        workflowId: dep.workflowId,
+        ...(dep.taskId?.trim() ? { taskId: dep.taskId.trim() } : {}),
+        requiredStatus: dep.requiredStatus,
+        ...(dep.gatePolicy ? { gatePolicy: dep.gatePolicy } : {}),
+        detachedAt: now,
+      };
+      detachedProvenance.push(entry);
+    }
+
+    const nextBaseBranch = baseBranchAfterDetach
+      ?? this.resolveDetachDefaultBranch(workflowId, targetWorkflow);
+
+    this.taskRepository.updateWorkflow(workflowId, {
+      externalDependencies: nextDeps.length > 0 ? nextDeps : undefined,
+      externalDependencyChanges: dependencyChanges,
+      detachedExternalDependencies: detachedProvenance.length > 0 ? detachedProvenance : undefined,
+      baseBranch: nextBaseBranch,
+    });
+
+    const eventTask = this.getMergeNode(workflowId) ?? targetTasks[0];
+    this.persistence.logEvent?.(eventTask.id, 'workflow.external_dependency_changed', {
+      workflowId,
+      upstreamWorkflowId,
+      action: 'removed',
+      changes: dependencyChanges.slice(existingChanges.length),
+    });
+    this.persistence.logEvent?.(eventTask.id, 'task.external_dependency_changed', {
+      workflowId,
+      upstreamWorkflowId,
+      action: 'removed',
+    });
 
     const affectedWorkflowIds = [workflowId, ...this.collectDownstreamWorkflowIds(workflowId)];
     for (const affectedWorkflowId of affectedWorkflowIds) {
@@ -4783,6 +3630,7 @@ export class Orchestrator {
     const forceResetIds = new Set(affectedTaskIds);
     const { affectedIds } = this.resetSubgraphToPending(
       affectedTaskIds,
+      'detach',
       Orchestrator.DETACH_RESET_CHANGES,
       { forceResetIds },
     );
@@ -4798,122 +3646,7 @@ export class Orchestrator {
 
   /** Drain the scheduler queue, starting tasks that fit the concurrency limit. */
   private drainScheduler(): TaskState[] {
-    const started: TaskState[] = [];
-    const activeAttempts = this.countActivePersistedAttempts();
-    let availableSlots = Math.max(0, this.maxConcurrency - activeAttempts);
-    this.logger.info('[orchestrator] drainScheduler: begin', {
-      active: activeAttempts,
-      maxConcurrency: this.maxConcurrency,
-      availableSlots,
-    });
-    let job = availableSlots > 0 ? this.scheduler.takeNext() : null;
-    while (job && availableSlots > 0) {
-      const task = this.stateGetTask(job.taskId);
-      this.logger.info('[orchestrator] drainScheduler: dequeued', {
-        taskId: job.taskId,
-        actualStatus: task?.status ?? 'NOT_FOUND',
-      });
-      if (!task || task.status !== 'pending') {
-        this.logger.info('[orchestrator] drainScheduler: skipping non-pending task', {
-          taskId: job.taskId,
-        });
-        job = this.scheduler.takeNext();
-        continue;
-      }
-
-      const now = new Date();
-      let attemptId = job.attemptId ?? this.ensureCurrentPendingAttempt(task);
-      let currentAttempt = this.loadAttemptById(attemptId);
-      if (!currentAttempt || isDiscardedAttempt(currentAttempt)) {
-        attemptId = this.ensureCurrentPendingAttempt(task);
-        currentAttempt = this.loadAttemptById(attemptId);
-      }
-      if (!currentAttempt || isDiscardedAttempt(currentAttempt)) {
-        this.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
-          taskId: job.taskId,
-          attemptId,
-          attemptStatus: currentAttempt?.status ?? 'missing',
-        });
-        job = this.scheduler.takeNext();
-        continue;
-      }
-      let launchAttemptId = attemptId;
-      const selectedTask = this.stateGetTask(job.taskId) ?? task;
-      if (selectedTask.execution.selectedAttemptId !== attemptId) {
-        this.writeAndSync(job.taskId, { execution: { selectedAttemptId: attemptId } });
-      }
-      let claimSucceeded = false;
-      const claimPatch = this.deferRunningUntilLaunch
-        ? {
-            status: 'claimed' as const,
-            claimedAt: now,
-            lastHeartbeatAt: now,
-            leaseExpiresAt: nextLeaseExpiry(now),
-          }
-        : {
-            status: 'running' as const,
-            claimedAt: currentAttempt?.claimedAt ?? now,
-            startedAt: now,
-            lastHeartbeatAt: now,
-            leaseExpiresAt: nextLeaseExpiry(now),
-          };
-      claimSucceeded = this.taskRepository.claimAttemptForLaunch?.(attemptId, claimPatch, now)
-        ?? !this.isAttemptLeaseActive(currentAttempt, now.getTime());
-      if (claimSucceeded && !this.taskRepository.claimAttemptForLaunch) {
-        this.taskRepository.updateAttempt(attemptId, claimPatch);
-      }
-      if (!claimSucceeded) {
-        this.logger.info('[orchestrator] drainScheduler: skipping already-claimed attempt', {
-          taskId: job.taskId,
-          attemptId,
-        });
-        job = availableSlots > 0 ? this.scheduler.takeNext() : null;
-        continue;
-      }
-
-      const changes: TaskStateChanges = this.deferRunningUntilLaunch
-        ? {
-            status: 'pending',
-            execution: {
-              selectedAttemptId: launchAttemptId,
-              generation: this.getExecutionGeneration(task),
-              lastHeartbeatAt: now,
-              phase: 'launching',
-              launchStartedAt: now,
-              launchCompletedAt: undefined,
-            },
-          }
-        : {
-            status: 'running',
-            execution: {
-              selectedAttemptId: launchAttemptId,
-              generation: this.getExecutionGeneration(task),
-              startedAt: now,
-              lastHeartbeatAt: now,
-              phase: 'launching',
-              launchStartedAt: now,
-              launchCompletedAt: undefined,
-            },
-          };
-      const updated = this.writeAndSync(job.taskId, changes);
-      this.persistence.logEvent?.(
-        job.taskId,
-        this.deferRunningUntilLaunch ? 'task.launch_claimed' : 'task.running',
-        changes,
-      );
-      this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
-      started.push(updated);
-      this.logger.info('[orchestrator] drainScheduler: started', {
-        taskId: job.taskId,
-        attemptId: launchAttemptId,
-        phase: 'launching',
-        generation: changes.execution?.generation ?? 'unknown',
-      });
-
-      availableSlots -= 1;
-      job = availableSlots > 0 ? this.scheduler.takeNext() : null;
-    }
-    return started;
+    return drainSchedulerImpl(this as unknown as SchedulerDomainHost);
   }
 
   /**
@@ -4958,7 +3691,7 @@ export class Orchestrator {
       return false;
     }
 
-    if (task.status !== 'running' && task.status !== 'pending' && task.status !== 'fixing_with_ai') {
+    if (task.status !== 'running' && task.status !== 'pending' && (task.status as string) !== 'queued' && task.status !== 'fixing_with_ai') {
       this.logger.info('[orchestrator] markTaskRunningAfterLaunch: reject', {
         taskId,
         attemptId,
@@ -4977,7 +3710,7 @@ export class Orchestrator {
         launchStartedAt: task.execution.launchStartedAt ?? task.execution.startedAt ?? launchedAt,
         launchCompletedAt: launchedAt,
       };
-      const changes: TaskStateChanges = task.status === 'pending'
+      const changes: TaskStateChanges = (task.status === 'pending' || (task.status as string) === 'queued')
         ? {
             status: 'running',
             execution: {

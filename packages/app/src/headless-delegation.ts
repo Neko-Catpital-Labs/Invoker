@@ -15,6 +15,9 @@ type DelegateTrackingOptions = {
   timeoutMs?: number;
 };
 
+export const DEFAULT_DELEGATION_TIMEOUT_MS = 5_000;
+export const WORKFLOW_DELEGATION_TIMEOUT_MS = 60_000;
+
 // ---------------------------------------------------------------------------
 // DelegationOutcome — typed result union for delegation attempts
 // ---------------------------------------------------------------------------
@@ -50,7 +53,11 @@ export async function tryDelegateRun(
     'headless.run',
     { planPath: resolvePath(planPath), traceId },
     messageBus,
-    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
+    {
+      waitForApproval,
+      noTrack,
+      timeoutMs: timeoutMs ?? DEFAULT_DELEGATION_TIMEOUT_MS,
+    },
   );
 }
 
@@ -66,12 +73,16 @@ export async function tryDelegateResume(
     'headless.resume',
     { workflowId, traceId },
     messageBus,
-    { waitForApproval, noTrack, timeoutMs: timeoutMs ?? 5_000 },
+    {
+      waitForApproval,
+      noTrack,
+      timeoutMs: timeoutMs ?? DEFAULT_DELEGATION_TIMEOUT_MS,
+    },
   );
 }
 
 function usesExtendedDelegationTimeout(command: string): boolean {
-  return command === 'rebase' || command === 'rebase-and-retry' || command === 'recreate-with-rebase' || command === 'restart';
+  return command === 'rebase-retry' || command === 'rebase-recreate' || command === 'restart';
 }
 
 function looksLikeWorkflowId(target: unknown): boolean {
@@ -84,22 +95,24 @@ export function delegationTimeoutMs(
 ): number {
   const command = args[0] ?? '';
   if (!usesExtendedDelegationTimeout(command)) {
-    return 5_000;
+    return DEFAULT_DELEGATION_TIMEOUT_MS;
   }
 
   const resolvedTarget = resolveHeadlessTarget(args[1], targetLookup);
   if (resolvedTarget.kind === 'workflow') {
-    return 60_000;
+    return WORKFLOW_DELEGATION_TIMEOUT_MS;
   }
-  return 5_000;
+  return DEFAULT_DELEGATION_TIMEOUT_MS;
 }
 
 export async function resolveDelegationTimeoutMs(args: string[]): Promise<number> {
   const command = args[0] ?? '';
   if (!usesExtendedDelegationTimeout(command)) {
-    return 5_000;
+    return DEFAULT_DELEGATION_TIMEOUT_MS;
   }
-  return looksLikeWorkflowId(args[1]) ? 60_000 : 5_000;
+  return looksLikeWorkflowId(args[1])
+    ? WORKFLOW_DELEGATION_TIMEOUT_MS
+    : DEFAULT_DELEGATION_TIMEOUT_MS;
 }
 
 export async function tryDelegateExec(
@@ -165,7 +178,7 @@ export async function tryPingHeadlessOwner(
 export async function tryDelegateQueryUiPerf(
   messageBus: MessageBus,
   reset?: boolean,
-  timeoutMs = 5_000,
+  timeoutMs = DEFAULT_DELEGATION_TIMEOUT_MS,
 ): Promise<Record<string, unknown> | null> {
   return tryDelegateQuery(messageBus, { kind: 'ui-perf', reset }, timeoutMs);
 }
@@ -173,7 +186,7 @@ export async function tryDelegateQueryUiPerf(
 export async function tryDelegateQuery(
   messageBus: MessageBus,
   payload: Record<string, unknown>,
-  timeoutMs = 5_000,
+  timeoutMs = DEFAULT_DELEGATION_TIMEOUT_MS,
 ): Promise<Record<string, unknown> | null> {
   const traceId = createTraceId('headless.query');
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
@@ -219,14 +232,19 @@ async function tryDelegate(
   const DELEGATION_TIMEOUT = Symbol('delegation-timeout');
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<typeof DELEGATION_TIMEOUT>((_, reject) => {
-    timeoutHandle = setTimeout(() => reject(DELEGATION_TIMEOUT), options.timeoutMs ?? 5_000);
+    timeoutHandle = setTimeout(
+      () => reject(DELEGATION_TIMEOUT),
+      options.timeoutMs ?? DEFAULT_DELEGATION_TIMEOUT_MS,
+    );
     timeoutHandle.unref?.();
   });
 
   let raw: unknown;
   try {
     const startedAt = Date.now();
-    delegationLog(`${traceId} send channel=${channel} timeoutMs=${options.timeoutMs ?? 5_000}`);
+    delegationLog(
+      `${traceId} send channel=${channel} timeoutMs=${options.timeoutMs ?? DEFAULT_DELEGATION_TIMEOUT_MS}`,
+    );
     raw = await Promise.race([
       messageBus.request(channel, payload),
       timeoutPromise,
@@ -234,7 +252,9 @@ async function tryDelegate(
     delegationLog(`${traceId} response channel=${channel} elapsedMs=${Date.now() - startedAt}`);
   } catch (err) {
     if (err === DELEGATION_TIMEOUT) {
-      delegationLog(`${traceId} timeout channel=${channel} timeoutMs=${options.timeoutMs ?? 5_000}`);
+      delegationLog(
+        `${traceId} timeout channel=${channel} timeoutMs=${options.timeoutMs ?? DEFAULT_DELEGATION_TIMEOUT_MS}`,
+      );
       return { kind: 'timeout' };
     }
     if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
@@ -248,9 +268,10 @@ async function tryDelegate(
   }
 
   // ── Response-shape validation ──────────────────────────────────────────
-  // Owner handlers return one of two shapes:
+  // Owner handlers return one of these shapes:
   //   1. { workflowId: string; tasks: TaskState[] }  — workflow-creating commands
-  //   2. { ok: true, ... }                           — mutation commands
+  //   2. { ok: true, ... }                           — mutation commands / accepted
+  //      acknowledgements (a fire-and-forget submit also carries workflowId/intentId)
   // Anything else is a protocol violation.
   if (raw == null || typeof raw !== 'object') {
     const msg = `expected object response, got ${raw === null ? 'null' : typeof raw}`;
@@ -263,17 +284,19 @@ async function tryDelegate(
   const hasWorkflowId = 'workflowId' in response && typeof response.workflowId === 'string';
   const hasOk = 'ok' in response && response.ok === true;
 
-  if (hasWorkflowId) {
-    if (!Array.isArray(response.tasks)) {
-      const msg = `response has workflowId but tasks is ${typeof response.tasks}, expected array`;
+  if (!hasOk) {
+    if (hasWorkflowId) {
+      if (!Array.isArray(response.tasks)) {
+        const msg = `response has workflowId but tasks is ${typeof response.tasks}, expected array`;
+        delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
+        return { kind: 'protocol-error', message: msg };
+      }
+    } else {
+      const keys = Object.keys(response).join(', ');
+      const msg = `response has neither workflowId (string) nor ok (true); keys: [${keys}]`;
       delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
       return { kind: 'protocol-error', message: msg };
     }
-  } else if (!hasOk) {
-    const keys = Object.keys(response).join(', ');
-    const msg = `response has neither workflowId (string) nor ok (true); keys: [${keys}]`;
-    delegationLog(`${traceId} protocol-error channel=${channel} ${msg}`);
-    return { kind: 'protocol-error', message: msg };
   }
 
   if (hasWorkflowId) {
@@ -283,7 +306,7 @@ async function tryDelegate(
     process.stdout.write('Delegated to owner\n');
   }
 
-  const outcome: DelegationOutcome = hasWorkflowId
+  const outcome: DelegationOutcome = hasWorkflowId && Array.isArray(response.tasks)
     ? { kind: 'delegated', workflowId: response.workflowId as string, tasks: response.tasks as TaskState[] }
     : { kind: 'delegated' };
 
