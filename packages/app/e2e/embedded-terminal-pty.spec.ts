@@ -20,6 +20,7 @@ const TERMINAL_OUTPUT_WRITE_BUDGET_MS = 250;
 const TERMINAL_RESIZE_BUDGET_MS = 250;
 const TERMINAL_SCROLL_BUDGET_MS = 50;
 const TERMINAL_OPEN_WALL_BUDGET_MS = 2000;
+const TERMINAL_INPUT_WALL_BUDGET_MS = 2000;
 const TERMINAL_TAB_SWITCH_WALL_BUDGET_MS = 1000;
 const TERMINAL_SCROLL_WALL_BUDGET_MS = 2000;
 const TERMINAL_SESSION_UPSERT_BUDGET_MS = 250;
@@ -32,6 +33,7 @@ const TERMINAL_PRESSURE_BUDGETS = {
   maxResizeMs: TERMINAL_RESIZE_BUDGET_MS,
   maxScrollMs: TERMINAL_SCROLL_BUDGET_MS,
   maxOpenWallMs: TERMINAL_OPEN_WALL_BUDGET_MS,
+  maxInputWallMs: TERMINAL_INPUT_WALL_BUDGET_MS,
   maxTabSwitchWallMs: TERMINAL_TAB_SWITCH_WALL_BUDGET_MS,
   maxScrollWallMs: TERMINAL_SCROLL_WALL_BUDGET_MS,
   maxTerminalSessionUpsertMs: TERMINAL_SESSION_UPSERT_BUDGET_MS,
@@ -385,6 +387,15 @@ test.describe('Embedded terminal PTY', () => {
     await openTaskTerminalFromMiniDag(page, 'terminal-pressure-beta');
     await expect(page.getByTestId(`terminal-tab-${fullBetaTaskId}`)).toHaveAttribute('data-active', 'true', { timeout: 10000 });
     const betaOpenWallMs = Date.now() - betaOpenStartedAt;
+    const betaPane = page.getByTestId(`terminal-pane-${fullBetaTaskId}`);
+    await expect(betaPane).toBeVisible();
+
+    const betaInputStartedAt = Date.now();
+    await betaPane.click();
+    await page.keyboard.type("printf 'b''eta-pressure-ready\\n'");
+    await page.keyboard.press('Enter');
+    await expect(betaPane.getByText('beta-pressure-ready')).toBeVisible({ timeout: 10000 });
+    const betaInputWallMs = Date.now() - betaInputStartedAt;
 
     const switchStartedAt = Date.now();
     await page.getByRole('tab', { name: /Terminal pressure alpha/i }).click();
@@ -426,6 +437,7 @@ test.describe('Embedded terminal PTY', () => {
       fullBetaTaskId,
       alphaOpenWallMs,
       betaOpenWallMs,
+      betaInputWallMs,
       switchWallMs,
       scrollWallMs,
       attachPayloads,
@@ -454,11 +466,16 @@ test.describe('Embedded terminal PTY', () => {
       terminalEvidenceMessage,
     ).toBe(true);
     expect(
+      inputPayloads.some((payload) => payload.taskId === fullBetaTaskId && payload.active === true),
+      terminalEvidenceMessage,
+    ).toBe(true);
+    expect(
       resizePayloads.some((payload) => payload.source === 'active_session' && payload.taskId === fullAlphaTaskId),
       terminalEvidenceMessage,
     ).toBe(true);
     expect(alphaOpenWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
     expect(betaOpenWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_OPEN_WALL_BUDGET_MS);
+    expect(betaInputWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_WALL_BUDGET_MS);
     expect(switchWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_TAB_SWITCH_WALL_BUDGET_MS);
     expect(scrollWallMs, terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_WALL_BUDGET_MS);
     expect(Math.max(...inputPayloads.map((payload) => Number(payload.durationMs))), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_INPUT_BUDGET_MS);

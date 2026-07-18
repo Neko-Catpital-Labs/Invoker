@@ -16,6 +16,7 @@ const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+const COMPONENT_INPUT_COMMIT_BUDGET_MS = 100;
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
@@ -468,9 +469,78 @@ describe('Invoker terminal (component)', () => {
     const commitPayload = lastPerfPayload('planning_chat_input_commit');
     expect(Number.isFinite(commitPayload.durationMs)).toBe(true);
     expect(commitPayload.durationMs).toBeGreaterThanOrEqual(0);
+    expect(commitPayload.durationMs).toBeLessThanOrEqual(COMPONENT_INPUT_COMMIT_BUDGET_MS);
     expect(commitPayload.transcriptLineCount).toBe(largeTranscript.length);
 
     const transcriptCommitsAfterTyping = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'planning_chat_transcript_commit');
+    expect(transcriptCommitsAfterTyping).toHaveLength(0);
+  });
+
+  it('keeps restored planning chat typing responsive without recommitting the transcript', async () => {
+    const messageCount = 280;
+    const restoredSessions = Array.from({ length: 4 }, (_, sessionIndex) => makePlanningSessionSummary({
+      id: `pressure-chat-${sessionIndex}`,
+      title: `Pressure chat ${sessionIndex}`,
+      status: 'still_discussing',
+      messages: Array.from({ length: messageCount }, (__, messageIndex) => ({
+        id: sessionIndex * 1000 + messageIndex + 1,
+        role: messageIndex % 2 === 0 ? 'user' as const : 'assistant' as const,
+        text: [
+          `pressure session ${sessionIndex} message ${String(messageIndex + 1).padStart(3, '0')}`,
+          'keeps a realistic planning transcript in the renderer',
+          'while the operator continues typing into the composer',
+        ].join(' '),
+        createdAt: '2026-07-07T00:00:00.000Z',
+      })),
+      draftPlanAvailable: false,
+      draftPlanSummary: undefined,
+      updatedAt: '2026-07-07T00:05:00.000Z',
+    }));
+    mock.api.planningChatList = vi.fn(async () => ({ ok: true, sessions: restoredSessions }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(vi.mocked(mock.api.planningChatList).mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('pressure session 0 message 280');
+    });
+
+    const reportUiPerf = vi.mocked(mock.api.reportUiPerf);
+    reportUiPerf.mockClear();
+
+    const input = screen.getByTestId('invoker-terminal-input');
+    const nextValue = 'type through the restored transcript without a renderer stall';
+    fireEvent.change(input, { target: { value: nextValue } });
+
+    await waitFor(() => expect(input).toHaveValue(nextValue));
+    await waitFor(() => {
+      expect(reportUiPerf).toHaveBeenCalledWith(
+        'planning_chat_input_commit',
+        expect.objectContaining({
+          valueLength: nextValue.length,
+          previousValueLength: 0,
+          conversationKey: 'pressure-chat-0',
+          transcriptLineCount: messageCount,
+        }),
+      );
+    });
+
+    const changePayload = lastPerfPayload('planning_chat_input_change');
+    expect(changePayload).toEqual(expect.objectContaining({
+      valueLength: nextValue.length,
+      previousValueLength: 0,
+      conversationKey: 'pressure-chat-0',
+      transcriptLineCount: messageCount,
+    }));
+    expect(changePayload.handlerDurationMs).toBeLessThanOrEqual(COMPONENT_INPUT_HANDLER_BUDGET_MS);
+
+    const commitPayload = lastPerfPayload('planning_chat_input_commit');
+    expect(commitPayload.durationMs).toBeLessThanOrEqual(COMPONENT_INPUT_COMMIT_BUDGET_MS);
+    expect(commitPayload.transcriptLineCount).toBe(messageCount);
+
+    const transcriptCommitsAfterTyping = reportUiPerf.mock.calls
       .filter(([metric]) => metric === 'planning_chat_transcript_commit');
     expect(transcriptCommitsAfterTyping).toHaveLength(0);
   });

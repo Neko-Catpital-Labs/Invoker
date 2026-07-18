@@ -622,6 +622,20 @@ describe('Terminal drawer (component)', () => {
     await waitFor(() => expect(xtermMock.writeLog).toHaveLength(initialWriteCount + 80));
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
 
+    fireEvent.wheel(screen.getByTestId(`terminal-pane-${alpha.taskId}`), { deltaY: -640 });
+    const scrollPayload = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'embedded_terminal_scroll')
+      .map(([, data]) => data as Record<string, any>)
+      .at(-1);
+    expect(scrollPayload).toEqual(expect.objectContaining({
+      sessionId: alpha.sessionId,
+      taskId: alpha.taskId,
+      active: true,
+      deltaY: -640,
+      drawerState: 'partial',
+    }));
+    expect(scrollPayload?.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
+
     fireEvent.click(screen.getByRole('tab', { name: /Beta description/i }));
     await waitFor(() => {
       expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
@@ -661,6 +675,11 @@ describe('Terminal drawer (component)', () => {
         }),
       );
     });
+    const resizePayload = vi.mocked(mock.api.reportUiPerf).mock.calls
+      .filter(([metric]) => metric === 'embedded_terminal_resize')
+      .map(([, data]) => data as Record<string, any>)
+      .find((payload) => payload.source === 'active_session' && payload.sessionId === beta.sessionId);
+    expect(resizePayload?.durationMs).toBeLessThanOrEqual(COMPONENT_TERMINAL_INTERACTION_BUDGET_MS);
   });
 
   it('does not duplicate the replay snapshot when a live mounted session receives an updated descriptor', async () => {
