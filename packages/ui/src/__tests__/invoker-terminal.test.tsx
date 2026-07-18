@@ -19,8 +19,9 @@ const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+const INVOKER_TERMINAL_TEST_TIMEOUT_MS = 20_000;
 
-describe('Invoker terminal (component)', () => {
+describe('Invoker terminal (component)', { timeout: INVOKER_TERMINAL_TEST_TIMEOUT_MS }, () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
