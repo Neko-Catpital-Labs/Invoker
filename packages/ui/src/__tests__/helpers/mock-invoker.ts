@@ -158,7 +158,10 @@ export function createMockInvoker(
 
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {
     taskSnapshot = tasks;
-    if (workflows) workflowSnapshot = workflows;
+    if (workflows) {
+      workflowSnapshot = workflows;
+      workflowsCallback?.(workflows);
+    }
 
     // Fire created deltas for each task
     for (const task of tasks) {
