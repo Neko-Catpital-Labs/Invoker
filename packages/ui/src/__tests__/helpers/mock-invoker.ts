@@ -382,6 +382,7 @@ export function createMockInvoker(
         failedWorkflowIds: [],
         pendingWorkflowIds: [],
         runningWorkflowIds: [],
+        completedWorkflowIds: [],
         skipped: {
           awaitingApproval: 0,
           reviewReady: 0,
@@ -389,6 +390,7 @@ export function createMockInvoker(
           failedTasks: 0,
           pendingTasks: 0,
           runningTasks: 0,
+          completedTasks: 0,
         },
       },
       started: [],

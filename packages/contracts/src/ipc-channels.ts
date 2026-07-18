@@ -598,6 +598,8 @@ export interface StartReadyRequest {
   recreateFailed?: boolean;
   recreateFailedAndPending?: boolean;
   recreateFailedPendingAndRunning?: boolean;
+  /** Recreate failed + pending/queued + running + completed (finished) workflows. */
+  recreateAll?: boolean;
   dryRun?: boolean;
 }
 
@@ -607,6 +609,7 @@ export interface StartReadyPreview {
   failedWorkflowIds: string[];
   pendingWorkflowIds: string[];
   runningWorkflowIds: string[];
+  completedWorkflowIds: string[];
   skipped: {
     awaitingApproval: number;
     reviewReady: number;
@@ -614,6 +617,7 @@ export interface StartReadyPreview {
     failedTasks: number;
     pendingTasks: number;
     runningTasks: number;
+    completedTasks: number;
   };
 }
 
