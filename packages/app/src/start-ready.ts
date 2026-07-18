@@ -24,9 +24,11 @@ type StartReadyRequestExt = StartReadyRequest & {
 type StartReadyPreviewExt = StartReadyPreview & {
   pendingWorkflowIds: string[];
   runningWorkflowIds: string[];
+  completedWorkflowIds: string[];
   skipped: StartReadyPreview['skipped'] & {
     pendingTasks: number;
     runningTasks: number;
+    completedTasks: number;
   };
 };
 function collectRecoverableTasks(orchestrator: StartReadyOrchestrator): TaskState[] {
