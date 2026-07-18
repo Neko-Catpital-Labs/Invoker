@@ -1,0 +1,27 @@
+{
+  "name": "@neko-catpital-labs/invoker-slack",
+  "version": "0.0.7",
+  "description": "Invoker standalone Slack manager installer",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Neko-Catpital-Labs/Invoker.git",
+    "directory": "packages/npm-slack"
+  },
+  "bin": {
+    "invoker-slack": "bin/invoker-slack.js"
+  },
+  "files": [
+    "bin/**/*",
+    "scripts/**/*",
+    "vendor/.gitkeep",
+    "package.json"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "test": "node bin/invoker-slack.js --version || true"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,36 @@
+formula: bugfix
+version: 1
+description: >
+  Fix a bug or regression as one review-compressed workflow: a behavior-lane
+  fix slice plus a proof-lane verification that runs the shared repro command
+  (the same command fails before the fix and passes after). The recipe locks
+  the workflow shape and the required review/rationale headings; the author
+  fills the {{var}} slots and specializes the REPLACE_ME prose before submit.
+vars:
+  repo_url:
+    required: true
+    example: "git@github.com:Neko-Catpital-Labs/Invoker.git"
+    description: "Git remote for the repo where tasks run (git remote get-url origin)."
+  base_branch:
+    required: false
+    default: "master"
+    example: "master"
+    description: "Base branch for the workflow."
+  bug_slug:
+    required: true
+    example: "sample-null-deref"
+    description: "Kebab-case identifier used in task ids and the plan name."
+  bug_summary:
+    required: true
+    example: "null dereference in the sample module"
+    description: "One-line description of the bug being fixed."
+  fix_file:
+    required: true
+    example: "packages/app/src/plan-parser.ts"
+    description: "Single product file the fix touches (behavior lane; one file for v1)."
+  verify_command:
+    required: true
+    example: "test 1 -eq 1"
+    description: "Shared repro/verify command; fails before the fix, passes after."
+workflows:
+  - bugfix.workflow.yaml

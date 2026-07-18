@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../lib/common.sh"
 
+export INVOKER_DISABLE_EXCLUSIVE_LOCKING=1
+# This harness intentionally overlaps multiple writable headless clients while
+# sampling first-5s state changes. Keep shared WAL here; production owners
+# still exercise exclusive locking separately.
 invoker_e2e_init
 trap invoker_e2e_cleanup EXIT
 
@@ -14,7 +18,7 @@ unset ELECTRON_RUN_AS_NODE
 echo "==> case 2.16: delete-all"
 invoker_e2e_run_headless delete-all
 
-PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-plan.XXXXXX.yaml")"
+PLAN_PATH="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-plan.yaml.XXXXXX")"
 cat > "$PLAN_PATH" <<'EOF'
 name: e2e-dry-run group2 2.16 retry-vs-recreate-window
 repoUrl: git@github.com:invoker/workflow-test.git
@@ -26,9 +30,36 @@ tasks:
     description: Task retried then recreated
     command: bash -lc 'exit 1'
 EOF
+# The recreate client is intentionally still alive while this case samples the
+# first five seconds. In WAL mode a read-only sampler can lose that race; retry
+# only that transient busy-open failure so the assertion still checks reset
+# timing instead of failing on the harness read.
+invoker_e2e_case_216_query_json() {
+  local out err status attempt
+  err="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-query.err.XXXXXX")"
+  for attempt in 1 2 3 4 5; do
+    if out="$(invoker_e2e_run_headless "$@" --output json 2>"$err")"; then
+      rm -f "$err"
+      printf '%s' "$out"
+      return 0
+    fi
+    status=$?
+    if grep -Fq 'Read-only file open refused while WAL sidecars exist' "$err"; then
+      sleep 0.25
+      continue
+    fi
+    cat "$err" >&2
+    rm -f "$err"
+    return "$status"
+  done
+  cat "$err" >&2
+  rm -f "$err"
+  return 75
+}
+
 
 echo "==> case 2.16: submit seed workflow"
-SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-submit.XXXXXX.log")"
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-submit.log.XXXXXX")"
 invoker_e2e_submit_plan_capture "$PLAN_PATH" "$SUBMIT_LOG"
 
 WF_ID="$(invoker_e2e_extract_workflow_id_from_log "$SUBMIT_LOG")"
@@ -94,7 +125,16 @@ recreate_snapshot_has_pending=0
 for i in 0 1 2 3 4 5; do
   KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
   FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
-  SNAP_JSON="$(invoker_e2e_run_headless query tasks --workflow "$WF_ID" --output json)"
+  query_status=0
+  SNAP_JSON="$(invoker_e2e_case_216_query_json query tasks --workflow "$WF_ID")" || query_status=$?
+  if [ "$query_status" -eq 75 ]; then
+    echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=busy"
+    sleep 1
+    continue
+  fi
+  if [ "$query_status" -ne 0 ]; then
+    exit "$query_status"
+  fi
   SNAP_COUNTS="$(printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; from collections import Counter; data=json.load(sys.stdin); c=Counter(t.get("status","") for t in data); print(" ".join(f"{k}:{c[k]}" for k in sorted(c)))')"
   echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
 
@@ -106,7 +146,7 @@ done
 kill "$RECREATE_PID" 2>/dev/null || true
 wait "$RECREATE_PID" 2>/dev/null || true
 
-KEEP_PENDING_DELTA_S="$(invoker_e2e_run_headless query audit "$KEEP_TASK_ID" --output json | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
+KEEP_PENDING_DELTA_S="$(invoker_e2e_case_216_query_json query audit "$KEEP_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
 for e in data:
     if e.get("eventType")!="task.pending":
         continue
@@ -117,7 +157,7 @@ for e in data:
     if epoch >= start:
         deltas.append(epoch-start)
 print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
-FAIL_PENDING_DELTA_S="$(invoker_e2e_run_headless query audit "$FAIL_TASK_ID" --output json | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
+FAIL_PENDING_DELTA_S="$(invoker_e2e_case_216_query_json query audit "$FAIL_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
 for e in data:
     if e.get("eventType")!="task.pending":
         continue

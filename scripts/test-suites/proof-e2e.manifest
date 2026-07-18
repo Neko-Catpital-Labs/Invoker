@@ -1,0 +1,14 @@
+# True e2e tests on a mock/temp DB — the ONLY suites the e2e proof gate runs.
+# One line per suite, relative to scripts/test-suites/. Blank lines and # comments ignored.
+# Everything else is covered by a dedicated CI job and is NOT run here.
+required/21-e2e-dry-run-downstream-reset.sh
+required/20-e2e-dry-run.sh
+required/21-e2e-dry-run-downstream.sh
+required/23c-stale-late-completion-after-reset.sh
+required/15-submit-workflow-chain.sh
+required/22-e2e-dry-run-github.sh
+required/23d-same-workflow-tracked-fix-vs-recreate.sh
+required/50-verify-executor-routing.sh
+required/23b-fix-intent-cancellation-stale-ssh-metadata.sh
+required/08-electron-preprovision-repro.sh
+required/23a-recreate-task-queue-authority.sh

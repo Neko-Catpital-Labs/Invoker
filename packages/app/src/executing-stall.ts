@@ -1,4 +1,4 @@
-import type { RunnerKind } from '@invoker/workflow-core';
+import { isCrashPreservedExecution, type RunnerKind, type TaskState } from '@invoker/workflow-core';
 
 export interface ExecutingStallEvaluationInput {
   now: Date;
@@ -35,12 +35,13 @@ export function evaluateExecutingStall(input: ExecutingStallEvaluationInput): Ex
   const heartbeatStale =
     !heartbeatSource || now.getTime() - heartbeatSource.getTime() >= executingStallTimeoutMs;
   const leaseExpired = !!leaseExpiresAt && leaseExpiresAt.getTime() < now.getTime();
+  const leaseStillValid = !!leaseExpiresAt && leaseExpiresAt.getTime() >= now.getTime();
   const executingAgeMs = executingStartedAt ? now.getTime() - executingStartedAt.getTime() : 0;
   const executingStalled =
     phase === 'executing'
     && executingStartedAt !== undefined
     && executingAgeMs >= executingStallTimeoutMs
-    && (leaseExpired || heartbeatStale);
+    && (leaseExpired || (!leaseStillValid && heartbeatStale));
 
   const staleReason = leaseExpired
     ? 'attempt lease expired'
@@ -54,4 +55,14 @@ export function evaluateExecutingStall(input: ExecutingStallEvaluationInput): Ex
     executingStalled,
     staleReason,
   };
+}
+
+export function taskNeedsExecutingStallCheck(
+  task: Pick<TaskState, 'status' | 'execution'>,
+): boolean {
+  if (isCrashPreservedExecution(task.execution)) return false;
+  if (task.status === 'running' || task.status === 'fixing_with_ai') {
+    return true;
+  }
+  return task.status === 'pending' && task.execution.phase === 'launching';
 }

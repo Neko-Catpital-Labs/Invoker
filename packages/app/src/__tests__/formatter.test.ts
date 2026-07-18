@@ -3,15 +3,19 @@ import {
   formatTaskStatus,
   formatWorkflowStatus,
   formatEventLog,
+  formatWorkerActions,
+  formatWorkerDecisions,
   serializeWorkflow,
   serializeTask,
   serializeEvent,
+  serializeWorkerAction,
   formatAsLabel,
   formatAsJson,
   formatAsJsonl,
 } from '../formatter.js';
 import type { TaskState } from '@invoker/workflow-core';
-import type { TaskEvent, Workflow } from '@invoker/data-store';
+import type { TaskEvent, WorkerActionRecord, Workflow } from '@invoker/data-store';
+import type { WorkerActionSummary } from '@invoker/contracts';
 
 // ── ANSI Code Constants ──────────────────────────────────────
 
@@ -56,6 +60,18 @@ describe('formatTaskStatus', () => {
     expect(output).toContain('[failed]');
   });
 
+  it('shows correct label, icon, and color for closed status', () => {
+    const task = makeTask({ status: 'closed' });
+    const output = formatTaskStatus(task);
+    expect(output).toContain(DIM);
+    expect(output).toContain('◼');
+    expect(output).toContain('[closed]');
+    // Closed is terminal-neutral, not failed: it must not borrow the failed icon/color.
+    expect(output).not.toContain(RED);
+    expect(output).not.toContain('✗');
+    expect(output).not.toContain('[failed]');
+  });
+
   it('shows correct color for running status', () => {
     const task = makeTask({ status: 'running' });
     const output = formatTaskStatus(task);
@@ -93,15 +109,17 @@ describe('formatWorkflowStatus', () => {
       total: 5,
       completed: 2,
       failed: 1,
+      closed: 1,
       running: 1,
-      pending: 1,
+      pending: 0,
     };
     const output = formatWorkflowStatus(status);
     expect(output).toContain('5 total');
     expect(output).toContain('2 completed');
     expect(output).toContain('1 failed');
+    expect(output).toContain('1 closed');
     expect(output).toContain('1 running');
-    expect(output).toContain('1 pending');
+    expect(output).toContain('0 pending');
   });
 
   it('uses colored output', () => {
@@ -150,6 +168,124 @@ describe('formatEventLog', () => {
   it('handles empty events', () => {
     const output = formatEventLog([]);
     expect(output).toContain('No events recorded');
+  });
+
+  it('renders task.worker_action events with worker action details', () => {
+    const output = formatEventLog([{
+      id: 3,
+      taskId: 'task-1',
+      eventType: 'task.worker_action',
+      payload: JSON.stringify({
+        workerKind: 'pr-summary-refresh',
+        actionType: 'refresh-pr-summary',
+        status: 'completed',
+        summary: 'Updated PR body',
+      }),
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    expect(output).toContain('task.worker_action pr-summary-refresh/refresh-pr-summary [completed] Updated PR body');
+  });
+});
+
+// ── formatWorkerActions ─────────────────────────────────────
+
+describe('formatWorkerActions', () => {
+  const action: WorkerActionRecord = {
+    id: 'wa-1',
+    workerKind: 'autofix',
+    actionType: 'fix-task',
+    workflowId: 'wf-1',
+    taskId: 'wf-1/task-1',
+    subjectType: 'task',
+    subjectId: 'wf-1/task-1',
+    externalKey: 'wf-1/task-1:g0:a1',
+    status: 'running',
+    attemptCount: 1,
+    summary: 'Retrying task',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:01:00.000Z',
+  };
+
+  it('formats worker action summaries', () => {
+    const output = formatWorkerActions([action]);
+    expect(output).toContain('Worker actions (1)');
+    expect(output).toContain('wa-1');
+    expect(output).toContain('autofix/fix-task');
+    expect(output).toContain('task=wf-1/task-1');
+    expect(output).toContain('Retrying task');
+  });
+
+  it('handles empty worker actions', () => {
+    expect(formatWorkerActions([])).toContain('No worker actions found');
+  });
+
+  it('escapes terminal control characters in worker action fields', () => {
+    const output = formatWorkerActions([{
+      ...action,
+      id: 'wa-\u001b[31m1',
+      workerKind: 'auto\nfix',
+      actionType: 'fix\ttask',
+      taskId: 'wf-1/task\r1',
+      summary: 'Retry\nnext',
+    }]);
+
+    expect(output).toContain('wa-\\u001b[31m1');
+    expect(output).toContain('auto\\nfix/fix\\ttask');
+    expect(output).toContain('task=wf-1/task\\r1');
+    expect(output).toContain('Retry\\nnext');
+  });
+});
+
+// ── formatWorkerDecisions ────────────────────────────────────
+
+describe('formatWorkerDecisions', () => {
+  const decisions: WorkerActionSummary[] = [
+    {
+      id: 'wd-act',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'queued',
+      attemptCount: 1,
+      agentName: 'codex',
+      decision: 'act',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:01:00.000Z',
+    },
+    {
+      id: 'wd-skip',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-2',
+      externalKey: 'wf-1/task-2:g0:a1',
+      status: 'skipped',
+      attemptCount: 3,
+      reason: 'worker-retry-budget-exhausted',
+      decision: 'skip',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:02:00.000Z',
+    },
+  ];
+
+  it('handles empty worker decisions', () => {
+    expect(formatWorkerDecisions([])).toContain('No worker decisions found.');
+  });
+
+  it('renders decision class, agent, task, and skip reason', () => {
+    const output = formatWorkerDecisions(decisions);
+    expect(output).toContain('Worker decisions (2)');
+    expect(output).toContain('ACT');
+    expect(output).toContain('SKIP');
+    expect(output).toContain('agent=codex');
+    expect(output).toContain('task=wf-1/task-1');
+    expect(output).toContain('reason=worker-retry-budget-exhausted');
   });
 });
 
@@ -243,6 +379,12 @@ describe('serializeTask', () => {
         branch: 'feature/test',
         commit: 'abc123',
         exitCode: 0,
+        reviewProviderId: '42',
+        reviewGate: {
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{ id: 'contracts', required: true, status: 'open', generation: 0 }],
+        },
         error: undefined,
       } as TaskState['execution'],
     });
@@ -251,6 +393,12 @@ describe('serializeTask', () => {
     expect(execution.branch).toBe('feature/test');
     expect(execution.commit).toBe('abc123');
     expect(execution.exitCode).toBe(0);
+    expect(execution.reviewProviderId).toBe('42');
+    expect(execution.reviewGate).toEqual({
+      activeGeneration: 0,
+      completion: { required: 'all', status: 'approved' },
+      artifacts: [{ id: 'contracts', required: true, status: 'open', generation: 0 }],
+    });
     expect(execution).not.toHaveProperty('error');
   });
 
@@ -305,6 +453,101 @@ describe('serializeEvent', () => {
     };
     const result = serializeEvent(event);
     expect(result).not.toHaveProperty('payload');
+  });
+});
+
+// ── serializeWorkerAction ───────────────────────────────────
+
+describe('serializeWorkerAction', () => {
+  it('returns a JSON-safe worker action object', () => {
+    const action: WorkerActionRecord = {
+      id: 'wa-1',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 2,
+      intentId: '42',
+      agentName: 'codex',
+      executionModel: 'gpt-5.2',
+      sessionId: 'sess-1',
+      summary: 'Fixed',
+      payload: { result: 'ok' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+      completedAt: '2026-01-01T00:05:00.000Z',
+    };
+
+    const result = serializeWorkerAction(action);
+    expect(result).toEqual({
+      id: 'wa-1',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-1',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 2,
+      intentId: '42',
+      agentName: 'codex',
+      executionModel: 'gpt-5.2',
+      sessionId: 'sess-1',
+      summary: 'Fixed',
+      payload: { result: 'ok' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+      completedAt: '2026-01-01T00:05:00.000Z',
+    });
+    expect(JSON.stringify(result)).not.toContain('\x1b');
+  });
+
+  it('normalizes unsafe payload values before JSON output', () => {
+    class PayloadBox {
+      label: string;
+
+      constructor(label: string) {
+        this.label = label;
+      }
+    }
+
+    const circular: Record<string, unknown> = { ok: true };
+    circular.self = circular;
+    const action: WorkerActionRecord = {
+      id: 'wa-unsafe',
+      workerKind: 'autofix',
+      actionType: 'fix-task',
+      subjectType: 'task',
+      subjectId: 'wf-1/task-1',
+      externalKey: 'wf-1/task-1:g0:a1',
+      status: 'completed',
+      attemptCount: 1,
+      payload: {
+        big: BigInt(1),
+        circular,
+        map: new Map([['answer', BigInt(42)]]),
+        box: new PayloadBox('kept'),
+        list: [undefined, Number.NaN],
+      },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:05:00.000Z',
+    };
+
+    const result = serializeWorkerAction(action);
+
+    expect(() => formatAsJson(result)).not.toThrow();
+    expect(JSON.parse(formatAsJson(result)).payload).toEqual({
+      big: '1',
+      circular: { ok: true, self: '[Circular]' },
+      map: { answer: '42' },
+      box: { label: 'kept' },
+      list: [null, null],
+    });
   });
 });
 

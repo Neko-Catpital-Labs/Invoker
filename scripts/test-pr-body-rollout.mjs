@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 import { strict as assert } from 'node:assert';
-import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   evaluateRollout,
   parseAuthorList,

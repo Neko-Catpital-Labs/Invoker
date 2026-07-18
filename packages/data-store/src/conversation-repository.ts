@@ -7,7 +7,7 @@
  */
 
 import type { PlanDefinition } from '@invoker/workflow-core';
-import type { PersistenceAdapter, Conversation, ConversationMessage } from './adapter.js';
+import type { PersistenceAdapter, Conversation, ConversationMessage, ConversationMode } from './adapter.js';
 
 // ── Public Types ─────────────────────────────────────────────
 
@@ -15,6 +15,7 @@ export interface ConversationEntry {
   threadTs: string;
   channelId: string;
   userId: string;
+  mode: ConversationMode;
   messages: ConversationMessageEntry[];
   extractedPlan: PlanDefinition | null;
   planSubmitted: boolean;
@@ -63,6 +64,7 @@ export class ConversationRepository {
     planSubmitted?: boolean,
     channelId?: string,
     userId?: string,
+    mode?: ConversationMode,
   ): void {
     const now = new Date().toISOString();
 
@@ -72,6 +74,7 @@ export class ConversationRepository {
 
     if (existing) {
       this.adapter.updateConversation(threadTs, {
+        mode: mode ?? existing.mode ?? 'plan',
         extractedPlan: planJson ?? existing.extractedPlan,
         planSubmitted: planSubmitted ?? existing.planSubmitted,
         updatedAt: now,
@@ -81,6 +84,7 @@ export class ConversationRepository {
         threadTs,
         channelId: channelId ?? '',
         userId: userId ?? '',
+        mode: mode ?? 'plan',
         extractedPlan: planJson,
         planSubmitted: planSubmitted ?? false,
         createdAt: now,
@@ -118,6 +122,7 @@ export class ConversationRepository {
       threadTs: conv.threadTs,
       channelId: conv.channelId,
       userId: conv.userId,
+      mode: conv.mode ?? 'plan',
       messages: rawMessages.map((m) => ({
         role: m.role,
         content: this.parseJson(m.content, `message seq=${m.seq} in ${threadTs}`),
@@ -147,6 +152,7 @@ export class ConversationRepository {
       threadTs: conv.threadTs,
       channelId: conv.channelId,
       userId: conv.userId,
+      mode: conv.mode ?? 'plan',
       extractedPlan: this.parsePlan(conv.extractedPlan),
       planSubmitted: conv.planSubmitted,
       createdAt: conv.createdAt,

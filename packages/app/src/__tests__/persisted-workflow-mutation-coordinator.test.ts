@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import type { WorkflowMutationFailedEvent } from '@invoker/contracts';
 import { SQLiteAdapter } from '@invoker/data-store';
-import { PersistedWorkflowMutationCoordinator, type WorkflowMutationContext } from '../persisted-workflow-mutation-coordinator.js';
+import type { TaskState } from '@invoker/workflow-core';
+import {
+  PersistedWorkflowMutationCoordinator,
+  type WorkflowMutationContext,
+} from '../persisted-workflow-mutation-coordinator.js';
 import { dispatchStartedTasksWithGlobalTopup } from '../global-topup.js';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -17,6 +22,19 @@ async function waitFor(condition: () => boolean, attempts: number = 20): Promise
   }
 }
 
+function makeTask(id: string, workflowId: string = 'wf-1'): TaskState {
+  return {
+    id,
+    description: id,
+    status: 'pending',
+    dependencies: [],
+    createdAt: new Date(),
+    config: { workflowId },
+    execution: {},
+    taskStateVersion: 1,
+  };
+}
+
 describe('PersistedWorkflowMutationCoordinator', () => {
   const adapters: SQLiteAdapter[] = [];
 
@@ -29,13 +47,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('high-priority queued work runs before queued normal work for the same workflow', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const order: string[] = [];
     const gate = deferred();
@@ -66,13 +80,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('releases a workflow lease after fire-and-forget task launch acceptance', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const startedTask = {
       id: 'task-a',
@@ -115,7 +125,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(adapter.listWorkflowMutationLeases()).toHaveLength(0);
   });
 
-  it('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
+  it('emits taskId for task-targeted headless.exec failures', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     adapter.saveWorkflow({
@@ -125,6 +135,129 @@ describe('PersistedWorkflowMutationCoordinator', () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-a'));
+
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        throw new Error('task mutation failed');
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    await expect(coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['set', 'command', 'wf-1/task-a', 'echo hi'] }],
+    )).rejects.toThrow('task mutation failed');
+
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]).toMatchObject({
+      workflowId: 'wf-1',
+      channel: 'headless.exec',
+      taskId: 'wf-1/task-a',
+    });
+    const failureAuditEvents = adapter.getEvents('wf-1/task-a')
+      .filter((event) => event.eventType === 'workflow.mutation.failed');
+    expect(failureAuditEvents).toHaveLength(1);
+    expect(JSON.parse(failureAuditEvents[0]!.payload ?? '{}')).toMatchObject({
+      channel: 'headless.exec',
+      taskId: 'wf-1/task-a',
+    });
+  });
+
+  it('does not emit taskId for workflow-targeted headless.exec failures', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-a'));
+
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        throw new Error('workflow mutation failed');
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    await expect(coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'headless.exec',
+      [{ args: ['recreate', 'wf-1'] }],
+    )).rejects.toThrow('workflow mutation failed');
+
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]).toMatchObject({
+      workflowId: 'wf-1',
+      channel: 'headless.exec',
+    });
+    expect(failedEvents[0]).not.toHaveProperty('taskId');
+    expect(adapter.getEvents('wf-1/task-a')
+      .filter((event) => event.eventType === 'workflow.mutation.failed')).toEqual([]);
+  });
+
+  it('keeps invoker channel failure taskId behavior unchanged', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-a'));
+
+    const failedEvents: WorkflowMutationFailedEvent[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        throw new Error('invoker mutation failed');
+      },
+      { onIntentFailed: (event) => failedEvents.push(event) },
+    );
+
+    await expect(coordinator.enqueue<void>(
+      'wf-1',
+      'normal',
+      'invoker:fix-with-agent',
+      ['wf-1/task-a', 'codex'],
+    )).rejects.toThrow('invoker mutation failed');
+
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]).toMatchObject({
+      workflowId: 'wf-1',
+      channel: 'invoker:fix-with-agent',
+      taskId: 'wf-1/task-a',
+    });
+    const failureAuditEvents = adapter.getEvents('wf-1/task-a')
+      .filter((event) => event.eventType === 'workflow.mutation.failed');
+    expect(failureAuditEvents).toHaveLength(1);
+    expect(JSON.parse(failureAuditEvents[0]!.payload ?? '{}')).toMatchObject({
+      channel: 'invoker:fix-with-agent',
+      taskId: 'wf-1/task-a',
+    });
+  });
+
+  it('evicts older queued workflow intents when a delegated recreate fence starts', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -172,13 +305,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when recreate is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -236,13 +365,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when internal recreate-task is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -287,13 +412,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when headless recreate-task is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -340,13 +461,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when internal recreate-task fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -380,16 +497,12 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
-  it('evicts older queued workflow intents when recreate-with-rebase fence starts', async () => {
+  it('evicts older queued workflow intents when rebase-recreate fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -408,31 +521,27 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     void running.catch(() => {});
     const olderQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['old-queued']);
     void olderQueued.catch(() => {});
-    const recreateWithRebase = coordinator.enqueue<void>('wf-1', 'high', 'invoker:recreate-with-rebase', ['wf-1']);
+    const rebaseRecreate = coordinator.enqueue<void>('wf-1', 'high', 'invoker:rebase-recreate', ['wf-1']);
     const newerQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['new-queued']);
 
-    await recreateWithRebase;
+    await rebaseRecreate;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
     await expect(olderQueued).rejects.toThrow(/evicted/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
-      'invoker:recreate-with-rebase:wf-1',
+      'invoker:rebase-recreate:wf-1',
       'invoker:edit-task-agent:new-queued',
     ]);
   });
 
-  it('invalidates an older running workflow intent when recreate-with-rebase is enqueued', async () => {
+  it('invalidates an older running workflow intent when rebase-recreate is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -456,13 +565,13 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     void olderRunning.catch(() => {});
     await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
 
-    const recreateWithRebase = coordinator.enqueue<void>(
+    const rebaseRecreate = coordinator.enqueue<void>(
       'wf-1',
       'high',
-      'invoker:recreate-with-rebase',
+      'invoker:rebase-recreate',
       ['wf-1'],
     );
-    await recreateWithRebase;
+    await rebaseRecreate;
     await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
 
     const intentsAfterRecreate = adapter.listWorkflowMutationIntents('wf-1');
@@ -471,20 +580,16 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     expect(intentsAfterRecreate.find((intent) => intent.id === 2)?.status).toBe('completed');
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
-      'invoker:recreate-with-rebase:wf-1',
+      'invoker:rebase-recreate:wf-1',
     ]);
   });
 
-  it('treats headless recreate-with-rebase as a recreate fence', async () => {
+  it('treats headless rebase-recreate as a recreate fence', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -504,22 +609,22 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     void running.catch(() => {});
     const olderQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['old-queued']);
     void olderQueued.catch(() => {});
-    const recreateWithRebase = coordinator.enqueue<void>(
+    const rebaseRecreate = coordinator.enqueue<void>(
       'wf-1',
       'high',
       'headless.exec',
-      [{ args: ['recreate-with-rebase', 'wf-1'], noTrack: true }],
+      [{ args: ['rebase-recreate', 'wf-1'], noTrack: true }],
     );
     const newerQueued = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:edit-task-agent', ['new-queued']);
 
-    await recreateWithRebase;
+    await rebaseRecreate;
     await newerQueued;
     await expect(running).rejects.toThrow(/superseded by recreate intent/i);
     await expect(olderQueued).rejects.toThrow(/evicted/i);
 
     expect(order).toEqual([
       'invoker:fix-with-agent:wf-1/blocker-task',
-      'headless.exec:recreate-with-rebase wf-1',
+      'headless.exec:rebase-recreate wf-1',
       'invoker:edit-task-agent:new-queued',
     ]);
   });
@@ -527,13 +632,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when retry-workflow fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -569,16 +670,117 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     ]);
   });
 
+  it('coalesces duplicate fire-and-forget headless workflow retries while queued or running', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+    adapter.saveWorkflow({ id: 'wf-2',
+    name: 'wf-2', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+
+    const runningGate = deferred();
+    const order: string[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async (_channel, args) => {
+        const payload = args[0] as { args?: string[] } | undefined;
+        const command = payload?.args?.join(' ') ?? String(args[0]);
+        order.push(command);
+        if (command === 'retry wf-2') {
+          await runningGate.promise;
+        }
+      },
+    );
+
+    const firstQueued = coordinator.submit(
+      'wf-1',
+      'high',
+      'headless.exec',
+      [{ args: ['retry', 'wf-1'], noTrack: true }],
+      { deferDrain: true },
+    );
+    const queuedDuplicates = Array.from({ length: 25 }, () =>
+      coordinator.submit(
+        'wf-1',
+        'high',
+        'headless.exec',
+        [{ args: ['retry', 'wf-1'], noTrack: true }],
+        { deferDrain: true },
+      ),
+    );
+
+    expect(new Set([firstQueued, ...queuedDuplicates])).toEqual(new Set([firstQueued]));
+
+    const firstRunning = coordinator.submit(
+      'wf-2',
+      'high',
+      'headless.exec',
+      [{ args: ['retry', 'wf-2'], noTrack: true }],
+    );
+    await waitFor(() => order.includes('retry wf-2'));
+
+    const runningDuplicates = Array.from({ length: 25 }, () =>
+      coordinator.submit(
+        'wf-2',
+        'high',
+        'headless.exec',
+        [{ args: ['retry', 'wf-2'], noTrack: true }],
+      ),
+    );
+
+    expect(new Set([firstRunning, ...runningDuplicates])).toEqual(new Set([firstRunning]));
+    runningGate.resolve();
+
+    await waitFor(() => adapter.listWorkflowMutationIntents(undefined, ['completed']).length === 2);
+
+    expect(order.sort()).toEqual(['retry wf-1', 'retry wf-2']);
+    expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
+    expect(adapter.listWorkflowMutationIntents('wf-2')).toHaveLength(1);
+  });
+
+  it('coalesces duplicate start-ready intents while queued', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
+
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => undefined,
+    );
+
+    const first = coordinator.submit(
+      'wf-1',
+      'normal',
+      'invoker:start-ready',
+      [{}],
+      { deferDrain: true },
+    );
+    const duplicates = Array.from({ length: 5 }, () =>
+      coordinator.submit(
+        'wf-1',
+        'normal',
+        'invoker:start-ready',
+        [{}],
+        { deferDrain: true },
+      ),
+    );
+
+    expect(new Set([first, ...duplicates])).toEqual(new Set([first]));
+    expect(adapter.listWorkflowMutationIntents('wf-1')).toHaveLength(1);
+  });
+
   it('requeues interrupted running workflow mutations on restart and drains persisted queued work', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const firstGate = deferred();
     const owner1Order: string[] = [];
@@ -617,13 +819,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('requeues interrupted fix-with-agent workflow mutations on restart', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const firstGate = deferred();
     const owner1Order: string[] = [];
@@ -660,13 +858,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('does not let another owner steal a live workflow lease', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const owner1Order: string[] = [];
@@ -710,13 +904,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('submit returns immediately while persisted work drains in the background', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -744,13 +934,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
     for (let index = 1; index <= 4; index += 1) {
-      adapter.saveWorkflow({
-        id: `wf-${index}`,
-        name: `wf-${index}`,
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
+      adapter.saveWorkflow({ id: `wf-${index}`,
+      name: `wf-${index}`, createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(), });
       adapter.enqueueWorkflowMutationIntent(`wf-${index}`, 'mut', [`job-${index}`], 'normal');
     }
 
@@ -790,13 +976,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('does not run two intents for the same workflow concurrently', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const firstGate = deferred();
     const order: string[] = [];
@@ -834,13 +1016,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when internal delete-workflow is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -886,13 +1064,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when internal delete-workflow fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -929,13 +1103,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when delegated headless delete is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -983,13 +1153,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when delegated headless delete fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1037,13 +1203,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when internal delete-all-workflows is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1089,13 +1251,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when internal delete-all-workflows fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1132,13 +1290,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when delegated headless delete-all is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1186,13 +1340,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when delegated headless delete-all fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1242,13 +1392,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('invalidates an older running workflow intent when internal bulk delete-all-workflows is enqueued', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1294,13 +1440,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('evicts older queued workflow intents when internal bulk delete-all-workflows fence starts', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     const order: string[] = [];
@@ -1339,13 +1481,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('aborts the dispatch AbortSignal when recreate-task preempts a running fix mutation', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     let capturedContext: WorkflowMutationContext | undefined;
@@ -1389,13 +1527,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('aborts the dispatch AbortSignal when delete-workflow preempts a running fix mutation', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     let capturedContext: WorkflowMutationContext | undefined;
@@ -1433,16 +1567,12 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await expect(olderRunning).rejects.toThrow(/superseded by delete intent/i);
   });
 
-  it('aborts the dispatch AbortSignal when recreate-with-rebase preempts a running fix mutation', async () => {
+  it('aborts the dispatch AbortSignal when rebase-recreate preempts a running fix mutation', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     let capturedContext: WorkflowMutationContext | undefined;
@@ -1471,7 +1601,7 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     const recreateRebase = coordinator.enqueue<void>(
       'wf-1',
       'high',
-      'invoker:recreate-with-rebase',
+      'invoker:rebase-recreate',
       ['wf-1'],
     );
     await recreateRebase;
@@ -1483,13 +1613,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('does not abort the dispatch AbortSignal for non-preempted mutations that complete normally', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     let signalAbortedDuringDispatch = false;
     const coordinator = new PersistedWorkflowMutationCoordinator(
@@ -1515,13 +1641,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('abort signal reason is a WorkflowMutationInvalidatedError when preempted', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     const gate = deferred();
     let capturedContext: WorkflowMutationContext | undefined;
@@ -1562,13 +1684,9 @@ describe('PersistedWorkflowMutationCoordinator', () => {
   it('dispatch handler can observe abort during long-running work and stop early', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     adapters.push(adapter);
-    adapter.saveWorkflow({
-      id: 'wf-1',
-      name: 'wf-1',
-      status: 'running',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    });
+    adapter.saveWorkflow({ id: 'wf-1',
+    name: 'wf-1', createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(), });
 
     let iterationsBeforeAbort = 0;
     const gate = deferred();
@@ -1607,5 +1725,122 @@ describe('PersistedWorkflowMutationCoordinator', () => {
 
     expect(iterationsBeforeAbort).toBeGreaterThan(0);
     await expect(olderRunning).rejects.toThrow(/superseded by recreate intent/i);
+  });
+
+  it('invokes onIntentFailed with intent metadata when the async handler throws', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const failureEvents: Array<{
+      intentId: number;
+      workflowId: string;
+      channel: string;
+      taskId?: string;
+      message: string;
+      failedAt: string;
+    }> = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        throw new Error('SSH target "remote_digital_ocean_3" cannot run codex');
+      },
+      {
+        onIntentFailed: (event) => {
+          failureEvents.push(event);
+        },
+      },
+    );
+
+    const attempt = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:approve', ['wf-1/task-alpha']);
+    await expect(attempt).rejects.toThrow(/cannot run codex/);
+
+    expect(failureEvents).toHaveLength(1);
+    const [event] = failureEvents;
+    expect(event.workflowId).toBe('wf-1');
+    expect(event.channel).toBe('invoker:approve');
+    expect(event.taskId).toBe('wf-1/task-alpha');
+    expect(event.intentId).toBeGreaterThan(0);
+    expect(event.message).toMatch(/cannot run codex/);
+    expect(typeof event.failedAt).toBe('string');
+    expect(Number.isFinite(Date.parse(event.failedAt))).toBe(true);
+  });
+
+  it('emits headless.exec task metadata and banner-safe messages without stack traces', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    adapter.saveTask('wf-1', makeTask('wf-1/task-alpha'));
+
+    const failureEvents: Array<{
+      taskId?: string;
+      headlessCommand?: string;
+      message: string;
+    }> = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        const err = new Error('SSH remote script failed (exit=1, phase=remote_agent_fix)\nSTDOUT:\n{"type":"error"}');
+        err.stack = `${err.message}\n    at createSshRemoteScriptError (/tmp/main.js:1:1)`;
+        throw err;
+      },
+      {
+        onIntentFailed: (event) => {
+          failureEvents.push(event);
+        },
+      },
+    );
+
+    const attempt = coordinator.enqueue<void>('wf-1', 'normal', 'headless.exec', [{
+      args: ['fix', 'wf-1/task-alpha', 'codex'],
+      noTrack: true,
+    }]);
+    await expect(attempt).rejects.toThrow(/SSH remote script failed/);
+
+    expect(failureEvents).toHaveLength(1);
+    const [event] = failureEvents;
+    expect(event.taskId).toBe('wf-1/task-alpha');
+    expect(event.headlessCommand).toBe('fix');
+    expect(event.message).toContain('SSH remote script failed');
+    expect(event.message).not.toContain('createSshRemoteScriptError');
+  });
+
+  it('leaves onIntentFailed out of the successful-completion path', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const failureEvents: unknown[] = [];
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => 'ok',
+      {
+        onIntentFailed: (event) => {
+          failureEvents.push(event);
+        },
+      },
+    );
+
+    await coordinator.enqueue<string>('wf-1', 'normal', 'invoker:approve', ['wf-1/task-alpha']);
+    expect(failureEvents).toEqual([]);
   });
 });

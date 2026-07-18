@@ -1,20 +1,48 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-pattern='Electron|electron'
+list_electron_processes() {
+  ps -axo pid=,command= | while read -r pid command; do
+    if [ -z "${pid:-}" ] || [ "$pid" = "$$" ] || [ "$pid" = "${PPID:-}" ]; then
+      continue
+    fi
 
-if ! pgrep -af "$pattern" >/dev/null 2>&1; then
+    case "$command" in
+      *kill-all-electron.sh*)
+        continue
+        ;;
+      *Electron.app/Contents/MacOS/Electron*|*"node "*scripts/electron.cjs*)
+        printf '%s %s\n' "$pid" "$command"
+        ;;
+    esac
+  done
+}
+
+kill_electron_processes() {
+  local signal="$1"
+  local processes
+  processes="$(list_electron_processes)"
+  if [ -z "$processes" ]; then
+    return 0
+  fi
+  printf '%s\n' "$processes" | while read -r pid _; do
+    kill "-$signal" "$pid" 2>/dev/null || true
+  done
+}
+
+processes="$(list_electron_processes)"
+if [ -z "$processes" ]; then
   echo "No Electron processes found"
   exit 0
 fi
 
 echo "Electron processes before kill:"
-pgrep -af "$pattern"
+printf '%s\n' "$processes"
 
-pkill -f "$pattern" 2>/dev/null || true
+kill_electron_processes TERM
 
 for _ in $(seq 1 10); do
-  if ! pgrep -af "$pattern" >/dev/null 2>&1; then
+  if [ -z "$(list_electron_processes)" ]; then
     echo "All Electron processes stopped"
     exit 0
   fi
@@ -22,12 +50,13 @@ for _ in $(seq 1 10); do
 done
 
 echo "Forcing SIGKILL on remaining Electron processes..."
-pkill -9 -f "$pattern" 2>/dev/null || true
+kill_electron_processes KILL
 sleep 0.5
 
-if pgrep -af "$pattern" >/dev/null 2>&1; then
+processes="$(list_electron_processes)"
+if [ -n "$processes" ]; then
   echo "Some Electron processes are still running:"
-  pgrep -af "$pattern"
+  printf '%s\n' "$processes"
   exit 1
 fi
 

@@ -2,6 +2,8 @@
   "comment": "Example Invoker configuration file",
   "description": "Default location: ~/.invoker/config.json. For repo-specific configs, set INVOKER_REPO_CONFIG_PATH when launching Invoker.",
   "maxConcurrency": 6,
+  "defaultExecutionAgent": "codex",
+
 
   "executors": {
     "worktree": {
@@ -77,10 +79,42 @@
     }
   ],
 
+  "slackHarnessPresets": {
+    "comment": "Slack planning harness presets: preset key -> CLI tool + optional model. Selected via a leading [preset] tag in the lobby @Invoker message. Omit to use built-ins (cursor+claude / cursor+codex / omp / omp+claude / codex).",
+    "omp+claude": { "tool": "omp", "model": "anthropic/claude-opus-4" },
+    "cursor+codex": { "tool": "cursor", "model": "gpt-5-codex" },
+    "codex": { "tool": "codex" }
+  },
+  "defaultSlackHarnessPreset": "cursor+claude",
+  "slackRepos": {
+    "comment": "Slack repo aliases: alias -> git URL, resolved from a [repo:<alias>] tag",
+    "web": "git@github.com:acme/web.git",
+    "api": "git@github.com:acme/api.git"
+  },
+  "defaultRepoUrl": "git@github.com:acme/web.git",
+
   "autoFixRetries": 3,
   "autoApproveAIFixes": true,
+  "autoFixCi": false,
+
+  "prMaintenance": {
+    "comment": "Built-in owner-host PR maintenance workers. Enable on the host that owns the Invoker database; start/stop from Workers or run one scan with ./run.sh --headless worker <kind>.",
+    "enabled": true,
+    "repoRoot": "/srv/invoker",
+    "intervalMs": 300000,
+    "lockPath": "/tmp/invoker-pr-maintenance.lock",
+    "env": {
+      "INVOKER_GITHUB_TARGET_REPO": "acme/web",
+      "INVOKER_CODERABBIT_LOGIN": "coderabbitai[bot]"
+    }
+  },
+
+  "webToken": "change-me-to-a-long-random-secret",
+  "webHost": "127.0.0.1",
+  "webPort": 4200,
 
   "notes": {
+    "web_surface": "webToken enables the browser UI + Slack live status card surfaces. Env vars INVOKER_WEB_TOKEN / INVOKER_WEB_HOST / INVOKER_WEB_PORT override these. Set webHost to 0.0.0.0 to reach it from another machine (e.g. the DigitalOcean host); open http://<host>:<webPort>/?token=<webToken>.",
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
     "config_locations": [
       "~/.invoker/config.json - Default user-level settings",

@@ -1,0 +1,101 @@
+# Expected outcome: skill-doctor passes schema and atomicity, then fails
+# lint-review-units because one prompt combines ownership, scan, validation,
+# submission, wakeup routing, and CLI activation.
+name: "All-in-one auto-fix review unit"
+description: |
+  Standalone workflow waiver:
+  - This fixture intentionally models the original all-in-one auto-fix change so review-unit lint can reject it.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
+tasks:
+  - id: implement-all-in-one-autofix-recovery
+    description: |
+      Review claim:
+      - The recovery worker owns auto-fix recovery end to end.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Every submitted fix still goes through the existing mutation route.
+      Slice rationale:
+      - This intentionally keeps ownership, policy, wakeup, and CLI activation together to prove lint rejects it.
+      Architectural effect:
+      - Worker runtime ownership, persisted task scanning, candidate validation, intent submission, wakeup routing, and headless activation all change together.
+      Goal:
+      - Implement the complete auto-fix recovery path.
+      Motivation:
+      - Recover failed tasks after process restarts.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep the all-in-one slice to prove lint rejects it.
+      - Option B: split ownership, scan, validation, submit, wakeups, and activation into separate review units.
+      Implementation details:
+      - Move recovery ownership out of worker-runtime, scan failed tasks, validate stale candidates, submit fix intents, route lifecycle wakeups, and expose the headless worker command.
+      Non-goals:
+      - Do not add a generic worker registry.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/app/src/worker-runtime.ts
+      - packages/app/src/workers/auto-fix-recovery.ts
+      - packages/app/src/headless.ts
+      - packages/app/src/__tests__/auto-fix-recovery.test.ts
+      Change types:
+      - packages/app/src/worker-runtime.ts: modify
+      - packages/app/src/workers/auto-fix-recovery.ts: modify
+      - packages/app/src/headless.ts: modify
+      - packages/app/src/__tests__/auto-fix-recovery.test.ts: modify
+      Acceptance criteria:
+      - Ensure recovery worker ownership moves, failed tasks are scanned, stale candidates are validated, fix intents submit, wakeups route, and the CLI command works.
+    prompt: |
+      Review claim:
+      - The recovery worker owns auto-fix recovery end to end.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Every submitted fix still goes through the existing mutation route.
+      Slice rationale:
+      - This intentionally keeps ownership, policy, wakeup, and CLI activation together to prove lint rejects it.
+      Architectural effect:
+      - Worker runtime ownership, persisted task scanning, candidate validation, intent submission, wakeup routing, and headless activation all change together.
+      Goal:
+      - Implement the complete auto-fix recovery path.
+      Motivation:
+      - Recover failed tasks after process restarts.
+      Alternative considerations:
+      - Option A (chosen for fixture): keep the all-in-one slice to prove lint rejects it.
+      - Option B: split ownership, scan, validation, submit, wakeups, and activation into separate review units.
+      Implementation details:
+      - Move recovery ownership out of worker-runtime, scan failed tasks, validate stale candidates, submit fix intents, route lifecycle wakeups, and expose the headless worker command.
+      Non-goals:
+      - Do not add a generic worker registry.
+      Acceptance criteria:
+      - Ensure the end-to-end recovery path is present and tested.
+      Assume no prior context. Modify packages/app/src/worker-runtime.ts, packages/app/src/workers/auto-fix-recovery.ts, packages/app/src/headless.ts, and packages/app/src/__tests__/auto-fix-recovery.test.ts. Pass condition: pnpm --filter @invoker/app exec vitest run src/__tests__/worker-runtime.test.ts src/__tests__/auto-fix-recovery.test.ts src/__tests__/headless-autofix.test.ts exits 0.
+    dependencies: []
+  - id: final-regression
+    description: |
+      Review claim:
+      - Run the terminal full-suite regression gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command changes no production code and only validates the broad fixture.
+      Slice rationale:
+      - Terminal validation is separate from implementation work.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Run final full-suite regression gate.
+      Motivation:
+      - Ensure implementation updates remain stable.
+      Alternative considerations:
+      - Option A (chosen): full repository regression.
+      - Option B: package-only checks.
+      Implementation details:
+      - Execute root-level test gate after implementation task.
+      Non-goals:
+      - Do not modify source files.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [implement-all-in-one-autofix-recovery]

@@ -21,6 +21,8 @@ export class MockGit {
   private scripts: ScriptedResponse[] = [];
   private defaultBranch = 'master';
   private hasStagedChanges = false;
+  private remoteHeads = new Map<string, string>();
+  private readonly defaultSha = 'abc123';
 
   /** Script a response for calls matching a predicate. */
   on(match: (args: string[]) => boolean, response: string | Error, once = false): this {
@@ -66,6 +68,7 @@ export class MockGit {
     this.scripts = [];
     this.calls = [];
     this.hasStagedChanges = false;
+    this.remoteHeads.clear();
     return this;
   }
 
@@ -131,8 +134,17 @@ export class MockGit {
     }
     if (args[0] === 'branch') return '';
     if (args[0] === 'symbolic-ref') return `refs/remotes/origin/${this.defaultBranch}`;
-    if (args[0] === 'rev-parse') return 'abc123';
-    if (args[0] === 'push') return '';
+    if (args[0] === 'rev-parse') return this.defaultSha;
+    if (args[0] === 'push') {
+      this.recordPush(args);
+      return '';
+    }
+    if (args[0] === 'ls-remote' && args.includes('--heads')) {
+      const branch = this.lsRemoteBranch(args);
+      if (!branch) return '';
+      const sha = this.remoteHeads.get(branch);
+      return sha ? `${sha}\trefs/heads/${branch}\n` : '';
+    }
     // diff --cached --quiet exits non-zero when there are staged changes
     if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) {
       if (this.hasStagedChanges) {
@@ -141,5 +153,28 @@ export class MockGit {
       return '';
     }
     return '';
+  }
+
+  private recordPush(args: string[]): void {
+    const refspec = args[args.length - 1] ?? '';
+    if (!refspec || refspec.startsWith('-') || refspec === 'origin') return;
+    const remoteRef = refspec.includes(':') ? refspec.split(':').pop()! : refspec;
+    const branch = remoteRef.replace(/^refs\/heads\//, '');
+    if (branch.length === 0) return;
+    this.remoteHeads.set(branch, this.defaultSha);
+  }
+
+  private lsRemoteBranch(args: string[]): string | undefined {
+    const dashDash = args.indexOf('--');
+    if (dashDash >= 0 && args[dashDash + 1]) return args[dashDash + 1];
+    const headsIdx = args.indexOf('--heads');
+    if (headsIdx >= 0) {
+      for (let i = headsIdx + 1; i < args.length; i += 1) {
+        const value = args[i]!;
+        if (value === 'origin' || value.startsWith('-')) continue;
+        return value;
+      }
+    }
+    return undefined;
   }
 }

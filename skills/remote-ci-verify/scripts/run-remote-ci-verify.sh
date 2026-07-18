@@ -149,24 +149,35 @@ fi
 echo "==> Selected target: $SELECTED_ID ($SELECTED_USER@$SELECTED_HOST:$SELECTED_PORT)"
 
 echo "==> Running remote CI-equivalent flow"
+# Single-quote a value so the remote POSIX shell re-parses it as one token.
+# Without this, a multi-word value (e.g. CI_VERIFY_REMOTE_TEST_COMMAND="pnpm run
+# test:all") is split by the remote shell into `VAR=pnpm run test:all`, leaving
+# `run` to be executed as a command ("run: command not found").
+sh_squote() {
+  local s=${1-}
+  printf "'%s'" "${s//\'/\'\\\'\'}"
+}
+
+REMOTE_ENV=$(printf '%s ' \
+  "BRANCH=$(sh_squote "$BRANCH")" \
+  "REMOTE_NAME=$(sh_squote "$REMOTE_NAME")" \
+  "REPO_URL=$(sh_squote "$REPO_URL")" \
+  "REPO_SLUG=$(sh_squote "$REPO_SLUG")" \
+  "TARGET_ID=$(sh_squote "$SELECTED_ID")" \
+  "CI_VERIFY_REMOTE_BASE_DIR=$(sh_squote "$REMOTE_BASE_DIR")" \
+  "CI_VERIFY_REMOTE_INSTALL=$(sh_squote "$REMOTE_INSTALL")" \
+  "CI_VERIFY_REMOTE_BUILD_UI=$(sh_squote "$REMOTE_BUILD_UI")" \
+  "CI_VERIFY_REMOTE_INSTALL_PLAYWRIGHT_DEPS=$(sh_squote "$REMOTE_INSTALL_PLAYWRIGHT_DEPS")" \
+  "CI_VERIFY_KEEP_REMOTE_WORKTREE=$(sh_squote "$REMOTE_KEEP_WORKTREE")" \
+  "CI_VERIFY_REMOTE_TEST_COMMAND=$(sh_squote "$REMOTE_TEST_CMD")")
+
 ssh -tt \
   -i "$SELECTED_KEY" \
   -p "$SELECTED_PORT" \
   -o BatchMode=yes \
   -o StrictHostKeyChecking=accept-new \
   "$SELECTED_USER@$SELECTED_HOST" \
-  BRANCH="$BRANCH" \
-  REMOTE_NAME="$REMOTE_NAME" \
-  REPO_URL="$REPO_URL" \
-  REPO_SLUG="$REPO_SLUG" \
-  TARGET_ID="$SELECTED_ID" \
-  CI_VERIFY_REMOTE_BASE_DIR="$REMOTE_BASE_DIR" \
-  CI_VERIFY_REMOTE_INSTALL="$REMOTE_INSTALL" \
-  CI_VERIFY_REMOTE_BUILD_UI="$REMOTE_BUILD_UI" \
-  CI_VERIFY_REMOTE_INSTALL_PLAYWRIGHT_DEPS="$REMOTE_INSTALL_PLAYWRIGHT_DEPS" \
-  CI_VERIFY_KEEP_REMOTE_WORKTREE="$REMOTE_KEEP_WORKTREE" \
-  CI_VERIFY_REMOTE_TEST_COMMAND="$REMOTE_TEST_CMD" \
-  'bash -se' <<'REMOTE_EOF'
+  "${REMOTE_ENV}bash -se" <<'REMOTE_EOF'
 set -euo pipefail
 
 : "${BRANCH:?}"

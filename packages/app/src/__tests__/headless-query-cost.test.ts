@@ -112,7 +112,6 @@ describe('headless query cost', () => {
       repoRoot: '/fake/repo',
       invokerConfig: {} as any,
       initServices: vi.fn(async () => {}),
-      wireSlackBot: vi.fn(async () => ({})),
     };
     mockDeps.orchestrator.syncFromDb = vi.fn();
     mockDeps.orchestrator.getAllTasks = vi.fn(() => tasksForWf1 as any);
@@ -317,7 +316,6 @@ describe('headless query cost-events', () => {
       repoRoot: '/fake/repo',
       invokerConfig: {} as any,
       initServices: vi.fn(async () => {}),
-      wireSlackBot: vi.fn(async () => ({})),
     };
     mockDeps.orchestrator.syncFromDb = vi.fn();
     mockDeps.orchestrator.getAllTasks = vi.fn(() => tasksForWf1 as any);

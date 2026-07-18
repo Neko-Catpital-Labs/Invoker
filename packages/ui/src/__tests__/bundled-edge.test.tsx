@@ -4,13 +4,17 @@ import { describe, expect, it } from 'vitest';
 
 import { BundledEdge, type BundledEdgeData } from '../components/BundledEdge.js';
 
-function renderEdge(data?: Partial<BundledEdgeData>, selected = false) {
+function renderEdge(
+  data?: Partial<BundledEdgeData>,
+  selected = false,
+  endpoints: { source?: string; target?: string } = {},
+) {
   return render(
     <svg>
       <BundledEdge
         id="edge-a-b"
-        source="a"
-        target="b"
+        source={endpoints.source ?? 'a'}
+        target={endpoints.target ?? 'b'}
         sourceX={10}
         sourceY={20}
         targetX={110}
@@ -79,5 +83,18 @@ describe('BundledEdge', () => {
     const { container } = renderEdge({ external: true, selectionActive: true });
 
     expect(visibleEdgePath(container).getAttribute('style')).toContain('opacity: 0.86');
+  });
+
+  it('renders the supplied scoped-task edge label without falling back to workflow-prefixed ids', () => {
+    const { container, getByText } = renderEdge(
+      { label: 'setup-task → render-task' },
+      false,
+      { source: 'wf-alpha/setup-task', target: 'wf-alpha/render-task' },
+    );
+
+    fireEvent.mouseEnter(container.querySelector('.bundled-edge-group')!);
+
+    expect(getByText('setup-task → render-task')).toBeInTheDocument();
+    expect(container.textContent).not.toContain('wf-alpha');
   });
 });

@@ -25,7 +25,6 @@ function makeDeps() {
     repoRoot: '/fake/repo',
     invokerConfig: {},
     initServices: vi.fn(async () => {}),
-    wireSlackBot: vi.fn(async () => ({})),
   } as any;
 }
 

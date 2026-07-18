@@ -13,6 +13,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
+import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
 
@@ -58,77 +59,83 @@ base.describe('Orphan task relaunch on restart', () => {
   base('orphaned running task is relaunched after app restart', async () => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
     const configPath = path.join(testDir, 'e2e-config.json');
+    const electronUserDataDir = path.join(testDir, 'electron-user-data');
     writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
+    rmSync(electronUserDataDir, { recursive: true, force: true });
+    registerTrackedBrowserUserDataDir(electronUserDataDir);
 
     try {
-    const app1 = await electron.launch({
-      args: launchArgs(),
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        INVOKER_DB_DIR: testDir,
-        INVOKER_ALLOW_DELETE_ALL: '1',
-        INVOKER_E2E_ENABLE_COMPOSITOR: '1',
-        INVOKER_REPO_CONFIG_PATH: configPath,
-      },
-    });
-    const page1 = await app1.firstWindow();
-    await waitForInvoker(page1);
+      const app1 = await electron.launch({
+        args: [`--user-data-dir=${electronUserDataDir}`, ...launchArgs()],
+        env: {
+          ...process.env,
+          NODE_ENV: 'test',
+          INVOKER_TEST_WORKFLOW_IDS: '1',
+          INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
+          INVOKER_DB_DIR: testDir,
+          INVOKER_ALLOW_DELETE_ALL: '1',
+          INVOKER_E2E_ENABLE_COMPOSITOR: '1',
+          INVOKER_REPO_CONFIG_PATH: configPath,
+          INVOKER_USER_DATA_DIR: electronUserDataDir,
+        },
+      });
+      const page1 = await app1.firstWindow();
+      await waitForInvoker(page1);
 
-    // Clear any leftover state
-    await page1.evaluate(async () => {
-      await window.invoker.clear();
-      await window.invoker.deleteAllWorkflows();
-    });
+      // Clear any leftover state
+      await page1.evaluate(async () => {
+        await window.invoker.clear();
+        await window.invoker.deleteAllWorkflows();
+      });
 
-    // Load the plan and synthesize an orphaned running task with no live handle.
-    await page1.evaluate((planYaml) => window.invoker.loadPlan(planYaml), yamlStringify(RELAUNCH_PLAN));
-    const loadedResult = await page1.evaluate(() => window.invoker.getTasks(true));
-    const loadedTasks = Array.isArray(loadedResult) ? loadedResult : loadedResult.tasks;
-    const loadedSlow = findTask(loadedTasks, 'slow-task');
-    expect(loadedSlow).toBeDefined();
+      // Load the plan and synthesize an orphaned running task with no live handle.
+      await page1.evaluate((planYaml) => window.invoker.loadPlan(planYaml), yamlStringify(RELAUNCH_PLAN));
+      const loadedResult = await page1.evaluate(() => window.invoker.getTasks());
+      const loadedTasks = Array.isArray(loadedResult) ? loadedResult : loadedResult.tasks;
+      const loadedSlow = findTask(loadedTasks, 'slow-task');
+      expect(loadedSlow).toBeDefined();
 
-    await page1.evaluate(async ({ taskId }) => {
-      const now = new Date().toISOString();
-      await window.invoker.injectTaskStates?.([
-        {
-          taskId,
-          changes: {
-            status: 'running',
-            execution: {
-              phase: 'launching',
-              startedAt: now,
-              lastHeartbeatAt: now,
-              launchStartedAt: now,
+      await page1.evaluate(async ({ taskId }) => {
+        const now = new Date().toISOString();
+        await window.invoker.injectTaskStates?.([
+          {
+            taskId,
+            changes: {
+              status: 'running',
+              execution: {
+                phase: 'launching',
+                startedAt: now,
+                lastHeartbeatAt: now,
+                launchStartedAt: now,
+              },
             },
           },
-        },
-      ]);
-    }, { taskId: loadedSlow!.id });
+        ]);
+      }, { taskId: loadedSlow!.id });
 
-    await page1.evaluate(() => window.invoker.resumeWorkflow());
+      await page1.evaluate(() => window.invoker.resumeWorkflow());
 
-    const deadline2 = Date.now() + 60_000;
-    let observedSlow: any;
-    while (Date.now() < deadline2) {
-      const snapshot = await page1.evaluate(() => window.invoker.getTasks(true));
-      const tasks = Array.isArray(snapshot) ? snapshot : snapshot.tasks;
-      observedSlow = findTask(tasks, 'slow-task');
-      if (observedSlow?.status === 'running' && observedSlow?.execution?.phase !== 'launching') {
-        break;
+      const deadline2 = Date.now() + 60_000;
+      let observedSlow: any;
+      while (Date.now() < deadline2) {
+        const snapshot = await page1.evaluate(() => window.invoker.getTasks());
+        const tasks = Array.isArray(snapshot) ? snapshot : snapshot.tasks;
+        observedSlow = findTask(tasks, 'slow-task');
+        if (observedSlow?.status === 'running' && observedSlow?.execution?.phase !== 'launching') {
+          break;
+        }
+        await page1.waitForTimeout(300);
       }
-      await page1.waitForTimeout(300);
-    }
-    expect(observedSlow).toBeDefined();
-    expect(observedSlow?.status).toBe('running');
-    expect(observedSlow?.execution?.phase).not.toBe('launching');
+      expect(observedSlow).toBeDefined();
+      expect(observedSlow?.status).toBe('running');
+      expect(observedSlow?.execution?.phase).not.toBe('launching');
 
-    const postResult = await page1.evaluate(() => window.invoker.getTasks(true));
-    const postTasks = Array.isArray(postResult) ? postResult : postResult.tasks;
-    const postSlow = findTask(postTasks, 'slow-task');
-    expect(postSlow).toBeDefined();
-    expect(postSlow?.status).toBe('running');
-    await app1.close();
+      const postResult = await page1.evaluate(() => window.invoker.getTasks());
+      const postTasks = Array.isArray(postResult) ? postResult : postResult.tasks;
+      const postSlow = findTask(postTasks, 'slow-task');
+      expect(postSlow).toBeDefined();
+      expect(postSlow?.status).toBe('running');
+      await app1.close();
     } finally {
       if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
         rmSync(testDir, { recursive: true, force: true });
