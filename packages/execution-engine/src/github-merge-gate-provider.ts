@@ -346,14 +346,37 @@ function stringProp(value: Record<string, unknown>, ...keys: string[]): string |
   return undefined;
 }
 
+function checkRecencyMs(check: Record<string, unknown>): number {
+  const stamp = stringProp(check, 'completedAt', 'startedAt');
+  if (!stamp) return Number.NEGATIVE_INFINITY;
+  const ms = Date.parse(stamp);
+  return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+}
+
+// statusCheckRollup retains historical runs; only the latest per name is current.
+function latestStatusChecksByName(items: unknown[]): Record<string, unknown>[] {
+  const latestByName = new Map<string, { check: Record<string, unknown>; recency: number; index: number }>();
+  items.forEach((item, index) => {
+    if (!item || typeof item !== 'object') return;
+    const check = item as Record<string, unknown>;
+    const name = stringProp(check, 'name', 'workflowName', 'context') ?? 'unknown check';
+    const recency = checkRecencyMs(check);
+    const previous = latestByName.get(name);
+    if (!previous || recency > previous.recency || (recency === previous.recency && index > previous.index)) {
+      latestByName.set(name, { check, recency, index });
+    }
+  });
+  return [...latestByName.values()]
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.check);
+}
+
 function summarizeStatusChecks(items: unknown[] | undefined): MergeGateApprovalStatus['checks'] {
   if (!Array.isArray(items) || items.length === 0) return undefined;
 
   let hasPending = false;
   const failed: MergeGateFailedCheck[] = [];
-  for (const item of items) {
-    if (!item || typeof item !== 'object') continue;
-    const check = item as Record<string, unknown>;
+  for (const check of latestStatusChecksByName(items)) {
     const name = stringProp(check, 'name', 'workflowName', 'context') ?? 'unknown check';
     const status = stringProp(check, 'status')?.toUpperCase();
     const conclusion = stringProp(check, 'conclusion')?.toUpperCase();
