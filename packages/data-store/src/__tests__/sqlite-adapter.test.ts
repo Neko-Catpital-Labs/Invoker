@@ -1003,6 +1003,50 @@ describe('SQLiteAdapter', () => {
       expect(leases).toHaveLength(1);
       expect(leases[0]?.resourceKey).toBe('ssh:live-b');
     });
+
+    it('allows up to maxHolders live holders on one resource key', () => {
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@counted.example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-1',
+        maxHolders: 2,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@counted.example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-2',
+        maxHolders: 2,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@counted.example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-3',
+        maxHolders: 2,
+      })).toBe(false);
+
+      expect(adapter.countExecutionResourceLeases('ssh:invoker@counted.example.com:22')).toBe(2);
+      expect(adapter.listExecutionResourceLeasesByKey('ssh:invoker@counted.example.com:22')).toHaveLength(2);
+    });
+
+    it('renews an existing holder without consuming an extra maxHolders slot', () => {
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@renew.example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-1',
+        maxHolders: 1,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:invoker@renew.example.com:22',
+        resourceType: 'ssh',
+        holderId: 'holder-1',
+        maxHolders: 1,
+        taskId: 'task-renewed',
+      })).toBe(true);
+
+      const leases = adapter.listExecutionResourceLeasesByKey('ssh:invoker@renew.example.com:22');
+      expect(leases).toHaveLength(1);
+      expect(leases[0]?.taskId).toBe('task-renewed');
+    });
   });
 
   describe('task_launch_dispatch outbox', () => {
