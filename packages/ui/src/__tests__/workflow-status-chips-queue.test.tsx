@@ -11,6 +11,8 @@ describe('WorkflowStatusChips queue capacity', () => {
     const queueStatus: QueueStatus = {
       maxConcurrency: 8,
       runningCount: 3,
+      activeExecutionCount: 1,
+      launchingCount: 2,
       running: [
         { taskId: 'a', description: 'a' },
         { taskId: 'b', description: 'b' },
@@ -33,9 +35,11 @@ describe('WorkflowStatusChips queue capacity', () => {
       />,
     );
 
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (3/8)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/8)');
+    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (3/8)');
+    expect(screen.getByTestId('queue-chip-launching')).toHaveTextContent('Launching (2)');
     expect(screen.getByTestId('queue-chip-queued')).toHaveTextContent('Queued (2)');
-    expect(screen.getByTestId('workflow-status-pill-running')).toHaveTextContent('running (1)');
+    expect(screen.getByTestId('workflow-status-pill-running')).toHaveTextContent('workflows running (1)');
 
     fireEvent.click(screen.getByTestId('queue-chip-queued'));
     expect(onOpenRunningSurface).toHaveBeenCalledTimes(1);
