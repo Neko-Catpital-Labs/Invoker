@@ -10,6 +10,7 @@ import {
 function needsActionGraphDetail(status: string): boolean {
   switch (status) {
     case 'running':
+    case 'queued':
     case 'failed':
     case 'fixing_with_ai':
     case 'blocked':
