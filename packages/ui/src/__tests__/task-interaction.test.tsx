@@ -94,7 +94,7 @@ describe('Task interaction (component)', () => {
     });
   });
 
-  it('clicking workflow graph background dismisses the selected mini DAG', async () => {
+  it('clicking workflow graph background keeps the selected mini DAG', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
 
@@ -110,7 +110,8 @@ describe('Task interaction (component)', () => {
     fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
 
     await waitFor(() => {
-      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
   });
 
