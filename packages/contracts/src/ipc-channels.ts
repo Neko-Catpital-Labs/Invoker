@@ -253,6 +253,29 @@ export interface SystemDiagnostics {
   bundledSkills?: BundledSkillsStatus;
 }
 
+export interface PlanningChatSeedTranscriptResult {
+  threadTs: string;
+  messageCount: number;
+  messageBytes: number;
+}
+
+export interface PlanningChatOpenResult {
+  threadTs: string;
+  messageCount: number;
+}
+
+export interface PlanningChatSendOptions {
+  responseOverride?: string;
+  responseDelayMs?: number;
+}
+
+export interface PlanningChatSendResult {
+  threadTs: string;
+  reply: string;
+  messageCount: number;
+  elapsedMs: number;
+}
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -531,6 +554,18 @@ export const IpcTestOnlyChannels = {
   'invoker:inject-task-states': {} as {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
     response: void;
+  },
+  'invoker:planning-chat-seed-transcript': {} as {
+    request: [threadTs: string, messageCount?: number, messageBytes?: number];
+    response: PlanningChatSeedTranscriptResult;
+  },
+  'invoker:planning-chat-open': {} as {
+    request: [threadTs: string];
+    response: PlanningChatOpenResult;
+  },
+  'invoker:planning-chat-send': {} as {
+    request: [threadTs: string, userMessage: string, options?: PlanningChatSendOptions];
+    response: PlanningChatSendResult;
   },
 } as const;
 

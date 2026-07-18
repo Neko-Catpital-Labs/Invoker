@@ -59,7 +59,7 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope, CommandError } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type { PlanningChatSendOptions, WorkResponse } from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
@@ -170,6 +170,24 @@ function isTaskInFlightForForcedStop(task: TaskState): boolean {
 declare const __BUILD_SHA__: string | undefined;
 declare const __BUILD_VERSION__: string | undefined;
 
+type PlanningChatLogFn = (source: string, level: string, message: string) => void;
+
+interface PlanConversationInstance {
+  init(): Promise<void>;
+  sendMessage(userMessage: string): Promise<string>;
+  readonly history: readonly unknown[];
+  spawnCursor(prompt: string): Promise<string>;
+}
+
+type PlanConversationConstructor = new (config: {
+  threadTs: string;
+  conversationRepo: ConversationRepository;
+  cursorCommand: string;
+  workingDir: string;
+  timeoutMs: number;
+  log: PlanningChatLogFn;
+}) => PlanConversationInstance;
+
 // ── Detect headless mode ─────────────────────────────────────
 
 // Electron passes extra args after `--` or interleaves them.
@@ -217,6 +235,7 @@ let commandService: CommandService;
 let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const planningChatTestConversations = new Map<string, PlanConversationInstance>();
 /**
  * The mutation context for the currently executing workflow mutation.
  * Set by the coordinator dispatch callback before invoking the handler,
@@ -2808,6 +2827,116 @@ if (isHeadless) {
           orchestrator.syncAllFromDb();
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('invoker:workflows-changed', persistence.listWorkflows());
+          }
+        },
+      );
+
+      const planningChatLog = {
+        info: (msg: string) => logger.info(msg, { module: 'planning-chat-test' }),
+        warn: (msg: string) => logger.warn(msg, { module: 'planning-chat-test' }),
+        error: (msg: string) => logger.error(msg, { module: 'planning-chat-test' }),
+      };
+
+      const makePlanningConversationRepo = () => new ConversationRepository(persistence, planningChatLog);
+
+      const toBoundedInteger = (value: unknown, fallback: number, max: number): number => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric <= 0) return fallback;
+        return Math.min(Math.floor(numeric), max);
+      };
+
+      const requireThreadTs = (value: unknown): string => {
+        const threadTs = String(value ?? '').trim();
+        if (!threadTs) throw new Error('threadTs is required');
+        return threadTs;
+      };
+
+      ipcMain.handle(
+        'invoker:planning-chat-seed-transcript',
+        (_event, threadTsArg: unknown, messageCountArg?: unknown, messageBytesArg?: unknown) => {
+          const threadTs = requireThreadTs(threadTsArg);
+          const messageCount = toBoundedInteger(messageCountArg, 2_500, 10_000);
+          const messageBytes = toBoundedInteger(messageBytesArg, 1_024, 8_192);
+          const now = new Date().toISOString();
+
+          persistence.runInTransaction(() => {
+            persistence.deleteConversation(threadTs);
+            persistence.saveConversation({
+              threadTs,
+              channelId: 'e2e-planning-chat',
+              userId: 'e2e-user',
+              extractedPlan: null,
+              planSubmitted: false,
+              createdAt: now,
+              updatedAt: now,
+            });
+
+            for (let index = 0; index < messageCount; index += 1) {
+              const role = index % 2 === 0 ? 'user' : 'assistant';
+              const prefix = `planning transcript pressure ${index}: `;
+              const content = prefix + 'x'.repeat(Math.max(0, messageBytes - prefix.length));
+              persistence.appendMessage(threadTs, role, content);
+            }
+          });
+
+          planningChatTestConversations.delete(threadTs);
+          return { threadTs, messageCount: persistence.countMessages(threadTs), messageBytes };
+        },
+      );
+
+      ipcMain.handle('invoker:planning-chat-open', async (_event, threadTsArg: unknown) => {
+        const threadTs = requireThreadTs(threadTsArg);
+        const { PlanConversation } = loadSurfaces() as { PlanConversation: PlanConversationConstructor };
+        const conversation = new PlanConversation({
+          threadTs,
+          conversationRepo: makePlanningConversationRepo(),
+          cursorCommand: 'invoker-e2e-planning-chat-override',
+          workingDir: repoRoot,
+          timeoutMs: 5_000,
+          log: (source, level, message) => {
+            const logMethod = level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info';
+            logger[logMethod](message, { module: source });
+          },
+        });
+        await conversation.init();
+        planningChatTestConversations.set(threadTs, conversation);
+        return { threadTs, messageCount: conversation.history.length };
+      });
+
+      ipcMain.handle(
+        'invoker:planning-chat-send',
+        async (_event, threadTsArg: unknown, userMessageArg: unknown, optionsArg?: PlanningChatSendOptions) => {
+          const threadTs = requireThreadTs(threadTsArg);
+          const conversation = planningChatTestConversations.get(threadTs);
+          if (!conversation) {
+            throw new Error(`Planning chat "${threadTs}" has not been opened`);
+          }
+
+          const options = optionsArg ?? {};
+          const responseOverride = typeof options.responseOverride === 'string'
+            ? options.responseOverride
+            : 'Deterministic planning chat response';
+          const responseDelayMs = toBoundedInteger(options.responseDelayMs, 1_000, 10_000);
+          const mutableConversation = conversation as PlanConversationInstance & {
+            spawnCursor(prompt: string): Promise<string>;
+          };
+          const originalSpawnCursor = mutableConversation.spawnCursor.bind(mutableConversation);
+          mutableConversation.spawnCursor = async () => {
+            await new Promise<void>((resolve) => setTimeout(resolve, responseDelayMs));
+            return responseOverride;
+          };
+
+          const startedAt = Date.now();
+          try {
+            const reply = await conversation.sendMessage(String(userMessageArg ?? ''));
+            return {
+              threadTs,
+              reply,
+              messageCount: conversation.history.length,
+              elapsedMs: Date.now() - startedAt,
+            };
+          } finally {
+            mutableConversation.spawnCursor = originalSpawnCursor;
           }
         },
       );
