@@ -609,7 +609,7 @@ export interface StartReadyPreview {
   failedWorkflowIds: string[];
   pendingWorkflowIds: string[];
   runningWorkflowIds: string[];
-  completedWorkflowIds: string[];
+  completedWorkflowIds?: string[];
   skipped: {
     awaitingApproval: number;
     reviewReady: number;
@@ -617,7 +617,7 @@ export interface StartReadyPreview {
     failedTasks: number;
     pendingTasks: number;
     runningTasks: number;
-    completedTasks: number;
+    completedTasks?: number;
   };
 }
 
