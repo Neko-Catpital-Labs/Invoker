@@ -19,7 +19,7 @@ export function readDefaultSlackHarnessPreset(configPath = resolveInvokerConfigP
 }
 
 export function resolveDefaultHarnessPreset(envPreset: string | undefined, configPreset: string | undefined): string | undefined {
-  if (envPreset?.trim()) return envPreset.trim();
   if (configPreset?.trim()) return configPreset.trim();
+  if (envPreset?.trim()) return envPreset.trim();
   return undefined;
 }
