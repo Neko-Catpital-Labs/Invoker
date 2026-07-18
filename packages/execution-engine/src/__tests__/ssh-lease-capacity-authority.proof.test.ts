@@ -4,14 +4,10 @@ import type { TaskState } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '@invoker/data-store';
 
 /**
- * Proof for durable SSH lease capacity authority.
+ * Authority proof for durable SSH lease capacity.
  *
- * Desired end state (slices 2–4): SSH member capacity is decided by unexpired
- * `execution_resource_leases` rows (host-keyed), not by in-memory
- * `activeExecutions` / `pendingPoolSelections`.
- *
- * These tests use `it.fails` so CI stays green while the current memory-backed
- * authority still exhibits the buggy contract. Fix slices remove `.fails`.
+ * SSH member capacity is decided by unexpired `execution_resource_leases`
+ * rows (host-keyed), not by in-memory `activeExecutions` / `pendingPoolSelections`.
  */
 
 const sharedHost = {
