@@ -10,6 +10,13 @@ interface WorkflowInspectorProps {
   remoteTargets?: string[];
   executionPools?: string[];
   executionAgents?: string[];
+  mutationFailure?: {
+    taskId: string;
+    workflowId?: string;
+    message: string;
+    mutationKind?: string;
+    intentId?: string | number;
+  } | null;
   actionNode?: unknown;
   collapsed: boolean;
   advancedExpanded: boolean;
@@ -48,6 +55,7 @@ export function WorkflowInspector({
   workflowTasks,
   executionPools,
   executionAgents,
+  mutationFailure,
   collapsed,
   advancedExpanded,
   onEditPool,
@@ -190,6 +198,25 @@ export function WorkflowInspector({
             <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
           )}
         </section>
+
+        {task && mutationFailure && (
+          <section
+            data-testid="task-mutation-failure-detail"
+            className="rounded border border-amber-500/50 bg-amber-950/30 p-3"
+          >
+            <h3 className="text-[11px] uppercase tracking-wide text-amber-200">Mutation failure</h3>
+            <p className="mt-1 text-xs text-amber-100 break-words">{mutationFailure.message}</p>
+            <div className="mt-2 space-y-1 text-[11px] text-amber-100/80">
+              {mutationFailure.mutationKind && (
+                <div>mutation: {mutationFailure.mutationKind}</div>
+              )}
+              {mutationFailure.intentId !== undefined && (
+                <div>intent: {mutationFailure.intentId}</div>
+              )}
+              <div>task: {mutationFailure.taskId}</div>
+            </div>
+          </section>
+        )}
 
         {task && !task.config.isMergeNode && onEditPool && (
           <section className="rounded border border-gray-700 bg-gray-800/70 p-3">
