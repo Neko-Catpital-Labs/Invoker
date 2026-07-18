@@ -30,7 +30,11 @@ import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { StatusBar } from './components/StatusBar.js';
-import { TerminalDrawer } from './components/TerminalDrawer.js';
+import {
+  InvokerTerminal,
+  type DraftPlanSummary,
+  type PlanningChatSendResponse,
+} from './components/InvokerTerminal.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -246,6 +250,7 @@ export function App() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
+  const [draftPlanSummary, setDraftPlanSummary] = useState<DraftPlanSummary | null>(null);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
@@ -652,6 +657,7 @@ export function App() {
         const parsed = yaml.load(planText) as any;
         setPlanName(parsed?.name ?? 'Untitled Plan');
         setOnFinish(parsed?.onFinish ?? 'merge');
+        setDraftPlanSummary(null);
         refreshTasks();
       } catch (err) {
         console.error('Failed to load plan:', err);
@@ -683,6 +689,39 @@ export function App() {
     [handleLoadPlan],
   );
 
+  const handlePlanningChatSend = useCallback(
+    async (message: string): Promise<PlanningChatSendResponse> => {
+      const planningInvoker = window.invoker as typeof window.invoker & {
+        sendPlanningChatMessage?: (message: string) => Promise<PlanningChatSendResponse>;
+      };
+      if (!planningInvoker?.sendPlanningChatMessage) {
+        throw new Error('Planning chat is unavailable.');
+      }
+
+      const response = await planningInvoker.sendPlanningChatMessage(message);
+      if (typeof response !== 'string' && response) {
+        if ('draftPlanSummary' in response) {
+          setDraftPlanSummary(response.draftPlanSummary ?? null);
+        }
+
+        const submittedPlanText = response.planSubmitted
+          ? response.submittedPlanText ?? response.planText ?? null
+          : null;
+        if (submittedPlanText) {
+          await handleLoadPlan(submittedPlanText);
+          setDraftPlanSummary(null);
+        }
+      }
+
+      return response;
+    },
+    [handleLoadPlan],
+  );
+
+  const handleClearPlanningChat = useCallback(() => {
+    setDraftPlanSummary(null);
+  }, []);
+
   const handleStart = useCallback(async () => {
     if (!invoker) return;
     try {
@@ -711,6 +750,7 @@ export function App() {
       setHasStarted(false);
       setPlanName(null);
       setOnFinish('merge');
+      setDraftPlanSummary(null);
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
@@ -732,6 +772,7 @@ export function App() {
       setHasLoadedPlan(false);
       setHasStarted(false);
       setPlanName(null);
+      setDraftPlanSummary(null);
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
@@ -1140,9 +1181,12 @@ export function App() {
                   activeFilters={statusFilters}
                   onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
                 />
-                <TerminalDrawer
+                <InvokerTerminal
                   collapsed={terminalCollapsed}
                   onToggle={() => setTerminalCollapsed((prev) => !prev)}
+                  draftPlanSummary={draftPlanSummary}
+                  onPlanningChatSend={handlePlanningChatSend}
+                  onClearPlanningChat={handleClearPlanningChat}
                 />
               </>
             )}
