@@ -40,6 +40,7 @@ interface TaskDAGProps {
   tasks: Map<string, TaskState>;
   workflows?: Map<string, WorkflowMeta>;
   selectedTaskId?: string | null;
+  cameraSelection?: { requestId: number; target: string } | null;
   onTaskClick?: (task: TaskState) => void;
   onTaskDoubleClick?: (task: TaskState) => void;
   onTaskContextMenu?: (task: TaskState, event: React.MouseEvent) => void;
@@ -125,8 +126,8 @@ function layoutKeyFor(tasks: TaskState[], edges: RawTaskEdge[]): string {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
-  const { fitView } = useReactFlow();
+function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraSelection, onTaskClick, onTaskDoubleClick, onTaskContextMenu, statusFilters }: TaskDAGProps) {
+  const { fitView, setCenter, getZoom } = useReactFlow();
   const prevNodeCount = useRef(0);
   const reportedGraphVisibleRef = useRef(false);
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
@@ -393,6 +394,16 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, onTaskClick, onTaskDou
       requestAnimationFrame(() => fitView({ padding: 0.2 }));
     }
   }, [nodes.length, fitView]);
+
+  useEffect(() => {
+    if (!cameraSelection) return;
+    const position = activeLayout.positions.get(cameraSelection.target);
+    if (!position) return;
+    const frame = requestAnimationFrame(() => {
+      setCenter(position.x + 132, position.y + 44, { zoom: getZoom() });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeLayout.positions, cameraSelection, getZoom, setCenter]);
 
   useEffect(() => {
     if (reportedGraphVisibleRef.current || nodes.length === 0 || typeof window === 'undefined') {

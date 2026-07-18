@@ -23,6 +23,7 @@ interface WorkflowGraphProps {
   workflows: Map<string, WorkflowMeta>;
   selectedWorkflowId: string | null;
   statusFilters: Set<WorkflowStatus>;
+  cameraSelection?: { requestId: number; target: string } | null;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: MouseEvent, workflowId: string) => void;
 }
@@ -68,10 +69,11 @@ function WorkflowGraphInner({
   workflows,
   selectedWorkflowId,
   statusFilters,
+  cameraSelection,
   onSelectWorkflow,
   onWorkflowContextMenu,
 }: WorkflowGraphProps): JSX.Element {
-  const { fitView } = useReactFlow();
+  const { fitView, setCenter, getZoom } = useReactFlow();
   const reportedVisibleRef = useRef(false);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
@@ -178,6 +180,16 @@ function WorkflowGraphInner({
     });
     return () => cancelAnimationFrame(frame);
   }, [fitView, graph.nodes.length, graphSignature]);
+
+  useEffect(() => {
+    if (!cameraSelection || typeof window === 'undefined') return;
+    const position = positions.get(cameraSelection.target);
+    if (!position) return;
+    const frame = requestAnimationFrame(() => {
+      setCenter(position.x + 110, position.y + 44, { zoom: getZoom() });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [cameraSelection, getZoom, positions, setCenter]);
 
   if (graph.nodes.length === 0) {
     return (
