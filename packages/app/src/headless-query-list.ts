@@ -66,7 +66,7 @@ export type HeadlessQueryDeps = Pick<
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|task-output|container-id|queue|review-gate|action-graph|audit|session|workers|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|task-output|container-id|queue|review-gate|action-graph|audit|session|workers|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats|execution-leases>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -427,8 +427,61 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       await headlessCosts(flags, deps);
       break;
     }
+    case 'execution-leases': {
+      const listLeases = deps.persistence.listExecutionResourceLeases?.bind(deps.persistence);
+      if (!listLeases) {
+        throw new Error('Persistence adapter does not support listExecutionResourceLeases');
+      }
+      const nowIso = new Date().toISOString();
+      const leases = listLeases()
+        .filter((lease) => lease.leaseExpiresAt > nowIso)
+        .map((lease) => ({
+          resourceKey: lease.resourceKey,
+          resourceType: lease.resourceType,
+          poolId: lease.poolId ?? null,
+          poolMemberId: lease.poolMemberId ?? null,
+          taskId: lease.taskId ?? null,
+          holderId: lease.holderId,
+          acquiredAt: lease.acquiredAt,
+          lastHeartbeatAt: lease.lastHeartbeatAt,
+          leaseExpiresAt: lease.leaseExpiresAt,
+        }));
+      switch (flags.output) {
+        case 'label':
+          writeOut(leases.map((lease) => lease.resourceKey).join('\n') + (leases.length > 0 ? '\n' : ''));
+          break;
+        case 'json':
+          writeOut(formatAsJson(leases) + '\n');
+          break;
+        case 'jsonl':
+          writeOut(formatAsJsonl(leases) + '\n');
+          break;
+        default: {
+          if (leases.length === 0) {
+            writeOut('No live execution resource leases.\n');
+            break;
+          }
+          const lines = [
+            'RESOURCE_KEY\tPOOL\tMEMBER\tTASK\tHOLDER\tEXPIRES',
+            ...leases.map((lease) => (
+              [
+                lease.resourceKey,
+                lease.poolId ?? '-',
+                lease.poolMemberId ?? '-',
+                lease.taskId ?? '-',
+                lease.holderId,
+                lease.leaseExpiresAt,
+              ].join('\t')
+            )),
+          ];
+          writeOut(lines.join('\n') + '\n');
+          break;
+        }
+      }
+      break;
+    }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats, execution-leases`);
   }
 }
 
