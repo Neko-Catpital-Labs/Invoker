@@ -204,7 +204,7 @@ describe('Task interaction (component)', () => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
     });

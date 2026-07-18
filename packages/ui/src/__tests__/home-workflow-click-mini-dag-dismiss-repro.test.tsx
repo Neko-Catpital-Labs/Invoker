@@ -19,25 +19,23 @@ vi.mock('@xyflow/react', async () => {
 
 const { App } = await import('../App.js');
 
-const workflows: WorkflowMeta[] = [
-  { id: 'wf-a', name: 'Workflow A', status: 'running' },
-  { id: 'wf-b', name: 'Workflow B', status: 'running' },
-];
+const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'running' }];
 
 const alpha = makeUITask({
   id: 'task-alpha',
-  description: 'Alpha task',
+  description: 'First test task',
   status: 'pending',
   workflowId: 'wf-a',
-  command: 'echo alpha',
+  command: 'echo hello-alpha',
 });
 
 const beta = makeUITask({
   id: 'task-beta',
-  description: 'Beta task',
+  description: 'Second test task',
   status: 'pending',
-  workflowId: 'wf-b',
-  command: 'echo beta',
+  workflowId: 'wf-a',
+  dependencies: ['task-alpha'],
+  command: 'echo hello-beta',
 });
 
 describe('Home workflow graph mini DAG click dismissal repro', () => {
@@ -52,35 +50,35 @@ describe('Home workflow graph mini DAG click dismissal repro', () => {
     mock.cleanup();
   });
 
-  async function selectWorkflowB() {
+  async function selectWorkflowA() {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('rf__node-wf-b'));
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow B');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow B');
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
   }
 
   it('keeps the selected mini DAG after a blank graph surface click', async () => {
-    await selectWorkflowB();
+    await selectWorkflowA();
 
     fireEvent.click(screen.getByTestId('workflow-graph-surface'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow B');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow B');
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
   });
 
   it('keeps the selected mini DAG after a retargeted React Flow pane click', async () => {
-    await selectWorkflowB();
+    await selectWorkflowA();
 
     fireEvent.click(screen.getByTestId('workflow-graph-react-flow'), {
       clientX: 24,
@@ -88,8 +86,8 @@ describe('Home workflow graph mini DAG click dismissal repro', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow B');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow B');
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
     });
   });
 });
