@@ -113,6 +113,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -124,6 +125,14 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+function appendTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const next = `${snapshot ?? ''}${chunk}`;
+  return next.length > TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS
+    ? next.slice(next.length - TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS)
+    : next;
+}
+
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
@@ -1049,6 +1058,34 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [graphMaximized, planningTerminalExpanded]);
 
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || !event.data) return;
+
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const terminalSession = session.terminalSession;
+          if (!terminalSession) return session;
+          const matches = event.planningSessionId
+            ? session.id === event.planningSessionId
+            : terminalSession.sessionId === event.sessionId;
+          if (!matches) return session;
+          changed = true;
+          return {
+            ...session,
+            terminalSession: {
+              ...terminalSession,
+              outputSnapshot: appendTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data),
+            },
+          };
+        });
+        return changed ? next : prev;
+      });
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onTerminalExit?.((event) => {
