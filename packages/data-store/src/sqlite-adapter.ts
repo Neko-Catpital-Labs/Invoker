@@ -2819,24 +2819,37 @@ export class SQLiteAdapter implements PersistenceAdapter {
     poolMemberId?: string;
     metadata?: unknown;
     leaseMs?: number;
+    /** Max live holders for this resource key. Default 1 preserves exclusive semantics. */
+    maxHolders?: number;
   }): boolean {
     const now = new Date();
     const nowIso = now.toISOString();
     const leaseExpiresAt = new Date(now.getTime() + (options.leaseMs ?? EXECUTION_RESOURCE_LEASE_MS)).toISOString();
+    const maxHolders = Math.max(1, Math.floor(options.maxHolders ?? 1));
     return this.runTransaction(() => {
       this.execRun(
         'DELETE FROM execution_resource_leases WHERE resource_key = ? AND lease_expires_at <= ?',
         [options.resourceKey, nowIso],
       );
-      const active = this.queryOne(
+      const existingForHolder = this.queryOne(
         `SELECT holder_id FROM execution_resource_leases
          WHERE resource_key = ?
-           AND holder_id != ?
+           AND holder_id = ?
            AND lease_expires_at > ?
          LIMIT 1`,
         [options.resourceKey, options.holderId, nowIso],
       );
-      if (active) return false;
+      if (!existingForHolder) {
+        const otherHolders = this.queryOne(
+          `SELECT COUNT(*) AS cnt FROM execution_resource_leases
+           WHERE resource_key = ?
+             AND holder_id != ?
+             AND lease_expires_at > ?`,
+          [options.resourceKey, options.holderId, nowIso],
+        );
+        const otherCount = Number(otherHolders?.cnt ?? 0);
+        if (otherCount >= maxHolders) return false;
+      }
 
       this.execRun(
         `INSERT OR REPLACE INTO execution_resource_leases (
@@ -2858,6 +2871,39 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
       return true;
     });
+  }
+
+  countExecutionResourceLeases(resourceKey: string, nowIso?: string): number {
+    const cutoff = nowIso ?? new Date().toISOString();
+    const row = this.queryOne(
+      `SELECT COUNT(*) AS cnt FROM execution_resource_leases
+       WHERE resource_key = ?
+         AND lease_expires_at > ?`,
+      [resourceKey, cutoff],
+    );
+    return Number(row?.cnt ?? 0);
+  }
+
+  listExecutionResourceLeasesByKey(resourceKey: string, nowIso?: string): ExecutionResourceLease[] {
+    const cutoff = nowIso ?? new Date().toISOString();
+    return this.queryAll(
+      `SELECT * FROM execution_resource_leases
+       WHERE resource_key = ?
+         AND lease_expires_at > ?
+       ORDER BY acquired_at ASC`,
+      [resourceKey, cutoff],
+    ).map((row) => ({
+      resourceKey: String(row.resource_key),
+      resourceType: String(row.resource_type),
+      holderId: String(row.holder_id),
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      poolId: row.pool_id ? String(row.pool_id) : undefined,
+      poolMemberId: row.pool_member_id ? String(row.pool_member_id) : undefined,
+      acquiredAt: String(row.acquired_at),
+      lastHeartbeatAt: String(row.last_heartbeat_at),
+      leaseExpiresAt: String(row.lease_expires_at),
+      metadata: row.metadata_json ? JSON.parse(String(row.metadata_json)) : undefined,
+    }));
   }
 
   renewExecutionResourceLease(
