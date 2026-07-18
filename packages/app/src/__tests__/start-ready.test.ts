@@ -64,6 +64,7 @@ describe('start-ready', () => {
       failedWorkflowIds: ['wf-2'],
       pendingWorkflowIds: ['wf-1'],
       runningWorkflowIds: [],
+      completedWorkflowIds: [],
       skipped: {
         awaitingApproval: 1,
         reviewReady: 0,
@@ -71,6 +72,7 @@ describe('start-ready', () => {
         failedTasks: 1,
         pendingTasks: 2,
         runningTasks: 0,
+        completedTasks: 0,
       },
     });
   });
@@ -195,5 +197,40 @@ describe('start-ready', () => {
     });
 
     expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2', 'wf-3']);
+  });
+
+  it('recreates failed, pending/queued, running, and completed workflows when recreateAll is set', () => {
+    const failed = makeTask('wf-1/failed', 'failed');
+    const pendingOnly = makeTask('wf-2/pending', 'pending');
+    const runningOnly = makeTask('wf-3/running', 'running');
+    const completedOnly = makeTask('wf-4/completed', 'completed');
+    const approval = makeTask('wf-5/approval', 'awaiting_approval');
+    const orchestrator = harness(
+      [failed, pendingOnly, runningOnly, completedOnly, approval],
+      [],
+    );
+
+    const result = runStartReady(orchestrator, { recreateAll: true });
+
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-3');
+    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-4');
+    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalledWith('wf-5');
+    expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2', 'wf-3', 'wf-4']);
+    expect(result.preview.completedWorkflowIds).toEqual(['wf-4']);
+  });
+
+  it('prefers recreateAll over narrower recreate flags', () => {
+    const failed = makeTask('wf-1/failed', 'failed');
+    const completedOnly = makeTask('wf-2/completed', 'completed');
+    const orchestrator = harness([failed, completedOnly], []);
+
+    const result = runStartReady(orchestrator, {
+      recreateFailed: true,
+      recreateAll: true,
+    });
+
+    expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2']);
   });
 });
