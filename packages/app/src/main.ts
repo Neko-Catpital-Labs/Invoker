@@ -59,7 +59,7 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope, CommandError } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type { PlanningChatSendResponse, WorkResponse } from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
@@ -2783,6 +2783,8 @@ if (isHeadless) {
     });
 
     if (process.env.NODE_ENV === 'test') {
+      let testPlanningChatResponses: PlanningChatSendResponse[] = [];
+
       ipcMain.handle(
         'invoker:inject-task-states',
         async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
@@ -2811,6 +2813,21 @@ if (isHeadless) {
           }
         },
       );
+
+      ipcMain.handle(
+        'invoker:set-test-planning-chat-response',
+        async (_event, response: PlanningChatSendResponse | PlanningChatSendResponse[]) => {
+          testPlanningChatResponses = Array.isArray(response) ? [...response] : [response];
+        },
+      );
+
+      ipcMain.handle('invoker:send-planning-chat-message', async (_event, message: string) => {
+        const response = testPlanningChatResponses.shift();
+        if (response === undefined) {
+          throw new Error(`No test planning chat response configured for message "${message}"`);
+        }
+        return response;
+      });
     }
 
     registerGuiMutationHandler('invoker:start', async () => {

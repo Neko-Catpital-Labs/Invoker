@@ -23,6 +23,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import type { Locator, Page } from '@playwright/test';
+import type { DraftPlanSummary, PlanningChatSendResponse } from '@invoker/contracts';
 
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
@@ -185,6 +186,18 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
   return workflowId!;
 }
 
+async function setTestPlanningChatResponse(
+  page: Page,
+  response: PlanningChatSendResponse | PlanningChatSendResponse[],
+): Promise<void> {
+  await page.evaluate(async (mockResponse) => {
+    if (!window.invoker.setTestPlanningChatResponse) {
+      throw new Error('setTestPlanningChatResponse test harness is unavailable');
+    }
+    await window.invoker.setTestPlanningChatResponse(mockResponse);
+  }, response);
+}
+
 test.describe('Visual proof capture', () => {
   test('empty state', async ({ page }) => {
     await expect(page.getByText('Load a plan to render workflow graph')).toBeVisible({ timeout: 5000 });
@@ -192,6 +205,85 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
     await assertPageScreenshot(page, 'empty-state');
+  });
+
+  test('planning-terminal revised draft summary replaces initial ready list in same conversation', async ({ page }) => {
+    const firstSummary: DraftPlanSummary = {
+      planName: 'Initial terminal draft',
+      taskCount: 2,
+      taskGroups: [
+        {
+          name: 'Initial scope',
+          tasks: [
+            { id: 'first-shell', description: 'Add the shell-only planning harness' },
+            { id: 'first-assert', description: 'Assert the initial ready bar' },
+          ],
+        },
+      ],
+    };
+    const revisedSummary: DraftPlanSummary = {
+      planName: 'Revised terminal draft',
+      taskCount: 3,
+      taskGroups: [
+        {
+          name: 'Harness updates',
+          tasks: [
+            { id: 'revised-harness', description: 'Queue deterministic planning responses' },
+          ],
+        },
+        {
+          name: 'E2E proof',
+          tasks: [
+            { id: 'revised-submit', description: 'Submit the revised request in the same terminal' },
+            { id: 'revised-assert', description: 'Assert the latest ready summary only' },
+          ],
+        },
+      ],
+    };
+
+    await setTestPlanningChatResponse(page, {
+      reply: 'Initial draft is ready.',
+      draftPlanSummary: firstSummary,
+    });
+
+    await page.getByRole('button', { name: 'Expand terminal drawer' }).click();
+    const input = page.getByTestId('invoker-terminal-input');
+    await input.fill('Draft the initial planning proof');
+    await page.getByTestId('invoker-terminal-send').click();
+
+    await expect(page.getByTestId('invoker-terminal-ready-plan-name')).toHaveText('Initial terminal draft');
+    await expect(page.getByTestId('invoker-terminal-ready-task-count')).toHaveText('2 tasks');
+    await expect(page.getByTestId('invoker-terminal-ready-task-list')).toContainText('Initial scope');
+    await expect(page.getByTestId('invoker-terminal-ready-task-list')).toContainText('Add the shell-only planning harness');
+
+    await setTestPlanningChatResponse(page, {
+      reply: 'Revised draft is ready.',
+      draftPlanSummary: revisedSummary,
+    });
+
+    await input.fill('Revise that plan with the latest task grouping');
+    await page.getByTestId('invoker-terminal-send').click();
+
+    const readyBar = page.getByTestId('invoker-terminal-ready-bar');
+    const readyTaskList = page.getByTestId('invoker-terminal-ready-task-list');
+    await expect(page.getByTestId('invoker-terminal-ready-plan-name')).toHaveText('Revised terminal draft');
+    await expect(page.getByTestId('invoker-terminal-ready-task-count')).toHaveText('3 tasks');
+    await expect(readyTaskList).toContainText('Harness updates');
+    await expect(readyTaskList).toContainText('E2E proof');
+    await expect(readyTaskList).toContainText('Queue deterministic planning responses');
+    await expect(readyTaskList).toContainText('Assert the latest ready summary only');
+    await expect(readyBar).not.toContainText('Initial terminal draft');
+    await expect(readyTaskList).not.toContainText('Initial scope');
+    await expect(readyTaskList).not.toContainText('Add the shell-only planning harness');
+
+    const transcript = page.getByTestId('invoker-terminal-messages');
+    await expect(transcript.locator('> div')).toHaveCount(4);
+    await expect(transcript).toContainText('Draft the initial planning proof');
+    await expect(transcript).toContainText('Initial draft is ready.');
+    await expect(transcript).toContainText('Revise that plan with the latest task grouping');
+    await expect(transcript).toContainText('Revised draft is ready.');
+
+    await captureScreenshot(page, 'planning-terminal-revised-draft-summary');
   });
 
   test('dag loaded', async ({ page }) => {

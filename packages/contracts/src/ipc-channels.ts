@@ -244,6 +244,49 @@ export interface BundledSkillsStatus {
 
 export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
 
+export interface DraftPlanSummaryTask {
+  readonly id?: string;
+  readonly title?: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly summary?: string;
+}
+
+export interface DraftPlanSummaryTaskGroup {
+  readonly id?: string;
+  readonly title?: string;
+  readonly name?: string;
+  readonly label?: string;
+  readonly taskCount?: number;
+  readonly count?: number;
+  readonly taskIds?: readonly string[];
+  readonly tasks?: readonly (DraftPlanSummaryTask | string)[];
+}
+
+export interface DraftPlanSummary {
+  readonly planName?: string;
+  readonly name?: string;
+  readonly title?: string;
+  readonly taskCount?: number;
+  readonly count?: number;
+  readonly taskGroups?: readonly DraftPlanSummaryTaskGroup[];
+  readonly groups?: readonly DraftPlanSummaryTaskGroup[];
+  readonly tasks?: readonly (DraftPlanSummaryTask | string)[];
+  readonly summary?: string;
+}
+
+export type PlanningChatSendResponse =
+  | string
+  | {
+      readonly reply?: string;
+      readonly content?: string;
+      readonly message?: string;
+      readonly draftPlanSummary?: DraftPlanSummary | null;
+      readonly planSubmitted?: boolean;
+      readonly submittedPlanText?: string | null;
+      readonly planText?: string | null;
+    };
+
 export interface SystemDiagnostics {
   platform: string;
   arch: string;
@@ -531,6 +574,14 @@ export const IpcTestOnlyChannels = {
   'invoker:inject-task-states': {} as {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
     response: void;
+  },
+  'invoker:set-test-planning-chat-response': {} as {
+    request: [response: PlanningChatSendResponse | PlanningChatSendResponse[]];
+    response: void;
+  },
+  'invoker:send-planning-chat-message': {} as {
+    request: [message: string];
+    response: PlanningChatSendResponse;
   },
 } as const;
 
