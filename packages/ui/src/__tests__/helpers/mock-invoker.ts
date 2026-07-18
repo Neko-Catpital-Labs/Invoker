@@ -16,6 +16,15 @@ import type {
   TaskExecution,
 } from '../../types.js';
 
+interface PlanningChatStreamEvent {
+  sessionId: string;
+  chunk: string;
+}
+
+interface PlanningChatStreamApi {
+  onPlanningChatStream: (cb: (event: PlanningChatStreamEvent) => void) => () => void;
+}
+
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
   api: InvokerAPI;
@@ -23,6 +32,8 @@ export interface MockInvoker {
   setTasks: (tasks: TaskState[], workflows?: WorkflowMeta[]) => void;
   /** Directly fire a task delta to subscribers. */
   fireDelta: (delta: TaskDelta) => void;
+  /** Directly fire a planning chat stream event to subscribers. */
+  firePlanningChatStream: (event: PlanningChatStreamEvent) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
   /** Install the mock on window.invoker. */
@@ -39,6 +50,7 @@ export function createMockInvoker(
   let workflowSnapshot = initialWorkflows;
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
+  let planningChatStreamCallback: ((event: PlanningChatStreamEvent) => void) | undefined;
 
   const api: InvokerAPI = {
     // Defer resolution one microtask so snapshot is read after synchronous setTasks()
@@ -155,6 +167,10 @@ export function createMockInvoker(
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
   };
+  (api as InvokerAPI & PlanningChatStreamApi).onPlanningChatStream = vi.fn((cb: (event: PlanningChatStreamEvent) => void) => {
+    planningChatStreamCallback = cb;
+    return () => { planningChatStreamCallback = undefined; };
+  });
 
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {
     taskSnapshot = tasks;
@@ -168,6 +184,10 @@ export function createMockInvoker(
 
   function fireDelta(delta: TaskDelta) {
     deltaCallback?.(delta);
+  }
+
+  function firePlanningChatStream(event: PlanningChatStreamEvent) {
+    planningChatStreamCallback?.(event);
   }
 
   function fireWorkflowsChanged(workflows: WorkflowMeta[]) {
@@ -188,7 +208,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+  return { api, setTasks, fireDelta, firePlanningChatStream, fireWorkflowsChanged, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */
