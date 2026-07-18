@@ -3096,6 +3096,40 @@ describe('TaskRunner', () => {
       expect(executor2.executor).not.toBe(executor3.executor);
     });
 
+    it('passes provisionCommand through SSH executor selection and cache identity', () => {
+      let provisionCommand = 'pnpm install --frozen-lockfile';
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-a': {
+            host: 'dev.example.com',
+            user: 'deployer',
+            sshKeyPath: '/home/user/.ssh/id_rsa',
+            managedWorkspaces: true,
+            remoteInvokerHome: '/tmp/invoker-home',
+            provisionCommand,
+          },
+        }),
+      });
+
+      const task = makeTask({
+        id: 'task-1',
+        config: { runnerKind: 'ssh', poolMemberId: 'remote-a' },
+      });
+
+      const first = executor.selectExecutor(task).executor;
+      expect((first as any).remoteInvokerHome).toBe('/tmp/invoker-home');
+      expect((first as any).provisionCommand).toBe('pnpm install --frozen-lockfile');
+
+      provisionCommand = 'pnpm install --frozen-lockfile --prefer-offline';
+      const second = executor.selectExecutor(task).executor;
+      expect(second).not.toBe(first);
+      expect((second as any).provisionCommand).toBe('pnpm install --frozen-lockfile --prefer-offline');
+    });
+
     it('does not cache non-SSH executors', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,

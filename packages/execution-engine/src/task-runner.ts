@@ -178,6 +178,7 @@ export interface TaskRunnerConfig {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
+    /** Explicit managed-worktree hydration command, e.g. pnpm install --frozen-lockfile. */
     provisionCommand?: string;
     use_api_key?: boolean;
     secretsFile?: string;
