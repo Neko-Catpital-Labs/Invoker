@@ -105,6 +105,7 @@ export interface PersistenceAdapter {
 
   // Conversation queries
   listActiveConversations(): Conversation[];
+  listSubmittedConversations(): Conversation[];
   deleteConversationsOlderThan(cutoffIso: string): number;
 
   // Conversation messages

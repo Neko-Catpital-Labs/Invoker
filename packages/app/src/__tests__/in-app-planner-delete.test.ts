@@ -69,6 +69,7 @@ describe('planning chat deletion', () => {
       },
       conversationRepo: {
         deleteConversation: (id) => calls.push(`conversation:${id}`),
+        listSubmittedConversations: () => [],
       },
     });
 
@@ -80,6 +81,54 @@ describe('planning chat deletion', () => {
       'conversation:submitted-1',
       'store:submitted-2',
       'conversation:submitted-2',
+    ]);
+  });
+
+  it('bulk deletes persisted submitted conversations when memory has no session', () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('submitted-live', { id: 'submitted-live', status: 'submitted' });
+    const calls: string[] = [];
+
+    const result = deleteSubmittedPlanningChats({
+      sessions,
+      planningSessionStore: {
+        deleteInAppPlanningSession: (id) => calls.push(`store:${id}`),
+      },
+      conversationRepo: {
+        deleteConversation: (id) => calls.push(`conversation:${id}`),
+        listSubmittedConversations: () => [
+          {
+            threadTs: 'submitted-persisted',
+            channelId: '',
+            userId: '',
+            extractedPlan: null,
+            planSubmitted: true,
+            createdAt: '',
+            updatedAt: '',
+          },
+          {
+            threadTs: 'submitted-live',
+            channelId: '',
+            userId: '',
+            extractedPlan: null,
+            planSubmitted: true,
+            createdAt: '',
+            updatedAt: '',
+          },
+        ],
+      },
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      deletedSessionIds: ['submitted-live', 'submitted-persisted'],
+    });
+    expect(sessions.has('submitted-live')).toBe(false);
+    expect(calls).toEqual([
+      'store:submitted-live',
+      'conversation:submitted-live',
+      'store:submitted-persisted',
+      'conversation:submitted-persisted',
     ]);
   });
 

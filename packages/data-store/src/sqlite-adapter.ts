@@ -1631,6 +1631,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  listSubmittedConversations(): Conversation[] {
+    const rows = this.queryAll(
+      'SELECT * FROM conversations WHERE plan_submitted = 1 ORDER BY updated_at DESC',
+    );
+    return rows.map((row: any) => ({
+      threadTs: row.thread_ts as string,
+      channelId: row.channel_id as string,
+      userId: row.user_id as string,
+      extractedPlan: (row.extracted_plan as string) ?? null,
+      planSubmitted: row.plan_submitted === 1,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    }));
+  }
+
   deleteConversationsOlderThan(cutoffIso: string): number {
     this.ensureWritable();
     // Delete messages first (FK constraint)

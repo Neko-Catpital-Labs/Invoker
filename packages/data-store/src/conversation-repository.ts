@@ -155,6 +155,23 @@ export class ConversationRepository {
   }
 
   /**
+   * List all submitted conversations.
+   * Returns conversation metadata without messages for efficiency.
+   */
+  listSubmittedConversations(): Array<Omit<ConversationEntry, 'messages'>> {
+    const conversations = this.adapter.listSubmittedConversations();
+    return conversations.map((conv) => ({
+      threadTs: conv.threadTs,
+      channelId: conv.channelId,
+      userId: conv.userId,
+      extractedPlan: this.parsePlan(conv.extractedPlan),
+      planSubmitted: conv.planSubmitted,
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt,
+    }));
+  }
+
+  /**
    * Delete conversations older than the specified number of days.
    * Returns the count of deleted conversations.
    */

@@ -224,6 +224,19 @@ describe('ConversationRepository', () => {
     });
   });
 
+  describe('listSubmittedConversations', () => {
+    it('returns only submitted conversations', () => {
+      seedConversation('ts-active');
+      seedConversation('ts-submitted');
+      adapter.updateConversation('ts-submitted', { planSubmitted: true });
+
+      const submitted = repo.listSubmittedConversations();
+      expect(submitted).toHaveLength(1);
+      expect(submitted[0].threadTs).toBe('ts-submitted');
+      expect(submitted[0].planSubmitted).toBe(true);
+    });
+  });
+
   // ── cleanupOldConversations ──────────────────────────────
 
   describe('cleanupOldConversations', () => {

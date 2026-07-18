@@ -1253,6 +1253,18 @@ describe('SQLiteAdapter', () => {
     });
   });
 
+  describe('listSubmittedConversations', () => {
+    it('returns submitted conversations without active drafts', () => {
+      adapter.saveConversation(makeConversation('ts-active'));
+      adapter.saveConversation(makeConversation('ts-submitted', { planSubmitted: true }));
+
+      const submitted = adapter.listSubmittedConversations();
+
+      expect(submitted.map((conversation) => conversation.threadTs)).toEqual(['ts-submitted']);
+      expect(submitted[0].planSubmitted).toBe(true);
+    });
+  });
+
   // ── Conversation Messages ──────────────────────────────
 
   describe('appendMessage + loadMessages', () => {

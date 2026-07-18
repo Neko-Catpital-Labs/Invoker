@@ -21,6 +21,10 @@ export function createInAppPlanningChatSessions(): InAppPlanningChatSessions {
   return new Map();
 }
 
+type PlanningConversationRepo =
+  Pick<ConversationRepository, 'deleteConversation'> &
+  Partial<Pick<ConversationRepository, 'listSubmittedConversations'>>;
+
 interface PlanningChatDeleteLogger {
   error(message: string, context?: Record<string, unknown>): void;
 }
@@ -28,7 +32,7 @@ interface PlanningChatDeleteLogger {
 export interface PlanningChatDeleteDeps {
   sessions: InAppPlanningChatSessions;
   planningSessionStore?: Pick<InAppPlanningSessionStore, 'deleteInAppPlanningSession'>;
-  conversationRepo?: Pick<ConversationRepository, 'deleteConversation'>;
+  conversationRepo?: PlanningConversationRepo;
   closeTerminal?: (terminalSessionId: string) => void;
   logger?: PlanningChatDeleteLogger;
 }
@@ -101,13 +105,20 @@ export function deletePlanningChat(
 export function deleteSubmittedPlanningChats(
   deps: PlanningChatDeleteDeps,
 ): InAppPlanningDeleteSubmittedResponse {
-  const submittedSessions = [...deps.sessions.values()]
-    .filter((session) => session.status === 'submitted')
-    .map((session) => ({ id: session.id, session }));
-  const deletedSessionIds = submittedSessions.map(({ id }) => id);
+  const submittedSessionIds = new Set(
+    [...deps.sessions.values()]
+      .filter((session) => session.status === 'submitted')
+      .map((session) => session.id),
+  );
 
-  for (const { id, session } of submittedSessions) {
-    cleanupPlanningChatSession(id, session, deps);
+  for (const conversation of deps.conversationRepo?.listSubmittedConversations?.() ?? []) {
+    submittedSessionIds.add(conversation.threadTs);
+  }
+
+  const deletedSessionIds = [...submittedSessionIds];
+
+  for (const sessionId of deletedSessionIds) {
+    cleanupPlanningChatSession(sessionId, deps.sessions.get(sessionId), deps);
   }
 
   return { ok: true, deletedSessionIds };
