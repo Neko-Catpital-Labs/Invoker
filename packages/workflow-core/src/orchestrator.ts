@@ -666,6 +666,11 @@ export class Orchestrator {
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
+  /** Coalesces UI polls (`refresh: false`) so IPC does not recompute every 2s. */
+  private queueStatusUiCache:
+    | { at: number; value: ReturnType<Orchestrator['getQueueStatus']> }
+    | null = null;
+  private static readonly QUEUE_STATUS_UI_CACHE_MS = 2500;
   /**
    * Owner-local backoff for tasks deferred due to execution-pool capacity.
    * Keyed to `deferredTaskIds` membership: the periodic scheduler skips
@@ -764,6 +769,7 @@ export class Orchestrator {
     }
     const id = existing.id;
     this.taskRepository.updateTask(id, changes);
+    this.queueStatusUiCache = null;
     const updated: TaskState = {
       ...existing,
       ...(changes.status !== undefined ? { status: changes.status } : {}),
@@ -985,9 +991,10 @@ export class Orchestrator {
     return loadAttempt.call(this.persistence, attemptId);
   }
 
-    private attemptLeaseAnchor(attempt: Attempt): Date | undefined {
+  private attemptLeaseAnchor(attempt: Attempt): Date | undefined {
     return attempt.lastHeartbeatAt ?? attempt.claimedAt ?? attempt.startedAt;
   }
+
   private isAttemptLeaseActive(attempt: Attempt | undefined, now: number = Date.now()): boolean {
     if (!attempt) return false;
     if (isDiscardedAttempt(attempt)) return false;
@@ -3148,23 +3155,79 @@ export class Orchestrator {
     running: Array<{ taskId: string; attemptId?: string; description: string }>;
     queued: Array<{ taskId: string; priority: number; description: string }>;
   } {
-    if (options?.refresh !== false) {
+    const refresh = options?.refresh !== false;
+    const uiPoll = !refresh;
+    if (uiPoll && this.queueStatusUiCache) {
+      const age = Date.now() - this.queueStatusUiCache.at;
+      if (age >= 0 && age < Orchestrator.QUEUE_STATUS_UI_CACHE_MS) {
+        return this.queueStatusUiCache.value;
+      }
+    }
+    if (refresh) {
       this.refreshFromDb();
     }
+    // UI polls must stay cheap on the Electron main thread: no per-attempt
+    // SQLite reads, no launch-order topo sort. Full path keeps exact semantics.
+    const attemptCache = new Map<string, Attempt | undefined>();
+    const loadAttemptCached = (attemptId: string | undefined): Attempt | undefined => {
+      if (!attemptId) return undefined;
+      if (attemptCache.has(attemptId)) return attemptCache.get(attemptId);
+      const attempt = this.loadAttemptById(attemptId);
+      attemptCache.set(attemptId, attempt);
+      return attempt;
+    };
+    const summarizeDescription = (description: string): string => {
+      if (!uiPoll || description.length <= 160) return description;
+      return `${description.slice(0, 157)}...`;
+    };
+    const taskLivenessActive = (task: TaskState, nowMs: number): boolean => {
+      if (isCrashPreservedExecution(task.execution)) return false;
+      const raw = task.execution.lastHeartbeatAt
+        ?? task.execution.startedAt
+        ?? task.execution.launchStartedAt;
+      if (!raw) return true;
+      const ts = raw instanceof Date
+        ? raw.getTime()
+        : typeof raw === 'string'
+          ? Date.parse(raw)
+          : Number.NaN;
+      if (!Number.isFinite(ts)) return true;
+      return ts + ATTEMPT_LEASE_MS >= nowMs;
+    };
     const tasks = this.stateMachine.getAllTasks();
     const now = Date.now();
-    const activeAttempts = tasks
-      .filter((task) =>
-        task.status === 'running'
-        || task.status === 'fixing_with_ai'
-        || ((task.status === 'pending' || (task.status as string) === 'queued') && !!task.execution.selectedAttemptId),
-      )
-      .map((task) => {
-        const attemptId = task.execution.selectedAttemptId;
-        const attempt = this.loadAttemptById(attemptId);
-        return { task, attemptId, attempt };
-      })
-      .filter(({ task, attempt }) => this.isTaskExecutionActive(task, attempt, now));
+    const activeAttempts = uiPoll
+      ? tasks
+        .filter((task) => {
+          if (task.status === 'running' || task.status === 'fixing_with_ai') {
+            return taskLivenessActive(task, now);
+          }
+          if (
+            (task.status === 'pending' || (task.status as string) === 'queued')
+            && task.execution.phase === 'launching'
+            && !!task.execution.selectedAttemptId
+          ) {
+            return taskLivenessActive(task, now);
+          }
+          return false;
+        })
+        .map((task) => ({
+          task,
+          attemptId: task.execution.selectedAttemptId,
+          attempt: undefined as Attempt | undefined,
+        }))
+      : tasks
+        .filter((task) =>
+          task.status === 'running'
+          || task.status === 'fixing_with_ai'
+          || ((task.status === 'pending' || (task.status as string) === 'queued') && !!task.execution.selectedAttemptId),
+        )
+        .map((task) => {
+          const attemptId = task.execution.selectedAttemptId;
+          const attempt = loadAttemptCached(attemptId);
+          return { task, attemptId, attempt };
+        })
+        .filter(({ task, attempt }) => this.isTaskExecutionActive(task, attempt, now));
     const activeTaskIds = new Set(activeAttempts.map(({ task }) => task.id));
     const workflowBlockerCache = new Map<string, string | undefined>();
     const isExternallyBlocked = (task: TaskState): boolean => {
@@ -3175,35 +3238,46 @@ export class Orchestrator {
       }
       return workflowBlockerCache.get(workflowId) !== undefined;
     };
-    const queuedJobs = getPendingLaunchQueueSnapshotImpl(
-      this as unknown as SchedulerDomainHost,
-      this.stateMachine
-        .getReadyTasks()
-        .filter((task) => task.status === 'pending' || (task.status as string) === 'queued')
-        .filter((task) => !activeTaskIds.has(task.id))
-        .filter((task) => !isExternallyBlocked(task))
+    const readyCandidates = this.stateMachine
+      .getReadyTasks()
+      .filter((task) => task.status === 'pending' || (task.status as string) === 'queued')
+      .filter((task) => !activeTaskIds.has(task.id))
+      .filter((task) => !isExternallyBlocked(task));
+    let queuedTasks: Array<{ taskId: string; priority: number; description: string }>;
+    if (uiPoll) {
+      queuedTasks = readyCandidates
         .map((task) => ({
           taskId: task.id,
-          attemptId: task.execution.selectedAttemptId,
-          priority: this.loadAttemptById(task.execution.selectedAttemptId)?.queuePriority ?? 0,
-        })),
-    );
-    const queuedTasks = queuedJobs
-      .map((job) => {
-        const task = this.stateGetTask(job.taskId);
-        if (!task || (task.status !== 'pending' && (task.status as string) !== 'queued')) return undefined;
-        if (activeTaskIds.has(task.id) || isExternallyBlocked(task)) return undefined;
-        return {
+          priority: 0,
+          description: summarizeDescription(task.description),
+        }))
+        .sort((left, right) => left.taskId.localeCompare(right.taskId));
+    } else {
+      const queuedJobs = getPendingLaunchQueueSnapshotImpl(
+        this as unknown as SchedulerDomainHost,
+        readyCandidates.map((task) => ({
           taskId: task.id,
-          priority: job.priority,
-          description: task.description,
-        };
-      })
-      .filter((task): task is { taskId: string; priority: number; description: string } => task !== undefined);
+          attemptId: task.execution.selectedAttemptId,
+          priority: loadAttemptCached(task.execution.selectedAttemptId)?.queuePriority ?? 0,
+        })),
+      );
+      queuedTasks = queuedJobs
+        .map((job) => {
+          const task = this.stateGetTask(job.taskId);
+          if (!task || (task.status !== 'pending' && (task.status as string) !== 'queued')) return undefined;
+          if (activeTaskIds.has(task.id) || isExternallyBlocked(task)) return undefined;
+          return {
+            taskId: task.id,
+            priority: job.priority,
+            description: task.description,
+          };
+        })
+        .filter((task): task is { taskId: string; priority: number; description: string } => task !== undefined);
+    }
     const activeExecutionCount = activeAttempts.filter(({ task }) =>
       task.status === 'running' || task.status === 'fixing_with_ai',
     ).length;
-    return {
+    const value = {
       maxConcurrency: this.maxConcurrency,
       runningCount: activeAttempts.length,
       activeExecutionCount,
@@ -3211,14 +3285,20 @@ export class Orchestrator {
       running: activeAttempts.map(({ task, attemptId }) => ({
         taskId: task.id,
         attemptId,
-        description: task.description,
+        description: summarizeDescription(task.description),
       })),
       queued: queuedTasks.map((task) => ({
         taskId: task.taskId,
         priority: task.priority,
-        description: task.description,
+        description: summarizeDescription(task.description),
       })),
     };
+    if (uiPoll) {
+      this.queueStatusUiCache = { at: Date.now(), value };
+    } else {
+      this.queueStatusUiCache = null;
+    }
+    return value;
   }
 
   // ── Private: Response Handling ─────────────────────────────
@@ -3600,7 +3680,7 @@ export class Orchestrator {
     // append the same provenance entry twice.
     const existingProvenance = targetWorkflow?.detachedExternalDependencies ?? [];
     const provenanceKey = (dep: { workflowId: string; taskId?: string; requiredStatus: 'completed'; gatePolicy?: 'completed' | 'review_ready' }) =>
-      `${dep.workflowId} ${dep.taskId?.trim() ?? ''} ${dep.requiredStatus} ${dep.gatePolicy ?? ''}`;
+      `${dep.workflowId}/${dep.taskId?.trim() ?? ''}/${dep.requiredStatus}/${dep.gatePolicy ?? ''}`;
     const seenProvenance = new Set(existingProvenance.map(provenanceKey));
     const detachedProvenance: DetachedExternalDependency[] = [...existingProvenance];
     for (const dep of removedDeps) {
