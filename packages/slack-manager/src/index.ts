@@ -19,13 +19,13 @@ import { ConversationRepository, SQLiteAdapter, WorkflowChannelRepository } from
 
 import { IpcInvokerClient } from './invoker-client.js';
 import { createInvokerLauncher } from './invoker-launcher.js';
+import { resolveDefaultHarnessPreset, readDefaultSlackHarnessPreset } from './runtime-config.js';
 import { createRunWorkflowOp } from './workflow-ops.js';
 import { createCommandHandler } from './command-handler.js';
 import { startEventSubscription } from './event-subscription.js';
 import { createPlanningCommandBuilder, createPrepareRepoCheckout, createGatherWorkflowContext } from './host-seams.js';
 import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
-
 const VERSION = '0.0.7';
 
 const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
@@ -90,6 +90,8 @@ async function main(): Promise<void> {
 
   const repoRoot = process.env.INVOKER_REPO_ROOT ?? process.cwd();
   const repoUrl = detectRepoUrl(repoRoot, log);
+  const configDefaultHarnessPreset = readDefaultSlackHarnessPreset();
+  const defaultHarnessPreset = resolveDefaultHarnessPreset(process.env.INVOKER_SLACK_DEFAULT_PRESET, configDefaultHarnessPreset);
 
   const launcher = createInvokerLauncher({
     repoRoot,
@@ -109,7 +111,7 @@ async function main(): Promise<void> {
     lobbyChannelId: process.env.SLACK_LOBBY_CHANNEL_ID ?? process.env.SLACK_CHANNEL_ID,
     cursorCommand: process.env.CURSOR_COMMAND ?? 'agent',
     model: process.env.CURSOR_MODEL,
-    defaultHarnessPreset: process.env.INVOKER_SLACK_DEFAULT_PRESET,
+    defaultHarnessPreset,
     workingDir: repoRoot,
     conversationRepo,
     workflowChannelRepo,
