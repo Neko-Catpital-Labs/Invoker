@@ -120,10 +120,8 @@ describe('SSH lease capacity authority (proof)', () => {
     expect(() => runner.selectExecutor(makeTask('wf-2/task-b', 'pnpm-ssh'))).not.toThrow();
   });
 
-  // Desired: host-keyed leases prevent two pools from double-booking one droplet.
-  // Today memory capacity is per (poolId, member), so mixed-local + pnpm both
-  // select the same remote-shared successfully without any host lease.
-  it.fails('blocks a second pool from selecting a host already reserved by another pool', async () => {
+  // Host-keyed claim-at-select prevents two pools from double-booking one droplet.
+  it('blocks a second pool from selecting a host already reserved by another pool', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {
       const first = makeTask('wf-1/task-a', 'mixed-local-ssh');

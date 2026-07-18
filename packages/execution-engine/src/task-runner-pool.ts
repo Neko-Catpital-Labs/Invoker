@@ -321,8 +321,14 @@ function leaseHolderId(host: TaskRunnerPoolHost, taskId: string, attemptId: stri
 
 export function acquirePoolSelectionLease(host: TaskRunnerPoolHost, task: TaskState, attemptId: string, selection: PoolSelection | undefined): boolean {
   if (!selection || selection.member.type !== 'ssh') return true;
+  if (selection.leaseResourceKey && selection.leaseHolderId) {
+    host.persistence.renewExecutionResourceLease?.(selection.leaseResourceKey, selection.leaseHolderId);
+    return true;
+  }
   const target = host.getRemoteTargets()[selection.member.id];
   if (!target) return true;
+  const pool = host.getExecutionPools()[selection.poolId];
+  const maxHolders = pool ? poolMemberLimit(pool, selection.member) : undefined;
   const resourceKey = sshResourceKey(target);
   const holderId = leaseHolderId(host, task.id, attemptId);
   const acquired = host.persistence.claimExecutionResourceLease?.({
@@ -332,6 +338,7 @@ export function acquirePoolSelectionLease(host: TaskRunnerPoolHost, task: TaskSt
     taskId: task.id,
     poolId: selection.poolId,
     poolMemberId: selection.member.id,
+    maxHolders: maxHolders ?? 1,
     metadata: {
       runnerInstanceId: host.runnerInstanceId,
       pid: process.pid,
@@ -529,6 +536,37 @@ function reclaimOrphanedExecutionSlots(host: TaskRunnerPoolHost & MergeRunnerHos
   }
 }
 
+function clearPendingPoolSelection(host: TaskRunnerPoolHost, taskId: string): void {
+  const previous = host.pendingPoolSelections.get(taskId);
+  if (previous) {
+    releasePoolSelectionLease(host, previous);
+    host.pendingPoolSelections.delete(taskId);
+  }
+}
+
+function reservePoolMemberSelection(
+  host: TaskRunnerPoolHost,
+  task: TaskState,
+  poolId: string,
+  pool: ExecutionPoolConfig,
+  member: ExecutionPoolMember,
+  resolvedExecution: ResolvedExecutionSelection,
+): PoolSelection | undefined {
+  const selection: PoolSelection = {
+    poolId,
+    member,
+    memberKey: poolMemberKey(member),
+    selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
+    resolvedExecution,
+  };
+  host.pendingPoolSelections.set(task.id, selection);
+  if (member.type !== 'ssh') return selection;
+  const attemptId = task.execution.selectedAttemptId ?? `${task.id}:select`;
+  if (acquirePoolSelectionLease(host, task, attemptId, selection)) return selection;
+  host.pendingPoolSelections.delete(task.id);
+  return undefined;
+}
+
 export function selectExecutor(
   host: TaskRunnerPoolHost & MergeRunnerHost,
   task: TaskState,
@@ -543,7 +581,7 @@ export function selectExecutor(
     executionAgent: host.resolveExecutionAgent(task),
     executionModel: host.resolveExecutionModel(task),
   };
-  host.pendingPoolSelections.delete(task.id);
+  clearPendingPoolSelection(host, task.id);
   reclaimSupersededExecutionSlots(host, task);
   reclaimOrphanedExecutionSlots(host);
 
@@ -554,34 +592,32 @@ export function selectExecutor(
       if (
         excludedPoolMemberKeys.has(poolMemberKey(member))
         || !poolMemberHasCapacity(host, task.config.poolId, pool, member)
+        || !reservePoolMemberSelection(host, task, task.config.poolId, pool, member, resolvedExecution)
       ) {
         throw poolCapacityError(host, task, task.config.poolId, pool, excludedPoolMemberKeys);
       }
       effectiveType = member.type;
       selectedPoolMemberId = member.id;
-      host.pendingPoolSelections.set(task.id, {
-        poolId: task.config.poolId,
-        member,
-        memberKey: poolMemberKey(member),
-        selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
-        resolvedExecution,
-      });
     }
   } else if (task.config.poolId) {
     const pool = host.getExecutionPools()[task.config.poolId];
-    const member = pool ? selectPoolMember(host, task.config.poolId, pool, excludedPoolMemberKeys) : undefined;
-    if (member) {
-      effectiveType = member.type;
-      selectedPoolMemberId = member.type === 'ssh' ? member.id : undefined;
-      host.pendingPoolSelections.set(task.id, {
-        poolId: task.config.poolId,
-        member,
-        memberKey: poolMemberKey(member),
-        selectionStrategy: pool.selectionStrategy ?? 'roundRobin',
-        resolvedExecution,
-      });
-    } else if (pool) {
-      throw poolCapacityError(host, task, task.config.poolId, pool, excludedPoolMemberKeys);
+    if (pool) {
+      const attempted = new Set(excludedPoolMemberKeys);
+      let reserved: PoolSelection | undefined;
+      while (true) {
+        const member = selectPoolMember(host, task.config.poolId, pool, attempted);
+        if (!member) break;
+        reserved = reservePoolMemberSelection(host, task, task.config.poolId, pool, member, resolvedExecution);
+        if (reserved) {
+          effectiveType = member.type;
+          selectedPoolMemberId = member.type === 'ssh' ? member.id : undefined;
+          break;
+        }
+        attempted.add(poolMemberKey(member));
+      }
+      if (!reserved) {
+        throw poolCapacityError(host, task, task.config.poolId, pool, attempted);
+      }
     }
   }
   if (
