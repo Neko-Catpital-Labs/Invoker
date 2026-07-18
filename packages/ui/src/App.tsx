@@ -1076,7 +1076,7 @@ export function App() {
             <div
               ref={graphSurfaceRef}
               data-testid="workflow-graph-surface"
-              className="flex-1 relative overflow-hidden border-r border-gray-800 bg-gray-900"
+              className="flex-1 relative isolate overflow-hidden border-r border-gray-800 bg-gray-900"
               onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
             >
               {viewMode === 'queue' ? (

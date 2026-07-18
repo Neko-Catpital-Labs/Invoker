@@ -51,6 +51,34 @@ describe('Task interaction (component)', () => {
     });
   });
 
+  it('layers the mini DAG inside the graph surface below global overlays', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+
+    const surface = screen.getByTestId('workflow-graph-surface');
+    const graph = screen.getByTestId('workflow-graph-react-flow');
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+
+    expect(surface).toHaveClass('relative', 'isolate');
+    expect(surface).toContainElement(graph);
+    expect(surface).toContainElement(panel);
+    expect(panel).toHaveClass('absolute', 'z-10');
+    expect(panel.className).not.toContain('z-[1000]');
+    expect(panel.style.zIndex).toBe('');
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-wf-a'), { clientX: 100, clientY: 120 });
+
+    const globalMenu = await screen.findByRole('menu');
+    expect(surface).not.toContainElement(globalMenu);
+    expect(globalMenu).toHaveClass('fixed', 'z-50');
+  });
+
   it('clicking a mini DAG task updates prompt details', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
