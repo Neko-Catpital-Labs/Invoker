@@ -46,8 +46,6 @@ const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
 
-const FLOATING_GRAPH_PANEL_Z_INDEX = 1000;
-
 describe('Context menu (component)', () => {
   let mock: MockInvoker;
 
@@ -107,7 +105,7 @@ describe('Context menu (component)', () => {
     await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
   });
 
-  it('task context menu opened from the selected workflow mini DAG layers above the floating graph panel', async () => {
+  it('task context menu opened from the selected workflow mini DAG uses a global overlay layer', async () => {
     await setup();
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
     const panel = await screen.findByTestId('selected-workflow-mini-dag');
@@ -116,8 +114,10 @@ describe('Context menu (component)', () => {
 
     const menu = await screen.findByRole('menu');
     expect(panel).toBeInTheDocument();
-    expect(menu).toHaveStyle({ zIndex: String(FLOATING_GRAPH_PANEL_Z_INDEX + 100) });
-    expect(Number(menu.style.zIndex)).toBeGreaterThan(FLOATING_GRAPH_PANEL_Z_INDEX);
+    expect(panel).toHaveClass('z-10');
+    expect(panel.style.zIndex).toBe('');
+    expect(menu).toHaveStyle({ zIndex: '1100' });
+    expect(Number(menu.style.zIndex)).toBeGreaterThan(10);
   });
 
   it('workflow context menu retries workflow', async () => {

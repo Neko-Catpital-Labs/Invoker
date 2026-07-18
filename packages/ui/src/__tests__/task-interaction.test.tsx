@@ -130,6 +130,32 @@ describe('Task interaction (component)', () => {
     expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
   });
 
+  it('scopes mini DAG layering to the workflow graph surface below global overlays', async () => {
+    render(<App />);
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    const surface = screen.getByTestId('workflow-graph-surface');
+    const graphContent = screen.getByTestId('workflow-graph-scroll');
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+
+    expect(surface).toHaveClass('relative', 'isolate');
+    expect(graphContent.parentElement).toBe(surface);
+    expect(panel.parentElement).toBe(surface);
+    expect(panel).toHaveClass('absolute', 'z-10');
+    expect(panel.style.zIndex).toBe('');
+
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-a'));
+    const workflowMenu = await screen.findByRole('menu');
+
+    expect(surface).not.toContainElement(workflowMenu);
+    expect(workflowMenu).toHaveClass('fixed', 'z-50');
+  });
+
   it('drags the selected workflow mini DAG by its header', async () => {
     render(<App />);
     act(() => mock.setTasks([alpha, beta], workflows));
