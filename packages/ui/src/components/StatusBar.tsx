@@ -61,6 +61,11 @@ export function StatusBar({ tasks, queueStatus, activeFilters, keyboardActiveKey
       case 'closed':
         closed++;
         break;
+      case 'queued':
+        if (!runningTaskIds.has(task.id)) {
+          pending++;
+        }
+        break;
       case 'pending':
         if (!runningTaskIds.has(task.id)) {
           pending++;

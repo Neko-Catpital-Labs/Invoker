@@ -38,6 +38,7 @@ const STATUS_OPTIONS: readonly TaskStatus[] = [
   'needs_input',
   'blocked',
   'pending',
+  'queued',
   'review_ready',
   'stale',
   'closed',
@@ -45,6 +46,7 @@ const STATUS_OPTIONS: readonly TaskStatus[] = [
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   pending: 'Pending',
+  queued: 'Queued',
   running: 'Running',
   fixing_with_ai: 'Autofixing',
   completed: 'Completed',
@@ -59,6 +61,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 
 const STATUS_STYLE: Record<TaskStatus, string> = {
   pending: 'bg-gray-700 text-gray-200',
+  queued: 'bg-cyan-800 text-cyan-100',
   running: 'bg-blue-700 text-blue-100',
   fixing_with_ai: 'bg-amber-700 text-amber-100',
   completed: 'bg-emerald-700 text-emerald-100',
