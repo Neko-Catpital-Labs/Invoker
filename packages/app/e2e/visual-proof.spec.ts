@@ -722,7 +722,7 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'mutation-failure-focus-2-after');
   });
 
-  test('terminal planning loads graph', async ({ page }) => {
+  test('terminal planning submits without graph jump', async ({ page }) => {
     const plannedYaml = yamlStringify(TERMINAL_PLANNED_PLAN);
     // Mirror the real planner reply shape: prose followed by the full fenced
     // plan YAML. The transcript must render every line of it untruncated
@@ -772,15 +772,15 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
     await page.getByRole('button', { name: 'Submit to Invoker' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
-    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Terminal Planned Flow');
+    await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toHaveCount(0);
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveCount(0);
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
     await expect(page.getByText('What to expect')).toHaveCount(0);
-    await captureScreenshot(page, 'terminal-planned-graph');
+    await captureScreenshot(page, 'terminal-planned-no-jump-after-submit');
 
-    // Returning to the Planning Terminal keeps the full conversation:
-    // submitting must not clear or truncate the transcript.
-    await page.getByTestId('sidebar-planning').click();
+    // Submitting must not clear or truncate the transcript.
     await expect(transcript).toContainText('Add README');
     await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
     await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then use Start ready work.');
@@ -1000,11 +1000,17 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
     await page.getByRole('button', { name: 'Submit to Invoker' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Workers Surface Contracts/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Workers Surface UI/ })).toBeVisible();
-    await expect(page.getByTestId('workflow-inspector-title')).toContainText(/Workers Surface (Contracts|UI)/);
-    await captureScreenshot(page, 'stacked-workflows');
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toHaveCount(0);
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveCount(0);
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
+    await expect(transcript).toContainText(
+      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.',
+    );
+    await expect(transcript).toContainText('Build the Workers Surface');
+    await captureScreenshot(page, 'stacked-workflows-no-jump');
 
     const stack = await page.evaluate(async () => {
       const workflows = await window.invoker.listWorkflows();
@@ -1050,7 +1056,7 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
