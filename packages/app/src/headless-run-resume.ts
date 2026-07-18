@@ -9,6 +9,7 @@
  */
 
 import { makeEnvelope, type StartReadyRequest } from '@invoker/contracts';
+
 import type { TaskState } from '@invoker/workflow-core';
 import {
   remoteFetchForPool,
@@ -49,6 +50,23 @@ import {
   preemptWorkflowExecution,
 } from './headless-shared.js';
 import { runStartReady } from './start-ready.js';
+type StartReadyRequestExt = StartReadyRequest & {
+  recreateFailedAndPending?: boolean;
+};
+
+type StartReadyPreviewExt = {
+  readyTaskIds: string[];
+  recoverableTaskIds: string[];
+  failedWorkflowIds: string[];
+  pendingWorkflowIds: string[];
+  skipped: {
+    awaitingApproval: number;
+    reviewReady: number;
+    blocked: number;
+    failedTasks: number;
+    pendingTasks: number;
+  };
+};
 
 export async function headlessWatch(workflowId: string | undefined, deps: HeadlessDeps): Promise<void> {
   const workflows = deps.persistence.listWorkflows();
@@ -214,10 +232,10 @@ export async function headlessResume(
 }
 
 function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefined): {
-  request: StartReadyRequest;
+  request: StartReadyRequestExt;
   noTrack: boolean;
 } {
-  const request: StartReadyRequest = {};
+  const request: StartReadyRequestExt = {};
   let noTrack = inheritedNoTrack ?? false;
   for (const arg of args) {
     switch (arg) {
@@ -227,11 +245,14 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
       case '--recreate-failed':
         request.recreateFailed = true;
         break;
+      case '--recreate-failed-and-pending':
+        request.recreateFailedAndPending = true;
+        break;
       case '--no-track':
         noTrack = true;
         break;
       default:
-        throw new Error(`Unknown start-ready option "${arg}". Usage: --headless start-ready [--dry-run] [--recreate-failed] [--no-track]`);
+        throw new Error(`Unknown start-ready option "${arg}". Usage: --headless start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--no-track]`);
     }
   }
   return { request, noTrack };
@@ -239,15 +260,24 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request);
+  const result = runStartReady(deps.orchestrator, request) as typeof runStartReady extends (...args: any[]) => infer T
+    ? T & { preview: StartReadyPreviewExt }
+    : never;
   const runnable = result.started.filter(isDispatchableLaunch);
   const preview = result.preview;
 
-  const modeLabel = request.recreateFailed ? 'Start and recreate failed' : 'Start ready work';
+  const modeLabel = request.recreateFailedAndPending
+    ? 'Start and recreate failed and pending'
+    : request.recreateFailed
+      ? 'Start and recreate failed'
+      : 'Start ready work';
   process.stdout.write(`${modeLabel}: ${result.dryRun ? 'preview' : 'submitted'}\n`);
   process.stdout.write(`  ready: ${preview.readyTaskIds.length}\n`);
   process.stdout.write(`  recoverable: ${preview.recoverableTaskIds.length}\n`);
   process.stdout.write(`  failed workflows: ${preview.failedWorkflowIds.length}\n`);
+  if (request.recreateFailedAndPending) {
+    process.stdout.write(`  pending workflows: ${preview.pendingWorkflowIds.length}\n`);
+  }
   process.stdout.write(`  recreated workflows: ${result.recreatedWorkflowIds.length}\n`);
   process.stdout.write(`  started: ${runnable.length}\n`);
 
