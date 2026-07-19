@@ -51,7 +51,9 @@ vi.mock('../components/WorkflowGraph.js', async () => {
 
 const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
 const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const setViewportMock = (ReactFlowModule as unknown as { __setViewportMock: Mock }).__setViewportMock;
 const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
+const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock }).__getViewportMock;
 
 // App must be imported AFTER vi.mock registers so it binds the mocked react-flow.
 const { App } = await import('../App.js');
@@ -117,8 +119,11 @@ describe('Browser-surface camera (component)', () => {
     mock.install();
     fitViewMock.mockClear();
     setCenterMock.mockClear();
+    setViewportMock.mockClear();
     getZoomMock.mockReset();
     getZoomMock.mockReturnValue(1);
+    getViewportMock.mockReset();
+    getViewportMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
     workflowGraphSpy.reset();
   });
 
@@ -190,5 +195,36 @@ describe('Browser-surface camera (component)', () => {
     await flushFrames(4);
 
     expect(fitViewMock).toHaveBeenCalled();
+  });
+
+  it('returns from the Planning surface by restoring the workflow graph viewport instead of fitting', async () => {
+    const savedViewport = { x: -360, y: 144, zoom: 0.68 };
+    mock.setTasks([], workflows);
+    render(<App />);
+
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+    workflowGraphSpy.reset();
+
+    getViewportMock.mockReturnValue(savedViewport);
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    await screen.findByTestId('planning-session-rail');
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+      && command.reason === 'sidebar-planning'
+    ))).toBe(false);
   });
 });
