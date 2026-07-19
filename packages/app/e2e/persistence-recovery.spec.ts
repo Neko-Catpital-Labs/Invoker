@@ -72,7 +72,7 @@ test.describe('Persistence recovery', () => {
 
     const tasks = result.tasks as any[];
     for (const task of tasks) {
-      if (task.status === 'pending') {
+      if (task.status === 'pending' || task.status === 'queued') {
         expect(task.execution.startedAt).toBeFalsy();
         expect(task.execution.completedAt).toBeFalsy();
       } else if (task.status === 'completed') {
@@ -106,6 +106,6 @@ test.describe('Persistence recovery', () => {
     expect(gamma).toBeTruthy();
     expect(alpha.status).toBe('completed');
     expect(beta.status).toBe('completed');
-    expect(gamma.status).toBe('pending');
+    expect(['pending', 'queued']).toContain(gamma.status);
   });
 });

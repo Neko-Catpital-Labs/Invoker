@@ -3446,7 +3446,7 @@ describe('Orchestrator', () => {
       });
     });
 
-    it('resets a pending launching task with a claimed selected attempt', () => {
+    it('resets a queued launching task with a claimed selected attempt', () => {
       const claimedOrchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
@@ -3461,7 +3461,7 @@ describe('Orchestrator', () => {
       const [started] = claimedOrchestrator.startExecution();
       const taskId = started!.id;
       const oldAttemptId = started!.execution.selectedAttemptId!;
-      expect(started!.status).toBe('pending');
+      expect(started!.status).toBe('queued');
       expect(started!.execution.phase).toBe('launching');
       expect(persistence.loadAttempt(oldAttemptId)?.status).toBe('claimed');
 

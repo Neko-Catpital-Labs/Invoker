@@ -252,7 +252,7 @@ export function cancelTaskImpl(
     const neverStarted =
       id !== rootId &&
       !t.execution.startedAt &&
-      (t.status === 'pending' || t.status === 'blocked');
+      (t.status === 'pending' || (t.status as string) === 'queued' || t.status === 'blocked');
 
     if (neverStarted) {
       const blockedChanges: TaskStateChanges = {
@@ -312,6 +312,7 @@ export function cancelWorkflowImpl(
 
   const cancellable: Partial<Record<TaskStatus, true>> = {
     pending: true,
+    queued: true as Partial<Record<TaskStatus, true>>['queued'],
     running: true,
     fixing_with_ai: true,
     blocked: true,

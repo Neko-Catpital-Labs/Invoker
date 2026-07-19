@@ -24,13 +24,14 @@ function makeTask(
 }
 
 describe('reconcileOrphanedInFlightTasksOnBoot', () => {
-  it('treats running, fixing_with_ai, and launching pending as in-flight', () => {
+  it('treats running, fixing_with_ai, and launching pending or queued tasks as in-flight', () => {
     expect(isTaskInFlightForForcedStop(makeTask('a', 'running'))).toBe(true);
     expect(isTaskInFlightForForcedStop(makeTask('b', 'fixing_with_ai'))).toBe(true);
     expect(isTaskInFlightForForcedStop(makeTask('c', 'pending', { phase: 'launching' }))).toBe(true);
-    expect(isTaskInFlightForForcedStop(makeTask('d', 'pending'))).toBe(false);
-    expect(isTaskInFlightForForcedStop(makeTask('e', 'completed'))).toBe(false);
-    expect(isTaskInFlightForForcedStop(makeTask('f', 'running', {
+    expect(isTaskInFlightForForcedStop(makeTask('d', 'queued' as TaskState['status'], { phase: 'launching' }))).toBe(true);
+    expect(isTaskInFlightForForcedStop(makeTask('e', 'pending'))).toBe(false);
+    expect(isTaskInFlightForForcedStop(makeTask('f', 'completed'))).toBe(false);
+    expect(isTaskInFlightForForcedStop(makeTask('g', 'running', {
       crashPreservedAt: new Date('2026-07-13T01:02:03.000Z'),
     }))).toBe(false);
   });

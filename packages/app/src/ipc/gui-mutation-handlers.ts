@@ -340,7 +340,7 @@ function assertDeleteAllEnabled(): void {
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
-    || (task.status === 'pending' && task.execution.phase === 'launching');
+    || ((task.status === 'pending' || (task.status as string) === 'queued') && task.execution.phase === 'launching');
 }
 
 export function createGuiMutationTaskActions(context: GuiMutationTaskActionsContext): GuiMutationTaskActions {

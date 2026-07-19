@@ -49,7 +49,7 @@ except Exception:
     raise SystemExit(0)
 status=d.get("status","")
 phase=(d.get("execution") or {}).get("phase","")
-print("yes" if status=="running" or (status=="pending" and phase=="launching") else "")
+print("yes" if status=="running" or ((status=="pending" or status=="queued") and phase=="launching") else "")
 ')"
   if [ "$IN_FLIGHT" = "yes" ]; then
     echo "==> case 2.15: task is in-flight (poll $i)"
@@ -96,8 +96,8 @@ if ! printf '%s' "$AUDIT_JSON" | grep -Fq 'task.pending'; then
   exit 1
 fi
 
-if [ "$STATUS_AFTER" != "running" ] && [ "$STATUS_AFTER" != "pending" ] && [ "$STATUS_AFTER" != "completed" ]; then
-  echo "FAIL case 2.15: expected task to be pending|running after recreate, got '$STATUS_AFTER'"
+if [ "$STATUS_AFTER" != "running" ] && [ "$STATUS_AFTER" != "pending" ] && [ "$STATUS_AFTER" != "queued" ] && [ "$STATUS_AFTER" != "completed" ]; then
+  echo "FAIL case 2.15: expected task to be queued|pending|running after recreate, got '$STATUS_AFTER'"
   invoker_e2e_run_headless status 2>&1 || true
   exit 1
 fi

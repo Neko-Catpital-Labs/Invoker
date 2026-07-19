@@ -28,15 +28,16 @@ describe('preserveCrashedInFlightTasks', () => {
       persistence,
       [
         makeTask('running-task', 'running', { phase: 'executing' }),
-        makeTask('launching-task', 'pending', { phase: 'launching' }),
+        makeTask('launching-pending-task', 'pending', { phase: 'launching' }),
+        makeTask('launching-queued-task', 'queued' as TaskState['status'], { phase: 'launching' }),
         makeTask('done-task', 'completed'),
       ],
       { pid: 46301, diagnostic: null },
       preservedAt,
     );
 
-    expect(preserved).toEqual(['running-task', 'launching-task']);
-    expect(updateTask).toHaveBeenCalledTimes(2);
+    expect(preserved).toEqual(['running-task', 'launching-pending-task', 'launching-queued-task']);
+    expect(updateTask).toHaveBeenCalledTimes(3);
     expect(updateTask).toHaveBeenNthCalledWith(1, 'running-task', {
       execution: expect.objectContaining({
         crashPreservedAt: preservedAt,

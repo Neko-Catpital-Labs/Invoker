@@ -8,7 +8,7 @@ import {
 export function isTaskInFlightForCrashPreservation(task: TaskState): boolean {
   return task.status === 'running'
     || task.status === 'fixing_with_ai'
-    || (task.status === 'pending' && task.execution.phase === 'launching');
+    || ((task.status === 'pending' || (task.status as string) === 'queued') && task.execution.phase === 'launching');
 }
 
 export function buildCrashPreservationSummary(reclaimedDeadOwner: ReclaimedDeadOwnerInfo): string {

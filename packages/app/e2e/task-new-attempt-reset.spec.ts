@@ -226,10 +226,9 @@ base.describe('Task new-attempt reset repro', () => {
         page,
         'slow-task',
         (task) =>
-          (task.status === 'pending' || task.status === 'running')
+          (task.status === 'pending' || task.status === 'queued' || task.status === 'running')
           && task.execution?.selectedAttemptId
-          && task.execution.selectedAttemptId !== oldAttemptId
-          && task.execution.phase !== 'launching',
+          && task.execution.selectedAttemptId !== oldAttemptId,
       );
       const newAttemptId = relaunched.execution.selectedAttemptId;
       expect(newAttemptId).toBeTruthy();
@@ -248,7 +247,7 @@ base.describe('Task new-attempt reset repro', () => {
       const oldAttempt = graph.nodes.find((node: any) => node.attemptId === oldAttemptId);
       const newAttempt = graph.nodes.find((node: any) => node.attemptId === newAttemptId);
       expect(oldAttempt?.status).toBe('cancelled');
-      expect(['pending', 'waiting', 'claimed', 'running']).toContain(newAttempt?.status);
+      expect(['pending', 'queued', 'waiting', 'claimed', 'running']).toContain(newAttempt?.status);
     } finally {
       await cleanupWorkflow(page);
       if (app) {

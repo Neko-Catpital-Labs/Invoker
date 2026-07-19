@@ -131,7 +131,7 @@ describe('dispatch capacity invariants', () => {
   it('reports active executions separately from launching slots', async () => {
     const { persistence, orchestrator } = await makeHarness(4);
     adapters.push(persistence);
-    const now = new Date('2026-07-01T00:00:00.000Z');
+    const now = new Date();
 
     for (let i = 0; i < 4; i += 1) {
       loadSingleTaskWorkflow(orchestrator, persistence, `wf-${i}`, `task-${i}`);
@@ -213,10 +213,13 @@ describe('dispatch capacity invariants', () => {
     expect(persistence.loadLaunchDispatchById(recentRow!.id)?.state).toBe('leased');
   });
 
-  it('gates executing-stall checks to running, fixing, and pending+launching tasks', () => {
+  it('gates executing-stall checks to running, fixing, and launching pending or queued tasks', () => {
     expect(taskNeedsExecutingStallCheck(makeTask('wf/t-running', 'wf', 'running'))).toBe(true);
     expect(taskNeedsExecutingStallCheck(makeTask('wf/t-fixing', 'wf', 'fixing_with_ai'))).toBe(true);
-    expect(taskNeedsExecutingStallCheck(makeTask('wf/t-launching', 'wf', 'pending', {
+    expect(taskNeedsExecutingStallCheck(makeTask('wf/t-launching-pending', 'wf', 'pending', {
+      execution: { phase: 'launching' } as any,
+    }))).toBe(true);
+    expect(taskNeedsExecutingStallCheck(makeTask('wf/t-launching-queued', 'wf', 'queued' as any, {
       execution: { phase: 'launching' } as any,
     }))).toBe(true);
     expect(taskNeedsExecutingStallCheck(makeTask('wf/t-pending', 'wf', 'pending'))).toBe(false);
