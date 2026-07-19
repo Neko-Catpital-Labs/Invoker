@@ -42,13 +42,11 @@ describe('App launch (component)', () => {
     act(() => window.dispatchEvent(new Event('resize')));
     expect(await screen.findByText('What do you want to build?')).toBeInTheDocument();
     expect(screen.getByTestId('planning-session-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('planning-session-rail')).toHaveClass('w-64');
+    expect(screen.getByTestId('planning-context-panel')).toHaveClass('w-16');
+    expect(screen.getByTestId('app-sidebar')).toHaveClass('w-16');
     expect(screen.getByTestId('sidebar-home')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Planning chats');
-    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Plan graph');
-    expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
-    expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
-    expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('');
 
     fireEvent.click(screen.getByTestId('sidebar-planning'));
     expect(await screen.findByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
@@ -62,8 +60,6 @@ describe('App launch (component)', () => {
     render(<App />);
     act(() => window.dispatchEvent(new Event('resize')));
     await screen.findByTestId('sidebar-planning');
-
-    fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
 
     const sidebar = screen.getByTestId('app-sidebar');
     expect(sidebar.className).toContain('w-16');
@@ -138,7 +134,6 @@ describe('App launch (component)', () => {
     render(<App />);
 
     const workersButton = await screen.findByTestId('sidebar-workers');
-    expect(workersButton).toHaveTextContent('Workers');
     fireEvent.click(workersButton);
 
     expect(await screen.findByTestId('worker-activity-card')).toBeInTheDocument();
@@ -164,7 +159,9 @@ describe('App launch (component)', () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
     render(<App />);
     act(() => window.dispatchEvent(new Event('resize')));
-    expect(await screen.findByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(await screen.findByTestId('sidebar-home')).toHaveTextContent('');
+    fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
     expect(screen.queryByTestId('rail-open-file')).not.toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
     expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Plan graph');
@@ -199,6 +196,8 @@ describe('App launch (component)', () => {
     render(<App />);
     await screen.findByTestId('sidebar-workflows');
 
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+    fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
     expect(screen.getByTestId('app-sidebar').className).toContain('w-60');
 
     fireEvent.click(screen.getByTestId('sidebar-workflows'));
@@ -242,7 +241,6 @@ describe('App launch (component)', () => {
     const sidebar = screen.getByTestId('app-sidebar');
     const toggle = screen.getByTestId('sidebar-collapse-toggle');
 
-    fireEvent.click(toggle);
     expect(sidebar.className).toContain('w-16');
     expect(screen.getByTestId('sidebar-running')).toBeInTheDocument();
 
