@@ -609,7 +609,7 @@ export function selectExecutor(
 
   if (task.config.poolId && explicitPoolMemberId) {
     const pool = host.getExecutionPools()[task.config.poolId];
-    const member = pool?.members.find((candidate) => candidate.type === 'ssh' && candidate.id === explicitPoolMemberId);
+    const member = pool?.members.find((candidate) => candidate.id === explicitPoolMemberId);
     if (pool && member) {
       if (
         excludedPoolMemberKeys.has(poolMemberKey(member))
@@ -632,7 +632,7 @@ export function selectExecutor(
         reserved = reservePoolMemberSelection(host, task, task.config.poolId, pool, member, resolvedExecution);
         if (reserved) {
           effectiveType = member.type;
-          selectedPoolMemberId = member.type === 'ssh' ? member.id : undefined;
+          selectedPoolMemberId = member.id;
           break;
         }
         attempted.add(poolMemberKey(member));
