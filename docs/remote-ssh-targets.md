@@ -33,12 +33,18 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "port": 22,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     }
   }
 }
 ```
-Invoker does not run repo bootstrap automatically on managed SSH checkouts. If a repo needs setup such as `pnpm install` or `flutter pub get`, configure `provisionCommand` explicitly or make the task command run that repo-owned step.
+Managed SSH workspaces only clone, fetch, and prepare the repo checkout. Invoker does not infer repo bootstrap from package-manager commands and does not install dependencies automatically. Every package-manager, build, or test command that runs on managed SSH needs one explicit bootstrap owner:
+
+- Target-owned bootstrap: set `provisionCommand` on the remote target. Invoker runs it inside the task workspace before each SSH task payload. Use this for stable repo setup such as `pnpm install --frozen-lockfile` or `flutter pub get`.
+- Task-owned bootstrap: when the target has no `provisionCommand`, or when setup is task-specific, put the repo-owned setup at the start of the task command, for example `pnpm install --frozen-lockfile && pnpm test`.
+
+Do not rely on ambient `node_modules`, package caches, or setup performed by a previous task. Managed workspaces are disposable execution capacity.
 
 ## Owner-host workers
 
@@ -65,7 +71,7 @@ Do not install separate cron jobs on SSH targets for these maintenance paths. Th
 | `port` | number | no | SSH port (default: 22) |
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
-| `provisionCommand` | string | no | Explicit bootstrap command run inside the task workspace before each SSH task payload; unset means no provisioning |
+| `provisionCommand` | string | no | Target-owned bootstrap command run inside the task workspace before each SSH task payload; unset means no provisioning, so task commands that need setup must bootstrap themselves |
 | `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
 
 ## Multiple SSH Targets
@@ -87,6 +93,8 @@ tasks:
     command: "pnpm test"
     poolId: staging-server-b
 ```
+
+The `pnpm test` commands above rely on both example targets owning bootstrap through `provisionCommand`. If a selected target does not configure `provisionCommand`, write the command as `pnpm install --frozen-lockfile && pnpm test` or use the repo's equivalent setup command first.
 
 This is the simplest way to target specific SSH machines: define multiple `remoteTargets`, then point each task at the target ID it should use. If you need queueing, load balancing, or mixed local/SSH routing, put those target IDs inside `executionPools` and use the pool name as `poolId` instead.
 
@@ -119,13 +127,29 @@ tasks:
 
 The executor validates at runtime that the selected target or pool exists and resolves to an SSH-capable execution route.
 
+### Package-script verification
+
+Remote verification should use repo/package scripts when they exist instead of raw runner binaries. For example, `packages/ui/package.json` defines `test` as `node scripts/run-vitest.mjs`, so a managed SSH verification command should use the script:
+
+```yaml
+tasks:
+  - id: verify-ui
+    description: "Run UI tests through the package script"
+    command: "pnpm --filter @invoker/ui test"
+    poolId: staging-server
+    dependencies: []
+```
+
+Avoid commands such as `cd packages/ui && npx vitest run` or `pnpm --filter @invoker/ui exec vitest run` when the package script exists, because they bypass repo-owned wrappers and may assume dependencies or runtime flags that only the script provides. The same bootstrap rule still applies: this command is valid on managed SSH only when the target has `provisionCommand`, or when the command starts with the repo bootstrap.
+
 ## How It Works
 
 1. The plan parser reads `poolId` from YAML and stores it on the task config.
 2. At dispatch time, Invoker resolves that `poolId` either directly to a `remoteTargets` entry or to an `executionPools` member selection.
 3. An `SshExecutor` instance is created with the chosen target's connection details.
-4. The runner spawns: `ssh -i <keyPath> -p <port> -o StrictHostKeyChecking=accept-new -o BatchMode=yes user@host <command>`
-5. For `claude` action types, the Claude CLI command is shell-quoted and executed remotely.
+4. If the selected target has `provisionCommand`, the runner executes that command inside the task workspace before the task payload. If it is unset, no provisioning is inferred.
+5. The runner spawns: `ssh -i <keyPath> -p <port> -o StrictHostKeyChecking=accept-new -o BatchMode=yes user@host <command>`
+6. For `claude` action types, the Claude CLI command is shell-quoted and executed remotely.
 
 ### SSH options
 
