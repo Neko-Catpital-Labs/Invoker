@@ -3,8 +3,9 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
-import { PlanConversation } from '../slack/plan-conversation.js';
+import { PlanConversation, isConfirmation } from '../slack/plan-conversation.js';
 
 // Activation side: the planner is told to write the full plan to the draft file
 // and reply with a summary, and each turn starts from a cleared file so a prior
@@ -17,17 +18,41 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 const mockSpawn = vi.mocked(child_process.spawn);
 
-function fakePlannerChild(stdout: string): any {
+function fakePlannerChild(stdout: string, beforeClose?: () => void): any {
   const proc = new EventEmitter() as any;
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
   proc.kill = vi.fn();
   setTimeout(() => {
+    beforeClose?.();
     if (stdout) proc.stdout.emit('data', Buffer.from(stdout));
     proc.emit('close', 0);
   }, 0);
   return proc;
 }
+
+const VALID_PLAN_YAML = `name: "Draft Activation"
+onFinish: none
+tasks:
+  - id: implement
+    description: "Implement the change"
+    prompt: "Do the work"
+    dependencies: []
+`;
+
+const INLINE_PLAN_RESPONSE = `Here is the plan:
+
+\`\`\`yaml
+name: "Draft Activation"
+onFinish: none
+tasks:
+  - id: implement
+    description: "Implement the change"
+    prompt: "Do the work"
+    dependencies: []
+\`\`\`
+
+Reply \`submit\` to submit it.`;
 
 describe('plan draft file — activation side', () => {
   let workingDir: string;
@@ -78,5 +103,52 @@ describe('plan draft file — activation side', () => {
 
     expect(existsSync(path)).toBe(false);
     expect(conversation.getDraftedPlan()).toBeNull();
+  });
+
+  it('requires the exact submit line as a standalone post-plan instruction', () => {
+    const conversation = new PlanConversation({});
+    (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
+
+    const prompt = conversation.buildCursorPrompt();
+    const submitLine = 'Reply `submit` to submit it.';
+    const lines = prompt.split('\n');
+
+    expect(lines.filter((line) => line === submitLine)).toHaveLength(1);
+    expect(prompt.match(/Reply `submit` to submit it\./g)).toHaveLength(1);
+    expect(prompt).toContain('Do NOT place that line inline in a sentence.');
+  });
+
+  it('exposes the latest draft for the submit handler without marking it submitted', async () => {
+    const conversation = new PlanConversation({ workingDir, threadTs: 'submit-123', plannerRetryLimit: 0 });
+    const path = conversation.planDraftFilePath();
+    if (!path) throw new Error('expected a plan draft path');
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(
+      'Drafted the plan.\n\nReply `submit` to submit it.',
+      () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
+    ));
+    await conversation.sendMessage('Create the plan');
+
+    expect(isConfirmation('submit')).toBe(true);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(conversation.planSubmitted).toBe(false);
+    expect(conversation.submittedPlanText).toBeNull();
+
+    const draftedPlan = conversation.getDraftedPlan();
+    expect(draftedPlan).not.toBeNull();
+    const parsedDraft = parseYaml(draftedPlan!) as Record<string, unknown>;
+    expect(parsedDraft.name).toBe('Draft Activation');
+  });
+
+  it('falls back to the latest inline plan when no draft file path exists', async () => {
+    const conversation = new PlanConversation({ plannerRetryLimit: 0 });
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(INLINE_PLAN_RESPONSE));
+    await conversation.sendMessage('Create the plan');
+
+    const draftedPlan = conversation.getDraftedPlan();
+    expect(draftedPlan).not.toBeNull();
+    const parsedDraft = parseYaml(draftedPlan!) as Record<string, unknown>;
+    expect(parsedDraft.name).toBe('Draft Activation');
   });
 });
