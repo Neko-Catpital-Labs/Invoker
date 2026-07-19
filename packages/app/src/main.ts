@@ -100,6 +100,18 @@ import {
   resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
+import {
+  createInAppPlanningChatSessions,
+  createPlanningChatSession,
+  getPlanningChatSession,
+  listInAppPlanningPresets,
+  listPlanningChatSessions,
+  planFromGoal,
+  resetPlanningChat,
+  sendPlanningChatMessage,
+  submitPlanningChatDraft,
+  type LoadedGeneratedPlan,
+} from './in-app-planner.js';
 // applyPlanDefinitionDefaults removed — parsePlan() applies defaults internally
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -1170,6 +1182,7 @@ if (isHeadless) {
   let apiServer: ApiServer | null = null;
   let ownerMode = true;
   const taskHandles = new Map<string, { handle: ExecutorHandle; executor: Executor }>();
+  const planningChatSessions = createInAppPlanningChatSessions();
   const launchingTasks = new Set<string>();
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -2240,6 +2253,53 @@ if (isHeadless) {
     });
   }
 
+  async function loadGeneratedPlanDraft(planText: string): Promise<LoadedGeneratedPlan> {
+    const { parsePlan } = await import('./plan-parser.js');
+    const plan = parsePlan(planText);
+    logger.info(`planning-chat-submit: loading "${plan.name}" (${plan.tasks.length} tasks)`, { module: 'ipc' });
+    taskHandles.clear();
+    backupPlan(plan, planText, logger);
+
+    const workflowIdsBefore = new Set(orchestrator.getWorkflowIds());
+    orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+    const workflowIds = orchestrator.getWorkflowIds().filter((id) => !workflowIdsBefore.has(id));
+    const workflowId = workflowIds[0];
+    if (!workflowId) {
+      throw new Error(`Failed to resolve workflow id for generated plan "${plan.name}".`);
+    }
+
+    const workflows = persistence.listWorkflows();
+    lastKnownWorkflowCount = workflows.length;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('invoker:workflows-changed', workflows);
+    }
+
+    return {
+      planName: plan.name,
+      workflowId,
+      workflowIds,
+      workflowCount: workflowIds.length,
+    };
+  }
+
+  function createInAppPlannerDeps() {
+    return {
+      config: invokerConfig,
+      loadGeneratedPlan: loadGeneratedPlanDraft,
+      workingDir: repoRoot,
+      sessions: planningChatSessions,
+      log: (source: string, level: string, message: string) => {
+        if (level === 'error') {
+          logger.error(message, { module: source });
+        } else if (level === 'warn') {
+          logger.warn(message, { module: source });
+        } else {
+          logger.info(message, { module: source });
+        }
+      },
+    };
+  }
+
   function bootstrapInitialWorkflowState(): void {
     const workflows = listWorkflowsByStartupRecency();
     lastKnownWorkflowCount = workflows.length;
@@ -2781,6 +2841,44 @@ if (isHeadless) {
       backupPlan(plan, undefined, logger);
       orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
     });
+
+    registerGuiMutationHandler('invoker:plan-from-goal', async (requestArg: unknown) => (
+      planFromGoal(requestArg as Parameters<typeof planFromGoal>[0], createInAppPlannerDeps())
+    ));
+    registerGuiMutationHandler('invoker:planning-chat-create', async (requestArg?: unknown) => (
+      createPlanningChatSession(
+        requestArg as Parameters<typeof createPlanningChatSession>[0],
+        createInAppPlannerDeps(),
+      )
+    ));
+    ipcMain.handle('invoker:planning-chat-list', () => (
+      listPlanningChatSessions({ sessions: planningChatSessions })
+    ));
+    ipcMain.handle('invoker:planning-chat-get', (_event, requestArg: unknown) => (
+      getPlanningChatSession(
+        requestArg as Parameters<typeof getPlanningChatSession>[0],
+        { sessions: planningChatSessions },
+      )
+    ));
+    registerGuiMutationHandler('invoker:planning-chat-send', async (requestArg: unknown) => (
+      sendPlanningChatMessage(
+        requestArg as Parameters<typeof sendPlanningChatMessage>[0],
+        createInAppPlannerDeps(),
+      )
+    ));
+    registerGuiMutationHandler('invoker:planning-chat-submit', async (requestArg: unknown) => (
+      submitPlanningChatDraft(
+        requestArg as Parameters<typeof submitPlanningChatDraft>[0],
+        createInAppPlannerDeps(),
+      )
+    ));
+    registerGuiMutationHandler('invoker:planning-chat-reset', async (requestArg: unknown) => (
+      resetPlanningChat(
+        requestArg as Parameters<typeof resetPlanningChat>[0],
+        { sessions: planningChatSessions },
+      )
+    ));
+    ipcMain.handle('invoker:get-planning-presets', () => listInAppPlanningPresets(invokerConfig));
 
     if (process.env.NODE_ENV === 'test') {
       ipcMain.handle(

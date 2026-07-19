@@ -266,7 +266,29 @@ export interface TaskReplacementDef {
 // ── IPC Bridge API ──────────────────────────────────────────
 // InvokerAPI is derived from the IPC channel registry in @invoker/contracts.
 
-export type { InvokerAPI, ClaudeMessage, AgentSessionData } from '@invoker/contracts';
+export type {
+  InvokerAPI,
+  ClaudeMessage,
+  AgentSessionData,
+  InAppPlanRequest,
+  InAppPlanResponse,
+  InAppPlanningChatLine,
+  InAppPlanningChatRequest,
+  InAppPlanningChatResponse,
+  InAppPlanningCreateSessionRequest,
+  InAppPlanningCreateSessionResponse,
+  InAppPlanningGetSessionRequest,
+  InAppPlanningGetSessionResponse,
+  InAppPlanningListSessionsResponse,
+  InAppPlanningPlanSummary,
+  InAppPlanningResetRequest,
+  InAppPlanningResetResponse,
+  InAppPlanningSessionStatus,
+  InAppPlanningSessionSummary,
+  InAppPlanningSubmitRequest,
+  InAppPlanningSubmitResponse,
+  PlanningPresetOption,
+} from '@invoker/contracts';
 
 import type { InvokerAPI } from '@invoker/contracts';
 
