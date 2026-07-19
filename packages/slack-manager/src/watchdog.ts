@@ -109,7 +109,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
         if (canAlert()) {
           lastAlertAt = now();
           await deps.alert(
-            `:rotating_light: Invoker is still down after ${maxAttempts} relaunch attempts. Reply \`restart\` to retry.`,
+            `:rotating_light: Invoker is still down after ${maxAttempts} relaunch attempts. Reply \`@Invoker restart\` to retry.`,
           );
         }
         return;
@@ -133,7 +133,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
         if (canAlert()) {
           lastAlertAt = now();
           await deps.alert(
-            `:rotating_light: Invoker is down and I could not bring it back after ${maxAttempts} attempts. Reply \`restart\` to retry.`,
+            `:rotating_light: Invoker is down and I could not bring it back after ${maxAttempts} attempts. Reply \`@Invoker restart\` to retry.`,
           );
         } else {
           deps.log('warn', 'Invoker still down after max relaunch attempts — alert suppressed by cooldown');

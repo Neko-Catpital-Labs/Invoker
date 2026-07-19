@@ -17,7 +17,7 @@ export type RunWorkflowOp = (
   onProgress?: (p: WorkflowOpProgress) => void,
 ) => Promise<WorkflowOpResult>;
 
-const DOWN_SUMMARY = 'Invoker is down and I could not bring it back. Reply `restart` to retry.';
+const DOWN_SUMMARY = 'Invoker is down and I could not bring it back. Reply `@Invoker restart` to retry.';
 
 /** Workflow-op verb → delegated headless `exec` command (workflow id appended). `cancel` is workflow-scoped. */
 const MUTATION_COMMAND: Partial<Record<WorkflowOpName, string>> = {
