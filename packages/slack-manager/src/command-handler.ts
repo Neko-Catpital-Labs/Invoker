@@ -20,6 +20,13 @@ export interface CommandHandlerDeps {
 
 const DOWN_MESSAGE = 'Invoker is down and I could not bring it back. Reply `@Invoker restart` to retry.';
 
+export class SlackCommandError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SlackCommandError';
+  }
+}
+
 export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   return async (command: SurfaceCommand): Promise<void> => {
     try {
@@ -29,7 +36,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         ? DOWN_MESSAGE
         : `Command \`${command.type}\` failed: ${errMessage(err)}`;
       deps.log('error', message);
-      await deps.slack.handleEvent({ type: 'error', message }).catch(() => {});
+      throw err instanceof SlackCommandError ? err : new SlackCommandError(message);
     }
   };
 }
