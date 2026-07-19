@@ -11,9 +11,20 @@
  *    for straighter edges.
  */
 
-import ELK from 'elkjs/lib/elk.bundled.js';
-
 import type { TaskState } from '../types.js';
+
+// elkjs (~1.6 MB bundled) is loaded lazily so it does not ride in the cold
+// startup entry chunk. The first workflow graph paint uses WorkflowGraph, which
+// does not call layoutTaskGraph; ELK is only fetched when the task DAG renders.
+let elkModulePromise: Promise<{ default: new () => ElkLayoutEngine }> | null = null;
+function loadElk(): Promise<{ default: new () => ElkLayoutEngine }> {
+  if (!elkModulePromise) {
+    elkModulePromise = import('elkjs/lib/elk.bundled.js') as Promise<{
+      default: new () => ElkLayoutEngine;
+    }>;
+  }
+  return elkModulePromise;
+}
 
 export interface NodePosition {
   x: number;
@@ -45,10 +56,10 @@ interface ElkLayoutEngine {
   }>;
 }
 
-const NODE_WIDTH = 280;
-const NODE_HEIGHT = 80;
-const HORIZONTAL_GAP = 120;
-const VERTICAL_GAP_BASE = 40;
+const NODE_WIDTH = 167;
+const NODE_HEIGHT = 40;
+const HORIZONTAL_GAP = 80;
+const VERTICAL_GAP_BASE = 24;
 const VERTICAL_GAP_PER_CONNECTION = 12;
 const BARYCENTER_SWEEPS = 4;
 
@@ -88,7 +99,13 @@ export async function layoutTaskGraph(
     .sort((a, b) => edgeLayoutId(a).localeCompare(edgeLayoutId(b)));
 
   try {
-    const elk = options?.elk ?? new ELK();
+    let elk: ElkLayoutEngine;
+    if (options?.elk) {
+      elk = options.elk;
+    } else {
+      const { default: ELK } = await loadElk();
+      elk = new ELK();
+    }
     const graph = {
       id: 'task-dag',
       layoutOptions: {

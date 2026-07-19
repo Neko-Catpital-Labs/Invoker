@@ -95,14 +95,19 @@ export function FloatingGraphPanel({
     <div
       ref={panelRef}
       data-testid={testId}
-      className={`absolute h-[280px] w-[420px] rounded border border-gray-700 bg-gray-900/95 overflow-hidden shadow-lg ${className}`}
-      style={position ? { left: position.left, top: position.top } : { top: PANEL_MARGIN, right: PANEL_MARGIN }}
+      className={`absolute top-3 right-3 z-[1000] h-[210px] w-[315px] rounded border border-border bg-background/95 overflow-hidden shadow-lg ${className}`}
+      style={{
+        ...(position ? { left: position.left, top: position.top, right: 'auto' } : {}),
+        isolation: 'isolate',
+        pointerEvents: 'auto',
+        zIndex: 1000,
+      }}
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
     >
       <div
         data-testid={dragHandleTestId}
-        className="cursor-move select-none px-2 py-1 text-[11px] text-gray-300 border-b border-gray-700"
+        className="cursor-move select-none px-2 py-1 text-[11px] text-muted-foreground border-b border-border"
         onPointerDown={handleDragStart}
         onPointerMove={handleDragMove}
         onPointerUp={handleDragEnd}
