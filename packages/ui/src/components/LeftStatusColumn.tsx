@@ -6,6 +6,7 @@ import {
   AttentionIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  GraphIcon,
   InvokerIcon,
   MoonIcon,
   SettingsIcon,
@@ -151,13 +152,13 @@ export function LeftStatusColumn({
       >
         {collapsed ? (
           <div className="relative inline-flex h-9 w-9 items-center justify-center">
-            <span><WorkflowsIcon className={ICON_CLASS} /></span>
+            <span><GraphIcon className={ICON_CLASS} /></span>
           </div>
         ) : (
           <>
             <span className="flex min-w-0 items-center gap-3">
               <span className="inline-flex rounded-md border border-border bg-sidebar-accent/40 p-1.5 text-muted-foreground">
-                <WorkflowsIcon className={ICON_CLASS} />
+                <GraphIcon className={ICON_CLASS} />
               </span>
               <span className="truncate">Plan graph</span>
             </span>
