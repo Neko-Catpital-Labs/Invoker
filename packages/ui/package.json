@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "NODE_OPTIONS='--max-old-space-size=512' vite build",
-    "test": "vitest run"
+    "test": "node scripts/run-vitest.mjs"
   },
   "dependencies": {
     "@invoker/contracts": "workspace:*",
