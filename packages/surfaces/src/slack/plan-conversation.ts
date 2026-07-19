@@ -133,6 +133,10 @@ export interface PlanConversationConfig {
 const CONFIRMATION_PATTERNS = [
   /^yes$/i,
   /^y$/i,
+  /^yes please$/i,
+  /^ok$/i,
+  /^okay$/i,
+  /^approve$/i,
   /^go$/i,
   /^go ahead$/i,
   /^execute$/i,
@@ -144,6 +148,7 @@ const CONFIRMATION_PATTERNS = [
   /^lgtm$/i,
   /^ship it$/i,
   /^approved$/i,
+  /^sounds good$/i,
 ];
 
 export function isConfirmation(text: string): boolean {
