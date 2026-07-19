@@ -80,6 +80,19 @@ describe('validateSlackCredentials', () => {
     expect(checks.find((c) => c.id === 'slack-bot-token')?.status).toBe('error');
     expect(checks.find((c) => c.id === 'slack-app-token')?.status).toBe('error');
   });
+
+  it('errors on lobby conversations.info missing_scope with a reinstall remediation', async () => {
+    const fetchImpl = mockFetch({
+      'auth.test': { body: { ok: true, user: 'invoker', team: 'Acme' }, scopes: REQUIRED_BOT_SCOPES.join(',') },
+      'apps.connections.open': { body: { ok: true } },
+      'conversations.info': { body: { ok: false, error: 'missing_scope', needed: 'channels:read' } },
+    });
+    const checks = await validateSlackCredentials(creds, fetchImpl as never);
+    const channelCheck = checks.find((c) => c.id === 'slack-channel');
+    expect(channelCheck?.status).toBe('error');
+    expect(channelCheck?.detail).toContain('channels:read');
+    expect(channelCheck?.remediation).toContain('Reinstall');
+  });
 });
 
 describe('upsertEnvLines', () => {
