@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SessionManager, SessionIdentifier, SessionHandle } from '../slack/thread-session-manager.js';
+import * as child_process from 'node:child_process';
 
 // ── Mock child_process.spawn ────────────────────────────────
 
@@ -21,6 +22,8 @@ vi.mock('node:child_process', async (importOriginal) => {
     }),
   };
 });
+
+const mockSpawn = vi.mocked(child_process.spawn);
 
 // ── Mock ConversationRepository ─────────────────────────────
 
@@ -212,6 +215,42 @@ describe('SessionManager', () => {
       'U001',
       'agent',
     );
+  });
+
+  it('BUG: a per-session repoUrl override is ignored — the manager-level default always wins', async () => {
+    mockSpawn.mockClear();
+    const multiRepoManager = new SessionManager({
+      cursorCommand: 'cursor',
+      workingDir: '/fake',
+      conversationRepo: mockRepo as any,
+      evictionIntervalMs: 60_000,
+      // Simulates `defaultRepoUrl` in ~/.invoker/config.json pointed at Invoker.
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+      mode: 'plan',
+    });
+    multiRepoManager.start();
+
+    // Simulates a Slack thread that resolved a `[repo:notarepo]` tag to a
+    // different repo. `getOrCreateSession`'s opts type has no `repoUrl` field
+    // today, so a caller has no way to override the manager-level default for
+    // this one thread — `as any` stands in for that missing capability.
+    const id = new SessionIdentifier('C123', '1234.5678');
+    const handle = await multiRepoManager.getOrCreateSession(id, 'U001', {
+      workingDir: '/checkouts/notarepo',
+      repoUrl: 'git@github.com:EdbertChan/notarepo.git',
+    } as any);
+    expect(handle).not.toBeNull();
+
+    await handle!.sendMessage('Add a health endpoint');
+    const prompt = mockSpawn.mock.calls[0][1]![1] as string;
+
+    // Reproduces the bug: even though this thread asked for notarepo, the
+    // system prompt still tells the planning LLM to write Invoker's repoUrl
+    // into the YAML plan.
+    expect(prompt).toContain('repoUrl: "git@github.com:Neko-Catpital-Labs/Invoker.git"');
+    expect(prompt).not.toContain('EdbertChan/notarepo.git');
+
+    multiRepoManager.stop();
   });
 
   it('getMetrics returns correct counts', async () => {
