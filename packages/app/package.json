@@ -65,7 +65,7 @@
     "test": "vitest run",
     "start": "unset ELECTRON_RUN_AS_NODE && node ../../scripts/electron.cjs dist/main.js",
     "dev": "tsup src/main.ts src/preload.ts --format cjs --outDir dist --external electron && unset ELECTRON_RUN_AS_NODE && node ../../scripts/electron.cjs dist/main.js",
-    "test:e2e": "sh -c 'if command -v xvfb-run >/dev/null 2>&1; then exec xvfb-run --auto-servernum playwright test \"$@\"; else exec playwright test \"$@\"; fi' --",
+    "test:e2e": "sh -c 'if [ \"${1-}\" = \"--\" ]; then shift; fi; if command -v xvfb-run >/dev/null 2>&1; then exec xvfb-run --auto-servernum playwright test \"$@\"; else exec playwright test \"$@\"; fi' --",
     "test:e2e:visible": "sh -c 'export INVOKER_E2E_HIDE_WINDOW=0; if command -v xvfb-run >/dev/null 2>&1; then exec xvfb-run --auto-servernum playwright test \"$@\"; else exec playwright test \"$@\"; fi' --",
     "test:e2e:quiet": "pnpm run test:e2e"
   },
