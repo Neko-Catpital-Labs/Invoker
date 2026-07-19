@@ -482,6 +482,48 @@ branch refs/heads/${targetBranch}
     // The actual exit code propagation is tested by integration tests with real SSH.
   });
 
+  it('falls back to default managed provisioning when provisionCommand is blank', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      provisionCommand: '   ',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'echo test',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh.start(req);
+
+    expect(capturedScript).toContain('[ ! -f package.json ]');
+  });
+
   it('does not return a handle until managed remote bootstrap/setup has finished', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
