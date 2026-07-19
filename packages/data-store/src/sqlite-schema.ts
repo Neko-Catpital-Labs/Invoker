@@ -184,6 +184,29 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_conv_messages_thread
         ON conversation_messages(thread_ts, seq);
 
+      CREATE TABLE IF NOT EXISTS slack_launch_contexts (
+        thread_ts TEXT PRIMARY KEY,
+        repo_url TEXT NOT NULL,
+        harness_preset TEXT NOT NULL,
+        working_dir TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        lobby_channel_id TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS slack_pending_confirmations (
+        confirm_key TEXT PRIMARY KEY,
+        thread_ts TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_slack_pending_confirmations_expiry
+        ON slack_pending_confirmations(expires_at);
+
       CREATE TABLE IF NOT EXISTS in_app_planning_sessions (
         session_id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -228,6 +251,7 @@ export const SCHEMA_DDL = `
         lobby_thread_ts TEXT,
         harness_preset TEXT,
         repo_url TEXT,
+        progress_card_ts TEXT,
         created_at TEXT NOT NULL
       );
 
@@ -460,6 +484,7 @@ export const SCHEMA_DDL = `
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
 export const COLUMN_MIGRATIONS = [
+  'ALTER TABLE workflow_channels ADD COLUMN progress_card_ts TEXT',
   "ALTER TABLE conversations ADD COLUMN mode TEXT DEFAULT 'plan'",
   'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
   'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',

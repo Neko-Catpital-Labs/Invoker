@@ -45,6 +45,8 @@ import type {
   ActivityLogEntry,
   Conversation,
   ConversationMessage,
+  SlackLaunchContext,
+  SlackPendingConfirmation,
   WorkflowChannel,
   WorkerActionListFilters,
   WorkerActionRecord,
@@ -2027,6 +2029,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteConversation(threadTs: string): void {
+    this.execRun('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
+    this.execRun('DELETE FROM slack_pending_confirmations WHERE thread_ts = ?', [threadTs]);
     this.execRun('DELETE FROM conversation_messages WHERE thread_ts = ?', [threadTs]);
     this.execRun('DELETE FROM conversations WHERE thread_ts = ?', [threadTs]);
   }
@@ -2047,8 +2051,36 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  listActivePlanConversations(channelId: string, userId: string): Conversation[] {
+    const rows = this.queryAll(`
+      SELECT * FROM conversations
+      WHERE channel_id = ? AND user_id = ? AND mode = 'plan' AND plan_submitted = 0
+      ORDER BY updated_at DESC
+    `, [channelId, userId]);
+    return rows.map((row: any) => ({
+      threadTs: row.thread_ts as string,
+      channelId: row.channel_id as string,
+      userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
+      extractedPlan: (row.extracted_plan as string) ?? null,
+      planSubmitted: row.plan_submitted === 1,
+      createdAt: row.created_at as string,
+      updatedAt: row.updated_at as string,
+    }));
+  }
+
   deleteConversationsOlderThan(cutoffIso: string): number {
     this.ensureWritable();
+    this.db.run(`
+      DELETE FROM slack_launch_contexts WHERE thread_ts IN (
+        SELECT thread_ts FROM conversations WHERE updated_at < ?
+      )
+    `, [cutoffIso]);
+    this.db.run(`
+      DELETE FROM slack_pending_confirmations WHERE thread_ts IN (
+        SELECT thread_ts FROM conversations WHERE updated_at < ?
+      )
+    `, [cutoffIso]);
     // Delete messages first (FK constraint)
     this.db.run(`
       DELETE FROM conversation_messages WHERE thread_ts IN (
@@ -2102,13 +2134,100 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  // ── Slack Plan Submission Session State ─────────────────
+
+  saveSlackLaunchContext(context: SlackLaunchContext): void {
+    this.execRun(`
+      INSERT OR REPLACE INTO slack_launch_contexts
+        (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [
+      context.threadTs,
+      context.repoUrl,
+      context.harnessPreset,
+      context.workingDir,
+      context.requestedBy,
+      context.lobbyChannelId,
+    ]);
+  }
+
+  loadSlackLaunchContext(threadTs: string): SlackLaunchContext | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM slack_launch_contexts WHERE thread_ts = ?',
+      [threadTs],
+    ) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return {
+      threadTs: row.thread_ts as string,
+      repoUrl: row.repo_url as string,
+      harnessPreset: row.harness_preset as string,
+      workingDir: row.working_dir as string,
+      requestedBy: row.requested_by as string,
+      lobbyChannelId: row.lobby_channel_id as string,
+    };
+  }
+
+  deleteSlackLaunchContext(threadTs: string): void {
+    this.execRun('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
+  }
+
+  saveSlackPendingConfirmation(confirmation: SlackPendingConfirmation): void {
+    this.execRun(`
+      INSERT OR REPLACE INTO slack_pending_confirmations
+        (confirm_key, thread_ts, channel_id, user_id, kind, payload_json, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      confirmation.confirmKey,
+      confirmation.threadTs,
+      confirmation.channelId,
+      confirmation.userId,
+      confirmation.kind,
+      confirmation.payloadJson,
+      confirmation.createdAt,
+      confirmation.expiresAt,
+    ]);
+  }
+
+  loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM slack_pending_confirmations WHERE confirm_key = ?',
+      [confirmKey],
+    ) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    return {
+      confirmKey: row.confirm_key as string,
+      threadTs: row.thread_ts as string,
+      channelId: row.channel_id as string,
+      userId: row.user_id as string,
+      kind: row.kind as string,
+      payloadJson: row.payload_json as string,
+      createdAt: row.created_at as string,
+      expiresAt: row.expires_at as string,
+    };
+  }
+
+  deleteSlackPendingConfirmation(confirmKey: string): void {
+    this.execRun('DELETE FROM slack_pending_confirmations WHERE confirm_key = ?', [confirmKey]);
+  }
+
+  purgeExpiredSlackPendingConfirmations(nowIso: string): number {
+    this.ensureWritable();
+    this.db.run(
+      'DELETE FROM slack_pending_confirmations WHERE expires_at <= ?',
+      [nowIso],
+    );
+    const changes = this.db.getRowsModified();
+    this.dirty = true;
+    return changes;
+  }
+
   // ── Workflow Channels (Slack workflow↔channel mapping) ──
 
   saveWorkflowChannel(rec: WorkflowChannel): void {
     this.execRun(`
       INSERT OR REPLACE INTO workflow_channels
-        (workflow_id, channel_id, requested_by, lobby_channel_id, lobby_thread_ts, harness_preset, repo_url, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (workflow_id, channel_id, requested_by, lobby_channel_id, lobby_thread_ts, harness_preset, repo_url, progress_card_ts, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       rec.workflowId,
       rec.channelId,
@@ -2117,6 +2236,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       rec.lobbyThreadTs ?? null,
       rec.harnessPreset ?? null,
       rec.repoUrl ?? null,
+      rec.progressCardTs ?? null,
       rec.createdAt,
     ]);
   }
@@ -2130,6 +2250,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       lobbyThreadTs: (row.lobby_thread_ts as string) ?? undefined,
       harnessPreset: (row.harness_preset as string) ?? undefined,
       repoUrl: (row.repo_url as string) ?? undefined,
+      progressCardTs: (row.progress_card_ts as string) ?? undefined,
       createdAt: row.created_at as string,
     };
   }

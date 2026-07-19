@@ -33,6 +33,26 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+export interface SlackLaunchContext {
+  threadTs: string;
+  repoUrl: string;
+  harnessPreset: string;
+  workingDir: string;
+  requestedBy: string;
+  lobbyChannelId: string;
+}
+
+export interface SlackPendingConfirmation {
+  confirmKey: string;
+  threadTs: string;
+  channelId: string;
+  userId: string;
+  kind: string;
+  payloadJson: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 // ── Workflow Channel Types (Slack workflow↔channel mapping) ─
 
 export interface WorkflowChannel {
@@ -43,6 +63,7 @@ export interface WorkflowChannel {
   lobbyThreadTs?: string;
   harnessPreset?: string;
   repoUrl?: string;
+  progressCardTs?: string;
   createdAt: string;
 }
 
@@ -328,12 +349,22 @@ export interface PersistenceAdapter {
 
   // Conversation queries
   listActiveConversations(): Conversation[];
+  listActivePlanConversations(channelId: string, userId: string): Conversation[];
   deleteConversationsOlderThan(cutoffIso: string): number;
 
   // Conversation messages
   appendMessage(threadTs: string, role: 'user' | 'assistant', content: string): void;
   countMessages(threadTs: string): number;
   loadMessages(threadTs: string): ConversationMessage[];
+
+  // Slack plan submission session state
+  saveSlackLaunchContext(context: SlackLaunchContext): void;
+  loadSlackLaunchContext(threadTs: string): SlackLaunchContext | undefined;
+  deleteSlackLaunchContext(threadTs: string): void;
+  saveSlackPendingConfirmation(confirmation: SlackPendingConfirmation): void;
+  loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined;
+  deleteSlackPendingConfirmation(confirmKey: string): void;
+  purgeExpiredSlackPendingConfirmations(nowIso: string): number;
 
   // Workflow channels (Slack workflow↔channel mapping)
   saveWorkflowChannel(rec: WorkflowChannel): void;
