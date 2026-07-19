@@ -22,7 +22,7 @@
 
   "remoteTargets": {
     "staging-server": {
-      "comment": "Managed SSH target configuration for remote execution",
+      "comment": "Managed SSH target; provisionCommand owns repo bootstrap before each task payload",
       "host": "192.168.1.100",
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_staging",
@@ -34,7 +34,7 @@
       "remoteHeartbeatIntervalSeconds": 30
     },
     "build-server-b": {
-      "comment": "Second SSH target for running different tasks on a different host",
+      "comment": "Second managed SSH target; omit provisionCommand only when every task command bootstraps itself",
       "host": "192.168.1.101",
       "user": "deploy",
       "sshKeyPath": "/home/user/.ssh/id_build_b",
@@ -72,7 +72,7 @@
 
   "executorRoutingRules": [
     {
-      "comment": "Route pnpm commands to the SSH-only pool before defaultPoolId applies",
+      "comment": "Route pnpm commands to the SSH-only pool before defaultPoolId applies; pool members above own bootstrap via provisionCommand",
       "regex": "\\bpnpm(?:\\s|$)",
       "poolId": "pnpm-ssh",
       "strategy": "route"
@@ -116,6 +116,7 @@
   "notes": {
     "web_surface": "webToken enables the browser UI + Slack live status card surfaces. Env vars INVOKER_WEB_TOKEN / INVOKER_WEB_HOST / INVOKER_WEB_PORT override these. Set webHost to 0.0.0.0 to reach it from another machine (e.g. the DigitalOcean host); open http://<host>:<webPort>/?token=<webToken>.",
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
+    "managed_ssh_bootstrap": "Managed SSH workspaces clone/fetch the repo only. Package-manager, build, and test commands must have explicit bootstrap ownership: either the selected target has provisionCommand, or the task command starts with repo setup such as pnpm install --frozen-lockfile.",
     "config_locations": [
       "~/.invoker/config.json - Default user-level settings",
       "INVOKER_REPO_CONFIG_PATH=/path/to/config.json - Explicit override for repo/test-specific config"

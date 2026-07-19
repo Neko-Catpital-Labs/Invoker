@@ -282,6 +282,8 @@ Rules:
    - For focused package tests in a monorepo, run from the relevant package/workspace directory or use the repo's documented workspace filter.
    - To target a specific test file, use the syntax supported by the discovered test script.
    - Prefer focused verification during iteration and reserve broad/full-suite commands for the final gate only when the target repo documents such a command.
+   - For package-manager commands that may run on managed SSH, make bootstrap ownership explicit. Either the selected/configured target has a \`provisionCommand\` that installs repo dependencies before each task payload, or the task command itself must run the repo-owned bootstrap first (for example \`pnpm install --frozen-lockfile && pnpm --filter @scope/pkg test\`). If you cannot verify a target \`provisionCommand\`, include the bootstrap in the command or ask the user to configure it before relying on remote package-manager commands.
+   - Prefer repo/package scripts over raw test-runner binaries in remote commands. Avoid raw \`vitest\`, \`npx vitest\`, or \`pnpm exec vitest\` when a package script exists; for example, \`packages/ui/package.json\` uses \`node scripts/run-vitest.mjs\`, so use \`pnpm --filter @invoker/ui test\` instead of bypassing that wrapper.
    - If Invoker config auto-routes heavyweight commands, keep discovered test/build commands as normal command tasks unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
 7. Use meaningful task IDs (kebab-case).

@@ -358,7 +358,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (task.command && /\bnpx vitest run\b/.test(task.command)) {
       throw new PlanParseError(
         `Task "${task.id}" uses 'npx vitest run' which may not resolve correctly. ` +
-        `Use 'pnpm test' instead.`,
+        `Use the repo/package test script instead, such as 'pnpm --filter <package> test' when a package script owns the runner flags.`,
       );
     }
 
