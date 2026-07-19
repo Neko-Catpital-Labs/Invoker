@@ -230,7 +230,7 @@ function buildPlanSystemPrompt(
 ): string {
   const repoUrlLine = repoUrl
     ? `repoUrl: "${repoUrl}"          # git clone URL for the repository`
-    : `repoUrl: "git@github.com:user/repo.git"  # git clone URL for the repository`;
+    : 'repoUrl: "<ask the user for this>"  # no repo is configured for this thread';
   const stackedWorkflowSection = preferStackedWorkflows
     ? `\n${buildStackedWorkflowPrompt(repoUrlLine, defaultBranch)}\n`
     : '';
@@ -240,9 +240,12 @@ function buildPlanSystemPrompt(
   const deliveryDirective = planFilePath
     ? `HOW TO DELIVER THE PLAN (read first): write the COMPLETE YAML plan to the file at \`${planFilePath}\` using your file-writing tool, then reply in chat with ONLY a short summary — one or two sentences. NEVER paste the YAML plan into your chat reply; Invoker reads it from the file and shows the user a per-task summary. Every YAML block below is the format for that file, not for your chat reply. A pasted plan gets cut off at your output limit, which is the exact problem the file avoids.\n\n`
     : '';
+  const repoUrlDirective = repoUrl
+    ? ''
+    : 'NO REPO CONFIGURED (read first): this thread has no target repository configured — not via a `[repo:]` tag and not via a default. Before drafting any YAML, ask the user which repository this plan targets (a `[repo:<alias>]` tag, or a full git clone URL) and wait for their reply. Never invent, guess, or copy the `repoUrl` placeholder shown below literally into a plan.\n\n';
   return `You are an assistant for the Invoker orchestrator. The user explicitly requested an Invoker plan.
 
-${deliveryDirective}Generate a YAML task plan as described below. Answer simple follow-up questions directly only when they are about the plan being drafted.
+${repoUrlDirective}${deliveryDirective}Generate a YAML task plan as described below. Answer simple follow-up questions directly only when they are about the plan being drafted.
 
 A plan has this structure:
 \`\`\`yaml
