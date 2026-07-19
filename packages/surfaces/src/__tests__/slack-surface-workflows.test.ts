@@ -561,6 +561,37 @@ describe('lobby verb routing', () => {
     expect(runWorkflowOp).not.toHaveBeenCalled();
     expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: 'Cancelled.' }));
   });
+
+  it('notifies when a near-yes reply drops a pending approval', async () => {
+    const surface = lobbySurface();
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> recreate all', ts: 't1', user: 'U1' }, say });
+
+    const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
+    await messageHandler(surface)({
+      event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'yes please add more tests' },
+      say: say2,
+    });
+    expect(runWorkflowOp).not.toHaveBeenCalled();
+    expect(say2).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('Dropped the pending approval'),
+    }));
+  });
+
+  it('accepts ok as confirmation for a staged bulk verb', async () => {
+    runWorkflowOp.mockResolvedValue({ ok: true, summary: 'recreate: 3 ok' });
+    const surface = lobbySurface();
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> recreate all', ts: 't1', user: 'U1' }, say });
+
+    const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
+    await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'ok' }, say: say2 });
+    expect(runWorkflowOp).toHaveBeenCalledTimes(1);
+    expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: 'recreate: 3 ok' }));
+  });
+
   it('confirms a bulk verb via the Approve button: acks instantly and posts the result in-thread', async () => {
     runWorkflowOp.mockResolvedValue({ ok: true, summary: 'recreate: 3 ok' });
     const surface = lobbySurface();
