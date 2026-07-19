@@ -73,6 +73,7 @@ export type RemoteTargetDisplay = {
   port?: number;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
+  provisionCommand?: string;
   use_api_key?: boolean;
   secretsFile?: string;
   remoteHeartbeatIntervalSeconds?: number;
@@ -652,6 +653,73 @@ export function selectExecutor(
     effectiveType = 'worktree';
   }
 
+  if (effectiveType === 'ssh') {
+    const registered = host.executorRegistry.get('ssh');
+    if (registered && !(registered instanceof SshExecutor)) {
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh → ${registered.type}`);
+      return { executor: registered, resolvedExecution, selectedPoolMemberId };
+    }
+
+    const remoteTargets = host.getRemoteTargets();
+    const targetId =
+      selectedPoolMemberId
+      ?? (task.config as { poolMemberId?: string }).poolMemberId
+      ?? (task.config.poolId && remoteTargets[task.config.poolId] ? task.config.poolId : undefined);
+    if (targetId) {
+      const target = remoteTargets[targetId];
+      if (!target) {
+        throw new Error(
+          `Task ${task.id} references poolMemberId="${targetId}" but no matching ` +
+          `entry exists in remoteTargets config. Available: [${Object.keys(remoteTargets).join(', ')}]`,
+        );
+      }
+
+      const configFingerprint = JSON.stringify({
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+        managedWorkspaces: target.managedWorkspaces,
+        remoteInvokerHome: target.remoteInvokerHome,
+        provisionCommand: target.provisionCommand,
+        use_api_key: target.use_api_key === true,
+        secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
+        remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
+      });
+      const cacheKey = `${targetId}|${configFingerprint}`;
+
+      const cached = host.sshExecutorCache.get(cacheKey);
+      if (cached) {
+        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
+        return { executor: cached, resolvedExecution, selectedPoolMemberId: targetId };
+      }
+
+      for (const key of host.sshExecutorCache.keys()) {
+        if (key.startsWith(`${targetId}|`)) {
+          host.sshExecutorCache.delete(key);
+        }
+      }
+
+      const ssh = new SshExecutor({
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+        agentRegistry: host.executionAgentRegistry,
+        managedWorkspaces: target.managedWorkspaces,
+        remoteInvokerHome: target.remoteInvokerHome,
+        provisionCommand: target.provisionCommand,
+        useApiKey: target.use_api_key,
+        secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
+        remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
+      });
+      host.executorRegistry.register(`ssh:${targetId}`, ssh);
+      host.sshExecutorCache.set(cacheKey, ssh);
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (lazy registered)`);
+      return { executor: ssh, resolvedExecution, selectedPoolMemberId: targetId };
+    }
+  }
+
   if (effectiveType) {
     const registered = host.executorRegistry.get(effectiveType);
     if (registered && (effectiveType !== 'merge' || registered.type === 'merge')) {
@@ -691,63 +759,7 @@ export function selectExecutor(
     }
 
     if (effectiveType === 'ssh') {
-      const remoteTargets = host.getRemoteTargets();
-      const targetId =
-        selectedPoolMemberId
-        ?? (task.config as { poolMemberId?: string }).poolMemberId
-        ?? (task.config.poolId && remoteTargets[task.config.poolId] ? task.config.poolId : undefined);
-      if (!targetId) {
-        throw new Error(`Task ${task.id} has runnerKind=ssh but no poolMemberId`);
-      }
-
-      const target = remoteTargets[targetId];
-      if (!target) {
-        throw new Error(
-          `Task ${task.id} references poolMemberId="${targetId}" but no matching ` +
-          `entry exists in remoteTargets config. Available: [${Object.keys(remoteTargets).join(', ')}]`,
-        );
-      }
-
-      const configFingerprint = JSON.stringify({
-        host: target.host,
-        user: target.user,
-        sshKeyPath: target.sshKeyPath,
-        port: target.port,
-        managedWorkspaces: target.managedWorkspaces,
-        remoteInvokerHome: target.remoteInvokerHome,
-        use_api_key: target.use_api_key === true,
-        secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
-        remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
-      });
-      const cacheKey = `${targetId}|${configFingerprint}`;
-
-      const cached = host.sshExecutorCache.get(cacheKey);
-      if (cached) {
-        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (cached)`);
-        return { executor: cached, resolvedExecution, selectedPoolMemberId: targetId };
-      }
-
-      for (const key of host.sshExecutorCache.keys()) {
-        if (key.startsWith(`${targetId}|`)) {
-          host.sshExecutorCache.delete(key);
-        }
-      }
-
-      const ssh = new SshExecutor({
-        host: target.host,
-        user: target.user,
-        sshKeyPath: target.sshKeyPath,
-        port: target.port,
-        agentRegistry: host.executionAgentRegistry,
-        managedWorkspaces: target.managedWorkspaces,
-        useApiKey: target.use_api_key,
-        secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
-        remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
-      });
-      host.executorRegistry.register(`ssh:${targetId}`, ssh);
-      host.sshExecutorCache.set(cacheKey, ssh);
-      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (lazy registered)`);
-      return { executor: ssh, resolvedExecution, selectedPoolMemberId: targetId };
+      throw new Error(`Task ${task.id} has runnerKind=ssh but no poolMemberId`);
     }
   }
 
