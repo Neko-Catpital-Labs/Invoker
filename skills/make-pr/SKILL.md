@@ -85,6 +85,8 @@ node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-p
 
 Update an existing PR with:
 
+After any branch update, rebase, force-push, or stacked-branch reshuffle, refresh the PR title and body so they still match the live diff. Re-check `## Summary`, test commands, revert guidance, and any visual proof section; old copy is stale the moment the branch meaning changes.
+
 ```bash
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md --update <pr-number>
 ```
@@ -120,8 +122,10 @@ Do not generalize this to unrelated repos.
 
 ## Validation
 
-Before creating a PR:
+Before creating or updating a PR:
 
+- ensure the PR title still matches the current slice after any branch update or force-push
+- ensure the `## Summary` section still describes the current diff, not the earlier version
 - ensure the branch is pushed
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible
