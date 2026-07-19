@@ -253,6 +253,67 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
         expect.objectContaining({ type: 'start_plan', planText }),
       ]);
     });
+
+    it('clears a leftover Processing ack when plan: is empty', async () => {
+      surface = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        anthropicApiKey: 'test-anthropic-key',
+      });
+      await surface.start(async () => {});
+
+      const app = surface.getApp() as any;
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+      const say = vi.fn().mockImplementation(async ({ text }) => {
+        const ts = `${Date.now()}.${Math.random().toString(36).substr(2, 6)}`;
+        apiCalls.push({ method: 'postMessage', channel: 'C-test', text, ts });
+        return { ts, ok: true };
+      });
+
+      await mentionHandler({
+        event: { text: '<@UBOT123456> plan:', ts: '3333.001', user: 'U123' },
+        say,
+      });
+
+      expect(apiCalls[0]).toEqual(expect.objectContaining({
+        method: 'postMessage',
+        text: 'Processing your request...',
+      }));
+      expect(apiCalls.some((c) => c.method === 'delete' && c.ts === apiCalls[0].ts)).toBe(true);
+      expect(mockSendMessage).not.toHaveBeenCalled();
+    });
+
+    it('clears a leftover Processing ack when the planner throws', async () => {
+      surface = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        anthropicApiKey: 'test-anthropic-key',
+      });
+      mockSendMessage.mockRejectedValue(new Error('planner crashed'));
+      await surface.start(async () => {});
+
+      const app = surface.getApp() as any;
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+      const say = vi.fn().mockImplementation(async ({ text }) => {
+        const ts = `${Date.now()}.${Math.random().toString(36).substr(2, 6)}`;
+        apiCalls.push({ method: 'postMessage', channel: 'C-test', text, ts });
+        return { ts, ok: true };
+      });
+
+      await mentionHandler({
+        event: { text: '<@UBOT123456> fix the typo', ts: '4444.001', user: 'U123' },
+        say,
+      });
+
+      const ack = apiCalls.find((c) => c.method === 'postMessage' && c.text === 'Processing your request...');
+      expect(ack).toBeTruthy();
+      expect(apiCalls.some((c) => c.method === 'postMessage' && c.text?.includes('planner crashed'))).toBe(true);
+      expect(apiCalls.some((c) => c.method === 'delete' && c.ts === ack?.ts)).toBe(true);
+    });
   });
 
   describe('Configuration Options', () => {
