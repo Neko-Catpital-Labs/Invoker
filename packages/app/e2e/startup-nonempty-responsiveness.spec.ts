@@ -313,7 +313,7 @@ test('planning chat typing stays responsive with a large restored transcript', a
       await page.reload();
       await page.waitForLoadState('domcontentloaded');
       await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
-      await page.getByTestId('sidebar-planning').click();
+      await page.getByTestId('sidebar-home').click();
       await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-transcript')).toContainText(
         `pressure request ${PLANNING_PRESSURE_TURNS}`,
