@@ -54,23 +54,30 @@ describe('createWatchdog', () => {
     expect(launch).toHaveBeenCalledTimes(3);
   });
 
-  it('resets after a successful relaunch', async () => {
+  it('keeps attempt state after a successful relaunch until health is stable', async () => {
     let nowMs = 0;
-    const launch = vi.fn(async () => true); // relaunch succeeds
+    let healthy = false;
+    const launch = vi.fn(async () => {
+      healthy = true;
+      return true;
+    });
     const wd = createWatchdog({
-      client: { isHealthy: vi.fn(async () => false), launch },
+      client: { isHealthy: vi.fn(async () => healthy), launch },
       log: () => {}, alert: vi.fn(),
       failuresBeforeRelaunch: 1, baseBackoffMs: 60_000,
+      stableHealthyPolls: 3,
       now: () => nowMs,
     });
-    await wd.tick();
+    await wd.tick(); // down → launch succeeds
     expect(launch).toHaveBeenCalledTimes(1);
-    // success reset the window → next failure relaunches again immediately
-    await wd.tick();
+
+    healthy = false; // flap immediately
+    nowMs += 100;
+    await wd.tick(); // still counts as recovery; launches again
     expect(launch).toHaveBeenCalledTimes(2);
   });
 
-  it('resets when Invoker recovers on its own', async () => {
+  it('resets only after enough consecutive healthy polls', async () => {
     let nowMs = 0;
     let healthy = false;
     const launch = vi.fn(async () => false);
@@ -78,12 +85,45 @@ describe('createWatchdog', () => {
       client: { isHealthy: vi.fn(async () => healthy), launch },
       log: () => {}, alert: vi.fn(),
       failuresBeforeRelaunch: 1, baseBackoffMs: 60_000,
+      stableHealthyPolls: 3,
       now: () => nowMs,
     });
     await wd.tick();
     expect(launch).toHaveBeenCalledTimes(1);
-    healthy = true; await wd.tick(); // recovered → reset
-    healthy = false; nowMs += 100; await wd.tick(); // fresh failure relaunches without waiting a window
+
+    healthy = true;
+    await wd.tick(); // 1/3
+    await wd.tick(); // 2/3
+    healthy = false; nowMs += 100; await wd.tick(); // flap before stable → relaunch
     expect(launch).toHaveBeenCalledTimes(2);
+
+    healthy = true;
+    await wd.tick();
+    await wd.tick();
+    await wd.tick(); // 3/3 → reset
+    healthy = false; nowMs += 100; await wd.tick(); // fresh failure after full recovery
+    expect(launch).toHaveBeenCalledTimes(3);
+  });
+
+  it('rate-limits repeated give-up alerts while Invoker stays down', async () => {
+    let nowMs = 0;
+    const launch = vi.fn(async () => false);
+    const alert = vi.fn();
+    const wd = createWatchdog({
+      client: { isHealthy: vi.fn(async () => false), launch },
+      log: () => {}, alert,
+      failuresBeforeRelaunch: 1, maxAttempts: 1, baseBackoffMs: 1_000, maxBackoffMs: 1_000,
+      alertCooldownMs: 60_000,
+      now: () => nowMs,
+    });
+
+    await wd.tick();
+    expect(alert).toHaveBeenCalledTimes(1);
+
+    nowMs += 1_000; await wd.tick(); // still within cooldown
+    expect(alert).toHaveBeenCalledTimes(1);
+
+    nowMs += 60_000; await wd.tick(); // cooldown elapsed → remind once
+    expect(alert).toHaveBeenCalledTimes(2);
   });
 });
