@@ -56,6 +56,7 @@ const CONFIRMATION_PATTERNS = [
   /^proceed$/i,
   /^do it$/i,
   /^confirm$/i,
+  /^submit$/i,
   /^lgtm$/i,
   /^ship it$/i,
   /^approved$/i,
@@ -122,7 +123,9 @@ Rules:
 7. Use meaningful task IDs (kebab-case).
 8. When ready, output the plan inside a \`\`\`yaml code block.
 9. Always include \`dependencies\` (even if empty array).
-10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
+10. After generating a plan, include a short post-plan summary that tells the user they can confirm execution. The confirmation instruction MUST be exactly this standalone line:
+Reply \`submit\` to submit it.
+Do NOT place that line inline in a sentence.
 11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
 }
 
