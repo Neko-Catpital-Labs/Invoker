@@ -51,6 +51,11 @@ export interface SshExecutorConfig {
    * Default: ~/.invoker
    */
   remoteInvokerHome?: string;
+  /**
+   * Explicit remote bootstrap command to run inside the task workspace before
+   * the task payload. Unset by default; no provisioning/bootstrap is inferred.
+   */
+  provisionCommand?: string;
   /** Opt-in: export agent API keys from secretsFile into remote task shells. */
   useApiKey?: boolean;
   /** Optional local secrets file used when useApiKey is true. */
@@ -87,6 +92,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly agentRegistry?: AgentRegistry;
   private readonly managedWorkspaces: boolean;
   private readonly remoteInvokerHome: string;
+  private readonly provisionCommand: string | undefined;
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
   private readonly remoteHeartbeatIntervalSeconds: number;
@@ -101,6 +107,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.agentRegistry = config.agentRegistry;
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
+    this.provisionCommand = config.provisionCommand;
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
@@ -151,8 +158,13 @@ INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
 printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
 (
+  SLEEP_PID=""
+  trap 'if [ -n "\${SLEEP_PID:-}" ]; then kill "$SLEEP_PID" >/dev/null 2>&1 || true; fi; exit 0' TERM INT
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
-    sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
+    sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS" &
+    SLEEP_PID=$!
+    wait "$SLEEP_PID" 2>/dev/null || exit 0
+    SLEEP_PID=""
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
     printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
   done
@@ -174,6 +186,13 @@ exit "$PAYLOAD_EXIT"
     return `#!/usr/bin/env bash
 set -e
 ${payload}
+`;
+  }
+
+  private buildProvisionScript(provisionCommand: string): string {
+    return `#!/usr/bin/env bash
+set -e
+${provisionCommand}
 `;
   }
 
@@ -229,9 +248,23 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
+    const provision = this.provisionCommand ? this.buildProvisionScript(this.provisionCommand) : undefined;
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const provisionPathDefinition = provision ? `PROVISION_PATH="$STAGING_DIR/provision.sh"
+` : '';
+    const renderProvisionSection = provision ? this.renderHeredocFile('"$PROVISION_PATH"', provision, 'provision') : '';
+    const chmodProvisionPath = provision ? ' "$PROVISION_PATH"' : '';
+    const runProvisionSection = provision ? `echo "[SshExecutor] Running configured provision command..."
+if "$PROVISION_PATH"; then
+  echo "[SshExecutor] Configured provision command completed."
+else
+  PROVISION_EXIT=$?
+  echo "[SshExecutor] Configured provision command failed with exit code $PROVISION_EXIT." >&2
+  exit "$PROVISION_EXIT"
+fi
+` : '';
     const runPayloadSection = `echo "[SshExecutor] Running task payload..."
 `;
 
@@ -241,6 +274,7 @@ INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
+${provisionPathDefinition}
 cleanup_runtime() {
   local status="$1"
   trap - EXIT HUP INT TERM
@@ -254,8 +288,13 @@ INVOKER_HEARTBEAT_INTERVAL_SECONDS=${heartbeatIntervalSeconds}
 start_bootstrap_heartbeat() {
   printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
   (
+    SLEEP_PID=""
+    trap 'if [ -n "\${SLEEP_PID:-}" ]; then kill "$SLEEP_PID" >/dev/null 2>&1 || true; fi; exit 0' TERM INT
     while true; do
-      sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
+      sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS" &
+      SLEEP_PID=$!
+      wait "$SLEEP_PID" 2>/dev/null || exit 0
+      SLEEP_PID=""
       printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
     done
   ) &
@@ -275,12 +314,12 @@ trap 'cleanup_runtime 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
-${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
+${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}${renderProvisionSection}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"${chmodProvisionPath}
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
 ${options.envExports}
 start_bootstrap_heartbeat
-${runPayloadSection}stop_bootstrap_heartbeat
+${runProvisionSection}${runPayloadSection}stop_bootstrap_heartbeat
 "$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
@@ -533,7 +572,8 @@ ${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Managed workspace mode: clone, fetch, create worktrees, provision, then execute.
+   * Managed workspace mode: clone/fetch, create/reset worktrees, optionally run
+   * an explicitly configured provision command, then execute.
    */
   private async startManagedWorkspace(
     request: WorkRequest,
