@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../types.js';
+import type { TaskState, WorkflowMeta } from '../types.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -50,6 +50,68 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
+  });
+
+  it('shows running actions in the expanded sidebar and selects tasks from that list', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-alpha', name: 'Alpha workflow', status: 'running' },
+      { id: 'wf-beta', name: 'Beta workflow', status: 'fixing_with_ai' },
+    ];
+    const queuedTask = makeUITask({
+      id: 'task-queued',
+      description: 'Queued setup task',
+      status: 'queued' as unknown as TaskState['status'],
+      workflowId: 'wf-alpha',
+    });
+    const runningTask = makeUITask({
+      id: 'task-running',
+      description: 'Run integration suite',
+      status: 'running',
+      workflowId: 'wf-alpha',
+    });
+    const fixingTask = makeUITask({
+      id: 'task-fixing',
+      description: 'Fix review failure',
+      status: 'fixing_with_ai',
+      workflowId: 'wf-beta',
+    });
+    const completedTask = makeUITask({
+      id: 'task-completed',
+      description: 'Completed task',
+      status: 'completed',
+      workflowId: 'wf-beta',
+    });
+
+    mock.cleanup();
+    mock = createMockInvoker([queuedTask, runningTask, fixingTask, completedTask], workflows);
+    mock.install();
+
+    render(<App />);
+
+    const runningSection = await screen.findByTestId('sidebar-running-section');
+    expect(runningSection).toHaveTextContent('Running actions');
+    expect(runningSection).toHaveTextContent('3');
+
+    const runningList = await screen.findByTestId('sidebar-running-list');
+    expect(runningList).toHaveTextContent('Queued setup task');
+    expect(runningList).toHaveTextContent('queued · Alpha workflow');
+    expect(runningList).toHaveTextContent('Run integration suite');
+    expect(runningList).toHaveTextContent('running · Alpha workflow');
+    expect(runningList).toHaveTextContent('Fix review failure');
+    expect(runningList).toHaveTextContent('fixing with ai · Beta workflow');
+    expect(runningList).not.toHaveTextContent('Completed task');
+
+    fireEvent.click(screen.getByTestId('sidebar-running-action-task-fixing'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Fix review failure');
+    });
+
+    fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
+    expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
+    expect(screen.queryByTestId('sidebar-running-section')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-running-list')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
   });
 
   it('hides the collapsed Planning Terminal badge for the idle initial chat', async () => {

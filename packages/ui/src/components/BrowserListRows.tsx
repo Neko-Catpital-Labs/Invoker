@@ -10,6 +10,7 @@ interface BrowserTaskRowProps {
   tone: BrowserTaskRowTone;
   selected: boolean;
   onSelect: (taskId: string) => void;
+  testId?: string;
 }
 
 export const BrowserTaskRow = memo(function BrowserTaskRow({
@@ -20,6 +21,7 @@ export const BrowserTaskRow = memo(function BrowserTaskRow({
   tone,
   selected,
   onSelect,
+  testId,
 }: BrowserTaskRowProps) {
   const accent = tone === 'attention'
     ? selected ? 'bg-amber-500/15 text-amber-100 ring-1 ring-amber-500/40' : 'text-foreground hover:bg-accent/30'
@@ -27,6 +29,7 @@ export const BrowserTaskRow = memo(function BrowserTaskRow({
   return (
     <button
       type="button"
+      data-testid={testId}
       onClick={() => onSelect(taskId)}
       className={`block w-full rounded-md px-2.5 py-1.5 text-left transition-colors ${accent}`}
     >

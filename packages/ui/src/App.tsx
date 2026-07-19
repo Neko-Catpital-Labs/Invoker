@@ -4102,9 +4102,12 @@ export function App() {
           workerStatus={workerStatus}
           planningSessionCount={planningSessions.length}
           planningAttentionCount={planningAttentionCount}
+          runningEntries={runningEntries}
+          selectedTaskId={selectedTaskId}
           selectedSurface={sidebarSurface}
           collapsed={sidebarCollapsed}
           onSelectSurface={handleSelectSidebarSurface}
+          onSelectTask={selectTaskById}
           onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
           onOpenSettings={() => {
             cancelPendingSystemSetupAutoOpen();
