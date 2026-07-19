@@ -24,9 +24,11 @@ type StartReadyRequestExt = StartReadyRequest & {
 type StartReadyPreviewExt = StartReadyPreview & {
   pendingWorkflowIds: string[];
   runningWorkflowIds: string[];
+  completedWorkflowIds: string[];
   skipped: StartReadyPreview['skipped'] & {
     pendingTasks: number;
     runningTasks: number;
+    completedTasks: number;
   };
 };
 function collectRecoverableTasks(orchestrator: StartReadyOrchestrator): TaskState[] {
@@ -93,6 +95,14 @@ function workflowIdsToRecreate(
   request: StartReadyRequestExt,
   preview: StartReadyPreviewExt,
 ): string[] {
+  if (request.recreateAll) {
+    return unionWorkflowIds(
+      preview.failedWorkflowIds,
+      preview.pendingWorkflowIds,
+      preview.runningWorkflowIds,
+      preview.completedWorkflowIds,
+    );
+  }
   if (request.recreateFailedPendingAndRunning) {
     return unionWorkflowIds(
       preview.failedWorkflowIds,
@@ -116,6 +126,7 @@ export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): 
   const failedTasks = tasks.filter((task) => task.status === 'failed');
   const pendingTasks = tasks.filter((task) => isPendingOrQueued(task));
   const runningTasks = tasks.filter((task) => task.status === 'running');
+  const completedTasks = tasks.filter((task) => task.status === 'completed');
 
   const preview: StartReadyPreviewExt = {
     readyTaskIds: readyTasks.map((task) => task.id),
@@ -123,6 +134,7 @@ export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): 
     failedWorkflowIds: uniqueWorkflowIds(failedTasks),
     pendingWorkflowIds: uniqueWorkflowIds(pendingTasks),
     runningWorkflowIds: uniqueWorkflowIds(runningTasks),
+    completedWorkflowIds: uniqueWorkflowIds(completedTasks),
     skipped: {
       awaitingApproval: tasks.filter((task) => task.status === 'awaiting_approval').length,
       reviewReady: tasks.filter((task) => task.status === 'review_ready').length,
@@ -130,6 +142,7 @@ export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): 
       failedTasks: failedTasks.length,
       pendingTasks: pendingTasks.length,
       runningTasks: runningTasks.length,
+      completedTasks: completedTasks.length,
     },
   };
   return preview;
