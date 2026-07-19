@@ -1,0 +1,561 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import type { WorkflowMutationIntent, WorkflowMutationPriority } from '@invoker/data-store';
+import type { TaskState } from '@invoker/workflow-core';
+
+import { parseFixWithAgentMutationArgs } from '../auto-fix-intents.js';
+import {
+  autoFixAttemptLedgerKeyFromLifecycleEvent,
+  createAutoFixAttemptLedger,
+} from '../auto-fix-attempt-ledger.js';
+import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
+import type { WorkerActionRecord, WorkerActionWrite } from '../worker-decision-ledger.js';
+import {
+  CI_FAILURE_WORKER_KIND,
+  ciFailureActionKey,
+  createCiFailureTick,
+} from '../workers/ci-failure-worker.js';
+import {
+  DEFAULT_PR_STATUS_WORKER_INTERVAL_MS,
+  createPrStatusWorker,
+} from '../workers/pr-status-worker.js';
+
+const logger: any = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+};
+logger.child = vi.fn(() => logger);
+
+type TaskOverrides = Partial<Omit<TaskState, 'config' | 'execution'>> & {
+  config?: Partial<TaskState['config']>;
+  execution?: Record<string, unknown> & Partial<TaskState['execution']>;
+};
+
+function makeTask(overrides: TaskOverrides = {}): TaskState {
+  const { config, execution, ...rest } = overrides;
+  return {
+    id: 'wf-1/merge',
+    description: 'merge',
+    status: 'review_ready',
+    dependencies: [],
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    config: { workflowId: 'wf-1', isMergeNode: true, ...(config ?? {}) },
+    execution: {
+      generation: 2,
+      selectedAttemptId: 'attempt-1',
+      branch: 'feature/ci',
+      reviewGate: {
+        activeGeneration: 2,
+        completion: { required: 'all', status: 'approved' },
+        artifacts: [{
+          id: 'pr-123',
+          providerId: '123',
+          provider: 'github',
+          required: true,
+          status: 'open',
+          generation: 2,
+          headSha: 'sha-1',
+        }],
+      },
+      ...(execution ?? {}),
+    },
+    taskStateVersion: 10,
+    ...rest,
+  } as TaskState;
+}
+
+function makeEvent(overrides: Partial<ReviewGateCiFailedLifecycleEvent> = {}): ReviewGateCiFailedLifecycleEvent {
+  return {
+    eventKey: 'review_gate.ci_failed|workflow:wf-1|task:wf-1/merge',
+    kind: 'review_gate.ci_failed',
+    workflowId: 'wf-1',
+    taskId: 'wf-1/merge',
+    status: 'review_ready',
+    taskStateVersion: 10,
+    generation: 2,
+    attemptId: 'attempt-1',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    recoveryWakeup: {
+      eventKey: 'review_gate.ci_failed|workflow:wf-1|task:wf-1/merge',
+      eventKind: 'review_gate.ci_failed',
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      taskStateVersion: 10,
+      generation: 2,
+      attemptId: 'attempt-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      reason: 'review_gate_failure',
+      authoritative: false,
+    },
+    reviewId: '123',
+    reviewUrl: 'https://github.com/owner/repo/pull/123',
+    headSha: 'sha-1',
+    headRef: 'feature/ci',
+    branch: 'feature/ci',
+    failedChecks: [
+      { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' },
+      { name: 'lint', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/2' },
+    ],
+    statusText: 'CI failed',
+    ...overrides,
+  };
+}
+
+function toRecord(write: WorkerActionWrite): WorkerActionRecord {
+  const now = '2026-01-01T00:00:00.000Z';
+  return {
+    ...write,
+    attemptCount: write.attemptCount ?? 0,
+    createdAt: write.createdAt ?? now,
+    updatedAt: write.updatedAt ?? now,
+  };
+}
+
+function makeHarness(task = makeTask()) {
+  const tasks = new Map<string, TaskState>([[task.id, task]]);
+  const actions = new Map<string, WorkerActionRecord>();
+  const submit = vi.fn((
+    workflowId: string,
+    priority: WorkflowMutationPriority,
+    channel: string,
+    args: unknown[],
+  ) => {
+    expect(workflowId).toBe('wf-1');
+    expect(priority).toBe('normal');
+    expect(channel).toBe('invoker:fix-with-agent');
+    expect(args).toBeDefined();
+    return 42;
+  });
+  const store = {
+    listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+    loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
+    loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
+    listWorkflowMutationIntents: vi.fn((): WorkflowMutationIntent[] => []),
+    getWorkerAction: vi.fn((workerKind: string, externalKey: string) => actions.get(`${workerKind}:${externalKey}`)),
+    upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+      const existing = actions.get(`${write.workerKind}:${write.externalKey}`);
+      const saved = toRecord({ ...write, id: existing?.id ?? write.id, createdAt: existing?.createdAt });
+      actions.set(`${write.workerKind}:${write.externalKey}`, saved);
+      return saved;
+    }),
+    logEvent: vi.fn(),
+  };
+  const attemptLedger = createAutoFixAttemptLedger();
+  return { actions, store, submit, attemptLedger };
+}
+
+describe('PR status and CI failure workers', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it('polls review-gate status on the 60000ms default interval', async () => {
+    vi.useFakeTimers();
+    const checkMergeGateStatuses = vi.fn().mockResolvedValue(undefined);
+    const worker = createPrStatusWorker({
+      logger,
+      reviewGate: { checkMergeGateStatuses },
+      installSignalHandlers: false,
+    });
+
+    worker.start();
+    expect(checkMergeGateStatuses).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(DEFAULT_PR_STATUS_WORKER_INTERVAL_MS);
+
+    expect(checkMergeGateStatuses).toHaveBeenCalledTimes(1);
+    await worker.stop();
+  });
+
+  it('queues a head-SHA guarded CI repair intent and records its dedupe action', async () => {
+    const event = makeEvent();
+    const sameChecksDifferentOrder = makeEvent({
+      failedChecks: [...event.failedChecks].reverse(),
+    });
+    const harness = makeHarness();
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      getAutoFixAgent: () => 'codex',
+      getAutoFixExecutionModel: () => 'openai/gpt-5.2',
+      drainEvents: () => [event],
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'wake',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    expect(ciFailureActionKey(sameChecksDifferentOrder)).toBe(ciFailureActionKey(event));
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    const [, , , args] = harness.submit.mock.calls[0];
+    const parsed = parseFixWithAgentMutationArgs(args);
+    expect(parsed).toMatchObject({
+      taskId: 'wf-1/merge',
+      agentName: 'codex',
+      context: {
+        autoFix: true,
+        executionModel: 'openai/gpt-5.2',
+        reviewGateContext: {
+          reviewId: '123',
+          generation: 2,
+          selectedAttemptId: 'attempt-1',
+          headSha: 'sha-1',
+        },
+      },
+    });
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+      workerKind: CI_FAILURE_WORKER_KIND,
+      actionType: 'fix-ci-failure',
+      status: 'queued',
+      intentId: '42',
+      externalKey: ciFailureActionKey(event),
+    });
+  });
+
+  it('recovers a workflow-mapped review gate with persisted failing checks when no lifecycle event is drained', async () => {
+    const failedChecks = [
+      { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' },
+    ];
+    const task = makeTask({
+      execution: {
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            provider: 'github',
+            required: true,
+            status: 'open',
+            generation: 2,
+            url: 'https://github.com/owner/repo/pull/123',
+            headSha: 'sha-1',
+            headRef: 'feature/ci',
+            checksState: 'failure',
+            failedChecks,
+            rawStatus: 'CI failed',
+          }],
+        },
+      },
+    });
+    const harness = makeHarness(task);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [],
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    const expectedKey = ciFailureActionKey({
+      taskId: 'wf-1/merge',
+      reviewId: '123',
+      headSha: 'sha-1',
+      failedChecks,
+    });
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    const [, , , args] = harness.submit.mock.calls[0];
+    expect(parseFixWithAgentMutationArgs(args)).toMatchObject({
+      taskId: 'wf-1/merge',
+      context: {
+        autoFix: true,
+        reviewGateContext: {
+          reviewId: '123',
+          generation: 2,
+          selectedAttemptId: 'attempt-1',
+          headSha: 'sha-1',
+          branch: 'feature/ci',
+        },
+      },
+    });
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${expectedKey}`)).toMatchObject({
+      workerKind: CI_FAILURE_WORKER_KIND,
+      actionType: 'fix-ci-failure',
+      status: 'queued',
+      intentId: '42',
+    });
+  });
+
+  it('recovers from the persisted current head when an in-memory CI failure event is stale', async () => {
+    const failedChecks = [
+      { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' },
+    ];
+    const staleEvent = makeEvent({
+      headSha: 'sha-stale',
+      failedChecks,
+    });
+    const task = makeTask({
+      execution: {
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            provider: 'github',
+            required: true,
+            status: 'open',
+            generation: 2,
+            url: 'https://github.com/owner/repo/pull/123',
+            headSha: 'sha-current',
+            headRef: 'feature/ci',
+            checksState: 'failure',
+            failedChecks,
+            rawStatus: 'CI failed',
+          }],
+        },
+      },
+    });
+    const harness = makeHarness(task);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [staleEvent],
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'wake',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    const staleKey = ciFailureActionKey(staleEvent);
+    const currentKey = ciFailureActionKey({
+      taskId: 'wf-1/merge',
+      reviewId: '123',
+      headSha: 'sha-current',
+      failedChecks,
+    });
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${staleKey}`)).toBeUndefined();
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${currentKey}`)).toMatchObject({
+      status: 'queued',
+      intentId: '42',
+    });
+  });
+
+  it('recovers persisted CI failure artifacts that use the task review id as lineage', async () => {
+    const failedChecks = [
+      { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' },
+    ];
+    const task = makeTask({
+      execution: {
+        reviewId: '123',
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            provider: 'github',
+            required: true,
+            status: 'open',
+            generation: 2,
+            url: 'https://github.com/owner/repo/pull/123',
+            headSha: 'sha-1',
+            headRef: 'feature/ci',
+            checksState: 'failure',
+            failedChecks,
+            rawStatus: 'CI failed',
+          }],
+        },
+      },
+    });
+    const harness = makeHarness(task);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [],
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(parseFixWithAgentMutationArgs(harness.submit.mock.calls[0][3])).toMatchObject({
+      taskId: 'wf-1/merge',
+      context: {
+        reviewGateContext: {
+          reviewId: '123',
+          headSha: 'sha-1',
+        },
+      },
+    });
+  });
+
+  it('skips CI repair when an open fix intent already exists for the merge task', async () => {
+    const event = makeEvent();
+    const harness = makeHarness();
+    harness.store.listWorkflowMutationIntents.mockReturnValue([{
+      id: 7,
+      workflowId: 'wf-1',
+      channel: 'invoker:fix-with-agent',
+      args: ['wf-1/merge', 'codex'],
+      priority: 'normal',
+      status: 'queued',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    }]);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [event],
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'wake',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
+  });
+
+  it('skips CI repair once the retry budget is exhausted', async () => {
+    const event = makeEvent();
+    const harness = makeHarness();
+    harness.attemptLedger.consume(autoFixAttemptLedgerKeyFromLifecycleEvent(event), 1);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 1,
+      drainEvents: () => [event],
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'wake',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+      status: 'skipped',
+      payload: expect.objectContaining({
+        reason: 'worker-retry-budget-exhausted',
+        workerRetryBudget: 1,
+      }),
+    });
+  });
+
+  it('rejects stale CI failure events without recording a durable action row', async () => {
+    const event = makeEvent();
+    const task = makeTask({
+      execution: {
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            required: true,
+            status: 'open',
+            generation: 2,
+            headSha: 'sha-2',
+          }],
+        },
+      },
+    });
+    const harness = makeHarness(task);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      defaultAutoFixRetries: 2,
+      attemptLedger: harness.attemptLedger,
+      drainEvents: () => [event],
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'wake',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toBeUndefined();
+    expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
+  });
+
+  it('does not recover CI repair from a persisted merge-conflict review gate artifact', async () => {
+    const failedChecks = [
+      { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' },
+    ];
+    const task = makeTask({
+      execution: {
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            provider: 'github',
+            required: true,
+            status: 'open',
+            generation: 2,
+            url: 'https://github.com/owner/repo/pull/123',
+            headSha: 'sha-1',
+            checksState: 'failure',
+            failedChecks,
+            mergeState: 'dirty',
+            rawStatus: 'Merge conflict',
+          }],
+        },
+      },
+    });
+    const harness = makeHarness(task);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [],
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
+  });
+});

@@ -12,6 +12,9 @@
       "path": "../contracts"
     },
     {
+      "path": "../transport"
+    },
+    {
       "path": "../workflow-core"
     },
     {

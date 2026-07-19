@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@invoker/contracts": "workspace:*",
+    "@invoker/transport": "workspace:*",
     "@invoker/workflow-core": "workspace:*",
     "@invoker/data-store": "workspace:*"
   },
