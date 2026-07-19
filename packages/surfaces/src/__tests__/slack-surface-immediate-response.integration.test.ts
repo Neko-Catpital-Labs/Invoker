@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SlackSurface } from '../slack/slack-surface.js';
-import { sanitizeSlashCommands, splitForSlack } from '../slack/slack-message-helpers.js';
+import { redactAbsolutePaths, sanitizeSlashCommands, sanitizeSlackOutbound, splitForSlack } from '../slack/slack-message-helpers.js';
 import type { SurfaceCommand } from '../surface.js';
 
 // ── Mock @slack/bolt ────────────────────────────────────────
@@ -684,6 +684,21 @@ describe('sanitizeSlashCommands', () => {
     );
     expect(sanitizeSlashCommands('Start a new Invoker workflow channel')).toBe(
       'Start a new Invoker workflow channel',
+    );
+  });
+});
+
+describe('redactAbsolutePaths', () => {
+  it('collapses host absolute paths to a short tail', () => {
+    const input = 'Changed: [tsup.config.ts](/home/invoker/.invoker/slack-manager/planning-clones/64a63486912a/packages/app/tsup.config.ts:5)';
+    expect(redactAbsolutePaths(input)).toBe(
+      'Changed: [tsup.config.ts](…/packages/app/tsup.config.ts:5)',
+    );
+  });
+
+  it('is applied by sanitizeSlackOutbound', () => {
+    expect(sanitizeSlackOutbound('see /Users/edbert/Documents/GitHub/Invoker/packages/app/foo.ts')).toBe(
+      'see …/packages/app/foo.ts',
     );
   });
 });
