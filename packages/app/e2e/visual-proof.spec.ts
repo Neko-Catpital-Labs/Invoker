@@ -1127,28 +1127,27 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
 
-  test('sidebar-default-width — home to workflows keeps auto-collapsed width', async ({ page }) => {
+  test('sidebar-default-width — home to workflows keeps default full width', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     const sidebar = page.getByTestId('app-sidebar');
 
-    // Capture the full Home -> Workflows -> Home sequence before asserting so a
-    // buggy build still records the width snap (regression: Home expanded, then
-    // Workflows collapsed).
     await page.getByTestId('sidebar-home').click();
     await captureScreenshot(page, 'sidebar-default-width-1-home');
 
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
+    await expect(sidebar).toHaveClass(/w-60/);
     await captureScreenshot(page, 'sidebar-default-width-2-workflows');
 
     await page.getByTestId('sidebar-home').click();
+    await expect(sidebar).toHaveClass(/w-60/);
     await captureScreenshot(page, 'sidebar-default-width-3-home-return');
 
     await page.getByTestId('sidebar-workflows').click();
-    await expect(sidebar).toHaveClass(/w-16/);
+    await expect(sidebar).toHaveClass(/w-60/);
     await page.getByTestId('sidebar-home').click();
-    await expect(sidebar).toHaveClass(/w-16/);
+    await expect(sidebar).toHaveClass(/w-60/);
   });
 
   test('sidebar-collapse-state — manual sidebar width survives left rail navigation', async ({ page }) => {
