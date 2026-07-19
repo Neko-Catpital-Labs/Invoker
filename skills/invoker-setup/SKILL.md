@@ -54,7 +54,7 @@ invoker-cli setup slack
 If you are doing it on the user's behalf (you cannot click api.slack.com), drive it manually:
 
 1. Generate the manifest (the wizard writes it, or you can): it requests bot scopes
-   `app_mentions:read, chat:write, channels:history, channels:read, groups:write, groups:history, users:read`,
+   `app_mentions:read, chat:write, channels:history, groups:write, groups:history, users:read`,
    enables Socket Mode, and subscribes to the `app_mention` event.
 2. Tell the user: open https://api.slack.com/apps → **Create New App → From a manifest**, pick the
    workspace, paste the manifest JSON, create the app.
