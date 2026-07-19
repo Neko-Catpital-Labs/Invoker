@@ -12,7 +12,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SlackSurface } from '../slack/slack-surface.js';
-import { splitForSlack } from '../slack/slack-message-helpers.js';
+import { sanitizeSlashCommands, splitForSlack } from '../slack/slack-message-helpers.js';
 import type { SurfaceCommand } from '../surface.js';
 
 // ── Mock @slack/bolt ────────────────────────────────────────
@@ -659,6 +659,32 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       expect(updates[0].text).toBe('First response');
       expect(updates[1].text).toBe('Second response');
     });
+  });
+});
+
+describe('sanitizeSlashCommands', () => {
+  it('replaces hallucinated /invoker commands but keeps /invoker conversations', () => {
+    expect(sanitizeSlashCommands('run `/invoker start_plan` now')).toBe(
+      'reply with "yes", "go", or "execute" to confirm now',
+    );
+    expect(sanitizeSlashCommands('Please `/invoker approve task-1`')).toBe(
+      'Please reply with "yes", "go", or "execute" to confirm',
+    );
+    expect(sanitizeSlashCommands('use /invoker conversations list')).toBe(
+      'use /invoker conversations list',
+    );
+  });
+
+  it('does not rewrite ordinary Invoker prose', () => {
+    expect(sanitizeSlashCommands('This thread can’t create or submit an Invoker plan')).toBe(
+      'This thread can’t create or submit an Invoker plan',
+    );
+    expect(sanitizeSlashCommands('I can’t submit or execute an Invoker plan; try submit')).toBe(
+      'I can’t submit or execute an Invoker plan; try submit',
+    );
+    expect(sanitizeSlashCommands('Start a new Invoker workflow channel')).toBe(
+      'Start a new Invoker workflow channel',
+    );
   });
 });
 
