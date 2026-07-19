@@ -7,6 +7,7 @@
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
 import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
 export type ConversationMode = 'agent' | 'plan';
@@ -347,6 +348,7 @@ export interface PersistenceAdapter {
   // Attempts
   saveAttempt(attempt: Attempt): void;
   loadAttempts(nodeId: string): Attempt[];
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttempt[];
   loadAttempt(attemptId: string): Attempt | undefined;
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void;
 
