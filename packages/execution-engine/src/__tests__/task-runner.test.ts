@@ -2208,6 +2208,58 @@ describe('TaskRunner', () => {
     });
   });
 
+  describe('SSH target executor selection', () => {
+    it('prefers configured remote target settings over a generic registered SshExecutor', () => {
+      const genericSsh = new SshExecutor({
+        host: 'generic.example',
+        user: 'runner',
+        sshKeyPath: '/generic/key',
+      });
+      const registeredExecutors = new Map<string, any>([
+        ['ssh', genericSsh],
+      ]);
+      const registry = {
+        getDefault: () => ({ type: 'worktree' }),
+        get: (type: string) => registeredExecutors.get(type),
+        getAll: () => [...registeredExecutors.values()],
+        register: vi.fn((type: string, executor: any) => {
+          registeredExecutors.set(type, executor);
+        }),
+      };
+      const runner = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: registry as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'remote-with-provision': {
+            host: 'remote.example',
+            user: 'invoker',
+            sshKeyPath: '/target/key',
+            managedWorkspaces: true,
+            provisionCommand: 'pnpm install --frozen-lockfile',
+          },
+        }),
+      });
+
+      const selected = runner.selectExecutor(makeTask({
+        id: 'ssh-targeted-task',
+        config: {
+          command: 'pnpm test',
+          runnerKind: 'ssh' as any,
+          poolId: 'remote-with-provision',
+        },
+      }));
+
+      expect(selected.executor).toBeInstanceOf(SshExecutor);
+      expect(selected.executor).not.toBe(genericSsh);
+      expect((selected.executor as any).host).toBe('remote.example');
+      expect((selected.executor as any).provisionCommand).toBe('pnpm install --frozen-lockfile');
+      expect(selected.selectedPoolMemberId).toBe('remote-with-provision');
+      expect(registry.register).toHaveBeenCalledWith('ssh:remote-with-provision', selected.executor);
+    });
+  });
+
   describe('pre-start heartbeat', () => {
     it('fires onHeartbeat while awaiting a slow executor.start', async () => {
       vi.useFakeTimers();
