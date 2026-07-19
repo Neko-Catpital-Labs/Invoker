@@ -92,9 +92,9 @@ export class ConversationRepository {
       });
     }
 
-    // Determine how many messages already exist and append new ones
-    const existingMessages = this.adapter.loadMessages(threadTs);
-    const newMessages = messages.slice(existingMessages.length);
+    // Determine how many messages already exist without reading the transcript.
+    const existingMessageCount = this.adapter.countMessages(threadTs);
+    const newMessages = messages.slice(existingMessageCount);
 
     for (const msg of newMessages) {
       const contentJson = typeof msg.content === 'string'
