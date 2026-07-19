@@ -2,19 +2,15 @@
  * Regression coverage for execution-pool member pinning across ALL member
  * types, not only SSH.
  *
- * `selectExecutor()` currently (a) drops the picked member's id whenever the
- * pick is not type `ssh`, so nothing is ever pinned back onto a task that
- * first ran on a `worktree` member, and (b) only matches an explicit
+ * `selectExecutor()` used to (a) drop the picked member's id whenever the
+ * pick was not type `ssh`, so nothing was ever pinned back onto a task that
+ * first ran on a `worktree` member, and (b) only match an explicit
  * `poolMemberId` pin against `ssh` candidates, silently ignoring pins that
- * point at a `worktree` member. Together this lets a task that started on
+ * point at a `worktree` member. Together this let a task that started on
  * the local worktree member get re-routed to an unrelated SSH host on a
  * later call to `selectExecutor()` (e.g. during `publishApprovedFix`),
- * which then tries to run git commands against a workspace path that only
+ * which then tried to run git commands against a workspace path that only
  * exists on the original machine.
- *
- * These three cases are marked `it.fails` because the underlying defect is
- * still present; the follow-up fix flips them to `it` once
- * `selectExecutor()`'s pinning logic is made type-agnostic.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { TaskRunner } from '../task-runner.js';
@@ -71,7 +67,7 @@ function makeRunner() {
 }
 
 describe('selectExecutor pool member pinning across types', () => {
-  it.fails('returns a defined selectedPoolMemberId for a fresh worktree pick, not just SSH', () => {
+  it('returns a defined selectedPoolMemberId for a fresh worktree pick, not just SSH', () => {
     const runner = makeRunner();
 
     const task = makeTask({
@@ -85,7 +81,7 @@ describe('selectExecutor pool member pinning across types', () => {
     expect(selected.selectedPoolMemberId).toBe('member-local');
   });
 
-  it.fails('honors a persisted worktree pin instead of rotating to the SSH member', () => {
+  it('honors a persisted worktree pin instead of rotating to the SSH member', () => {
     const runner = makeRunner();
 
     // Step 1: original run picks the worktree member (RR cursor=0 → member-local).
@@ -122,7 +118,7 @@ describe('selectExecutor pool member pinning across types', () => {
     expect(publishSelection.selectedPoolMemberId).toBe('member-local');
   });
 
-  it.fails('honors an explicit poolMemberId pinned to a non-SSH member without re-rolling selection', () => {
+  it('honors an explicit poolMemberId pinned to a non-SSH member without re-rolling selection', () => {
     const runner = makeRunner();
 
     const task = makeTask({

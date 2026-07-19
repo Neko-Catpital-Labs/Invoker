@@ -190,13 +190,13 @@ export async function dispatchExecutor(
         }
         if (meta.containerId) execution.containerId = meta.containerId;
         const poolSelection = host.pendingPoolSelections.get(task.id);
-        const selectedSshTargetId = executor.type === 'ssh'
+        const selectedPoolMemberId = executor.type === 'ssh'
           ? host.selectedRemoteTargetId(task, poolSelection)
-          : undefined;
+          : poolSelection?.member.id;
         host.persistence.updateTask(task.id, {
           config: {
             runnerKind: executor.type as RunnerKind,
-            ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
+            ...(selectedPoolMemberId ? { poolMemberId: selectedPoolMemberId } : {}),
           },
           execution: execution as any,
         });
@@ -304,15 +304,15 @@ export async function dispatchExecutor(
       poolSelection,
     );
 
-    const selectedSshTargetId = executor.type === 'ssh'
+    const selectedPoolMemberId = executor.type === 'ssh'
       ? host.selectedRemoteTargetId(task, poolSelection)
-      : undefined;
+      : poolSelection?.member.id;
     const changes = {
       config: {
         runnerKind: executor.type as RunnerKind,
         executionAgent: resolvedExecution.executionAgent,
         executionModel: resolvedExecution.executionModel,
-        ...(selectedSshTargetId ? { poolMemberId: selectedSshTargetId } : {}),
+        ...(selectedPoolMemberId ? { poolMemberId: selectedPoolMemberId } : {}),
       },
       execution: {
         workspacePath: handle.workspacePath,
