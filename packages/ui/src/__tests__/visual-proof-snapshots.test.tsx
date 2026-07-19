@@ -35,11 +35,9 @@ describe('Visual proof snapshots', () => {
     render(<App />);
     expect(screen.getByText('What do you want to build?')).toBeInTheDocument();
     expect(screen.getByTestId('planning-session-rail')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
-    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Plan graph');
-    expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
-    expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
-    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.getByTestId('app-sidebar')).toHaveClass('w-16');
+    expect(screen.getByTestId('planning-context-panel')).toHaveClass('w-16');
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('');
     expect(screen.getByText('Describe a change, investigate a bug, or ask Invoker to draft a full plan. Review the graph before starting work.')).toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();

@@ -665,7 +665,41 @@ function WorkflowContextMenu({
   );
 }
 
-function EmptyPlanGraphCta({ onGoHome }: { onGoHome: () => void }): JSX.Element {
+function EmptyPlanGraphCta({
+  creationError,
+  draftPlan,
+  onCreateWorkflow,
+  onGoHome,
+}: {
+  creationError?: string;
+  draftPlan?: { name: string; taskCount: number };
+  onCreateWorkflow?: () => void;
+  onGoHome: () => void;
+}): JSX.Element {
+  if (draftPlan && onCreateWorkflow) {
+    return (
+      <aside className="h-full w-full border-l border-border bg-background/90 p-4" data-testid="empty-plan-graph-cta">
+        <div className="rounded-xl border border-border bg-card/70 p-4">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Draft review</div>
+          <h2 className="mt-1 text-sm font-semibold text-foreground">{draftPlan.name}</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {draftPlan.taskCount} task{draftPlan.taskCount === 1 ? '' : 's'} ready to create as a workflow.
+          </p>
+          {creationError && (
+            <p className="mt-3 text-xs text-destructive">{creationError}</p>
+          )}
+          <button
+            type="button"
+            data-testid="planning-create-workflow"
+            onClick={onCreateWorkflow}
+            className="mt-4 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            Create workflow
+          </button>
+        </div>
+      </aside>
+    );
+  }
   return (
     <aside className="h-full w-full border-l border-border bg-background/90 p-4" data-testid="empty-plan-graph-cta">
       <div className="rounded-xl border border-border bg-card/70 p-4">
@@ -784,7 +818,7 @@ export function App() {
   const suppressDagSurfaceDismissRef = useRef(false);
   const contextMenuTaskRef = useRef<TaskState | null>(null);
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
@@ -879,7 +913,8 @@ export function App() {
   const [detachNotice, setDetachNotice] = useState<string | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('planning');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
-  const [planningContextCollapsed, setPlanningContextCollapsed] = useState(false);
+  const [planningContextCollapsed, setPlanningContextCollapsed] = useState(true);
+  const [planningSessionRailCollapsed, setPlanningSessionRailCollapsed] = useState(false);
   // Typed graph camera state. The graph viewport is user-owned after the
   // initial render: only explicit navigation commands (issued through the
   // central factory) move it. No per-handler event++/requestId++ counters.
@@ -3893,13 +3928,6 @@ export function App() {
   const connectedAgentLabels = (systemDiagnostics?.tools ?? [])
     .filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed)
     .map((tool) => tool.name.replace(/\s+CLI$/i, ''));
-  const planningPhase = activePlanningSession.status === 'submitted'
-    ? 'review'
-    : draftPlanAvailable
-      ? 'draft'
-      : terminalLines.some((line) => line.role === 'user')
-        ? 'discuss'
-        : 'discuss';
 
   const renderPlanningContextPanel = (): JSX.Element => (
     <aside
@@ -3944,29 +3972,6 @@ export function App() {
               <p className="mt-1 text-foreground">{activePlanningSession.submittedPlanName}</p>
             </div>
           )}
-          <div>
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Agents</div>
-            <p className="mt-1 text-foreground">
-              {connectedAgentLabels.length > 0 ? connectedAgentLabels.join(', ') : 'None detected yet'}
-            </p>
-          </div>
-          <div>
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Phase</div>
-            <ol className="mt-2 space-y-1.5 text-xs text-muted-foreground">
-              {(['discuss', 'draft', 'review', 'run'] as const).map((phase) => {
-                const order = { discuss: 0, draft: 1, review: 2, run: 3 } as const;
-                const current = order[planningPhase];
-                const done = order[phase] < current || (phase === 'discuss' && terminalLines.some((line) => line.role === 'user'));
-                const active = phase === planningPhase;
-                return (
-                  <li key={phase} className={active ? 'font-medium text-foreground' : done ? 'text-emerald-400' : ''}>
-                    {(done && !active) ? '✓ ' : active ? '● ' : '○ '}
-                    {phase.charAt(0).toUpperCase() + phase.slice(1)}
-                  </li>
-                );
-              })}
-            </ol>
-          </div>
           {(draftPlanAvailable || activePlanningSession.status === 'submitted') && (
             <button
               type="button"
@@ -3984,24 +3989,58 @@ export function App() {
 
   const renderPlanningTerminalSurface = (): JSX.Element => (
     <div className="flex min-h-0 flex-1 overflow-hidden">
-      <div data-testid="planning-session-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-card">
-        <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5">
-          <div className="min-w-0">
-            <h2 className="text-sm font-medium text-foreground">Planning</h2>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {planningSessions.length} chat{planningSessions.length === 1 ? '' : 's'}
-              {planningReadyCount > 0 ? ` · ${planningReadyCount} ready` : ''}
-            </p>
+      <div
+        data-testid="planning-session-rail"
+        className={`flex h-full shrink-0 flex-col border-r border-border bg-card transition-all duration-150 ${planningSessionRailCollapsed ? 'w-16' : 'w-64'}`}
+      >
+        {planningSessionRailCollapsed ? (
+          <div className="flex flex-col items-center gap-2 px-2 py-2.5">
+            <button
+              type="button"
+              aria-label="New chat"
+              onClick={handleCreatePlanningSession}
+              className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              data-testid="planning-session-rail-toggle"
+              aria-label="Expand planning chats"
+              onClick={() => setPlanningSessionRailCollapsed(false)}
+              className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary"
+            >
+              ›
+            </button>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleCreatePlanningSession}
-          >
-            New chat
-          </Button>
-        </div>
-        <div className={RAIL_LIST_FRAME_CLASS}>{renderPlanningSessionList()}</div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5">
+              <div className="min-w-0">
+                <h2 className="text-sm font-medium text-foreground">Planning</h2>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {planningSessions.length} chat{planningSessions.length === 1 ? '' : 's'}
+                  {planningReadyCount > 0 ? ` · ${planningReadyCount} ready` : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={handleCreatePlanningSession}>
+                  New chat
+                </Button>
+                <button
+                  type="button"
+                  data-testid="planning-session-rail-toggle"
+                  aria-label="Collapse planning chats"
+                  onClick={() => setPlanningSessionRailCollapsed(true)}
+                  className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary"
+                >
+                  ‹
+                </button>
+              </div>
+            </div>
+            <div className={RAIL_LIST_FRAME_CLASS}>{renderPlanningSessionList()}</div>
+          </>
+        )}
       </div>
       <div
         className="flex min-h-0 flex-1 flex-col overflow-hidden"
@@ -4009,40 +4048,29 @@ export function App() {
         tabIndex={0}
         data-keyboard-active={keyboardRegion === 'planning' ? 'true' : 'false'}
       >
-        {(setupIncomplete || connectedAgentLabels.length > 0) && (
-          <div
-            data-testid="planning-setup-strip"
-            className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card/50 px-4 py-2 text-xs"
-          >
-            <div className="flex flex-wrap items-center gap-3 text-muted-foreground">
-              <span className={setupIncomplete ? 'text-amber-300' : 'text-emerald-400'}>
-                {setupIncomplete ? 'Setup needed' : 'Invoker is ready'}
-              </span>
-              {connectedAgentLabels.length > 0 && (
-                <span>Agents connected: {connectedAgentLabels.join(', ')}</span>
-              )}
-            </div>
-            <button
-              type="button"
-              data-testid="planning-finish-setup"
-              onClick={() => {
-                cancelPendingSystemSetupAutoOpen();
-                setShowSystemSetup(true);
-              }}
-              className="rounded-md border border-border px-2.5 py-1 text-xs text-foreground hover:bg-secondary"
-            >
-              {setupIncomplete ? 'Finish setup' : 'Manage setup'}
-            </button>
-          </div>
-        )}
         <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2.5">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-medium text-foreground">Planning chat</h2>
             <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{activePlanningSession.title}</p>
           </div>
-          <span className="shrink-0 rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
-            {planningSessionStatusLabel(activePlanningSession)}
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground">
+              {planningSessionStatusLabel(activePlanningSession)}
+            </span>
+            {setupIncomplete && (
+              <button
+                type="button"
+                data-testid="planning-finish-setup"
+                onClick={() => {
+                  cancelPendingSystemSetupAutoOpen();
+                  setShowSystemSetup(true);
+                }}
+                className="rounded-md border border-border px-2.5 py-1 text-xs text-foreground hover:bg-secondary"
+              >
+                Finish setup
+              </button>
+            )}
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-hidden bg-background">
           <InvokerTerminal
@@ -4055,25 +4083,18 @@ export function App() {
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
-            submitError={planningSubmitError}
             readOnly={activePlanningReadOnly}
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
-            setupIncomplete={setupIncomplete}
             submittedPlanName={activePlanningSession.submittedPlanName}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
-            onSubmitDraft={() => void handlePlanningSubmitDraft()}
             onPresetChange={setSelectedPlanningPresetKey}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
             onOpenGraph={() => navigatePlanGraphAndFit('planning-open-graph')}
-            onFinishSetup={() => {
-              cancelPendingSystemSetupAutoOpen();
-              setShowSystemSetup(true);
-            }}
           />
         </div>
       </div>
@@ -4320,7 +4341,12 @@ export function App() {
               className={`${showEmptyPlanGraphCta || showInspectorPlaceholder ? 'w-96' : effectiveInspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
             >
               {showEmptyPlanGraphCta ? (
-                <EmptyPlanGraphCta onGoHome={() => navigatePlanningHome('empty-graph-cta')} />
+                <EmptyPlanGraphCta
+                  creationError={planningSubmitError?.message}
+                  draftPlan={draftPlanAvailable && draftPlanSummary ? draftPlanSummary : undefined}
+                  onCreateWorkflow={draftPlanAvailable ? () => void handlePlanningSubmitDraft() : undefined}
+                  onGoHome={() => navigatePlanningHome('empty-graph-cta')}
+                />
               ) : showInspectorPlaceholder ? (
                 <EmptyInspectorPlaceholder />
               ) : showWorkerDetailsPanel ? (
@@ -4384,7 +4410,6 @@ export function App() {
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
-            submitError={planningSubmitError}
             expanded
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
@@ -4395,7 +4420,6 @@ export function App() {
             onValueChange={setPlanningInput}
             readOnly={activePlanningReadOnly}
             onSubmit={() => void handlePlanningSubmit()}
-            onSubmitDraft={() => void handlePlanningSubmitDraft()}
             onPresetChange={setSelectedPlanningPresetKey}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
@@ -4403,10 +4427,6 @@ export function App() {
             onOpenGraph={() => {
               setPlanningTerminalExpanded(false);
               navigatePlanGraphAndFit('planning-expanded-open-graph');
-            }}
-            onFinishSetup={() => {
-              cancelPendingSystemSetupAutoOpen();
-              setShowSystemSetup(true);
             }}
           />
         </div>

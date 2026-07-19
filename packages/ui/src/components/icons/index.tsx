@@ -11,6 +11,7 @@ import {
   GitPullRequest,
   Layers,
   Moon,
+  Network,
   Play,
   Settings,
   Sun,
@@ -37,6 +38,7 @@ export const AttentionIcon = withDefaults(AlertTriangle);
 export const RunningIcon = withDefaults(Clock);
 export const WorkerIcon = withDefaults(Cpu);
 export const WorkflowsIcon = withDefaults(Layers);
+export const GraphIcon = withDefaults(Network);
 export const PlanningTerminalIcon = withDefaults(TerminalSquare);
 export const SettingsIcon = withDefaults(Settings);
 export const InvokerIcon = withDefaults(Compass);

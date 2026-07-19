@@ -56,7 +56,6 @@ interface InvokerTerminalProps {
     taskGroups?: { workflow: string | null; tasks: string[] }[];
   };
   planningStream?: InvokerTerminalPlanningStream | null;
-  submitError?: SubmitErrorView | null;
   readOnly?: boolean;
   expanded?: boolean;
   mode?: PlanningTerminalMode;
@@ -65,22 +64,13 @@ interface InvokerTerminalProps {
   terminalError?: string | null;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
-  onSubmitDraft: () => void;
   onPresetChange: (presetKey: string) => void;
   onModeChange?: (mode: PlanningTerminalMode) => void;
   onExpand: () => void;
   onCloseExpanded?: () => void;
-  onCollapse?: () => void;
   onOpenGraph?: () => void;
-  onFinishSetup?: () => void;
-  setupIncomplete?: boolean;
   submittedPlanName?: string;
   activeConversationKey: string;
-}
-
-interface SubmitErrorView {
-  title: string;
-  message: string;
 }
 
 function roleLabel(role: InvokerTerminalLine['role']): string {
@@ -119,17 +109,14 @@ function MessageBody({ text, toneClass }: { text: string; toneClass: string }): 
       {segments.map((segment, index) => {
         if (segment.kind === 'code') {
           return (
-            <pre
-              key={`code-${index}`}
-              className="overflow-x-auto rounded-lg border border-border bg-card/80 px-3 py-2.5 font-mono text-[12px] leading-5 text-foreground"
-            >
-              {segment.language ? (
-                <div className="mb-1.5 font-sans text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {segment.language}
-                </div>
-              ) : null}
-              <code className="whitespace-pre">{segment.text.replace(/\n$/, '')}</code>
-            </pre>
+            <details key={`code-${index}`} className="rounded-lg border border-border bg-card/80">
+              <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                {segment.language ? `View ${segment.language.toUpperCase()}` : 'View details'}
+              </summary>
+              <pre className="overflow-x-auto border-t border-border px-3 py-2.5 font-mono text-[12px] leading-5 text-foreground">
+                <code className="whitespace-pre">{segment.text.replace(/\n$/, '')}</code>
+              </pre>
+            </details>
           );
         }
         const prose = segment.text.replace(/^\n+|\n+$/g, '');
@@ -341,7 +328,6 @@ export function InvokerTerminal({
   draftPlanAvailable,
   draftPlanSummary,
   planningStream,
-  submitError,
   readOnly = false,
   expanded = false,
   mode = 'chat',
@@ -350,15 +336,11 @@ export function InvokerTerminal({
   terminalError = null,
   onValueChange,
   onSubmit,
-  onSubmitDraft,
   onPresetChange,
   onModeChange,
   onExpand,
   onCloseExpanded,
-  onCollapse,
   onOpenGraph,
-  onFinishSetup,
-  setupIncomplete = false,
   submittedPlanName,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
@@ -366,6 +348,7 @@ export function InvokerTerminal({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const [shouldFollowTranscript, setShouldFollowTranscript] = useState(true);
+  const [showComposerOptions, setShowComposerOptions] = useState(false);
   const inputSequenceRef = useRef(0);
   const latestLineCountRef = useRef(lines.length);
   const perfContextRef = useRef({ activeConversationKey, expanded });
@@ -424,6 +407,13 @@ export function InvokerTerminal({
       readOnly,
     });
   }, [activeConversationKey, busy, expanded, lines.length, readOnly, value]);
+
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input || expanded) return;
+    input.style.height = '0px';
+    input.style.height = `${Math.min(input.scrollHeight, 144)}px`;
+  }, [expanded, value]);
 
   useLayoutEffect(() => {
     const lastLine = lines.at(-1);
@@ -540,19 +530,6 @@ export function InvokerTerminal({
             <div className="text-[11px] font-medium tracking-wide text-muted-foreground">
               {roleLabel(line.role)}
             </div>
-            {line.reasoning ? (
-              <details
-                data-testid="invoker-terminal-thinking"
-                className="rounded-md border border-border/60 bg-background/40 px-2.5 py-1.5 text-muted-foreground"
-              >
-                <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
-                  Thinking
-                </summary>
-                <div className="mt-1 whitespace-pre-wrap font-sans text-[12px] leading-5 text-muted-foreground">
-                  {line.reasoning}
-                </div>
-              </details>
-            ) : null}
             <MessageBody text={line.text} toneClass={toneClass} />
           </div>
         );
@@ -561,21 +538,14 @@ export function InvokerTerminal({
         <div
           data-testid="invoker-terminal-planner-stream"
           data-state={planningStream.status}
-          className={`rounded-xl border px-3.5 py-2.5 ${
+          className={`flex items-center gap-2 text-xs ${
             planningStream.status === 'failed'
-              ? 'border-destructive/50 bg-destructive/10'
-              : 'border-border-strong bg-card/70'
+              ? 'text-destructive'
+              : 'text-muted-foreground'
           }`}
         >
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-[11px] font-medium text-muted-foreground">Planner stream</div>
-            <div className={`text-[11px] ${planningStream.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>
-              {planningStream.status === 'failed' ? 'failed' : 'live'}
-            </div>
-          </div>
-          <div className={`mt-2 whitespace-pre-wrap font-sans text-[13.5px] leading-6 ${planningStream.status === 'failed' ? 'text-destructive' : 'text-foreground'}`}>
-            {planningStream.text}
-          </div>
+          <span aria-hidden="true" className={planningStream.status === 'failed' ? '' : 'animate-pulse'}>●</span>
+          <span>{planningStream.status === 'failed' ? 'Planning stopped. Try again when ready.' : 'Drafting your plan…'}</span>
         </div>
       ) : null}
     </>
@@ -607,18 +577,9 @@ export function InvokerTerminal({
                 onClick={() => onModeChange('tmux')}
                 className={`border-l border-border px-2.5 py-1 text-xs ${mode === 'tmux' ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}`}
               >
-                tmux
+                Tmux
               </button>
             </div>
-          )}
-          {mode === 'chat' && busy && (
-            <span className="text-[11px] text-muted-foreground">working…</span>
-          )}
-          {mode === 'tmux' && terminalBusy && (
-            <span className="text-[11px] text-muted-foreground">starting…</span>
-          )}
-          {mode === 'chat' && readOnly && (
-            <span className="text-[11px] text-muted-foreground">submitted</span>
           )}
           {expanded ? (
             <button
@@ -630,26 +591,14 @@ export function InvokerTerminal({
               Close
             </button>
           ) : (
-            <>
-              {onCollapse && (
-                <button
-                  type="button"
-                  aria-label="Collapse planning chat"
-                  onClick={onCollapse}
-                  className="rounded-sm border border-border px-2.5 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
-                >
-                  Collapse
-                </button>
-              )}
-              <button
-                type="button"
-                aria-label="Expand planning chat"
-                onClick={onExpand}
-                className="rounded-sm border border-border px-2.5 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
-              >
-                Expand
-              </button>
-            </>
+            <button
+              type="button"
+              aria-label="Expand planning chat"
+              onClick={onExpand}
+              className="rounded-sm border border-border px-2.5 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
+            >
+              Expand
+            </button>
           )}
         </div>
       </div>
@@ -688,111 +637,31 @@ export function InvokerTerminal({
                     </button>
                   ))}
                 </div>
-                {setupIncomplete && onFinishSetup && (
-                  <div className="rounded-md border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-100">
-                    <div className="font-medium">Finish setup once, then plan from here.</div>
-                    <button
-                      type="button"
-                      data-testid="invoker-terminal-finish-setup"
-                      onClick={onFinishSetup}
-                      className="mt-2 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-500"
-                    >
-                      Finish setup
-                    </button>
-                  </div>
-                )}
               </div>
             ) : (
               transcriptContent
             )}
           </div>
 
-          {submitError && !readOnly && (
-            <div
-              data-testid="invoker-terminal-submit-error"
-              className="sticky bottom-0 z-10 border-t border-destructive/40 bg-background px-4 py-3 text-destructive-foreground"
-            >
-              <div className="text-sm font-medium text-destructive">{submitError.title}</div>
-              <div className="mt-2 whitespace-pre-wrap font-sans text-xs leading-5 text-destructive/90">{submitError.message}</div>
-              <div className="mt-3 flex flex-wrap gap-2">
-                {draftPlanAvailable && (
-                  <button
-                    type="button"
-                    onClick={onSubmitDraft}
-                    disabled={busy}
-                    className="rounded-sm bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground hover:bg-destructive/85 disabled:cursor-wait disabled:opacity-50"
-                  >
-                    Retry submit
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={focusComposer}
-                  className="rounded-sm border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
-                >
-                  Keep chatting
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void navigator.clipboard?.writeText(submitError.message)}
-                  className="rounded-sm border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
-                >
-                  Copy error
-                </button>
-              </div>
-            </div>
-          )}
-
           {draftPlanAvailable && !readOnly && (
             <div
               data-testid="invoker-terminal-ready-bar"
               className="sticky bottom-0 z-10 border-t border-border bg-card/80 px-4 py-3.5 text-sm text-foreground backdrop-blur-sm"
             >
-              <div className="mb-1 text-sm font-semibold tracking-tight text-foreground">Plan draft ready</div>
               <p className="mb-3 text-xs text-muted-foreground">
                 {draftPlanSummary
-                  ? `draft ready · "${draftPlanSummary.name}" · ${draftPlanSummary.workflowCount && draftPlanSummary.workflowCount > 1 ? `${draftPlanSummary.workflowCount} workflows · ${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}` : `${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}`}`
-                  : 'draft ready'}
+                  ? `Draft ready · ${draftPlanSummary.name} · ${draftPlanSummary.workflowCount && draftPlanSummary.workflowCount > 1 ? `${draftPlanSummary.workflowCount} workflows · ${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}` : `${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}`}`
+                  : 'Draft ready'}
               </p>
-              {draftPlanSummary?.taskGroups && draftPlanSummary.taskGroups.length > 0 && (
-                <div
-                  data-testid="invoker-terminal-plan-tasks"
-                  className="mb-3 max-h-52 overflow-y-auto rounded-lg border border-border/70 bg-background/60 px-3 py-2 pr-1"
-                >
-                  {draftPlanSummary.taskGroups.map((group, groupIndex) => (
-                    <div key={group.workflow ?? `group-${groupIndex}`} className="mb-2 last:mb-0">
-                      {group.workflow ? (
-                        <div className="text-xs font-semibold text-foreground">{group.workflow}</div>
-                      ) : null}
-                      <ul className={group.workflow ? 'mt-0.5 border-l border-border-strong pl-3' : ''}>
-                        {group.tasks.map((task, taskIndex) => (
-                          <li key={taskIndex} className="flex gap-2 text-xs text-muted-foreground">
-                            <span aria-hidden="true">–</span>
-                            <span>{task}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              )}
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onSubmitDraft}
-                  disabled={busy}
-                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-wait disabled:opacity-50"
-                >
-                  Submit to Invoker
-                </button>
                 {onOpenGraph && (
                   <button
                     type="button"
                     data-testid="invoker-terminal-open-graph"
                     onClick={onOpenGraph}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
+                    className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                   >
-                    Open graph
+                    Review draft
                   </button>
                 )}
                 <button
@@ -831,33 +700,45 @@ export function InvokerTerminal({
             className="border-t border-border bg-background px-4 py-3.5"
             onSubmit={handleFormSubmit}
           >
-            <div className="rounded-xl border border-border bg-card/40 px-3 py-2 focus-within:border-border-strong">
+            <div className="rounded-xl border border-border bg-card/40 px-3 py-1.5 focus-within:border-border-strong">
               <textarea
                 ref={inputRef}
                 data-testid="invoker-terminal-input"
                 value={value}
                 disabled={busy || readOnly}
-                rows={expanded ? 8 : 3}
+                rows={expanded ? 5 : 1}
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
-                placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change, ask questions, or say “draft the full plan”.'}
-                className={`min-h-[4.5rem] w-full resize-none border-0 bg-transparent py-1.5 font-sans text-[13.5px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 ${composerDisabledCursorClass}`}
+                placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe what you want to build'}
+                className={`min-h-9 w-full resize-none border-0 bg-transparent py-1 font-sans text-[13.5px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 ${composerDisabledCursorClass}`}
               />
-              <div className="mt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-2">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>Agent</span>
-                  <select
-                    data-testid="invoker-terminal-harness"
-                    value={selectedPresetKey}
-                    onChange={(event) => onPresetChange(event.target.value)}
-                    disabled={readOnly}
-                    className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-3 pt-2">
+                <div>
+                  <button
+                    type="button"
+                    aria-expanded={showComposerOptions}
+                    onClick={() => setShowComposerOptions((visible) => !visible)}
+                    className="text-xs text-muted-foreground hover:text-foreground"
                   >
-                    {presetOptions.map((option) => (
-                      <option key={option.key} value={option.key}>{option.label}</option>
-                    ))}
-                  </select>
-                </label>
+                    Options
+                  </button>
+                  {showComposerOptions && (
+                    <label className="ml-3 text-xs text-muted-foreground">
+                      Agent
+                      <select
+                        data-testid="invoker-terminal-harness"
+                        value={selectedPresetKey}
+                        onChange={(event) => onPresetChange(event.target.value)}
+                        disabled={readOnly}
+                        className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                      >
+                        {presetOptions.map((option) => (
+                          <option key={option.key} value={option.key}>{option.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </div>
                 <Button
                   type="submit"
                   size="sm"
