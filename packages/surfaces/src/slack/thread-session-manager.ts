@@ -271,7 +271,7 @@ export class SessionManager {
   async getOrCreateSession(
     id: SessionIdentifier,
     userId: string,
-    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode },
+    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode; repoUrl?: string },
   ): Promise<SessionHandle | null> {
     const key = id.toString();
 
@@ -322,7 +322,7 @@ export class SessionManager {
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
-        repoUrl: this.repoUrl,
+        repoUrl: opts?.repoUrl ?? this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
         plannerRetryLimit: this.plannerRetryLimit,
@@ -355,7 +355,7 @@ export class SessionManager {
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
-        repoUrl: this.repoUrl,
+        repoUrl: opts?.repoUrl ?? this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
         plannerRetryLimit: this.plannerRetryLimit,
