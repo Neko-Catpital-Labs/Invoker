@@ -2083,7 +2083,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
           SELECT thread_ts FROM conversations WHERE updated_at < ?
         )
       `, [cutoffIso]);
-      // Delete messages first (FK constraint)
       this.db.run(`
         DELETE FROM conversation_messages WHERE thread_ts IN (
           SELECT thread_ts FROM conversations WHERE updated_at < ?

@@ -56,9 +56,9 @@ export class SlackSessionRepository {
     confirmKey: string,
     now = new Date(),
   ): PendingSlackConfirmation | null {
-    const nowIso = now.toISOString();
     const confirmation = this.adapter.loadSlackPendingConfirmation(confirmKey);
-    if (!confirmation || confirmation.expiresAt <= nowIso) return null;
+    if (!confirmation) return null;
+    if (new Date(confirmation.expiresAt) <= now) return null;
     const { payloadJson, ...pending } = confirmation;
     return {
       ...pending,
