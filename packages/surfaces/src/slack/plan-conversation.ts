@@ -145,6 +145,7 @@ const CONFIRMATION_PATTERNS = [
   /^proceed$/i,
   /^do it$/i,
   /^confirm$/i,
+  /^submit$/i,
   /^lgtm$/i,
   /^ship it$/i,
   /^approved$/i,
@@ -287,7 +288,9 @@ Rules:
 7. Use meaningful task IDs (kebab-case).
 8. ${outputInstruction}
 9. Always include \`dependencies\` (even if empty array).
-10. After generating a plan, tell the user they can submit it by replying with \`submit\`.
+10. After generating a plan, include a short post-plan summary that tells the user they can confirm execution. The confirmation instruction MUST be exactly this standalone line:
+Reply \`submit\` to submit it.
+Do NOT place that line inline in a sentence.
 11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically after explicit Slack approval.
 12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
 }

@@ -418,6 +418,7 @@ describe('isConfirmation', () => {
   it('detects "proceed"', () => expect(isConfirmation('proceed')).toBe(true));
   it('detects "do it"', () => expect(isConfirmation('do it')).toBe(true));
   it('detects "confirm"', () => expect(isConfirmation('confirm')).toBe(true));
+  it('detects "submit"', () => expect(isConfirmation('submit')).toBe(true));
   it('detects "lgtm"', () => expect(isConfirmation('lgtm')).toBe(true));
   it('detects "yes!" with trailing punctuation', () => expect(isConfirmation('yes!')).toBe(true));
   it('detects " yes " with whitespace', () => expect(isConfirmation(' yes ')).toBe(true));
@@ -796,6 +797,28 @@ describe('PlanConversation prompt construction', () => {
     (conv as any).messages.push({ role: 'user', content: 'Hello' });
     const prompt = conv.buildCursorPrompt();
     expect(prompt).toContain('repoUrl: "git@github.com:user/repo.git"');
+  });
+
+  it('requires the submit instruction as a standalone post-plan summary line', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Build a feature' });
+    const prompt = conv.buildCursorPrompt();
+    const submitLine = 'Reply `submit` to submit it.';
+
+    expect(prompt.split('\n').filter((line) => line === submitLine)).toHaveLength(1);
+    expect(prompt.match(/Reply `submit` to submit it\./g)).toHaveLength(1);
+    expect(prompt).toContain('short post-plan summary');
+    expect(prompt).toContain('Do NOT place that line inline in a sentence.');
+  });
+
+  it('keeps existing plan delivery, stack, and merge mode guidance', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Build a feature' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('mergeMode: external_review');
+    expect(prompt).toContain('Prefer small reviewable slices');
+    expect(prompt).toContain('The orchestrator handles plan execution automatically after explicit Slack approval.');
   });
 
   it('system prompt requires discovered verification commands for target repos', () => {
