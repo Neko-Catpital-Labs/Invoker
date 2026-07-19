@@ -156,10 +156,12 @@ export function splitCodeBlockChunk(text: string, limit: number): string[] {
  * The inner Claude sometimes invents non-existent commands like "/invoker start_plan".
  * This replaces any such references (except /invoker conversations, which is real)
  * with the correct user instruction.
+ *
+ * Requires a leading `/` so ordinary prose like "an Invoker plan" is left alone.
  */
 export function sanitizeSlashCommands(text: string): string {
   return text.replace(
-    /(?:use |run |type |try )?`?\/?invoker\s+(?!conversations\b)\w+[^`\n]*`?/gi,
+    /(?:use |run |type |try )?`?\/invoker\s+(?!conversations\b)\w+[^`\n]*`?/gi,
     'reply with "yes", "go", or "execute" to confirm',
   );
 }
