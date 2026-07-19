@@ -343,8 +343,14 @@ export function parseLocalRequest(text: string): LocalRequest | null {
   return null;
 }
 
+/** If the whole message is one fenced block, return its body; otherwise the original text. */
+export function unwrapSoleFencedBlock(text: string): string {
+  const match = /^```(?:[\w+-]*)?\r?\n([\s\S]*?)\r?\n```\s*$/.exec(text.trim());
+  return match ? match[1].trim() : text.trim();
+}
+
 export function parseThreadRequest(text: string): ThreadRequest | null {
-  const trimmed = text.trim();
+  const trimmed = unwrapSoleFencedBlock(text);
   const planPatterns = [
     /^(?:invoker\s+)?plan\s*:\s*/i,
     /^draft\s+(?:an?\s+)?invoker\s+plan\s*:\s*/i,
