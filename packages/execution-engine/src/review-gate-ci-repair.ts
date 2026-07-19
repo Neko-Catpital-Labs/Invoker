@@ -38,6 +38,7 @@ const NO_HEAD_SHA = 'no-head';
 type CiFailureActionStatus = WorkerActionStatus;
 
 export interface ReviewGateCiRepairStore {
+  listWorkflows?(): ReadonlyArray<{ id: string }>;
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   listWorkflowMutationIntents?(
@@ -70,6 +71,8 @@ export interface ReviewGateCiRepairPolicyOptions {
   getRetryBudget?: (task: TaskState) => number;
 }
 
+type ReviewGateArtifact = NonNullable<TaskState['execution']['reviewGate']>['artifacts'][number];
+
 export function ciFailureChecksHash(failedChecks: readonly ReviewGateFailedCheck[]): string {
   const normalized = failedChecks
     .map((check) => ({
@@ -98,6 +101,161 @@ export function ciFailureActionKey(event: Pick<
     event.headSha ?? NO_HEAD_SHA,
     ciFailureChecksHash(event.failedChecks),
   ].join(':');
+}
+
+function isCurrentRequiredReviewGateArtifact(
+  gate: NonNullable<TaskState['execution']['reviewGate']>,
+  artifact: ReviewGateArtifact,
+): boolean {
+  return artifact.required
+    && artifact.generation === gate.activeGeneration
+    && artifact.status === 'open'
+    && !artifact.discardedAt;
+}
+
+function normalizeFailedChecks(
+  failedChecks: ReviewGateArtifact['failedChecks'],
+): ReviewGateFailedCheck[] {
+  return (failedChecks ?? []).map((check) => ({
+    name: check.name,
+    conclusion: check.conclusion,
+    detailsUrl: check.detailsUrl,
+  }));
+}
+
+function workflowIdForTask(task: TaskState): string | undefined {
+  return task.config.workflowId;
+}
+
+function buildRecoveryEventKey(args: {
+  workflowId: string;
+  task: TaskState;
+  reviewId: string;
+  headSha?: string;
+  failedChecks: readonly ReviewGateFailedCheck[];
+}): string {
+  return [
+    'review_gate.ci_failed',
+    `workflow:${args.workflowId}`,
+    `task:${args.task.id}`,
+    `generation:${args.task.execution.generation ?? 0}`,
+    args.task.execution.selectedAttemptId ? `attempt:${args.task.execution.selectedAttemptId}` : undefined,
+    args.task.taskStateVersion != null ? `task-state:${args.task.taskStateVersion}` : undefined,
+    `recovery:${args.reviewId}:${args.headSha ?? 'no-head-sha'}:${ciFailureChecksHash(args.failedChecks)}`,
+  ].filter((part): part is string => typeof part === 'string' && part.length > 0).join('|');
+}
+
+function reviewGateCiRecoveryEventFromArtifact(
+  task: TaskState,
+  artifact: ReviewGateArtifact,
+  now: string,
+): ReviewGateCiFailedLifecycleEvent | undefined {
+  const gate = task.execution.reviewGate;
+  const workflowId = workflowIdForTask(task);
+  const reviewId = artifact.providerId ?? task.execution.reviewId;
+  if (!gate || !workflowId || !reviewId) return undefined;
+  if (!isCurrentRequiredReviewGateArtifact(gate, artifact)) return undefined;
+  if (artifact.mergeState === 'dirty') return undefined;
+  if (artifact.checksState !== 'failure') return undefined;
+
+  const failedChecks = normalizeFailedChecks(artifact.failedChecks);
+  if (failedChecks.length === 0) return undefined;
+
+  const generation = task.execution.generation ?? 0;
+  const attemptId = task.execution.selectedAttemptId;
+  const branch = task.execution.branch ?? artifact.branch;
+  const eventKey = buildRecoveryEventKey({
+    workflowId,
+    task,
+    reviewId,
+    headSha: artifact.headSha,
+    failedChecks,
+  });
+  return {
+    eventKey,
+    kind: 'review_gate.ci_failed',
+    workflowId,
+    taskId: task.id,
+    status: task.status,
+    taskStateVersion: task.taskStateVersion,
+    generation,
+    ...(attemptId ? { attemptId } : {}),
+    createdAt: now,
+    recoveryWakeup: {
+      eventKey,
+      eventKind: 'review_gate.ci_failed',
+      workflowId,
+      taskId: task.id,
+      taskStateVersion: task.taskStateVersion,
+      generation,
+      ...(attemptId ? { attemptId } : {}),
+      createdAt: now,
+      reason: 'review_gate_failure',
+      authoritative: false,
+    },
+    reviewId,
+    reviewUrl: artifact.url ?? reviewId,
+    ...(artifact.headSha ? { headSha: artifact.headSha } : {}),
+    ...(artifact.headRef ? { headRef: artifact.headRef } : {}),
+    ...(branch ? { branch } : {}),
+    failedChecks,
+    statusText: artifact.rawStatus ?? 'CI failed',
+  };
+}
+
+export function listReviewGateCiRepairRecoveryEvents(
+  options: Pick<ReviewGateCiRepairPolicyOptions, 'store' | 'logger'> & { now?: () => string },
+): ReviewGateCiFailedLifecycleEvent[] {
+  const listWorkflows = options.store.listWorkflows;
+  if (!listWorkflows) {
+    options.logger.debug?.(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-scan-skip`, {
+      module: 'review-gate-ci-repair',
+      reason: 'list-workflows-unavailable',
+    });
+    return [];
+  }
+
+  const events: ReviewGateCiFailedLifecycleEvent[] = [];
+  let workflows: ReadonlyArray<{ id: string }>;
+  try {
+    workflows = listWorkflows.call(options.store);
+  } catch (error) {
+    options.logger.error(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-scan-error`, {
+      module: 'review-gate-ci-repair',
+      phase: 'list-workflows',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return events;
+  }
+
+  for (const workflow of workflows) {
+    let tasks: TaskState[];
+    try {
+      tasks = options.store.loadTasks(workflow.id);
+    } catch (error) {
+      options.logger.error(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-scan-error`, {
+        module: 'review-gate-ci-repair',
+        workflowId: workflow.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    for (const task of tasks) {
+      if (!task.config.isMergeNode) continue;
+      if (task.status !== 'review_ready' && task.status !== 'awaiting_approval') continue;
+      const gate = task.execution.reviewGate;
+      if (!gate) continue;
+      for (const artifact of gate.artifacts) {
+        const event = reviewGateCiRecoveryEventFromArtifact(
+          task,
+          artifact,
+          options.now?.() ?? new Date().toISOString(),
+        );
+        if (event) events.push(event);
+      }
+    }
+  }
+  return events;
 }
 
 function retryBudgetForTask(task: TaskState, options: ReviewGateCiRepairPolicyOptions): number {

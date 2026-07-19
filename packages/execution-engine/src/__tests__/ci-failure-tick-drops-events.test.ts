@@ -145,4 +145,72 @@ describe('createCiFailureTick resilience', () => {
     expect(submit).toHaveBeenCalledTimes(2);
     expect(logger.error).toHaveBeenCalled();
   });
+
+  it('still processes persisted scan recovery when draining wake events fails', async () => {
+    const baseTask = makeTask('task-scan');
+    const scanTask: TaskState = {
+      ...baseTask,
+      execution: {
+        ...baseTask.execution,
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-456',
+            providerId: '456',
+            provider: 'github',
+            required: true,
+            status: 'open',
+            generation: 2,
+            url: 'https://github.com/owner/repo/pull/456',
+            headSha: 'sha-scan',
+            checksState: 'failure',
+            failedChecks: [
+              { name: 'integration', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/456' },
+            ],
+            rawStatus: 'CI failed',
+          }],
+        },
+      },
+    } as TaskState;
+    const tasks = new Map<string, TaskState>([[scanTask.id, scanTask]]);
+    const actions = new Map<string, WorkerActionRecord>();
+    const submit = vi.fn<[string, WorkflowMutationPriority, string, unknown[]], number>(() => 42);
+    const store = {
+      listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+      loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
+      loadTask: vi.fn((taskId: string) => tasks.get(taskId)),
+      listWorkflowMutationIntents: vi.fn(() => []),
+      getWorkerAction: vi.fn((workerKind: string, externalKey: string) => actions.get(`${workerKind}:${externalKey}`)),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+        const existing = actions.get(`${write.workerKind}:${write.externalKey}`);
+        const saved = toRecord({ ...write, id: existing?.id ?? write.id, createdAt: existing?.createdAt });
+        actions.set(`${write.workerKind}:${write.externalKey}`, saved);
+        return saved;
+      }),
+      logEvent: vi.fn(),
+    };
+
+    const tick = createCiFailureTick({
+      store,
+      submitter: { submit },
+      logger,
+      attemptLedger: createAutoFixAttemptLedger(),
+      defaultAutoFixRetries: 2,
+      drainEvents: () => {
+        throw new Error('boom draining wake events');
+      },
+    });
+
+    await tick({
+      identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' },
+      reason: 'wake',
+      tickNumber: 1,
+      signal: new AbortController().signal,
+    });
+
+    const submittedTaskIds = submit.mock.calls.map((call) => (call[3] as [string, ...unknown[]])[0]);
+    expect(submittedTaskIds).toEqual(['task-scan']);
+    expect(logger.error).toHaveBeenCalled();
+  });
 });

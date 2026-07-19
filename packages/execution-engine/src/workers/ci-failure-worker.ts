@@ -11,6 +11,7 @@ import type {
 } from '../lifecycle-events.js';
 import {
   ciFailureActionKey,
+  listReviewGateCiRepairRecoveryEvents,
   queueReviewGateCiRepair,
   type ReviewGateCiRepairPolicyOptions,
   type ReviewGateCiRepairStore,
@@ -70,7 +71,19 @@ export function registerCiFailureWorker(
 
 export function createCiFailureTick(options: CiFailureWorkerPolicyOptions): WorkerTick {
   return async () => {
-    const events = options.drainEvents?.() ?? [];
+    let drainedEvents: ReviewGateCiFailedLifecycleEvent[] = [];
+    try {
+      drainedEvents = options.drainEvents?.() ?? [];
+    } catch (error) {
+      options.logger.error(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-drain-error`, {
+        module: 'ci-failure-worker',
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const events = [
+      ...drainedEvents,
+      ...listReviewGateCiRepairRecoveryEvents(options),
+    ];
     const seen = new Set<string>();
     for (const event of events) {
       const externalKey = ciFailureActionKey(event);
