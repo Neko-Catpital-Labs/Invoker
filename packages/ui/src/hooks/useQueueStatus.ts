@@ -3,7 +3,7 @@ import type { QueueStatus } from '../types.js';
 import { areStructurallyEqual } from './useDedupedState.js';
 import { subscribeVisibilityAwarePoll } from './visibilityAwarePoll.js';
 
-export function useQueueStatus(pollMs = 2000, enabled = true): QueueStatus | null {
+export function useQueueStatus(pollMs = 5000, enabled = true): QueueStatus | null {
   const [queueStatus, setQueueStatus] = useState<QueueStatus | null>(null);
   const inFlightRef = useRef(false);
 

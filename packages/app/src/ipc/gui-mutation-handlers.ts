@@ -1738,7 +1738,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
 
   ipcMain.handle('invoker:get-queue-status', () => {
-    return orchestrator.getQueueStatus();
+    return orchestrator.getQueueStatus({ refresh: false });
   });
   ipcMain.handle('invoker:get-worker-status', async () => {
     if (!ownerMode) {
