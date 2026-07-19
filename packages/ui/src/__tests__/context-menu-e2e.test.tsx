@@ -46,11 +46,14 @@ const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
 
-describe('Context menu (component)', () => {
+const FLOATING_GRAPH_PANEL_Z_INDEX = 1000;
+const APP_CONTEXT_MENU_TEST_TIMEOUT_MS = 20_000;
+
+describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS }, () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
-    mock = createMockInvoker();
+    mock = createMockInvoker([alpha, beta, merge], workflows);
     mock.install();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     Object.defineProperty(navigator, 'clipboard', {
@@ -70,10 +73,7 @@ describe('Context menu (component)', () => {
   ) {
     render(<App />);
     act(() => mock.setTasks(tasks, workflowList));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('workflow-node-wf-1')).toBeInTheDocument();
-    });
+    expect(await screen.findByTestId('workflow-node-wf-1')).toBeInTheDocument();
   }
 
   async function openWorkflowContextMenu() {

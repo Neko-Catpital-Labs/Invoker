@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
-import { Button } from './primitives/index.js';
+import { SendIcon } from './icons/index.js';
 
 export interface InvokerTerminalLine {
   id: number;
@@ -402,6 +402,8 @@ export function InvokerTerminal({
   };
 
   const composerDisabledCursorClass = busy ? 'disabled:cursor-wait' : readOnly ? 'disabled:cursor-not-allowed' : '';
+  const sendButtonDisabled = busy || readOnly || !value.trim();
+  const sendButtonDisabledCursorClass = busy ? 'disabled:cursor-wait' : 'disabled:cursor-not-allowed';
 
   const handleValueChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const startedAt = nowMs();
@@ -720,13 +722,17 @@ export function InvokerTerminal({
                   ))}
                 </select>
               </label>
-              <Button
+              <button
                 type="submit"
-                size="sm"
-                disabled={busy || readOnly || !value.trim()}
+                aria-label="Send"
+                disabled={sendButtonDisabled}
+                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
               >
-                Send
-              </Button>
+                <SendIcon
+                  data-testid="invoker-terminal-send-icon"
+                  className="h-4 w-4"
+                />
+              </button>
             </div>
           </form>
         </>

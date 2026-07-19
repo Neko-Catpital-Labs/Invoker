@@ -55,6 +55,7 @@ import type {
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from './adapter.js';
+import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { SCHEMA_DDL } from './sqlite-schema.js';
 import {
   mapRowToTaskLaunchDispatch,
@@ -69,6 +70,7 @@ import {
   readSpoolLinesFromFile,
   readLastSpoolLinesFromFile,
 } from './sqlite-output-spool.js';
+import { SlowQueryAggregator, type SlowQueryShapeStats } from './slow-query-aggregator.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
@@ -186,6 +188,51 @@ export type EphemeralSQLiteAdapterOptions = Pick<
   SQLiteAdapterOptions,
   'outputTailLimit' | 'outputDir' | 'activityLogMaxRows'
 >;
+
+const DEFAULT_SLOW_QUERY_SUMMARY_TOP_N = 10;
+const DEFAULT_SLOW_QUERY_SUMMARY_INTERVAL_MS = 30_000;
+const SLOW_QUERY_SUMMARY_SQL_PREVIEW_LENGTH = 240;
+
+function formatSlowQuerySummaryLine(index: number, stats: SlowQueryShapeStats): string {
+  const maxRows = stats.maxRows === undefined ? '' : ` maxRows=${stats.maxRows}`;
+  const firstSeen = new Date(stats.firstSeenAtMs).toISOString();
+  const lastSeen = new Date(stats.lastSeenAtMs).toISOString();
+  const sql = stats.shape.slice(0, SLOW_QUERY_SUMMARY_SQL_PREVIEW_LENGTH);
+
+  return `${index + 1}. max=${stats.maxMs.toFixed(1)}ms p95=${stats.p95Ms.toFixed(1)}ms ` +
+    `p50=${stats.p50Ms.toFixed(1)}ms count=${stats.count}${maxRows} ` +
+    `seen=${firstSeen}..${lastSeen} sql=${sql}`;
+}
+
+function formatSlowQuerySummary(
+  thresholdMs: number,
+  aggregator: SlowQueryAggregator,
+): string {
+  const topQueries = aggregator.topN(DEFAULT_SLOW_QUERY_SUMMARY_TOP_N);
+  const lines = topQueries.map((stats, index) => formatSlowQuerySummaryLine(index, stats));
+  return [
+    `[SQLiteAdapter] slow query summary threshold=${thresholdMs.toFixed(1)}ms ` +
+      `events=${aggregator.totalCount} shapes=${aggregator.shapeCount} top=${topQueries.length}`,
+    ...lines,
+  ].join('\n');
+}
+
+function createDefaultSlowQuerySink(thresholdMs: number): (info: SlowQueryInfo) => void {
+  const aggregator = new SlowQueryAggregator();
+  let lastSummaryAtMs = 0;
+
+  return (info) => {
+    aggregator.record(info);
+
+    const now = Date.now();
+    const shouldSummarize =
+      lastSummaryAtMs === 0 || now - lastSummaryAtMs >= DEFAULT_SLOW_QUERY_SUMMARY_INTERVAL_MS;
+    if (!shouldSummarize) return;
+
+    console.warn(formatSlowQuerySummary(thresholdMs, aggregator));
+    lastSummaryAtMs = now;
+  };
+}
 
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -621,13 +668,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.slowQueryThresholdMs = options?.slowQueryThresholdMs ?? 25;
     this.onSlowQuery = options?.onSlowQuery
       ?? (this.slowQueryThresholdMs > 0
-        ? (info) => {
-            console.warn(
-              `[SQLiteAdapter] slow query ${info.durationMs.toFixed(1)}ms` +
-                (info.rowCount === undefined ? '' : ` rows=${info.rowCount}`) +
-                `: ${info.sql.slice(0, 200)}`,
-            );
-          }
+        ? createDefaultSlowQuerySink(this.slowQueryThresholdMs)
         : null);
     this.corruptionRecovery = corruptionRecovery;
     this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
@@ -2038,6 +2079,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     `, [threadTs, nextSeq, role, content]);
   }
 
+  countMessages(threadTs: string): number {
+    const row = this.queryOne(
+      'SELECT COUNT(*) AS count FROM conversation_messages WHERE thread_ts = ?',
+      [threadTs],
+    ) as { count?: number } | undefined;
+    return Number(row?.count ?? 0);
+  }
+
   loadMessages(threadTs: string): ConversationMessage[] {
     const rows = this.queryAll(
       'SELECT * FROM conversation_messages WHERE thread_ts = ? ORDER BY seq ASC',
@@ -2303,6 +2352,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   loadAttempts(nodeId: string): Attempt[] {
     return this.taskAttemptRepo.loadAttempts(nodeId);
+  }
+
+  loadCostAttributionAttempts(nodeId: string): CostAttributionAttempt[] {
+    return this.taskAttemptRepo.loadCostAttributionAttempts(nodeId);
   }
 
   loadActionGraphAttempts(

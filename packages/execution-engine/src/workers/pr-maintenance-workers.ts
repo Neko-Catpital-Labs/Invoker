@@ -13,12 +13,14 @@ import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
 export const CODERABBIT_ADDRESS_WORKER_KIND = 'coderabbit-address';
+export const PR_ADMIN_BYPASS_LAND_WORKER_KIND = 'pr-admin-bypass-land';
 export const PR_CONFLICT_REBASE_WORKER_KIND = 'pr-conflict-rebase';
 export const PR_CI_FAILURE_SCAN_WORKER_KIND = 'pr-ci-failure-scan';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
 
 export type PrMaintenanceWorkerKind =
   | typeof CODERABBIT_ADDRESS_WORKER_KIND
+  | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
   | typeof PR_CONFLICT_REBASE_WORKER_KIND
   | typeof PR_CI_FAILURE_SCAN_WORKER_KIND;
 
@@ -34,6 +36,12 @@ const CODERABBIT_ADDRESS_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: CODERABBIT_ADDRESS_WORKER_KIND,
   scriptRelativePath: 'scripts/cron-coderabbit-address.sh',
   note: 'Runs the CodeRabbit review-address cron entrypoint under worker scheduling.',
+};
+
+const PR_ADMIN_BYPASS_LAND_ENTRYPOINT: PrMaintenanceEntrypoint = {
+  kind: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh',
+  note: 'Runs the admin-bypass Mergify land babysitter cron entrypoint under worker scheduling.',
 };
 
 const PR_CONFLICT_REBASE_ENTRYPOINT: PrMaintenanceEntrypoint = {
@@ -98,6 +106,7 @@ export function registerPrMaintenanceWorkers(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registerCoderabbitAddressWorker(registry);
+  registerPrAdminBypassLandWorker(registry);
   registerPrConflictRebaseWorker(registry);
   registerPrCiFailureScanWorker(registry);
   return registry;
@@ -111,6 +120,22 @@ export function registerCoderabbitAddressWorker(
     note: CODERABBIT_ADDRESS_ENTRYPOINT.note,
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createCoderabbitAddressWorker({
+        logger: deps.logger,
+        ...deps.prMaintenance,
+        store: deps.store,
+      }),
+  });
+  return registry;
+}
+
+export function registerPrAdminBypassLandWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+    note: PR_ADMIN_BYPASS_LAND_ENTRYPOINT.note,
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createPrAdminBypassLandWorker({
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
@@ -153,6 +178,10 @@ export function registerPrCiFailureScanWorker(
 
 export function createCoderabbitAddressWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
   return createPrMaintenanceWorker(CODERABBIT_ADDRESS_ENTRYPOINT, options);
+}
+
+export function createPrAdminBypassLandWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
+  return createPrMaintenanceWorker(PR_ADMIN_BYPASS_LAND_ENTRYPOINT, options);
 }
 
 export function createPrConflictRebaseWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {

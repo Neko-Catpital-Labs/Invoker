@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Shared helpers for the two PR-maintenance cron jobs that run co-located with
+# Shared helpers for the PR-maintenance cron jobs that run co-located with
 # the Invoker owner:
 #
-#   scripts/cron-coderabbit-address.sh  (Job 1) — address new CodeRabbit reviews
-#   scripts/cron-pr-conflict-rebase.sh  (Job 2) — rebase-recreate conflicting PRs
+#   scripts/cron-coderabbit-address.sh — address new CodeRabbit reviews
+#   scripts/cron-pr-admin-bypass-land.sh — babysit admin-bypass Mergify land queue
+#   scripts/cron-pr-conflict-rebase.sh — rebase-recreate conflicting PRs
 #
 # Source this AFTER `set -euo pipefail`:
 #   source "$(dirname "$0")/cron-pr-lib.sh"
@@ -15,9 +16,9 @@
 #              ledger_marker_seen, ledger_max_marker, gh_json,
 #              resolve_workflow_for_pr, prune_stale_pr_workdirs
 #
-# Both jobs run their mutating operation SYNCHRONOUSLY while holding a single
-# shared lock, so only one PR cron operation runs at a time (the other exits
-# this tick and retries in 5 min). The lock prefers flock (Linux owner host)
+# Each job runs its mutating operation SYNCHRONOUSLY while holding a single
+# shared lock, so only one PR cron operation runs at a time (other jobs exit
+# this tick and retry in 5 min). The lock prefers flock (Linux owner host)
 # and falls back to an atomic mkdir lock where flock is absent (e.g. macOS).
 
 # headless-lib.sh: REPO_ROOT, RUNNER, IPC_HELPER, headless_query, ... It keys
@@ -99,8 +100,9 @@ cron_lock() {
 
 # ---------------------------------------------------------------------------
 # Durable attempt ledger (append-only TSV: kind \t key \t marker \t epoch).
-# One file per job; both under ~/.invoker. Markers are opaque strings:
-#   Job 1 records a comment's ISO-8601 updated_at; Job 2 records a generation.
+# One file per job; all under ~/.invoker. Markers are opaque strings:
+#   CodeRabbit records a comment's ISO-8601 updated_at.
+#   Conflict rebase records a workflow generation.
 # ---------------------------------------------------------------------------
 
 LEDGER=""
@@ -182,8 +184,8 @@ resolve_workflow_for_pr() {
 
 # ---------------------------------------------------------------------------
 # Local disk guardrail: prune stale PR checkout workdirs.
-# This is only used by Job 1 (cron-coderabbit-address) today, but lives here so
-# both jobs share the same policy when/if Job 2 needs checkouts later.
+# This is only used by cron-coderabbit-address today, but lives here so PR cron
+# jobs share the same policy when/if another entrypoint needs checkouts later.
 # ---------------------------------------------------------------------------
 
 PR_CRON_WORKDIR_STAMP_NAME=".invoker-pr-cron-last-used"
