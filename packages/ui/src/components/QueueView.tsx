@@ -120,7 +120,12 @@ export function QueueView({
         <div className="shrink-0 border-b border-border px-4 py-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <section data-testid="running-queue-section-running" className="rounded-md border border-border bg-card/60 p-3">
-              <div className="text-sm font-medium text-foreground">Running ({queueRunning.length})</div>
+              <div className="text-sm font-medium text-foreground">
+                In flight ({queueRunning.length})
+              </div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">
+                Concurrency slots (executing + launching)
+              </div>
               <div className="mt-2 space-y-1 text-xs text-muted-foreground">
                 {queueRunning.length > 0 ? (
                   queueRunning.map((entry) => (

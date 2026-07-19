@@ -39,7 +39,10 @@ export function WorkflowStatusChips({
   }
 
   const hasFilters = activeFilters.size > 0;
-  const queueRunning = queueStatus?.runningCount ?? 0;
+  const queueSlots = queueStatus?.runningCount ?? 0;
+  const queueExecuting = queueStatus?.activeExecutionCount ?? queueSlots;
+  const queueLaunching = queueStatus?.launchingCount
+    ?? Math.max(0, queueSlots - queueExecuting);
   const queueMax = queueStatus?.maxConcurrency ?? 0;
   const queueQueued = queueStatus?.queued.length ?? 0;
 
@@ -53,8 +56,26 @@ export function WorkflowStatusChips({
             onClick={() => onOpenRunningSurface?.()}
             className="px-2 py-0.5 text-xs rounded-full cursor-pointer select-none text-blue-300 hover:brightness-125"
           >
-            Executing ({queueRunning}/{queueMax})
+            Executing ({queueExecuting}/{queueMax})
           </button>
+          <button
+            type="button"
+            data-testid="queue-chip-slots"
+            onClick={() => onOpenRunningSurface?.()}
+            className="px-2 py-0.5 text-xs rounded-full cursor-pointer select-none text-sky-200/90 hover:brightness-125"
+          >
+            Slots ({queueSlots}/{queueMax})
+          </button>
+          {queueLaunching > 0 && (
+            <button
+              type="button"
+              data-testid="queue-chip-launching"
+              onClick={() => onOpenRunningSurface?.()}
+              className="px-2 py-0.5 text-xs rounded-full cursor-pointer select-none text-cyan-300/90 hover:brightness-125"
+            >
+              Launching ({queueLaunching})
+            </button>
+          )}
           <button
             type="button"
             data-testid="queue-chip-queued"
@@ -81,7 +102,7 @@ export function WorkflowStatusChips({
               keyboardActiveKey === status ? 'ring-2 ring-ring/90 ring-offset-1 ring-offset-background' : '',
             ].join(' ')}
           >
-            {status.replaceAll('_', ' ')} ({count})
+            {status === 'running' ? 'workflows running' : status.replaceAll('_', ' ')} ({count})
           </button>
         );
       })}
