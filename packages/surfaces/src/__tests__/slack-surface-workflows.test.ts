@@ -186,6 +186,19 @@ describe('parseThreadRequest', () => {
     expect(parseThreadRequest('plan: fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
     expect(parseThreadRequest('draft an Invoker plan: fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
   });
+
+  it('treats a sole fenced plan: block as plan mode', () => {
+    const fenced = '```text\nplan: Prove and fix the adverse UI test issues\n```';
+    expect(parseThreadRequest(fenced)).toEqual({
+      mode: 'plan',
+      text: 'Prove and fix the adverse UI test issues',
+    });
+  });
+
+  it('does not treat a fence nested after prose as a plan opt-in', () => {
+    const mixed = 'please help\n\n```text\nplan: do not treat this as plan mode\n```';
+    expect(parseThreadRequest(mixed)).toEqual({ mode: 'agent', text: mixed });
+  });
 });
 
 // ── Built-in harness presets ─────────────────────────────────
