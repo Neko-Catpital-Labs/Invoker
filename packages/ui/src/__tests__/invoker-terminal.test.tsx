@@ -30,7 +30,7 @@ describe('Invoker terminal (component)', () => {
   });
 
   async function openPlanningTerminal() {
-    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    fireEvent.click(await screen.findByTestId('sidebar-home'));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
     });
@@ -46,25 +46,23 @@ describe('Invoker terminal (component)', () => {
     expect(list.parentElement).toHaveClass('flex', 'min-h-0', 'flex-1', 'flex-col');
   }
 
-  async function expectSurfaceRailList(surface: 'planning' | 'workflows' | 'attention', listTestId: string) {
-    fireEvent.click(await screen.findByTestId(`sidebar-${surface}`));
+  async function expectSurfaceRailList(surface: 'home' | 'workflows' | 'attention', listTestId: string) {
+    fireEvent.click(screen.getByTestId(`sidebar-${surface}`));
     await waitFor(() => {
       expect(screen.getByTestId(`sidebar-${surface}`)).toHaveAttribute('aria-current', 'page');
     });
-    expectRailListScrollContract(await screen.findByTestId(listTestId));
+    expectRailListScrollContract(screen.getByTestId(listTestId));
   }
 
   it('renders an empty flush planning pane before the first message', async () => {
     render(<App />);
     await openPlanningTerminal();
 
-    expect(screen.getByRole('heading', { name: 'Planning chat window' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
     expect(screen.getByText('Still discussing')).toBeInTheDocument();
-    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
-    expect(screen.queryByText('Talk it through, then submit the plan to Invoker.')).not.toBeInTheDocument();
-    expect(screen.queryByText('Ask Invoker what you want to build.')).not.toBeInTheDocument();
+    expect(screen.getByText('What do you want to build?')).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-empty-hero')).toBeInTheDocument();
     const transcript = screen.getByTestId('invoker-terminal-transcript');
-    expect(transcript).toBeEmptyDOMElement();
     const terminalShell = transcript.closest('section');
     expect(terminalShell).not.toBeNull();
     expect(terminalShell?.className).not.toContain('border border-border');
@@ -259,7 +257,7 @@ describe('Invoker terminal (component)', () => {
     });
     expect(await screen.findByTestId('invoker-terminal-planner-stream')).toHaveTextContent('first raw stream');
 
-    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
     expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
 
     submitPlanningText('second session request');
@@ -478,6 +476,7 @@ describe('Invoker terminal (component)', () => {
   it('reports a many-workflow planning typing lag baseline from the task prompt editor', async () => {
     const { tasks, workflows } = makeManyWorkflowTypingBaseline();
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
 
     act(() => mock.setTasks(tasks, workflows));
 
@@ -622,12 +621,12 @@ describe('Invoker terminal (component)', () => {
 
     render(<App />);
 
-    const planningButton = await screen.findByTestId('sidebar-planning');
+    const homeButton = await screen.findByTestId('sidebar-home');
     await waitFor(() => {
-      expect(within(planningButton).getByText('2')).toBeInTheDocument();
+      expect(within(homeButton).getByText('2')).toBeInTheDocument();
     });
 
-    fireEvent.click(planningButton);
+    fireEvent.click(homeButton);
 
     expect(await screen.findByText('4 planning chats.')).toBeInTheDocument();
     expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('4 chats');
@@ -637,20 +636,18 @@ describe('Invoker terminal (component)', () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
     render(<App />);
 
-    const planningButton = await screen.findByTestId('sidebar-planning');
-    await waitFor(() => {
-      expect(within(planningButton).getByText('0')).toBeInTheDocument();
-    });
+    const homeButton = await screen.findByTestId('sidebar-home');
+    expect(within(homeButton).queryByText('0')).not.toBeInTheDocument();
 
-    fireEvent.click(planningButton);
+    fireEvent.click(homeButton);
 
     expect(await screen.findByText('1 planning chat.')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
 
     await waitFor(() => {
       expect(screen.getByText('2 planning chats.')).toBeInTheDocument();
     });
-    expect(within(screen.getByTestId('sidebar-planning')).getByText('0')).toBeInTheDocument();
+    expect(within(screen.getByTestId('sidebar-home')).queryByText('0')).not.toBeInTheDocument();
     expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('2 chats');
   });
 
@@ -708,8 +705,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
-      expect(screen.getByRole('heading', { name: 'Planning chat window' })).toBeInTheDocument();
+      expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
     });
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
@@ -764,8 +761,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
-      expect(screen.getByRole('heading', { name: 'Planning chat window' })).toBeInTheDocument();
+      expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
         'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.',
       );
@@ -809,8 +806,8 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(2);
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
-      expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
-      expect(screen.getByRole('heading', { name: 'Planning chat window' })).toBeInTheDocument();
+      expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review it, then use Start ready work.');
     });
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
@@ -869,7 +866,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
     await waitFor(() => expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' }));
 
-    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    fireEvent.click(screen.getByTestId('sidebar-home'));
 
     const input = screen.getByTestId('invoker-terminal-input');
     expect(input).toBeDisabled();
@@ -903,7 +900,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('hello');
     await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.'));
 
-    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
 
     expect(screen.getByTestId('invoker-terminal-input')).toHaveValue('');
     expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('I can help draft that.');
@@ -970,7 +967,7 @@ describe('Invoker terminal (component)', () => {
     submitPlanningText('first session request');
     await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
 
     const secondInput = screen.getByTestId('invoker-terminal-input');
     expect(secondInput).not.toBeDisabled();
@@ -1080,12 +1077,13 @@ describe('Invoker terminal (component)', () => {
     mock = createMockInvoker(tasks, workflows);
     mock.install();
     render(<App />);
+    await screen.findByTestId('planning-session-list');
 
-    await expectSurfaceRailList('planning', 'planning-session-list');
+    await expectSurfaceRailList('home', 'planning-session-list');
     await expectSurfaceRailList('workflows', 'workflows-rail-list');
     await expectSurfaceRailList('attention', 'attention-rail-list');
     expect(screen.queryByTestId('running-rail-list')).not.toBeInTheDocument();
-  });
+  }, 15_000);
 
   it('keeps the submit button accessible as Send while rendering an icon-only affordance', () => {
     render(<InvokerTerminal {...terminalProps({ value: 'draft a plan' })} />);

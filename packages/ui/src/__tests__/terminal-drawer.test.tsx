@@ -160,6 +160,7 @@ describe('Terminal drawer (component)', () => {
 
   it('starts minimized: header is shown but no terminal body', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await waitFor(() => {
       // From minimized, the single button's next action is "Partial".
       expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
@@ -175,6 +176,7 @@ describe('Terminal drawer (component)', () => {
     vi.mocked(mock.api.terminalList).mockResolvedValue([restored]);
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
 
     await waitFor(() => {
       expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
@@ -262,6 +264,7 @@ describe('Terminal drawer (component)', () => {
 
   it('opens the drawer in the partial state (not maximized) when opening a terminal via double-click', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
 
@@ -281,6 +284,7 @@ describe('Terminal drawer (component)', () => {
 
   it('cycles minimized → partial → maximized → minimized via the single button', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha], workflows));
     await selectWorkflow();
 
@@ -328,6 +332,7 @@ describe('Terminal drawer (component)', () => {
 
   it('focuses an existing running tab when double-clicking the same task again', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
 
@@ -366,6 +371,7 @@ describe('Terminal drawer (component)', () => {
 
   it('renders distinct tabs for different tasks side by side', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
 
@@ -384,6 +390,7 @@ describe('Terminal drawer (component)', () => {
 
   it('keeps the minimize control reachable when many tabs are open', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
 
@@ -408,6 +415,7 @@ describe('Terminal drawer (component)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha], workflows));
     await selectWorkflow();
 
@@ -421,6 +429,7 @@ describe('Terminal drawer (component)', () => {
 
   it('opens the drawer when the context-menu Open Terminal action is used', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha], workflows));
     await selectWorkflow();
 
@@ -438,6 +447,7 @@ describe('Terminal drawer (component)', () => {
 
   it('keeps the context-menu Open Terminal action routed through open-terminal IPC', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha], workflows));
     await selectWorkflow();
 
@@ -469,6 +479,7 @@ describe('Terminal drawer (component)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha], workflows));
     await selectWorkflow();
 
@@ -736,6 +747,7 @@ describe('Terminal drawer (component)', () => {
     }));
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha, taskBeta], workflows));
     await selectWorkflow();
 

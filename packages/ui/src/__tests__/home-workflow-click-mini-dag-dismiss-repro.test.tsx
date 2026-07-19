@@ -6,6 +6,7 @@
  * so workflow-graph-surface's dismiss handler clears the selection in the same
  * turn. Unit tests that only fireEvent.click(node) never hit that path.
  */
+
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import { vi } from 'vitest';
@@ -20,7 +21,6 @@ vi.mock('@xyflow/react', async () => {
 const { App } = await import('../App.js');
 
 const workflows: WorkflowMeta[] = [{ id: 'wf-a', name: 'Workflow A', status: 'running' }];
-
 const alpha = makeUITask({
   id: 'task-alpha',
   description: 'First test task',
@@ -28,7 +28,6 @@ const alpha = makeUITask({
   workflowId: 'wf-a',
   command: 'echo hello-alpha',
 });
-
 const beta = makeUITask({
   id: 'task-beta',
   description: 'Second test task',
@@ -38,7 +37,7 @@ const beta = makeUITask({
   command: 'echo hello-beta',
 });
 
-describe('Home workflow graph mini DAG click dismissal repro', () => {
+describe('Home workflow click mini-DAG dismiss race', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
@@ -50,44 +49,58 @@ describe('Home workflow graph mini DAG click dismissal repro', () => {
     mock.cleanup();
   });
 
-  async function selectWorkflowA() {
+  it('keeps the mini-DAG when select is followed by a retargeted surface click in the same turn', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    const node = screen.getByTestId('workflow-node-wf-a');
+    const captureRoot = screen.getByTestId('workflow-graph-react-flow');
 
-    await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
+    act(() => {
+      fireEvent.click(node);
+      // Same-turn click retargeted to the pointer-capture root (not inside the node).
+      fireEvent.click(captureRoot);
     });
-  }
-
-  it('keeps the selected mini DAG after a blank graph surface click', async () => {
-    await selectWorkflowA();
-
-    fireEvent.click(screen.getByTestId('workflow-graph-surface'));
 
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
+    });
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
+  });
+
+  it('restores the mini-DAG after leave-Home reselect when selection was dismissed', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    act(() => mock.setTasks([alpha, beta], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
+    });
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
     });
   });
 
-  it('keeps the selected mini DAG after a retargeted React Flow pane click', async () => {
-    await selectWorkflowA();
-
-    fireEvent.click(screen.getByTestId('workflow-graph-react-flow'), {
-      clientX: 24,
-      clientY: 24,
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
-    });
-  });
 });

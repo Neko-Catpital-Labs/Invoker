@@ -33,13 +33,14 @@ describe('Visual proof snapshots', () => {
 
   it('empty-state', () => {
     render(<App />);
-    expect(screen.getByText('What to expect')).toBeInTheDocument();
-    expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
+    expect(screen.getByText('What do you want to build?')).toBeInTheDocument();
+    expect(screen.getByTestId('planning-session-rail')).toBeInTheDocument();
     expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Plan graph');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
-    expect(screen.getByText('Describe the change in the terminal to generate a plan.')).toBeInTheDocument();
+    expect(screen.getByText('Describe a change, investigate a bug, or ask Invoker to draft a full plan. Review the graph before starting work.')).toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
@@ -63,6 +64,7 @@ describe('Visual proof snapshots', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -110,6 +112,7 @@ describe('Visual proof snapshots', () => {
     const detached = makeUITask({ id: 'task-detached', description: 'Detached downstream task', status: 'running', workflowId: 'wf-detached' });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([upstream, active, detached], workflows));
 
     await waitFor(() => {
@@ -141,6 +144,7 @@ describe('Visual proof snapshots', () => {
     const alpha = makeUITask({ id: 'task-alpha', description: 'First test task', status: 'running', workflowId: 'wf-alpha' });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha], workflows));
 
     await waitFor(() => {
