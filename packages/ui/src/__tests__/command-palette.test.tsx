@@ -111,9 +111,13 @@ function Harness({
         workerStatus={null}
         selectedSurface="home"
         collapsed={false}
+        runningEntries={runningEntries}
+        selectedTaskId={null}
         onSelectSurface={() => {}}
+        onSelectTask={() => {}}
         onToggleCollapsed={() => {}}
         planningSessionCount={0}
+        planningAttentionCount={0}
         onOpenSettings={() => {}}
         theme="dark"
         onToggleTheme={() => {}}

@@ -1,7 +1,9 @@
 import type { JSX } from 'react';
 import type { WorkerStatusSnapshot } from '../types.js';
-import type { SidebarSurface } from '../lib/workflow-progress-surfaces.js';
+import type { SidebarSurface, WorkflowTaskEntry } from '../lib/workflow-progress-surfaces.js';
+import { formatTaskStatus } from '../lib/workflow-progress-surfaces.js';
 import { countActiveWorkerActions } from '../lib/worker-display.js';
+import { BrowserTaskRow } from './BrowserListRows.js';
 import {
   AttentionIcon,
   ChevronLeftIcon,
@@ -22,7 +24,10 @@ interface LeftStatusColumnProps {
   workerStatus: WorkerStatusSnapshot | null;
   selectedSurface: SidebarSurface;
   collapsed: boolean;
+  runningEntries: WorkflowTaskEntry[];
+  selectedTaskId: string | null;
   onSelectSurface: (surface: SidebarSurface) => void;
+  onSelectTask: (taskId: string) => void;
   onToggleCollapsed: () => void;
   planningSessionCount: number;
   planningAttentionCount: number;
@@ -68,7 +73,10 @@ export function LeftStatusColumn({
   workerStatus,
   selectedSurface,
   collapsed,
+  runningEntries,
+  selectedTaskId,
   onSelectSurface,
+  onSelectTask,
   onToggleCollapsed,
   planningSessionCount,
   planningAttentionCount,
@@ -79,6 +87,7 @@ export function LeftStatusColumn({
   const runningWorkers = workerStatus?.workers.filter((worker) => worker.lifecycle === 'running').length ?? 0;
   const registeredWorkers = workerStatus?.workers.length ?? 0;
   const activeWorkerActions = workerStatus ? countActiveWorkerActions(workerStatus.workers) : 0;
+  const runningCount = runningEntries.length;
 
   const sources: SourceItem[] = [
     { key: 'attention', label: 'Needs Attention', count: attentionCount, tone: 'attention', icon: <AttentionIcon className={ICON_CLASS} /> },
@@ -205,24 +214,60 @@ export function LeftStatusColumn({
       <span data-testid="sidebar-running" hidden aria-hidden="true">Running</span>
 
       {!collapsed && (
-        <div className="mt-6 flex-1 overflow-y-auto scrollbar-sleek px-2.5 text-xs text-muted-foreground">
-          {selectedSurface === 'workflows' && (
-            workflowCount === 0
-              ? 'No workflows yet'
-              : `${workflowCount} workflow${workflowCount === 1 ? '' : 's'} ready to browse.`
-          )}
-          {selectedSurface === 'attention' && (
-            attentionCount === 0
-              ? 'Nothing needs a decision right now.'
-              : `${attentionCount} item${attentionCount === 1 ? ' needs' : 's need'} attention.`
-          )}
-          {selectedSurface === 'workers' && (
-            workerStatus === null
-              ? 'Worker status is not available yet.'
-              : `${runningWorkers} process${runningWorkers === 1 ? '' : 'es'} running · ${activeWorkerActions} active action${activeWorkerActions === 1 ? '' : 's'}`
-          )}
-          {selectedSurface === 'home' && 'Plan graph details live here.'}
-          {selectedSurface === 'planning' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
+        <div className="mt-5 flex min-h-0 flex-1 flex-col overflow-hidden px-2.5">
+          <section data-testid="sidebar-running-section" className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="flex items-center justify-between gap-2">
+              <div className="truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/70">
+                Running actions
+              </div>
+              <span className={`shrink-0 rounded-full px-1.5 py-0 text-[10px] leading-4 ${countClass(runningCount > 0 ? 'running' : 'neutral')}`}>
+                {runningCount}
+              </span>
+            </div>
+            {runningCount === 0 ? (
+              <div data-testid="sidebar-running-empty" className="mt-2 truncate text-xs text-muted-foreground">
+                No running actions
+              </div>
+            ) : (
+              <div data-testid="sidebar-running-list" className="mt-2 min-h-0 flex-1 overflow-y-auto pr-1 scrollbar-sleek">
+                <div className="space-y-1">
+                  {runningEntries.map((entry) => (
+                    <BrowserTaskRow
+                      key={entry.task.id}
+                      taskId={entry.task.id}
+                      title={entry.task.description || entry.task.id}
+                      workflowName={entry.workflow?.name}
+                      statusLabel={formatTaskStatus(entry.task.status)}
+                      tone="running"
+                      selected={selectedTaskId === entry.task.id}
+                      onSelect={onSelectTask}
+                      testId={`sidebar-running-action-${entry.task.id}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          <div className="mt-4 border-t border-sidebar-border pt-3 text-xs text-muted-foreground">
+            {selectedSurface === 'workflows' && (
+              workflowCount === 0
+                ? 'No workflows yet'
+                : `${workflowCount} workflow${workflowCount === 1 ? '' : 's'} ready to browse.`
+            )}
+            {selectedSurface === 'attention' && (
+              attentionCount === 0
+                ? 'Nothing needs a decision right now.'
+                : `${attentionCount} item${attentionCount === 1 ? ' needs' : 's need'} attention.`
+            )}
+            {selectedSurface === 'workers' && (
+              workerStatus === null
+                ? 'Worker status is not available yet.'
+                : `${runningWorkers} process${runningWorkers === 1 ? '' : 'es'} running · ${activeWorkerActions} active action${activeWorkerActions === 1 ? '' : 's'}`
+            )}
+            {selectedSurface === 'home' && 'Plan graph details live here.'}
+            {selectedSurface === 'planning' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
+          </div>
         </div>
       )}
 
