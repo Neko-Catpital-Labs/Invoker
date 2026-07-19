@@ -32,6 +32,23 @@ describe('normalizeSlowQuerySql', () => {
       normalizeSlowQuerySql('SELECT * FROM attempts WHERE workflow_id IN (1, 2, 3)'),
     );
   });
+
+  it('preserves delimited identifiers instead of normalizing their contents', () => {
+    expect(
+      normalizeSlowQuerySql('SELECT "tenant:alpha" FROM attempts'),
+    ).toBe('SELECT "tenant:alpha" FROM attempts');
+    expect(
+      normalizeSlowQuerySql('SELECT * FROM attempts WHERE "tenant:alpha" = 1'),
+    ).not.toBe(
+      normalizeSlowQuerySql('SELECT * FROM attempts WHERE "tenant:beta" = 1'),
+    );
+    expect(
+      normalizeSlowQuerySql('SELECT `tenant:alpha` FROM attempts'),
+    ).toBe('SELECT `tenant:alpha` FROM attempts');
+    expect(
+      normalizeSlowQuerySql('SELECT [tenant:alpha] FROM attempts'),
+    ).toBe('SELECT [tenant:alpha] FROM attempts');
+  });
 });
 
 describe('SlowQueryAggregator', () => {
@@ -96,5 +113,31 @@ describe('SlowQueryAggregator', () => {
     expect(aggregator.totalCount).toBe(0);
     expect(aggregator.shapeCount).toBe(0);
     expect(aggregator.topN()).toEqual([]);
+  });
+
+  it('bounds per-shape memory instead of retaining every duration sample forever', () => {
+    const aggregator = new SlowQueryAggregator({ now: () => 1_000 });
+
+    for (let i = 0; i < 5_000; i += 1) {
+      aggregator.record({ durationMs: i, sql: 'SELECT * FROM attempts WHERE node_id = ?' });
+    }
+
+    expect(aggregator.totalCount).toBe(5_000);
+    const [stats] = aggregator.topN(1);
+    expect(stats?.maxMs).toBe(4_999);
+    expect(stats?.count).toBe(5_000);
+    expect(stats?.p50Ms).toBeGreaterThanOrEqual(0);
+    expect(stats?.p50Ms).toBeLessThanOrEqual(4_999);
+  });
+
+  it('bounds distinct tracked shapes instead of growing the shape map forever', () => {
+    const aggregator = new SlowQueryAggregator({ now: () => 1_000 });
+
+    for (let i = 0; i < 5_000; i += 1) {
+      aggregator.record({ durationMs: 1, sql: `SELECT * FROM t${i} WHERE id = 'literal-${i}'` });
+    }
+
+    expect(aggregator.totalCount).toBe(5_000);
+    expect(aggregator.shapeCount).toBeLessThanOrEqual(200);
   });
 });

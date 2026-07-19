@@ -18,11 +18,32 @@ export interface SlowQueryShapeStats {
 interface MutableShapeStats {
   shape: string;
   count: number;
+  /** Bounded reservoir sample of durations, used only to estimate percentiles. */
   durationsMs: number[];
   maxMs: number;
   maxRows?: number;
   firstSeenAtMs: number;
   lastSeenAtMs: number;
+}
+
+/** Caps per-shape duration samples so memory stays bounded for a long-lived process. */
+const MAX_DURATION_SAMPLES_PER_SHAPE = 500;
+/** Caps distinct tracked shapes; least-severe shape is evicted to make room for a new one. */
+const MAX_TRACKED_SHAPES = 200;
+
+/**
+ * Reservoir sampling (Algorithm R): keeps a fixed-size, statistically
+ * representative sample of an unbounded stream without retaining every value.
+ */
+function addReservoirSample(samples: number[], value: number, seenCount: number): void {
+  if (samples.length < MAX_DURATION_SAMPLES_PER_SHAPE) {
+    samples.push(value);
+    return;
+  }
+  const replaceIndex = Math.floor(Math.random() * seenCount);
+  if (replaceIndex < MAX_DURATION_SAMPLES_PER_SHAPE) {
+    samples[replaceIndex] = value;
+  }
 }
 
 const PARAMETER_PREFIXES = new Set([':', '@', '$']);
@@ -93,6 +114,36 @@ function skipSqlStringLiteral(sql: string, quoteIndex: number): number {
   return sql.length;
 }
 
+/**
+ * Skips a quoted identifier (e.g. "col", `col`) so its contents are copied
+ * verbatim instead of being mistaken for parameter/literal syntax. The quote
+ * character escapes itself by doubling, matching SQL identifier-quoting rules.
+ */
+function skipDelimitedIdentifier(sql: string, quoteIndex: number, quoteChar: string): number {
+  let index = quoteIndex + 1;
+  while (index < sql.length) {
+    if (sql[index] === quoteChar) {
+      if (sql[index + 1] === quoteChar) {
+        index += 2;
+        continue;
+      }
+      return index + 1;
+    }
+    index += 1;
+  }
+  return sql.length;
+}
+
+/** Skips a bracket-delimited identifier (e.g. [col]), MSSQL/Access style. */
+function skipBracketDelimitedIdentifier(sql: string, bracketIndex: number): number {
+  let index = bracketIndex + 1;
+  while (index < sql.length) {
+    if (sql[index] === ']') return index + 1;
+    index += 1;
+  }
+  return sql.length;
+}
+
 function skipNumberLiteral(sql: string, startIndex: number): number {
   let index = startIndex;
   if (sql[index] === '0' && (sql[index + 1] === 'x' || sql[index + 1] === 'X')) {
@@ -142,6 +193,20 @@ export function normalizeSlowQuerySql(sql: string): string {
     if (ch === "'") {
       normalized.push('?');
       index = skipSqlStringLiteral(sql, index);
+      continue;
+    }
+
+    if (ch === '"' || ch === '`') {
+      const end = skipDelimitedIdentifier(sql, index, ch);
+      normalized.push(sql.slice(index, end));
+      index = end;
+      continue;
+    }
+
+    if (ch === '[') {
+      const end = skipBracketDelimitedIdentifier(sql, index);
+      normalized.push(sql.slice(index, end));
+      index = end;
       continue;
     }
 
@@ -229,6 +294,7 @@ export class SlowQueryAggregator {
     this.recordedCount += 1;
 
     if (!existing) {
+      this.evictLeastSevereShapeIfAtCapacity();
       this.shapes.set(shape, {
         shape,
         count: 1,
@@ -242,7 +308,7 @@ export class SlowQueryAggregator {
     }
 
     existing.count += 1;
-    existing.durationsMs.push(info.durationMs);
+    addReservoirSample(existing.durationsMs, info.durationMs, existing.count);
     existing.maxMs = Math.max(existing.maxMs, info.durationMs);
     if (info.rowCount !== undefined) {
       existing.maxRows = existing.maxRows === undefined
@@ -250,6 +316,20 @@ export class SlowQueryAggregator {
         : Math.max(existing.maxRows, info.rowCount);
     }
     existing.lastSeenAtMs = observedAtMs;
+  }
+
+  /** Bounds distinct shapes tracked by dropping the currently least-severe one. */
+  private evictLeastSevereShapeIfAtCapacity(): void {
+    if (this.shapes.size < MAX_TRACKED_SHAPES) return;
+    let leastSevereKey: string | undefined;
+    let leastSevereMaxMs = Infinity;
+    for (const [key, stats] of this.shapes) {
+      if (stats.maxMs < leastSevereMaxMs) {
+        leastSevereMaxMs = stats.maxMs;
+        leastSevereKey = key;
+      }
+    }
+    if (leastSevereKey !== undefined) this.shapes.delete(leastSevereKey);
   }
 
   topN(n = 10): SlowQueryShapeStats[] {

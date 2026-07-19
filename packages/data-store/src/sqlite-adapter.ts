@@ -190,7 +190,6 @@ export type EphemeralSQLiteAdapterOptions = Pick<
 
 const DEFAULT_SLOW_QUERY_SUMMARY_TOP_N = 10;
 const DEFAULT_SLOW_QUERY_SUMMARY_INTERVAL_MS = 30_000;
-const DEFAULT_SLOW_QUERY_SUMMARY_RECORD_COUNT = 1_000;
 const SLOW_QUERY_SUMMARY_SQL_PREVIEW_LENGTH = 240;
 
 function formatSlowQuerySummaryLine(index: number, stats: SlowQueryShapeStats): string {
@@ -220,23 +219,17 @@ function formatSlowQuerySummary(
 function createDefaultSlowQuerySink(thresholdMs: number): (info: SlowQueryInfo) => void {
   const aggregator = new SlowQueryAggregator();
   let lastSummaryAtMs = 0;
-  let recordsSinceLastSummary = 0;
 
   return (info) => {
     aggregator.record(info);
-    recordsSinceLastSummary += 1;
 
     const now = Date.now();
-    const shouldSummarizeByTime =
+    const shouldSummarize =
       lastSummaryAtMs === 0 || now - lastSummaryAtMs >= DEFAULT_SLOW_QUERY_SUMMARY_INTERVAL_MS;
-    const shouldSummarizeByCount =
-      recordsSinceLastSummary >= DEFAULT_SLOW_QUERY_SUMMARY_RECORD_COUNT;
-
-    if (!shouldSummarizeByTime && !shouldSummarizeByCount) return;
+    if (!shouldSummarize) return;
 
     console.warn(formatSlowQuerySummary(thresholdMs, aggregator));
     lastSummaryAtMs = now;
-    recordsSinceLastSummary = 0;
   };
 }
 
