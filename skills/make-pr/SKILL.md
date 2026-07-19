@@ -3,13 +3,14 @@ name: make-pr
 description: >
   Create or update a pull request in this repo using the preferred PR schema,
   upstream-first branch workflow, and repo-specific publication rules. Trigger
-  when asked to make a PR, update a PR body, prepare PR text, or publish a
-  stacked PR branch.
+  when asked to make a PR, update a PR body, prepare PR text, publish a
+  stacked PR branch, or whenever a branch/PR change means the GitHub PR
+  metadata may now be stale.
 ---
 
 # make-pr
 
-Use this skill when the work is already done and the user wants a PR created, updated, rewritten, split, or republished.
+Use this skill when the work is already done and the user wants a PR created, updated, rewritten, split, or republished, and also whenever a branch, stack, or PR change could leave GitHub title/body/proof text out of date.
 
 Read this skill and `skills/visual-proof/SKILL.md` from the PR's target base branch (for example `git show origin/master:skills/make-pr/SKILL.md`) before authoring proof or PR bodies. Working branches and merge clones can carry stale policy copies, and the validators enforce the base branch's rules.
 
@@ -29,6 +30,7 @@ Order slices so a reviewer reads the evidence before the change it justifies (se
 - PR title/body authoring for Invoker
 - The preferred PR section schema
 - Upstream-first branch/PR workflow (explicit base and publish remotes)
+- Mandatory refresh after branch/PR changes that can stale GitHub metadata
 - Repo-specific publication rules:
   - Invoker-on-Invoker stacks may use `mergify stack push`
   - unrelated target repos should keep their own normal PR workflow unless they independently use Mergify Stacks
@@ -177,6 +179,8 @@ node scripts/validate-pr-body.mjs --body-file /tmp/my-pr.md
 node scripts/create-pr.mjs --title "<title>" --base master --body-file /tmp/my-pr.md
 ```
 
+After any branch update, rebase, force-push, or stacked-branch reshuffle, refresh the PR title and body so they still match the live diff. Re-check `## Summary`, test commands, revert guidance, and any visual proof section; old copy is stale the moment the branch meaning changes.
+
 Update an existing PR with:
 
 ```bash
@@ -255,6 +259,8 @@ Manual `gh pr edit` is the escape hatch when `create-pr --update-existing` canno
 
 
 ## Validation
+- ensure the PR title still matches the current slice after any branch update or force-push
+- ensure the `## Summary` section still describes the current diff, not the earlier version
 - ensure the branch is pushed
 - ensure the body sections are present and concrete
 - ensure test commands are real commands that were actually run when possible

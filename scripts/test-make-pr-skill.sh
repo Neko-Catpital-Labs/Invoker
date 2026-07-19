@@ -138,4 +138,14 @@ must_contain "$REVIEW_COMPRESSION_MD" "Dependency-cluster exception:" "review-co
 must_contain "$REVIEW_COMPRESSION_MD" "multiple distinct extractions from one file (one top-level symbol move per slice)" "review-compression must split multiple extractions one symbol per slice"
 # The new grain must NOT split the identical mechanical migration grouping.
 must_contain "$REVIEW_COMPRESSION_MD" "exact same mechanical migration across" "review-compression must keep grouping the same mechanical migration across files"
+
+# Stale GitHub PR metadata after a branch update is a common landing failure.
+# The skill must both trigger on it and tell the author what to re-check.
+must_contain "$SKILL_MD" "whenever a branch/PR change means the GitHub PR" "make-pr skill must trigger when a branch change could stale GitHub PR metadata"
+must_contain "$SKILL_MD" "could leave GitHub title/body/proof text out of date" "make-pr skill must apply to any branch/stack/PR change that can stale title/body/proof text"
+must_contain "$SKILL_MD" "Mandatory refresh after branch/PR changes that can stale GitHub metadata" "make-pr skill must list the metadata-refresh requirement in what it covers"
+must_contain "$SKILL_MD" "After any branch update, rebase, force-push, or stacked-branch reshuffle, refresh the PR title and body" "make-pr skill must require refreshing PR title/body after any branch update, rebase, or force-push"
+must_contain "$SKILL_MD" "ensure the PR title still matches the current slice after any branch update or force-push" "make-pr skill validation checklist must include the PR-title staleness check"
+must_contain "$SKILL_MD" 'ensure the `## Summary` section still describes the current diff, not the earlier version' "make-pr skill validation checklist must include the Summary staleness check"
+
 echo "OK: make-pr skill contract checks passed"
