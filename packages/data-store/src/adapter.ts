@@ -67,6 +67,62 @@ export interface ActivityLogEntry {
   message: string;
 }
 
+export type WorkerActionStatus =
+  | 'queued'
+  | 'pending'
+  | 'running'
+  | 'needs_input'
+  | 'review_ready'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'abandoned'
+  | 'cancelled';
+
+export interface WorkerActionRecord {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary: string;
+  payload?: unknown;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface WorkerActionWrite {
+  id: string;
+  workerKind: string;
+  actionType: string;
+  workflowId?: string;
+  taskId?: string;
+  subjectType: string;
+  subjectId: string;
+  externalKey: string;
+  status: WorkerActionStatus;
+  attemptCount?: number;
+  intentId?: string;
+  agentName?: string;
+  executionModel?: string;
+  sessionId?: string;
+  summary: string;
+  payload?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+  completedAt?: string;
+}
+
 export interface WorkflowTaskSnapshot {
   workflows: Workflow[];
   tasks: TaskState[];
@@ -134,6 +190,10 @@ export interface PersistenceAdapter {
   // Agent queries
   /** Read the configured execution agent name for a task (e.g. 'claude', 'codex'). */
   getExecutionAgent?(taskId: string): string | null;
+
+  // Worker action ledger
+  getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
+  upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
 
   // Lifecycle
   close(): void;
