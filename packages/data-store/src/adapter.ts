@@ -332,6 +332,7 @@ export interface PersistenceAdapter {
 
   // Conversation messages
   appendMessage(threadTs: string, role: 'user' | 'assistant', content: string): void;
+  countMessages(threadTs: string): number;
   loadMessages(threadTs: string): ConversationMessage[];
 
   // Workflow channels (Slack workflow↔channel mapping)
