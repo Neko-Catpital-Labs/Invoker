@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, execSync } from 'node:child_process';
@@ -242,7 +242,30 @@ describe('buildWorktreeListScript', () => {
     expect(script).toContain('H="xyz789"');
     expect(script).toContain('INVOKER_HOME=$(echo');
     expect(script).toContain('CLONE="$INVOKER_HOME/repos/$H"');
+    expect(script).toContain('rev-parse --git-dir');
     expect(script).toContain('git -C "$CLONE" worktree list --porcelain');
+  });
+
+  it('returns an empty list when the remote mirror clone is missing', () => {
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-list-missing-home-'));
+    const script = buildWorktreeListScript({
+      repoHash: 'missing123',
+      invokerHome: '~/.invoker',
+    });
+
+    try {
+      const output = execFileSync('bash', ['-lc', script], {
+        env: {
+          ...process.env,
+          HOME: fakeHome,
+        },
+        encoding: 'utf8',
+      });
+
+      expect(output).toBe('');
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
 });
 

@@ -234,6 +234,9 @@ elif [[ "\${INVOKER_HOME:0:2}" == '~/' ]]; then
   INVOKER_HOME="$HOME/\${INVOKER_HOME:2}"
 fi
 CLONE="$INVOKER_HOME/repos/$H"
+if [ ! -d "$CLONE" ] || ! git -C "$CLONE" rev-parse --git-dir >/dev/null 2>&1; then
+  exit 0
+fi
 git -C "$CLONE" worktree list --porcelain
 `;
 }
