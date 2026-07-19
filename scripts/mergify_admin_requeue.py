@@ -23,6 +23,7 @@ subprocess = exec_impl.subprocess
 _repair_conflict = exec_impl.repair_conflict
 _repair_check = exec_impl.repair_check
 _resolve_workflow = exec_impl.resolve_workflow
+_admin_bypass_nudge_body = exec_impl.admin_bypass_nudge_body
 
 
 def _execute_action(action: Action, repo: str, gh, ledger: Ledger, pr_by_number: Mapping[int, PrSnapshot], now: int) -> None:
@@ -30,9 +31,10 @@ def _execute_action(action: Action, repo: str, gh, ledger: Ledger, pr_by_number:
     if action.kind == "requeue":
         gh.comment(repo, action.pr_number, "@mergifyio queue")
         ledger.record("requeue", action.pr_number, pr.head_ref_oid, action.key, now)
-    elif action.kind == "add_admin_bypass_label":
-        gh.edit_label(repo, action.pr_number, add="admin-bypass")
-        ledger.record("add_admin_bypass_label", action.pr_number, pr.head_ref_oid, "admin-bypass", now)
+    elif action.kind == "nudge_admin_bypass_label":
+        if ledger.count("nudge_admin_bypass_label", action.pr_number, pr.head_ref_oid, action.key) == 0:
+            gh.comment(repo, action.pr_number, _admin_bypass_nudge_body())
+            ledger.record("nudge_admin_bypass_label", action.pr_number, pr.head_ref_oid, action.key, now)
     elif action.kind == "remove_merge_hold":
         gh.edit_label(repo, action.pr_number, remove="merge-hold")
         ledger.record("remove-merge-hold", action.pr_number, pr.head_ref_oid, "merge-hold", now)
