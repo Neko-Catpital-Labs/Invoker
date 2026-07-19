@@ -51,7 +51,9 @@ vi.mock('../components/WorkflowGraph.js', async () => {
 
 const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
 const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const setViewportMock = (ReactFlowModule as unknown as { __setViewportMock: Mock }).__setViewportMock;
 const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
+const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock }).__getViewportMock;
 
 // App must be imported AFTER vi.mock registers so it binds the mocked react-flow.
 const { App } = await import('../App.js');
@@ -117,8 +119,11 @@ describe('Browser-surface camera (component)', () => {
     mock.install();
     fitViewMock.mockClear();
     setCenterMock.mockClear();
+    setViewportMock.mockClear();
     getZoomMock.mockReset();
     getZoomMock.mockReturnValue(1);
+    getViewportMock.mockReset();
+    getViewportMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
     workflowGraphSpy.reset();
   });
 
@@ -165,30 +170,65 @@ describe('Browser-surface camera (component)', () => {
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
   });
-  it('clicking the left-nav home icon returns to the workflow graph and issues the Home fit command', async () => {
-    mock.setTasks(tasks, workflows);
+  it('clicking the left-nav home icon returns to the workflow graph without refitting the saved viewport', async () => {
+    const savedViewport = { x: -360, y: 140, zoom: 1.45 };
+    getViewportMock.mockReturnValue(savedViewport);
+    mock.setTasks([], workflows);
     render(<App />);
 
-    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
-    await screen.findByTestId('selected-workflow-mini-dag');
+    await screen.findByTestId('workflow-node-wf-a');
     await settleCamera();
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    await screen.findByTestId('browser-rail');
     fitViewMock.mockClear();
     setCenterMock.mockClear();
+    setViewportMock.mockClear();
     workflowGraphSpy.reset();
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
 
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
-    await waitFor(() => {
-      const matchingCommands = workflowGraphSpy.commands.filter((command): command is GraphCameraCommand => (
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+
+    const matchingCommands = workflowGraphSpy.commands.filter((command): command is GraphCameraCommand => (
         command?.kind === 'fitInitial'
         && command.scope === 'workflow'
         && command.reason === 'sidebar-home'
-      ));
-      expect(matchingCommands.length).toBeGreaterThan(0);
-    });
+    ));
+    expect(matchingCommands).toHaveLength(0);
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
+  it('returning from the Planning Terminal restores the previous workflow graph viewport', async () => {
+    const savedViewport = { x: -220, y: 96, zoom: 1.3 };
+    getViewportMock.mockReturnValue(savedViewport);
+    mock.setTasks([], workflows);
+    render(<App />);
+
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    await screen.findByTestId('planning-session-rail');
+    workflowGraphSpy.reset();
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
     await flushFrames(4);
 
-    expect(fitViewMock).toHaveBeenCalled();
+    const fitCommands = workflowGraphSpy.commands.filter((command): command is GraphCameraCommand => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+    ));
+    expect(fitCommands).toHaveLength(0);
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
   });
 });

@@ -71,6 +71,7 @@ import {
   type GraphCameraCommandInput,
   type GraphCameraCommandIssuer,
   type GraphScope,
+  type GraphViewport,
 } from './lib/graph-camera.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
@@ -904,6 +905,8 @@ export function App() {
   // Temporary, non-persisted suppression of the camera lock after a manual pan
   // or wheel zoom. The next explicit node selection clears it.
   const cameraSuppressedRef = useRef(false);
+  const workflowGraphViewportRef = useRef<GraphViewport | null>(null);
+  const pendingWorkflowGraphFitRef = useRef<{ reason: string; afterRefreshSequence: number } | null>(null);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1582,6 +1585,10 @@ export function App() {
   // autofocus the graph — no camera command is issued here.
   const handleManualViewport = useCallback(() => {
     cameraSuppressedRef.current = true;
+  }, []);
+
+  const handleWorkflowGraphViewportSnapshot = useCallback((viewport: GraphViewport) => {
+    workflowGraphViewportRef.current = viewport;
   }, []);
 
   const armSuppressDagSurfaceDismiss = useCallback(() => {
@@ -2507,6 +2514,45 @@ export function App() {
     if (result) setStartReadyPreview(null);
   }, [handleStartReadyAction, startReadyPreviewMode]);
 
+  const navigatePlanGraph = useCallback(() => {
+    // Surface/window switches are not camera intent. Drop stale commands so a
+    // remounted graph restores its saved viewport without replaying old fits or
+    // selection centers.
+    setCameraCommand(null);
+    setSidebarSurface('home');
+    setInspectorManualOpen(false);
+    setViewMode('dag');
+  }, []);
+
+  const navigatePlanGraphAndFit = useCallback((reason: string) => {
+    workflowGraphViewportRef.current = null;
+    cameraSuppressedRef.current = false;
+    setSidebarSurface('home');
+    setInspectorManualOpen(false);
+    setViewMode('dag');
+    issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
+  }, [issueCameraCommand]);
+
+  const schedulePlanGraphFitAfterSnapshot = useCallback((reason: string) => {
+    workflowGraphViewportRef.current = null;
+    cameraSuppressedRef.current = false;
+    pendingWorkflowGraphFitRef.current = {
+      reason,
+      afterRefreshSequence: graphRefreshSequence,
+    };
+    setCameraCommand(null);
+  }, [graphRefreshSequence]);
+
+  useEffect(() => {
+    const pending = pendingWorkflowGraphFitRef.current;
+    if (!pending) return;
+    if (sidebarSurface !== 'home' || viewMode !== 'dag') return;
+    if (graphRefreshSequence <= pending.afterRefreshSequence) return;
+    if (workflows.size === 0) return;
+    pendingWorkflowGraphFitRef.current = null;
+    navigatePlanGraphAndFit(pending.reason);
+  }, [graphRefreshSequence, navigatePlanGraphAndFit, sidebarSurface, viewMode, workflows.size]);
+
   const handlePlanningSubmitDraft = useCallback(async () => {
     if (activePlanningReadOnly) {
       return;
@@ -2527,9 +2573,9 @@ export function App() {
       if (result.ok) {
         setPlanningSubmitError(null);
         setHasLoadedPlan(true);
-        setSidebarSurface('home');
+        schedulePlanGraphFitAfterSnapshot('planning-submit');
+        navigatePlanGraph();
         setWorkflowSelectionDismissed(false);
-        setViewMode('dag');
         setGraphActionsMenuOpen(false);
         setPlanName(result.planName);
         setSelectedWorkflowId(result.workflowId);
@@ -2562,7 +2608,16 @@ export function App() {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [activePlanningReadOnly, appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [
+    activePlanningReadOnly,
+    appendTerminalLine,
+    invoker,
+    navigatePlanGraph,
+    planningSessionId,
+    refreshTaskGraph,
+    schedulePlanGraphFitAfterSnapshot,
+    updatePlanningSessionById,
+  ]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
@@ -2856,6 +2911,9 @@ export function App() {
       setSidebarCollapsed(false);
       setViewMode('dag');
       setGraphActionsMenuOpen(false);
+      workflowGraphViewportRef.current = null;
+      pendingWorkflowGraphFitRef.current = null;
+      setCameraCommand(null);
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
@@ -2964,14 +3022,6 @@ export function App() {
     setInspectorCollapsed((prev) => !prev);
   }, [autoCollapseInspector]);
 
-  const navigateHomeAndFitWorkflowGraph = useCallback((reason: string) => {
-    cameraSuppressedRef.current = false;
-    setSidebarSurface('home');
-    setInspectorManualOpen(false);
-    setViewMode('dag');
-    issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
-  }, [issueCameraCommand]);
-
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
     reportUiNavigation(window.invoker?.reportUiPerf, {
@@ -2989,14 +3039,14 @@ export function App() {
       return;
     }
     if (nextSurface === 'home') {
-      navigateHomeAndFitWorkflowGraph('sidebar-home');
+      navigatePlanGraph();
       return;
     }
     setViewMode('dag');
     setSidebarSurface(nextSurface);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, [navigateHomeAndFitWorkflowGraph, sidebarSurface, viewMode]);
+  }, [navigatePlanGraph, sidebarSurface, viewMode]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
@@ -3007,8 +3057,8 @@ export function App() {
       viewMode,
       dismiss: true,
     });
-    navigateHomeAndFitWorkflowGraph('browser-return-home');
-  }, [navigateHomeAndFitWorkflowGraph, sidebarSurface, viewMode]);
+    navigatePlanGraph();
+  }, [navigatePlanGraph, sidebarSurface, viewMode]);
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(
@@ -3528,6 +3578,8 @@ export function App() {
               onSelectWorkflow={handleWorkflowClick}
               onWorkflowContextMenu={handleWorkflowContextMenu}
               onManualViewport={handleManualViewport}
+              initialViewport={workflowGraphViewportRef.current}
+              onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
             />
           )}
           {renderSelectedWorkflowTaskGraph(sidebarSurface === 'home')}
@@ -4271,6 +4323,8 @@ export function App() {
                 onSelectWorkflow={handleWorkflowClick}
                 onWorkflowContextMenu={handleWorkflowContextMenu}
                 onManualViewport={handleManualViewport}
+                initialViewport={workflowGraphViewportRef.current}
+                onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
               />
             )}
           </div>

@@ -21,6 +21,13 @@
 /** Which graph a camera command applies to. */
 export type GraphScope = 'workflow' | 'task';
 
+/** React Flow viewport owned by a graph surface. */
+export interface GraphViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
 /**
  * How aggressively the camera follows selection.
  *  - `toggle`: re-centre whenever the selection changes (lock stays on).
