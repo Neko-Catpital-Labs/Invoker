@@ -41,6 +41,10 @@ export interface PlanConversationConfig {
   repoUrl?: string;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
+  /** Test-only response override used by deterministic app E2E gates. */
+  testOverrideResponse?: string;
+  /** Optional delay before resolving the test override response. */
+  testOverrideDelayMs?: number;
 }
 
 // ── Confirmation Detection ──────────────────────────────────
@@ -170,6 +174,8 @@ export class PlanConversation {
   private repoUrl?: string;
   private log: LogFn;
   private _initialized = false;
+  private testOverrideResponse?: string;
+  private testOverrideDelayMs: number;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -183,6 +189,8 @@ export class PlanConversation {
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
+    this.testOverrideResponse = config.testOverrideResponse;
+    this.testOverrideDelayMs = Math.max(0, config.testOverrideDelayMs ?? 0);
   }
 
   /**
@@ -333,6 +341,16 @@ export class PlanConversation {
 
   spawnCursor(prompt: string): Promise<string> {
     const spawnStart = Date.now();
+    if (this.testOverrideResponse !== undefined) {
+      this.log('plan-conversation', 'info', `[PERF] cursor_test_override: promptLen=${prompt.length}, delayMs=${this.testOverrideDelayMs}`);
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          this.log('plan-conversation', 'info', `[PERF] cursor_test_override_exit: elapsed=${Date.now() - spawnStart}ms`);
+          resolve(this.testOverrideResponse ?? '');
+        }, this.testOverrideDelayMs);
+      });
+    }
+
     return new Promise((resolve, reject) => {
       const args = ['--print'];
       if (this.model) args.push('--model', this.model);

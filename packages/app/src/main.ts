@@ -228,6 +228,9 @@ let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
 const appProcessStartedAt = Date.now();
+let planningConversationRepo: ConversationRepository | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const planningConversations = new Map<string, any>();
 
 interface GuiMutationPayload {
   channel: string;
@@ -460,6 +463,67 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
 function loadSurfaces(): any {
   const req = createRequire(__filename);
   return req('@invoker/surfaces');
+}
+
+function logPlanningConversation(source: string, level: string, message: string): void {
+  const module = source || 'plan-conversation';
+  if (level === 'error') {
+    logger.error(message, { module });
+  } else if (level === 'warn') {
+    logger.warn(message, { module });
+  } else {
+    logger.info(message, { module });
+  }
+}
+
+function getPlanningConversationRepo(): ConversationRepository {
+  if (!planningConversationRepo) {
+    planningConversationRepo = new ConversationRepository(persistence, {
+      info: (msg) => logger.info(msg, { module: 'conversation-repo' }),
+      warn: (msg) => logger.warn(msg, { module: 'conversation-repo' }),
+      error: (msg) => logger.error(msg, { module: 'conversation-repo' }),
+    });
+  }
+  return planningConversationRepo;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getPlanningConversation(threadTs: string): any {
+  const existing = planningConversations.get(threadTs);
+  if (existing) return existing;
+
+  const surfaces = loadSurfaces();
+  const testOverrideResponse = process.env.NODE_ENV === 'test'
+    ? process.env.INVOKER_TEST_PLANNING_CHAT_RESPONSE
+    : undefined;
+  const testOverrideDelayMs = Number(process.env.INVOKER_TEST_PLANNING_CHAT_RESPONSE_DELAY_MS ?? 0);
+  const timeoutMs = invokerConfig.planningTimeoutSeconds
+    ? invokerConfig.planningTimeoutSeconds * 1000
+    : undefined;
+  const conversation = new surfaces.PlanConversation({
+    threadTs,
+    conversationRepo: getPlanningConversationRepo(),
+    cursorCommand: process.env.CURSOR_COMMAND ?? 'agent',
+    model: process.env.CURSOR_MODEL,
+    workingDir: repoRoot,
+    timeoutMs,
+    defaultBranch: invokerConfig.defaultBranch,
+    repoUrl: process.env.INVOKER_REPO_URL,
+    log: logPlanningConversation,
+    testOverrideResponse,
+    testOverrideDelayMs: Number.isFinite(testOverrideDelayMs) ? testOverrideDelayMs : 0,
+  });
+  planningConversations.set(threadTs, conversation);
+  return conversation;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function planningChatSnapshot(threadTs: string, conversation: any) {
+  return {
+    threadTs,
+    messageCount: Array.isArray(conversation.history) ? conversation.history.length : 0,
+    planSubmitted: Boolean(conversation.planSubmitted),
+  };
 }
 
 // ── Shared Slack Bot Wiring ──────────────────────────────────
@@ -2784,6 +2848,37 @@ if (isHeadless) {
 
     if (process.env.NODE_ENV === 'test') {
       ipcMain.handle(
+        'invoker:planning-chat-seed-transcript',
+        async (_event, threadTsArg: string, messageCountArg: number, contentBytesArg?: number) => {
+          const threadTs = String(threadTsArg);
+          const messageCount = Math.max(0, Math.min(10_000, Math.floor(Number(messageCountArg) || 0)));
+          const contentBytes = Math.max(1, Math.min(8192, Math.floor(Number(contentBytesArg) || 512)));
+          const now = new Date().toISOString();
+          persistence.deleteConversation(threadTs);
+          persistence.saveConversation({
+            threadTs,
+            channelId: 'e2e',
+            userId: 'e2e',
+            extractedPlan: null,
+            planSubmitted: false,
+            createdAt: now,
+            updatedAt: now,
+          });
+          for (let index = 0; index < messageCount; index += 1) {
+            const role = index % 2 === 0 ? 'user' : 'assistant';
+            const prefix = `${role}-${index}:`;
+            const content = `${prefix}${'x'.repeat(Math.max(0, contentBytes - prefix.length))}`;
+            persistence.appendMessage(threadTs, role, JSON.stringify(content));
+          }
+          planningConversations.delete(threadTs);
+          logger.info(
+            `planning-chat-seed-transcript: thread="${threadTs}" messages=${messageCount} contentBytes=${contentBytes}`,
+            { module: 'ipc-test' },
+          );
+          return { threadTs, messageCount };
+        },
+      );
+      ipcMain.handle(
         'invoker:inject-task-states',
         async (_event, updates: Array<{ taskId: string; changes: TaskStateChanges }>) => {
           for (const { taskId, changes } of updates) {
@@ -2898,6 +2993,33 @@ if (isHeadless) {
     });
 
     ipcMain.handle('invoker:list-workflows', () => persistence.listWorkflows());
+    ipcMain.handle('invoker:planning-chat-open', async (_event, threadTsArg?: string) => {
+      const threadTs = typeof threadTsArg === 'string' && threadTsArg.length > 0
+        ? threadTsArg
+        : `planning-chat-${Date.now()}`;
+      const conversation = getPlanningConversation(threadTs);
+      await conversation.init();
+      logger.info(`planning-chat-open: thread="${threadTs}" messages=${conversation.history.length}`, { module: 'ipc' });
+      return planningChatSnapshot(threadTs, conversation);
+    });
+    ipcMain.handle('invoker:planning-chat-send', async (_event, threadTsArg: string, messageArg: string) => {
+      const threadTs = String(threadTsArg);
+      const message = String(messageArg);
+      if (!threadTs) throw new Error('planning-chat-send requires a threadTs');
+      if (!message) throw new Error('planning-chat-send requires a non-empty message');
+
+      const conversation = getPlanningConversation(threadTs);
+      const startedAt = Date.now();
+      logger.info(`planning-chat-send begin: thread="${threadTs}" messageBytes=${Buffer.byteLength(message, 'utf8')}`, { module: 'ipc' });
+      const reply = await conversation.sendMessage(message);
+      const elapsedMs = Date.now() - startedAt;
+      logger.info(`planning-chat-send end: thread="${threadTs}" elapsedMs=${elapsedMs} messages=${conversation.history.length}`, { module: 'ipc' });
+      return {
+        ...planningChatSnapshot(threadTs, conversation),
+        reply,
+        submittedPlanText: conversation.submittedPlanText,
+      };
+    });
     ipcMain.handle('invoker:get-execution-pools', () => Object.keys(loadConfig().executionPools ?? {}));
 
     registerGuiMutationHandler('invoker:delete-all-workflows', async () => {
