@@ -84,7 +84,7 @@ describe('SlackSessionRepository', () => {
     expect(repo.getPendingConfirmation('confirm-1', createdAt)).toBeNull();
   });
 
-  it('ignores expired confirmations upon retrieval and purges them manually', () => {
+  it('ignores expired confirmations until they are manually purged', () => {
     const createdAt = new Date('2026-07-19T12:00:00.000Z');
     repo.createPendingConfirmation({
       confirmKey: 'expired-confirmation',
