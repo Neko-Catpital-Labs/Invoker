@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createElement } from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { applyNodeChanges, type Node, type NodeChange } from '@xyflow/react';
 import * as ReactFlowModule from '@xyflow/react';
 import { TaskDAG } from '../components/TaskDAG.js';
@@ -509,5 +509,48 @@ describe('TaskDAG camera ownership', () => {
     // A manual move must never autofocus the graph.
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it.fails('does not let pre-recovery watchdog misses refit after a manual pan and graph data change', async () => {
+    const onManualViewport = vi.fn();
+
+    const { rerender } = await renderDagAndSettleInitialFit({
+      tasks: tasksMap('task-a'),
+      selectedTaskId: 'task-a',
+      onManualViewport,
+    });
+
+    const pane = screen.getByTestId('rf__pane');
+    fireEvent.pointerDown(pane);
+    fireEvent.pointerUp(pane);
+    expect(onManualViewport).toHaveBeenCalled();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    vi.useFakeTimers();
+    rerender(
+      createElement(TaskDAG, {
+        tasks: tasksMap('task-a', 'task-b'),
+        selectedTaskId: 'task-a',
+        onManualViewport,
+      }),
+    );
+
+    expect(screen.getByTestId('rf__node-task-b')).toBeInTheDocument();
+    for (const element of document.querySelectorAll<HTMLElement>('.react-flow__node')) {
+      element.style.visibility = 'hidden';
+    }
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(fitViewMock).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
   });
 });
