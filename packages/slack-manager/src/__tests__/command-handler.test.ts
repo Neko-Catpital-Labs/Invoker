@@ -97,9 +97,11 @@ describe('createCommandHandler', () => {
     });
   });
 
-  it('posts an error event when Invoker stays down', async () => {
+  it('rethrows a SlackCommandError when Invoker stays down so the surface can reply in-thread', async () => {
     const client = makeClient({ withRecovery: vi.fn(async () => { throw new InvokerDownError('down'); }) as InvokerClient['withRecovery'] });
-    await createCommandHandler({ client, slack, plansDir, log: noop })({ type: 'approve', taskId: 't1' });
-    expect(slack.handleEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }));
+    await expect(
+      createCommandHandler({ client, slack, plansDir, log: noop })({ type: 'approve', taskId: 't1' }),
+    ).rejects.toThrow(/Invoker is down/);
+    expect(slack.handleEvent).not.toHaveBeenCalled();
   });
 });
