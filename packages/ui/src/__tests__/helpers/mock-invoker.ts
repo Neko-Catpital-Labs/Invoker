@@ -201,6 +201,12 @@ export function createMockInvoker(
     replaceTask: vi.fn(async () => []),
     getActivityLogs: vi.fn(async () => []),
     getEvents: vi.fn(async () => []),
+    getActionGraph: vi.fn(async () => ({
+      generatedAt: '2026-07-07T00:00:00.000Z',
+      stallThresholdMs: 60_000,
+      nodes: [],
+      edges: [],
+    })),
     openTerminal: vi.fn(async () => ({ opened: true })),
     resumeWorkflow: vi.fn(async () => null),
     listWorkflows: vi.fn(async () => []),
