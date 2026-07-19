@@ -56,6 +56,13 @@ export interface GraphCameraCommand {
   sequence: number;
 }
 
+/** React Flow viewport coordinates captured for restoring a graph remount. */
+export interface GraphCameraViewport {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
 /** Valid {@link CameraMode} values. */
 const CAMERA_MODES: ReadonlySet<CameraMode> = new Set<CameraMode>(['toggle', 'once']);
 

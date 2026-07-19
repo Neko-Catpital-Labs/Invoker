@@ -294,10 +294,9 @@ export interface GitWorktreeSandboxResetOpts {
  *                                   files (e.g. node_modules/, build caches).
  *
  * Why -fd and not -fdx:
- *   Invoker no longer hydrates repos on checkout, so the task payload owns any
- *   repo bootstrap such as `pnpm install` or `flutter pub get`. Keeping
- *   gitignored caches alive with -fd makes repeated task-level hydration faster
- *   without changing tracked files.
+ *   Managed SSH may hydrate package caches such as node_modules/ before task
+ *   execution. Keeping gitignored caches alive with -fd makes repeated
+ *   task-level hydration faster without changing tracked files.
  */
 export function buildWorktreeSandboxResetScript(opts: GitWorktreeSandboxResetOpts): string {
   const wtB64 = base64Encode(opts.worktreePath);
