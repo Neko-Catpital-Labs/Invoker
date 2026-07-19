@@ -266,6 +266,7 @@ export const REQUIRED_BOT_SCOPES = [
   'app_mentions:read',
   'chat:write',
   'channels:history',
+  'channels:read',
   'groups:write',
   'groups:history',
   'users:read',
@@ -367,9 +368,25 @@ export async function validateSlackCredentials(
   if (creds.channelId && creds.botToken) {
     const res = await fetchImpl(`https://slack.com/api/conversations.info?channel=${encodeURIComponent(creds.channelId)}`, { headers: { Authorization: `Bearer ${creds.botToken}` } });
     const body = await res.json();
-    checks.push(body.ok
-      ? { id: 'slack-channel', name: 'Lobby channel', status: 'ok', detail: `#${body.channel?.name ?? creds.channelId}` }
-      : { id: 'slack-channel', name: 'Lobby channel', status: body.error === 'channel_not_found' ? 'error' : 'warn', detail: `conversations.info: ${body.error}`, remediation: 'Invite the bot to the lobby channel and use its channel ID (starts with C)' });
+    if (body.ok) {
+      checks.push({ id: 'slack-channel', name: 'Lobby channel', status: 'ok', detail: `#${body.channel?.name ?? creds.channelId}` });
+    } else if (body.error === 'missing_scope') {
+      checks.push({
+        id: 'slack-channel',
+        name: 'Lobby channel',
+        status: 'error',
+        detail: `conversations.info: missing_scope (needed ${body.needed ?? 'channels:read'})`,
+        remediation: 'Add channels:read in OAuth & Permissions, then Reinstall to Workspace so the bot token picks up the scope',
+      });
+    } else {
+      checks.push({
+        id: 'slack-channel',
+        name: 'Lobby channel',
+        status: body.error === 'channel_not_found' ? 'error' : 'warn',
+        detail: `conversations.info: ${body.error}`,
+        remediation: 'Invite the bot to the lobby channel and use its channel ID (starts with C)',
+      });
+    }
   } else if (!creds.channelId) {
     checks.push({ id: 'slack-channel', name: 'Lobby channel', status: 'error', detail: 'SLACK_CHANNEL_ID is not set', remediation: 'Use the lobby channel ID (starts with C) where you @mention Invoker' });
   }
