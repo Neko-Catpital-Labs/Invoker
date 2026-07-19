@@ -5,7 +5,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsup",
-    "test": "vitest run",
+    "test": "node ../../scripts/vitest-run.cjs",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
