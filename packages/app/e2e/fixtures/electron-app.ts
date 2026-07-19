@@ -298,6 +298,8 @@ export async function loadPlan(page: Page, plan: { tasks: readonly { id: string 
     plan.tasks.length,
     { timeout: 10000 },
   );
+  await page.getByTestId('sidebar-planning').click();
+  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 10000 });
   await page.getByRole('button', { name: 'Refresh' }).click();
   await selectWorkflowNode(page, workflowId ?? undefined);
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });

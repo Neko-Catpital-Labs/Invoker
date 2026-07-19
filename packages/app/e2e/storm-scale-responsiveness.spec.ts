@@ -233,7 +233,7 @@ for (const scale of SCALES) {
       }
     })();
 
-    await page.getByTestId('sidebar-home').click();
+    await page.getByTestId('sidebar-planning').click();
     const workflowNode = page
       .locator('[data-testid^="workflow-node-"]:visible:not([data-testid="workflow-node-wf-hitch-fat"])')
       .first();
@@ -260,10 +260,19 @@ for (const scale of SCALES) {
       page,
       async () => { await page.getByTestId('sidebar-home').dispatchEvent('click', { bubbles: true }); },
       async () => {
-        await expect(page.getByTestId('workflow-graph-surface')).toBeVisible({ timeout: scale.ackBudgetMs + 1500 });
+        await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: scale.ackBudgetMs + 1500 });
       },
     );
     expect(ack, `sidebar-home ack ${ack}ms at ${scale.name}`).toBeLessThanOrEqual(scale.ackBudgetMs);
+
+    ack = await measureAck(
+      page,
+      async () => { await page.getByTestId('sidebar-planning').dispatchEvent('click', { bubbles: true }); },
+      async () => {
+        await expect(page.getByTestId('workflow-graph-surface')).toBeVisible({ timeout: scale.ackBudgetMs + 1500 });
+      },
+    );
+    expect(ack, `sidebar-planning ack ${ack}ms at ${scale.name}`).toBeLessThanOrEqual(scale.ackBudgetMs);
 
     await settleWithTimeout(storm, 90_000, `storm ${scale.name}`);
     sampling = false;
@@ -282,7 +291,7 @@ for (const scale of SCALES) {
       },
     );
     expect(postStormAck, `post-storm sidebar-workers ack ${postStormAck}ms at ${scale.name}`).toBeLessThanOrEqual(scale.ackBudgetMs + 200);
-    await page.getByTestId('sidebar-home').dispatchEvent('click', { bubbles: true });
+    await page.getByTestId('sidebar-planning').dispatchEvent('click', { bubbles: true });
     await expect(page.getByTestId('workflow-graph-surface')).toBeVisible({ timeout: 30_000 });
     const finalQueue = await sampleQueueStatus(page);
     expect(finalQueue.activeExecutionCount).toBeLessThanOrEqual(finalQueue.runningCount);

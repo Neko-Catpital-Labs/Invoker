@@ -90,7 +90,7 @@ async function closeApp(app: ElectronApplication): Promise<void> {
 }
 
 async function openPlanningTerminal(page: Page): Promise<void> {
-  await page.getByTestId('sidebar-planning').click();
+  await page.getByTestId('sidebar-home').click();
   await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: 10000 });
 }
 
@@ -216,7 +216,7 @@ base.describe('Planning Terminal restart persistence', () => {
       await delay(1500);
 
       ({ app, page } = await launchApp({ dbDir: testDir, userDataDir, ipcSocketPath, configPath }));
-      await page.getByTestId('sidebar-planning').click();
+      await page.getByTestId('sidebar-home').click();
 
       await expect(page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' })).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toBeVisible({ timeout: 10000 });
