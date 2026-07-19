@@ -1,0 +1,338 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import * as childProcess from 'node:child_process';
+import { ConversationRepository, SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
+import { SlackSurface } from '../slack/slack-surface.js';
+import type { SurfaceCommand } from '../surface.js';
+import { SessionIdentifier } from '../slack/thread-session-manager.js';
+
+interface MockHandler {
+  pattern: string | RegExp;
+  handler: Function;
+}
+
+const sharedSlack = vi.hoisted(() => ({
+  client: {
+    auth: { test: vi.fn().mockResolvedValue({ user_id: 'UBOT' }) },
+    chat: {
+      postMessage: vi.fn().mockResolvedValue({ ts: 'posted' }),
+      update: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue({}),
+    },
+    reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
+  },
+}));
+
+vi.mock('@slack/bolt', () => {
+  class MockApp {
+    _eventHandlers: MockHandler[] = [];
+    _actionHandlers: MockHandler[] = [];
+    command = vi.fn();
+    event = vi.fn((pattern: string, handler: Function) => this._eventHandlers.push({ pattern, handler }));
+    action = vi.fn((pattern: string | RegExp, handler: Function) => this._actionHandlers.push({ pattern, handler }));
+    start = vi.fn().mockResolvedValue(undefined);
+    stop = vi.fn().mockResolvedValue(undefined);
+    client = sharedSlack.client;
+  }
+  return { App: MockApp };
+});
+
+vi.mock('node:child_process', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:child_process')>()),
+  spawn: vi.fn(),
+}));
+
+const mockSpawn = vi.mocked(childProcess.spawn);
+const silentLog = () => {};
+const plan = `\`\`\`yaml
+name: "Proof plan"
+tasks:
+  - id: proof
+    description: "Exercise the submission flow"
+    command: "pnpm test"
+    dependencies: []
+\`\`\``;
+
+function processWith(stdout: string): any {
+  const process = new EventEmitter() as any;
+  process.stdout = new EventEmitter();
+  process.stderr = new EventEmitter();
+  process.kill = vi.fn();
+  queueMicrotask(() => {
+    process.stdout.emit('data', Buffer.from(stdout));
+    process.emit('close', 0);
+  });
+  return process;
+}
+
+function handler(surface: SlackSurface, pattern: string): Function {
+  const found = (surface.getApp() as any)._eventHandlers.find((entry: MockHandler) => entry.pattern === pattern);
+  if (!found) throw new Error(`Missing ${pattern} handler`);
+  return found.handler;
+}
+
+function config(repo: ConversationRepository, extra: Partial<ConstructorParameters<typeof SlackSurface>[0]> = {}) {
+  return {
+    botToken: 'xoxb-proof',
+    appToken: 'xapp-proof',
+    signingSecret: 'proof',
+    channelId: 'C_DEFAULT',
+    lobbyChannelId: 'C_LOBBY',
+    conversationRepo: repo,
+    enableImmediateAck: false,
+    planningHeartbeatIntervalSeconds: 0,
+    log: silentLog,
+    ...extra,
+  };
+}
+
+async function start(surface: SlackSurface, commands: SurfaceCommand[]) {
+  await surface.start(async (command) => { commands.push(command); });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+async function mention(surface: SlackSurface, text: string, ts: string, threadTs?: string) {
+  const say = vi.fn().mockResolvedValue({ ts: `${ts}-reply` });
+  await handler(surface, 'app_mention')({
+    event: { text: `<@UBOT> ${text}`, ts, thread_ts: threadTs, user: 'U_PROOF', channel: 'C_LOBBY' },
+    say,
+  });
+  return say;
+}
+
+async function reply(surface: SlackSurface, text: string, threadTs: string) {
+  const say = vi.fn().mockResolvedValue({ ts: `${threadTs}-reply` });
+  await handler(surface, 'message')({
+    event: { text, ts: `${threadTs}-child`, thread_ts: threadTs, user: 'U_PROOF', channel: 'C_LOBBY' },
+    say,
+  });
+  return say;
+}
+
+describe('Slack plan submission restart repro contracts', () => {
+  let adapter: SQLiteAdapter;
+  let repo: ConversationRepository;
+  let workflowChannels: WorkflowChannelRepository;
+  let surfaces: SlackSurface[];
+
+  beforeEach(async () => {
+    mockSpawn.mockReset();
+    sharedSlack.client.auth.test.mockClear();
+    sharedSlack.client.chat.postMessage.mockClear();
+    sharedSlack.client.chat.update.mockClear();
+    sharedSlack.client.chat.delete.mockClear();
+    adapter = await SQLiteAdapter.create(':memory:');
+    repo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
+    workflowChannels = new WorkflowChannelRepository(adapter);
+    surfaces = [];
+  });
+
+  afterEach(async () => {
+    await Promise.all(surfaces.map((surface) => surface.stop()));
+    adapter.close();
+  });
+
+  function surface(commands: SurfaceCommand[], extra: Partial<ConstructorParameters<typeof SlackSurface>[0]> = {}) {
+    const created = new SlackSurface(config(repo, extra));
+    surfaces.push(created);
+    return created;
+  }
+
+  it.fails('promotes an agent thread when a bare plan: reply requests an Invoker plan', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands);
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith('Agent response'));
+    await mention(slack, 'fix the agent routing', 'thread-agent');
+    mockSpawn.mockImplementationOnce(() => processWith('Still an agent response'));
+    const say = await reply(slack, 'plan: draft a real migration plan', 'thread-agent');
+    const current = (slack as any).sessionManager.findSession(new SessionIdentifier('C_LOBBY', 'thread-agent'));
+    expect(current?.conversationMode).toBe('agent');
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Still an agent response' }));
+    await mention(slack, 'submit', 'submit-agent', 'thread-agent');
+    expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+  });
+
+  it.fails('stages a bare thread submit for confirmation instead of routing it to the planner', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands);
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, 'plan: create a proof', 'thread-submit');
+    mockSpawn.mockImplementationOnce(() => processWith('Planner received the submit message'));
+    const say = await reply(slack, 'submit', 'thread-submit');
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Planner received the submit message' }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Approve to proceed') }));
+  });
+
+  it.fails('restores non-default repo and preset context after a SlackSurface restart', async () => {
+    const commands: SurfaceCommand[] = [];
+    const first = surface(commands, {
+      repoAliases: { proof: 'https://example.test/proof.git' },
+      harnessPresets: { special: { tool: 'special-tool', model: 'special-model' } },
+      defaultHarnessPreset: 'special',
+    });
+    await start(first, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(first, '[special] [repo:proof] plan: preserve context', 'thread-context');
+    expect((first as any).planningContexts.get('thread-context')).toEqual(expect.objectContaining({
+      repoUrl: 'https://example.test/proof.git',
+      presetKey: 'special',
+    }));
+    await first.stop();
+    surfaces = surfaces.filter((candidate) => candidate !== first);
+
+    const second = surface(commands, {
+      repoAliases: { proof: 'https://example.test/proof.git' },
+      harnessPresets: { special: { tool: 'special-tool', model: 'special-model' } },
+      defaultRepoUrl: 'https://example.test/default.git',
+    });
+    await start(second, commands);
+    const say = await mention(second, 'submit', 'submit-context', 'thread-context');
+    expect((second as any).planningContexts.get('thread-context')).toBeUndefined();
+    expect((second as any).sessionManager.findSession(new SessionIdentifier('C_LOBBY', 'thread-context'))?.conversationMode).toBe('plan');
+    await reply(second, 'yes', 'thread-context');
+    expect(commands).toContainEqual(expect.objectContaining({
+      type: 'start_plan',
+      repoUrl: undefined,
+      harnessPreset: undefined,
+    }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Approve to proceed') }));
+    expect(commands).toContainEqual(expect.objectContaining({
+      type: 'start_plan',
+      repoUrl: 'https://example.test/proof.git',
+      harnessPreset: 'special',
+    }));
+  });
+
+  it.fails('restores a staged submit confirmation after a SlackSurface restart', async () => {
+    const commands: SurfaceCommand[] = [];
+    const first = surface(commands);
+    await start(first, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(first, 'plan: stage a submission', 'thread-confirm');
+    await mention(first, 'submit', 'submit-confirm', 'thread-confirm');
+    expect((first as any).pendingConfirms.get('thread-confirm')).toEqual(expect.objectContaining({ kind: 'submit' }));
+    await first.stop();
+    surfaces = surfaces.filter((candidate) => candidate !== first);
+
+    const second = surface(commands);
+    await start(second, commands);
+    expect((second as any).pendingConfirms.get('thread-confirm')).toBeUndefined();
+    mockSpawn.mockImplementationOnce(() => processWith('Planner received the lost confirmation'));
+    const say = await reply(second, 'yes', 'thread-confirm');
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Planner received the lost confirmation' }));
+    expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+  });
+
+  it.fails('recovers an evicted session from a thread reply and submit', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands);
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, 'plan: recover me', 'thread-evicted');
+    const manager = (slack as any).sessionManager;
+    const id = new SessionIdentifier('C_LOBBY', 'thread-evicted');
+    expect(repo.loadConversation('thread-evicted')?.messages).toHaveLength(2);
+    expect(manager.evictSession(id)).toBe(true);
+    expect(manager.findSession(id)).toBeNull();
+    mockSpawn.mockImplementationOnce(() => processWith('Recovered reply'));
+    const replySay = await reply(slack, 'continue', 'thread-evicted');
+    const submitSay = await mention(slack, 'submit', 'submit-evicted', 'thread-evicted');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(replySay).not.toHaveBeenCalled();
+    expect(submitSay).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No Invoker plan draft') }));
+    expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+  });
+
+  it.fails('cleans up a submitted session using its actual channel ID', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands);
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, 'plan: clean up in the lobby', 'thread-cleanup');
+    await mention(slack, 'submit', 'submit-cleanup', 'thread-cleanup');
+    await reply(slack, 'yes', 'thread-cleanup');
+    const manager = (slack as any).sessionManager;
+    const actualId = new SessionIdentifier('C_LOBBY', 'thread-cleanup');
+    expect(manager.findSession(actualId)).not.toBeNull();
+    expect(manager.findSession(new SessionIdentifier('C_DEFAULT', 'thread-cleanup'))).toBeNull();
+    expect(manager.getMetrics().submitted).toBe(0);
+    expect(manager.findSession(actualId)).toBeNull();
+  });
+
+  it.fails('preserves a staged submit after a non-confirmation reply', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands);
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, 'plan: keep my confirmation', 'thread-reply');
+    await mention(slack, 'submit', 'submit-reply', 'thread-reply');
+    expect((slack as any).pendingConfirms.get('thread-reply')).toEqual(expect.objectContaining({ kind: 'submit' }));
+    mockSpawn.mockImplementationOnce(() => processWith('Planner received the non-confirmation'));
+    const nonConfirmationSay = await reply(slack, 'add a note before submitting', 'thread-reply');
+    expect((slack as any).pendingConfirms.get('thread-reply')).toBeUndefined();
+    expect(nonConfirmationSay).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Dropped the pending approval') }));
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    mockSpawn.mockImplementationOnce(() => processWith('Planner received yes after the drop'));
+    const yesSay = await reply(slack, 'yes', 'thread-reply');
+    expect(yesSay).toHaveBeenCalledWith(expect.objectContaining({ text: 'Planner received yes after the drop' }));
+    expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+  });
+
+  it.fails('preserves explicit repo and preset when an agent thread is promoted to plan mode', async () => {
+    // Promotion does not exist on this base, so this contract records the required context precedence.
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands, {
+      repoAliases: { proof: 'https://example.test/proof.git' },
+      harnessPresets: { special: { tool: 'special-tool', model: 'special-model' } },
+      defaultHarnessPreset: 'default',
+      defaultRepoUrl: 'https://example.test/default.git',
+    });
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith('Agent response'));
+    await mention(slack, '[special] [repo:proof] fix this first', 'thread-promotion');
+    mockSpawn.mockImplementationOnce(() => processWith('Still an agent response'));
+    await reply(slack, 'plan: preserve the explicit target context', 'thread-promotion');
+    expect((slack as any).sessionManager.findSession(new SessionIdentifier('C_LOBBY', 'thread-promotion'))?.conversationMode).toBe('agent');
+    expect((slack as any).planningContexts.get('thread-promotion')).toBeUndefined();
+    await mention(slack, 'submit', 'submit-promotion', 'thread-promotion');
+    await reply(slack, 'yes', 'thread-promotion');
+    expect(commands).toContainEqual(expect.objectContaining({
+      type: 'start_plan',
+      repoUrl: 'https://example.test/proof.git',
+      harnessPreset: 'special',
+    }));
+  });
+
+  it('posts a duplicate progress card after SlackSurface restart', async () => {
+    const commands: SurfaceCommand[] = [];
+    workflowChannels.save({
+      workflowId: 'wf-proof',
+      channelId: 'C_PRIVATE_PROOF',
+      createdAt: new Date().toISOString(),
+    });
+    const first = surface(commands, { workflowChannelRepo: workflowChannels });
+    await start(first, commands);
+    const progress = {
+      workflowId: 'wf-proof',
+      name: 'Proof workflow',
+      percentComplete: 50,
+      counts: { total: 2, completed: 1, failed: 0, closed: 0, running: 1, pending: 0 },
+      tasks: [],
+    };
+    await first.handleEvent({ type: 'workflow_progress', progress });
+    expect(sharedSlack.client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C_PRIVATE_PROOF',
+    }));
+    await first.stop();
+    surfaces = surfaces.filter((candidate) => candidate !== first);
+
+    const second = surface(commands, { workflowChannelRepo: workflowChannels });
+    await start(second, commands);
+    await second.handleEvent({ type: 'workflow_progress', progress });
+    expect(sharedSlack.client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(sharedSlack.client.chat.postMessage.mock.calls.every(([message]: any[]) => message.channel === 'C_PRIVATE_PROOF')).toBe(true);
+  });
+});
