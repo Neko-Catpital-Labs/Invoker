@@ -983,7 +983,7 @@ test.describe('Visual proof capture', () => {
     });
   });
 
-  test('terminal planning submits Workers Surface as stacked workflows', async ({ page }) => {
+  test('terminal planning submits Workers Surface as stacked workflows without jumping surfaces', async ({ page }) => {
     const plannedYaml = yamlStringify(WORKERS_SURFACE_STACKED_PLAN);
     await page.evaluate(async ({ planYaml, planName }) => {
       await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the stacked plan.' });
@@ -1000,11 +1000,15 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
     await page.getByRole('button', { name: 'Submit to Invoker' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Workers Surface Contracts/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Workers Surface UI/ })).toBeVisible();
-    await expect(page.getByTestId('workflow-inspector-title')).toContainText(/Workers Surface (Contracts|UI)/);
-    await captureScreenshot(page, 'stacked-workflows');
+    const transcript = page.getByTestId('invoker-terminal-transcript');
+    await expect(transcript).toContainText('Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.');
+    await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { name: 'Planning chat window' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toHaveCount(0);
+    await expect(page.getByTestId('workflow-inspector-title')).toHaveCount(0);
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Submit to Invoker' })).toHaveCount(0);
+    await captureScreenshot(page, 'planning-submit-no-jump-stacked-workflows');
 
     const stack = await page.evaluate(async () => {
       const workflows = await window.invoker.listWorkflows();
