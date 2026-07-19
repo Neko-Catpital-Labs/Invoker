@@ -3,19 +3,21 @@ name: make-pr
 description: >
   Create or update a pull request in this repo using the preferred PR schema,
   upstream-first branch workflow, and repo-specific publication rules. Trigger
-  when asked to make a PR, update a PR body, prepare PR text, or publish a
-  stacked PR branch.
+  when asked to make a PR, update a PR body, prepare PR text, publish a
+  stacked PR branch, or whenever a branch/PR change means the GitHub PR
+  metadata may now be stale.
 ---
 
 # make-pr
 
-Use this skill when the work is already done and the user wants a PR created, updated, or rewritten.
+Use this skill when the work is already done and the user wants a PR created, updated, or rewritten, and also whenever a branch, stack, or PR change could leave GitHub title/body/proof text out of date.
 
 ## What this skill covers
 
 - PR title/body authoring for Invoker
 - The preferred PR section schema
 - Upstream-first branch/PR workflow (explicit base and publish remotes)
+- Mandatory refresh after branch/PR changes that can stale GitHub metadata
 - Repo-specific publication rules:
   - Invoker-on-Invoker stacks may use `mergify stack push`
   - unrelated target repos should keep their own normal PR workflow unless they independently use Mergify Stacks
