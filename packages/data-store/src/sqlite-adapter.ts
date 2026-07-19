@@ -43,6 +43,8 @@ import type {
   ActivityLogEntry,
   Conversation,
   ConversationMessage,
+  WorkerActionRecord,
+  WorkerActionWrite,
 } from './adapter.js';
 
 /**
@@ -575,6 +577,35 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
       CREATE INDEX IF NOT EXISTS idx_workflow_mutation_intents_workflow_status
         ON workflow_mutation_intents(workflow_id, status, priority, id);
+
+      CREATE TABLE IF NOT EXISTS worker_actions (
+        id TEXT PRIMARY KEY,
+        worker_kind TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        workflow_id TEXT,
+        task_id TEXT,
+        subject_type TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        external_key TEXT NOT NULL,
+        status TEXT NOT NULL,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        intent_id TEXT,
+        agent_name TEXT,
+        execution_model TEXT,
+        session_id TEXT,
+        summary TEXT NOT NULL,
+        payload_json TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE(worker_kind, external_key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_worker_actions_kind_status
+        ON worker_actions(worker_kind, status, updated_at);
+
+      CREATE INDEX IF NOT EXISTS idx_worker_actions_workflow_task
+        ON worker_actions(workflow_id, task_id, updated_at);
 
       CREATE TABLE IF NOT EXISTS workflow_mutation_leases (
         workflow_id TEXT PRIMARY KEY,
@@ -2281,6 +2312,101 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return rows.map((row) => this.rowToWorkflowMutationIntent(row));
   }
 
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM worker_actions WHERE worker_kind = ? AND external_key = ?',
+      [workerKind, externalKey],
+    );
+    return row ? this.rowToWorkerAction(row) : undefined;
+  }
+
+  upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord {
+    const existing = this.getWorkerAction(action.workerKind, action.externalKey);
+    const now = new Date().toISOString();
+    const createdAt = existing?.createdAt ?? action.createdAt ?? now;
+    const updatedAt = action.updatedAt ?? now;
+    const attemptCount = action.attemptCount ?? existing?.attemptCount ?? 0;
+    const payloadJson = action.payload === undefined ? null : JSON.stringify(action.payload);
+
+    if (existing) {
+      this.execRun(
+        `UPDATE worker_actions
+            SET id = ?,
+                action_type = ?,
+                workflow_id = ?,
+                task_id = ?,
+                subject_type = ?,
+                subject_id = ?,
+                status = ?,
+                attempt_count = ?,
+                intent_id = ?,
+                agent_name = ?,
+                execution_model = ?,
+                session_id = ?,
+                summary = ?,
+                payload_json = ?,
+                updated_at = ?,
+                completed_at = ?
+          WHERE worker_kind = ? AND external_key = ?`,
+        [
+          action.id,
+          action.actionType,
+          action.workflowId ?? null,
+          action.taskId ?? null,
+          action.subjectType,
+          action.subjectId,
+          action.status,
+          attemptCount,
+          action.intentId ?? null,
+          action.agentName ?? null,
+          action.executionModel ?? null,
+          action.sessionId ?? null,
+          action.summary,
+          payloadJson,
+          updatedAt,
+          action.completedAt ?? null,
+          action.workerKind,
+          action.externalKey,
+        ],
+      );
+    } else {
+      this.execRun(
+        `INSERT INTO worker_actions (
+          id, worker_kind, action_type, workflow_id, task_id, subject_type, subject_id,
+          external_key, status, attempt_count, intent_id, agent_name, execution_model,
+          session_id, summary, payload_json, created_at, updated_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          action.id,
+          action.workerKind,
+          action.actionType,
+          action.workflowId ?? null,
+          action.taskId ?? null,
+          action.subjectType,
+          action.subjectId,
+          action.externalKey,
+          action.status,
+          attemptCount,
+          action.intentId ?? null,
+          action.agentName ?? null,
+          action.executionModel ?? null,
+          action.sessionId ?? null,
+          action.summary,
+          payloadJson,
+          createdAt,
+          updatedAt,
+          action.completedAt ?? null,
+        ],
+      );
+    }
+
+    const saved = this.getWorkerAction(action.workerKind, action.externalKey);
+    if (!saved) {
+      throw new Error(`Failed to persist worker action ${action.workerKind}:${action.externalKey}`);
+    }
+    return saved;
+  }
+
   requeueRunningWorkflowMutationIntents(): number {
     const running = this.queryOne(
       `SELECT COUNT(*) AS count FROM workflow_mutation_intents WHERE status = 'running'`,
@@ -2493,6 +2619,33 @@ export class SQLiteAdapter implements PersistenceAdapter {
       createdAt: String(row.created_at),
       startedAt: (row.started_at as string) ?? undefined,
       completedAt: (row.completed_at as string) ?? undefined,
+    };
+  }
+
+  private rowToWorkerAction(row: Record<string, unknown>): WorkerActionRecord {
+    const payloadJson = row.payload_json;
+    return {
+      id: String(row.id),
+      workerKind: String(row.worker_kind),
+      actionType: String(row.action_type),
+      workflowId: row.workflow_id ? String(row.workflow_id) : undefined,
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      subjectType: String(row.subject_type),
+      subjectId: String(row.subject_id),
+      externalKey: String(row.external_key),
+      status: String(row.status) as WorkerActionRecord['status'],
+      attemptCount: Number(row.attempt_count ?? 0),
+      intentId: row.intent_id ? String(row.intent_id) : undefined,
+      agentName: row.agent_name ? String(row.agent_name) : undefined,
+      executionModel: row.execution_model ? String(row.execution_model) : undefined,
+      sessionId: row.session_id ? String(row.session_id) : undefined,
+      summary: String(row.summary),
+      payload: typeof payloadJson === 'string' && payloadJson.length > 0
+        ? JSON.parse(payloadJson)
+        : undefined,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      completedAt: row.completed_at ? String(row.completed_at) : undefined,
     };
   }
 

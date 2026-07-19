@@ -42,6 +42,7 @@ export const Channels = {
   TASK_DELTA: 'task.delta',
   TASK_OUTPUT: 'task.output',
   WORKFLOW_LOADED: 'workflow.loaded',
+  WORKFLOW_LIFECYCLE: 'workflow.lifecycle',
   EXPERIMENT_SPAWNED: 'experiment.spawned',
   EXPERIMENT_SELECTED: 'experiment.selected',
 } as const;

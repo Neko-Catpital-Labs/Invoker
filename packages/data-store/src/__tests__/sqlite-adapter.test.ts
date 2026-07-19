@@ -2698,4 +2698,52 @@ describe('SQLiteAdapter', () => {
       expect(adapter.evictQueuedWorkflowMutationIntentsBefore('wf-1', fence)).toEqual([]);
     });
   });
+
+  describe('worker actions', () => {
+    it('upserts and loads worker action decisions by worker kind and external key', () => {
+      const queued = adapter.upsertWorkerAction({
+        id: 'ci-failure:review-1',
+        workerKind: 'ci-failure',
+        actionType: 'fix-ci-failure',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/merge',
+        subjectType: 'review',
+        subjectId: '123',
+        externalKey: 'review-1',
+        status: 'queued',
+        attemptCount: 1,
+        intentId: '42',
+        summary: 'Queued CI repair with agent',
+        payload: { reason: 'queued', headSha: 'sha-1' },
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      });
+
+      expect(queued).toMatchObject({
+        workerKind: 'ci-failure',
+        externalKey: 'review-1',
+        status: 'queued',
+        attemptCount: 1,
+        intentId: '42',
+        payload: { reason: 'queued', headSha: 'sha-1' },
+      });
+
+      const completed = adapter.upsertWorkerAction({
+        ...queued,
+        status: 'completed',
+        summary: 'CI repair intent completed',
+        attemptCount: 1,
+        payload: { reason: 'completed' },
+        completedAt: '2026-01-01T00:01:00.000Z',
+      });
+
+      expect(completed).toMatchObject({
+        status: 'completed',
+        attemptCount: 1,
+        summary: 'CI repair intent completed',
+        payload: { reason: 'completed' },
+        completedAt: '2026-01-01T00:01:00.000Z',
+      });
+      expect(adapter.getWorkerAction('ci-failure', 'review-1')).toMatchObject(completed);
+    });
+  });
 });
