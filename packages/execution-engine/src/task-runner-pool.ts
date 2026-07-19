@@ -653,54 +653,19 @@ export function selectExecutor(
     effectiveType = 'worktree';
   }
 
-  if (effectiveType) {
-    const registered = host.executorRegistry.get(effectiveType);
-    if (registered && (effectiveType !== 'merge' || registered.type === 'merge')) {
-      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
+  if (effectiveType === 'ssh') {
+    const registered = host.executorRegistry.get('ssh');
+    if (registered && !(registered instanceof SshExecutor)) {
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh → ${registered.type}`);
       return { executor: registered, resolvedExecution, selectedPoolMemberId };
     }
 
-    if (effectiveType === 'docker') {
-      const docker = new DockerExecutor({
-        imageName: task.config.dockerImage || host.dockerConfig.imageName,
-        secretsFile: host.dockerConfig.secretsFile,
-        agentRegistry: host.executionAgentRegistry,
-      });
-      host.executorRegistry.register(`docker:${task.id}`, docker);
-      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=docker → docker (per-task)`);
-      return { executor: docker, resolvedExecution, selectedPoolMemberId };
-    }
-
-    if (effectiveType === 'worktree') {
-      const invokerHome = resolve(homedir(), '.invoker');
-      const worktree = new WorktreeExecutor({
-        worktreeBaseDir: resolve(invokerHome, 'worktrees'),
-        cacheDir: resolve(invokerHome, 'repos'),
-        maxWorktrees: host.maxWorktreesPerRepo,
-        agentRegistry: host.executionAgentRegistry,
-      });
-      host.executorRegistry.register('worktree', worktree);
-      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
-      return { executor: worktree, resolvedExecution, selectedPoolMemberId };
-    }
-
-    if (effectiveType === 'merge') {
-      const merge = new MergeGateExecutor(host);
-      host.executorRegistry.register?.('merge', merge);
-      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=merge → merge (lazy registered)`);
-      return { executor: merge, resolvedExecution, selectedPoolMemberId };
-    }
-
-    if (effectiveType === 'ssh') {
-      const remoteTargets = host.getRemoteTargets();
-      const targetId =
-        selectedPoolMemberId
-        ?? (task.config as { poolMemberId?: string }).poolMemberId
-        ?? (task.config.poolId && remoteTargets[task.config.poolId] ? task.config.poolId : undefined);
-      if (!targetId) {
-        throw new Error(`Task ${task.id} has runnerKind=ssh but no poolMemberId`);
-      }
-
+    const remoteTargets = host.getRemoteTargets();
+    const targetId =
+      selectedPoolMemberId
+      ?? (task.config as { poolMemberId?: string }).poolMemberId
+      ?? (task.config.poolId && remoteTargets[task.config.poolId] ? task.config.poolId : undefined);
+    if (targetId) {
       const target = remoteTargets[targetId];
       if (!target) {
         throw new Error(
@@ -752,6 +717,49 @@ export function selectExecutor(
       host.sshExecutorCache.set(cacheKey, ssh);
       traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=ssh remoteTarget=${targetId} → ssh (lazy registered)`);
       return { executor: ssh, resolvedExecution, selectedPoolMemberId: targetId };
+    }
+  }
+
+  if (effectiveType) {
+    const registered = host.executorRegistry.get(effectiveType);
+    if (registered && (effectiveType !== 'merge' || registered.type === 'merge')) {
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
+      return { executor: registered, resolvedExecution, selectedPoolMemberId };
+    }
+
+    if (effectiveType === 'docker') {
+      const docker = new DockerExecutor({
+        imageName: task.config.dockerImage || host.dockerConfig.imageName,
+        secretsFile: host.dockerConfig.secretsFile,
+        agentRegistry: host.executionAgentRegistry,
+      });
+      host.executorRegistry.register(`docker:${task.id}`, docker);
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=docker → docker (per-task)`);
+      return { executor: docker, resolvedExecution, selectedPoolMemberId };
+    }
+
+    if (effectiveType === 'worktree') {
+      const invokerHome = resolve(homedir(), '.invoker');
+      const worktree = new WorktreeExecutor({
+        worktreeBaseDir: resolve(invokerHome, 'worktrees'),
+        cacheDir: resolve(invokerHome, 'repos'),
+        maxWorktrees: host.maxWorktreesPerRepo,
+        agentRegistry: host.executionAgentRegistry,
+      });
+      host.executorRegistry.register('worktree', worktree);
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
+      return { executor: worktree, resolvedExecution, selectedPoolMemberId };
+    }
+
+    if (effectiveType === 'merge') {
+      const merge = new MergeGateExecutor(host);
+      host.executorRegistry.register?.('merge', merge);
+      traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=merge → merge (lazy registered)`);
+      return { executor: merge, resolvedExecution, selectedPoolMemberId };
+    }
+
+    if (effectiveType === 'ssh') {
+      throw new Error(`Task ${task.id} has runnerKind=ssh but no poolMemberId`);
     }
   }
 
