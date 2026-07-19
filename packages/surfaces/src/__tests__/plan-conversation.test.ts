@@ -823,6 +823,19 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('The orchestrator handles plan execution automatically after explicit Slack approval.');
   });
 
+  it('reproduces the Slack planner CLI handoff escape hatch', () => {
+    const conv = new PlanConversation({});
+    (conv as any).messages.push({ role: 'user', content: 'Build a feature' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('The orchestrator handles plan execution automatically after explicit Slack approval.');
+    expect(prompt).not.toContain('invoker-cli');
+    expect(prompt).not.toContain('invoker_submit_plan');
+    expect(prompt).not.toContain('invoker_validate_plan');
+    expect(prompt).not.toContain('submit-plan.sh');
+    expect(prompt).not.toContain('Harness handoff mode');
+  });
+
   it('system prompt requires discovered verification commands for target repos', () => {
     const conv = new PlanConversation({});
     (conv as any).messages.push({ role: 'user', content: 'Add a small pre-commit lint gate' });
