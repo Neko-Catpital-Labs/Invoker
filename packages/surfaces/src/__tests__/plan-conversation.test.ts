@@ -792,11 +792,13 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('repoUrl: "git@github.com:test/repo.git"');
   });
 
-  it('system prompt includes generic repoUrl placeholder when not configured', () => {
+  it('system prompt tells the model to ask the user for the repo when none is configured', () => {
     const conv = new PlanConversation({});
     (conv as any).messages.push({ role: 'user', content: 'Hello' });
     const prompt = conv.buildCursorPrompt();
-    expect(prompt).toContain('repoUrl: "git@github.com:user/repo.git"');
+    expect(prompt).toContain('NO REPO CONFIGURED');
+    expect(prompt).toContain('ask the user which repository this plan targets');
+    expect(prompt).not.toContain('repoUrl: "git@github.com:user/repo.git"');
   });
 
   it('requires the submit instruction as a standalone post-plan summary line', () => {

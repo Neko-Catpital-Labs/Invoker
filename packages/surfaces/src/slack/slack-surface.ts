@@ -888,6 +888,7 @@ export class SlackSurface implements Surface {
         model: preset.model,
         workingDir,
         mode: threadRequest.mode,
+        repoUrl,
       });
       if (!conversation) {
         await say({ text: 'Too many active conversations. Please wait.', thread_ts: threadTs });
@@ -2040,7 +2041,7 @@ ${text}`;
     threadTs: string,
     userId: string,
     create = true,
-    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode },
+    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode; repoUrl?: string },
   ): Promise<ConversationLike | null> {
     this.log('slack', 'info', `[TRACE] getSession (channelId=${channelId}, threadTs=${threadTs}, userId=${userId}, create=${create}, hasSessionManager=${!!this.sessionManager})`);
     if (this.sessionManager) {
@@ -2079,7 +2080,7 @@ ${text}`;
         threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
-        repoUrl: this.repoUrl,
+        repoUrl: opts?.repoUrl ?? this.defaultRepoUrl,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
@@ -2147,7 +2148,7 @@ ${text}`;
             threadTs: entry.threadTs,
             conversationRepo: this.conversationRepo,
             defaultBranch: this.defaultBranch,
-            repoUrl: this.repoUrl,
+            repoUrl: this.defaultRepoUrl,
             plannerRetryLimit: this.plannerRetryLimit,
             plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
           });

@@ -696,7 +696,7 @@ describe('SlackSurface', () => {
   });
 
   describe('multi-repo [repo:] tag resolution', () => {
-    it('BUG: a [repo:<alias>] tag changes the working directory but not the repoUrl the planning LLM is told to write', async () => {
+    it('threads a [repo:<alias>] tag into the created session instead of the default repo', async () => {
       const MockedPlanConversation = vi.mocked((await import('../slack/plan-conversation.js')).PlanConversation);
       MockedPlanConversation.mockClear();
 
@@ -719,14 +719,39 @@ describe('SlackSurface', () => {
         say,
       });
 
-      // Reproduces the bug: the tag is resolved (it changed the checkout dir
-      // via prepareRepoCheckout upstream), but the session is still built
-      // with the surface-level default repoUrl, not the resolved alias.
       expect(MockedPlanConversation).toHaveBeenCalledWith(
-        expect.objectContaining({ repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git' }),
+        expect.objectContaining({ repoUrl: 'git@github.com:EdbertChan/notarepo.git' }),
       );
       expect(MockedPlanConversation).not.toHaveBeenCalledWith(
-        expect.objectContaining({ repoUrl: 'git@github.com:EdbertChan/notarepo.git' }),
+        expect.objectContaining({ repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git' }),
+      );
+    });
+
+    it('falls back to the default repoUrl when the mention carries no [repo:] tag', async () => {
+      const MockedPlanConversation = vi.mocked((await import('../slack/plan-conversation.js')).PlanConversation);
+      MockedPlanConversation.mockClear();
+
+      const multiRepoSurface = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+        repoAliases: { notarepo: 'git@github.com:EdbertChan/notarepo.git' },
+      });
+
+      await multiRepoSurface.start(async () => {});
+      const app = multiRepoSurface.getApp() as any;
+      const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
+
+      const say = vi.fn().mockResolvedValue({ ts: '6666.001' });
+      await mentionHandler({
+        event: { text: '<@U_BOT> plan: add a health endpoint', ts: '6666', thread_ts: undefined, user: 'U1' },
+        say,
+      });
+
+      expect(MockedPlanConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git' }),
       );
     });
   });
