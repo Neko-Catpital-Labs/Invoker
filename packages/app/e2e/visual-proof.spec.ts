@@ -768,8 +768,10 @@ test.describe('Visual proof capture', () => {
       return el.scrollHeight - el.scrollTop - el.clientHeight;
     });
     expect(scrollGap).toBeLessThanOrEqual(1);
+    const codePanel = expandedTranscript.locator('pre code').last();
+    await expect(codePanel).toBeVisible();
+    await expect(codePanel).toContainText('command: echo B');
     const tailText = await expandedTranscript.evaluate((el) => el.textContent ?? '');
-    expect(tailText.trimEnd().endsWith('```')).toBe(true);
     expect(tailText).toContain('command: echo B');
     await captureScreenshot(page, 'terminal-planned-conversation-end');
     await page.keyboard.press('Escape');
