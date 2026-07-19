@@ -57,6 +57,7 @@ describe('Merge gate approval flow (integration)', () => {
 
   it('workflow context menu retries workflow', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskA, gateA], [wfA]));
 
     await waitFor(() => {
@@ -82,6 +83,7 @@ describe('Merge gate approval flow (integration)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([fixedTask], [wfA]));
 
     await waitFor(() => {
@@ -133,6 +135,7 @@ describe('Merge gate approval flow (integration)', () => {
     };
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([completedTask, reviewGate], [reviewWorkflow]));
 
     await waitFor(() => {

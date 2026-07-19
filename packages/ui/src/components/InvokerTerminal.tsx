@@ -71,6 +71,10 @@ interface InvokerTerminalProps {
   onExpand: () => void;
   onCloseExpanded?: () => void;
   onCollapse?: () => void;
+  onOpenGraph?: () => void;
+  onFinishSetup?: () => void;
+  setupIncomplete?: boolean;
+  submittedPlanName?: string;
   activeConversationKey: string;
 }
 
@@ -297,6 +301,10 @@ export function InvokerTerminal({
   onExpand,
   onCloseExpanded,
   onCollapse,
+  onOpenGraph,
+  onFinishSetup,
+  setupIncomplete = false,
+  submittedPlanName,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
   const renderStartedAt = nowMs();
@@ -594,7 +602,47 @@ export function InvokerTerminal({
             onScroll={handleTranscriptScroll}
             className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background px-4 py-4 font-mono text-[13px] leading-6"
           >
-            {transcriptContent}
+            {lines.length === 0 && !planningStream?.text ? (
+              <div data-testid="invoker-terminal-empty-hero" className="flex h-full min-h-[220px] flex-col justify-center gap-4">
+                <div>
+                  <h3 className="text-base font-semibold text-foreground">What do you want to build?</h3>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                    Describe a change, investigate a bug, or ask Invoker to draft a full plan. Review the graph before starting work.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {['Plan a feature', 'Investigate a bug', 'Compare approaches'].map((chip) => (
+                    <button
+                      key={chip}
+                      type="button"
+                      disabled={busy || readOnly}
+                      onClick={() => {
+                        onValueChange(chip);
+                        focusComposer();
+                      }}
+                      className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground disabled:opacity-50"
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+                {setupIncomplete && onFinishSetup && (
+                  <div className="rounded-md border border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-100">
+                    <div className="font-medium">Finish setup once, then plan from here.</div>
+                    <button
+                      type="button"
+                      data-testid="invoker-terminal-finish-setup"
+                      onClick={onFinishSetup}
+                      className="mt-2 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-500"
+                    >
+                      Finish setup
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              transcriptContent
+            )}
           </div>
 
           {submitError && !readOnly && (
@@ -638,6 +686,7 @@ export function InvokerTerminal({
               data-testid="invoker-terminal-ready-bar"
               className="sticky bottom-0 z-10 border-t border-border bg-background px-4 py-3 text-sm text-foreground"
             >
+              <div className="mb-2 text-sm font-medium text-foreground">Plan draft ready</div>
               {draftPlanSummary?.taskGroups && draftPlanSummary.taskGroups.length > 0 && (
                 <div
                   data-testid="invoker-terminal-plan-tasks"
@@ -675,6 +724,16 @@ export function InvokerTerminal({
                   >
                     Submit to Invoker
                   </button>
+                  {onOpenGraph && (
+                    <button
+                      type="button"
+                      data-testid="invoker-terminal-open-graph"
+                      onClick={onOpenGraph}
+                      className="rounded-sm border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
+                    >
+                      Open graph
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={focusComposer}
@@ -683,6 +742,27 @@ export function InvokerTerminal({
                     Keep chatting
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {readOnly && submittedPlanName && onOpenGraph && (
+            <div
+              data-testid="invoker-terminal-submitted-bar"
+              className="sticky bottom-0 z-10 border-t border-border bg-background px-4 py-3 text-sm text-foreground"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="font-mono text-xs text-muted-foreground">
+                  Plan ready · &quot;{submittedPlanName}&quot; · review the graph, then Start ready work
+                </span>
+                <button
+                  type="button"
+                  data-testid="invoker-terminal-open-graph"
+                  onClick={onOpenGraph}
+                  className="rounded-sm bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  Open graph
+                </button>
               </div>
             </div>
           )}

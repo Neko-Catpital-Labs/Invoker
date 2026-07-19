@@ -74,23 +74,6 @@ import {
 } from './lib/graph-camera.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
-type StartReadyRequestExt = StartReadyRequest & {
-  recreateFailedAndPending?: boolean;
-  recreateFailedPendingAndRunning?: boolean;
-};
-
-type StartReadyPreviewExt = StartReadyResult['preview'] & {
-  pendingWorkflowIds: string[];
-  runningWorkflowIds: string[];
-  skipped: StartReadyResult['preview']['skipped'] & {
-    pendingTasks: number;
-    runningTasks: number;
-  };
-};
-
-type StartReadyResultExt = StartReadyResult & {
-  preview: StartReadyPreviewExt;
-};
 type ModalState =
   | { type: 'none' }
   | { type: 'input'; task: TaskState }
@@ -98,12 +81,13 @@ type ModalState =
   | { type: 'experiment'; task: TaskState }
   | { type: 'replace'; task: TaskState };
 
-type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar';
+type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar' | 'planning';
 type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'>;
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
-const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
+const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['planning', 'workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
+const GRAPH_KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
 export const SELECTED_WORKFLOW_VANISH_GRACE_MS = 1000;
 const STATUS_KEY_ORDER: readonly WorkflowStatus[] = [
@@ -681,15 +665,18 @@ function WorkflowContextMenu({
   );
 }
 
-function EmptyGraphTutorial(): JSX.Element {
+function EmptyPlanGraphCta({ onGoHome }: { onGoHome: () => void }): JSX.Element {
   return (
-    <aside className="h-full w-full border-l border-border bg-background/90 p-4">
+    <aside className="h-full w-full border-l border-border bg-background/90 p-4" data-testid="empty-plan-graph-cta">
       <div className="rounded-xl border border-border bg-card/70 p-4">
-        <h2 className="text-sm font-semibold text-foreground">What to expect</h2>
+        <h2 className="text-sm font-semibold text-foreground">No plan yet</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Draft a plan from Home, then review the graph and start ready work.
+        </p>
         <ol className="mt-3 space-y-3 text-sm text-muted-foreground">
           <li>
             <div className="font-medium text-foreground">1. Type a goal</div>
-            <div className="mt-1 text-xs text-muted-foreground">Describe the change in the terminal to generate a plan.</div>
+            <div className="mt-1 text-xs text-muted-foreground">Describe the change in the planning chat.</div>
           </li>
           <li>
             <div className="font-medium text-foreground">2. Review the plan</div>
@@ -700,6 +687,14 @@ function EmptyGraphTutorial(): JSX.Element {
             <div className="mt-1 text-xs text-muted-foreground">Use Start ready work when the plan looks right.</div>
           </li>
         </ol>
+        <button
+          type="button"
+          data-testid="empty-plan-graph-go-home"
+          onClick={onGoHome}
+          className="mt-4 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Go to Home to draft
+        </button>
       </div>
     </aside>
   );
@@ -876,14 +871,15 @@ export function App() {
   const [graphActionsMenuOpen, setGraphActionsMenuOpen] = useState(false);
   const [startReadyMenuOpen, setStartReadyMenuOpen] = useState(false);
   const [startReadyBusy, setStartReadyBusy] = useState(false);
-  const [startReadyPreview, setStartReadyPreview] = useState<StartReadyResultExt | null>(null);
+  const [startReadyPreview, setStartReadyPreview] = useState<StartReadyResult | null>(null);
   const [startReadyPreviewMode, setStartReadyPreviewMode] = useState<
     'failed' | 'failedAndPending' | 'failedPendingAndRunning'
   >('failed');
   // Transient, user-visible outcome line for a confirmed workflow detach.
   const [detachNotice, setDetachNotice] = useState<string | null>(null);
-  const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('workflowGraph');
+  const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('planning');
   const [previousGraphRegion, setPreviousGraphRegion] = useState<KeyboardRegion>('workflowGraph');
+  const [planningContextCollapsed, setPlanningContextCollapsed] = useState(false);
   // Typed graph camera state. The graph viewport is user-owned after the
   // initial render: only explicit navigation commands (issued through the
   // central factory) move it. No per-handler event++/requestId++ counters.
@@ -909,7 +905,7 @@ export function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchActiveIndex, setSearchActiveIndex] = useState(0);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
-  const planningTypingContextRef = useRef<Record<string, unknown> | null>(null);
+  const planningTypingStateRef = useRef<PlanningTypingTelemetryState | null>(null);
   const planningTypingSequenceRef = useRef(0);
   const planningTypingFrameIdsRef = useRef<Set<number>>(new Set());
   const systemSetupAutoOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1214,7 +1210,7 @@ export function App() {
     };
   }, []);
   useEffect(() => {
-    planningTypingContextRef.current = createPlanningTypingTelemetryContext({
+    planningTypingStateRef.current = {
       tasks,
       workflows,
       viewMode,
@@ -1222,7 +1218,7 @@ export function App() {
       selectedTaskId,
       selectedWorkflowId,
       hasLoadedPlan,
-    });
+    };
   }, [
     tasks,
     workflows,
@@ -1265,9 +1261,9 @@ export function App() {
 
       const frameId = scheduleFrame(() => {
         planningTypingFrameIdsRef.current.delete(frameId);
-        const telemetryContext = planningTypingContextRef.current;
+        const telemetryState = planningTypingStateRef.current;
         void window.invoker?.reportUiPerf?.(PLANNING_TYPING_LAG_METRIC, {
-          ...(telemetryContext ?? {}),
+          ...(telemetryState ? createPlanningTypingTelemetryContext(telemetryState) : {}),
           sequence,
           eventType: event.type,
           lagMs: Math.round(performance.now() - startedAt),
@@ -1780,11 +1776,12 @@ export function App() {
 
       if (event.key === 'Tab') {
         event.preventDefault();
-        const currentIndex = KEYBOARD_REGION_ORDER.indexOf(keyboardRegion);
+        const regionOrder = sidebarSurface === 'home' ? (['planning'] as const) : GRAPH_KEYBOARD_REGION_ORDER;
+        const currentIndex = Math.max(0, regionOrder.indexOf(keyboardRegion as typeof regionOrder[number]));
         const nextIndex = event.shiftKey
-          ? (currentIndex - 1 + KEYBOARD_REGION_ORDER.length) % KEYBOARD_REGION_ORDER.length
-          : (currentIndex + 1) % KEYBOARD_REGION_ORDER.length;
-        focusKeyboardRegion(KEYBOARD_REGION_ORDER[nextIndex]);
+          ? (currentIndex - 1 + regionOrder.length) % regionOrder.length
+          : (currentIndex + 1) % regionOrder.length;
+        focusKeyboardRegion(regionOrder[nextIndex]);
         return;
       }
 
@@ -1903,6 +1900,7 @@ export function App() {
     modal.type,
     openSelectedContextMenu,
     previousGraphRegion,
+    sidebarSurface,
     searchActiveIndex,
     searchOpen,
     searchResults,
@@ -2058,7 +2056,8 @@ export function App() {
     setSelectedWorkerKind(workerStatus?.workers[0]?.kind ?? null);
   }, [selectedWorkerKind, sidebarSurface, workerStatus]);
   useEffect(() => {
-    if (viewMode !== 'dag' || sidebarSurface === 'home' || !selectedWorkflowGraphAvailable) {
+    // Camera resnap for browser surfaces only; plan graph handles its own fit on enter.
+    if (viewMode !== 'dag' || (sidebarSurface !== 'workflows' && sidebarSurface !== 'attention') || !selectedWorkflowGraphAvailable) {
       return;
     }
 
@@ -2090,11 +2089,30 @@ export function App() {
   ]);
 
 
-  const handleDagSurfaceClick = useCallback(() => {
+  const handleDagSurfaceClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (contextMenu || workflowContextMenu) {
       setContextMenu(null);
       setWorkflowContextMenu(null);
+      return;
     }
+
+    if (suppressDagSurfaceDismissRef.current) {
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    if (
+      target.closest('[data-testid^="workflow-node-"]') ||
+      target.closest('[data-testid="selected-workflow-mini-dag"]') ||
+      target.closest('.react-flow__node') ||
+      target.closest('[role="menu"]')
+    ) {
+      return;
+    }
+
+    setSelectedTaskId(null);
+    setSelectedWorkflowId(null);
+    setWorkflowSelectionDismissed(true);
   }, [contextMenu, workflowContextMenu]);
 
   const handleRestartTask = useCallback(async (taskId: string) => {
@@ -2437,13 +2455,13 @@ export function App() {
   }, [updateActivePlanningSession]);
 
   const handleStartReadyAction = useCallback(async (
-    request: StartReadyRequestExt = {},
-  ): Promise<StartReadyResultExt | null> => {
+    request: StartReadyRequest = {},
+  ): Promise<StartReadyResult | null> => {
     if (!invoker?.startReady) return null;
     setStartReadyBusy(true);
     setStartReadyMenuOpen(false);
     try {
-      const result = await invoker.startReady(request as StartReadyRequest) as StartReadyResultExt;
+      const result = await invoker.startReady(request);
       if (!result.dryRun) {
         await refreshTaskGraph();
         void refreshActionGraph();
@@ -2482,12 +2500,12 @@ export function App() {
     setStartReadyPreviewMode(mode);
     try {
       const result = await invoker.startReady(
-        (mode === 'failedPendingAndRunning'
+        mode === 'failedPendingAndRunning'
           ? { dryRun: true, recreateFailedPendingAndRunning: true }
           : mode === 'failedAndPending'
             ? { dryRun: true, recreateFailedAndPending: true }
-            : { dryRun: true, recreateFailed: true }) as StartReadyRequest,
-      ) as StartReadyResultExt;
+            : { dryRun: true, recreateFailed: true },
+      );
       setStartReadyPreview(result);
     } catch (err) {
       notifyMutationError('Failed to preview ready work:', err);
@@ -2527,12 +2545,13 @@ export function App() {
       if (result.ok) {
         setPlanningSubmitError(null);
         setHasLoadedPlan(true);
-        setSidebarSurface('home');
+        setSidebarSurface('planning');
         setWorkflowSelectionDismissed(false);
         setViewMode('dag');
         setGraphActionsMenuOpen(false);
         setPlanName(result.planName);
         setSelectedWorkflowId(result.workflowId);
+        issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'planning-submit' });
         updatePlanningSessionById(planningSessionId, (session) => ({
           ...session,
           busy: false,
@@ -2562,7 +2581,7 @@ export function App() {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [activePlanningReadOnly, appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [activePlanningReadOnly, appendTerminalLine, invoker, issueCameraCommand, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
@@ -2702,8 +2721,9 @@ export function App() {
     };
     setPlanningSessions((prev) => [session, ...prev]);
     setActivePlanningSessionId(session.id);
-    setSidebarSurface('planning');
-  }, [selectedPlanningPresetKey]);
+    setSidebarSurface('home');
+    focusKeyboardRegion('planning');
+  }, [focusKeyboardRegion, selectedPlanningPresetKey]);
 
   const handlePlanningModeChange = useCallback(async (mode: PlanningTerminalMode) => {
     const sourceSession = activePlanningSession;
@@ -2889,14 +2909,18 @@ export function App() {
     }
   }, [clearTasks, invoker]);
   const showStartReadyControl = hasLoadedPlan || tasks.size > 0 || workflows.size > 0;
-  const showEmptyGraphTutorial = sidebarSurface === 'home' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
-  const autoCollapseInspector = sidebarSurface !== 'home' && viewportWidth < 1440;
+  const showEmptyPlanGraphCta = sidebarSurface === 'planning' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
+  const setupIncomplete = Boolean(
+    systemDiagnostics
+    && (missingRequiredTool || needsBundledSkillsPrompt || installedAgentCount === 0),
+  );
+  const autoCollapseInspector = sidebarSurface !== 'planning' && viewportWidth < 1440;
   const effectiveInspectorCollapsed = inspectorCollapsed || (autoCollapseInspector && !inspectorManualOpen);
   const showWorkerDetailsPanel = viewMode === 'queue' && sidebarSurface === 'workers';
-  const showInspectorPlaceholder = !showEmptyGraphTutorial && !showWorkerDetailsPanel && !selectedTask && !selectedWorkflow && !(viewMode === 'actionGraph' && selectedActionNode);
+  const showInspectorPlaceholder = !showEmptyPlanGraphCta && !showWorkerDetailsPanel && !selectedTask && !selectedWorkflow && !(viewMode === 'actionGraph' && selectedActionNode);
 
   useEffect(() => {
-    if (sidebarSurface === 'home' || !autoCollapseInspector) {
+    if (sidebarSurface === 'planning' || !autoCollapseInspector) {
       setInspectorManualOpen(false);
     }
   }, [autoCollapseInspector, sidebarSurface]);
@@ -2934,7 +2958,7 @@ export function App() {
       setSelectedActionNodeId(null);
     }
     if (nextView === 'actionGraph') {
-      setSidebarSurface('home');
+      setSidebarSurface('planning');
       setViewMode('actionGraph');
       setWorkflowSelectionDismissed(true);
       setSelectedTaskId(null);
@@ -2945,11 +2969,12 @@ export function App() {
       return;
     }
     if (nextView === 'queue') {
-      setSidebarSurface('home');
+      setSidebarSurface('workers');
       setInspectorCollapsed(true);
       setInspectorManualOpen(false);
     } else {
-      setSidebarSurface('home');
+      // Timeline / history live on the plan-graph surface.
+      setSidebarSurface('planning');
     }
     setViewMode(nextView);
   }, [selectedActionNodeId, sidebarSurface, viewMode]);
@@ -2964,13 +2989,21 @@ export function App() {
     setInspectorCollapsed((prev) => !prev);
   }, [autoCollapseInspector]);
 
-  const navigateHomeAndFitWorkflowGraph = useCallback((reason: string) => {
-    cameraSuppressedRef.current = false;
+  const navigatePlanningHome = useCallback((_reason: string) => {
     setSidebarSurface('home');
     setInspectorManualOpen(false);
     setViewMode('dag');
+    focusKeyboardRegion('planning');
+  }, [focusKeyboardRegion]);
+
+  const navigatePlanGraphAndFit = useCallback((reason: string) => {
+    cameraSuppressedRef.current = false;
+    setSidebarSurface('planning');
+    setInspectorManualOpen(false);
+    setViewMode('dag');
+    focusKeyboardRegion('workflowGraph');
     issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
-  }, [issueCameraCommand]);
+  }, [focusKeyboardRegion, issueCameraCommand]);
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
@@ -2989,14 +3022,18 @@ export function App() {
       return;
     }
     if (nextSurface === 'home') {
-      navigateHomeAndFitWorkflowGraph('sidebar-home');
+      navigatePlanningHome('sidebar-home');
+      return;
+    }
+    if (nextSurface === 'planning') {
+      navigatePlanGraphAndFit('sidebar-planning');
       return;
     }
     setViewMode('dag');
     setSidebarSurface(nextSurface);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, [navigateHomeAndFitWorkflowGraph, sidebarSurface, viewMode]);
+  }, [navigatePlanGraphAndFit, navigatePlanningHome, sidebarSurface, viewMode]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
@@ -3007,8 +3044,8 @@ export function App() {
       viewMode,
       dismiss: true,
     });
-    navigateHomeAndFitWorkflowGraph('browser-return-home');
-  }, [navigateHomeAndFitWorkflowGraph, sidebarSurface, viewMode]);
+    navigatePlanningHome('browser-return-home');
+  }, [navigatePlanningHome, sidebarSurface, viewMode]);
 
   // ── Task actions ──────────────────────────────────────────
   const handleProvideInput = useCallback(
@@ -3338,12 +3375,22 @@ export function App() {
                 type="button"
                 data-testid="rail-home"
                 onClick={() => {
-                  handleSelectSidebarSurface('home');
+                  handleSelectSidebarSurface('planning');
                   selectViewMode('dag');
                 }}
                 className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
-                Home
+                Plan graph
+              </button>
+              <button
+                type="button"
+                data-testid="rail-planning-home"
+                onClick={() => {
+                  handleSelectSidebarSurface('home');
+                }}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
+              >
+                Planning home
               </button>
               <button
                 type="button"
@@ -3518,7 +3565,7 @@ export function App() {
         />
       ) : (
         <>
-          {sidebarSurface === 'home' && (
+          {sidebarSurface === 'planning' && (
             <WorkflowGraph
               workflows={workflows}
               selectedWorkflowId={selectedWorkflow?.id ?? null}
@@ -3530,7 +3577,7 @@ export function App() {
               onManualViewport={handleManualViewport}
             />
           )}
-          {renderSelectedWorkflowTaskGraph(sidebarSurface === 'home')}
+          {renderSelectedWorkflowTaskGraph(sidebarSurface === 'planning')}
         </>
       )}
     </div>
@@ -3589,7 +3636,7 @@ export function App() {
   );
 
   const renderWorkflowsList = (): JSX.Element => (
-    workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Use the terminal to plan your first run.') : (
+    workflowEntries.length === 0 ? renderBrowserEmptyState('No workflows yet', 'Go to Home to draft your first plan.') : (
       <div data-testid="workflows-rail-list" className={`${RAIL_SCROLL_BODY_CLASS} p-3`}>
         <div className="space-y-1">
           {workflowEntries.map((entry) => (
@@ -3843,13 +3890,104 @@ export function App() {
   );
 
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
+  const connectedAgentLabels = (systemDiagnostics?.tools ?? [])
+    .filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed)
+    .map((tool) => tool.name.replace(/\s+CLI$/i, ''));
+  const planningPhase = activePlanningSession.status === 'submitted'
+    ? 'review'
+    : draftPlanAvailable
+      ? 'draft'
+      : terminalLines.some((line) => line.role === 'user')
+        ? 'discuss'
+        : 'discuss';
+
+  const renderPlanningContextPanel = (): JSX.Element => (
+    <aside
+      data-testid="planning-context-panel"
+      className={`${planningContextCollapsed ? 'w-16' : 'w-72'} shrink-0 border-l border-border bg-card/60 transition-all duration-150`}
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+        {!planningContextCollapsed && (
+          <h2 className="text-sm font-semibold text-foreground">Current plan</h2>
+        )}
+        <button
+          type="button"
+          data-testid="planning-context-toggle"
+          aria-label={planningContextCollapsed ? 'Expand current plan' : 'Collapse current plan'}
+          onClick={() => setPlanningContextCollapsed((value) => !value)}
+          className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary"
+        >
+          {planningContextCollapsed ? '›' : '‹'}
+        </button>
+      </div>
+      {!planningContextCollapsed && (
+        <div className="space-y-4 p-4 text-sm">
+          <div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Goal</div>
+            <p className="mt-1 text-foreground">
+              {activePlanningSession.title === 'Untitled plan'
+                ? 'Describe a goal in the chat to begin drafting.'
+                : activePlanningSession.title}
+            </p>
+          </div>
+          {draftPlanSummary && (
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Draft</div>
+              <p className="mt-1 text-foreground">
+                {draftPlanSummary.name} · {draftPlanSummary.taskCount} task{draftPlanSummary.taskCount === 1 ? '' : 's'}
+              </p>
+            </div>
+          )}
+          {activePlanningSession.submittedPlanName && (
+            <div>
+              <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Submitted</div>
+              <p className="mt-1 text-foreground">{activePlanningSession.submittedPlanName}</p>
+            </div>
+          )}
+          <div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Agents</div>
+            <p className="mt-1 text-foreground">
+              {connectedAgentLabels.length > 0 ? connectedAgentLabels.join(', ') : 'None detected yet'}
+            </p>
+          </div>
+          <div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Phase</div>
+            <ol className="mt-2 space-y-1.5 text-xs text-muted-foreground">
+              {(['discuss', 'draft', 'review', 'run'] as const).map((phase) => {
+                const order = { discuss: 0, draft: 1, review: 2, run: 3 } as const;
+                const current = order[planningPhase];
+                const done = order[phase] < current || (phase === 'discuss' && terminalLines.some((line) => line.role === 'user'));
+                const active = phase === planningPhase;
+                return (
+                  <li key={phase} className={active ? 'font-medium text-foreground' : done ? 'text-emerald-400' : ''}>
+                    {(done && !active) ? '✓ ' : active ? '● ' : '○ '}
+                    {phase.charAt(0).toUpperCase() + phase.slice(1)}
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+          {(draftPlanAvailable || activePlanningSession.status === 'submitted') && (
+            <button
+              type="button"
+              data-testid="planning-context-open-graph"
+              onClick={() => navigatePlanGraphAndFit('planning-context')}
+              className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
+            >
+              Open graph
+            </button>
+          )}
+        </div>
+      )}
+    </aside>
+  );
 
   const renderPlanningTerminalSurface = (): JSX.Element => (
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <div data-testid="planning-session-rail" className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-card">
         <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2.5">
           <div className="min-w-0">
-            <h2 className="text-sm font-medium text-foreground">Planning Terminal</h2>
+            <h2 className="text-sm font-medium text-foreground">Planning</h2>
             <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
               {planningSessions.length} chat{planningSessions.length === 1 ? '' : 's'}
               {planningReadyCount > 0 ? ` · ${planningReadyCount} ready` : ''}
@@ -3860,15 +3998,46 @@ export function App() {
             size="sm"
             onClick={handleCreatePlanningSession}
           >
-            New
+            New chat
           </Button>
         </div>
         <div className={RAIL_LIST_FRAME_CLASS}>{renderPlanningSessionList()}</div>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+        data-keyboard-region="planning"
+        tabIndex={0}
+        data-keyboard-active={keyboardRegion === 'planning' ? 'true' : 'false'}
+      >
+        {(setupIncomplete || connectedAgentLabels.length > 0) && (
+          <div
+            data-testid="planning-setup-strip"
+            className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card/50 px-4 py-2 text-xs"
+          >
+            <div className="flex flex-wrap items-center gap-3 text-muted-foreground">
+              <span className={setupIncomplete ? 'text-amber-300' : 'text-emerald-400'}>
+                {setupIncomplete ? 'Setup needed' : 'Invoker is ready'}
+              </span>
+              {connectedAgentLabels.length > 0 && (
+                <span>Agents connected: {connectedAgentLabels.join(', ')}</span>
+              )}
+            </div>
+            <button
+              type="button"
+              data-testid="planning-finish-setup"
+              onClick={() => {
+                cancelPendingSystemSetupAutoOpen();
+                setShowSystemSetup(true);
+              }}
+              className="rounded-md border border-border px-2.5 py-1 text-xs text-foreground hover:bg-secondary"
+            >
+              {setupIncomplete ? 'Finish setup' : 'Manage setup'}
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-4 py-2.5">
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-medium text-foreground">Planning chat window</h2>
+            <h2 className="truncate text-sm font-medium text-foreground">Planning chat</h2>
             <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">{activePlanningSession.title}</p>
           </div>
           <span className="shrink-0 rounded-full border border-border bg-background px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
@@ -3892,15 +4061,23 @@ export function App() {
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
+            setupIncomplete={setupIncomplete}
+            submittedPlanName={activePlanningSession.submittedPlanName}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
             onSubmitDraft={() => void handlePlanningSubmitDraft()}
             onPresetChange={setSelectedPlanningPresetKey}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
+            onOpenGraph={() => navigatePlanGraphAndFit('planning-open-graph')}
+            onFinishSetup={() => {
+              cancelPendingSystemSetupAutoOpen();
+              setShowSystemSetup(true);
+            }}
           />
         </div>
       </div>
+      {renderPlanningContextPanel()}
     </div>
   );
   const renderBrowserRail = (): JSX.Element => (
@@ -3935,7 +4112,7 @@ export function App() {
       data-keyboard-active={keyboardRegion === 'bottomBar' ? 'true' : 'false'}
       className={`outline-none ${keyboardRegion === 'bottomBar' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
     >
-      {sidebarSurface === 'home' && (
+      {sidebarSurface === 'planning' && (
         <WorkflowStatusChips
           workflows={workflows}
           activeFilters={statusFilters}
@@ -4000,7 +4177,7 @@ export function App() {
   );
 
   const homeSubtitle = workflows.size === 0
-    ? 'Your plan will appear here.'
+    ? 'No plan yet — draft one from Home.'
     : selectedWorkflow
       ? `${selectedWorkflow.name} · ${formatWorkflowStatus(selectedWorkflow.status)}`
       : `${workflowEntries.length} workflow${workflowEntries.length === 1 ? '' : 's'} ready`;
@@ -4119,9 +4296,9 @@ export function App() {
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
             {sidebarSurface === 'home' ? (
-              renderGraphWorkspace('Plan graph', homeSubtitle, true)
-            ) : sidebarSurface === 'planning' ? (
               renderPlanningTerminalSurface()
+            ) : sidebarSurface === 'planning' ? (
+              renderGraphWorkspace('Plan graph', homeSubtitle, true)
             ) : sidebarSurface === 'workers' ? (
               renderWorkersSurface()
             ) : (
@@ -4131,19 +4308,19 @@ export function App() {
               </div>
             )}
 
-            {sidebarSurface === 'home' && viewMode === 'dag' && renderGraphTerminalChrome()}
+            {sidebarSurface === 'planning' && viewMode === 'dag' && renderGraphTerminalChrome()}
           </main>
 
-          {sidebarSurface !== 'planning' && sidebarSurface !== 'workers' && (
+          {sidebarSurface !== 'home' && sidebarSurface !== 'workers' && (
             <div
               data-testid="workflow-inspector-shell"
               data-keyboard-region="inspector"
               tabIndex={0}
               data-keyboard-active={keyboardRegion === 'inspector' ? 'true' : 'false'}
-              className={`${showEmptyGraphTutorial || showInspectorPlaceholder ? 'w-96' : effectiveInspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
+              className={`${showEmptyPlanGraphCta || showInspectorPlaceholder ? 'w-96' : effectiveInspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150 outline-none ${keyboardRegion === 'inspector' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
             >
-              {showEmptyGraphTutorial ? (
-                <EmptyGraphTutorial />
+              {showEmptyPlanGraphCta ? (
+                <EmptyPlanGraphCta onGoHome={() => navigatePlanningHome('empty-graph-cta')} />
               ) : showInspectorPlaceholder ? (
                 <EmptyInspectorPlaceholder />
               ) : showWorkerDetailsPanel ? (
@@ -4213,6 +4390,8 @@ export function App() {
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
+            setupIncomplete={setupIncomplete}
+            submittedPlanName={activePlanningSession.submittedPlanName}
             onValueChange={setPlanningInput}
             readOnly={activePlanningReadOnly}
             onSubmit={() => void handlePlanningSubmit()}
@@ -4221,6 +4400,14 @@ export function App() {
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
             onCloseExpanded={() => setPlanningTerminalExpanded(false)}
+            onOpenGraph={() => {
+              setPlanningTerminalExpanded(false);
+              navigatePlanGraphAndFit('planning-expanded-open-graph');
+            }}
+            onFinishSetup={() => {
+              cancelPendingSystemSetupAutoOpen();
+              setShowSystemSetup(true);
+            }}
           />
         </div>
       )}

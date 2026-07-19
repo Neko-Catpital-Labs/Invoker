@@ -69,6 +69,7 @@ describe('Context menu (component)', () => {
     workflowList = workflows,
   ) {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks(tasks, workflowList));
 
     await waitFor(() => {
@@ -364,6 +365,7 @@ describe('Context menu (component)', () => {
 
     async function setupStack() {
       render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
       act(() => mock.setTasks([upTask, downTask], stackWorkflows));
       await waitFor(() => {
         expect(screen.getByTestId('workflow-node-wf-down')).toBeInTheDocument();
