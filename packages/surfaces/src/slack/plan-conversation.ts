@@ -17,6 +17,12 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
 import type { LogFn } from '../surface.js';
+import {
+  buildUnverifiedNotice,
+  captureRepoState,
+  looksLikeCompletionClaim,
+  repoStateUnchanged,
+} from './agent-turn-verification.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -433,10 +439,19 @@ export class PlanConversation {
     const tPrompt = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: promptLen=${prompt.length}, historyMsgs=${this.messages.length - 1}, promptPreview="${prompt.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
+    const repoStateBefore = this.mode === 'agent'
+      ? await captureRepoState(this.workingDir)
+      : null;
     const response = await this.spawnPlanner(prompt);
     const tCursor = Date.now();
     const formatted = formatCodexPlannerStdout(response);
-    const message = formatted.message;
+    let message = formatted.message;
+    const repoStateAfter = this.mode === 'agent'
+      ? await captureRepoState(this.workingDir)
+      : null;
+    if (looksLikeCompletionClaim(message) && repoStateUnchanged(repoStateBefore, repoStateAfter)) {
+      message = `${message}\n\n${buildUnverifiedNotice()}`;
+    }
     this._lastTurnReasoning = formatted.reasoning;
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
