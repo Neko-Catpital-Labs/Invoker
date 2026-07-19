@@ -846,59 +846,64 @@ export class SlackSurface implements Surface {
     // Slower paths (LLM classifier, repo checkout, agent) acknowledge receipt up front.
     if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
 
-    // Fallback classifier: only when a non-verb message looks operational.
-    if (!explicitLocalAgent && looksOperational(parsed.text)) {
-      const cls = await this.classifyLobbyIntent(parsed.text, preset);
-      this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
-      if (cls.intent === 'command') {
-        await this.clearImmediateAck(channel, threadTs);
-        await this.proposeLobbyOp(cls, threadTs, channel, say);
-        return;
+    try {
+      // Fallback classifier: only when a non-verb message looks operational.
+      if (!explicitLocalAgent && looksOperational(parsed.text)) {
+        const cls = await this.classifyLobbyIntent(parsed.text, preset);
+        this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
+        if (cls.intent === 'command') {
+          await this.clearImmediateAck(channel, threadTs);
+          await this.proposeLobbyOp(cls, threadTs, channel, say);
+          return;
+        }
+        if (cls.intent === 'question') {
+          await this.clearImmediateAck(channel, threadTs);
+          await this.answerLobbyQuestion(parsed.text, preset, threadTs, say);
+          return;
+        }
+        // invalid-command / plan → fall through to a planning conversation.
       }
-      if (cls.intent === 'question') {
-        await this.clearImmediateAck(channel, threadTs);
-        await this.answerLobbyQuestion(parsed.text, preset, threadTs, say);
-        return;
+
+      const threadRequest = parseThreadRequest(parsed.text);
+      if (!threadRequest) return;
+
+      // Default: a normal agent conversation. `plan:` opts into an Invoker YAML draft.
+      let workingDir = this.workingDir;
+      if (repoUrl && this.prepareRepoCheckout) {
+        try {
+          workingDir = await this.prepareRepoCheckout(repoUrl);
+        } catch (err) {
+          this.log('slack', 'error', `Failed to prepare repo checkout for ${repoUrl}: ${err}`);
+          await say({ text: `Failed to check out repo: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
+          return;
+        }
       }
-      // invalid-command / plan → fall through to a planning conversation.
-    }
 
-    const threadRequest = parseThreadRequest(parsed.text);
-    if (!threadRequest) return;
-
-    // Default: a normal agent conversation. `plan:` opts into an Invoker YAML draft.
-    let workingDir = this.workingDir;
-    if (repoUrl && this.prepareRepoCheckout) {
-      try {
-        workingDir = await this.prepareRepoCheckout(repoUrl);
-      } catch (err) {
-        this.log('slack', 'error', `Failed to prepare repo checkout for ${repoUrl}: ${err}`);
-        await say({ text: `Failed to check out repo: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
-        return;
-      }
-    }
-
-    const conversation = await this.getSession(channel, threadTs, event.user ?? 'unknown', true, {
-      tool: preset.tool,
-      model: preset.model,
-      workingDir,
-      mode: threadRequest.mode,
-    });
-    if (!conversation) {
-      await say({ text: 'Too many active conversations. Please wait.', thread_ts: threadTs });
-      return;
-    }
-
-    if (threadRequest.mode === 'plan') {
-      this.planningContexts.set(threadTs, {
-        repoUrl,
-        presetKey: parsed.presetKey,
-        requestedBy: event.user,
-        lobbyChannel: channel,
+      const conversation = await this.getSession(channel, threadTs, event.user ?? 'unknown', true, {
+        tool: preset.tool,
+        model: preset.model,
+        workingDir,
+        mode: threadRequest.mode,
       });
-    }
+      if (!conversation) {
+        await say({ text: 'Too many active conversations. Please wait.', thread_ts: threadTs });
+        return;
+      }
 
-    await this.handleConversationMessage(conversation, threadRequest.text, threadTs, say, channel);
+      if (threadRequest.mode === 'plan') {
+        this.planningContexts.set(threadTs, {
+          repoUrl,
+          presetKey: parsed.presetKey,
+          requestedBy: event.user,
+          lobbyChannel: channel,
+        });
+      }
+
+      await this.handleConversationMessage(conversation, threadRequest.text, threadTs, say, channel);
+    } finally {
+      // Drop any leftover Processing… ack (success paths already replace/delete it).
+      await this.clearImmediateAck(channel, threadTs);
+    }
   }
 
   /** Post the immediate "received it" acknowledgment and track it for in-place replacement. */
