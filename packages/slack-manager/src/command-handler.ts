@@ -36,8 +36,6 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
         ? DOWN_MESSAGE
         : `Command \`${command.type}\` failed: ${errMessage(err)}`;
       deps.log('error', message);
-      // Rethrow so SlackSurface can reply in the active thread instead of
-      // posting a false success line while an unscoped lobby error appears.
       throw err instanceof SlackCommandError ? err : new SlackCommandError(message);
     }
   };
