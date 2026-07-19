@@ -210,6 +210,7 @@ describe('Browser-surface camera (component)', () => {
     workflowGraphSpy.reset();
 
     getViewportMock.mockReturnValue(savedViewport);
+    fireEvent.wheel(screen.getByTestId('rf__pane'), { deltaY: -240 });
     fireEvent.click(screen.getByTestId('sidebar-planning'));
     await screen.findByTestId('planning-session-rail');
 
@@ -224,7 +225,6 @@ describe('Browser-surface camera (component)', () => {
     expect(workflowGraphSpy.commands.some((command) => (
       command?.kind === 'fitInitial'
       && command.scope === 'workflow'
-      && command.reason === 'sidebar-planning'
     ))).toBe(false);
   });
 });
