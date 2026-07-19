@@ -12,6 +12,7 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'PY'
 #!/usr/bin/env python3
 import json
+import os
 import sys
 
 HEAD = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -25,6 +26,7 @@ REQUIRED = [
     "UI Vitest",
 ]
 REPO = "Neko-Catpital-Labs/Invoker"
+LOG = os.environ["GH_REPRO_LOG"]
 
 
 def contexts():
@@ -100,22 +102,41 @@ if args[:2] == ["api", f"repos/{REPO}/issues/100/comments"]:
     print("[]")
     raise SystemExit(0)
 
+if args[:2] == ["pr", "comment"]:
+    with open(LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps({"args": args}) + "\n")
+    raise SystemExit(0)
+
 print(f"unexpected gh args: {args}", file=sys.stderr)
 raise SystemExit(2)
 PY
 chmod +x "$TMP/bin/gh"
 
 export PATH="$TMP/bin:$PATH"
-out="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo "$REPO" --author EdbertChan --state-file "$TMP/ledger.jsonl")"
-printf '%s\n' "$out"
+export GH_REPRO_LOG="$TMP/gh-calls.jsonl"
+: > "$GH_REPRO_LOG"
+out1="$(python3 scripts/mergify_admin_requeue.py --once --repo "$REPO" --author EdbertChan --state-file "$TMP/ledger.jsonl")"
+out2="$(python3 scripts/mergify_admin_requeue.py --once --repo "$REPO" --author EdbertChan --state-file "$TMP/ledger.jsonl")"
+printf '%s\n%s\n' "$out1" "$out2"
 
-case "$out" in
-  *"DRY-RUN add-admin-bypass-label PR #100"*) ;;
-  *) echo "[repro] expected stack expansion to surface unlabeled bottom PR #100" >&2; exit 1 ;;
+case "$out1" in
+  *"nudge-admin-bypass-label PR #100"*) ;;
+  *) echo "[repro] expected stack expansion to nudge for unlabeled bottom PR #100" >&2; exit 1 ;;
 esac
 
-case "$out" in
+case "$out1" in
   *"no current bottom"*) echo "[repro] saw pre-fix failure mode: upper PR was processed without its bottom" >&2; exit 1 ;;
+esac
+
+comment_count="$(wc -l < "$GH_REPRO_LOG" | tr -d ' ')"
+if [[ "$comment_count" != "1" ]]; then
+  echo "[repro] expected exactly one nudge comment across repeated runs, saw $comment_count" >&2
+  exit 1
+fi
+
+case "$(cat "$GH_REPRO_LOG")" in
+  *"Please add \`admin-bypass\`"*) ;;
+  *) echo "[repro] nudge comment did not ask humans to add admin-bypass" >&2; exit 1 ;;
 esac
 
 echo "[repro] passed"

@@ -22,6 +22,13 @@ except ImportError:
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def admin_bypass_nudge_body() -> str:
+    return (
+        "Invoker Mergify babysitting paused: this PR is the current bottom of the stack and is missing the `admin-bypass` label. "
+        "Please add `admin-bypass` to this PR; babysitting will continue after it is tagged."
+    )
+
+
 def resolve_workflow(pr_number: int) -> tuple[str, str]:
     try:
         out = subprocess.run(["./run.sh", "--headless", "query", "review-gate", str(pr_number), "--output", "json"], cwd=str(REPO_ROOT), check=True, text=True, capture_output=True).stdout
@@ -102,8 +109,8 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
         print(f"{prefix}repair-check PR #{action.pr_number} check={json.dumps(key)}")
     elif action.kind == "comment_blocked":
         print(f"BLOCK PR #{action.pr_number} {action.detail}")
-    elif action.kind == "add_admin_bypass_label":
-        print(f"{prefix}add-admin-bypass-label PR #{action.pr_number}")
+    elif action.kind == "nudge_admin_bypass_label":
+        print(f"{prefix}nudge-admin-bypass-label PR #{action.pr_number}")
     elif action.kind == "remove_merge_hold":
         print(f"{prefix}remove-merge-hold PR #{action.pr_number}")
     elif action.kind == "resolve_bot_threads":
@@ -117,9 +124,10 @@ def execute_action(action: Action, repo: str, gh: GhClient, ledger: Ledger, pr_b
     if action.kind == "requeue":
         gh.comment(repo, action.pr_number, "@mergifyio queue")
         ledger.record("requeue", action.pr_number, pr.head_ref_oid, action.key, now)
-    elif action.kind == "add_admin_bypass_label":
-        gh.edit_label(repo, action.pr_number, add="admin-bypass")
-        ledger.record("add_admin_bypass_label", action.pr_number, pr.head_ref_oid, "admin-bypass", now)
+    elif action.kind == "nudge_admin_bypass_label":
+        if ledger.count("nudge_admin_bypass_label", action.pr_number, pr.head_ref_oid, action.key) == 0:
+            gh.comment(repo, action.pr_number, admin_bypass_nudge_body())
+            ledger.record("nudge_admin_bypass_label", action.pr_number, pr.head_ref_oid, action.key, now)
     elif action.kind == "remove_merge_hold":
         gh.edit_label(repo, action.pr_number, remove="merge-hold")
         ledger.record("remove-merge-hold", action.pr_number, pr.head_ref_oid, "merge-hold", now)
@@ -203,7 +211,7 @@ def run_once(args: argparse.Namespace) -> int:
             print_action(action, pr, args.dry_run, args.json)
             if not args.dry_run:
                 execute_action(action, args.repo, gh, ledger, pr_by_number, now)
-                if action.kind not in {"comment_blocked"}:
+                if action.kind not in {"comment_blocked", "nudge_admin_bypass_label"}:
                     return 0
     return 0
 
