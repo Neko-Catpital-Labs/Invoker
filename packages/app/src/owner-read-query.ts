@@ -230,7 +230,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     onActivity: deps.onActivity,
     getUiPerfStats: deps.getUiPerfStats,
     resetUiPerfStats: deps.resetUiPerfStats,
-    getQueueStatus: () => orchestrator.getQueueStatus() as unknown as Record<string, unknown>,
+    getQueueStatus: () => orchestrator.getQueueStatus({ refresh: false }) as unknown as Record<string, unknown>,
     getWorkerStatus: deps.getWorkerStatus,
     getWorkers: deps.getWorkers,
     listWorkerActionHistory: (request: WorkerActionHistoryRequest) => listWorkerActionHistory(persistence, request),
