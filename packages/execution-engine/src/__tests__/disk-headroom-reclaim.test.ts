@@ -14,6 +14,7 @@ import {
   resolveDiskCleanupEnabled,
   TMP_SCRATCH_GLOBS,
   TMP_SCRATCH_MIN_AGE_MINUTES,
+  TMP_TRANSIENT_TEST_GLOBS,
 } from '../workers/disk-headroom-reclaim.js';
 
 const tempDirs: string[] = [];
@@ -74,6 +75,9 @@ describe('disk-headroom cleanup guards', () => {
     for (const glob of TMP_SCRATCH_GLOBS) {
       expect(script).toContain(glob);
     }
+    for (const glob of TMP_TRANSIENT_TEST_GLOBS) {
+      expect(script).toContain(glob);
+    }
     // Age guard protects in-flight runs; system + lock entries are excluded.
     expect(script).toContain(`-mmin +${TMP_SCRATCH_MIN_AGE_MINUTES}`);
     expect(script).toContain("! -name 'systemd-private-*'");
@@ -94,6 +98,16 @@ describe('disk-headroom cleanup guards', () => {
     expect(script).toContain('reap_tmp "$entry"');
     expect(script).not.toContain('rm -rf "$TMP_CLEAN"/$pat');
     expect(script).not.toMatch(/-mmin \+\d+[\s\S]*?-exec rm -rf/);
+  });
+
+  it('reaps known stale E2E and chaos directories even when they contain transcripts', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker');
+
+    expect(script).toContain('reap_transient_test_tmp');
+    expect(script).toContain('reap_transient_test_tmp "$entry"');
+    expect(script).toContain('invoker-e2e-db.*');
+    expect(script).toContain('invoker-e2e-home.*');
+    expect(script).toContain('invoker-chaos-*-home.*');
   });
 
   it('age-gates the targeted glob sweep and never touches the live invoker home', () => {
