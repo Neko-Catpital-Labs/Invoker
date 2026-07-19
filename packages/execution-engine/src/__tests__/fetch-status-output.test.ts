@@ -69,6 +69,7 @@ class TestExecutor extends BaseExecutor<BaseEntry> {
 function createTempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'fetch-status-output-test-'));
   execSync('git init -b master', { cwd: dir });
+  execSync('git config gc.auto 0', { cwd: dir });
   execSync('git config user.email "test@test.com"', { cwd: dir });
   execSync('git config user.name "Test"', { cwd: dir });
   writeFileSync(join(dir, 'initial.txt'), 'initial content');
@@ -83,6 +84,7 @@ function createTempRepo(): string {
 function createRemote(localRepo: string): string {
   const remote = mkdtempSync(join(tmpdir(), 'fetch-status-output-remote-'));
   execSync('git init --bare -b master', { cwd: remote });
+  execSync('git config gc.auto 0', { cwd: remote });
   execSync(`git remote add origin ${remote}`, { cwd: localRepo });
   execSync('git push -u origin master', { cwd: localRepo });
   return remote;
@@ -136,6 +138,7 @@ describe('fetch status visibility in task output', () => {
       // Create a second clone and push commits ahead
       const secondClone = mkdtempSync(join(tmpdir(), 'fetch-status-clone-'));
       execSync(`git clone --no-local ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+      execSync('git config gc.auto 0', { cwd: secondClone });
       execSync('git checkout -B master origin/master', { cwd: secondClone });
       execSync('git config user.email "test@test.com"', { cwd: secondClone });
       execSync('git config user.name "Test"', { cwd: secondClone });
@@ -166,6 +169,7 @@ describe('fetch status visibility in task output', () => {
       // manufacturing 101 physical commits in CI's temporary git store.
       const secondClone = mkdtempSync(join(tmpdir(), 'fetch-status-clone-'));
       execSync(`git clone --no-local ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
+      execSync('git config gc.auto 0', { cwd: secondClone });
       execSync('git checkout -B master origin/master', { cwd: secondClone });
       execSync('git config user.email "test@test.com"', { cwd: secondClone });
       execSync('git config user.name "Test"', { cwd: secondClone });
