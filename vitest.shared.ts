@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import MergifyReporter from '@mergifyio/vitest';
 
 const maxWorkers = process.env.INVOKER_VITEST_MAX_WORKERS
@@ -9,7 +9,7 @@ export default defineConfig({
     env: {
       INVOKER_TEST_WORKFLOW_IDS: '1',
     },
-    exclude: ['**/node_modules/**', '**/dist/**'],
+    exclude: [...configDefaults.exclude, '**/dist/**'],
     globals: true,
     // App plan-parser tests call git ls-remote (execSync timeout 10s); Vitest default 5s flakes.
     testTimeout: 20_000,
