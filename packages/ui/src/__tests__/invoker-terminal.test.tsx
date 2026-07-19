@@ -21,7 +21,7 @@ function terminalProps(overrides: Partial<Parameters<typeof InvokerTerminal>[0]>
 }
 
 describe('Invoker terminal composer', () => {
-  it('keeps the submit button accessible as Send while rendering the arrow affordance', () => {
+  it('keeps the submit button accessible as Send while rendering a right-pointing send icon', () => {
     render(<InvokerTerminal {...terminalProps()} />);
 
     const sendButton = screen.getByRole('button', { name: 'Send' });
@@ -30,12 +30,12 @@ describe('Invoker terminal composer', () => {
     expect(within(sendButton).getByTestId('invoker-terminal-send-icon')).toBeInTheDocument();
   });
 
-  it('uses the yellow send-button styling in the enabled state', () => {
+  it('uses the yellow send-button styling with a white icon in the enabled state', () => {
     render(<InvokerTerminal {...terminalProps()} />);
 
     const sendButton = screen.getByRole('button', { name: 'Send' });
     expect(sendButton).toHaveClass('bg-amber-400');
-    expect(sendButton).toHaveClass('text-gray-950');
+    expect(sendButton).toHaveClass('text-white');
     expect(sendButton).toHaveClass('hover:bg-amber-300');
   });
 

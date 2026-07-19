@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
-import { SendArrowIcon } from './icons/index.js';
+import { SendIcon } from './icons/index.js';
 
 export interface InvokerTerminalLine {
   id: number;
@@ -585,9 +585,9 @@ export function InvokerTerminal({
                 type="submit"
                 aria-label="Send"
                 disabled={sendButtonDisabled}
-                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-gray-950 shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
+                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
               >
-                <SendArrowIcon
+                <SendIcon
                   data-testid="invoker-terminal-send-icon"
                   className="h-4 w-4"
                 />
