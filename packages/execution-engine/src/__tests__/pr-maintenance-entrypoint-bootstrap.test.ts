@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -14,6 +14,7 @@ const repoRoot = resolveRepoRoot(process.cwd());
 const PR_MAINTENANCE_ENTRYPOINTS = [
   { kind: 'coderabbit-address', scriptRelativePath: 'scripts/cron-coderabbit-address.sh' },
   { kind: 'pr-conflict-rebase', scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh' },
+  { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
   { kind: 'pr-ci-failure-scan', scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh' },
 ] as const;
 
@@ -62,4 +63,53 @@ describe('PR maintenance entrypoints bootstrap', () => {
       expect(result.status).toBe(0);
     });
   }
+
+  it('admin-bypass land wrapper passes shared repo and author controls to Python', () => {
+    const scriptPath = resolve(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh');
+    const stateFile = join(stubBin, 'mergify-state.jsonl');
+    const argvOutput = join(stubBin, 'python-argv.txt');
+
+    const flockStub = join(stubBin, 'flock');
+    writeFileSync(flockStub, '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+    chmodSync(flockStub, 0o755);
+
+    const pythonStub = join(stubBin, 'python3');
+    writeFileSync(
+      pythonStub,
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$PYTHON_ARGV_OUTPUT"\n',
+      { mode: 0o755 },
+    );
+    chmodSync(pythonStub, 0o755);
+
+    const result = spawnSync('bash', [scriptPath], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        PATH: `${stubBin}:${process.env.PATH ?? ''}`,
+        INVOKER_PR_CRON_LOCK: lockPath,
+        INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
+        INVOKER_PR_CRON_AUTHOR: 'octocat',
+        INVOKER_PR_CRON_DRY_RUN: '1',
+        INVOKER_MERGIFY_ADMIN_REQUEUE_STATE_FILE: stateFile,
+        PYTHON_ARGV_OUTPUT: argvOutput,
+      },
+    });
+
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    expect(output).not.toContain('No such file or directory');
+    expect(result.status).toBe(0);
+    expect(readFileSync(argvOutput, 'utf8').trim().split('\n')).toEqual([
+      'scripts/mergify_admin_requeue.py',
+      '--once',
+      '--repo',
+      'owner/repo',
+      '--author',
+      'octocat',
+      '--state-file',
+      stateFile,
+      '--dry-run',
+    ]);
+  });
 });

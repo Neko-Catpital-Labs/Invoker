@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Shared helpers for the two PR-maintenance cron jobs that run co-located with
+# Shared helpers for the PR-maintenance cron jobs that run co-located with
 # the Invoker owner:
 #
-#   scripts/cron-coderabbit-address.sh  (Job 1) — address new CodeRabbit reviews
-#   scripts/cron-pr-conflict-rebase.sh  (Job 2) — rebase-recreate conflicting PRs
+#   scripts/cron-coderabbit-address.sh       — address new CodeRabbit reviews
+#   scripts/cron-pr-conflict-rebase.sh       — rebase-recreate conflicting PRs
+#   scripts/cron-pr-admin-bypass-land.sh     — babysit admin-bypass land flow
+#   packages/execution-engine/scripts/cron-pr-ci-failure.sh — repair mapped PR CI status
 #
 # Source this AFTER `set -euo pipefail`:
 #   source "$(dirname "$0")/cron-pr-lib.sh"
