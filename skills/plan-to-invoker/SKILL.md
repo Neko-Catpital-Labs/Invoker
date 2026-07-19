@@ -58,6 +58,8 @@ For implementation benchmark plans, switch `onFinish` and `mergeMode` only when 
 
 Use this mode when invoked by the installed command or MCP prompt.
 
+Do not use this mode from a Slack `plan:` or agent thread. In Slack, write the draft requested by the Slack orchestrator and let its `submit` and approval flow validate and execute it; do not invoke CLI or MCP handoff tools yourself.
+
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 - Prefer the MCP tools `invoker_validate_plan` and `invoker_submit_plan` when available.
