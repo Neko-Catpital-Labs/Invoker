@@ -766,6 +766,10 @@ export class SlackSurface implements Surface {
       const isLobbyOrDm = !channel || channel === this.lobbyChannelId || channel.startsWith('D');
       if (!isLobbyOrDm) {
         this.log('slack', 'info', `Ignoring @mention in non-lobby channel ${channel}`);
+        await say({
+          text: 'I only plan in the lobby channel (or DMs), and only run workflow controls in a mapped workflow channel. Mention me there instead.',
+          thread_ts: event.thread_ts ?? event.ts,
+        });
         return;
       }
 
