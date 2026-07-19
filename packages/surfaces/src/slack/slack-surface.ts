@@ -1121,19 +1121,24 @@ export class SlackSurface implements Surface {
       await this.runConfirmedRestart(threadTs, say);
       return;
     }
-    await say({ text: 'Starting plan execution…', thread_ts: threadTs });
     const ctx = pending.ctx;
-    await this.onCommand?.({
-      type: 'start_plan',
-      planText: pending.planText,
-      repoUrl: ctx?.repoUrl,
-      harnessPreset: ctx?.presetKey,
-      requestedBy: ctx?.requestedBy,
-      lobbyChannel: ctx?.lobbyChannel ?? pending.channel,
-      lobbyThreadTs: pending.lobbyThreadTs,
-    });
-    this.planningContexts.delete(pending.lobbyThreadTs);
-    this.cleanupSession(pending.lobbyThreadTs, 'plan_submitted');
+    try {
+      await this.onCommand?.({
+        type: 'start_plan',
+        planText: pending.planText,
+        repoUrl: ctx?.repoUrl,
+        harnessPreset: ctx?.presetKey,
+        requestedBy: ctx?.requestedBy,
+        lobbyChannel: ctx?.lobbyChannel ?? pending.channel,
+        lobbyThreadTs: pending.lobbyThreadTs,
+      });
+      await say({ text: 'Starting plan execution…', thread_ts: threadTs });
+      this.planningContexts.delete(pending.lobbyThreadTs);
+      this.cleanupSession(pending.lobbyThreadTs, 'plan_submitted');
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      await say({ text: detail, thread_ts: threadTs });
+    }
   }
 
   /** Restart Invoker on request — always confirm first (it interrupts the running app). */
@@ -1465,26 +1470,45 @@ ${text}`;
     threadTs: string,
   ): Promise<void> {
     const scoped = (task: string): string => `${mapping.workflowId}/${task}`;
+    const run = async (command: Parameters<NonNullable<typeof this.onCommand>>[0], okText: string): Promise<void> => {
+      try {
+        await this.onCommand?.(command);
+        await say({ text: okText, thread_ts: threadTs });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        await say({ text: detail, thread_ts: threadTs });
+      }
+    };
     switch (ctrl.kind) {
       case 'status':
-        await this.onCommand?.({ type: 'get_status', workflowId: mapping.workflowId });
-        await say({ text: `Fetching status for \`${mapping.workflowId}\`...`, thread_ts: threadTs });
+        await run(
+          { type: 'get_status', workflowId: mapping.workflowId },
+          `Fetching status for \`${mapping.workflowId}\`...`,
+        );
         return;
       case 'approve':
-        await this.onCommand?.({ type: 'approve', taskId: scoped(ctrl.task) });
-        await say({ text: `Approving \`${scoped(ctrl.task)}\`.`, thread_ts: threadTs });
+        await run(
+          { type: 'approve', taskId: scoped(ctrl.task) },
+          `Approving \`${scoped(ctrl.task)}\`.`,
+        );
         return;
       case 'reject':
-        await this.onCommand?.({ type: 'reject', taskId: scoped(ctrl.task) });
-        await say({ text: `Rejecting \`${scoped(ctrl.task)}\`.`, thread_ts: threadTs });
+        await run(
+          { type: 'reject', taskId: scoped(ctrl.task) },
+          `Rejecting \`${scoped(ctrl.task)}\`.`,
+        );
         return;
       case 'retry':
-        await this.onCommand?.({ type: 'retry', taskId: scoped(ctrl.task) });
-        await say({ text: `Retrying \`${scoped(ctrl.task)}\`.`, thread_ts: threadTs });
+        await run(
+          { type: 'retry', taskId: scoped(ctrl.task) },
+          `Retrying \`${scoped(ctrl.task)}\`.`,
+        );
         return;
       case 'input':
-        await this.onCommand?.({ type: 'provide_input', taskId: scoped(ctrl.task), input: ctrl.text });
-        await say({ text: `Sent input to \`${scoped(ctrl.task)}\`.`, thread_ts: threadTs });
+        await run(
+          { type: 'provide_input', taskId: scoped(ctrl.task), input: ctrl.text },
+          `Sent input to \`${scoped(ctrl.task)}\`.`,
+        );
         return;
     }
   }
