@@ -11,7 +11,7 @@ import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, Work
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus } from './slack-formatter.js';
-import { splitForSlack, sanitizeSlashCommands } from './slack-message-helpers.js';
+import { splitForSlack, sanitizeSlackOutbound } from './slack-message-helpers.js';
 import type { SlackMessage } from './slack-formatter.js';
 import {
   DEFAULT_PLANNER_RETRY_BASE_DELAY_MS,
@@ -1231,7 +1231,7 @@ export class SlackSurface implements Surface {
   ): Promise<void> {
     try {
       const reply = await this.runOneShotPlanner(harness, buildLobbyQuestionPrompt(text));
-      const chunks = splitForSlack(sanitizeSlashCommands(reply));
+      const chunks = splitForSlack(sanitizeSlackOutbound(reply));
       for (let i = 0; i < chunks.length; i++) {
         if (i > 0) await this.sleep(this.messagePacingMs);
         await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
@@ -1265,7 +1265,7 @@ export class SlackSurface implements Surface {
       try {
         const result = await this.runLocalCommand(request.text, dir.workingDir);
         const reply = this.formatLocalCommandResult(result);
-        const chunks = splitForSlack(sanitizeSlashCommands(reply));
+        const chunks = splitForSlack(sanitizeSlackOutbound(reply));
         for (let i = 0; i < chunks.length; i++) {
           if (i > 0) await this.sleep(this.messagePacingMs);
           await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
@@ -1284,7 +1284,7 @@ export class SlackSurface implements Surface {
     await say({ text: 'Making that local change on DO1. I will not create or submit an Invoker plan.', thread_ts: threadTs });
     try {
       const reply = await this.runOneShotPlanner(harness, this.buildLocalChangePrompt(request.text, dir.workingDir));
-      const chunks = splitForSlack(sanitizeSlashCommands(reply));
+      const chunks = splitForSlack(sanitizeSlackOutbound(reply));
       for (let i = 0; i < chunks.length; i++) {
         if (i > 0) await this.sleep(this.messagePacingMs);
         await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
@@ -1375,7 +1375,7 @@ ${text}`;
   private formatLocalCommandResult(result: { code: number | null; stdout: string; stderr: string; timedOut: boolean }): string {
     const status = result.timedOut ? 'timed out' : `exit ${result.code ?? 'unknown'}`;
     const output = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join('\n\n');
-    const safeOutput = output.replace(/```/g, '`\u200b``');
+    const safeOutput = sanitizeSlackOutbound(output.replace(/```/g, '`\u200b``'));
     const maxChars = 12_000;
     const body = safeOutput.length > maxChars
       ? `[showing last ${maxChars} chars]\n${safeOutput.slice(-maxChars)}`
@@ -1435,7 +1435,7 @@ ${text}`;
       const ctx = await this.gatherWorkflowContext(mapping.workflowId);
       const harness = this.resolveHarnessPreset(mapping.harnessPreset ?? this.defaultHarnessPreset);
       const reply = await this.runOneShotPlanner(harness, buildAssistantPrompt(text, ctx));
-      const chunks = splitForSlack(sanitizeSlashCommands(reply));
+      const chunks = splitForSlack(sanitizeSlackOutbound(reply));
       for (let i = 0; i < chunks.length; i++) {
         if (i > 0) await this.sleep(this.messagePacingMs);
         await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
@@ -1732,7 +1732,7 @@ ${text}`;
         await this.stopTypingIndicator(channel, threadTs);
       }
 
-      const chunks = splitForSlack(sanitizeSlashCommands(reply));
+      const chunks = splitForSlack(sanitizeSlackOutbound(reply));
 
       const ackTs = this.ackMessages.get(threadTs);
       if (ackTs) {

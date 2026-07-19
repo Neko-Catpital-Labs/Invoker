@@ -165,3 +165,23 @@ export function sanitizeSlashCommands(text: string): string {
     'reply with "yes", "go", or "execute" to confirm',
   );
 }
+
+/** Collapse host absolute paths so Slack replies do not leak checkout layout. */
+export function redactAbsolutePaths(text: string): string {
+  return text.replace(
+    /(?:\/(?:home|Users|var|tmp|private\/tmp|opt|usr\/local)\/[^\s)\]`'"<>]+)/g,
+    (path) => {
+      const lineMatch = path.match(/:\d+(?:-\d+)?$/);
+      const lineSuffix = lineMatch?.[0] ?? '';
+      const cleaned = lineSuffix ? path.slice(0, -lineSuffix.length) : path;
+      const parts = cleaned.split('/').filter(Boolean);
+      const tail = parts.slice(-3).join('/');
+      return `…/${tail}${lineSuffix}`;
+    },
+  );
+}
+
+/** Outbound Slack text scrub: drop hallucinated slash-commands and absolute paths. */
+export function sanitizeSlackOutbound(text: string): string {
+  return redactAbsolutePaths(sanitizeSlashCommands(text));
+}
