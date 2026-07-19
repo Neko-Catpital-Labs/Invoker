@@ -22,6 +22,7 @@ REQUIRED = [
     "required-fast / Guardrails",
     "required-fast / Vitest Workspace",
     "required-fast / Submit Workflow Chain",
+    "UI Vitest",
     "e2e-proof / aggregate",
     "playwright / 1-of-6",
     "playwright / 2-of-6",
