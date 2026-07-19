@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
@@ -225,6 +225,72 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toContain("trap 'cleanup_runtime \"$?\"' EXIT");
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
+  });
+
+  it('managed mode runs configured provision command before payload', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: '~/.invoker',
+      provisionCommand: "printf 'provision\\n' >> order.txt",
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    vi.spyOn(ssh, 'remoteGitRecordAndPush').mockResolvedValue({ commitHash: 'abc123' });
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'payload\\n' >> order.txt",
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh.start(req);
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+
+    expect(script).toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(script).toContain('cat > "$PROVISION_PATH" <<');
+    expect(script.indexOf('"$PROVISION_PATH"')).toBeLessThan(script.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
+
+    const workspaceMatch = script.match(/WT=\$\(normalize_remote_path '([^']+)'\)/);
+    expect(workspaceMatch?.[1]).toBeDefined();
+
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-managed-provision-home-'));
+    try {
+      const workspacePath = workspaceMatch![1]!.replace(/^~(?=\/|$)/, fakeHome);
+      mkdirSync(workspacePath, { recursive: true });
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', script], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome },
+      });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(join(workspacePath, 'order.txt'), 'utf8')).toBe('provision\npayload\n');
+      expect(result.stdout.indexOf('[SshExecutor] Running configured provision command...'))
+        .toBeLessThan(result.stdout.indexOf('[SshExecutor] Running task payload...'));
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+      proc.emit('close', 0, null);
+      await new Promise((r) => setTimeout(r, 50));
+    }
   });
 
   it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
@@ -711,6 +777,112 @@ branch refs/heads/${targetBranch}
     expect(callScript).toContain('WT=$(normalize_remote_path \'/custom/path\')');
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
+  });
+
+  it('BYO mode runs configured provision command before payload', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'ssh-byo-provision-workspace-'));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+      provisionCommand: "printf 'provision\\n' >> order.txt",
+    }) as any;
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'payload\\n' >> order.txt",
+        description: 'test',
+        workspacePath,
+      },
+    });
+
+    await ssh.start(req);
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+
+    expect(script).toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(script.indexOf('"$PROVISION_PATH"')).toBeLessThan(script.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
+
+    try {
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', script], {
+        encoding: 'utf8',
+        env: { ...process.env },
+      });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(join(workspacePath, 'order.txt'), 'utf8')).toBe('provision\npayload\n');
+      expect(result.stdout.indexOf('[SshExecutor] Running configured provision command...'))
+        .toBeLessThan(result.stdout.indexOf('[SshExecutor] Running task payload...'));
+    } finally {
+      proc.emit('close', 0, null);
+      rmSync(workspacePath, { recursive: true, force: true });
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  });
+
+  it('surfaces configured provision command failures as task errors', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'ssh-byo-provision-fail-'));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+      provisionCommand: "printf 'bootstrap preparing\\n'; exit 42",
+    }) as any;
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'payload should not run\\n'",
+        description: 'test',
+        workspacePath,
+      },
+    });
+
+    try {
+      const handle = await ssh.start(req);
+      const proc = spawnedProcesses[spawnedProcesses.length - 1];
+      const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+      const script = writeMock.mock.calls[0]![0] as string;
+      const completion = new Promise<any>((resolve) => {
+        ssh.onComplete(handle, (response) => resolve(response));
+      });
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', script], {
+        encoding: 'utf8',
+        env: { ...process.env },
+      });
+
+      expect(result.status).toBe(42);
+      expect(result.stdout).toContain('[SshExecutor] Running configured provision command...');
+      expect(result.stdout).not.toContain('[SshExecutor] Running task payload...');
+      expect(result.stdout).not.toContain('payload should not run');
+      expect(result.stderr).toContain('[SshExecutor] Configured provision command failed with exit code 42.');
+
+      if (result.stdout) {
+        (proc.stdout as any).emit('data', Buffer.from(result.stdout));
+      }
+      if (result.stderr) {
+        (proc.stderr as any).emit('data', Buffer.from(result.stderr));
+      }
+      proc.emit('close', result.status, null);
+
+      const response = await completion;
+      expect(response.status).toBe('failed');
+      expect(response.outputs.exitCode).toBe(42);
+      expect(response.outputs.error).toContain('Configured provision command failed with exit code 42');
+      expect(response.outputs.error).not.toContain('payload should not run');
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+      await new Promise((r) => setTimeout(r, 50));
+    }
   });
 
   it('BYO mode throws when workspacePath is missing', async () => {

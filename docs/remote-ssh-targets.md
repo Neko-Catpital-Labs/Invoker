@@ -23,6 +23,7 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "sshKeyPath": "/home/user/.ssh/id_staging",
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "pnpm install --frozen-lockfile",
       "remoteHeartbeatIntervalSeconds": 30
     },
     "staging-server-b": {
@@ -37,7 +38,7 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
   }
 }
 ```
-Invoker does not run repo bootstrap automatically on managed SSH checkouts. If a repo needs setup such as `pnpm install` or `flutter pub get`, make the task command run that repo-owned step explicitly.
+Invoker does not run repo bootstrap automatically on managed SSH checkouts. If a repo needs setup such as `pnpm install` or `flutter pub get`, configure `provisionCommand` explicitly or make the task command run that repo-owned step.
 
 ## Owner-host workers
 
@@ -64,6 +65,7 @@ Do not install separate cron jobs on SSH targets for these maintenance paths. Th
 | `port` | number | no | SSH port (default: 22) |
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
+| `provisionCommand` | string | no | Explicit bootstrap command run inside the task workspace before each SSH task payload; unset means no provisioning |
 | `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
 
 ## Multiple SSH Targets
