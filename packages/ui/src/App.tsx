@@ -9,9 +9,17 @@
  * - Modals overlay when needed
  */
 
-import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type ReactElement, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowStatus } from './types.js';
+import type {
+  TaskState,
+  TaskReplacementDef,
+  ExternalGatePolicyUpdate,
+  WorkflowStatus,
+  InAppPlanningChatLine,
+  InAppPlanningPlanSummary,
+  InAppPlanningSessionSummary,
+} from './types.js';
 import type { ActionGraphNode } from '@invoker/contracts';
 import { useTasks } from './hooks/useTasks.js';
 import { useInvoker } from './hooks/useInvoker.js';
@@ -30,7 +38,7 @@ import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { StatusBar } from './components/StatusBar.js';
-import { TerminalDrawer } from './components/TerminalDrawer.js';
+import { InvokerTerminal } from './components/InvokerTerminal.js';
 import {
   isExperimentSpawnPivotTask,
   EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE,
@@ -218,6 +226,201 @@ export function hasMergeConflictExecution(task: TaskState | undefined): boolean 
   }
 }
 
+type DraftPlanTaskGroup = {
+  readonly name?: string;
+  readonly title?: string;
+  readonly workflowName?: string;
+  readonly taskCount?: number;
+  readonly steps?: readonly string[];
+  readonly tasks?: readonly string[];
+  readonly summaries?: readonly string[];
+};
+
+type DraftPlanSummaryWithGroups = Omit<InAppPlanningPlanSummary, 'taskGroups'> & {
+  readonly taskGroups?: readonly DraftPlanTaskGroup[];
+};
+
+interface DraftReviewGroup {
+  title: string;
+  steps: string[];
+  taskCount?: number;
+}
+
+interface ActivePlanningDraft {
+  sessionId: string;
+  summary: DraftPlanSummaryWithGroups;
+  draftPlanText?: string;
+}
+
+function isDraftReadySession(session: InAppPlanningSessionSummary | null): session is InAppPlanningSessionSummary & {
+  draftPlanSummary: DraftPlanSummaryWithGroups;
+} {
+  return Boolean(
+    session
+    && session.status !== 'submitted'
+    && session.draftPlanAvailable
+    && session.draftPlanSummary,
+  );
+}
+
+function stringList(value: readonly string[] | undefined): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => item.trim()).filter(Boolean)
+    : [];
+}
+
+function draftReviewGroups(summary: DraftPlanSummaryWithGroups): DraftReviewGroup[] {
+  if (Array.isArray(summary.taskGroups) && summary.taskGroups.length > 0) {
+    return summary.taskGroups.map((group, index) => {
+      const title = group.name?.trim()
+        || group.title?.trim()
+        || group.workflowName?.trim()
+        || `Workflow ${index + 1}`;
+      const steps = stringList(group.steps)
+        .concat(stringList(group.tasks))
+        .concat(stringList(group.summaries));
+      return {
+        title,
+        steps,
+        ...(typeof group.taskCount === 'number' ? { taskCount: group.taskCount } : {}),
+      };
+    }).filter((group) => group.steps.length > 0 || group.taskCount !== undefined);
+  }
+
+  const steps = stringList(summary.steps);
+  return steps.length > 0
+    ? [{
+        title: summary.workflowCount && summary.workflowCount > 1 ? 'Workflows' : 'Tasks',
+        steps,
+        taskCount: summary.taskCount,
+      }]
+    : [];
+}
+
+function appendPlanningMessages(
+  session: InAppPlanningSessionSummary | null,
+  sessionId: string,
+  userText: string,
+  assistantText: string,
+): InAppPlanningChatLine[] {
+  const createdAt = new Date().toISOString();
+  const existing = session?.id === sessionId ? session.messages : [];
+  const nextId = existing.reduce((max, line) => Math.max(max, line.id), 0) + 1;
+  return [
+    ...existing,
+    { id: nextId, role: 'user', text: userText, createdAt },
+    { id: nextId + 1, role: 'assistant', text: assistantText, createdAt },
+  ];
+}
+
+function PlanningDraftReviewPanel({
+  draft,
+  groups,
+  submitting,
+  panelRef,
+  onSubmitDraft,
+  onOpenGraph,
+  onClose,
+}: {
+  draft: ActivePlanningDraft;
+  groups: DraftReviewGroup[];
+  submitting: boolean;
+  panelRef: RefObject<HTMLDivElement | null>;
+  onSubmitDraft: () => void;
+  onOpenGraph: () => void;
+  onClose: () => void;
+}): ReactElement {
+  return (
+    <aside
+      ref={panelRef}
+      data-testid="planning-context-panel"
+      aria-label="Planning context panel"
+      tabIndex={-1}
+      className="h-full w-full border-l border-gray-800 bg-gray-900 flex flex-col outline-none focus:ring-2 focus:ring-emerald-500/60 focus:ring-inset"
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-gray-800 px-3 py-2">
+        <div className="min-w-0">
+          <h2 className="truncate text-sm font-medium text-gray-100">{draft.summary.name}</h2>
+          <div className="text-[11px] text-gray-400">
+            {draft.summary.workflowCount && draft.summary.workflowCount > 1
+              ? `${draft.summary.workflowCount} workflows`
+              : '1 workflow'}
+            {' - '}
+            {draft.summary.taskCount === 1 ? '1 task' : `${draft.summary.taskCount} tasks`}
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="Close draft review"
+          className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
+        >
+          Close
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-auto p-3 text-sm">
+        <div className="mb-3 flex items-center gap-2">
+          <button
+            data-testid="planning-create-workflow"
+            onClick={onSubmitDraft}
+            disabled={submitting}
+            className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {submitting ? 'Creating...' : 'Create workflow'}
+          </button>
+          <button
+            data-testid="planning-open-graph"
+            onClick={onOpenGraph}
+            className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800"
+          >
+            Open graph
+          </button>
+        </div>
+
+        <section className="mb-4">
+          <h3 className="text-[11px] uppercase text-gray-400">Step Summary</h3>
+          <div className="mt-2 space-y-3">
+            {groups.length > 0 ? (
+              groups.map((group, groupIndex) => (
+                <div key={`${group.title}-${groupIndex}`} data-testid="planning-draft-task-group">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <h4 className="truncate text-xs font-medium text-gray-200">{group.title}</h4>
+                    {group.taskCount !== undefined && (
+                      <span className="shrink-0 text-[11px] text-gray-500">
+                        {group.taskCount === 1 ? '1 task' : `${group.taskCount} tasks`}
+                      </span>
+                    )}
+                  </div>
+                  <ol className="space-y-1">
+                    {group.steps.map((step, index) => (
+                      <li key={`${step}-${index}`} className="flex gap-2 text-xs text-gray-300">
+                        <span className="mt-0.5 text-[11px] text-gray-500">{index + 1}.</span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ))
+            ) : (
+              <div className="text-xs text-gray-500">No step summary available.</div>
+            )}
+          </div>
+        </section>
+
+        <section>
+          <h3 className="text-[11px] uppercase text-gray-400">Draft YAML</h3>
+          <pre
+            data-testid="planning-draft-yaml"
+            className="mt-2 max-h-[45vh] overflow-auto rounded border border-gray-800 bg-gray-950 p-3 text-[11px] leading-relaxed text-gray-200"
+          >
+            <code>{draft.draftPlanText?.trim() || 'Draft YAML is not available for this saved session.'}</code>
+          </pre>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
 export function App() {
   const { tasks, workflows, clearTasks, refreshTasks } = useTasks();
   const invoker = useInvoker();
@@ -247,6 +450,13 @@ export function App() {
   const [advancedMetadataExpanded, setAdvancedMetadataExpanded] = useState(false);
   const [terminalCollapsed, setTerminalCollapsed] = useState(true);
   const [workflowContextMenu, setWorkflowContextMenu] = useState<{ x: number; y: number; workflowId: string } | null>(null);
+  const [planningSession, setPlanningSession] = useState<InAppPlanningSessionSummary | null>(null);
+  const [planningError, setPlanningError] = useState<string | null>(null);
+  const [planningSending, setPlanningSending] = useState(false);
+  const [planningSubmitting, setPlanningSubmitting] = useState(false);
+  const [draftReviewOpen, setDraftReviewOpen] = useState(false);
+  const [draftReviewFocusRequest, setDraftReviewFocusRequest] = useState(0);
+  const planningContextPanelRef = useRef<HTMLDivElement>(null);
   const uiPerfThrottleRef = useRef<Record<string, number>>({});
 
   const refreshSystemDiagnostics = useCallback(() => {
@@ -359,6 +569,46 @@ export function App() {
     }
     return next;
   }, [selectedWorkflow, selectedWorkflowId, tasks]);
+  const activePlanningDraft = useMemo<ActivePlanningDraft | null>(() => {
+    if (!isDraftReadySession(planningSession)) return null;
+    return {
+      sessionId: planningSession.id,
+      summary: planningSession.draftPlanSummary as DraftPlanSummaryWithGroups,
+      draftPlanText: planningSession.draftPlanText,
+    };
+  }, [planningSession]);
+  const activeDraftGroups = useMemo(
+    () => activePlanningDraft ? draftReviewGroups(activePlanningDraft.summary) : [],
+    [activePlanningDraft],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const api = window.invoker;
+    if (!api?.planningChatList) return;
+    api.planningChatList()
+      .then((response) => {
+        if (cancelled || !response.ok) return;
+        const readySession = response.sessions.find(isDraftReadySession);
+        if (readySession) setPlanningSession(readySession);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activePlanningDraft) {
+      setDraftReviewOpen(false);
+    }
+  }, [activePlanningDraft]);
+
+  useEffect(() => {
+    if (!draftReviewOpen || !activePlanningDraft) return;
+    const frame = requestAnimationFrame(() => planningContextPanelRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [draftReviewOpen, activePlanningDraft, draftReviewFocusRequest]);
 
   useEffect(() => {
     if (selectedTask?.config.workflowId) {
@@ -396,6 +646,113 @@ export function App() {
       }
     });
   }, []);
+
+  const handleReviewDraft = useCallback(() => {
+    if (!activePlanningDraft) return;
+    setViewMode('dag');
+    setInspectorCollapsed(false);
+    setDraftReviewOpen(true);
+    setDraftReviewFocusRequest((value) => value + 1);
+  }, [activePlanningDraft]);
+
+  const handleOpenDraftGraph = useCallback(() => {
+    setViewMode('actionGraph');
+    setWorkflowSelectionDismissed(true);
+    setSelectedTaskId(null);
+    setDraftReviewOpen(false);
+  }, []);
+
+  const handleSendPlanningMessage = useCallback(
+    async (message: string) => {
+      if (!invoker) return;
+      const trimmed = message.trim();
+      if (!trimmed) return;
+      setPlanningSending(true);
+      setPlanningError(null);
+      try {
+        const response = await invoker.planningChatSend({
+          message: trimmed,
+          ...(planningSession?.status !== 'submitted' && planningSession?.id ? { sessionId: planningSession.id } : {}),
+          ...(planningSession?.presetKey ? { presetKey: planningSession.presetKey } : {}),
+        });
+        if (!response.ok) {
+          setPlanningError(response.error);
+          return;
+        }
+        const now = new Date().toISOString();
+        setPlanningSession((previous) => {
+          const sameSession = previous?.id === response.sessionId ? previous : null;
+          return {
+            id: response.sessionId,
+            title: sameSession?.title ?? planningSession?.title ?? (trimmed.slice(0, 80) || 'Untitled plan'),
+            status: response.draftPlanAvailable ? 'draft_ready' : 'still_discussing',
+            presetKey: sameSession?.presetKey ?? planningSession?.presetKey ?? 'codex',
+            messages: appendPlanningMessages(sameSession, response.sessionId, trimmed, response.reply),
+            draftPlanAvailable: response.draftPlanAvailable,
+            ...(response.draftPlanSummary ? { draftPlanSummary: response.draftPlanSummary } : {}),
+            ...(response.draftPlanText ? { draftPlanText: response.draftPlanText } : {}),
+            createdAt: sameSession?.createdAt ?? planningSession?.createdAt ?? now,
+            updatedAt: now,
+          };
+        });
+        if (!response.draftPlanAvailable) {
+          setDraftReviewOpen(false);
+        }
+      } catch (err) {
+        setPlanningError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setPlanningSending(false);
+      }
+    },
+    [invoker, planningSession],
+  );
+
+  const handleSubmitPlanningDraft = useCallback(async () => {
+    if (!invoker || !activePlanningDraft || planningSubmitting) return;
+    setPlanningSubmitting(true);
+    setPlanningError(null);
+    try {
+      const response = await invoker.planningChatSubmit({ sessionId: activePlanningDraft.sessionId });
+      if (!response.ok) {
+        setPlanningError(response.error);
+        return;
+      }
+      const now = new Date().toISOString();
+      setPlanningSession((previous) => {
+        if (!previous || previous.id !== activePlanningDraft.sessionId) return previous;
+        const nextId = previous.messages.reduce((max, line) => Math.max(max, line.id), 0) + 1;
+        const successText = response.workflowCount && response.workflowCount > 1
+          ? `Plan "${response.planName}" submitted as ${response.workflowCount} stacked workflows.`
+          : `Plan "${response.planName}" submitted to Invoker.`;
+        return {
+          ...previous,
+          status: 'submitted',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+          submittedPlanName: response.planName,
+          submittedWorkflowId: response.workflowId,
+          updatedAt: now,
+          messages: [
+            ...previous.messages,
+            { id: nextId, role: 'system', text: successText, tone: 'success', createdAt: now },
+          ],
+        };
+      });
+      setDraftReviewOpen(false);
+      setWorkflowSelectionDismissed(false);
+      setHasLoadedPlan(true);
+      setHasStarted(false);
+      setPlanName(response.planName);
+      setSelectedWorkflowId(response.workflowId);
+      setViewMode('dag');
+      refreshTasks();
+    } catch (err) {
+      setPlanningError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPlanningSubmitting(false);
+    }
+  }, [activePlanningDraft, invoker, planningSubmitting, refreshTasks]);
   const missingRequiredTool = systemDiagnostics?.tools.find((tool) => tool.required && !tool.installed) ?? null;
   const installedAgentCount = systemDiagnostics?.tools.filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed).length ?? 0;
   const needsBundledSkillsPrompt = Boolean(systemDiagnostics?.isPackaged && systemDiagnostics?.bundledSkills?.promptRecommended);
@@ -652,6 +1009,7 @@ export function App() {
         const parsed = yaml.load(planText) as any;
         setPlanName(parsed?.name ?? 'Untitled Plan');
         setOnFinish(parsed?.onFinish ?? 'merge');
+        setDraftReviewOpen(false);
         refreshTasks();
       } catch (err) {
         console.error('Failed to load plan:', err);
@@ -715,6 +1073,8 @@ export function App() {
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
       setStatusFilters(new Set<WorkflowStatus>());
+      setDraftReviewOpen(false);
+      setPlanningError(null);
     } catch (err) {
       console.error('Failed to clear:', err);
     }
@@ -735,6 +1095,8 @@ export function App() {
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
+      setDraftReviewOpen(false);
+      setPlanningError(null);
     } catch (err) {
       console.error('Failed to delete workflows:', err);
     }
@@ -1140,34 +1502,54 @@ export function App() {
                   activeFilters={statusFilters}
                   onStatusClick={(filterKey, event) => handleStatusClick(filterKey as WorkflowStatus, event)}
                 />
-                <TerminalDrawer
+                <InvokerTerminal
                   collapsed={terminalCollapsed}
                   onToggle={() => setTerminalCollapsed((prev) => !prev)}
+                  planningSession={planningSession}
+                  sending={planningSending}
+                  submitting={planningSubmitting}
+                  error={planningError}
+                  onSendMessage={handleSendPlanningMessage}
+                  onReviewDraft={handleReviewDraft}
+                  onSubmitDraft={handleSubmitPlanningDraft}
+                  onOpenGraph={handleOpenDraftGraph}
                 />
               </>
             )}
           </div>
 
           <div className={`${inspectorCollapsed ? 'w-16' : 'w-96'} transition-all duration-150`}>
-            <WorkflowInspector
-              workflow={selectedWorkflow}
-              task={selectedTask}
-              workflowTasks={miniDagTasks}
-              remoteTargets={remoteTargets}
-              executionPools={executionPools}
-              executionAgents={executionAgents}
-              collapsed={inspectorCollapsed}
-              advancedExpanded={advancedMetadataExpanded}
-              actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
-              onEditType={handleEditType}
-              onEditPool={handleEditPool}
-              onEditAgent={handleEditAgent}
-              onEditPrompt={handleEditPrompt}
-              onEditCommand={handleEditCommand}
-              onSetMergeBranch={handleSetMergeBranch}
-              onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
-              onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
-            />
+            {draftReviewOpen && activePlanningDraft && !inspectorCollapsed ? (
+              <PlanningDraftReviewPanel
+                draft={activePlanningDraft}
+                groups={activeDraftGroups}
+                submitting={planningSubmitting}
+                panelRef={planningContextPanelRef}
+                onSubmitDraft={handleSubmitPlanningDraft}
+                onOpenGraph={handleOpenDraftGraph}
+                onClose={() => setDraftReviewOpen(false)}
+              />
+            ) : (
+              <WorkflowInspector
+                workflow={selectedWorkflow}
+                task={selectedTask}
+                workflowTasks={miniDagTasks}
+                remoteTargets={remoteTargets}
+                executionPools={executionPools}
+                executionAgents={executionAgents}
+                collapsed={inspectorCollapsed}
+                advancedExpanded={advancedMetadataExpanded}
+                actionNode={viewMode === 'actionGraph' ? selectedActionNode : null}
+                onEditType={handleEditType}
+                onEditPool={handleEditPool}
+                onEditAgent={handleEditAgent}
+                onEditPrompt={handleEditPrompt}
+                onEditCommand={handleEditCommand}
+                onSetMergeBranch={handleSetMergeBranch}
+                onToggleCollapsed={() => setInspectorCollapsed((prev) => !prev)}
+                onToggleAdvanced={() => setAdvancedMetadataExpanded((prev) => !prev)}
+              />
+            )}
           </div>
         </div>
       </div>
