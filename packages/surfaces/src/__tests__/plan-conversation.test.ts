@@ -210,7 +210,7 @@ name: "Preserve Commands"
 tasks:
   - id: run-vitest
     description: "Run Vitest"
-    command: "cd packages/surfaces && npx vitest run"
+    command: "pnpm --filter @invoker/surfaces test"
     dependencies: []
   - id: run-root-package-test
     description: "Run package test"
@@ -226,7 +226,7 @@ tasks:
     const result = extractYamlPlan(text);
     expect(result).not.toBeNull();
     const plan = parsePlanText(result!);
-    expect(plan.tasks[0].command).toBe('cd packages/surfaces && npx vitest run');
+    expect(plan.tasks[0].command).toBe('pnpm --filter @invoker/surfaces test');
     expect(plan.tasks[1].command).toBe('pnpm test packages/protocol/src/__tests__/validation.test.ts');
     expect(plan.tasks[2].command).toBe('npm test -- src/foo.test.ts');
   });
@@ -806,6 +806,15 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('Inspect repo manifests and existing docs/scripts before choosing commands');
     expect(prompt).toContain('do not impose Invoker-specific commands on external repos');
     expect(prompt).toContain('reserve broad/full-suite commands for the final gate only when the target repo documents such a command');
+    expect(prompt).toContain('For package-manager commands that may run on managed SSH');
+    expect(prompt).toContain('make bootstrap ownership explicit');
+    expect(prompt).toContain('provisionCommand');
+    expect(prompt).toContain('If you cannot verify a target `provisionCommand`');
+    expect(prompt).toContain('Prefer repo/package scripts over raw test-runner binaries in remote commands');
+    expect(prompt).toContain('Avoid raw `vitest`, `npx vitest`, or `pnpm exec vitest`');
+    expect(prompt).toContain('packages/ui/package.json');
+    expect(prompt).toContain('node scripts/run-vitest.mjs');
+    expect(prompt).toContain('pnpm --filter @invoker/ui test');
   });
 
   it('system prompt advertises external_review as the GitHub-backed review gate', () => {

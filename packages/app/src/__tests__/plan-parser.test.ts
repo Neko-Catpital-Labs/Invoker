@@ -538,6 +538,7 @@ tasks:
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('npx vitest run');
+    expect(() => parsePlan(yaml)).toThrow('Use the repo/package test script instead');
   });
 
   it('parses task with prompt instead of command', () => {
