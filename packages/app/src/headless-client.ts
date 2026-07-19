@@ -179,11 +179,13 @@ async function delegateMutation(
   noTrackTimeoutMs: number = DEFAULT_NO_TRACK_DELEGATION_TIMEOUT_MS,
 ): Promise<DelegationOutcome> {
   const command = args[0];
+  const commandTimeoutMs = command === 'run' || command === 'resume'
+    ? 5_000
+    : await resolveDelegationTimeoutMs(args);
+  // noTrack must not shrink long-running global commands (e.g. start-ready --recreate-all).
   const timeoutMs = noTrack
-    ? noTrackTimeoutMs
-    : command === 'run' || command === 'resume'
-      ? 5_000
-      : await resolveDelegationTimeoutMs(args);
+    ? Math.max(noTrackTimeoutMs, commandTimeoutMs)
+    : commandTimeoutMs;
   delegationClientLog(
     `delegateMutation command=${command ?? '<missing>'} timeoutMs=${timeoutMs} noTrack=${noTrack ? 'true' : 'false'} waitForApproval=${waitForApproval ? 'true' : 'false'}`,
   );
