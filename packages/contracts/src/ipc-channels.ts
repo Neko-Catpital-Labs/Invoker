@@ -187,6 +187,159 @@ export interface ResumeWorkflowResult {
   startedCount: number;
 }
 
+export interface InAppPlanRequest {
+  goal: string;
+  presetKey?: string;
+  /** @deprecated Use presetKey. */
+  preset?: string;
+}
+
+export type InAppPlanResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+      workflowIds?: string[];
+      workflowCount?: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export interface PlanningPresetOption {
+  key: string;
+  label: string;
+  tool: string;
+  model?: string;
+  isDefault: boolean;
+}
+
+export interface InAppPlanningPlanSummary {
+  name: string;
+  taskCount: number;
+  workflowCount?: number;
+  steps: string[];
+}
+
+export type InAppPlanningSessionStatus =
+  | 'still_discussing'
+  | 'waiting_for_answer'
+  | 'draft_ready'
+  | 'submitted';
+
+export interface InAppPlanningChatLine {
+  id: number;
+  role: 'user' | 'assistant' | 'system';
+  text: string;
+  tone?: 'muted' | 'error' | 'success';
+  createdAt: string;
+}
+
+export interface InAppPlanningSessionSummary {
+  id: string;
+  title: string;
+  status: InAppPlanningSessionStatus;
+  presetKey: string;
+  messages: InAppPlanningChatLine[];
+  draftPlanAvailable: boolean;
+  draftPlanSummary?: InAppPlanningPlanSummary;
+  /**
+   * Full YAML text for the current draft plan.
+   *
+   * Optional for compatibility with persisted sessions created before raw draft
+   * YAML was stored; those sessions may still expose draftPlanSummary.
+   */
+  draftPlanText?: string;
+  submittedWorkflowId?: string;
+  submittedPlanName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InAppPlanningCreateSessionRequest {
+  presetKey?: string;
+  title?: string;
+}
+
+export type InAppPlanningCreateSessionResponse =
+  | {
+      ok: true;
+      session: InAppPlanningSessionSummary;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export type InAppPlanningListSessionsResponse = {
+  ok: true;
+  sessions: InAppPlanningSessionSummary[];
+};
+
+export interface InAppPlanningGetSessionRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningGetSessionResponse =
+  | {
+      ok: true;
+      session: InAppPlanningSessionSummary;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export interface InAppPlanningChatRequest {
+  sessionId?: string;
+  message: string;
+  presetKey?: string;
+}
+
+export type InAppPlanningChatResponse =
+  | {
+      ok: true;
+      sessionId: string;
+      reply: string;
+      draftPlanAvailable: boolean;
+      draftPlanSummary?: InAppPlanningPlanSummary;
+      /**
+       * Full YAML text for the current draft plan.
+       *
+       * Optional because older sessions can have only draftPlanSummary.
+       */
+      draftPlanText?: string;
+    }
+  | {
+      ok: false;
+      sessionId?: string;
+      error: string;
+    };
+
+export interface InAppPlanningSubmitRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningSubmitResponse =
+  | {
+      ok: true;
+      planName: string;
+      workflowId: string;
+      workflowIds?: string[];
+      workflowCount?: number;
+    }
+  | {
+      ok: false;
+      error: string;
+    };
+
+export interface InAppPlanningResetRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningResetResponse = { ok: true };
+
 export interface WorkflowListEntry {
   id: string;
   name: string;
@@ -259,6 +412,38 @@ export interface SystemDiagnostics {
 
 export const IpcChannels = {
   // Plan & Workflow Management
+  'invoker:plan-from-goal': {} as {
+    request: [request: InAppPlanRequest];
+    response: InAppPlanResponse;
+  },
+  'invoker:planning-chat-create': {} as {
+    request: [request?: InAppPlanningCreateSessionRequest];
+    response: InAppPlanningCreateSessionResponse;
+  },
+  'invoker:planning-chat-list': {} as {
+    request: [];
+    response: InAppPlanningListSessionsResponse;
+  },
+  'invoker:planning-chat-get': {} as {
+    request: [request: InAppPlanningGetSessionRequest];
+    response: InAppPlanningGetSessionResponse;
+  },
+  'invoker:planning-chat-send': {} as {
+    request: [request: InAppPlanningChatRequest];
+    response: InAppPlanningChatResponse;
+  },
+  'invoker:planning-chat-submit': {} as {
+    request: [request: InAppPlanningSubmitRequest];
+    response: InAppPlanningSubmitResponse;
+  },
+  'invoker:planning-chat-reset': {} as {
+    request: [request: InAppPlanningResetRequest];
+    response: InAppPlanningResetResponse;
+  },
+  'invoker:get-planning-presets': {} as {
+    request: [];
+    response: PlanningPresetOption[];
+  },
   'invoker:load-plan': {} as {
     request: [planText: string];
     response: void;

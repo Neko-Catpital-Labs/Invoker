@@ -264,7 +264,7 @@ export class PlanConversation {
     const tPrompt = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: promptLen=${prompt.length}, historyMsgs=${this.messages.length - 1}, promptPreview="${prompt.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
-    const response = await this.spawnCursor(prompt);
+    const response = await this.spawnPlanner(prompt);
     const tCursor = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, responsePreview="${response.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
@@ -289,6 +289,11 @@ export class PlanConversation {
   /** Returns the conversation history. */
   get history(): readonly ConversationMessage[] {
     return this.messages.filter((m) => m.content.length > 0);
+  }
+
+  /** Returns the latest valid YAML draft in assistant history, or null. */
+  getDraftedPlan(): string | null {
+    return this.extractLastPlanFromMessages();
   }
 
   /** Reset the conversation. */
@@ -330,6 +335,10 @@ export class PlanConversation {
   }
 
   // ── Cursor CLI Subprocess ─────────────────────────────
+
+  spawnPlanner(prompt: string): Promise<string> {
+    return this.spawnCursor(prompt);
+  }
 
   spawnCursor(prompt: string): Promise<string> {
     const spawnStart = Date.now();
