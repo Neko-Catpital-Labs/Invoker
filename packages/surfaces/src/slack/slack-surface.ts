@@ -1095,6 +1095,10 @@ export class SlackSurface implements Surface {
     }
     // Neither: abandon the staged action so the new text is routed fresh.
     this.pendingConfirms.delete(threadTs);
+    await say({
+      text: 'Dropped the pending approval. Say `submit` (or the original action) again if you still want it, or reply `yes`/`no` next time.',
+      thread_ts: threadTs,
+    });
     return false;
   }
 
