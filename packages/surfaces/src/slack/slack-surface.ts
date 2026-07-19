@@ -1598,12 +1598,16 @@ ${text}`;
       return;
     }
 
+    let inviteFailed: string | undefined;
     if (event.requestedBy) {
       try {
         await client.conversations.invite({ channel: channelId, users: event.requestedBy });
       } catch (err) {
         const code = this.slackErrorCode(err);
-        if (code !== 'already_in_channel' && code !== 'cant_invite_self') {
+        if (code === 'already_in_channel' || code === 'cant_invite_self') {
+          // Requester is already present — treat as success.
+        } else {
+          inviteFailed = code ?? (err instanceof Error ? err.message : String(err));
           this.log('slack', 'warn', `Failed to invite ${event.requestedBy} to ${channelId}: ${err}`);
         }
       }
@@ -1629,7 +1633,15 @@ ${text}`;
     );
 
     if (event.lobbyChannel) {
-      await this.postToThread(event.lobbyChannel, event.lobbyThreadTs, `Created <#${channelId}> for workflow \`${event.workflowId}\`.`);
+      if (inviteFailed) {
+        await this.postToThread(
+          event.lobbyChannel,
+          event.lobbyThreadTs,
+          `Created private <#${channelId}> for workflow \`${event.workflowId}\`, but I could not invite you (${inviteFailed}). Ask a workspace admin to invite you, or check the bot has \`groups:write\` and was reinstalled after adding scopes.`,
+        );
+      } else {
+        await this.postToThread(event.lobbyChannel, event.lobbyThreadTs, `Created <#${channelId}> for workflow \`${event.workflowId}\`.`);
+      }
     }
   }
 

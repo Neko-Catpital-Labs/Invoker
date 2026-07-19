@@ -278,6 +278,23 @@ describe('workflow channel creation', () => {
 
     expect(repo.getByWorkflowId('wf-1-2')?.channelId).toBe('C_EXIST');
   });
+
+  it('tells the lobby when the requester invite fails', async () => {
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+    client.conversations.invite.mockRejectedValueOnce({ data: { error: 'missing_scope' } });
+
+    await surface.handleEvent({
+      type: 'workflow_created', workflowId: 'wf-1-2', requestedBy: 'U1',
+      lobbyChannel: 'CLOBBY', lobbyThreadTs: 't1',
+    });
+
+    expect(repo.getByWorkflowId('wf-1-2')?.channelId).toBe('C_NEW');
+    const lobbyPost = client.chat.postMessage.mock.calls.find((c: any[]) => c[0].channel === 'CLOBBY')?.[0];
+    expect(lobbyPost?.text).toContain('could not invite you');
+    expect(lobbyPost?.text).toContain('missing_scope');
+    expect(lobbyPost?.text).not.toBe('Created <#C_NEW> for workflow `wf-1-2`.');
+  });
 });
 
 // ── Outbound routing ─────────────────────────────────────────
