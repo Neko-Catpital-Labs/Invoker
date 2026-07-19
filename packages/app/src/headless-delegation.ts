@@ -17,6 +17,8 @@ type DelegateTrackingOptions = {
 
 export const DEFAULT_DELEGATION_TIMEOUT_MS = 5_000;
 export const WORKFLOW_DELEGATION_TIMEOUT_MS = 60_000;
+/** start-ready --recreate-all can recreate dozens of workflows inline on the owner. */
+export const START_READY_RECREATE_ALL_DELEGATION_TIMEOUT_MS = 300_000;
 
 // ---------------------------------------------------------------------------
 // DelegationOutcome — typed result union for delegation attempts
@@ -82,7 +84,10 @@ export async function tryDelegateResume(
 }
 
 function usesExtendedDelegationTimeout(command: string): boolean {
-  return command === 'rebase-retry' || command === 'rebase-recreate' || command === 'restart';
+  return command === 'rebase-retry'
+    || command === 'rebase-recreate'
+    || command === 'restart'
+    || command === 'start-ready';
 }
 
 function looksLikeWorkflowId(target: unknown): boolean {
@@ -97,6 +102,11 @@ export function delegationTimeoutMs(
   if (!usesExtendedDelegationTimeout(command)) {
     return DEFAULT_DELEGATION_TIMEOUT_MS;
   }
+  if (command === 'start-ready') {
+    return args.includes('--recreate-all')
+      ? START_READY_RECREATE_ALL_DELEGATION_TIMEOUT_MS
+      : WORKFLOW_DELEGATION_TIMEOUT_MS;
+  }
 
   const resolvedTarget = resolveHeadlessTarget(args[1], targetLookup);
   if (resolvedTarget.kind === 'workflow') {
@@ -109,6 +119,12 @@ export async function resolveDelegationTimeoutMs(args: string[]): Promise<number
   const command = args[0] ?? '';
   if (!usesExtendedDelegationTimeout(command)) {
     return DEFAULT_DELEGATION_TIMEOUT_MS;
+  }
+  // start-ready is global (no workflow arg) but recreates/starts many workflows.
+  if (command === 'start-ready') {
+    return args.includes('--recreate-all')
+      ? START_READY_RECREATE_ALL_DELEGATION_TIMEOUT_MS
+      : WORKFLOW_DELEGATION_TIMEOUT_MS;
   }
   return looksLikeWorkflowId(args[1])
     ? WORKFLOW_DELEGATION_TIMEOUT_MS
