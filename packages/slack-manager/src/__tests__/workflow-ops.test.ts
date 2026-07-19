@@ -86,5 +86,7 @@ describe('createRunWorkflowOp', () => {
     const res = await createRunWorkflowOp(client, noop)({ operation: 'recreate', target: { all: true } });
     expect(res.ok).toBe(false);
     expect(res.summary).toContain('Invoker is down');
+    expect(res.summary).toContain('@Invoker restart');
+    expect(res.summary).not.toMatch(/Reply `restart`/);
   });
 });
