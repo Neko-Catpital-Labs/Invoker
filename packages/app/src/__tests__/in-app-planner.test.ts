@@ -29,7 +29,6 @@ afterEach(() => {
 
 describe('planning chat draft YAML plumbing', () => {
   it('returns draftPlanText from send responses and stores it on the session', async () => {
-    vi.spyOn(PlanConversation.prototype, 'sendMessage').mockResolvedValue(VALID_PLAN_REPLY);
     const sessions = createInAppPlanningChatSessions();
 
     const result = await sendPlanningChatMessage({
@@ -38,6 +37,7 @@ describe('planning chat draft YAML plumbing', () => {
     }, {
       config: {},
       loadGeneratedPlan: vi.fn(),
+      plannerReplyOverride: vi.fn().mockResolvedValue(VALID_PLAN_REPLY),
       sessions,
     });
 
@@ -53,7 +53,6 @@ describe('planning chat draft YAML plumbing', () => {
   });
 
   it('threads draftPlanText through list and get session responses', async () => {
-    vi.spyOn(PlanConversation.prototype, 'sendMessage').mockResolvedValue(VALID_PLAN_REPLY);
     const sessions = createInAppPlanningChatSessions();
     const sent = await sendPlanningChatMessage({
       message: 'draft',
@@ -61,6 +60,7 @@ describe('planning chat draft YAML plumbing', () => {
     }, {
       config: {},
       loadGeneratedPlan: vi.fn(),
+      plannerReplyOverride: vi.fn().mockResolvedValue(VALID_PLAN_REPLY),
       sessions,
     });
     if (!sent.ok) throw new Error(sent.error);

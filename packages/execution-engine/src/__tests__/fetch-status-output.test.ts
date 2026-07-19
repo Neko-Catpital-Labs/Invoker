@@ -16,6 +16,7 @@ import { execSync } from 'node:child_process';
 import { BaseExecutor, type BaseEntry } from '../base-executor.js';
 import type { WorkRequest, WorkRequestInputs } from '@invoker/contracts';
 import type { ExecutorHandle, TerminalSpec } from '../executor.js';
+import { advanceRemoteBranch } from './git-remote-test-helpers.js';
 
 function makeRequest(actionId: string, inputs: Partial<WorkRequestInputs> = {}): WorkRequest {
   return {
@@ -133,19 +134,7 @@ describe('fetch status visibility in task output', () => {
     });
 
     it('shows staleness when commits behind', async () => {
-      // Create a second clone and push commits ahead
-      const secondClone = mkdtempSync(join(tmpdir(), 'fetch-status-clone-'));
-      execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
-      execSync('git checkout -B master origin/master', { cwd: secondClone });
-      execSync('git config user.email "test@test.com"', { cwd: secondClone });
-      execSync('git config user.name "Test"', { cwd: secondClone });
-
-      // Push 3 commits from second clone
-      for (let i = 1; i <= 3; i++) {
-        writeFileSync(join(secondClone, `file${i}.txt`), `content${i}`);
-        execSync(`git add -A && git commit -m "commit ${i}"`, { cwd: secondClone });
-      }
-      execSync('git push', { cwd: secondClone });
+      advanceRemoteBranch(remoteRepo, 3);
 
       const executionId = 'test-exec-behind';
       executor.registerTestEntry(executionId, makeRequest('test-action'));
@@ -155,25 +144,10 @@ describe('fetch status visibility in task output', () => {
       const output = executor.getOutputBuffer(executionId).join('');
       expect(output).toContain('Status: success');
       expect(output).toContain('3 commits behind origin/master');
-
-      // Cleanup
-      rmSync(secondClone, { recursive: true, force: true });
     });
 
     it('emits loud warning when >100 commits behind', async () => {
-      // Create a second clone and push many commits ahead
-      const secondClone = mkdtempSync(join(tmpdir(), 'fetch-status-clone-'));
-      execSync(`git clone ${remoteRepo} ${secondClone}`, { cwd: tmpdir() });
-      execSync('git checkout -B master origin/master', { cwd: secondClone });
-      execSync('git config user.email "test@test.com"', { cwd: secondClone });
-      execSync('git config user.name "Test"', { cwd: secondClone });
-
-      // Push 101 commits to trigger loud warning
-      for (let i = 1; i <= 101; i++) {
-        writeFileSync(join(secondClone, `file${i}.txt`), `content${i}`);
-        execSync(`git add -A && git commit -m "commit ${i}"`, { cwd: secondClone });
-      }
-      execSync('git push', { cwd: secondClone });
+      advanceRemoteBranch(remoteRepo, 101);
 
       const executionId = 'test-exec-very-behind';
       executor.registerTestEntry(executionId, makeRequest('test-action'));
@@ -184,9 +158,6 @@ describe('fetch status visibility in task output', () => {
       expect(output).toContain('Status: success');
       expect(output).toContain('101 commits behind origin/master');
       expect(output).toContain('[Git Fetch] WARNING: Local is 101 commits behind origin');
-
-      // Cleanup
-      rmSync(secondClone, { recursive: true, force: true });
     });
 
     it('handles new branch without remote tracking', async () => {
