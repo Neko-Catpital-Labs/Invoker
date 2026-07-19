@@ -511,7 +511,7 @@ describe('TaskDAG camera ownership', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it.fails('does not let pre-recovery watchdog misses refit after a manual pan and graph data change', async () => {
+  it('does not let pre-recovery watchdog misses refit after a manual pan and graph data change', async () => {
     const onManualViewport = vi.fn();
 
     const { rerender } = await renderDagAndSettleInitialFit({
