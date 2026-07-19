@@ -240,8 +240,8 @@ export interface InvokerConfig {
     port?: number;
     /**
      * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
-     * and provision per-task workspaces. When false (default), BYO mode: user provides
-     * pre-cloned repo path and handles all git/setup operations.
+     * then run the task in that checkout. When false (default), BYO mode: user provides
+     * pre-cloned repo path and handles git/setup operations.
      */
     managedWorkspaces?: boolean;
     /**
@@ -249,9 +249,14 @@ export interface InvokerConfig {
      * Default: ~/.invoker
      *
      * Invoker does not run repo bootstrap automatically. If a repo needs hydration,
-     * make the task command run the repo-owned setup explicitly.
+     * configure provisionCommand explicitly or make the task command run setup.
      */
     remoteInvokerHome?: string;
+    /**
+     * Explicit remote bootstrap command to run inside the task workspace before
+     * each SSH task payload. Unset by default; no provisioning is inferred.
+     */
+    provisionCommand?: string;
     /**
      * When true, export agent API keys from the local secrets file into SSH task/fix
      * shells. Default false so remote Claude/Codex CLI account auth is preserved.
