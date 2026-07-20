@@ -358,19 +358,37 @@ function summarizePlanText(planText: string): InAppPlanningPlanSummary | null {
       if (workflows.length === 0) return null;
       let taskCount = 0;
       const steps: string[] = [];
-      for (const workflow of workflows) {
-        if (typeof workflow.name === 'string' && workflow.name.trim()) {
-          steps.push(workflow.name.trim());
-        }
+      const taskGroups: NonNullable<InAppPlanningPlanSummary['taskGroups']> = [];
+      workflows.forEach((workflow, index) => {
+        const workflowName = typeof workflow.name === 'string' && workflow.name.trim()
+          ? workflow.name.trim()
+          : `Workflow ${index + 1}`;
+        steps.push(workflowName);
+        const workflowSteps: string[] = [];
         if (Array.isArray(workflow.tasks)) {
           taskCount += workflow.tasks.length;
+          for (const task of workflow.tasks) {
+            if (!task || typeof task !== 'object' || Array.isArray(task)) continue;
+            const candidate = task as Record<string, unknown>;
+            if (typeof candidate.description === 'string' && candidate.description.trim()) {
+              workflowSteps.push(candidate.description.trim());
+            } else if (typeof candidate.id === 'string' && candidate.id.trim()) {
+              workflowSteps.push(candidate.id.trim());
+            }
+          }
         }
-      }
+        taskGroups.push({
+          name: workflowName,
+          taskCount: Array.isArray(workflow.tasks) ? workflow.tasks.length : undefined,
+          steps: workflowSteps,
+        });
+      });
       return {
         name: typeof plan.name === 'string' && plan.name.trim() ? plan.name.trim() : 'Untitled plan',
         taskCount,
         workflowCount: workflows.length,
         steps,
+        taskGroups,
       };
     }
 

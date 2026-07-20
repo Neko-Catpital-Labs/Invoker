@@ -215,11 +215,18 @@ export interface PlanningPresetOption {
   isDefault: boolean;
 }
 
+export interface InAppPlanningTaskGroupSummary {
+  name: string;
+  taskCount?: number;
+  steps: string[];
+}
+
 export interface InAppPlanningPlanSummary {
   name: string;
   taskCount: number;
   workflowCount?: number;
   steps: string[];
+  taskGroups?: InAppPlanningTaskGroupSummary[];
 }
 
 export type InAppPlanningSessionStatus =
