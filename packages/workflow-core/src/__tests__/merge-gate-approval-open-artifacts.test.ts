@@ -285,23 +285,22 @@ function makeResponse(overrides: Partial<WorkResponse>): WorkResponse {
 }
 
 /**
- * Repro for: "Admin Bypass Babysitter Step 2" reported completed while
- * PRs #5127 / #5128 were still open.
+ * Merge-gate completion invariant.
  *
- * Observed sequence (~/.invoker/merge-trace.log, 2026-07-20):
- *   07:54:41.715  GATE_WS_SET_FIX_AWAITING          (merge gate enters fix session)
- *   07:54:41.721  worker-autoapprove-submitted      (approve intent queued, channel invoker:approve)
- *   07:54:54      PUBLISH_AFTER_FIX_ENTER
- *   08:08:48.889  GATE_WS_SET_TASK_REVIEW_READY     (fresh, unmerged PRs published)
- *   08:08:48.977  APPROVE_ENTER  status=review_ready
- *   08:08:49.013  APPROVE_DONE   status=completed
+ * Regression origin: "Admin Bypass Babysitter Step 2" reported completed while
+ * PRs #5127 / #5128 were still open (~/.invoker/merge-trace.log, 2026-07-20):
  *
- * The approve intent was validated against "awaiting_approval + pendingFixError"
- * (approve the AI fix) but consumed 14 minutes later against "review_ready"
- * (approve the review gate), because Orchestrator.approve accepts both states
- * and re-validates nothing at consumption time.
+ *   07:54:41.715  GATE_WS_SET_FIX_AWAITING        merge gate enters fix session
+ *   07:54:41.721  worker-autoapprove-submitted    approve intent 93969 queued
+ *   08:08:48.889  GATE_WS_SET_TASK_REVIEW_READY   fresh, unmerged PRs published
+ *   08:08:48.977  APPROVE_ENTER status=review_ready   (queueWaitMs 847256)
+ *   08:08:49.013  APPROVE_DONE  status=completed
+ *
+ * The intent was validated against "awaiting_approval + pendingFixError"
+ * (approve the AI fix) and spent 14 minutes later on "review_ready" (approve
+ * the review gate). approve() accepted both states and re-validated nothing.
  */
-describe('repro: queued fix-approval intent completes an unmerged external_review gate', () => {
+describe('merge gate approval requires approved artifacts', () => {
   let orchestrator: Orchestrator;
   let persistence: InMemoryPersistence;
 
@@ -332,21 +331,26 @@ describe('repro: queued fix-approval intent completes an unmerged external_revie
     return orchestrator.getAllTasks().find(t => t.config.isMergeNode)!;
   }
 
-  const openPrGate = {
-    activeGeneration: 11,
-    completion: { required: 'all' as const, status: 'approved' as const },
-    artifacts: [
-      { id: '5127', providerId: '5127', required: true, status: 'open' as const, generation: 11 },
-      { id: '5128', providerId: '5128', required: true, status: 'open' as const, generation: 11 },
-    ],
-  };
+  function gate(statuses: Array<'open' | 'approved'>) {
+    return {
+      activeGeneration: 11,
+      completion: { required: 'all' as const, status: 'approved' as const },
+      artifacts: statuses.map((status, i) => ({
+        id: String(5127 + i),
+        providerId: String(5127 + i),
+        required: true,
+        status,
+        generation: 11,
+      })),
+    };
+  }
 
   /**
-   * Drives the merge gate along the observed path: CI failure → fix session →
-   * fix awaiting approval (where the auto-approve worker queues its intent) →
-   * publishAfterFix → review_ready with freshly published, unmerged PRs.
+   * Drives the merge gate along the observed path: CI failure -> fix session ->
+   * fix awaiting approval (where the auto-approve worker queues its intent) ->
+   * publishAfterFix -> review_ready with freshly published PRs.
    */
-  function driveToReviewReadyWithOpenPrs(mergeId: string): void {
+  function driveToReviewReady(mergeId: string, statuses: Array<'open' | 'approved'>): void {
     orchestrator.handleWorkerResponse(
       makeResponse({ actionId: mergeId, status: 'failed', outputs: { exitCode: 1, error: 'ci failed' } }),
     );
@@ -360,56 +364,61 @@ describe('repro: queued fix-approval intent completes an unmerged external_revie
         reviewId: '5127',
         reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/5127',
         reviewStatus: 'Awaiting review',
-        reviewGate: openPrGate,
+        reviewGate: gate(statuses),
       },
     } as any);
   }
 
-  it('approve() marks the gate completed even though every required PR is still open', async () => {
+  it('refuses a stale fix-approval that lands on a gate whose PRs are still open', async () => {
     const merge = loadExternalReviewWorkflow();
-    driveToReviewReadyWithOpenPrs(merge.id);
+    driveToReviewReady(merge.id, ['open', 'open']);
 
-    const beforeApprove = orchestrator.getTask(merge.id)!;
-    expect(beforeApprove.status).toBe('review_ready');
-    expect(beforeApprove.execution.pendingFixError).toBeUndefined();
-    expect(beforeApprove.execution.reviewGate!.artifacts.every(a => a.status === 'open')).toBe(true);
-
-    // The stale intent lands. Nothing re-validates what it was approving.
-    await orchestrator.approve(merge.id);
+    await expect(orchestrator.approve(merge.id)).rejects.toThrow(/not approved/i);
 
     const after = orchestrator.getTask(merge.id)!;
+    expect(after.status).toBe('review_ready');
     expect(after.execution.reviewGate!.artifacts.every(a => a.status === 'open')).toBe(true);
-    expect(after.status).toBe('completed'); // BUG: unmerged stack reported as landed
   });
 
-  it('the approve hook performs no merge for external_review, so nothing lands', async () => {
+  it('reports which artifacts blocked the approval', async () => {
     const merge = loadExternalReviewWorkflow();
-    const approveMerge = vi.fn();
+    driveToReviewReady(merge.id, ['approved', 'open']);
 
-    // Mirrors packages/app/src/execution/task-runner-wiring.ts:70-80
-    orchestrator.setBeforeApproveHook(async (task: TaskState) => {
-      if (!task.config.isMergeNode || !task.config.workflowId) return;
-      if (task.execution.pendingFixError !== undefined) return;
-      const workflow = persistence.loadWorkflow(task.config.workflowId);
-      if (!workflow) return;
-      if (workflow.onFinish !== 'merge') return;
-      if (workflow.mergeMode === 'external_review') return;
-      approveMerge(task.config.workflowId);
-    });
+    await expect(orchestrator.approve(merge.id)).rejects.toThrow(/5128 is open/);
+    expect(orchestrator.getTask(merge.id)!.status).toBe('review_ready');
+  });
 
-    driveToReviewReadyWithOpenPrs(merge.id);
+  it('does not fire the approve hook when the gate is refused', async () => {
+    const merge = loadExternalReviewWorkflow();
+    const hook = vi.fn();
+    orchestrator.setBeforeApproveHook(hook);
+    driveToReviewReady(merge.id, ['open', 'open']);
+
+    await expect(orchestrator.approve(merge.id)).rejects.toThrow();
+    expect(hook).not.toHaveBeenCalled();
+  });
+
+  it('completes the gate once every required artifact is approved', async () => {
+    const merge = loadExternalReviewWorkflow();
+    driveToReviewReady(merge.id, ['approved', 'approved']);
+
     await orchestrator.approve(merge.id);
 
-    expect(approveMerge).not.toHaveBeenCalled();
     expect(orchestrator.getTask(merge.id)!.status).toBe('completed');
   });
 
-  it('downstream workflows gated on this merge node unblock as if the stack had landed', async () => {
+  it('still completes a merge gate that has no review artifacts', async () => {
     const merge = loadExternalReviewWorkflow();
-    driveToReviewReadyWithOpenPrs(merge.id);
+    orchestrator.handleWorkerResponse(
+      makeResponse({ actionId: merge.id, status: 'failed', outputs: { exitCode: 1, error: 'boom' } }),
+    );
+    orchestrator.beginFixSession(merge.id);
+    orchestrator.setFixAwaitingApproval(merge.id, 'boom');
+    orchestrator.resumeTaskAfterFixApproval(merge.id);
+    orchestrator.setTaskAwaitingApproval(merge.id);
+
     await orchestrator.approve(merge.id);
 
-    // externalDependencies use requiredStatus: 'completed' on '__merge__'.
     expect(orchestrator.getTask(merge.id)!.status).toBe('completed');
   });
 });
