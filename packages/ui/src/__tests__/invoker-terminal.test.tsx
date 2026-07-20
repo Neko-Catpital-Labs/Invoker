@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, type Mock, vi } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import * as ReactFlowModule from '@xyflow/react';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -14,6 +14,8 @@ vi.mock('@xyflow/react', async () => {
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
 
@@ -23,6 +25,8 @@ describe('Invoker terminal (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
   });
 
   afterEach(() => {
@@ -739,6 +743,68 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
     expect(mock.api.start).not.toHaveBeenCalled();
+  });
+
+  it('keeps the existing workflow selection and camera stable after draft submit', async () => {
+    const existingTasks = [
+      makeUITask({ id: 'task-existing', workflowId: 'wf-existing', description: 'Existing task' }),
+    ];
+    const existingWorkflows = [
+      { id: 'wf-existing', name: 'Existing Plan', status: 'pending' as const },
+    ];
+    mock.setTasks(existingTasks, existingWorkflows);
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Here is the plan.',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Submitted Plan', taskCount: 1, steps: ['Submitted task'] },
+    })) as any;
+    mock.api.planningChatSubmit = vi.fn(async () => {
+      mock.setTasks(
+        [
+          ...existingTasks,
+          makeUITask({ id: 'task-submitted', workflowId: 'wf-submitted', description: 'Submitted task' }),
+        ],
+        [
+          ...existingWorkflows,
+          { id: 'wf-submitted', name: 'Submitted Plan', status: 'pending' as const },
+        ],
+      );
+      return { ok: true, planName: 'Submitted Plan', workflowId: 'wf-submitted' };
+    }) as any;
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Existing Plan task DAG');
+    });
+
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the follow-up plan');
+    await screen.findByTestId('invoker-terminal-ready-bar');
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Submitted Plan" submitted to Invoker. Review it, then use Start ready work.');
+      expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Existing Plan task DAG');
+    });
+    expect(screen.getByTestId('workflow-node-wf-existing').className).toContain('ring-2');
+    expect(screen.getByTestId('workflow-node-wf-submitted').className).not.toContain('ring-2');
   });
 
   it('shows stacked workflow counts and submit messaging', async () => {

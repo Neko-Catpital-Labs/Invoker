@@ -1538,6 +1538,7 @@ export function App() {
       setPreviousGraphRegion(region);
     }
     requestAnimationFrame(() => {
+      if (document.querySelector('[role="menu"]')) return;
       const root = document.querySelector<HTMLElement>(`[data-keyboard-region="${region}"]`);
       if (!root) return;
       if (region === 'inspector') {
@@ -2545,11 +2546,8 @@ export function App() {
       if (result.ok) {
         setPlanningSubmitError(null);
         setHasLoadedPlan(true);
-        setWorkflowSelectionDismissed(false);
         setGraphActionsMenuOpen(false);
         setPlanName(result.planName);
-        setSelectedWorkflowId(result.workflowId);
-        issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'planning-submit' });
         updatePlanningSessionById(planningSessionId, (session) => ({
           ...session,
           busy: false,
@@ -2579,7 +2577,7 @@ export function App() {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [activePlanningReadOnly, appendTerminalLine, invoker, issueCameraCommand, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [activePlanningReadOnly, appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
