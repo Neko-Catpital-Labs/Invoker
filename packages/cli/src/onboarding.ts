@@ -98,6 +98,7 @@ export interface CliConfigState {
   error?: string;
   presets: Record<string, PlanningPresetSpec>;
   defaultPreset?: string;
+  contents?: JsonRecord;
 }
 
 export function loadCliConfig(configPath: string = defaultConfigPath()): CliConfigState {
@@ -107,7 +108,13 @@ export function loadCliConfig(configPath: string = defaultConfigPath()): CliConf
       slackHarnessPresets?: Record<string, PlanningPresetSpec>;
       defaultSlackHarnessPreset?: string;
     };
-    return { path: configPath, exists: true, presets: cfg.slackHarnessPresets ?? {}, defaultPreset: cfg.defaultSlackHarnessPreset };
+    return {
+      path: configPath,
+      exists: true,
+      presets: cfg.slackHarnessPresets ?? {},
+      defaultPreset: cfg.defaultSlackHarnessPreset,
+      contents: cfg as JsonRecord,
+    };
   } catch (err) {
     logCaughtException(`Failed to read Invoker config at ${configPath}`, err);
     return { path: configPath, exists: true, error: err instanceof Error ? err.message : String(err), presets: {} };
@@ -227,6 +234,7 @@ export function buildDoctorChecks(cfg: CliConfigState, isInstalled: IsInstalled 
     tools: DEFAULT_TOOL_REQUIREMENTS,
     isInstalled,
     config: { path: cfg.path, exists: cfg.exists, error: cfg.error },
+    configContents: cfg.contents,
     presets: cfg.presets,
     defaultPreset: cfg.defaultPreset,
   });
