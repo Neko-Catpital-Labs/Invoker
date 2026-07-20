@@ -278,6 +278,32 @@ describe('Invoker terminal (component)', () => {
     expect(firstPanel).not.toHaveTextContent('second raw stream');
   });
 
+  it('renders chat role labels and fenced YAML in a mono code panel', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'I drafted the plan.\n\n```yaml\nname: Fence Plan\ntasks: []\n```',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Fence Plan', taskCount: 0, taskGroups: [] },
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+    submitPlanningText('draft it');
+
+    const transcript = await screen.findByTestId('invoker-terminal-transcript');
+    await waitFor(() => {
+      expect(transcript).toHaveTextContent('I drafted the plan.');
+      expect(transcript).toHaveTextContent('name: Fence Plan');
+    });
+    expect(transcript).toHaveTextContent('You');
+    expect(transcript).toHaveTextContent('Invoker');
+    expect(transcript.querySelector('pre code')).toBeTruthy();
+    expect(transcript.querySelector('pre')?.className ?? '').toContain('font-mono');
+    expect(screen.queryByText('you ›')).not.toBeInTheDocument();
+    expect(screen.queryByText('invoker ›')).not.toBeInTheDocument();
+  });
+
   it('shows collapsed Thinking disclosure when reasoning is present', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
