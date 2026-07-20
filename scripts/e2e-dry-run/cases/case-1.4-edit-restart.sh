@@ -16,6 +16,7 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 1.4: submit plan (task will fail)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group1-single-task/1.4-edit-restart.yaml" || true
+invoker_e2e_wait_task_status e2e-g114-task failed
 
 ST=$(invoker_e2e_task_status e2e-g114-task)
 if [ "$ST" != "failed" ]; then
@@ -26,6 +27,7 @@ echo "==> case 1.4: confirmed intermediate status=failed"
 
 echo "==> case 1.4: edit command + restart"
 invoker_e2e_run_headless edit e2e-g114-task echo ok
+invoker_e2e_wait_task_status e2e-g114-task completed
 
 ST=$(invoker_e2e_task_status e2e-g114-task)
 if [ "$ST" != "completed" ]; then

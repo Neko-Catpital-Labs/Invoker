@@ -16,6 +16,7 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 4.1: submit plan (task A will fail)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group4-fix-merge/4.1-fix-downstream.yaml" || true
+invoker_e2e_wait_task_status e2e-g441-taskA failed
 
 STA=$(invoker_e2e_task_status e2e-g441-taskA)
 if [ "$STA" != "failed" ]; then
@@ -33,6 +34,7 @@ echo "==> case 4.1: confirmed B=pending"
 
 echo "==> case 4.1: fix A (claude-marker.sh runs)"
 invoker_e2e_run_headless fix e2e-g441-taskA
+invoker_e2e_wait_task_status e2e-g441-taskA awaiting_approval
 
 STA=$(invoker_e2e_task_status e2e-g441-taskA)
 if [ "$STA" != "awaiting_approval" ]; then
@@ -44,6 +46,8 @@ echo "==> case 4.1: confirmed A=awaiting_approval"
 
 echo "==> case 4.1: approve A"
 invoker_e2e_run_headless approve e2e-g441-taskA
+invoker_e2e_wait_task_status e2e-g441-taskA completed
+invoker_e2e_wait_task_status e2e-g441-taskB completed
 
 STA=$(invoker_e2e_task_status e2e-g441-taskA)
 STB=$(invoker_e2e_task_status e2e-g441-taskB)

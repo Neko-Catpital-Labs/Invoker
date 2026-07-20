@@ -16,6 +16,7 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 1.7: submit plan (command succeeds → awaiting_approval)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group1-single-task/1.7-manual-approve.yaml"
+invoker_e2e_wait_task_status e2e-g117-task awaiting_approval
 
 ST=$(invoker_e2e_task_status e2e-g117-task)
 if [ "$ST" != "awaiting_approval" ]; then
@@ -27,6 +28,7 @@ echo "==> case 1.7: confirmed status=awaiting_approval"
 
 echo "==> case 1.7: approve"
 invoker_e2e_run_headless approve e2e-g117-task
+invoker_e2e_wait_task_status e2e-g117-task completed
 
 ST=$(invoker_e2e_task_status e2e-g117-task)
 if [ "$ST" != "completed" ]; then

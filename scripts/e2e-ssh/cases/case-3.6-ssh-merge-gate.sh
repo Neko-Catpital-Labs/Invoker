@@ -16,6 +16,8 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 3.6: submit plan (mergeMode=github, mixed executors)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.6-ssh-merge-gate.yaml"
+invoker_e2e_wait_task_status e2e-g336-taskA completed
+invoker_e2e_wait_task_status e2e-g336-taskB completed
 
 STA=$(invoker_e2e_task_status e2e-g336-taskA)
 STB=$(invoker_e2e_task_status e2e-g336-taskB)
@@ -34,6 +36,7 @@ if [ -z "$MERGE_ID" ]; then
   exit 1
 fi
 echo "==> case 3.6: merge gate ID=$MERGE_ID"
+invoker_e2e_wait_task_status "$MERGE_ID" review_ready
 
 STM=$(invoker_e2e_task_status "$MERGE_ID")
 if [ "$STM" != "review_ready" ]; then
@@ -66,6 +69,7 @@ echo "==> case 3.6: confirmed gh PR creation API was called"
 
 echo "==> case 3.6: approve merge gate"
 invoker_e2e_run_headless approve "$MERGE_ID"
+invoker_e2e_wait_task_status "$MERGE_ID" completed
 
 STM=$(invoker_e2e_task_status "$MERGE_ID")
 if [ "$STM" != "completed" ]; then

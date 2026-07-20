@@ -16,6 +16,8 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 4.2: submit plan (mergeMode=github)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group4-fix-merge/4.2-github-pr.yaml"
+invoker_e2e_wait_task_status e2e-g442-taskA completed
+invoker_e2e_wait_task_status e2e-g442-taskB completed
 
 STA=$(invoker_e2e_task_status e2e-g442-taskA)
 STB=$(invoker_e2e_task_status e2e-g442-taskB)
@@ -35,6 +37,7 @@ if [ -z "$MERGE_ID" ]; then
   exit 1
 fi
 echo "==> case 4.2: merge gate ID=$MERGE_ID"
+invoker_e2e_wait_settled "$MERGE_ID"
 
 STM=$(invoker_e2e_task_status "$MERGE_ID")
 if [ "$STM" != "awaiting_approval" ] && [ "$STM" != "review_ready" ]; then

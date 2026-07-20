@@ -16,6 +16,8 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 2.7: submit plan (A will fail)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-task/2.7-fan-in-fix.yaml" || true
+invoker_e2e_wait_task_status e2e-g227-taskA failed
+invoker_e2e_wait_task_status e2e-g227-taskB completed
 
 STA=$(invoker_e2e_task_status e2e-g227-taskA)
 STB=$(invoker_e2e_task_status e2e-g227-taskB)
@@ -29,6 +31,7 @@ echo "==> case 2.7: confirmed A=failed, B=completed, C=pending"
 
 echo "==> case 2.7: fix A (claude-marker.sh runs)"
 invoker_e2e_run_headless fix e2e-g227-taskA
+invoker_e2e_wait_task_status e2e-g227-taskA awaiting_approval
 
 STA=$(invoker_e2e_task_status e2e-g227-taskA)
 if [ "$STA" != "awaiting_approval" ]; then
@@ -40,6 +43,8 @@ echo "==> case 2.7: confirmed A=awaiting_approval"
 
 echo "==> case 2.7: approve A"
 invoker_e2e_run_headless approve e2e-g227-taskA
+invoker_e2e_wait_task_status e2e-g227-taskA completed
+invoker_e2e_wait_task_status e2e-g227-taskC completed
 
 STA=$(invoker_e2e_task_status e2e-g227-taskA)
 STB=$(invoker_e2e_task_status e2e-g227-taskB)

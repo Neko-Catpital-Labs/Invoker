@@ -16,6 +16,8 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 2.1: submit plan"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-task/2.1-sequential-success.yaml"
+invoker_e2e_wait_task_status e2e-g221-taskA completed
+invoker_e2e_wait_task_status e2e-g221-taskB completed
 
 STA=$(invoker_e2e_task_status e2e-g221-taskA)
 STB=$(invoker_e2e_task_status e2e-g221-taskB)

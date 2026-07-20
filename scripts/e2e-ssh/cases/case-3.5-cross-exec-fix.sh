@@ -16,6 +16,8 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 3.5: submit plan (SSH B will fail)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.5-cross-exec-fix.yaml" || true
+invoker_e2e_wait_task_status e2e-g335-taskA completed
+invoker_e2e_wait_task_status e2e-g335-taskB failed
 
 STA=$(invoker_e2e_task_status e2e-g335-taskA)
 STB=$(invoker_e2e_task_status e2e-g335-taskB)
@@ -29,6 +31,7 @@ echo "==> case 3.5: confirmed A=completed, B=failed, C=pending"
 
 echo "==> case 3.5: fix B (claude-marker.sh runs)"
 invoker_e2e_run_headless fix e2e-g335-taskB
+invoker_e2e_wait_task_status e2e-g335-taskB awaiting_approval
 
 STB=$(invoker_e2e_task_status e2e-g335-taskB)
 if [ "$STB" != "awaiting_approval" ]; then
@@ -40,6 +43,8 @@ echo "==> case 3.5: confirmed B=awaiting_approval"
 
 echo "==> case 3.5: approve B"
 invoker_e2e_run_headless approve e2e-g335-taskB
+invoker_e2e_wait_task_status e2e-g335-taskB completed
+invoker_e2e_wait_task_status e2e-g335-taskC completed
 
 STA=$(invoker_e2e_task_status e2e-g335-taskA)
 STB=$(invoker_e2e_task_status e2e-g335-taskB)

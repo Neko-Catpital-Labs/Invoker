@@ -16,6 +16,7 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 2.12: submit plan (A has manual approval)"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group2-multi-task/2.12-manual-approve-downstream.yaml"
+invoker_e2e_wait_task_status e2e-g2212-taskA awaiting_approval
 
 STA=$(invoker_e2e_task_status e2e-g2212-taskA)
 STB=$(invoker_e2e_task_status e2e-g2212-taskB)
@@ -28,6 +29,8 @@ echo "==> case 2.12: confirmed A=awaiting_approval, B=pending"
 
 echo "==> case 2.12: approve A"
 invoker_e2e_run_headless approve e2e-g2212-taskA
+invoker_e2e_wait_task_status e2e-g2212-taskA completed
+invoker_e2e_wait_task_status e2e-g2212-taskB completed
 
 STA=$(invoker_e2e_task_status e2e-g2212-taskA)
 STB=$(invoker_e2e_task_status e2e-g2212-taskB)

@@ -16,6 +16,7 @@ invoker_e2e_run_headless delete-all
 
 echo "==> case 1.1: submit plan"
 invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-dry-run/group1-single-task/1.1-success.yaml"
+invoker_e2e_wait_task_status e2e-g111-task completed
 
 ST=$(invoker_e2e_task_status e2e-g111-task)
 if [ "$ST" != "completed" ]; then
