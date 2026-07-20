@@ -73,6 +73,30 @@ describe('Context menu (component)', () => {
     });
   }
 
+  async function openWorkflowContextMenu() {
+    await setup();
+    fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
+    return screen.findByRole('menu');
+  }
+
+  async function openTaskContextMenu() {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
+    });
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+    return screen.findByRole('menu');
+  }
+
+  function pressMenuKey(key: string) {
+    const activeElement = document.activeElement;
+    const target = activeElement && activeElement !== document.body
+      ? activeElement
+      : document;
+    fireEvent.keyDown(target, { key });
+  }
+
   it('right-clicking a workflow shows workflow actions', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
@@ -103,6 +127,39 @@ describe('Context menu (component)', () => {
     expect(screen.queryByText('Retry Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Cancel Workflow')).not.toBeInTheDocument();
     expect(screen.queryByText('Delete Workflow')).not.toBeInTheDocument();
+  });
+
+  it('workflow context menu copies workflow id with ArrowDown navigation and Enter activation', async () => {
+    await openWorkflowContextMenu();
+
+    pressMenuKey('ArrowDown');
+    pressMenuKey('ArrowDown');
+    pressMenuKey('ArrowDown');
+    pressMenuKey('Enter');
+
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('wf-1'));
+  });
+
+  it('workflow context menu ArrowUp wraps from the first item to More', async () => {
+    await openWorkflowContextMenu();
+
+    pressMenuKey('ArrowUp');
+    pressMenuKey('Enter');
+
+    expect(await screen.findByText('Rebase and Retry')).toBeInTheDocument();
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['Enter', 'Enter'],
+    ['Space', ' '],
+  ])('task context menu activates the next enabled task action with %s', async (_label, key) => {
+    await openTaskContextMenu();
+
+    pressMenuKey('ArrowDown');
+    pressMenuKey(key);
+
+    await waitFor(() => expect(mock.api.openTerminal).toHaveBeenCalledWith('task-alpha'));
   });
 
   it('workflow context menu retries workflow', async () => {

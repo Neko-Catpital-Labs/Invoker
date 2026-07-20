@@ -99,6 +99,10 @@ export function ContextMenu({
     setPosition({ left, top });
   }, [x, y]);
 
+  useLayoutEffect(() => {
+    menuRef.current?.focus();
+  }, []);
+
   // Capture-phase outside dismissal stays reliable even if graph layers stop
   // bubbling on mouse/pointer events before they reach document listeners.
   useEffect(() => {
@@ -138,19 +142,24 @@ export function ContextMenu({
     const enabledIndices = renderedItems
       .map((item, idx) => (item.enabled ? idx : -1))
       .filter((idx) => idx >= 0);
+    const activationKey = e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar';
+    const navigationKey = e.key === 'ArrowDown' || e.key === 'ArrowUp';
+
+    if (!navigationKey && !activationKey) return;
+    if (enabledIndices.length === 0) return;
+
+    e.preventDefault();
+    e.stopPropagation();
 
     if (e.key === 'ArrowDown') {
-      e.preventDefault();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const nextPos = (currentPos + 1) % enabledIndices.length;
       setFocusedIndex(enabledIndices[nextPos]);
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
       const currentPos = enabledIndices.indexOf(focusedIndex);
       const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
       setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
+    } else if (activationKey) {
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
