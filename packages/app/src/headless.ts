@@ -426,6 +426,24 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
   }
 }
 
+export function resolveHeadlessDiskHeadroomConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+): NonNullable<WorkerRuntimeDependencies['diskHeadroom']> {
+  return {
+    localPath: resolveInvokerHomeRoot(),
+    remoteTargets: Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
+      name,
+      connection: {
+        host: target.host,
+        user: target.user,
+        sshKeyPath: target.sshKeyPath,
+        port: target.port,
+      },
+      remotePath: '~/.invoker',
+    })),
+  };
+}
+
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
@@ -478,6 +496,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         getAutoFixAgent: () => deps.invokerConfig.autoFixAgent,
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
+      diskHeadroom: resolveHeadlessDiskHeadroomConfig(deps.invokerConfig),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');
