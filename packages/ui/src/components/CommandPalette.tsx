@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState, type JSX, type RefObject } from 'react';
-import { AlertTriangle, Clock, GitBranch, Home, Layers, Settings, Terminal } from 'lucide-react';
+import { AlertTriangle, Clock, GitBranch, Home, Layers, Settings } from 'lucide-react';
 import type { SidebarSurface, WorkflowListEntry, WorkflowTaskEntry } from '../lib/workflow-progress-surfaces.js';
 import {
   Command,
@@ -92,14 +92,15 @@ const CommandPaletteBody = memo(function CommandPaletteBody({
           <CommandEmpty>No matches.</CommandEmpty>
 
           <CommandGroup heading="Navigate">
-            <CommandItem value="home go home" onSelect={closeAnd(() => onSelectSurface('home'))}>
+            <CommandItem value="home go home planning" onSelect={closeAnd(() => onSelectSurface('home'))}>
               <Home strokeWidth={1.75} />
               <span>Go home</span>
-            </CommandItem>
-            <CommandItem value="planning terminal" onSelect={closeAnd(() => onSelectSurface('planning'))}>
-              <Terminal strokeWidth={1.75} />
-              <span>Planning Terminal</span>
               {planningSessionCount > 0 && <CommandShortcut>{planningSessionCount}</CommandShortcut>}
+            </CommandItem>
+            <CommandItem value="plan graph" onSelect={closeAnd(() => onSelectSurface('planning'))}>
+              <Layers strokeWidth={1.75} />
+              <span>Plan graph</span>
+              {workflowCount > 0 && <CommandShortcut>{workflowCount}</CommandShortcut>}
             </CommandItem>
             <CommandItem value="needs attention" onSelect={closeAnd(() => onSelectSurface('attention'))}>
               <AlertTriangle strokeWidth={1.75} />

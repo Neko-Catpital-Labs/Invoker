@@ -40,19 +40,23 @@ describe('App launch (component)', () => {
     Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true });
     render(<App />);
     act(() => window.dispatchEvent(new Event('resize')));
-    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
-    expect(screen.queryByText('What do you want to build?')).not.toBeInTheDocument();
-    expect(screen.getByText('What to expect')).toBeInTheDocument();
-    expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
+    expect(await screen.findByText('What do you want to build?')).toBeInTheDocument();
+    expect(screen.getByTestId('planning-session-rail')).toBeInTheDocument();
     expect(screen.getByTestId('sidebar-home')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Planning chats');
+    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Plan graph');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
     expect(screen.getByTestId('sidebar-workers')).toHaveTextContent('Workers');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(await screen.findByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
+    expect(screen.getByTestId('empty-plan-graph-cta')).toBeInTheDocument();
+    expect(screen.getByText('No plan yet')).toBeInTheDocument();
   });
 
-  it('hides the collapsed Planning Terminal badge for the idle initial chat', async () => {
+  it('hides the collapsed Plan graph badge for the idle initial chat', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
 
     render(<App />);
@@ -163,7 +167,7 @@ describe('App launch (component)', () => {
     expect(await screen.findByTestId('sidebar-home')).toHaveTextContent('Invoker');
     expect(screen.queryByTestId('rail-open-file')).not.toBeInTheDocument();
     expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
-    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Planning Terminal');
+    expect(screen.getByTestId('sidebar-planning')).toHaveTextContent('Plan graph');
     expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
     expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
     expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
@@ -184,7 +188,11 @@ describe('App launch (component)', () => {
     expect(await screen.findByText('1 workflow')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
-    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(await screen.findByTestId('planning-session-rail')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    expect(await screen.findByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
     expect(screen.getByText('Alpha · running')).toBeInTheDocument();
   });
   it('keeps sidebar width under explicit toggle control while surfaces change', async () => {
@@ -199,15 +207,14 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('app-sidebar').className).toContain('w-60');
 
     fireEvent.click(screen.getByTestId('browser-rail-dismiss'));
-    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(await screen.findByTestId('planning-session-rail')).toBeInTheDocument();
     expect(screen.getByTestId('app-sidebar').className).toContain('w-60');
 
     fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
     expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
 
     fireEvent.click(screen.getByTestId('sidebar-planning'));
-    expect(await screen.findByTestId('planning-session-rail')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Planning Terminal' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
     expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
 
     fireEvent.click(screen.getByTestId('sidebar-attention'));
@@ -220,7 +227,7 @@ describe('App launch (component)', () => {
     expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
-    expect(await screen.findByText('Plan graph')).toBeInTheDocument();
+    expect(await screen.findByTestId('planning-session-rail')).toBeInTheDocument();
     expect(screen.getByTestId('app-sidebar').className).toContain('w-16');
 
     fireEvent.click(screen.getByTestId('sidebar-collapse-toggle'));
@@ -270,9 +277,10 @@ describe('App launch (component)', () => {
   });
 
 
-  it('shows workflow status chips and terminal drawer controls in home view', () => {
+  it('shows workflow status chips and terminal drawer controls in plan graph view', async () => {
     render(<App />);
-    expect(screen.getByTestId('workflow-status-pill-running')).toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    expect(await screen.findByTestId('workflow-status-pill-running')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
   });
 

@@ -658,7 +658,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     return (
       <div className="h-full w-full flex items-center justify-center text-muted-foreground">
         <div className="text-center">
-          <p>Your plan will appear here.</p>
+          <p>No plan yet — draft one from Home.</p>
         </div>
       </div>
     );

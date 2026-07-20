@@ -30,7 +30,7 @@ describe('CodeRabbit PR #3050 — draft state cleared after submit', () => {
   });
 
   async function openPlanningTerminal() {
-    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    fireEvent.click(await screen.findByTestId('sidebar-home'));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
     });

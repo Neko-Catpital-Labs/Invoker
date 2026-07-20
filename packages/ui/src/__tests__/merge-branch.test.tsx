@@ -52,6 +52,7 @@ describe('workflow advanced metadata (component)', () => {
 
   it('shows base branch inside advanced metadata section', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskA, mergeNode], workflows));
 
     await waitFor(() => {

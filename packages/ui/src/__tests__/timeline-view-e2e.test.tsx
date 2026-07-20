@@ -103,6 +103,7 @@ describe('Timeline view (component)', () => {
 
   it('opening Timeline shows Workers mode by default', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([alpha, beta], [workflowAlpha]);
       mock.setWorkerDecisions({ actions: [], limit: 100, offset: 0, hasMore: false, workflowId: workflowAlpha.id });
@@ -132,6 +133,7 @@ describe('Timeline view (component)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([], [workflowAlpha, workflowBeta]);
       mock.setWorkerDecisions((request) => {
@@ -167,6 +169,7 @@ describe('Timeline view (component)', () => {
 
   it('labels timeline mode and worker search controls for assistive technology', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([alpha, gamma], [workflowAlpha, workflowBeta]);
       mock.setWorkerDecisions({ actions: [], limit: 100, offset: 0, hasMore: false, workflowId: workflowAlpha.id });
@@ -192,6 +195,7 @@ describe('Timeline view (component)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([], [workflowAlpha]);
       mock.setWorkerDecisions({ actions: [invalidAction], limit: 100, offset: 0, hasMore: false, workflowId: workflowAlpha.id });
@@ -208,6 +212,7 @@ describe('Timeline view (component)', () => {
 
   it('switching to Tasks mode still shows the existing task bars', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([alpha, beta], [workflowAlpha]);
     });
@@ -236,6 +241,7 @@ describe('Timeline view (component)', () => {
     } as never);
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([completedAlpha, beta], [workflowAlpha]);
     });
@@ -264,6 +270,7 @@ describe('Timeline view (component)', () => {
     } as never);
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([startedAlpha, beta], [workflowAlpha]);
     });
@@ -284,6 +291,7 @@ describe('Timeline view (component)', () => {
 
   it('task timeline row text keeps selectable text styling', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([alpha, beta], [workflowAlpha]);
     });
@@ -315,6 +323,7 @@ describe('Timeline view (component)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([alpha, beta, gamma], [workflowAlpha, workflowBeta]);
       mock.setWorkerDecisions((request) => {
@@ -388,6 +397,7 @@ describe('Timeline view (component)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([alpha, beta, gamma], [workflowAlpha, workflowBeta]);
       mock.setWorkerDecisions((request) => {
@@ -499,8 +509,9 @@ describe('Timeline view (component)', () => {
     });
   });
 
-  it('switching back to Home workflow graph works', async () => {
+  it('switching back to Plan graph works', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => {
       mock.setTasks([alpha, beta], [workflowAlpha]);
     });

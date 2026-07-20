@@ -66,7 +66,7 @@ describe('Start and recreate failed, pending, and running', () => {
 
     render(<App />);
     act(() => mock.setTasks([pending, failed, running], workflows));
-    fireEvent.click(await screen.findByTestId('sidebar-home'));
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
 
     await waitFor(() => {
       expect(screen.getByTestId('rail-start-ready-menu')).toBeInTheDocument();

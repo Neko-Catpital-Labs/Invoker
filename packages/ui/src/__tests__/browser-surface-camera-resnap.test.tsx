@@ -176,14 +176,14 @@ describe('Browser-surface camera (component)', () => {
     setCenterMock.mockClear();
     workflowGraphSpy.reset();
 
-    fireEvent.click(screen.getByTestId('sidebar-home'));
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
 
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
     await waitFor(() => {
       const matchingCommands = workflowGraphSpy.commands.filter((command): command is GraphCameraCommand => (
         command?.kind === 'fitInitial'
         && command.scope === 'workflow'
-        && command.reason === 'sidebar-home'
+        && command.reason === 'sidebar-planning'
       ));
       expect(matchingCommands.length).toBeGreaterThan(0);
     });
