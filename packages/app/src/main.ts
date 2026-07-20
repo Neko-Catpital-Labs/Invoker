@@ -160,6 +160,10 @@ import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
+import {
+  resolveReviewGateWorkflowIdForPrTarget,
+  type ReviewGateCiRepairCommandResult,
+} from './review-gate-ci-repair-command.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -723,6 +727,14 @@ if (isHeadless) {
         orchestrator, persistence, executorRegistry, messageBus,
         repoRoot, invokerConfig, initServices, wireSlackBot,
         commandService,
+        reviewGateCiRepairSubmitter: {
+          submit: (workflowId, priority, channel, args, options) => {
+            if (!workflowMutationCoordinator) {
+              throw new Error('Workflow mutation coordinator is unavailable');
+            }
+            return workflowMutationCoordinator.submit(workflowId, priority, channel, args, options);
+          },
+        },
         getUiPerfStats: () => ({
           ts: new Date().toISOString(),
           mainDeltaToUi: 0,
@@ -929,6 +941,8 @@ if (isHeadless) {
             case 'fix':
             case 'resolve-conflict':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
+            case 'repair-review-gate-ci':
+              return { workflowId: resolveReviewGateWorkflowIdForPrTarget(persistence, arg0), priority: 'normal' };
             default:
               return { priority: 'normal' };
           }
@@ -1098,6 +1112,7 @@ if (isHeadless) {
             );
             return { ok: true, intentId };
           }
+          let reviewGateCiRepairResult: ReviewGateCiRepairCommandResult | undefined;
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
             await runHeadless(args, {
               ...headlessDeps,
@@ -1105,8 +1120,20 @@ if (isHeadless) {
               noTrack: delegatedNoTrack,
               signal: activeMutationContext?.signal,
               mutationTiming: activeMutationContext?.mutationTiming,
+              onReviewGateCiRepairResult: (result) => {
+                reviewGateCiRepairResult = result;
+              },
             });
           });
+          if (reviewGateCiRepairResult) {
+            const responseWorkflowId = workflowId ?? reviewGateCiRepairResult.workflowId;
+            if (!responseWorkflowId) {
+              return { ok: true, reviewGateCiRepair: reviewGateCiRepairResult };
+            }
+            orchestrator.syncFromDb(responseWorkflowId);
+            const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === responseWorkflowId);
+            return { workflowId: responseWorkflowId, tasks, reviewGateCiRepair: reviewGateCiRepairResult };
+          }
           return { ok: true };
         });
       }
@@ -1765,6 +1792,7 @@ if (isHeadless) {
     logger.info(`executeHeadlessExec begin args="${payload.args.join(' ')}" noTrack=${payload.noTrack ? 'true' : 'false'}`, {
       module: 'ipc-delegate',
     });
+    let reviewGateCiRepairResult: ReviewGateCiRepairCommandResult | undefined;
     const headlessCommand = String(payload.args[0] ?? '');
     const headlessTarget = String(payload.args[1] ?? '');
     const resolvedHeadlessTarget = resolveHeadlessTarget(headlessTarget, persistence);
@@ -1787,6 +1815,17 @@ if (isHeadless) {
       noTrack: payload.noTrack,
       preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),
       preemptWorkflowExecution: (workflowId: string) => preemptWorkflowExecution(workflowId),
+      reviewGateCiRepairSubmitter: {
+        submit: (workflowId, priority, channel, args, options) => {
+          if (!workflowMutationCoordinator) {
+            throw new Error('Workflow mutation coordinator is unavailable');
+          }
+          return workflowMutationCoordinator.submit(workflowId, priority, channel, args, options);
+        },
+      },
+      onReviewGateCiRepairResult: (result) => {
+        reviewGateCiRepairResult = result;
+      },
       deferRunnableTasks: (tasks: TaskState[], workflowId?: string) => {
         const filteredTasks = tasks;
         const crossWorkflowTasks = workflowId
@@ -1868,12 +1907,18 @@ if (isHeadless) {
     logger.info(`executeHeadlessExec end args="${payload.args.join(' ')}" workflow="${workflowId ?? 'unknown'}"`, {
       module: 'ipc-delegate',
     });
-    if (!workflowId) {
+    const responseWorkflowId = workflowId ?? reviewGateCiRepairResult?.workflowId;
+    if (!responseWorkflowId) {
+      if (reviewGateCiRepairResult) {
+        return { ok: true, reviewGateCiRepair: reviewGateCiRepairResult };
+      }
       return { ok: true };
     }
-    orchestrator.syncFromDb(workflowId);
-    const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === workflowId);
-    return { workflowId, tasks };
+    orchestrator.syncFromDb(responseWorkflowId);
+    const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === responseWorkflowId);
+    return reviewGateCiRepairResult
+      ? { workflowId: responseWorkflowId, tasks, reviewGateCiRepair: reviewGateCiRepairResult }
+      : { workflowId: responseWorkflowId, tasks };
   }
 
   function workflowIdForTargetArg(targetArg: unknown): string | undefined {
@@ -1912,6 +1957,8 @@ if (isHeadless) {
       case 'fix':
       case 'resolve-conflict':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'normal' };
+      case 'repair-review-gate-ci':
+        return { workflowId: resolveReviewGateWorkflowIdForPrTarget(persistence, arg0), priority: 'normal' };
       default:
         return { priority: 'normal' };
     }

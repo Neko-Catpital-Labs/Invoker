@@ -8,6 +8,10 @@ import {
   type HeadlessTargetLookup,
 } from './headless-command-classification.js';
 import { createDelegatedTaskFeed, trackWorkflow } from './headless-watch.js';
+import {
+  formatReviewGateCiRepairResult,
+  type ReviewGateCiRepairCommandResult,
+} from './review-gate-ci-repair-command.js';
 
 type DelegateTrackingOptions = {
   waitForApproval?: boolean;
@@ -76,6 +80,18 @@ function usesExtendedDelegationTimeout(command: string): boolean {
 
 function looksLikeWorkflowId(target: unknown): boolean {
   return /^wf-[^/]+$/.test(String(target ?? ''));
+}
+
+function delegatedReviewGateCiRepairResult(response: Record<string, unknown>): ReviewGateCiRepairCommandResult | undefined {
+  const candidate = response.reviewGateCiRepair;
+  if (!candidate || typeof candidate !== 'object') return undefined;
+  const result = candidate as Partial<ReviewGateCiRepairCommandResult>;
+  if (result.ok !== true) return undefined;
+  if (result.decision !== 'queued' && result.decision !== 'skipped' && result.decision !== 'unmapped') {
+    return undefined;
+  }
+  if (typeof result.reason !== 'string') return undefined;
+  return candidate as ReviewGateCiRepairCommandResult;
 }
 
 export function delegationTimeoutMs(
@@ -281,6 +297,10 @@ async function tryDelegate(
     process.stdout.write(`Delegated to owner — workflow: ${targetWorkflowId}\n`);
   } else {
     process.stdout.write('Delegated to owner\n');
+  }
+  const repairResult = delegatedReviewGateCiRepairResult(response);
+  if (repairResult) {
+    process.stdout.write(`${formatReviewGateCiRepairResult(repairResult)}\n`);
   }
 
   const outcome: DelegationOutcome = hasWorkflowId
