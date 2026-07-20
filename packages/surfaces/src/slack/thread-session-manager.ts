@@ -162,6 +162,8 @@ export interface SessionManagerConfig {
   log?: LogFn;
   /** Cursor CLI subprocess timeout in ms. Passed to PlanConversation. */
   timeoutMs?: number;
+  /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
+  conversationalPlanning?: boolean;
 }
 
 export interface SessionMetrics {
@@ -198,6 +200,7 @@ export class SessionManager {
   private readonly evictionIntervalMs: number;
   private readonly maxActiveSessions: number;
   private readonly timeoutMs?: number;
+  private readonly conversationalPlanning: boolean;
 
   constructor(config: SessionManagerConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -211,6 +214,7 @@ export class SessionManager {
     this.evictionIntervalMs = config.evictionIntervalMs ?? 5 * 60 * 1000; // 5 minutes
     this.maxActiveSessions = config.maxActiveSessions ?? 100;
     this.timeoutMs = config.timeoutMs;
+    this.conversationalPlanning = config.conversationalPlanning ?? false;
   }
 
   /**
@@ -296,6 +300,7 @@ export class SessionManager {
         repoUrl: this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
+        conversationalPlanning: this.conversationalPlanning,
       });
       await conversation.init(); // Load state from database
       this.log('session-manager', 'info', `[TRACE] Recovery init() done (threadTs=${id.threadTs})`);
@@ -323,6 +328,7 @@ export class SessionManager {
         repoUrl: this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
+        conversationalPlanning: this.conversationalPlanning,
       });
       // Don't call init() for new sessions — nothing to load
 

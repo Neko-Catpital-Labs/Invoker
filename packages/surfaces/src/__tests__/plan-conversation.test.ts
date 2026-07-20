@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlanConversation, extractYamlPlan, rewritePnpmTestCommand, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
+import { PlanConversation, buildPlanSystemPrompt, extractYamlPlan, rewritePnpmTestCommand, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -455,8 +455,46 @@ describe('PlanConversation', () => {
     await conversation.sendMessage('Hello');
     const prompt = mockSpawn.mock.calls[0][1][1] as string;
     expect(prompt).toContain('YAML task plan');
+    expect(prompt).toContain('After exploring, generate the YAML plan directly');
     expect(prompt).toContain('Hello');
     expect(prompt).toContain('pnpm run test:all');
+  });
+
+  it('conversational planning asks for scope before drafting', async () => {
+    const conversational = new PlanConversation({ conversationalPlanning: true });
+    mockCursorResponse('What behavior should change first?');
+
+    await conversational.sendMessage('Build better planning');
+
+    const prompt = mockSpawn.mock.calls[0][1][1] as string;
+    expect(prompt).toContain('conversational planning mode');
+    expect(prompt).toContain('Drafting is not authorized yet');
+    expect(prompt).toContain('Ask scoping questions first');
+    expect(prompt).toContain('edge cases, corner cases, architecture choices, ambiguity');
+    expect(prompt).toContain('explain like the user is five');
+    expect(prompt).toContain('asking whether the user wants you to draft the YAML plan');
+    expect(prompt).not.toContain('name: "Plan Name"');
+    expect(prompt).not.toContain('After exploring, generate the YAML plan directly');
+  });
+
+  it('conversational planning treats confirmation without YAML as draft approval', async () => {
+    const conversational = new PlanConversation({ conversationalPlanning: true });
+    (conversational as any).messages.push({
+      role: 'assistant',
+      content: 'I understand the scope. Would you like me to draft the YAML plan?',
+    });
+    mockCursorResponse(VALID_YAML_PLAN);
+
+    const reply = await conversational.sendMessage('yes');
+
+    expect(reply).toBe(VALID_YAML_PLAN);
+    expect(conversational.planSubmitted).toBe(false);
+    expect(conversational.submittedPlanText).toBeNull();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const prompt = mockSpawn.mock.calls[0][1][1] as string;
+    expect(prompt).toContain('The user has explicitly approved drafting');
+    expect(prompt).toContain('name: "Plan Name"');
+    expect(prompt).toContain('After exploring, generate the YAML plan directly');
   });
 
   it('submittedPlanText is null before confirmation', async () => {
@@ -570,6 +608,14 @@ describe('PlanConversation', () => {
 });
 
 describe('PlanConversation prompt construction', () => {
+  it('buildPlanSystemPrompt defaults to direct YAML draft behavior', () => {
+    const prompt = buildPlanSystemPrompt('main');
+    expect(prompt).toContain('YAML task plan');
+    expect(prompt).toContain('name: "Plan Name"');
+    expect(prompt).toContain('After exploring, generate the YAML plan directly');
+    expect(prompt).toContain('pnpm run test:all');
+  });
+
   it('buildCursorPrompt includes system prompt for first message', () => {
     const conv = new PlanConversation({ defaultBranch: 'master' });
     (conv as any).messages.push({ role: 'user', content: 'Hello' });

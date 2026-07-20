@@ -39,6 +39,8 @@ export interface PlanConversationConfig {
   defaultBranch?: string;
   /** Default repo URL (e.g. "git@github.com:user/repo.git"). Used when plan YAML omits repoUrl. */
   repoUrl?: string;
+  /** Opt in to a scoping-first planning conversation before YAML drafting. Default: false. */
+  conversationalPlanning?: boolean;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
 }
@@ -66,9 +68,43 @@ export function isConfirmation(text: string): boolean {
   return CONFIRMATION_PATTERNS.some((re) => re.test(trimmed));
 }
 
+function isExplicitDraftRequest(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return [
+    /\bdraft\b.*\b(yaml\s+)?plan\b/,
+    /\b(generate|write|create|produce)\b.*\b(yaml\s+)?plan\b/,
+    /\b(yaml\s+)?plan\b.*\b(draft|yaml)\b/,
+    /\bgo ahead\b.*\bdraft\b/,
+    /\bdraft it\b/,
+  ].some((re) => re.test(normalized));
+}
+
+function previousAssistantAskedToDraft(messages: ConversationMessage[]): boolean {
+  for (let i = messages.length - 2; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'assistant') continue;
+    return /\bdraft\b/i.test(msg.content)
+      && /\b(plan|yaml)\b/i.test(msg.content)
+      && msg.content.includes('?');
+  }
+  return false;
+}
+
+function isDraftingAuthorizedForPrompt(messages: ConversationMessage[]): boolean {
+  const latest = messages[messages.length - 1];
+  if (!latest || latest.role !== 'user') return false;
+  if (isExplicitDraftRequest(latest.content)) return true;
+  return isConfirmation(latest.content) && previousAssistantAskedToDraft(messages);
+}
+
 // ── System Prompt ───────────────────────────────────────────
 
-function buildSystemPrompt(defaultBranch: string, repoUrl?: string): string {
+export interface BuildPlanSystemPromptOptions {
+  conversationalPlanning?: boolean;
+  draftingAuthorized?: boolean;
+}
+
+function buildDirectPlanSystemPrompt(defaultBranch: string, repoUrl?: string): string {
   const repoUrlLine = repoUrl
     ? `repoUrl: "${repoUrl}"          # git clone URL for the repository`
     : `repoUrl: "git@github.com:user/repo.git"  # git clone URL for the repository`;
@@ -126,6 +162,46 @@ Rules:
 11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
 }
 
+function buildConversationalPlanSystemPrompt(defaultBranch: string, repoUrl: string | undefined, draftingAuthorized: boolean): string {
+  const draftingInstructions = draftingAuthorized
+    ? `
+The user has explicitly approved drafting. You may now produce the YAML task plan.
+
+Use the authorized drafting contract below:
+${buildDirectPlanSystemPrompt(defaultBranch, repoUrl)}`
+    : `
+Drafting is not authorized yet. Do NOT output a \`\`\`yaml code block, do NOT write a draft plan file, and do NOT tell the user the plan can be executed.
+
+Before drafting is authorized:
+1. Ask scoping questions first when the request is broad, ambiguous, risky, or missing constraints.
+2. Discuss relevant edge cases, corner cases, architecture choices, ambiguity, and likely historic reasons for the current code shape.
+3. Explore the codebase as needed, then use what you learned by referencing specific files, components, and patterns.
+4. When enough information exists, explain like the user is five: summarize assumptions, goals, and a high-level task outline in plain language.
+5. End by asking whether the user wants you to draft the YAML plan.`;
+
+  return `You are an assistant for the Invoker orchestrator in conversational planning mode.
+
+This session is a planning conversation before any task plan exists. Your job is to help scope the work clearly before drafting.
+
+For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase), answer directly without drafting a plan.
+
+For implementation work, prefer a scoping conversation first. Do not rush directly to YAML unless the user has clearly approved drafting a plan.
+${draftingInstructions}
+
+When responding in conversational planning mode, be concrete, call out tradeoffs, and keep the next question or draft-authorization request easy to answer.`;
+}
+
+export function buildPlanSystemPrompt(
+  defaultBranch: string,
+  repoUrl?: string,
+  options: BuildPlanSystemPromptOptions = {},
+): string {
+  if (options.conversationalPlanning) {
+    return buildConversationalPlanSystemPrompt(defaultBranch, repoUrl, options.draftingAuthorized ?? false);
+  }
+  return buildDirectPlanSystemPrompt(defaultBranch, repoUrl);
+}
+
 // ── Dangerous Command Detection ─────────────────────────────
 
 export const DANGEROUS_PATTERNS: RegExp[] = [
@@ -168,6 +244,7 @@ export class PlanConversation {
   private conversationRepo?: ConversationRepository;
   private defaultBranch?: string;
   private repoUrl?: string;
+  private conversationalPlanning: boolean;
   private log: LogFn;
   private _initialized = false;
 
@@ -180,6 +257,7 @@ export class PlanConversation {
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
     this.repoUrl = config.repoUrl;
+    this.conversationalPlanning = config.conversationalPlanning ?? false;
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -252,12 +330,16 @@ export class PlanConversation {
         this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
         return reply;
       }
-      const errorReply = "I couldn't find a complete YAML plan in this conversation. Could you ask me to regenerate the plan?";
-      this.messages.push({ role: 'assistant', content: errorReply });
-      this.saveState();
-      const tEnd = Date.now();
-      this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation-failed): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
-      return errorReply;
+      if (this.conversationalPlanning) {
+        this.log('plan-conversation', 'info', '[TRACE] confirmation without YAML routed through conversational planning');
+      } else {
+        const errorReply = "I couldn't find a complete YAML plan in this conversation. Could you ask me to regenerate the plan?";
+        this.messages.push({ role: 'assistant', content: errorReply });
+        this.saveState();
+        const tEnd = Date.now();
+        this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation-failed): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
+        return errorReply;
+      }
     }
 
     const prompt = this.buildCursorPrompt();
@@ -308,7 +390,10 @@ export class PlanConversation {
    * and the complete conversation history.
    */
   buildCursorPrompt(): string {
-    const systemPrompt = buildSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl);
+    const systemPrompt = buildPlanSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl, {
+      conversationalPlanning: this.conversationalPlanning,
+      draftingAuthorized: this.conversationalPlanning && isDraftingAuthorizedForPrompt(this.messages),
+    });
     const parts: string[] = [systemPrompt];
 
     if (this.messages.length > 1) {
@@ -323,7 +408,11 @@ export class PlanConversation {
     const lastMessage = this.messages[this.messages.length - 1];
     if (lastMessage) {
       parts.push(`\nUser's latest message:\n${lastMessage.content}`);
-      parts.push('\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.');
+      if (this.conversationalPlanning) {
+        parts.push('\nRespond to the latest message in conversational planning mode. Scope first, and only draft YAML when the user has explicitly approved drafting.');
+      } else {
+        parts.push('\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.');
+      }
     }
 
     return parts.join('\n');
