@@ -129,6 +129,22 @@ describe('headless-client', () => {
     expect(runElectronHeadless).toHaveBeenCalledWith(argv);
   });
 
+  it('runs a named worker directly in standalone mode', async () => {
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    const runElectronHeadless = vi.fn(async () => 23);
+    const argv = ['worker', 'disk-headroom'];
+
+    const exitCode = await runHeadlessClientCommand(argv, {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      refreshMessageBus: vi.fn(async () => new LocalBus()),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(23);
+    expect(runElectronHeadless).toHaveBeenCalledWith(argv);
+  });
+
   it('keeps delegating a read when the ping misses but a live owner marker exists', async () => {
     process.env.INVOKER_HEADLESS_STANDALONE = '1';
     // A live owner holds the DB (marker names this process, sidecars present),
