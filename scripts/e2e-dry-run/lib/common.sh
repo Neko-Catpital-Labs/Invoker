@@ -53,7 +53,7 @@ invoker_e2e_ensure_branch_aliases() {
 invoker_e2e_allow_repo_git_ops() {
   (
     cd "$INVOKER_E2E_REPO_ROOT"
-    git config --global --add safe.directory "$INVOKER_E2E_REPO_ROOT" >/dev/null 2>&1 || true
+    git config --global --add safe.directory "*" >/dev/null 2>&1 || true
   )
 }
 
@@ -274,7 +274,7 @@ invoker_e2e_run_headless() {
       return 0
     fi
     case "$status" in
-      124|137|143)
+      124|137|139|143)
         if [ "$attempt" -lt "$max_attempts" ]; then
           echo "WARN: headless command interrupted (exit=$status), retrying once: $*" >&2
           attempt=$((attempt + 1))
@@ -305,7 +305,7 @@ invoker_e2e_submit_plan() {
       return 0
     fi
     case "$status" in
-      124|137|143)
+      124|137|139|143)
         if [ "$attempt" -lt "$max_attempts" ]; then
           echo "WARN: submit-plan interrupted (exit=$status), retrying once: $plan_path $*" >&2
           attempt=$((attempt + 1))
