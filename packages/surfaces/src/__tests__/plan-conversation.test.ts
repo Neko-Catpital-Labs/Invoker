@@ -771,6 +771,17 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).not.toContain('Conversation History');
   });
 
+  it('agent-mode system prompt allows local repro but bans mutating shared state', () => {
+    const conv = new PlanConversation({ mode: 'agent' });
+    (conv as any).messages.push({ role: 'user', content: 'Why do we get extra merge stacks?' });
+    const prompt = conv.buildCursorPrompt();
+    expect(prompt).toContain('Inside your worktree you are unrestricted');
+    expect(prompt).toContain('Reproducing a bug locally is always allowed');
+    expect(prompt).toContain('mergify stack push');
+    expect(prompt).toContain('scripts/land-stack.mjs --execute');
+    expect(prompt).toContain('ask the user to confirm');
+  });
+
   it('buildCursorPrompt includes history for multi-turn', () => {
     const conv = new PlanConversation({});
     (conv as any).messages.push(

@@ -24,6 +24,7 @@ import {
   DEFAULT_PLANNER_RETRY_BASE_DELAY_MS,
   DEFAULT_PLANNER_RETRY_LIMIT,
   PlanConversation,
+  SLACK_LOCAL_REPRO_POLICY,
   buildEmptyPlannerOutputError,
   defaultPlanningCommand,
   isConfirmation,
@@ -259,7 +260,7 @@ ${text}
 
 /** Q&A prompt for a lobby question: answer directly, never emit a plan. */
 export function buildLobbyQuestionPrompt(text: string): string {
-  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. ${SLACK_DIRECT_ANSWER_GUIDANCE} Do NOT generate a YAML plan and do NOT create a workflow. Question:\n${text}`;
+  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. ${SLACK_DIRECT_ANSWER_GUIDANCE} Do NOT generate a YAML plan and do NOT create a workflow. If answering well requires changing code, say in prose what the fix would be and tell the user to start a plan thread with \`plan: <request>\`.\n\n${SLACK_LOCAL_REPRO_POLICY}\n\nQuestion:\n${text}`;
 }
 
 /** Parse the classifier's raw stdout into a validated classification; never throws. */
