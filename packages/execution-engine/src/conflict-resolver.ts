@@ -145,15 +145,19 @@ async function resolveRemoteBranchOwnerPath(
   if (!branch) return undefined;
   const info = deriveRemoteManagedWorkspaceInfo(workspacePath, target);
   if (!info) return undefined;
-  const porcelain = await execRemoteSsh(
-    target,
-    buildWorktreeListScript({
-      repoHash: info.repoHash,
-      invokerHome: info.invokerHome,
-    }),
-    'list_worktrees',
-  );
-  return findManagedWorktreeForBranch(porcelain, branch, [info.managedPrefix]);
+  try {
+    const porcelain = await execRemoteSsh(
+      target,
+      buildWorktreeListScript({
+        repoHash: info.repoHash,
+        invokerHome: info.invokerHome,
+      }),
+      'list_worktrees',
+    );
+    return findManagedWorktreeForBranch(porcelain, branch, [info.managedPrefix]);
+  } catch {
+    return undefined;
+  }
 }
 
 // ── Extracted functions ──────────────────────────────────
