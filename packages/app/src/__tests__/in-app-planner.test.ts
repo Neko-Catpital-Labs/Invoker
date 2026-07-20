@@ -5,6 +5,7 @@ import {
   getPlanningChatSession,
   listPlanningChatSessions,
   sendPlanningChatMessage,
+  summarizePlanText,
   submitPlanningChatDraft,
 } from '../in-app-planner.js';
 
@@ -132,5 +133,33 @@ describe('planning chat draft YAML plumbing', () => {
       loadGeneratedPlan,
     })).resolves.toEqual({ ok: true, planName: 'Stored YAML', workflowId: 'wf-1' });
     expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Stored YAML'));
+  });
+
+  it('summarizes multi-workflow drafts with task groups', () => {
+    expect(summarizePlanText(`
+name: Grouped plan
+workflows:
+  - id: backend
+    name: Backend workflow
+    tasks:
+      - id: api
+        description: Add API endpoint
+  - id: frontend
+    name: Frontend workflow
+    tasks:
+      - id: sidebar
+        description: Add review sidebar
+      - id: actions
+        description: Wire ready bar actions
+`)).toMatchObject({
+      name: 'Grouped plan',
+      taskCount: 3,
+      workflowCount: 2,
+      steps: ['Backend workflow', 'Frontend workflow'],
+      taskGroups: [
+        { name: 'Backend workflow', workflowId: 'backend', taskCount: 1, steps: ['Add API endpoint'] },
+        { name: 'Frontend workflow', workflowId: 'frontend', taskCount: 2, steps: ['Add review sidebar', 'Wire ready bar actions'] },
+      ],
+    });
   });
 });

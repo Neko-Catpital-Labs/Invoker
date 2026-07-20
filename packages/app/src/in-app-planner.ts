@@ -345,7 +345,24 @@ function createLoadedResponse(loaded: LoadedGeneratedPlan): Extract<InAppPlanRes
   };
 }
 
-function summarizePlanText(planText: string): InAppPlanningPlanSummary | null {
+function summarizeTaskSteps(rawTasks: unknown): string[] | null {
+  if (!Array.isArray(rawTasks)) return [];
+  const steps: string[] = [];
+  for (const task of rawTasks) {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) return null;
+    const candidate = task as Record<string, unknown>;
+    if (typeof candidate.description === 'string' && candidate.description.trim()) {
+      steps.push(candidate.description.trim());
+    } else if (typeof candidate.id === 'string' && candidate.id.trim()) {
+      steps.push(candidate.id.trim());
+    } else {
+      return null;
+    }
+  }
+  return steps;
+}
+
+export function summarizePlanText(planText: string): InAppPlanningPlanSummary | null {
   try {
     const raw = parseYaml(planText) as unknown;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -358,35 +375,40 @@ function summarizePlanText(planText: string): InAppPlanningPlanSummary | null {
       if (workflows.length === 0) return null;
       let taskCount = 0;
       const steps: string[] = [];
-      for (const workflow of workflows) {
-        if (typeof workflow.name === 'string' && workflow.name.trim()) {
-          steps.push(workflow.name.trim());
+      const taskGroups: NonNullable<InAppPlanningPlanSummary['taskGroups']> = [];
+      workflows.forEach((workflow, index) => {
+        const workflowName =
+          typeof workflow.name === 'string' && workflow.name.trim()
+            ? workflow.name.trim()
+            : typeof workflow.id === 'string' && workflow.id.trim()
+              ? workflow.id.trim()
+              : `Workflow ${index + 1}`;
+        steps.push(workflowName);
+        const taskSteps = summarizeTaskSteps(workflow.tasks);
+        if (taskSteps === null) {
+          return;
         }
-        if (Array.isArray(workflow.tasks)) {
-          taskCount += workflow.tasks.length;
-        }
-      }
+        taskCount += Array.isArray(workflow.tasks) ? workflow.tasks.length : 0;
+        taskGroups.push({
+          name: workflowName,
+          ...(typeof workflow.id === 'string' && workflow.id.trim() ? { workflowId: workflow.id.trim() } : {}),
+          taskCount: taskSteps.length,
+          steps: taskSteps,
+        });
+      });
+      if (taskGroups.length !== workflows.length) return null;
       return {
         name: typeof plan.name === 'string' && plan.name.trim() ? plan.name.trim() : 'Untitled plan',
         taskCount,
         workflowCount: workflows.length,
         steps,
+        taskGroups,
       };
     }
 
     if (!Array.isArray(plan.tasks) || plan.tasks.length === 0) return null;
-    const steps: string[] = [];
-    for (const task of plan.tasks) {
-      if (!task || typeof task !== 'object' || Array.isArray(task)) return null;
-      const candidate = task as Record<string, unknown>;
-      if (typeof candidate.description === 'string' && candidate.description.trim()) {
-        steps.push(candidate.description.trim());
-      } else if (typeof candidate.id === 'string' && candidate.id.trim()) {
-        steps.push(candidate.id.trim());
-      } else {
-        return null;
-      }
-    }
+    const steps = summarizeTaskSteps(plan.tasks);
+    if (!steps) return null;
     return {
       name: typeof plan.name === 'string' && plan.name.trim() ? plan.name.trim() : 'Untitled plan',
       taskCount: plan.tasks.length,
