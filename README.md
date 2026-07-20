@@ -67,8 +67,9 @@ Minimal example:
 ```json
 {
   "maxConcurrency": 6,
-  "autoFixRetries": 3,
-  "autoFixAgent": "claude",
+  "autoFixRetries": 2,
+  "autoApproveAIFixes": false,
+  "autoFixAgent": "codex",
   "remoteTargets": {
     "staging-a": {
       "host": "203.0.113.10",
@@ -90,7 +91,17 @@ Minimal example:
 }
 ```
 
-More examples: [docs/invoker-config-example.json](docs/invoker-config-example.json), [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md), [docs/docker-executor.md](docs/docker-executor.md).
+More examples: [docs/getting-started.md](docs/getting-started.md), [docs/invoker-config-example.json](docs/invoker-config-example.json), [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md), [docs/docker-executor.md](docs/docker-executor.md).
+
+### Review-Gate CI Repair
+
+CI repair is owned by user config and persisted workflow state, not by plan YAML. Do not add `autoFix`, `autoFixRetries`, or other auto-fix fields to a plan. Set `autoFixRetries` in `~/.invoker/config.json` to a positive value to allow automatic repair attempts; `0` or an omitted value disables queueing.
+
+For workflow-mapped review gates, the built-in `ci-failure` worker consumes live `review_gate.ci_failed` lifecycle events and runs the persisted PR CI failure scan (`pr-ci-failure-scan`, logged as `worker-ci-failure-scan-*`) so missed events can still be recovered from stored review-gate artifacts. The headless command `repair-review-gate-ci <prNumber|prUrl>` is the manual entry point for the same policy: it maps the target back to exactly one Invoker merge-gate task, then queues a `fix-with-agent` mutation through the `ci-failure`/`fix-ci-failure` ledger. Use `query review-gate-ci <prNumber|prUrl>` to inspect the mapping and existing action without queueing.
+
+Queueing expects a current workflow-mapped review gate: the merge task is `review_ready` or `awaiting_approval`, the review artifact is required, open, and on the active generation, `checksState` is `failure`, `failedChecks` is present, and the recorded head SHA still matches the current gate. `mergeState: dirty` is treated as a merge conflict, not a CI failure; CI repair skips that case and leaves it to the conflict-resolution path.
+
+Operationally, the owning Invoker process must be able to submit workflow mutations and the configured fix agent must be installed in that owner environment. GitHub review-gate creation and polling depend on the `gh` CLI being authenticated for the target repository; manual `repair-review-gate-ci` can only use the review-gate artifact already persisted by the workflow. `autoFixAgent` selects the repair agent when set; otherwise the built-in default fix agent is used. `autoApproveAIFixes` only controls approval of the local AI-applied fix after it lands; it does not approve or merge the external PR.
 
 ### Multiple SSH Executors
 
@@ -232,6 +243,7 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 
 | Doc | Use |
 | --- | --- |
+| [docs/getting-started.md](docs/getting-started.md) | Setup path, review-gate plan example, CI repair checklist |
 | [docs/architecture-overview.md](docs/architecture-overview.md) | Runtime layers, scheduler, comparisons |
 | [docs/invoker-medium-article.md](docs/invoker-medium-article.md) | Product story, glossary, mapping tables |
 | [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md) | SQLite / sql.js single writer |
