@@ -55,6 +55,10 @@ mkdir -p \
 cp "$ROOT_DIR/run.sh" "$FAKE_ROOT/run.sh"
 
 printf 'preprovisioned pnpm workspace marker\n' > "$FAKE_ROOT/node_modules/.modules.yaml"
+printf 'lockfileVersion: 9.0\n' > "$FAKE_ROOT/pnpm-lock.yaml"
+touch -t 202001010000 "$FAKE_ROOT/pnpm-lock.yaml"
+touch -t 202001010001 "$FAKE_ROOT/node_modules/.modules.yaml"
+
 cat > "$FAKE_ROOT/node_modules/.bin/tsup" <<'SH'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--version" ]]; then
@@ -90,22 +94,33 @@ if [[ -e "$FAKE_ROOT/node_modules/.invoker-bootstrap-stamp" ]]; then
   exit 1
 fi
 
-status=0
-HOME="$TMP_DIR/home" \
-  INVOKER_DB_DIR="$TMP_DIR/db" \
-  INVOKER_REPO_CONFIG_PATH="$TMP_DIR/config.json" \
-  INVOKER_REPRO_PNPM_CALLS="$PNPM_CALLS" \
-  PATH="$STUB_BIN:$PATH" \
-  "$FAKE_ROOT/run.sh" --headless delete-all >"$RUN_STDOUT" 2>"$RUN_STDERR" || status=$?
+run_fake_headless() {
+  local force_bootstrap="${1:-0}"
+  rm -f "$PNPM_CALLS" "$RUN_STDOUT" "$RUN_STDERR"
+  status=0
+  HOME="$TMP_DIR/home" \
+    INVOKER_FORCE_BOOTSTRAP="$force_bootstrap" \
+    INVOKER_DB_DIR="$TMP_DIR/db" \
+    INVOKER_REPO_CONFIG_PATH="$TMP_DIR/config.json" \
+    INVOKER_REPRO_PNPM_CALLS="$PNPM_CALLS" \
+    PATH="$STUB_BIN:$PATH" \
+    "$FAKE_ROOT/run.sh" --headless delete-all >"$RUN_STDOUT" 2>"$RUN_STDERR" || status=$?
+}
 
-pnpm_call_count=0
-if [[ -f "$PNPM_CALLS" ]]; then
-  pnpm_call_count="$(wc -l < "$PNPM_CALLS" | tr -d '[:space:]')"
-fi
+pnpm_call_count() {
+  if [[ -f "$PNPM_CALLS" ]]; then
+    wc -l < "$PNPM_CALLS" | tr -d '[:space:]'
+  else
+    printf '0\n'
+  fi
+}
 
-if [[ "$EXPECTATION" == "bug" ]]; then
-  if [[ "$pnpm_call_count" -lt 1 ]]; then
-    echo "repro: expected run.sh to call pnpm while the bootstrap stamp is missing" >&2
+assert_pnpm_install_attempted() {
+  local reason="$1"
+  local count
+  count="$(pnpm_call_count)"
+  if [[ "$count" -lt 1 ]]; then
+    echo "repro: expected run.sh to call pnpm for $reason" >&2
     echo "stdout:" >&2
     cat "$RUN_STDOUT" >&2 || true
     echo "stderr:" >&2
@@ -113,20 +128,26 @@ if [[ "$EXPECTATION" == "bug" ]]; then
     exit 1
   fi
   if [[ "$status" -ne 73 ]]; then
-    echo "repro: expected pnpm stub exit 73, got $status" >&2
+    echo "repro: expected pnpm stub exit 73 for $reason, got $status" >&2
     cat "$RUN_STDERR" >&2 || true
     exit 1
   fi
   if ! grep -Fq 'install --frozen-lockfile' "$PNPM_CALLS"; then
-    echo "repro: expected pnpm install --frozen-lockfile, saw:" >&2
+    echo "repro: expected pnpm install --frozen-lockfile for $reason, saw:" >&2
     cat "$PNPM_CALLS" >&2 || true
     exit 1
   fi
+}
+
+run_fake_headless
+
+if [[ "$EXPECTATION" == "bug" ]]; then
+  assert_pnpm_install_attempted "a missing bootstrap stamp"
   echo "repro: confirmed bug"
   echo "repro: healthy artifacts were present, bootstrap stamp was absent, and run.sh called pnpm install"
   cat "$PNPM_CALLS"
 else
-  if [[ "$pnpm_call_count" -ne 0 ]]; then
+  if [[ "$(pnpm_call_count)" -ne 0 ]]; then
     echo "repro: expected fixed run.sh to skip pnpm for healthy preprovisioned artifacts" >&2
     cat "$PNPM_CALLS" >&2 || true
     exit 1
@@ -142,5 +163,13 @@ else
     cat "$RUN_STDOUT" >&2 || true
     exit 1
   fi
+
+  run_fake_headless 1
+  assert_pnpm_install_attempted "INVOKER_FORCE_BOOTSTRAP=1"
+
+  touch -t 202001010002 "$FAKE_ROOT/pnpm-lock.yaml"
+  run_fake_headless
+  assert_pnpm_install_attempted "a stale install metadata timestamp"
+
   echo "repro: confirmed fixed behavior"
 fi
