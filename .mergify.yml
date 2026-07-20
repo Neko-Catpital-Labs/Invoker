@@ -72,3 +72,13 @@ pull_request_rules:
     actions:
       queue:
         name: admin-bypass
+
+  # Merged head branches were never cleaned up, so the remote accumulated
+  # ~25.8k branches, 222 of them already merged into master. `force` stays at
+  # its default of false: Mergify then skips deletion while another open PR is
+  # still based on the branch, so a Mergify Stack is never orphaned.
+  - name: delete merged head branches
+    conditions:
+      - merged
+    actions:
+      delete_head_branch:
