@@ -37,6 +37,9 @@ describe('headless-command-classification', () => {
     expect(isHeadlessReadOnlyCommand(['list'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['session'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['open-terminal'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker', 'status'])).toBe(true);
+    expect(isHeadlessReadOnlyCommand(['worker', 'disk-headroom'])).toBe(false);
     expect(isHeadlessReadOnlyCommand(['run'])).toBe(false);
   });
 
@@ -53,6 +56,9 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['set', 'agent'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'fix-context'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'xyz'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['worker'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['worker', 'status'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['worker', 'disk-headroom'])).toBe(true);
   });
 
   it('classifies every registered set subcommand as mutating', () => {
