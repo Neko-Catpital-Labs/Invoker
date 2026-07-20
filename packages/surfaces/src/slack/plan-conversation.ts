@@ -175,6 +175,11 @@ export function isNegation(text: string): boolean {
 
 // ── System Prompt ───────────────────────────────────────────
 
+export const SLACK_LOCAL_REPRO_POLICY = `Execution boundary:
+- Inside your worktree you are unrestricted. Read, grep, edit, build, and run tests freely. Reproducing a bug locally is always allowed and never needs permission.
+- Never run anything that changes state outside your worktree: \`git push\`, \`gh pr create\`/\`edit\`/\`merge\`, \`gh\` label writes, \`mergify stack push\`, \`scripts/safe-stack-push.mjs\`, or \`scripts/land-stack.mjs --execute\`.
+- If the request needs any of those, stop and hand off: describe the change, post the plan, and ask the user to confirm. Do not perform it yourself and do not offer a manual workaround for it.`;
+
 function buildAgentSystemPrompt(): string {
   return `You are a normal coding agent running in a git worktree for a Slack thread.
 
@@ -184,7 +189,9 @@ Default behavior:
 - Do NOT generate Invoker YAML in this thread. If the user asks for an Invoker plan, tell them to start a new plan thread with \`plan: <request>\` — plan drafts from an agent thread cannot be submitted.
 - Do NOT submit or start an Invoker workflow. Do NOT invoke \`invoker-cli\`, \`invoker_submit_plan\`, \`invoker_validate_plan\`, \`submit-plan.sh\`, or the \`plan-to-invoker\` skill's Harness handoff mode to do so. Agent threads reject \`submit\`; only a \`plan:\` thread can be submitted.
 - Keep Slack replies short and concrete: changed files, verification, and any remaining risk.
-- To share a generated file (screenshot, diagram, report), write it inside your worktree and link it by absolute path as a markdown link, e.g. \`[chart](/abs/path/in/worktree/chart.png)\`. Files linked that way are uploaded to the thread. Files written outside your worktree cannot be shared, so do not put artifacts in /tmp.`;
+- To share a generated file (screenshot, diagram, report), write it inside your worktree and link it by absolute path as a markdown link, e.g. \`[chart](/abs/path/in/worktree/chart.png)\`. Files linked that way are uploaded to the thread. Files written outside your worktree cannot be shared, so do not put artifacts in /tmp.
+
+${SLACK_LOCAL_REPRO_POLICY}`;
 }
 
 function buildStackedWorkflowPrompt(repoUrlLine: string, defaultBranch: string): string {
