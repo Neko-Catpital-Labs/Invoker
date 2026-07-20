@@ -26,6 +26,9 @@ type RemoteTargetTestConfig = {
   host: string;
   user: string;
   sshKeyPath: string;
+  managedWorkspaces?: boolean;
+  remoteInvokerHome?: string;
+  provisionCommand?: string;
 };
 
 function makeRunner(overrides: {
@@ -78,6 +81,48 @@ function getPendingSelection(runner: TaskRunner, taskId: string) {
 }
 
 describe('SSH pool member capacity', () => {
+  it('passes remote workspace options into cached SSH executors', () => {
+    const provider = vi.fn()
+      .mockReturnValueOnce({
+        'remote-a': {
+          host: 'remote-a.example.com',
+          user: 'invoker',
+          sshKeyPath: '/tmp/fake-a',
+          managedWorkspaces: true,
+          remoteInvokerHome: '/remote/invoker',
+          provisionCommand: 'pnpm install --frozen-lockfile',
+        },
+      })
+      .mockReturnValueOnce({
+        'remote-a': {
+          host: 'remote-a.example.com',
+          user: 'invoker',
+          sshKeyPath: '/tmp/fake-a',
+          managedWorkspaces: true,
+          remoteInvokerHome: '/remote/invoker',
+          provisionCommand: 'pnpm install --frozen-lockfile --offline',
+        },
+      });
+    const runner = new TaskRunner({
+      orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+      persistence: { logEvent: vi.fn() } as any,
+      executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+      cwd: '/tmp',
+      remoteTargetsProvider: provider,
+    });
+    const task = makeTask('wf-1/task-a');
+    task.config = { runnerKind: 'ssh', poolMemberId: 'remote-a' };
+
+    const first = runner.selectExecutor(task).executor as any;
+    const second = runner.selectExecutor(task).executor as any;
+
+    expect(first.remoteInvokerHome).toBe('/remote/invoker');
+    expect(first.provisionCommand).toBe('pnpm install --frozen-lockfile');
+    expect(second).not.toBe(first);
+    expect(second.remoteInvokerHome).toBe('/remote/invoker');
+    expect(second.provisionCommand).toBe('pnpm install --frozen-lockfile --offline');
+  });
+
   it('treats leastLoaded maxConcurrentTasksPerMember as a hard cap', () => {
     const runner = makeRunner();
     runner.selectExecutor(makeTask('wf-1/task-a'));
