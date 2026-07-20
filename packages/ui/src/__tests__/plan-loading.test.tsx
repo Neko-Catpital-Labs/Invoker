@@ -77,6 +77,7 @@ describe('Plan loading (component)', () => {
 
   it('renders workflow graph nodes after setTasks', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -91,17 +92,19 @@ describe('Plan loading (component)', () => {
 
   it('empty state disappears after tasks are loaded', async () => {
     render(<App />);
-    expect(screen.getByTestId('workflow-graph-surface')).toHaveTextContent('Your plan will appear here.');
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    expect(screen.getByTestId('workflow-graph-surface')).toHaveTextContent('No plan yet — draft one from Home.');
 
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.getByTestId('workflow-graph-surface')).not.toHaveTextContent('Your plan will appear here.');
+      expect(screen.getByTestId('workflow-graph-surface')).not.toHaveTextContent('No plan yet — draft one from Home.');
     });
   });
 
   it('selecting workflow renders mini DAG for its tasks', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -115,6 +118,7 @@ describe('Plan loading (component)', () => {
     const messagesPerSession = 16;
     const scenario = makeTypingLagScenario(sessionCount, messagesPerSession);
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks(scenario.tasks, scenario.workflows));
 
     await waitFor(() => {

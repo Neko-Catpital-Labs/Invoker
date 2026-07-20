@@ -841,7 +841,7 @@ function WorkflowGraphInner({
   if (flowNodes.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-        Your plan will appear here.
+        No plan yet — draft one from Home.
       </div>
     );
   }

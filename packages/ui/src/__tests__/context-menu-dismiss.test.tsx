@@ -51,6 +51,7 @@ describe('Context menu dismissal (node-right-click regression)', () => {
 
   async function openContextMenu() {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([task], workflows));
 
     await waitFor(() => {
