@@ -18,6 +18,18 @@ permissions:
 env:
   CI: true
   NODE_VERSION: '26'
+  PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT: |
+    set -euo pipefail
+    if [[ -z "${GITHUB_WORKSPACE:-}" || "$GITHUB_WORKSPACE" == "/" ]]; then
+      echo "Refusing to clean unsafe GITHUB_WORKSPACE: ${GITHUB_WORKSPACE:-<unset>}" >&2
+      exit 1
+    fi
+    mkdir -p "$GITHUB_WORKSPACE"
+    if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+      sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
+    fi
+    chmod -R u+rwX "$GITHUB_WORKSPACE"
+    find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 
 jobs:
   # Full CI runs on default-branch pushes, manual/scheduled runs, and Mergify merge-queue refs.
@@ -29,6 +41,11 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Prepare self-hosted checkout workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: bash -c "$PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -80,6 +97,11 @@ jobs:
     name: quality / ${{ matrix.name }}
 
     steps:
+      - name: Prepare self-hosted checkout workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: bash -c "$PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -115,6 +137,11 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Prepare self-hosted checkout workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: bash -c "$PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -160,6 +187,11 @@ jobs:
     name: quality / ${{ matrix.name }}
 
     steps:
+      - name: Prepare self-hosted checkout workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: bash -c "$PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -385,6 +417,11 @@ jobs:
     name: required-fast / ${{ matrix.name }}
 
     steps:
+      - name: Prepare self-hosted checkout workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: bash -c "$PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -503,6 +540,11 @@ jobs:
     name: scheduled / Fix Intent Repros
 
     steps:
+      - name: Prepare self-hosted checkout workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: bash -c "$PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -886,6 +928,11 @@ jobs:
     name: optional / ${{ matrix.name }}
 
     steps:
+      - name: Prepare self-hosted checkout workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: bash -c "$PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -927,6 +974,11 @@ jobs:
     name: docker / comprehensive
 
     steps:
+      - name: Prepare self-hosted checkout workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: bash -c "$PREPARE_SELF_HOSTED_CHECKOUT_SCRIPT"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
