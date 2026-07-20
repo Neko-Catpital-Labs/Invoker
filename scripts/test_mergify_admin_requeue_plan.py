@@ -129,9 +129,9 @@ class PlanStackActions(unittest.TestCase):
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
         self.assertEqual(actions[0].kind, "repair_check")
 
-    def test_clean_bottom_missing_label_adds_admin_bypass(self):
+    def test_clean_bottom_missing_label_nudges_human(self):
         actions = self._plan(pr())  # green, no admin-bypass label
-        self.assertEqual((actions[0].kind, actions[0].key), ("add_admin_bypass_label", "admin-bypass"))
+        self.assertEqual((actions[0].kind, actions[0].key), ("comment_admin_bypass_nudge", "admin-bypass"))
 
     def test_clean_bottom_dequeued_gets_requeued(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued"))
