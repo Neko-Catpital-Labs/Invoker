@@ -135,7 +135,7 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number) for a in actions], [("requeue", 2604)])
 
-    def test_labeled_upper_stack_member_allows_unlabeled_bottom_label_repair(self):
+    def test_labeled_upper_stack_member_allows_unlabeled_bottom_nudge(self):
         snapshots = [
             pr(2605, base="stack/a", head="stack/b", labels={"admin-bypass", "dequeued"}),
             pr(2604, head="stack/a", labels={"dequeued"}, latest=mergify()),
@@ -144,7 +144,7 @@ Failing checks
         groups = group_stack_prs(snapshots, meta, "master")
         self.assertEqual([tuple(item.number for item in group.prs) for group in groups], [(2604, 2605)])
         actions = plan_stack_actions(groups[0], REQUIRED, self.ledger(), 1)
-        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("add_admin_bypass_label", 2604)])
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("comment_admin_bypass_nudge", 2604)])
 
     def test_upper_stack_blocker_stops_bottom_requeue(self):
         failed = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
@@ -155,10 +155,10 @@ Failing checks
         actions = plan_stack_actions(thread_stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2605, "human-review-thread")])
 
-    def test_missing_admin_bypass_label_on_current_bottom_adds_label_first(self):
+    def test_missing_admin_bypass_label_on_current_bottom_nudges_human_first(self):
         stack = StackGroup("s", (pr(2604, labels={"dequeued"}, latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
-        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("add_admin_bypass_label", 2604)])
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("comment_admin_bypass_nudge", 2604)])
 
     def test_dequeued_green_same_sha_requeues_once(self):
         stack = StackGroup("s", (pr(2605, latest=mergify(sha=HEAD)),))
@@ -275,7 +275,29 @@ Failing checks
         requeue._execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 2)
         self.assertEqual(len(fake.comments), 1)
 
+    def test_missing_admin_bypass_nudge_comments_once_without_label_edit(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+                self.label_edits = []
 
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def edit_label(self, repo, pr_number, *, add=None, remove=None):
+                self.label_edits.append((repo, pr_number, add, remove))
+
+        action = Action("comment_admin_bypass_nudge", 2647, "admin-bypass", "missing admin-bypass label")
+        for execute in (requeue._execute_action, requeue.exec_impl.execute_action):
+            ledger = self.ledger()
+            item = pr(2647, labels={"dequeued"}, latest=mergify())
+            fake = FakeGh()
+            execute(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 1)
+            execute(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 2)
+            self.assertEqual(len(fake.comments), 1)
+            self.assertIn("tag this PR with `admin-bypass`", fake.comments[0][2])
+            self.assertEqual(fake.label_edits, [])
+            self.assertEqual(ledger.count(requeue.exec_impl.ADMIN_BYPASS_NUDGE_LEDGER_KIND, 2647, HEAD, "admin-bypass"), 1)
 
     def test_mergify_queue_failure_repairs_even_when_current_required_check_is_missing(self):
         latest = MergifyQueueEvent(
