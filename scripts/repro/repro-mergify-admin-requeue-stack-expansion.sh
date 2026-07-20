@@ -110,8 +110,12 @@ out="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo "$REPO" 
 printf '%s\n' "$out"
 
 case "$out" in
-  *"DRY-RUN add-admin-bypass-label PR #100"*) ;;
-  *) echo "[repro] expected stack expansion to surface unlabeled bottom PR #100" >&2; exit 1 ;;
+  *"DRY-RUN comment-admin-bypass-nudge PR #100"*) ;;
+  *) echo "[repro] expected stack expansion to nudge for unlabeled bottom PR #100" >&2; exit 1 ;;
+esac
+
+case "$out" in
+  *"add-admin-bypass-label"*) echo "[repro] saw forbidden auto-label path for unlabeled bottom PR #100" >&2; exit 1 ;;
 esac
 
 case "$out" in
