@@ -130,6 +130,33 @@ class Ledger:
         self.rows.append(row)
 
 
+MERGE_CONDITIONS_HEADER_RE = re.compile(r"^(?P<indent>\s*)merge_conditions:(?:\s*&(?P<anchor>[\w-]+))?\s*$")
+MERGE_CONDITIONS_ALIAS_RE = re.compile(r"^(?P<indent>\s*)merge_conditions:\s*\*(?P<alias>[\w-]+)\s*$")
+
+
+def _collect_required_checks(lines: list[str], start: int, parent_indent: int) -> set[str]:
+    required: set[str] = set()
+    for raw in lines[start + 1:]:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        if indent <= parent_indent:
+            break
+        if stripped.startswith("- check-success = "):
+            required.add(stripped.split("=", 1)[1].strip())
+    return required
+
+
+def _resolve_required_check_alias(lines: list[str], anchor_name: str) -> set[str]:
+    for i, raw in enumerate(lines):
+        match = MERGE_CONDITIONS_HEADER_RE.match(raw)
+        if not match or match.group("anchor") != anchor_name:
+            continue
+        return _collect_required_checks(lines, i, len(match.group("indent")))
+    return set()
+
+
 def load_mergify_rules(path: Path) -> tuple[str, frozenset[str], frozenset[str]]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -157,17 +184,20 @@ def load_mergify_rules(path: Path) -> tuple[str, frozenset[str], frozenset[str]]
     trunk = ""
     labels: set[str] = set()
     required: set[str] = set()
-    in_merge = False
-    for raw in block:
+    for i, raw in enumerate(block):
         stripped = raw.strip()
-        if re.match(r"^[A-Za-z_].*:$", stripped):
-            in_merge = stripped == "merge_conditions:"
+        alias_match = MERGE_CONDITIONS_ALIAS_RE.match(raw)
+        if alias_match:
+            required.update(_resolve_required_check_alias(lines, alias_match.group("alias")))
+            continue
+        header_match = MERGE_CONDITIONS_HEADER_RE.match(raw)
+        if header_match:
+            required.update(_collect_required_checks(block, i, len(header_match.group("indent"))))
+            continue
         if stripped.startswith("- base="):
             trunk = stripped.split("=", 1)[1].strip()
         elif stripped.startswith("- label="):
             labels.add(stripped.split("=", 1)[1].strip())
-        elif in_merge and stripped.startswith("- check-success = "):
-            required.add(stripped.split("=", 1)[1].strip())
 
     if not trunk or not labels or not required:
         raise ValueError("failed to load admin-bypass Mergify rule")
