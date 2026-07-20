@@ -59,7 +59,7 @@ import type {
   TaskStateChanges,
 } from '@invoker/workflow-core';
 import { makeEnvelope, CommandError } from '@invoker/contracts';
-import type { WorkResponse } from '@invoker/contracts';
+import type { PlanningChatSendResponse, WorkResponse } from '@invoker/contracts';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { SQLiteAdapter, ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import { IpcBus, Channels, TransportError, TransportErrorCode } from '@invoker/transport';
@@ -169,6 +169,8 @@ function isTaskInFlightForForcedStop(task: TaskState): boolean {
 
 declare const __BUILD_SHA__: string | undefined;
 declare const __BUILD_VERSION__: string | undefined;
+
+let testPlanningChatResponse: PlanningChatSendResponse | undefined;
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -2809,6 +2811,21 @@ if (isHeadless) {
           if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('invoker:workflows-changed', persistence.listWorkflows());
           }
+        },
+      );
+      ipcMain.handle(
+        'invoker:set-test-planning-chat-response',
+        async (_event, response: PlanningChatSendResponse) => {
+          testPlanningChatResponse = response;
+        },
+      );
+      ipcMain.handle(
+        'invoker:send-planning-chat-message',
+        async (_event, _message: string): Promise<PlanningChatSendResponse> => {
+          if (testPlanningChatResponse === undefined) {
+            throw new Error('No test planning chat response configured.');
+          }
+          return testPlanningChatResponse;
         },
       );
     }
