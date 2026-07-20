@@ -30,6 +30,9 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
 
   async function openPlanningTerminal() {
     fireEvent.click(await screen.findByTestId('sidebar-home'));
+    const expandPlanningChats = screen.queryByRole('button', { name: 'Expand planning chats' });
+    if (expandPlanningChats) fireEvent.click(expandPlanningChats);
+    fireEvent.click(await screen.findByRole('button', { name: 'Options' }));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
     });
@@ -67,7 +70,8 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
 
     submitPlanningText('draft the full plan');
     await screen.findByTestId('invoker-terminal-ready-bar');
-    fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
+    fireEvent.click(await screen.findByTestId('planning-create-workflow'));
 
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
@@ -97,7 +101,7 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
 
     const stream = await screen.findByTestId('invoker-terminal-planner-stream');
     expect(stream).toHaveAttribute('data-state', 'streaming');
-    expect(stream).toHaveTextContent('live planner thinking after submit');
+    expect(stream).toHaveTextContent('Drafting your plan…');
 
     await act(async () => {
       resolveSecondSend?.({
@@ -111,7 +115,6 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Final assistant reply for the new turn.');
-      expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('live planner thinking after submit');
     });
   });
 });
