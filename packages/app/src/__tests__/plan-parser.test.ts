@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults } from '../plan-parser.js';
+import { parsePlan, parsePlanSubmissionBundle, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFileSync } from 'node:fs';
@@ -106,6 +106,34 @@ tasks:
     expect(plan.tasks[0].command).toBe('echo "Hello, World!"');
   });
 
+  it('normalizes optional executionModel values', () => {
+    const yaml = `
+name: Model Selector Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: explicit
+    description: Explicit model
+    command: echo explicit
+    executionModel: claude
+  - id: padded
+    description: Padded model
+    command: echo padded
+    executionModel: "  claude  "
+  - id: empty
+    description: Empty model
+    command: echo empty
+    executionModel: "  "
+  - id: absent
+    description: Absent model
+    command: echo absent
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBe('claude');
+    expect(plan.tasks[2].executionModel).toBeUndefined();
+    expect(plan.tasks[3].executionModel).toBeUndefined();
+  });
+
   it('parses optional intermediateRepoUrl', () => {
     const yaml = `
 name: Intermediate Remote Plan
@@ -118,6 +146,108 @@ tasks:
 `;
     const plan = parsePlan(yaml);
     expect(plan.intermediateRepoUrl).toBe('https://github.com/fork/repo.git');
+  });
+
+  it('parses a Workers Surface stacked workflow bundle in order', () => {
+    const yaml = `
+name: Workers Surface
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+onFinish: pull_request
+mergeMode: external_review
+workflows:
+  - name: Workers Surface Contracts
+    featureBranch: plan/workers-surface-contracts
+    tasks:
+      - id: define-worker-contracts
+        description: Define worker contracts
+        prompt: Update shared contracts for workers
+        dependencies: []
+      - id: verify-worker-contracts
+        description: Verify worker contracts
+        command: pnpm test packages/contracts
+        dependencies: [define-worker-contracts]
+  - name: Workers Surface UI
+    featureBranch: plan/workers-surface-ui
+    tasks:
+      - id: build-workers-ui
+        description: Build workers UI
+        prompt: Implement the workers surface
+        dependencies: []
+      - id: verify-workers-ui
+        description: Verify workers UI
+        command: pnpm test packages/ui
+        dependencies: [build-workers-ui]
+`;
+    const bundle = parsePlanSubmissionBundle(yaml);
+    expect(bundle.name).toBe('Workers Surface');
+    expect(bundle.isStack).toBe(true);
+    expect(bundle.plans.map((plan) => plan.name)).toEqual([
+      'Workers Surface Contracts',
+      'Workers Surface UI',
+    ]);
+    expect(bundle.plans[0].repoUrl).toBe('git@github.com:test/repo.git');
+    expect(bundle.plans[0].mergeMode).toBe('external_review');
+    expect(bundle.plans[0].reviewProvider).toBe('github');
+    expect(bundle.plans[0].featureBranch).toBe('plan/workers-surface-contracts');
+    expect(bundle.plans[1].featureBranch).toBe('plan/workers-surface-ui');
+    expect(bundle.plans[1].tasks.map((task) => task.id)).toEqual([
+      'build-workers-ui',
+      'verify-workers-ui',
+    ]);
+  });
+
+  it('rejects invalid stacked workflow bundles', () => {
+    expect(() => parsePlanSubmissionBundle(`
+name: Empty Stack
+repoUrl: git@github.com:test/repo.git
+workflows: []
+`)).toThrow('Plan stack must have a non-empty "workflows" array');
+
+    expect(() => parsePlanSubmissionBundle(`
+name: Mixed Stack
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: top
+    description: Top task
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Plan stack must put tasks inside each workflow');
+
+    expect(() => parsePlanSubmissionBundle(`
+name: Legacy Stack
+repoUrl: git@github.com:test/repo.git
+autoFixRetries: 1
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Plan stack-level "autoFixRetries" is no longer supported');
+
+    expect(() => parsePlanSubmissionBundle(`
+name: Bad Dependencies
+repoUrl: git@github.com:test/repo.git
+externalDependencies: bad
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Plan stack "externalDependencies" must be an array');
+
+    expect(() => parsePlan(`
+name: Legacy Parse Entry
+repoUrl: git@github.com:test/repo.git
+workflows:
+  - name: Child
+    tasks:
+      - id: child
+        description: Child task
+`)).toThrow('Stacked workflow YAML must be loaded with parsePlanSubmissionBundle()');
   });
 
   it('parses plan with dependencies', () => {
@@ -148,16 +278,16 @@ tasks:
     const yaml = `
 name: External Dependency Plan
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: verify-control-plane-regression
 tasks:
   - id: gated
     description: Wait for prior workflow task
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: verify-control-plane-regression
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
+    expect(plan.externalDependencies).toEqual([
       {
         workflowId: 'wf-123',
         taskId: 'verify-control-plane-regression',
@@ -171,16 +301,16 @@ tasks:
     const yaml = `
 name: External Dependency By Workflow
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
 tasks:
   - id: gated
     description: Wait for prior workflow merge gate
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+    expect(plan.externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
     ]);
   });
 
@@ -188,22 +318,22 @@ tasks:
     const yaml = `
 name: External Dependency Review Ready
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: review_ready
 tasks:
   - id: gated
     description: Wait for prior workflow merge gate to be review-ready
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: __merge__
-        gatePolicy: review_ready
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
+    expect(plan.externalDependencies).toEqual([
       { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
     ]);
   });
 
-  it('parses top-level externalDependencies and applies them to root tasks', () => {
+  it('parses top-level externalDependencies onto the workflow only', () => {
     const yaml = `
 name: Workflow Chain Step
 repoUrl: git@github.com:test/repo.git
@@ -223,23 +353,18 @@ tasks:
     dependencies: [root-a]
 `;
     const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
+    expect(plan.externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'review_ready' },
     ]);
-    expect(plan.tasks[1].externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
-    ]);
+    expect(plan.tasks[0].externalDependencies).toBeUndefined();
+    expect(plan.tasks[1].externalDependencies).toBeUndefined();
     expect(plan.tasks[2].externalDependencies).toBeUndefined();
   });
 
-  it('lets task-level externalDependencies override inherited top-level dependency by workflow+task', () => {
+  it('rejects task-level externalDependencies', () => {
     const yaml = `
-name: Workflow Chain Override
+name: Task-Level External Dependency
 repoUrl: git@github.com:test/repo.git
-externalDependencies:
-  - workflowId: wf-123
-    taskId: __merge__
-    gatePolicy: review_ready
 tasks:
   - id: root
     description: Root
@@ -249,10 +374,10 @@ tasks:
         taskId: __merge__
         gatePolicy: completed
 `;
-    const plan = parsePlan(yaml);
-    expect(plan.tasks[0].externalDependencies).toEqual([
-      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'completed' },
-    ]);
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(
+      'task-level "externalDependencies", which is no longer supported',
+    );
   });
 
   it('rejects invalid top-level externalDependencies.gatePolicy', () => {
@@ -276,14 +401,14 @@ tasks:
     const yaml = `
 name: Bad External Dependency Plan
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: verify-control-plane-regression
+    requiredStatus: running
 tasks:
   - id: gated
     description: Wait
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: verify-control-plane-regression
-        requiredStatus: running
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('"requiredStatus" must be "completed"');
@@ -293,14 +418,14 @@ tasks:
     const yaml = `
 name: Bad External Dependency Gate Policy
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: whenever
 tasks:
   - id: gated
     description: Wait
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: __merge__
-        gatePolicy: whenever
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "completed" or "review_ready"');
@@ -310,14 +435,14 @@ tasks:
     const yaml = `
 name: Deprecated Approved Gate Policy
 repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: approved
 tasks:
   - id: gated
     description: Wait
     command: echo "go"
-    externalDependencies:
-      - workflowId: wf-123
-        taskId: __merge__
-        gatePolicy: approved
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow("gatePolicy value 'approved' is no longer supported. Use 'completed' instead.");
@@ -373,6 +498,33 @@ tasks:
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('must have a "description" field');
+  });
+
+  it('rejects plan with duplicate task ids', () => {
+    const yaml = `
+name: Dup Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: build
+    description: First build
+    command: echo "one"
+  - id: build
+    description: Second build
+    command: echo "two"
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('Duplicate task id "build"');
+  });
+
+  it('rejects non-object task entries with a parse error', () => {
+    const yaml = `
+name: Bad Task Shape Plan
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - null
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow('Task at index 0 must be an object with an "id" field');
   });
 
   it('rejects task commands using npx vitest run', () => {
@@ -543,6 +695,81 @@ tasks:
     const plan = parsePlan(yaml);
     expect(plan.tasks[0].executionAgent).toBe('codex');
     expect(plan.tasks[1].executionAgent).toBeUndefined();
+  });
+
+  it('applies defaultExecutionAgent from config when agent task omits executionAgent', () => {
+    writeFileSync(isolatedConfigPath, JSON.stringify({ defaultBranch: 'main', defaultExecutionAgent: 'codex' }));
+    const yaml = `
+name: Config Agent Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: default-task
+    description: "No agent specified"
+    prompt: "Do the thing"
+  - id: command-task
+    description: "Command-only task"
+    command: "echo hi"
+  - id: explicit-task
+    description: "Explicit agent"
+    prompt: "Do the thing"
+    executionAgent: claude
+`;
+    const plan = applyConfiguredPlanDefaults(parsePlan(yaml));
+    expect(plan.tasks[0].executionAgent).toBe('codex');
+    expect(plan.tasks[1].executionAgent).toBeUndefined();
+    expect(plan.tasks[2].executionAgent).toBe('claude');
+  });
+
+  it('parses executionModel from task definitions', () => {
+    const yaml = `
+name: Model Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: claude-task
+    description: "Task using claude model"
+    command: "npm test"
+    executionModel: claude
+  - id: default-task
+    description: "No model specified"
+    command: "echo hi"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBeUndefined();
+  });
+
+  it('trims whitespace from executionModel and treats empty as undefined', () => {
+    const yaml = `
+name: Model Trim Test
+repoUrl: git@github.com:test/repo.git
+tasks:
+  - id: padded
+    description: "Padded model"
+    command: "echo hi"
+    executionModel: "  claude  "
+  - id: empty
+    description: "Empty model"
+    command: "echo hi"
+    executionModel: ""
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.tasks[0].executionModel).toBe('claude');
+    expect(plan.tasks[1].executionModel).toBeUndefined();
+  });
+
+  it('rejects a non-string executionModel with PlanParseError', () => {
+    const yaml = `
+name: Bad Model Test
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+tasks:
+  - id: t1
+    description: "Bad model"
+    command: "echo hi"
+    executionModel: 123
+`;
+    expect(() => parsePlan(yaml)).toThrow(PlanParseError);
+    expect(() => parsePlan(yaml)).toThrow(/executionModel/);
   });
 
   describe('onFinish parsing', () => {

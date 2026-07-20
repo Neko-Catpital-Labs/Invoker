@@ -54,7 +54,7 @@ description: |
   Tradeoffs: Adds a cross-package dependency (core -> graph) but reduces core
   complexity by ~300 lines. All existing tests must pass unchanged.
 onFinish: pull_request
-mergeMode: github
+mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 baseBranch: master
 featureBranch: refactor/extract-graph-package
@@ -157,8 +157,3 @@ tasks:
     description: "Build all packages to verify no breakage"
     command: "pnpm build 2>&1"
     dependencies: [verify-core-tests]
-
-  - id: final-regression
-    description: "Run the full repository test suite as the final regression gate"
-    command: "pnpm run test:all"
-    dependencies: [scaffold-package, move-types, move-dag-utils, extract-action-graph, update-graph-index, refactor-state-machine, write-graph-tests, verify-graph-tests, verify-core-tests, verify-full-build]

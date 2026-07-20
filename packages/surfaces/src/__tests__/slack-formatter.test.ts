@@ -3,11 +3,26 @@ import {
   formatTaskCreated,
   formatTaskUpdated,
   formatWorkflowStatus,
+  formatWorkflowProgress,
   formatExperimentSelection,
   formatError,
   formatSurfaceEvent,
 } from '../slack/slack-formatter.js';
 import type { SurfaceEvent } from '../surface.js';
+function extractMrkdwnTexts(message: { blocks: any[] }): string[] {
+  return message.blocks.flatMap((block: any) => {
+    const texts: string[] = [];
+    if (block.text?.type === 'mrkdwn') texts.push(block.text.text);
+    if (Array.isArray(block.elements)) {
+      for (const element of block.elements) {
+        if (typeof element.text === 'string') texts.push(element.text);
+        else if (element.text?.type === 'mrkdwn') texts.push(element.text.text);
+      }
+    }
+    return texts;
+  });
+}
+
 
 describe('formatTaskCreated', () => {
   it('returns message with pending status', () => {
@@ -84,22 +99,113 @@ describe('formatWorkflowStatus', () => {
       total: 10,
       completed: 5,
       failed: 1,
+      closed: 0,
       running: 2,
       pending: 2,
     });
     expect(msg.text).toContain('5/10');
     expect(msg.blocks[0].text!.text).toContain('Completed: 5');
     expect(msg.blocks[0].text!.text).toContain('Failed: 1');
+    expect(msg.blocks[0].text!.text).toContain('Closed: 0');
     expect(msg.blocks[0].text!.text).toContain('Running: 2');
     expect(msg.blocks[0].text!.text).toContain('Pending: 2');
   });
 
   it('formats zero counts', () => {
     const msg = formatWorkflowStatus({
-      total: 0, completed: 0, failed: 0, running: 0, pending: 0,
+      total: 0, completed: 0, failed: 0, closed: 0, running: 0, pending: 0,
     });
     expect(msg.text).toContain('0/0');
   });
+});
+
+describe('formatWorkflowProgress', () => {
+  it('renders header with percent and counts plus one row per task including the review link', () => {
+    const msg = formatWorkflowProgress({
+      workflowId: 'wf-1',
+      name: 'My Workflow',
+      percentComplete: 50,
+      counts: { total: 4, completed: 2, failed: 0, closed: 0, running: 1, pending: 1 },
+      tasks: [
+        { id: 'build', name: 'Build', status: 'completed', reviewUrl: 'https://x/pr' },
+        { id: 'test', name: 'Test', status: 'running', phase: 'executing' },
+      ],
+    });
+
+    // Header section: name, percent, and the count emoji line.
+    const header = msg.blocks[0];
+    expect(header.type).toBe('section');
+    expect(header.text!.text).toContain('My Workflow');
+    expect(header.text!.text).toContain('50%');
+    expect(header.text!.text).toContain(':white_check_mark:2');
+    expect(header.text!.text).toContain(':large_blue_circle:1');
+
+    // Divider then the single task-rows section.
+    expect(msg.blocks[1].type).toBe('divider');
+    const rows = msg.blocks[2].text!.text;
+    expect(rows).toContain('*build*');
+    expect(rows).toContain('<https://x/pr|PR>');
+    expect(rows).toContain('*test* Running (executing)');
+
+    expect(msg.text).toContain('50%');
+    expect(msg.text).toContain('(2/4)');
+  });
+
+  it('collapses task lists longer than 40 rows', () => {
+    const tasks = Array.from({ length: 45 }, (_, i) => ({ id: `t${i}`, name: `T${i}`, status: 'pending' }));
+    const msg = formatWorkflowProgress({
+      workflowId: 'wf-2',
+      name: 'Big',
+      percentComplete: 0,
+      counts: { total: 45, completed: 0, failed: 0, closed: 0, running: 0, pending: 45 },
+      tasks,
+    });
+    const rows = msg.blocks[2].text!.text;
+    expect(rows).toContain('…and 5 more');
+  });
+
+  it('appends a footer context block when prUrl/reviewState are set', () => {
+    const msg = formatWorkflowProgress({
+      workflowId: 'wf-3',
+      name: 'WithReview',
+      percentComplete: 100,
+      counts: { total: 1, completed: 1, failed: 0, closed: 0, running: 0, pending: 0 },
+      tasks: [{ id: 'a', name: 'A', status: 'completed' }],
+      prUrl: 'https://x/pr',
+      reviewState: 'approved',
+    });
+    const footer = msg.blocks[msg.blocks.length - 1];
+    expect(footer.type).toBe('context');
+    expect((footer as any).elements[0].text).toContain('approved');
+    expect((footer as any).elements[0].text).toContain('<https://x/pr|PR>');
+  });
+  it('caps every workflow progress block at Slack mrkdwn limits', () => {
+    const msg = formatWorkflowProgress({
+      workflowId: 'wf-long',
+      name: `Workflow ${'W'.repeat(3_500)}`,
+      percentComplete: 42,
+      counts: { total: 2, completed: 1, failed: 0, closed: 0, running: 1, pending: 0 },
+      tasks: [
+        {
+          id: `task-${'T'.repeat(2_500)}`,
+          name: `Task ${'N'.repeat(2_500)}`,
+          status: 'running',
+          phase: `phase-${'P'.repeat(1_500)}`,
+          reviewUrl: `https://example.com/${'r'.repeat(800)}`,
+        },
+      ],
+      prUrl: `https://example.com/pr/${'u'.repeat(2_800)}`,
+      reviewState: `review-${'R'.repeat(3_200)}`,
+    });
+
+    const texts = extractMrkdwnTexts(msg);
+    expect(texts).not.toHaveLength(0);
+    for (const text of texts) {
+      expect(text.length).toBeLessThanOrEqual(3_000);
+    }
+    expect(texts.some((text) => text.length === 3_000 && text.endsWith('…'))).toBe(true);
+  });
+
 });
 
 describe('formatExperimentSelection', () => {
@@ -134,6 +240,14 @@ describe('formatError', () => {
     expect(msg.text).toContain('Something went wrong');
     expect(msg.blocks[0].text!.text).toContain(':warning:');
   });
+  it('caps long error text with an ellipsis', () => {
+    const msg = formatError(`Boom ${'E'.repeat(3_500)}`);
+    expect(msg.text.length).toBeLessThanOrEqual(3_000);
+    expect(msg.text.endsWith('…')).toBe(true);
+    expect(msg.blocks[0].text!.text.length).toBeLessThanOrEqual(3_000);
+    expect(msg.blocks[0].text!.text.endsWith('…')).toBe(true);
+  });
+
 });
 
 describe('formatSurfaceEvent', () => {
@@ -173,7 +287,7 @@ describe('formatSurfaceEvent', () => {
   it('routes workflow_status events', () => {
     const event: SurfaceEvent = {
       type: 'workflow_status',
-      status: { total: 3, completed: 1, failed: 0, running: 1, pending: 1 },
+      status: { total: 3, completed: 1, failed: 0, closed: 0, running: 1, pending: 1 },
     };
     const msg = formatSurfaceEvent(event);
     expect(msg).not.toBeNull();

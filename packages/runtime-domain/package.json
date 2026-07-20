@@ -1,18 +1,18 @@
 {
   "name": "@invoker/runtime-domain",
-  "version": "0.0.1",
+  "version": "0.0.4",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {
     ".": {
+      "types": "./src/index.ts",
       "import": "./src/index.ts",
-      "require": "./src/index.ts",
-      "types": "./src/index.ts"
+      "require": "./src/index.ts"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts",
+    "build": "tsup src/index.ts --format esm --dts --tsconfig tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"

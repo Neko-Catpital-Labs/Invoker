@@ -1,5 +1,8 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { WorkflowMetadataInvalidator } from '../workflow-metadata-invalidation.js';
+import {
+  CoalescedWorkflowMetadataPublisher,
+  WorkflowMetadataInvalidator,
+} from '../workflow-metadata-invalidation.js';
 import type { Workflow } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
@@ -46,7 +49,13 @@ describe('WorkflowMetadataInvalidator', () => {
 
     expect(publish).not.toHaveBeenCalled();
     vi.advanceTimersByTime(25);
-    expect(publish).toHaveBeenCalledWith([expect.objectContaining({ id: 'wf-1', status: 'running' })]);
+    expect(publish).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 'wf-1', status: 'running' })],
+      {
+        coalescedRequests: 1,
+        reasonCounts: { taskDelta: 1 },
+      },
+    );
   });
 
   it('uses the cached pre-delete task snapshot for removed deltas', () => {
@@ -110,5 +119,54 @@ describe('WorkflowMetadataInvalidator', () => {
     vi.advanceTimersByTime(25);
 
     expect(publish).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CoalescedWorkflowMetadataPublisher', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('coalesces rapid publish requests into one latest listWorkflows snapshot', () => {
+    vi.useFakeTimers();
+    let currentSnapshot = [makeWorkflow('wf-old', 'pending')];
+    const listWorkflows = vi.fn(() => currentSnapshot);
+    const publish = vi.fn();
+    const publisher = new CoalescedWorkflowMetadataPublisher({
+      listWorkflows,
+      publish,
+      flushMs: 50,
+    });
+
+    publisher.requestPublish('first');
+    publisher.requestPublish('second');
+    publisher.requestPublish('second');
+    currentSnapshot = [makeWorkflow('wf-new', 'running')];
+
+    expect(listWorkflows).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(50);
+
+    expect(listWorkflows).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: 'wf-new' })],
+      {
+        coalescedRequests: 3,
+        reasonCounts: { first: 1, second: 2 },
+      },
+    );
+
+    publisher.requestPublish('third');
+    currentSnapshot = [makeWorkflow('wf-final', 'completed')];
+    vi.advanceTimersByTime(50);
+
+    expect(listWorkflows).toHaveBeenCalledTimes(2);
+    expect(publish).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ id: 'wf-final' })],
+      {
+        coalescedRequests: 1,
+        reasonCounts: { third: 1 },
+      },
+    );
   });
 });

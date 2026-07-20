@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
@@ -156,7 +159,7 @@ describe('SshExecutor pre-flight validation', () => {
 });
 
 describe('SshExecutor managed workspace mode', () => {
-  it('happy path: creates worktree, provisions, runs command, sets workspacePath and branch', async () => {
+  it('happy path: creates worktree, runs command, sets workspacePath and branch', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
@@ -205,9 +208,21 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callExecId).toBe(handle.executionId);
     expect(callReq).toBe(req);
     expect(callHandle).toBe(handle);
-    // Provision command is base64-encoded in the script, check for presence
-    expect(callScript).toMatch(/Provisioning remote worktree/);
-    expect(callScript).toMatch(/base64 -d/);
+    expect(callScript).not.toMatch(/Provisioning remote worktree/);
+    expect(callScript).not.toMatch(/base64 -d/);
+    expect(callScript).toContain(`/runtime/ssh-executor/${callExecId}-test-task`);
+    expect(callScript).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(callScript).toContain('PAYLOAD_PATH="$STAGING_DIR/payload.sh"');
+    expect(callScript).not.toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(callScript).toContain('cat > "$RUNNER_PATH" <<');
+    expect(callScript).toContain('cat > "$PAYLOAD_PATH" <<');
+    expect(callScript).not.toContain('cat > "$PROVISION_PATH" <<');
+    expect(callScript).toContain('start_bootstrap_heartbeat');
+    expect(callScript).toContain('stop_bootstrap_heartbeat');
+    expect(callScript.indexOf('stop_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
+    expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(callScript).toContain('rm -rf "$STAGING_DIR"');
+    expect(callScript).toContain("trap 'cleanup_runtime \"$?\"' EXIT");
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
@@ -260,6 +275,126 @@ branch refs/heads/experiment/test-task-oldhash
     expect(handle.workspacePath).not.toBe(`~/.invoker/worktrees/${repoHash}/experiment-test-task-oldhash`);
     expect(setupTaskBranchSpy).toHaveBeenCalledTimes(1);
     expect(execRemoteCapture).not.toHaveBeenCalledWith(expect.stringContaining('branch -m'), 'rename_reuse_branch');
+  });
+
+  it('reuse_exact: sandbox-resets the worktree before mergeRequestUpstreamBranches', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    const repoHash = computeRepoUrlHash('git@github.com:owner/repo.git');
+    const baseHead = 'aabbccddeeff00112233445566778899aabbccdd';
+    const actionId = 'reuse-sandbox-test';
+    const command = 'pnpm test';
+    const lifecycleTag = '';
+    const upstreamCommits: string[] = [];
+
+    // Compute the exact branch the executor will derive from these inputs.
+    // The executor uses request.inputs.prompt (not description) as the third arg.
+    const contentHash = computeContentHash(actionId, command, undefined, upstreamCommits, baseHead);
+    const experimentBranch = buildExperimentBranchName(actionId, lifecycleTag, contentHash);
+    const san = experimentBranch.replace(/\//g, '-');
+    const invokerHome = '/home/testuser/.invoker';
+    const exactPath = `${invokerHome}/worktrees/${repoHash}/${san}`;
+
+    const capturedCalls: Array<{ script: string; phase?: string }> = [];
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string, phase?: string) => {
+      capturedCalls.push({ script, phase });
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return `__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=${baseHead}`;
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) {
+        // Return a porcelain listing that includes the exact canonical path with the right branch
+        return [
+          `worktree ${exactPath}`,
+          `HEAD ${baseHead}`,
+          `branch refs/heads/${experimentBranch}`,
+          '',
+        ].join('\n');
+      }
+      // Respond to the abbrev-ref HEAD inspection for reuse candidate
+      if (script.includes('rev-parse --abbrev-ref HEAD')) {
+        return experimentBranch;
+      }
+      return '';
+    });
+
+    const mergeUpstreamSpy = vi.spyOn(ssh, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      actionId,
+      inputs: { command, description: 'sandbox reset test', repoUrl: 'git@github.com:owner/repo.git' },
+    }));
+
+    // sandbox_reset must have been called with the right script content
+    const sandboxResetCall = capturedCalls.find(c => c.phase === 'sandbox_reset');
+    expect(sandboxResetCall).toBeDefined();
+    expect(sandboxResetCall?.script).toContain('git -C "$WT" reset --hard "$REF"');
+    expect(sandboxResetCall?.script).toContain('git -C "$WT" clean -fd');
+
+    // mergeRequestUpstreamBranches must have been called exactly once
+    expect(mergeUpstreamSpy).toHaveBeenCalledTimes(1);
+
+    // sandbox_reset (execRemoteCapture call) must be ordered before mergeRequestUpstreamBranches.
+    // We verify this via invocationCallOrder so a future refactor cannot silently move
+    // the reset after the merge without breaking this test.
+    const sandboxResetCallIndex = capturedCalls.findIndex(c => c.phase === 'sandbox_reset');
+    // execRemoteCapture is called once per capturedCalls entry; find which mock invocation
+    // index corresponds to the sandbox_reset call.
+    const execMock = vi.mocked(ssh.execRemoteCapture as unknown as (...args: any[]) => any);
+    const sandboxResetInvocationOrder = execMock.mock.invocationCallOrder[sandboxResetCallIndex];
+    const mergeInvocationOrder = mergeUpstreamSpy.mock.invocationCallOrder[0];
+    expect(sandboxResetInvocationOrder).toBeDefined();
+    expect(mergeInvocationOrder).toBeDefined();
+    expect(sandboxResetInvocationOrder!).toBeLessThan(mergeInvocationOrder!);
+  });
+
+  it('staging dir is always evicted (rm -rf before mkdir) in buildRuntimeBootstrapScript', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: { command: 'echo hi', description: 'test', repoUrl: 'git@github.com:owner/repo.git' },
+    }));
+
+    // rm -rf must appear before mkdir -p in the bootstrap script
+    const rmIndex = capturedScript.indexOf('rm -rf "$STAGING_DIR"');
+    const mkdirIndex = capturedScript.indexOf('mkdir -p "$STAGING_DIR"');
+    expect(rmIndex).toBeGreaterThanOrEqual(0);
+    expect(mkdirIndex).toBeGreaterThanOrEqual(0);
+    expect(rmIndex).toBeLessThan(mkdirIndex);
   });
 
   it('persists the owning worktree path on startup failure when Git reports a branch owner', async () => {
@@ -436,51 +571,6 @@ branch refs/heads/${targetBranch}
     await expect(ssh.start(req)).rejects.toThrow(/STDOUT:\n__INVOKER_BASE_HEAD__=partial/);
   });
 
-  it('propagates provision command failure as process exit code', async () => {
-    const ssh = new SshExecutor({
-      host: 'localhost',
-      user: 'testuser',
-      sshKeyPath: '/dev/null',
-      managedWorkspaces: true,
-      provisionCommand: 'exit 42',
-    }) as any;
-
-    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
-      if (script.includes('__INVOKER_BASE_REF__=')) {
-        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123';
-      }
-      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
-      if (script.includes('worktree list --porcelain')) return '';
-      return '';
-    });
-
-    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
-
-    // Capture script passed to spawnSshRemoteStdin to verify provision command is included
-    let capturedScript = '';
-    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
-      (_executionId: string, _request: any, handle: any, script: string) => {
-        capturedScript = script;
-        return handle;
-      },
-    );
-
-    const req = makeRequest({
-      actionType: 'command',
-      inputs: {
-        command: 'echo test',
-        description: 'test',
-        repoUrl: 'git@github.com:owner/repo.git',
-      },
-    });
-
-    await ssh.start(req);
-
-    // Verify provision command 'exit 42' is embedded in the script
-    expect(capturedScript).toContain('exit 42');
-    // Note: We're testing that the provision command is included in the script.
-    // The actual exit code propagation is tested by integration tests with real SSH.
-  });
 
   it('does not return a handle until managed remote bootstrap/setup has finished', async () => {
     const ssh = new SshExecutor({
@@ -589,7 +679,7 @@ branch refs/heads/${targetBranch}
 
     const execSpy = vi.spyOn(ssh, 'execRemoteCapture').mockResolvedValue('');
     const setupSpy = vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
-    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
       (_executionId: string, _request: any, handle: any) => handle,
     );
 
@@ -611,6 +701,16 @@ branch refs/heads/${targetBranch}
     // No clone/fetch/worktree/provision should happen
     expect(execSpy).not.toHaveBeenCalled();
     expect(setupSpy).not.toHaveBeenCalled();
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const [callExecId, , , callScript] = spawnStub.mock.calls[0];
+    expect(callScript).not.toContain('base64 -d');
+    expect(callScript).toContain(`/runtime/ssh-executor/${callExecId}-test-task`);
+    expect(callScript).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(callScript).toContain('PAYLOAD_PATH="$STAGING_DIR/payload.sh"');
+    expect(callScript).not.toContain('cat > "$PROVISION_PATH"');
+    expect(callScript).toContain('WT=$(normalize_remote_path \'/custom/path\')');
+    expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(callScript).toContain('rm -rf "$STAGING_DIR"');
   });
 
   it('BYO mode throws when workspacePath is missing', async () => {
@@ -994,6 +1094,11 @@ describe('SshExecutor entry lifecycle', () => {
     const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
     const script = writeMock.mock.calls[0]![0] as string;
     expect(script).toContain('INVOKER_HEARTBEAT_INTERVAL_SECONDS=11');
+    expect(script).toContain('start_bootstrap_heartbeat');
+    expect(script).toContain('stop_bootstrap_heartbeat');
+    expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(script).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(script).not.toContain('base64 -d');
     proc.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
   });
@@ -1031,7 +1136,7 @@ describe('SshExecutor entry lifecycle', () => {
     expect(err.stdout).toBe('COMMIT_HASH=abc123def456\n');
   });
 
-  it('managed mode with remoteInvokerHome="~/.invoker" uses base64-decode + tilde-normalize (Bug #1 variant)', async () => {
+  it('managed mode with remoteInvokerHome="~/.invoker" stages runtime scripts and tilde-normalizes paths', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
@@ -1069,23 +1174,93 @@ describe('SshExecutor entry lifecycle', () => {
     expect(writeMock).toHaveBeenCalled();
     const script = writeMock.mock.calls[0]![0] as string;
 
-    // Bug #1 fix: base64-decode + tilde-normalize block replaces the old
-    // buggy `WT="~/.invoker/..."` literal (which bash would NOT expand).
-    expect(script).toContain('WT=$(echo ');
-    expect(script).toContain('| base64 -d)');
-    expect(script).toContain(`if [[ "$WT" == '~' ]]; then`);
-    expect(script).toContain('WT="$HOME"');
+    // The workspace path is transported as a quoted literal and normalized on
+    // the remote, avoiding the old buggy `WT="~/.invoker/..."` literal (which
+    // bash would NOT expand) and avoiding base64 runtime delivery.
+    expect(script).not.toContain('base64 -d');
+    expect(script).toContain("INVOKER_HOME=$(normalize_remote_path '~/.invoker')");
+    expect(script).toContain('WT=$(normalize_remote_path \'~/.invoker/worktrees/');
+    expect(script).toContain(`if [[ "$path" == '~' ]]; then`);
     expect(script).not.toContain('WT="~/.invoker/');
-
-    // Prove the decoded path is the tilde-prefixed canonical worktree path.
-    const match = script.match(/WT=\$\(echo (\S+) \| base64 -d\)/);
-    expect(match).toBeTruthy();
-    const decoded = Buffer.from(match![1]!, 'base64').toString('utf-8');
-    expect(decoded).toMatch(/^~\/\.invoker\/worktrees\/[a-f0-9]{12}\//);
+    expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(script).toContain('PAYLOAD_PATH="$STAGING_DIR/payload.sh"');
+    expect(script).not.toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(script).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(script).toContain('rm -rf "$STAGING_DIR"');
 
     // Let the mock process finish so heartbeat and entry state clean up.
     proc.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
+  });
+  it.skip('managed mode skips implicit provisioning and still reaches a Flutter payload', async () => {
+    const ssh2 = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 1,
+      remoteInvokerHome: '~/.invoker',
+    }) as any;
+
+    vi.spyOn(ssh2, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh2, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    const req = makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'ok\\n' > .invoker-flutter-bootstrap-ran",
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh2.start(req);
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as { mock: { calls: unknown[][] } };
+    expect(writeMock.mock.calls.length).toBeGreaterThan(0);
+    const script = writeMock.mock.calls[0]?.[0];
+    expect(typeof script).toBe('string');
+
+    const bootstrapScript = script as string;
+    expect(bootstrapScript).not.toContain('"$PROVISION_PATH"');
+    expect(bootstrapScript).not.toContain('. "$PROVISION_PATH"');
+
+    const workspaceMatch = bootstrapScript.match(/WT=\$\(normalize_remote_path '([^']+)'\)/);
+    if (!workspaceMatch?.[1]) {
+      throw new Error('Managed SSH bootstrap did not embed a workspace path');
+    }
+
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-flutter-bootstrap-home-'));
+    try {
+      const workspacePath = workspaceMatch[1].replace(/^~(?=\/|$)/, fakeHome);
+      const markerPath = join(workspacePath, '.invoker-flutter-bootstrap-ran');
+      mkdirSync(workspacePath, { recursive: true });
+      writeFileSync(join(workspacePath, 'pubspec.yaml'), 'name: flutter_fixture\n');
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', bootstrapScript], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('[SshExecutor] Running task payload...');
+      expect(result.stdout).not.toContain('[provision]');
+      expect(existsSync(markerPath)).toBe(true);
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+      proc.emit('close', 0, null);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   });
 
   it('changes managed branch and worktree when request lifecycleTag changes, as recreate does', async () => {
@@ -1147,7 +1322,7 @@ describe('SshExecutor entry lifecycle', () => {
     expect(second.workspacePath).toBe(secondOpts?.worktreeDir);
   });
 
-  it('managed mode with absolute remoteInvokerHome still uses base64-decode (normalize is a no-op)', async () => {
+  it('managed mode with absolute remoteInvokerHome stages scripts under that home', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
@@ -1182,16 +1357,13 @@ describe('SshExecutor entry lifecycle', () => {
     const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
     const script = writeMock.mock.calls[0]![0] as string;
 
-    // Same base64-decode pattern regardless of absolute vs tilde path.
-    expect(script).toContain('WT=$(echo ');
-    expect(script).toContain('| base64 -d)');
-
-    // Decoded path starts with /opt/invoker; the normalize block is a no-op
-    // because $WT does not begin with '~'.
-    const match = script.match(/WT=\$\(echo (\S+) \| base64 -d\)/);
-    expect(match).toBeTruthy();
-    const decoded = Buffer.from(match![1]!, 'base64').toString('utf-8');
-    expect(decoded).toMatch(/^\/opt\/invoker\/worktrees\/[a-f0-9]{12}\//);
+    expect(script).not.toContain('base64 -d');
+    expect(script).toContain("INVOKER_HOME=$(normalize_remote_path '/opt/invoker')");
+    expect(script).toContain('STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/');
+    expect(script).toContain('WT=$(normalize_remote_path \'/opt/invoker/worktrees/');
+    expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
+    expect(script).toContain('PAYLOAD_PATH="$STAGING_DIR/payload.sh"');
+    expect(script).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
 
     proc.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));

@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
+import { delimiter, join } from 'node:path';
 
 export const SIGKILL_TIMEOUT_MS = 5_000;
 const SHELL_ENV_RESOLUTION_TIMEOUT_MS = 10_000;
@@ -45,6 +47,41 @@ export function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): b
   }
 }
 
+export function childProcessHasExited(child: ChildProcess): boolean {
+  return child.exitCode != null || child.signalCode != null;
+}
+
+export async function terminateChildProcessGroup(
+  child: ChildProcess,
+  isComplete: () => boolean,
+): Promise<void> {
+  if (childProcessHasExited(child) || isComplete()) return;
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const killTimer = setTimeout(() => {
+      if (!isComplete()) {
+        killProcessGroup(child, 'SIGKILL');
+      }
+    }, SIGKILL_TIMEOUT_MS);
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(killTimer);
+      resolve();
+    };
+
+    child.once('close', finish);
+
+    if (childProcessHasExited(child) || isComplete()) {
+      finish();
+      return;
+    }
+
+    killProcessGroup(child, 'SIGTERM');
+  });
+}
+
 function splitPathEntries(rawPath?: string): string[] {
   if (!rawPath) return [];
   return rawPath.split(':').map((entry) => entry.trim()).filter(Boolean);
@@ -65,11 +102,15 @@ function withPrependedUniqueEntries(prefixes: string[], rest: string[]): string[
   return ordered;
 }
 
+function mergePathValues(first?: string, second?: string): string {
+  return joinPathEntries(withPrependedUniqueEntries(splitPathEntries(first), splitPathEntries(second)));
+}
+
 export function applyMacOSPathFallback(rawPath?: string): string {
   const current = splitPathEntries(rawPath);
   const preferred = process.platform === 'darwin' ? MACOS_PATH_FALLBACK_PREFIXES : [];
-  const fallback = current.length > 0 ? current : MACOS_STANDARD_PATH_ENTRIES;
-  return joinPathEntries(withPrependedUniqueEntries(preferred, fallback));
+  const base = current.length > 0 ? current : MACOS_STANDARD_PATH_ENTRIES;
+  return joinPathEntries(withPrependedUniqueEntries(base, preferred));
 }
 
 export function parseResolvedShellPath(output: string): string | null {
@@ -84,6 +125,22 @@ export function parseResolvedShellPath(output: string): string | null {
 
 export function getEffectivePath(): string {
   return effectivePath;
+}
+
+export function resolveExecutableOnCurrentPath(command: string): string | undefined {
+  if (command.includes('/') || command.includes('\\')) return command;
+  const pathValue = process.env.PATH ?? '';
+  for (const dir of pathValue.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, command);
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Continue searching PATH.
+    }
+  }
+  return undefined;
 }
 
 export async function probeMacOSShellPath(shell: string, timeoutMs = SHELL_ENV_RESOLUTION_TIMEOUT_MS): Promise<string> {
@@ -162,8 +219,9 @@ export async function initializeShellEnvironment(): Promise<ShellEnvironmentInit
     }
 
     try {
+      const inheritedPath = process.env.PATH;
       const resolvedPath = await probeMacOSShellPath(shell);
-      effectivePath = applyMacOSPathFallback(resolvedPath);
+      effectivePath = applyMacOSPathFallback(mergePathValues(inheritedPath, resolvedPath));
       process.env.PATH = effectivePath;
       initializationResult = {
         status: 'resolved',
@@ -199,6 +257,54 @@ export function cleanElectronEnv(): NodeJS.ProcessEnv {
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.ELECTRON_NO_ASAR;
   delete env.ELECTRON_NO_ATTACH_CONSOLE;
+  delete env.INVOKER_REPO_CONFIG_PATH;
   env.PATH = getEffectivePath();
   return env;
+}
+
+const AGENT_OUTPUT_DETAIL_MAX_CHARS = 2000;
+
+const CODEX_STDIN_NOISE = /^Reading additional input from stdin\.\.\.$/;
+
+function nonEmptyTrimmedLines(text: string): string[] {
+  return text.split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+/** Drop the benign "Reading additional input from stdin..." lines codex emits when it
+ * runs without a controlling TTY. This noise can land on either stdout or stderr
+ * depending on the codex version, so every candidate stream is filtered through here. */
+function stripCodexStdinNoise(text: string): string {
+  return nonEmptyTrimmedLines(text)
+    .filter((line) => !CODEX_STDIN_NOISE.test(line))
+    .join('\n');
+}
+
+function tailChars(text: string): string {
+  return text.length <= AGENT_OUTPUT_DETAIL_MAX_CHARS
+    ? text
+    : text.slice(-AGENT_OUTPUT_DETAIL_MAX_CHARS);
+}
+
+export function buildAgentExitFailureDetail(
+  rawStdout: string,
+  stderr: string,
+  displayStdout?: string,
+): string {
+  const meaningfulStderr = stripCodexStdinNoise(stderr);
+  const meaningfulDisplay = stripCodexStdinNoise(displayStdout ?? '');
+  const meaningfulStdout = stripCodexStdinNoise(rawStdout);
+  const candidate = meaningfulStderr || meaningfulDisplay || meaningfulStdout;
+  if (candidate) return tailChars(candidate);
+
+  // Nothing meaningful survived. If the only thing either stream emitted was the
+  // benign codex stdin/TTY noise, return an actionable hint instead of echoing it
+  // back verbatim (which reads as a pointless error to the user).
+  const emittedLines = [...nonEmptyTrimmedLines(stderr), ...nonEmptyTrimmedLines(rawStdout)];
+  if (emittedLines.length > 0 && emittedLines.every((line) => CODEX_STDIN_NOISE.test(line))) {
+    return 'agent exited non-zero with no captured output, emitting only '
+      + '"Reading additional input from stdin..." — a known codex CLI failure when it '
+      + 'runs without a controlling TTY (see openai/codex#19945 and #20919). '
+      + 'Retry; if it persists, update the codex CLI.';
+  }
+  return '(no output)';
 }

@@ -1,0 +1,57 @@
+formula: implementation-stack
+version: 1
+description: >
+  Implement a feature as a dependency-ordered stack of review-compressed
+  workflows, one per architecture layer (persistence -> domain -> api), each
+  gated on the previous workflow's merge. The recipe locks the layer sequence,
+  the cross-workflow merge gates, and the required review/rationale headings;
+  the author fills the {{var}} slots and specializes the REPLACE_ME prose per
+  layer, then submits the rendered files in order with
+  scripts/submit-workflow-chain.sh (which wires __UPSTREAM_WORKFLOW_ID__ and the
+  stacked baseBranch). Drop a layer's workflow if the feature does not touch it.
+vars:
+  repo_url:
+    required: true
+    example: "git@github.com:Neko-Catpital-Labs/Invoker.git"
+    description: "Git remote for the repo where tasks run (git remote get-url origin)."
+  base_branch:
+    required: false
+    default: "master"
+    example: "master"
+    description: "Base branch for the first (bottom) workflow; the chain script rewrites later steps."
+  feature_slug:
+    required: true
+    example: "sample-feature"
+    description: "Kebab-case identifier used in task ids and plan names."
+  feature_summary:
+    required: true
+    example: "the sample feature"
+    description: "One-line description of the feature being implemented."
+  l1_file:
+    required: true
+    example: "packages/app/src/plan-parser.ts"
+    description: "Persistence-layer product file this stack step edits (one file for v1)."
+  l1_verify:
+    required: true
+    example: "test 1 -eq 1"
+    description: "Deterministic proof command for the persistence layer."
+  l2_file:
+    required: true
+    example: "packages/workflow-core/src/orchestrator.ts"
+    description: "Domain-layer product file this stack step edits (one file for v1)."
+  l2_verify:
+    required: true
+    example: "test 1 -eq 1"
+    description: "Deterministic proof command for the domain layer."
+  l3_file:
+    required: true
+    example: "packages/execution-engine/src/task-runner.ts"
+    description: "API/surface-layer product file this stack step edits (one file for v1)."
+  l3_verify:
+    required: true
+    example: "test 1 -eq 1"
+    description: "Deterministic proof command for the api/surface layer."
+workflows:
+  - step-1-persistence.workflow.yaml
+  - step-2-domain.workflow.yaml
+  - step-3-surface.workflow.yaml

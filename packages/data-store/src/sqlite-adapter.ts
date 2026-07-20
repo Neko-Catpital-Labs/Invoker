@@ -1,74 +1,161 @@
 /**
- * SQLiteAdapter — PersistenceAdapter backed by sql.js (WASM SQLite).
+ * SQLiteAdapter — PersistenceAdapter backed by native SQLite.
  *
  * Uses `:memory:` for testing, file path for production.
- * Construction is async (WASM init), all operations after init are synchronous.
+ * Construction remains async for API compatibility, all operations after init are synchronous.
  */
 
-import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import {
   appendFileSync,
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
   readFileSync,
   readSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type {
   TaskState,
   TaskStateChanges,
   Attempt,
-  TaskStatus,
-  WorkflowRollup,
-  WorkflowRollupTaskSummary,
+  ExternalDependencyChange,
+  DetachedExternalDependency,
 } from '@invoker/workflow-core';
-import {
-  computeWorkflowRollupFromSummaries,
-  isDiscardedAttempt,
-  normalizeRunnerKind,
-} from '@invoker/workflow-core';
+import { DISPATCH_LEASE_MS } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type {
+  ExecutionResourceLeaseReleaseRow,
+  LaunchDispatchInvalidationRow,
   PersistenceAdapter,
+  ReviewGateLookup,
   Workflow,
+  WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
+  TaskEventListFilters,
   ActivityLogEntry,
   Conversation,
   ConversationMessage,
+  WorkflowChannel,
+  WorkerActionListFilters,
+  WorkerActionRecord,
+  WorkerActionWrite,
+  WorkerDesiredStateRecord,
+  TerminalSessionPatch,
+  TerminalSessionRecord,
+  InAppPlanningSessionPatch,
+  InAppPlanningSessionRecord,
 } from './adapter.js';
+import { SCHEMA_DDL } from './sqlite-schema.js';
+import {
+  mapRowToTaskLaunchDispatch,
+  mapRowToWorkflowMutationIntent,
+  mapRowToWorkflowMutationLease,
+  mapRowToWorkerAction,
+} from './sqlite-row-mappers.js';
+import {
+  taskOutputFilePath,
+  taskSpoolFilePath,
+  encodeSpoolLine,
+  readSpoolLinesFromFile,
+  readLastSpoolLinesFromFile,
+} from './sqlite-output-spool.js';
+import type { SqliteExecutor } from './sqlite-executor.js';
+import * as migrations from './sqlite-migrations.js';
+import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
+import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
 
-/**
- * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
- * to `cd packages/<pkg> && pnpm test -- <relative-path>`.
- */
-function rewritePnpmTestCommand(cmd: string): string {
-  const withFile = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)\/(\S+)(.*)/);
-  if (withFile) {
-    const [, , pkg, rest, suffix] = withFile;
-    return `cd packages/${pkg} && pnpm test -- ${rest}${suffix}`;
-  }
-  const pkgOnly = cmd.match(/^(pnpm test)\s+(?:--\s+)?packages\/([^/\s]+)(.*)/);
-  if (pkgOnly) {
-    const [, , pkg, suffix] = pkgOnly;
-    return `cd packages/${pkg} && pnpm test${suffix}`;
-  }
-  return cmd;
+function normalizeWorkerActionStatus(status: string): string {
+  return status === 'canceled' ? 'cancelled' : status;
 }
 
-/** Cached sql.js init promise — WASM is loaded only once per process. */
-let sqlJsPromise: ReturnType<typeof initSqlJs> | null = null;
+type NativeSqlite = typeof import('node:sqlite');
+
+let nativeSqlite: Promise<NativeSqlite> | undefined;
+const nativeSqliteSpecifier = 'node:' + 'sqlite';
+
+function loadNativeSqlite(): Promise<NativeSqlite> {
+  nativeSqlite ??= import(nativeSqliteSpecifier) as Promise<NativeSqlite>;
+  return nativeSqlite;
+}
+const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
+
+// activity_log is capped to its most recent rows so the DB file stays bounded; 0 disables.
+const DEFAULT_ACTIVITY_LOG_MAX_ROWS = 100_000;
+const ACTIVITY_LOG_PRUNE_INTERVAL = 1_000; // prune at most once per N writes
+
+const OUTPUT_DIAGNOSTIC_TAIL_CHARS = 8_000;
 
 export interface OutputChunk {
   offset: number;
   data: string;
+}
+
+const SQLITE_EPHEMERAL_DATABASE = ':memory:';
+
+function ownerMarkerPath(dbPath: string): string {
+  return `${dbPath}.owner`;
+}
+
+/**
+ * PID of the writable owner currently holding `dbPath`, or null when none is
+ * live. A marker left behind by a crashed owner reports null so a dead process
+ * can never lock readers out permanently.
+ */
+function readLiveOwnerPid(dbPath: string): number | null {
+  const marker = ownerMarkerPath(dbPath);
+  if (!existsSync(marker)) return null;
+  let pid: number;
+  try {
+    pid = Number.parseInt(readFileSync(marker, 'utf-8').trim(), 10);
+  } catch {
+    return null;
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  if (pid === process.pid) return pid;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+export function hasLiveWritableOwner(dbPath: string): boolean {
+  const sidecarsExist = existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`);
+  return sidecarsExist && readLiveOwnerPid(dbPath) !== null;
+}
+
+function writeOwnerMarker(dbPath: string): void {
+  try {
+    writeFileSync(ownerMarkerPath(dbPath), String(process.pid), 'utf-8');
+  } catch (err) {
+    console.warn(
+      `[SQLiteAdapter] Could not write owner marker for ${dbPath}: ${err instanceof Error ? err.message : String(err)}. ` +
+      'Read-only opens cannot detect this owner and will be allowed alongside it.',
+    );
+  }
+}
+
+function clearOwnerMarker(dbPath: string): void {
+  const marker = ownerMarkerPath(dbPath);
+  try {
+    if (existsSync(marker) && readLiveOwnerPid(dbPath) === process.pid) rmSync(marker, { force: true });
+  } catch (err) {
+    console.warn(
+      `[SQLiteAdapter] Could not clear owner marker for ${dbPath}: ${err instanceof Error ? err.message : String(err)}. ` +
+      'A stale marker is ignored once this PID exits.',
+    );
+  }
 }
 
 interface SQLiteAdapterOptions {
@@ -76,11 +163,247 @@ interface SQLiteAdapterOptions {
   ownerCapability?: boolean;
   outputTailLimit?: number;
   outputDir?: string;
+  /** Max retained activity_log rows; 0 disables retention. */
+  activityLogMaxRows?: number;
+  /**
+   * Open WAL in exclusive locking mode: the wal-index lives in heap memory and
+   * no `-shm` file is created, making the process immune to the SIGBUS that a
+   * truncated memory-mapped `-shm` causes. Requires this process to be the SOLE
+   * opener of the database file — a concurrent open is rejected with SQLITE_BUSY.
+   */
+  exclusiveLocking?: boolean;
+  slowQueryThresholdMs?: number;
+  onSlowQuery?: (info: SlowQueryInfo) => void;
 }
+
+export interface SlowQueryInfo {
+  durationMs: number;
+  sql: string;
+  rowCount?: number;
+}
+
+export type EphemeralSQLiteAdapterOptions = Pick<
+  SQLiteAdapterOptions,
+  'outputTailLimit' | 'outputDir' | 'activityLogMaxRows'
+>;
 
 export type WorkflowMutationPriority = 'high' | 'normal';
 export type WorkflowMutationIntentStatus = 'queued' | 'running' | 'completed' | 'failed';
 export const WORKFLOW_MUTATION_LEASE_MS = 30_000;
+export const EXECUTION_RESOURCE_LEASE_MS = 20 * 60 * 1000;
+
+export interface ExecutionResourceLease {
+  resourceKey: string;
+  resourceType: string;
+  holderId: string;
+  taskId?: string;
+  poolId?: string;
+  poolMemberId?: string;
+  acquiredAt: string;
+  lastHeartbeatAt: string;
+  leaseExpiresAt: string;
+  metadata?: unknown;
+}
+
+type SQLiteParams = unknown[] | Record<string, unknown>;
+
+function normalizeParams(params: SQLiteParams = []): unknown[] | Record<string, unknown> {
+  return Array.isArray(params) ? params : params;
+}
+
+function paramsToArgs(params: SQLiteParams = []): unknown[] {
+  return Array.isArray(params) ? params : [params];
+}
+
+function sqlStringLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/**
+ * SQLite result codes that mean the database file itself is unreadable and a
+ * fresh start is the only recovery: SQLITE_CORRUPT (11) and SQLITE_NOTADB (26).
+ * Transient/operational failures (e.g. SQLITE_BUSY=5, SQLITE_LOCKED=6,
+ * SQLITE_CANTOPEN=14) MUST NOT trigger destructive recovery: a concurrent
+ * process briefly holding a lock would otherwise rename the live database and
+ * its -wal/-shm sidecars away, losing data and (because other connections have
+ * the -shm memory-mapped) crashing them with SIGBUS.
+ */
+const SQLITE_CORRUPT = 11;
+const SQLITE_NOTADB = 26;
+// Extended result codes pack the primary code in the low 8 bits (e.g.
+// SQLITE_CORRUPT_VTAB = 267 -> 267 & 0xff = 11), so mask before comparing or
+// extended corruption variants slip through as "not corruption".
+const SQLITE_PRIMARY_RESULT_CODE_MASK = 0xff;
+
+/**
+ * True when `err` is a SQLite open failure caused by an unreadable database file
+ * (SQLITE_CORRUPT / SQLITE_NOTADB, including their extended variants) — the only
+ * class of failure for which destructive backup-and-recreate recovery is safe.
+ */
+export function isDatabaseCorruptionError(err: unknown): boolean {
+  const errcode = (err as { errcode?: unknown } | null)?.errcode;
+  if (typeof errcode === 'number') {
+    const primary = errcode & SQLITE_PRIMARY_RESULT_CODE_MASK;
+    return primary === SQLITE_CORRUPT || primary === SQLITE_NOTADB;
+  }
+  // Fallback for runtimes that do not surface a numeric errcode.
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return message.includes('malformed') || message.includes('not a database');
+}
+
+/**
+ * Metadata attached to an adapter that opened via the corruption-recovery
+ * branch of {@link SQLiteAdapter.create}. `restoredFromSnapshot` is the source
+ * of the recovered data when auto-restore succeeded, or `null` when no clean
+ * hourly snapshot was available and the adapter fell back to an empty schema.
+ * `quarantinedPath` always points at the preserved pre-recovery file so the
+ * user can attempt manual `.recover` later.
+ */
+export interface CorruptionRecovery {
+  readonly detectedAt: string;
+  readonly quarantinedPath: string;
+  readonly restoredFromSnapshot: string | null;
+}
+
+/** Prefix produced by `createHourlySnapshot` in `packages/app/src/delete-all-snapshot.ts`. */
+const HOURLY_SNAPSHOT_LABEL = 'hourly-auto-';
+
+/**
+ * Run `PRAGMA quick_check` on the raw file at `dbPath`. Returns `true` iff the
+ * check reports a single `'ok'` row. Any open failure, IO error, or non-ok row
+ * yields `false` so callers can treat the file as unusable without unwrapping
+ * SQLite error taxonomy. The connection is closed before returning so we never
+ * leave a `-shm` mapping on a file we're about to copy or ignore.
+ */
+async function fileQuickCheckOk(dbPath: string): Promise<boolean> {
+  try {
+    const { DatabaseSync } = await loadNativeSqlite();
+    const db = new DatabaseSync(dbPath, { readOnly: true });
+    try {
+      const rows = db.prepare('PRAGMA quick_check').all() as Array<{ quick_check?: unknown }>;
+      return rows.length === 1 && rows[0]?.quick_check === 'ok';
+    } finally {
+      db.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find the newest `<dbBasename>.hourly-auto-*` file in `backupDir` whose
+ * `quick_check` passes. Returns `null` when the directory is missing, has no
+ * matching snapshots, or every candidate is corrupt. Snapshot names embed an
+ * ISO-derived timestamp (`YYYYMMDD-HHMMSS-mmmZ`), so lexicographic descending
+ * order is chronologically newest-first.
+ */
+async function findLatestCleanHourlySnapshot(
+  backupDir: string,
+  dbBasename: string,
+): Promise<string | null> {
+  let entries: string[];
+  try {
+    entries = readdirSync(backupDir);
+  } catch {
+    return null;
+  }
+  const prefix = `${dbBasename}.${HOURLY_SNAPSHOT_LABEL}`;
+  const snapshots = entries
+    .filter((name) => name.startsWith(prefix) && !name.endsWith('-wal') && !name.endsWith('-shm'))
+    .sort()
+    .reverse();
+  for (const name of snapshots) {
+    const candidate = join(backupDir, name);
+    if (await fileQuickCheckOk(candidate)) return candidate;
+  }
+  return null;
+}
+
+class NativeStatementCompat {
+  private boundParams: SQLiteParams = [];
+  private iterator: Iterator<Record<string, unknown>> | null = null;
+  private current: Record<string, unknown> | undefined;
+
+  constructor(private readonly stmt: StatementSync) {}
+
+  bind(params: SQLiteParams = []): void {
+    this.boundParams = normalizeParams(params);
+    this.iterator = null;
+    this.current = undefined;
+  }
+
+  step(): boolean {
+    if (!this.iterator) {
+      this.iterator = this.stmt.iterate(...(paramsToArgs(this.boundParams) as any[])) as Iterator<Record<string, unknown>>;
+    }
+    const next = this.iterator.next();
+    this.current = next.done ? undefined : next.value;
+    return !next.done;
+  }
+
+  getAsObject(): Record<string, unknown> {
+    return this.current ?? {};
+  }
+
+  get(...params: unknown[]): Record<string, unknown> | undefined {
+    return this.stmt.get(...(params as any[])) as Record<string, unknown> | undefined;
+  }
+
+  all(...params: unknown[]): Record<string, unknown>[] {
+    return this.stmt.all(...(params as any[])) as Record<string, unknown>[];
+  }
+
+  run(...params: unknown[]): { changes: number | bigint; lastInsertRowid: number | bigint } {
+    return this.stmt.run(...(params as any[]));
+  }
+
+  free(): void {
+    this.iterator = null;
+    this.current = undefined;
+  }
+}
+
+class NativeDatabaseCompat {
+  private lastChanges = 0;
+
+  constructor(private readonly db: DatabaseSync) {}
+
+  run(sql: string, params: SQLiteParams = []): void {
+    const trimmed = sql.trim();
+    if (Array.isArray(params) && params.length === 0 && !trimmed.includes('?') && trimmed.split(';').filter(Boolean).length > 1) {
+      this.db.exec(sql);
+      this.lastChanges = 0;
+      return;
+    }
+    const result = this.db.prepare(sql).run(...(paramsToArgs(params) as any[]));
+    this.lastChanges = Number(result.changes);
+  }
+
+  prepare(sql: string): NativeStatementCompat {
+    return new NativeStatementCompat(this.db.prepare(sql));
+  }
+
+  exec(sql: string): Array<{ columns: string[]; values: unknown[][] }> {
+    const trimmed = sql.trim();
+    if (/^(?:SELECT|PRAGMA)\b/i.test(trimmed)) {
+      const stmt = this.db.prepare(sql);
+      const rows = stmt.all() as Record<string, unknown>[];
+      const columns = stmt.columns().map((column) => column.name);
+      return [{ columns, values: rows.map((row) => columns.map((column) => row[column])) }];
+    }
+    this.db.exec(sql);
+    this.lastChanges = 0;
+    return [];
+  }
+
+  getRowsModified(): number {
+    return this.lastChanges;
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
 
 export interface WorkflowMutationIntent {
   id: number;
@@ -106,57 +429,274 @@ export interface WorkflowMutationLease {
   leaseExpiresAt: string;
 }
 
+export type TaskLaunchDispatchState =
+  | 'enqueued'
+  | 'leased'
+  | 'completed'
+  | 'abandoned';
+
+export type TaskLaunchDispatchPriority = 'high' | 'normal' | 'low';
+
+export interface TaskLaunchDispatch {
+  id: number;
+  taskId: string;
+  attemptId: string;
+  workflowId: string;
+  state: TaskLaunchDispatchState;
+  priority: TaskLaunchDispatchPriority;
+  dispatchOwner?: string;
+  enqueuedAt: string;
+  leasedAt?: string;
+  completedAt?: string;
+  fencedUntil?: string;
+  attemptsCount: number;
+  lastError?: string;
+  generation: number;
+}
+
+type TerminalSessionRow = {
+  session_id?: unknown;
+  task_id?: unknown;
+  target_key?: unknown;
+  status?: unknown;
+  exit_code?: unknown;
+  cwd?: unknown;
+  command?: unknown;
+  args_json?: unknown;
+  linux_terminal_tail?: unknown;
+  mode?: unknown;
+  attached?: unknown;
+  output_snapshot?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+};
+
+type InAppPlanningSessionRow = {
+  session_id?: unknown;
+  title?: unknown;
+  preset_key?: unknown;
+  status?: unknown;
+  draft_plan_summary_json?: unknown;
+  submitted_workflow_id?: unknown;
+  submitted_plan_name?: unknown;
+  terminal_mode?: unknown;
+  terminal_session_id?: unknown;
+  terminal_status?: unknown;
+  terminal_exit_code?: unknown;
+  terminal_output_snapshot?: unknown;
+  terminal_updated_at?: unknown;
+  pending_response?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+};
+
+type InAppPlanningMessageRow = {
+  session_id?: unknown;
+  message_id?: unknown;
+  role?: unknown;
+  text?: unknown;
+  tone?: unknown;
+  created_at?: unknown;
+};
+
+function parseTerminalArgsJson(value: unknown): string[] {
+  if (typeof value !== 'string' || value.length === 0) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function isInAppPlanningSessionStatus(value: unknown): value is InAppPlanningSessionStatus {
+  return value === 'still_discussing'
+    || value === 'waiting_for_answer'
+    || value === 'draft_ready'
+    || value === 'submitted';
+}
+
+function isPlanningTerminalMode(value: unknown): value is PlanningTerminalMode {
+  return value === 'chat' || value === 'tmux';
+}
+
+function isPlanningTerminalStatus(value: unknown): value is 'running' | 'exited' | undefined {
+  return value === undefined || value === null || value === 'running' || value === 'exited';
+}
+
+function isInAppPlanningMessageRole(value: unknown): value is InAppPlanningChatLine['role'] {
+  return value === 'user' || value === 'assistant' || value === 'system';
+}
+
+function isInAppPlanningMessageTone(value: unknown): value is InAppPlanningChatLine['tone'] {
+  return value === undefined
+    || value === null
+    || value === 'muted'
+    || value === 'error'
+    || value === 'success';
+}
+
+function parseInAppPlanningPlanSummary(value: unknown): InAppPlanningPlanSummary | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('planning summary must be an object');
+  }
+  const candidate = parsed as Partial<InAppPlanningPlanSummary>;
+  if (
+    typeof candidate.name !== 'string'
+    || typeof candidate.taskCount !== 'number'
+    || !Array.isArray(candidate.steps)
+    || !candidate.steps.every((step) => typeof step === 'string')
+    || (
+      candidate.workflowCount !== undefined
+      && typeof candidate.workflowCount !== 'number'
+    )
+  ) {
+    throw new Error('planning summary has invalid shape');
+  }
+  const taskGroups = Array.isArray(candidate.taskGroups)
+    ? candidate.taskGroups.filter(
+      (group): group is InAppPlanningPlanSummary['taskGroups'][number] =>
+        !!group
+        && typeof group === 'object'
+        && (group.workflow === null || typeof group.workflow === 'string')
+        && Array.isArray(group.tasks)
+        && group.tasks.every((task) => typeof task === 'string'),
+    )
+    : [];
+  return {
+    name: candidate.name,
+    taskCount: candidate.taskCount,
+    ...(candidate.workflowCount === undefined ? {} : { workflowCount: candidate.workflowCount }),
+    steps: candidate.steps,
+    taskGroups,
+  };
+}
+
 export class SQLiteAdapter implements PersistenceAdapter {
-  private db: SqlJsDatabase;
+  private db: NativeDatabaseCompat;
+  private nativeDb: DatabaseSync;
   private dbPath: string | null;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readOnly: boolean;
   private dirty = false;
-  private flushDelayMs: number;
-  private flushWarnThresholdMs: number;
-  private flushWarnDbSizeBytes: number;
-  private flushWarnCooldownMs: number;
-  private lastFlushWarnAtMs = 0;
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
   private outputDir: string;
   private spoolNextOffsetCache = new Map<string, number>();
   private writeTransactionDepth = 0;
-  private lastWorkflowTaskSnapshotStats: Record<string, unknown> | null = null;
+  private readonly activityLogMaxRows: number;
+  private activityLogWritesSincePrune = 0;
+  private eventCounterFallbackLogged = false;
+  private readonly exclusiveLocking: boolean;
+  private readonly taskAttemptRepo: SqliteTaskAttemptRepository;
+  private readonly workflowRepo: SqliteWorkflowRepository;
+  private readonly slowQueryThresholdMs: number;
+  private readonly onSlowQuery: ((info: SlowQueryInfo) => void) | null;
+
+  /**
+   * Non-null only when this adapter was opened via the corruption-recovery
+   * branch of {@link SQLiteAdapter.create}. Callers (e.g. `main.ts`) surface
+   * this to the user so a silent auto-restore or empty-DB fallback is never
+   * invisible again. Field, not method, so it's cheap to check on every boot.
+   */
+  readonly corruptionRecovery: CorruptionRecovery | null;
 
   /** Use SQLiteAdapter.create() instead. */
-  private constructor(db: SqlJsDatabase, dbPath: string | null, options?: SQLiteAdapterOptions) {
-    this.db = db;
+  private constructor(
+    db: DatabaseSync,
+    dbPath: string | null,
+    options?: SQLiteAdapterOptions,
+    corruptionRecovery: CorruptionRecovery | null = null,
+  ) {
+    this.nativeDb = db;
+    this.db = new NativeDatabaseCompat(db);
     this.dbPath = dbPath;
     this.readOnly = options?.readOnly === true;
-    this.flushDelayMs = this.dbPath
-      ? Number(process.env.INVOKER_SQLITE_FLUSH_DEBOUNCE_MS ?? 0)
-      : 0;
-    this.flushWarnThresholdMs = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_THRESHOLD_MS ?? 250);
-    this.flushWarnDbSizeBytes = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_DB_MB ?? 256) * 1024 * 1024;
-    this.flushWarnCooldownMs = Number(process.env.INVOKER_SQLITE_FLUSH_WARN_COOLDOWN_MS ?? 60_000);
     this.outputTailLimit = options?.outputTailLimit ?? 100;
     this.outputDir = options?.outputDir ?? this.resolveOutputDir(dbPath);
-    this.db.run('PRAGMA foreign_keys = ON');
-    this.initSchema();
-    this.migrate();
+    this.activityLogMaxRows = options?.activityLogMaxRows ?? DEFAULT_ACTIVITY_LOG_MAX_ROWS;
+    this.exclusiveLocking = options?.exclusiveLocking === true;
+    this.slowQueryThresholdMs = options?.slowQueryThresholdMs ?? 25;
+    this.onSlowQuery = options?.onSlowQuery
+      ?? (this.slowQueryThresholdMs > 0
+        ? (info) => {
+            console.warn(
+              `[SQLiteAdapter] slow query ${info.durationMs.toFixed(1)}ms` +
+                (info.rowCount === undefined ? '' : ` rows=${info.rowCount}`) +
+                `: ${info.sql.slice(0, 200)}`,
+            );
+          }
+        : null);
+    this.corruptionRecovery = corruptionRecovery;
+    this.taskAttemptRepo = new SqliteTaskAttemptRepository(this.executor, {
+      updateTask: (taskId, changes) => this.updateTask(taskId, changes),
+      updateAttempt: (attemptId, changes) => this.updateAttempt(attemptId, changes),
+    });
+    this.workflowRepo = new SqliteWorkflowRepository(
+      this.executor,
+      (task) => this.taskAttemptRepo.reconcileTaskFromSelectedAttempt(task),
+    );
+    this.configureConnection(dbPath !== null);
+    if (!this.readOnly) {
+      this.initSchema();
+      this.migrate();
+    }
+  }
+
+  private normalizeConversationMode(value: unknown): Conversation['mode'] {
+    return value === 'agent' ? 'agent' : 'plan';
   }
 
   /**
-   * Async factory — loads WASM once, opens or creates the database.
+   * Open a private non-file-backed SQLite database.
+   *
+   * This is for process-local placeholder persistence only. It does not open
+   * invoker.db, does not enable WAL, and cannot create or map invoker.db-shm.
+   */
+  static async createEphemeral(options?: EphemeralSQLiteAdapterOptions): Promise<SQLiteAdapter> {
+    return SQLiteAdapter.create(SQLITE_EPHEMERAL_DATABASE, options);
+  }
+
+  /**
+   * Async factory — opens or creates the database.
    * If the on-disk file is corrupted, backs it up and starts fresh.
-   * @param dbPath File path or ':memory:' (default).
-   * @param options readOnly=true opens DB for read operations without schema mutation/flush.
+   * @param dbPath File path or the private in-memory SQLite database name (default).
+   * @param options readOnly=true opens DB for read operations without schema mutation.
    *                ownerCapability=true is required to open DB in writable mode for file-backed databases.
    */
-  static async create(dbPath: string = ':memory:', options?: SQLiteAdapterOptions): Promise<SQLiteAdapter> {
-    if (!sqlJsPromise) {
-      sqlJsPromise = initSqlJs();
-    }
-    const SQL = await sqlJsPromise;
-
-    const isFile = dbPath !== ':memory:';
+  static async create(
+    dbPath: string = SQLITE_EPHEMERAL_DATABASE,
+    options?: SQLiteAdapterOptions,
+  ): Promise<SQLiteAdapter> {
+    const isFile = dbPath !== SQLITE_EPHEMERAL_DATABASE;
     const requestWritable = options?.readOnly !== true;
+
+    // Exclusive (heap wal-index, no -shm) locking is reserved for the sole
+    // opener: only the writable owner of a file-backed database may request it.
+    // A read-only or non-owner caller opting in would contend with the real
+    // owner (SQLITE_BUSY) or get a cryptic open failure.
+    if (isFile && options?.exclusiveLocking === true && (!requestWritable || !options?.ownerCapability)) {
+      throw new Error(
+        'exclusiveLocking requires the writable owner process to be the sole opener of the database file.',
+      );
+    }
+
+    // Sidecar files alone cannot prove a writable owner is live: opening a
+    // WAL-mode database read-only creates -wal/-shm itself, and a read-only
+    // connection has no write access to checkpoint them away on close. Gating
+    // on mere existence therefore lets the first reader wedge every reader
+    // after it. Only a live owner may turn a reader away.
+    if (isFile && options?.readOnly === true && (existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`))) {
+      const ownerPid = readLiveOwnerPid(dbPath);
+      if (ownerPid !== null) {
+        throw new Error(
+          `Cannot open SQLite database read-only while writable owner PID ${ownerPid} holds live WAL sidecars for ${dbPath}. ` +
+          'Close the writable owner cleanly before opening a file-backed read-only adapter.',
+        );
+      }
+    }
 
     // Enforce owner-only writable initialization for file-backed databases
     if (isFile && requestWritable && !options?.ownerCapability) {
@@ -167,23 +707,85 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
-    if (isFile && existsSync(dbPath)) {
-      const buffer = readFileSync(dbPath);
-      try {
-        const db = new SQL.Database(buffer);
-        return new SQLiteAdapter(db, dbPath, options);
-      } catch (err) {
-        const backupPath = `${dbPath}.corrupt-${Date.now()}`;
-        console.error(
-          `[SQLiteAdapter] Database corrupted (${err instanceof Error ? err.message : String(err)}). ` +
-          `Backing up to ${backupPath} and starting fresh.`,
-        );
-        renameSync(dbPath, backupPath);
-      }
+    if (isFile) {
+      mkdirSync(dirname(dbPath), { recursive: true });
     }
 
-    const db = new SQL.Database();
-    return new SQLiteAdapter(db, isFile ? dbPath : null, options);
+
+    try {
+      const { DatabaseSync } = await loadNativeSqlite();
+      const db = new DatabaseSync(dbPath, { readOnly: options?.readOnly === true });
+      if (isFile && requestWritable && options?.ownerCapability) writeOwnerMarker(dbPath);
+      return new SQLiteAdapter(db, isFile ? dbPath : null, options);
+    } catch (err) {
+      if (!isFile || options?.readOnly === true || !existsSync(dbPath) || !isDatabaseCorruptionError(err)) {
+        throw err;
+      }
+      const detectedAt = new Date().toISOString();
+      const backupPath = `${dbPath}.corrupt-${Date.now()}`;
+      console.error(
+        `[SQLiteAdapter] Database corrupted (${err instanceof Error ? err.message : String(err)}). ` +
+        `Quarantining to ${backupPath}.`,
+      );
+      renameSync(dbPath, backupPath);
+      for (const suffix of ['-wal', '-shm']) {
+        const sidecar = `${dbPath}${suffix}`;
+        if (existsSync(sidecar)) renameSync(sidecar, `${backupPath}${suffix}`);
+      }
+
+      // Data-preserving recovery: prefer the newest clean hourly snapshot over
+      // silently starting empty. The invariant only holds if the snapshot is
+      // itself intact (quick_check == ok), so we walk newest-first and skip
+      // any candidate whose pages are also damaged.
+      const backupDir = join(dirname(dbPath), 'db-backups');
+      const cleanSnapshot = await findLatestCleanHourlySnapshot(backupDir, basename(dbPath));
+      let restoredFromSnapshot: string | null = null;
+      if (cleanSnapshot) {
+        try {
+          copyFileSync(cleanSnapshot, dbPath);
+          restoredFromSnapshot = cleanSnapshot;
+          console.error(
+            `[SQLiteAdapter] Auto-restored ${dbPath} from clean snapshot ${cleanSnapshot}.`,
+          );
+        } catch (copyErr) {
+          console.error(
+            `[SQLiteAdapter] Failed to restore from ${cleanSnapshot}: ` +
+              (copyErr instanceof Error ? copyErr.message : String(copyErr)) +
+              '. Falling back to empty database.',
+          );
+        }
+      } else {
+        console.error(
+          `[SQLiteAdapter] No clean hourly snapshot in ${backupDir}; starting fresh empty database.`,
+        );
+      }
+
+      const recovery: CorruptionRecovery = {
+        detectedAt,
+        quarantinedPath: backupPath,
+        restoredFromSnapshot,
+      };
+      const { DatabaseSync } = await loadNativeSqlite();
+      const db = new DatabaseSync(dbPath);
+      return new SQLiteAdapter(db, dbPath, options, recovery);
+    }
+  }
+
+  /**
+   * Cheap ("~milliseconds on hundreds of MB") integrity gate for the live
+   * connection. Returns `true` iff SQLite's `PRAGMA quick_check` produces a
+   * single `'ok'` row. Callers use this to refuse destructive downstream work
+   * on a damaged DB — most importantly, to skip the hourly snapshot when the
+   * source is corrupt (otherwise the corruption propagates into every backup
+   * and defeats the auto-restore invariant in {@link SQLiteAdapter.create}).
+   */
+  quickCheck(): boolean {
+    try {
+      const rows = this.nativeDb.prepare('PRAGMA quick_check').all() as Array<{ quick_check?: unknown }>;
+      return rows.length === 1 && rows[0]?.quick_check === 'ok';
+    } catch {
+      return false;
+    }
   }
 
   private resolveOutputDir(dbPath: string | null): string {
@@ -194,31 +796,53 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return join(invokerHome, 'task-output');
   }
 
-  // ── sql.js Helpers ───────────────────────────────────────
+  private configureConnection(fileBacked: boolean): void {
+    this.nativeDb.exec('PRAGMA busy_timeout = 5000');
+    this.nativeDb.exec('PRAGMA foreign_keys = ON');
+    if (fileBacked) {
+      if (this.exclusiveLocking) {
+        // Heap wal-index (no -shm file). MUST precede `journal_mode = WAL`.
+        this.nativeDb.exec('PRAGMA locking_mode = EXCLUSIVE');
+      }
+      this.nativeDb.exec('PRAGMA journal_mode = WAL');
+      this.nativeDb.exec('PRAGMA synchronous = FULL');
+      this.nativeDb.exec('PRAGMA wal_autocheckpoint = 1000');
+    }
+  }
+
+  // ── SQLite Helpers ───────────────────────────────────────
+
+  private noteSlowQuery(startedAt: number, sql: string, rowCount?: number): void {
+    if (this.slowQueryThresholdMs <= 0 || !this.onSlowQuery) return;
+    const durationMs = performance.now() - startedAt;
+    if (durationMs < this.slowQueryThresholdMs) return;
+    this.onSlowQuery({ durationMs, sql, ...(rowCount === undefined ? {} : { rowCount }) });
+  }
 
   /** Run a single-row SELECT, returning the row as an object or undefined. */
   private queryOne(sql: string, params: unknown[] = []): Record<string, unknown> | undefined {
+    const startedAt = performance.now();
     const stmt = this.db.prepare(sql);
-    stmt.bind(params as any[]);
-    if (stmt.step()) {
-      const row = stmt.getAsObject();
+    try {
+      const row = stmt.get(...(paramsToArgs(params) as any[])) as Record<string, unknown> | undefined;
+      this.noteSlowQuery(startedAt, sql, row === undefined ? 0 : 1);
+      return row;
+    } finally {
       stmt.free();
-      return row as Record<string, unknown>;
     }
-    stmt.free();
-    return undefined;
   }
 
   /** Run a multi-row SELECT, returning an array of row objects. */
   private queryAll(sql: string, params: unknown[] = []): Record<string, unknown>[] {
+    const startedAt = performance.now();
     const stmt = this.db.prepare(sql);
-    stmt.bind(params as any[]);
-    const rows: Record<string, unknown>[] = [];
-    while (stmt.step()) {
-      rows.push(stmt.getAsObject() as Record<string, unknown>);
+    try {
+      const rows = stmt.all(...(paramsToArgs(params) as any[])) as Record<string, unknown>[];
+      this.noteSlowQuery(startedAt, sql, rows.length);
+      return rows;
+    } finally {
+      stmt.free();
     }
-    stmt.free();
-    return rows;
   }
 
   private ensureWritable(): void {
@@ -227,31 +851,29 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
-  /** Run an INSERT/UPDATE/DELETE and schedule a flush. */
+  /** Run an INSERT/UPDATE/DELETE. File-backed durability is handled by SQLite/WAL. */
   private execRun(sql: string, params: unknown[] = []): void {
     this.ensureWritable();
+    const startedAt = performance.now();
     this.db.run(sql, params as any[]);
+    this.noteSlowQuery(startedAt, sql);
     this.dirty = true;
-    if (this.writeTransactionDepth === 0) {
-      this.scheduleFlush();
-    }
   }
 
   private runTransaction<T>(work: () => T): T {
     this.ensureWritable();
-    this.db.run('BEGIN');
+    this.db.run(this.writeTransactionDepth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT invoker_nested_${this.writeTransactionDepth}`);
     this.writeTransactionDepth += 1;
     try {
       const result = work();
       this.writeTransactionDepth -= 1;
-      this.db.run('COMMIT');
+      this.db.run(this.writeTransactionDepth === 0 ? 'COMMIT' : `RELEASE invoker_nested_${this.writeTransactionDepth}`);
       this.dirty = true;
-      this.scheduleFlush();
       return result;
     } catch (err) {
       this.writeTransactionDepth = Math.max(0, this.writeTransactionDepth - 1);
       try {
-        this.db.run('ROLLBACK');
+        this.db.run(this.writeTransactionDepth === 0 ? 'ROLLBACK' : `ROLLBACK TO invoker_nested_${this.writeTransactionDepth}`);
       } catch {
         // Preserve the original statement failure if SQLite already aborted the
         // transaction before we reached this cleanup path.
@@ -265,948 +887,434 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.runTransaction(work);
   }
 
+  private get executor(): SqliteExecutor {
+    return {
+      queryOne: (sql, params) => this.queryOne(sql, params),
+      queryAll: (sql, params) => this.queryAll(sql, params),
+      execRun: (sql, params) => this.execRun(sql, params),
+      runTransaction: <T>(work: () => T): T => this.runTransaction<T>(work),
+      run: (sql, params) => this.db.run(sql, params),
+      getRowsModified: () => this.db.getRowsModified(),
+      readOnly: this.readOnly,
+      markDirty: () => {
+        this.dirty = true;
+      },
+    };
+  }
+
   runCompatibilityMigration(): {
     migratedFixingWithAiStatuses: number;
     normalizedMergeModes: number;
     staleAutoFixExperimentTasks: number;
     normalizedStaleLaunchMetadata: number;
+    normalizedLegacyAcknowledgedLaunchDispatches: number;
+    backfilledMissingSshPoolMemberIds: number;
   } {
-    const report = {
-      migratedFixingWithAiStatuses: 0,
-      normalizedMergeModes: 0,
-      staleAutoFixExperimentTasks: 0,
-      normalizedStaleLaunchMetadata: 0,
-    };
-    this.runTransaction(() => {
-      this.db.run(
-        `UPDATE tasks
-         SET status = 'fixing_with_ai'
-         WHERE status = 'running' AND is_fixing_with_ai = 1`,
-      );
-      report.migratedFixingWithAiStatuses = this.db.getRowsModified();
-
-      this.db.run(
-        `UPDATE tasks
-         SET is_fixing_with_ai = 0
-         WHERE status = 'fixing_with_ai' AND is_fixing_with_ai != 0`,
-      );
-
-      this.db.run(
-        `UPDATE workflows
-         SET merge_mode = 'external_review'
-         WHERE merge_mode = 'github'`,
-      );
-      report.normalizedMergeModes = this.db.getRowsModified();
-
-      this.db.run(
-        `UPDATE tasks
-         SET status = 'stale',
-             error = 'Stale auto-fix experiment branch; migrated to modern retry model',
-             completed_at = COALESCE(completed_at, datetime('now')),
-             is_fixing_with_ai = 0
-         WHERE status != 'stale'
-           AND (
-             (parent_task IS NOT NULL AND id LIKE '%-exp-fix-%')
-             OR (
-               is_reconciliation = 1
-               AND parent_task IN (
-                 SELECT id FROM tasks
-                 WHERE parent_task IS NOT NULL AND id LIKE '%-exp-fix-%'
-               )
-             )
-           )`,
-      );
-      report.staleAutoFixExperimentTasks = this.db.getRowsModified();
-
-      this.db.run(
-        `UPDATE tasks
-         SET launch_phase = NULL,
-             launch_started_at = NULL,
-             launch_completed_at = NULL
-         WHERE status IN ('completed', 'failed', 'needs_input', 'awaiting_approval', 'review_ready', 'stale')
-           AND launch_started_at IS NOT NULL
-           AND started_at IS NOT NULL
-           AND (julianday(started_at) - julianday(launch_started_at)) * 86400.0 > 3600.0`,
-      );
-      report.normalizedStaleLaunchMetadata = this.db.getRowsModified();
-    });
-    return report;
+    return migrations.runCompatibilityMigration(this.executor);
   }
 
-  /** Flush DB to disk (no-op for :memory:). */
-  private flush(): void {
-    if (!this.dbPath || !this.dirty) return;
-    const startedAt = Date.now();
-    const dir = dirname(this.dbPath);
-    mkdirSync(dir, { recursive: true });
-    const tmpPath = `${this.dbPath}.tmp`;
-    const exported = Buffer.from(this.db.export());
-    writeFileSync(tmpPath, exported);
-    renameSync(tmpPath, this.dbPath);
-    this.dirty = false;
-    const elapsedMs = Date.now() - startedAt;
-    const shouldWarnElapsed = Number.isFinite(this.flushWarnThresholdMs) && elapsedMs >= this.flushWarnThresholdMs;
-    const shouldWarnSize = Number.isFinite(this.flushWarnDbSizeBytes) && exported.length >= this.flushWarnDbSizeBytes;
-    if ((shouldWarnElapsed || shouldWarnSize) && Date.now() - this.lastFlushWarnAtMs >= this.flushWarnCooldownMs) {
-      this.lastFlushWarnAtMs = Date.now();
-      process.stderr.write(
-        `[sqlite-flush] slow-or-large flush elapsedMs=${elapsedMs} sizeBytes=${exported.length} debounceMs=${this.flushDelayMs}\n`,
-      );
-    }
-  }
-
-  /** Debounced flush — coalesces rapid writes into a single I/O. */
-  private scheduleFlush(): void {
+  checkpointWal(mode: 'PASSIVE' | 'FULL' | 'RESTART' | 'TRUNCATE' = 'PASSIVE'): void {
     if (!this.dbPath) return;
-    if (this.flushDelayMs <= 0) {
-      if (this.flushTimer) {
-        clearTimeout(this.flushTimer);
-        this.flushTimer = null;
+    try {
+      this.nativeDb.exec(`PRAGMA wal_checkpoint(${mode})`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/locked|busy/i.test(message)) {
+        throw err;
       }
-      this.flush();
-      return;
     }
-    // Coalesce bursts onto the earliest pending flush to avoid timer churn.
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
-      this.flush();
-      this.flushTimer = null;
-    }, this.flushDelayMs);
+  }
+
+  async backupTo(destinationPath: string): Promise<void> {
+    if (!this.dbPath) {
+      throw new Error('SQLiteAdapter.backupTo requires a file-backed database');
+    }
+    mkdirSync(dirname(destinationPath), { recursive: true });
+    const { backup } = await loadNativeSqlite();
+    await backup(this.nativeDb, destinationPath);
+    this.checkpointWal('PASSIVE');
   }
 
   private initSchema(): void {
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS workflows (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        visual_proof INTEGER,
-        plan_file TEXT,
-        repo_url TEXT,
-        intermediate_repo_url TEXT,
-        branch TEXT,
-        on_finish TEXT,
-        base_branch TEXT,
-        parent_remote TEXT,
-        feature_branch TEXT,
-        merge_mode TEXT,
-        review_provider TEXT,
-        generation INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS tasks (
-        id TEXT PRIMARY KEY,
-        workflow_id TEXT NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        blocked_by TEXT,
-        dependencies TEXT DEFAULT '[]',
-        command TEXT,
-        prompt TEXT,
-        exit_code INTEGER,
-        error TEXT,
-        protocol_error_code TEXT,
-        protocol_error_message TEXT,
-        input_prompt TEXT,
-        external_dependencies TEXT,
-
-        -- Context
-        summary TEXT,
-        problem TEXT,
-        approach TEXT,
-        test_plan TEXT,
-        repro_command TEXT,
-
-        -- Git
-        branch TEXT,
-        commit_hash TEXT,
-        fixed_integration_sha TEXT,
-        fixed_integration_recorded_at TEXT,
-        fixed_integration_source TEXT,
-        parent_task TEXT,
-
-        -- Experiments
-        pivot INTEGER DEFAULT 0,
-        experiment_variants TEXT,
-        is_reconciliation INTEGER DEFAULT 0,
-        selected_experiment TEXT,
-        experiment_results TEXT,
-        requires_manual_approval INTEGER DEFAULT 0,
-
-        -- Repository
-        repo_url TEXT,
-        feature_branch TEXT,
-
-        -- Merge node
-        is_merge_node INTEGER DEFAULT 0,
-
-        -- Claude session
-        claude_session_id TEXT,
-        workspace_path TEXT,
-
-        -- Timestamps
-        created_at TEXT DEFAULT (datetime('now')),
-        launch_phase TEXT,
-        launch_started_at TEXT,
-        launch_completed_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        execution_generation INTEGER DEFAULT 0,
-        docker_image TEXT,
-
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        event_type TEXT NOT NULL,
-        payload TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (task_id) REFERENCES tasks(id)
-      );
-
-      CREATE TABLE IF NOT EXISTS activity_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-        source TEXT NOT NULL,
-        level TEXT NOT NULL DEFAULT 'info',
-        message TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS conversations (
-        thread_ts TEXT PRIMARY KEY,
-        channel_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        extracted_plan TEXT,
-        plan_submitted INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE TABLE IF NOT EXISTS conversation_messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        thread_ts TEXT NOT NULL,
-        seq INTEGER NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (thread_ts) REFERENCES conversations(thread_ts)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_conv_messages_thread
-        ON conversation_messages(thread_ts, seq);
-
-      CREATE TABLE IF NOT EXISTS task_output (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        data TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now'))
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_task_output_task
-        ON task_output(task_id);
-
-      CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id
-        ON tasks(workflow_id);
-
-      CREATE TABLE IF NOT EXISTS attempts (
-        id TEXT PRIMARY KEY,
-        node_id TEXT NOT NULL,
-        attempt_number INTEGER NOT NULL,
-        queue_priority INTEGER NOT NULL DEFAULT 0,
-        status TEXT DEFAULT 'pending',
-
-        -- Input snapshot
-        snapshot_commit TEXT,
-        base_branch TEXT,
-        upstream_attempt_ids TEXT DEFAULT '[]',
-
-        -- Overrides
-        command_override TEXT,
-        prompt_override TEXT,
-
-        -- Execution state
-        claimed_at TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        exit_code INTEGER,
-        error TEXT,
-        last_heartbeat_at TEXT,
-        lease_expires_at TEXT,
-
-        -- Output
-        branch TEXT,
-        commit_hash TEXT,
-        summary TEXT,
-        workspace_path TEXT,
-        claude_session_id TEXT,
-        container_id TEXT,
-
-        -- Lineage
-        supersedes_attempt_id TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-
-        -- Merge conflict
-        merge_conflict TEXT,
-
-        FOREIGN KEY (node_id) REFERENCES tasks(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_attempts_node_created
-        ON attempts(node_id, created_at);
-
-      CREATE TABLE IF NOT EXISTS workflow_mutation_intents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        workflow_id TEXT NOT NULL,
-        channel TEXT NOT NULL,
-        args_json TEXT NOT NULL,
-        priority TEXT NOT NULL DEFAULT 'normal',
-        status TEXT NOT NULL DEFAULT 'queued',
-        owner_id TEXT,
-        error TEXT,
-        created_at TEXT DEFAULT (datetime('now')),
-        started_at TEXT,
-        completed_at TEXT,
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_workflow_mutation_intents_workflow_status
-        ON workflow_mutation_intents(workflow_id, status, priority, id);
-
-      CREATE TABLE IF NOT EXISTS workflow_mutation_leases (
-        workflow_id TEXT PRIMARY KEY,
-        owner_id TEXT NOT NULL,
-        active_intent_id INTEGER,
-        active_mutation_kind TEXT,
-        leased_at TEXT NOT NULL,
-        last_heartbeat_at TEXT NOT NULL,
-        lease_expires_at TEXT NOT NULL,
-        FOREIGN KEY (workflow_id) REFERENCES workflows(id),
-        FOREIGN KEY (active_intent_id) REFERENCES workflow_mutation_intents(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_workflow_mutation_leases_expiry
-        ON workflow_mutation_leases(lease_expires_at);
-
-      CREATE TABLE IF NOT EXISTS output_spool (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id TEXT NOT NULL,
-        offset INTEGER NOT NULL,
-        data TEXT NOT NULL,
-        created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (task_id) REFERENCES tasks(id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_output_spool_task_offset
-        ON output_spool(task_id, offset);
-    `);
+    this.db.run(SCHEMA_DDL);
   }
 
-  /** Add columns that may not exist in older databases. */
   private migrate(): void {
-    const migrations = [
-      'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
-      'ALTER TABLE tasks ADD COLUMN container_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN is_merge_node INTEGER DEFAULT 0',
-      'ALTER TABLE workflows ADD COLUMN on_finish TEXT',
-      'ALTER TABLE workflows ADD COLUMN base_branch TEXT',
-      'ALTER TABLE workflows ADD COLUMN parent_remote TEXT',
-      'ALTER TABLE workflows ADD COLUMN feature_branch TEXT',
-      'ALTER TABLE workflows ADD COLUMN generation INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN last_heartbeat_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN experiment_prompt TEXT',
-      'ALTER TABLE tasks ADD COLUMN auto_fix INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN max_fix_attempts INTEGER',
-      'ALTER TABLE tasks ADD COLUMN action_request_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN experiments TEXT',
-      'ALTER TABLE tasks ADD COLUMN selected_experiments TEXT',
-      'ALTER TABLE tasks ADD COLUMN utilization INTEGER',
-      'ALTER TABLE tasks ADD COLUMN pending_fix_error TEXT',
-      'ALTER TABLE workflows ADD COLUMN merge_mode TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_url TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_status TEXT',
-      'ALTER TABLE tasks ADD COLUMN review_provider_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN is_fixing_with_ai INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN execution_generation INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN docker_image TEXT',
-      'ALTER TABLE tasks ADD COLUMN selected_attempt_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN pool_member_id TEXT',
-      'ALTER TABLE workflows ADD COLUMN description TEXT',
-      'ALTER TABLE workflows ADD COLUMN visual_proof INTEGER',
-      'ALTER TABLE workflows ADD COLUMN intermediate_repo_url TEXT',
-      // agent_session_id: new column for pluggable agent architecture
-      'ALTER TABLE tasks ADD COLUMN agent_session_id TEXT',
-      'ALTER TABLE attempts ADD COLUMN agent_session_id TEXT',
-      'ALTER TABLE workflows ADD COLUMN review_provider TEXT',
-      // execution_agent / agent_name: interchangeable agent support
-      'ALTER TABLE tasks ADD COLUMN execution_agent TEXT',
-      'ALTER TABLE tasks ADD COLUMN agent_name TEXT',
-      // durable audit pointers for most-recent agent session/name
-      'ALTER TABLE tasks ADD COLUMN last_agent_session_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN last_agent_name TEXT',
-      'ALTER TABLE tasks ADD COLUMN external_dependencies TEXT',
-      'ALTER TABLE tasks ADD COLUMN runner_kind TEXT',
-      'ALTER TABLE tasks ADD COLUMN pool_id TEXT',
-      'ALTER TABLE tasks ADD COLUMN auto_fix_attempts INTEGER DEFAULT 0',
-      'ALTER TABLE tasks ADD COLUMN launch_phase TEXT',
-      'ALTER TABLE tasks ADD COLUMN launch_started_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN launch_completed_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_sha TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_recorded_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN fixed_integration_source TEXT',
-      'ALTER TABLE attempts ADD COLUMN queue_priority INTEGER NOT NULL DEFAULT 0',
-      'ALTER TABLE attempts ADD COLUMN claimed_at TEXT',
-      'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
-      'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
-    ];
-    for (const sql of migrations) {
-      try {
-        this.db.run(sql);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes('duplicate column name')) {
-          throw err;
-        }
-      }
-    }
-    this.migrateWorkflowStatusColumn();
-
-    // Replace old attempt_number index with created_at index
-    this.db.run('DROP INDEX IF EXISTS idx_attempts_node');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_attempts_node_created ON attempts(node_id, created_at)');
-    this.db.run('CREATE INDEX IF NOT EXISTS idx_tasks_workflow_id ON tasks(workflow_id)');
-
-    if (!this.readOnly) {
-      this.migrateTestCommands();
-      this.migrateGatePolicyApprovedToCompleted();
-      this.runCompatibilityMigration();
-    }
+    migrations.migrate(this.executor, () => this.reconcileTerminalSessionInvariants());
   }
 
   private migrateWorkflowStatusColumn(): void {
-    if (this.readOnly) return;
-    const columns = this.queryAll('PRAGMA table_info(workflows)') as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === 'status')) return;
-
-    const foreignKeys = this.queryOne('PRAGMA foreign_keys') as { foreign_keys?: number } | undefined;
-    const foreignKeysEnabled = foreignKeys?.foreign_keys === 1;
-    if (foreignKeysEnabled) {
-      this.db.run('PRAGMA foreign_keys = OFF');
-    }
-    this.db.run(`
-      CREATE TABLE workflows_new (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        visual_proof INTEGER,
-        plan_file TEXT,
-        repo_url TEXT,
-        intermediate_repo_url TEXT,
-        branch TEXT,
-        on_finish TEXT,
-        base_branch TEXT,
-        parent_remote TEXT,
-        feature_branch TEXT,
-        merge_mode TEXT,
-        review_provider TEXT,
-        generation INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT (datetime('now')),
-        updated_at TEXT DEFAULT (datetime('now'))
-      )
-    `);
-    this.db.run(`
-      INSERT INTO workflows_new (
-        id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
-        branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, generation, created_at, updated_at
-      )
-      SELECT
-        id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url,
-        branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode,
-        review_provider, generation, created_at, updated_at
-      FROM workflows
-    `);
-    this.db.run('DROP TABLE workflows');
-    this.db.run('ALTER TABLE workflows_new RENAME TO workflows');
-    if (foreignKeysEnabled) {
-      this.db.run('PRAGMA foreign_keys = ON');
-    }
-    this.dirty = true;
-    this.scheduleFlush();
+    migrations.migrateWorkflowStatusColumn(this.executor);
   }
 
-  /**
-   * Rewrite `pnpm test packages/<pkg>/...` (incorrect root-level invocation)
-   * to `cd packages/<pkg> && pnpm test -- <relative-path>`.
-   * Idempotent: already-rewritten commands won't match the LIKE pattern.
-   */
+  private dropTaskAutoFixAttemptsColumn(): void {
+    migrations.dropTaskAutoFixAttemptsColumn(this.executor);
+  }
+
   private migrateTestCommands(): void {
-    try {
-      const rows = this.queryAll(
-        `SELECT id, command FROM tasks WHERE command LIKE 'pnpm test packages/%' OR command LIKE 'pnpm test -- packages/%'`,
-      ) as Array<{ id: string; command: string }>;
-
-      for (const row of rows) {
-        const fixed = rewritePnpmTestCommand(row.command);
-        if (fixed !== row.command) {
-          this.execRun('UPDATE tasks SET command = ? WHERE id = ?', [fixed, row.id]);
-        }
-      }
-    } catch {
-      // Table may not exist yet on first run
-    }
+    migrations.migrateTestCommands(this.executor);
   }
 
-  /**
-   * Rewrite `gatePolicy: 'approved'` to `gatePolicy: 'completed'` in
-   * external_dependencies JSON column.
-   * Idempotent: subsequent runs find zero matches and do nothing.
-   */
   private migrateGatePolicyApprovedToCompleted(): void {
-    try {
-      const rows = this.queryAll(
-        `SELECT id, external_dependencies FROM tasks WHERE external_dependencies LIKE '%"gatePolicy":"approved"%'`,
-      ) as Array<{ id: string; external_dependencies: string }>;
+    migrations.migrateGatePolicyApprovedToCompleted(this.executor);
+  }
 
-      for (const row of rows) {
-        try {
-          const deps = JSON.parse(row.external_dependencies) as Array<{
-            workflowId: string;
-            taskId?: string;
-            requiredStatus: string;
-            gatePolicy?: string;
-          }>;
+  private migrateTaskExternalDependenciesToWorkflows(): void {
+    migrations.migrateTaskExternalDependenciesToWorkflows(this.executor);
+  }
 
-          let modified = false;
-          for (const dep of deps) {
-            if (dep.gatePolicy === 'approved') {
-              dep.gatePolicy = 'completed';
-              modified = true;
-            }
-          }
+  private reconcileTerminalSessionInvariants(): void {
+    const rows = this.queryAll(
+      `SELECT session_id, target_key
+       FROM terminal_sessions
+       WHERE status = 'running'
+       ORDER BY target_key ASC, updated_at DESC, created_at DESC, session_id DESC`,
+    ) as Array<{ session_id: string; target_key: string }>;
 
-          if (modified) {
-            const updated = JSON.stringify(deps);
-            this.execRun('UPDATE tasks SET external_dependencies = ? WHERE id = ?', [updated, row.id]);
-          }
-        } catch {
-          // Skip malformed JSON rows
-        }
+    const seenTargets = new Set<string>();
+    const now = new Date().toISOString();
+    for (const row of rows) {
+      if (!row.target_key || !row.session_id) continue;
+      if (!seenTargets.has(row.target_key)) {
+        seenTargets.add(row.target_key);
+        continue;
       }
-    } catch {
-      // Table may not exist yet on first run
+      this.db.run(
+        `UPDATE terminal_sessions
+            SET status = 'exited',
+                updated_at = ?
+          WHERE session_id = ?`,
+        [now, row.session_id],
+      );
     }
+
+    this.db.run(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_terminal_sessions_running_target
+         ON terminal_sessions(target_key)
+         WHERE status = 'running'`,
+    );
   }
 
   // ── Workflows ─────────────────────────────────────────
 
-  saveWorkflow(workflow: Workflow): void {
-    this.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, generation, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      workflow.id, workflow.name,
-      workflow.description ?? null,
-      workflow.visualProof ? 1 : 0,
-      workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.intermediateRepoUrl ?? null, workflow.branch ?? null,
-      workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
-      workflow.mergeMode ?? null,
-      workflow.reviewProvider ?? null,
-      workflow.generation ?? 0,
-      workflow.createdAt, workflow.updatedAt,
-    ]);
+  saveWorkflow(workflow: WorkflowSaveInput): void {
+    this.workflowRepo.saveWorkflow(workflow);
   }
 
-  updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'updatedAt' | 'baseBranch' | 'generation' | 'mergeMode'>>): void {
-    const setClauses: string[] = [];
-    const values: unknown[] = [];
-    if (changes.baseBranch !== undefined) {
-      setClauses.push('base_branch = ?');
-      values.push(changes.baseBranch);
-    }
-    if (changes.generation !== undefined) {
-      setClauses.push('generation = ?');
-      values.push(changes.generation);
-    }
-    if (changes.mergeMode !== undefined) {
-      setClauses.push('merge_mode = ?');
-      values.push(changes.mergeMode);
-    }
-    setClauses.push('updated_at = ?');
-    values.push(changes.updatedAt ?? new Date().toISOString());
-    if (setClauses.length === 0) return;
-    values.push(workflowId);
-    this.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
+  updateWorkflow(workflowId: string, changes: WorkflowMetadataChanges): void {
+    this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
   loadWorkflow(workflowId: string): Workflow | undefined {
-    const row = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
-    if (!row) return undefined;
-    const rollup = this.loadWorkflowRollups([workflowId]).get(workflowId);
-    return this.rowToWorkflow(row, rollup);
+    return this.workflowRepo.loadWorkflow(workflowId);
   }
 
   listWorkflows(): Workflow[] {
-    const rows = this.queryAll(
-      'SELECT * FROM workflows ORDER BY created_at DESC',
-    );
-    const workflowIds = rows.map((row: any) => String(row.id));
-    const rollups = this.loadWorkflowRollups(workflowIds);
-    return rows.map((row: any) => this.rowToWorkflow(row, rollups.get(String(row.id))));
+    return this.workflowRepo.listWorkflows();
+  }
+
+  findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
+    return this.workflowRepo.findReviewGateByPr(pr);
+  }
+
+  searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[] {
+    return this.workflowRepo.searchWorkflowsAndTasks(query, opts);
   }
 
   loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
-    const totalStartedAt = Date.now();
-    const workflowQueryStartedAt = Date.now();
-    const workflowRows = this.queryAll('SELECT * FROM workflows ORDER BY created_at DESC');
-    const workflowMetadataQueryMs = Date.now() - workflowQueryStartedAt;
-    const taskQueryStartedAt = Date.now();
-    const taskRows = this.queryAll('SELECT * FROM tasks ORDER BY workflow_id ASC, id ASC');
-    const taskQueryMs = Date.now() - taskQueryStartedAt;
-    const tasksByWorkflowId = new Map<string, TaskState[]>();
-    const workflowIds = workflowRows.map((row: any) => String(row.id));
-    const rollupStartedAt = Date.now();
-    const rollups = this.computeWorkflowRollupsFromRows(workflowIds, taskRows);
-    const rollupComputationMs = Date.now() - rollupStartedAt;
-    const tasks: TaskState[] = [];
-
-    const deserializeStartedAt = Date.now();
-    for (const row of taskRows) {
-      const task = this.reconcileTaskFromSelectedAttempt(this.rowToTask(row));
-      tasks.push(task);
-      const workflowId = task.config.workflowId ?? '';
-      if (!workflowId) continue;
-      const workflowTasks = tasksByWorkflowId.get(workflowId) ?? [];
-      workflowTasks.push(task);
-      tasksByWorkflowId.set(workflowId, workflowTasks);
-    }
-    const taskDeserializeReconcileMs = Date.now() - deserializeStartedAt;
-
-    const snapshot = {
-      workflows: workflowRows.map((row: any) => this.rowToWorkflow(row, rollups.get(String(row.id)))),
-      tasks,
-      tasksByWorkflowId,
-    };
-    this.lastWorkflowTaskSnapshotStats = {
-      workflowMetadataQueryMs,
-      taskQueryMs,
-      rollupComputationMs,
-      taskDeserializeReconcileMs,
-      totalMs: Date.now() - totalStartedAt,
-      workflowCount: snapshot.workflows.length,
-      taskCount: tasks.length,
-    };
-    return snapshot;
+    return this.workflowRepo.loadWorkflowTaskSnapshot();
   }
 
   getLastWorkflowTaskSnapshotStats(): Record<string, unknown> | null {
-    return this.lastWorkflowTaskSnapshotStats ? { ...this.lastWorkflowTaskSnapshotStats } : null;
+    return this.workflowRepo.getLastWorkflowTaskSnapshotStats();
   }
 
   // ── Tasks ─────────────────────────────────────────────
 
   saveTask(workflowId: string, task: TaskState): void {
-    const cfg = task.config;
-    const exec = task.execution;
-    this.execRun(`
-      INSERT OR REPLACE INTO tasks (
-        id, workflow_id, description, status, blocked_by, dependencies,
-        command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies,
-        summary, problem, approach, test_plan, repro_command,
-        branch, commit_hash, fixed_integration_sha, fixed_integration_recorded_at, fixed_integration_source, parent_task,
-        pivot, experiment_variants, is_reconciliation, selected_experiment,
-        selected_experiments, experiment_results, requires_manual_approval,
-        repo_url, feature_branch,
-        is_merge_node, auto_fix, max_fix_attempts,
-        runner_kind, pool_id, agent_session_id, workspace_path, container_id,
-        last_agent_session_id, last_agent_name,
-        action_request_id, experiments,
-        created_at, launch_phase, launch_started_at, launch_completed_at, started_at, completed_at, last_heartbeat_at,
-        utilization, pending_fix_error,
-        review_url, review_id, review_status, review_provider_id,
-        is_fixing_with_ai,
-        execution_generation,
-        pool_member_id,
-        docker_image,
-        execution_agent,
-        agent_name,
-        task_state_version
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?,
-        ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?,
-        ?, ?,
-        ?, ?, ?, ?,
-        ?, ?,
-        ?, ?, ?, ?,
-        ?,
-        ?,
-        ?,
-        ?,
-        ?,
-        ?,
-        ?
-      )
-    `, [
-      task.id, workflowId, task.description, task.status,
-      exec.blockedBy ?? null,
-      JSON.stringify(task.dependencies),
-      cfg.command ?? null, cfg.prompt ?? null, cfg.experimentPrompt ?? null,
-      exec.exitCode ?? null, exec.error ?? null, exec.protocolErrorCode ?? null, exec.protocolErrorMessage ?? null, exec.inputPrompt ?? null,
-      cfg.externalDependencies ? JSON.stringify(cfg.externalDependencies) : null,
-      cfg.summary ?? null, cfg.problem ?? null, cfg.approach ?? null,
-      cfg.testPlan ?? null, cfg.reproCommand ?? null,
-      exec.branch ?? null,
-      exec.commit ?? null,
-      exec.fixedIntegrationSha ?? null,
-      exec.fixedIntegrationRecordedAt?.toISOString() ?? null,
-      exec.fixedIntegrationSource ?? null,
-      cfg.parentTask ?? null,
-      cfg.pivot ? 1 : 0,
-      cfg.experimentVariants ? JSON.stringify(cfg.experimentVariants) : null,
-      cfg.isReconciliation ? 1 : 0,
-      exec.selectedExperiment ?? null,
-      exec.selectedExperiments ? JSON.stringify(exec.selectedExperiments) : null,
-      exec.experimentResults ? JSON.stringify(exec.experimentResults) : null,
-      cfg.requiresManualApproval ? 1 : 0,
-      null, cfg.featureBranch ?? null,
-      cfg.isMergeNode ? 1 : 0,
-      0, null,
-      cfg.runnerKind ?? null,
-      cfg.poolId ?? null,
-      exec.agentSessionId ?? null,
-      exec.workspacePath ?? null,
-      exec.containerId ?? null,
-      exec.lastAgentSessionId ?? null,
-      exec.lastAgentName ?? null,
-      exec.actionRequestId ?? null,
-      exec.experiments ? JSON.stringify(exec.experiments) : null,
-      task.createdAt.toISOString(),
-      exec.phase ?? null,
-      exec.launchStartedAt?.toISOString() ?? null,
-      exec.launchCompletedAt?.toISOString() ?? null,
-      exec.startedAt?.toISOString() ?? null,
-      exec.completedAt?.toISOString() ?? null,
-      exec.lastHeartbeatAt?.toISOString() ?? null,
-      null,
-      exec.pendingFixError ?? null,
-      exec.reviewUrl ?? null,
-      exec.reviewId ?? null,
-      exec.reviewStatus ?? null,
-      exec.reviewProviderId ?? null,
-      exec.isFixingWithAI ? 1 : 0,
-      exec.generation ?? 0,
-      (cfg as { poolMemberId?: string }).poolMemberId ?? null,
-      cfg.dockerImage ?? null,
-      cfg.executionAgent ?? null,
-      exec.agentName ?? null,
-      task.taskStateVersion ?? 1,
-    ]);
+    this.taskAttemptRepo.saveTask(workflowId, task);
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
-    const setClauses: string[] = [];
-    const values: any[] = [];
-
-    if (changes.status !== undefined) {
-      setClauses.push('status = ?');
-      values.push(changes.status);
-    }
-    if (changes.dependencies !== undefined) {
-      setClauses.push('dependencies = ?');
-      values.push(JSON.stringify(changes.dependencies));
-    }
-
-    if (changes.config) {
-      const configMap: Record<string, string> = {
-        workflowId: 'workflow_id',
-        parentTask: 'parent_task',
-        command: 'command',
-        prompt: 'prompt',
-        experimentPrompt: 'experiment_prompt',
-        summary: 'summary',
-        problem: 'problem',
-        approach: 'approach',
-        testPlan: 'test_plan',
-        reproCommand: 'repro_command',
-        featureBranch: 'feature_branch',
-        runnerKind: 'runner_kind',
-        poolId: 'pool_id',
-        poolMemberId: 'pool_member_id',
-        dockerImage: 'docker_image',
-        executionAgent: 'execution_agent',
-      };
-      const configBoolMap: Record<string, string> = {
-        pivot: 'pivot',
-        isReconciliation: 'is_reconciliation',
-        requiresManualApproval: 'requires_manual_approval',
-        isMergeNode: 'is_merge_node',
-      };
-
-      for (const [key, col] of Object.entries(configMap)) {
-        if (key in changes.config) {
-          setClauses.push(`${col} = ?`);
-          values.push((changes.config as any)[key] ?? null);
-        }
-      }
-      for (const [key, col] of Object.entries(configBoolMap)) {
-        if (key in changes.config) {
-          setClauses.push(`${col} = ?`);
-          values.push((changes.config as any)[key] ? 1 : 0);
-        }
-      }
-      if ('experimentVariants' in changes.config) {
-        setClauses.push('experiment_variants = ?');
-        values.push(changes.config.experimentVariants ? JSON.stringify(changes.config.experimentVariants) : null);
-      }
-      if ('externalDependencies' in changes.config) {
-        setClauses.push('external_dependencies = ?');
-        values.push(changes.config.externalDependencies ? JSON.stringify(changes.config.externalDependencies) : null);
-      }
-    }
-
-    if (changes.execution) {
-      const execMap: Record<string, string> = {
-        blockedBy: 'blocked_by',
-        inputPrompt: 'input_prompt',
-        exitCode: 'exit_code',
-        error: 'error',
-        protocolErrorCode: 'protocol_error_code',
-        protocolErrorMessage: 'protocol_error_message',
-        actionRequestId: 'action_request_id',
-        branch: 'branch',
-        commit: 'commit_hash',
-        fixedIntegrationSha: 'fixed_integration_sha',
-        fixedIntegrationSource: 'fixed_integration_source',
-        agentSessionId: 'agent_session_id',
-        lastAgentSessionId: 'last_agent_session_id',
-        workspacePath: 'workspace_path',
-        containerId: 'container_id',
-        selectedExperiment: 'selected_experiment',
-        pendingFixError: 'pending_fix_error',
-        reviewUrl: 'review_url',
-        reviewId: 'review_id',
-        reviewStatus: 'review_status',
-        reviewProviderId: 'review_provider_id',
-        phase: 'launch_phase',
-        generation: 'execution_generation',
-        selectedAttemptId: 'selected_attempt_id',
-        agentName: 'agent_name',
-        lastAgentName: 'last_agent_name',
-        autoFixAttempts: 'auto_fix_attempts',
-      };
-      const execDateMap: Record<string, string> = {
-        startedAt: 'started_at',
-        completedAt: 'completed_at',
-        lastHeartbeatAt: 'last_heartbeat_at',
-        launchStartedAt: 'launch_started_at',
-        launchCompletedAt: 'launch_completed_at',
-        fixedIntegrationRecordedAt: 'fixed_integration_recorded_at',
-      };
-      const execJsonFields: Record<string, string> = {
-        experiments: 'experiments',
-        selectedExperiments: 'selected_experiments',
-        experimentResults: 'experiment_results',
-      };
-
-      for (const [key, col] of Object.entries(execMap)) {
-        if (key in changes.execution) {
-          setClauses.push(`${col} = ?`);
-          values.push((changes.execution as any)[key] ?? null);
-        }
-      }
-      for (const [key, col] of Object.entries(execDateMap)) {
-        if (key in changes.execution) {
-          setClauses.push(`${col} = ?`);
-          const val = (changes.execution as any)[key];
-          values.push(val instanceof Date ? val.toISOString() : val ?? null);
-        }
-      }
-      for (const [key, col] of Object.entries(execJsonFields)) {
-        if (key in changes.execution) {
-          setClauses.push(`${col} = ?`);
-          const val = (changes.execution as any)[key];
-          values.push(val ? JSON.stringify(val) : null);
-        }
-      }
-      const execBoolMap: Record<string, string> = {
-        isFixingWithAI: 'is_fixing_with_ai',
-      };
-      for (const [key, col] of Object.entries(execBoolMap)) {
-        if (key in changes.execution) {
-          setClauses.push(`${col} = ?`);
-          values.push((changes.execution as any)[key] ? 1 : 0);
-        }
-      }
-    }
-
-    if (setClauses.length === 0) return;
-
-    // Atomically bump task-state version with every mutation
-    setClauses.push('task_state_version = task_state_version + 1');
-
-    if (changes.execution && 'workspacePath' in changes.execution) {
-      try {
-        const row = this.queryOne(
-          'SELECT is_merge_node AS isMerge, workspace_path AS prevPath FROM tasks WHERE id = ?',
-          [taskId],
-        ) as { isMerge?: number; prevPath?: string | null } | undefined;
-        if (row?.isMerge === 1) {
-          const nextWs = (changes.execution as { workspacePath?: string }).workspacePath;
-          console.log(
-            `[merge-gate-workspace] sqlite.updateTask mergeNode task=${taskId} ` +
-              `workspace_path ${row.prevPath ?? 'NULL'} → ${nextWs ?? 'NULL'} ` +
-              '(caller sets executor worktree path and/or gate clone path)',
-          );
-        }
-      } catch {
-        /* best-effort diagnostics only */
-      }
-    }
-
-    values.push(taskId);
-    const heartbeatOnly =
-      setClauses.length === 1 && setClauses[0].trimStart().startsWith('last_heartbeat_at =');
-    if (!heartbeatOnly && process.env.NODE_ENV !== 'test' && process.env.INVOKER_TRACE_PERSIST_SQL === '1') {
-      const cols = setClauses.map((c) => c.split(/\s*=\s*/)[0]!.trim()).join(', ');
-      console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
-    }
-    this.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    this.taskAttemptRepo.updateTask(taskId, changes);
   }
 
   loadTasks(workflowId: string): TaskState[] {
-    const rows = this.queryAll('SELECT * FROM tasks WHERE workflow_id = ?', [workflowId]);
-    return rows.map((row) => this.reconcileTaskFromSelectedAttempt(this.rowToTask(row)));
+    return this.taskAttemptRepo.loadTasks(workflowId);
   }
 
   loadTask(taskId: string): TaskState | undefined {
-    const row = this.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
-    if (!row) return undefined;
-    return this.reconcileTaskFromSelectedAttempt(this.rowToTask(row));
+    return this.taskAttemptRepo.loadTask(taskId);
   }
 
   getAllTaskIds(): string[] {
-    const rows = this.queryAll('SELECT id FROM tasks') as Array<{ id: string }>;
-    return rows.map((r) => r.id);
+    return this.taskAttemptRepo.getAllTaskIds();
   }
 
   getAllTaskBranches(): string[] {
+    return this.taskAttemptRepo.getAllTaskBranches();
+  }
+
+  upsertTerminalSession(record: TerminalSessionRecord): void {
+    this.ensureWritable();
+    this.db.run(
+      `INSERT INTO terminal_sessions (
+        session_id,
+        task_id,
+        target_key,
+        status,
+        exit_code,
+        cwd,
+        command,
+        args_json,
+        linux_terminal_tail,
+        mode,
+        attached,
+        output_snapshot,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        task_id = excluded.task_id,
+        target_key = excluded.target_key,
+        status = excluded.status,
+        exit_code = excluded.exit_code,
+        cwd = excluded.cwd,
+        command = excluded.command,
+        args_json = excluded.args_json,
+        linux_terminal_tail = excluded.linux_terminal_tail,
+        mode = excluded.mode,
+        attached = excluded.attached,
+        output_snapshot = excluded.output_snapshot,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at`,
+      [
+        record.sessionId,
+        record.taskId,
+        record.targetKey,
+        record.status,
+        record.exitCode ?? null,
+        record.cwd ?? null,
+        record.command ?? null,
+        JSON.stringify(record.args ?? []),
+        record.linuxTerminalTail ?? null,
+        record.mode,
+        record.attached ? 1 : 0,
+        record.outputSnapshot,
+        record.createdAt,
+        record.updatedAt,
+      ],
+    );
+    this.dirty = true;
+  }
+
+  listTerminalSessions(): TerminalSessionRecord[] {
     const rows = this.queryAll(
-      'SELECT DISTINCT branch FROM tasks WHERE branch IS NOT NULL',
-    ) as Array<{ branch: string }>;
-    return rows.map((r) => r.branch);
+      'SELECT * FROM terminal_sessions ORDER BY updated_at ASC, created_at ASC',
+    ) as TerminalSessionRow[];
+    const records: TerminalSessionRecord[] = [];
+    for (const row of rows) {
+      const record = this.mapTerminalSessionRow(row);
+      if (record) records.push(record);
+    }
+    return records;
+  }
+
+  loadTerminalSession(sessionId: string): TerminalSessionRecord | undefined {
+    const row = this.queryOne('SELECT * FROM terminal_sessions WHERE session_id = ?', [sessionId]);
+    return row ? this.mapTerminalSessionRow(row as TerminalSessionRow) : undefined;
+  }
+
+  updateTerminalSession(sessionId: string, patch: TerminalSessionPatch): void {
+    this.ensureWritable();
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+    if (Object.hasOwn(patch, 'status')) {
+      setClauses.push('status = ?');
+      values.push(patch.status ?? null);
+    }
+    if (Object.hasOwn(patch, 'exitCode')) {
+      setClauses.push('exit_code = ?');
+      values.push(patch.exitCode ?? null);
+    }
+    if (Object.hasOwn(patch, 'outputSnapshot')) {
+      setClauses.push('output_snapshot = ?');
+      values.push(patch.outputSnapshot ?? '');
+    }
+    if (Object.hasOwn(patch, 'updatedAt')) {
+      setClauses.push('updated_at = ?');
+      values.push(patch.updatedAt ?? null);
+    }
+    if (setClauses.length === 0) return;
+    values.push(sessionId);
+    this.db.run(`UPDATE terminal_sessions SET ${setClauses.join(', ')} WHERE session_id = ?`, values);
+    this.dirty = true;
+  }
+
+  deleteTerminalSession(sessionId: string): void {
+    this.ensureWritable();
+    this.db.run('DELETE FROM terminal_sessions WHERE session_id = ?', [sessionId]);
+    this.dirty = true;
+  }
+
+  upsertInAppPlanningSession(record: InAppPlanningSessionRecord): void {
+    this.runTransaction(() => {
+      this.db.run(
+        `INSERT INTO in_app_planning_sessions (
+          session_id,
+          title,
+          preset_key,
+          status,
+          draft_plan_summary_json,
+          submitted_workflow_id,
+          submitted_plan_name,
+          terminal_mode,
+          terminal_session_id,
+          terminal_status,
+          terminal_exit_code,
+          terminal_output_snapshot,
+          terminal_updated_at,
+          pending_response,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+          title = excluded.title,
+          preset_key = excluded.preset_key,
+          status = excluded.status,
+          draft_plan_summary_json = excluded.draft_plan_summary_json,
+          submitted_workflow_id = excluded.submitted_workflow_id,
+          submitted_plan_name = excluded.submitted_plan_name,
+          terminal_mode = excluded.terminal_mode,
+          terminal_session_id = excluded.terminal_session_id,
+          terminal_status = excluded.terminal_status,
+          terminal_exit_code = excluded.terminal_exit_code,
+          terminal_output_snapshot = excluded.terminal_output_snapshot,
+          terminal_updated_at = excluded.terminal_updated_at,
+          pending_response = excluded.pending_response,
+          created_at = excluded.created_at,
+          updated_at = excluded.updated_at`,
+        [
+          record.id,
+          record.title,
+          record.presetKey,
+          record.status,
+          record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
+          record.submittedWorkflowId ?? null,
+          record.submittedPlanName ?? null,
+          record.terminalMode ?? 'chat',
+          record.terminalSessionId ?? null,
+          record.terminalStatus ?? null,
+          record.terminalExitCode ?? null,
+          record.terminalOutputSnapshot ?? '',
+          record.terminalUpdatedAt ?? null,
+          record.pendingResponse ? 1 : 0,
+          record.createdAt,
+          record.updatedAt,
+        ],
+      );
+      this.replaceInAppPlanningMessages(record.id, record.messages, record.updatedAt);
+    });
+  }
+
+  listInAppPlanningSessions(): InAppPlanningSessionRecord[] {
+    const rows = this.queryAll(
+      'SELECT * FROM in_app_planning_sessions ORDER BY updated_at DESC, created_at DESC',
+    ) as InAppPlanningSessionRow[];
+    const records: InAppPlanningSessionRecord[] = [];
+    for (const row of rows) {
+      const record = this.mapInAppPlanningSessionRow(row);
+      if (record) records.push(record);
+    }
+    return records;
+  }
+
+  loadInAppPlanningSession(sessionId: string): InAppPlanningSessionRecord | undefined {
+    const row = this.queryOne('SELECT * FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
+    return row ? this.mapInAppPlanningSessionRow(row as InAppPlanningSessionRow) : undefined;
+  }
+
+  updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void {
+    this.ensureWritable();
+    const updateSession = (): void => {
+      const setClauses: string[] = [];
+      const values: unknown[] = [];
+      if (Object.hasOwn(patch, 'title')) {
+        setClauses.push('title = ?');
+        values.push(patch.title ?? null);
+      }
+      if (Object.hasOwn(patch, 'status')) {
+        setClauses.push('status = ?');
+        values.push(patch.status ?? null);
+      }
+      if (Object.hasOwn(patch, 'draftPlanSummary')) {
+        setClauses.push('draft_plan_summary_json = ?');
+        values.push(patch.draftPlanSummary ? JSON.stringify(patch.draftPlanSummary) : null);
+      }
+      if (Object.hasOwn(patch, 'submittedWorkflowId')) {
+        setClauses.push('submitted_workflow_id = ?');
+        values.push(patch.submittedWorkflowId ?? null);
+      }
+      if (Object.hasOwn(patch, 'submittedPlanName')) {
+        setClauses.push('submitted_plan_name = ?');
+        values.push(patch.submittedPlanName ?? null);
+      }
+      if (Object.hasOwn(patch, 'terminalMode')) {
+        setClauses.push('terminal_mode = ?');
+        values.push(patch.terminalMode ?? 'chat');
+      }
+      if (Object.hasOwn(patch, 'terminalSessionId')) {
+        setClauses.push('terminal_session_id = ?');
+        values.push(patch.terminalSessionId ?? null);
+      }
+      if (Object.hasOwn(patch, 'terminalStatus')) {
+        setClauses.push('terminal_status = ?');
+        values.push(patch.terminalStatus ?? null);
+      }
+      if (Object.hasOwn(patch, 'terminalExitCode')) {
+        setClauses.push('terminal_exit_code = ?');
+        values.push(patch.terminalExitCode ?? null);
+      }
+      if (Object.hasOwn(patch, 'terminalOutputSnapshot')) {
+        setClauses.push('terminal_output_snapshot = ?');
+        values.push(patch.terminalOutputSnapshot ?? '');
+      }
+      if (Object.hasOwn(patch, 'terminalUpdatedAt')) {
+        setClauses.push('terminal_updated_at = ?');
+        values.push(patch.terminalUpdatedAt ?? null);
+      }
+      if (Object.hasOwn(patch, 'pendingResponse')) {
+        setClauses.push('pending_response = ?');
+        values.push(patch.pendingResponse ? 1 : 0);
+      }
+      if (Object.hasOwn(patch, 'updatedAt')) {
+        setClauses.push('updated_at = ?');
+        values.push(patch.updatedAt ?? null);
+      }
+      if (setClauses.length > 0) {
+        values.push(sessionId);
+        this.db.run(`UPDATE in_app_planning_sessions SET ${setClauses.join(', ')} WHERE session_id = ?`, values);
+      }
+      if (patch.messages) {
+        const updatedAt = patch.updatedAt ?? new Date().toISOString();
+        this.replaceInAppPlanningMessages(sessionId, patch.messages, updatedAt);
+      }
+    };
+
+    if (patch.messages) {
+      this.runTransaction(updateSession);
+      return;
+    }
+
+    updateSession();
+    this.dirty = true;
+  }
+
+  deleteInAppPlanningSession(sessionId: string): void {
+    this.runTransaction(() => {
+      this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
+      this.db.run('DELETE FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
+    });
   }
 
   private getTaskIdsForWorkflow(workflowId: string): string[] {
@@ -1224,16 +1332,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }
   }
 
-  private taskOutputKey(taskId: string): string {
-    return createHash('sha256').update(taskId).digest('hex');
-  }
-
   private taskOutputFile(taskId: string): string {
-    return join(this.outputDir, 'full', `${this.taskOutputKey(taskId)}.log`);
+    return taskOutputFilePath(this.outputDir, taskId);
   }
 
   private taskSpoolFile(taskId: string): string {
-    return join(this.outputDir, 'spool', `${this.taskOutputKey(taskId)}.jsonl`);
+    return taskSpoolFilePath(this.outputDir, taskId);
   }
 
   private ensureOutputSubdir(kind: 'full' | 'spool'): void {
@@ -1254,67 +1358,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return readFileSync(file, 'utf8');
   }
 
-  private encodeSpoolLine(chunk: OutputChunk): string {
-    const data = Buffer.from(chunk.data, 'utf8').toString('base64');
-    return `${chunk.offset}\t${data}\n`;
-  }
-
-  private decodeSpoolLine(line: string): OutputChunk | null {
-    if (!line) return null;
-    const separator = line.indexOf('\t');
-    if (separator <= 0) return null;
-    const offset = Number.parseInt(line.slice(0, separator), 10);
-    if (!Number.isFinite(offset)) return null;
-    return {
-      offset,
-      data: Buffer.from(line.slice(separator + 1), 'base64').toString('utf8'),
-    };
-  }
-
   private readSpoolLines(taskId: string): OutputChunk[] {
-    const file = this.taskSpoolFile(taskId);
-    if (!existsSync(file)) return [];
-    return readFileSync(file, 'utf8')
-      .split('\n')
-      .map((line) => this.decodeSpoolLine(line))
-      .filter((chunk): chunk is OutputChunk => chunk !== null);
+    return readSpoolLinesFromFile(this.taskSpoolFile(taskId));
   }
 
   private readLastSpoolLines(taskId: string, limit: number): OutputChunk[] {
-    if (limit <= 0) return [];
-    const file = this.taskSpoolFile(taskId);
-    if (!existsSync(file)) return [];
-
-    const fd = openSync(file, 'r');
-    try {
-      const size = statSync(file).size;
-      const chunkSize = 64 * 1024;
-      let position = size;
-      let suffix = '';
-      let lines: string[] = [];
-
-      while (position > 0 && lines.length <= limit) {
-        const readSize = Math.min(chunkSize, position);
-        position -= readSize;
-        const buffer = Buffer.allocUnsafe(readSize);
-        readSync(fd, buffer, 0, readSize, position);
-        const text = buffer.toString('utf8') + suffix;
-        const parts = text.split('\n');
-        suffix = parts.shift() ?? '';
-        lines = parts.concat(lines);
-      }
-      if (position === 0 && suffix) {
-        lines.unshift(suffix);
-      }
-
-      return lines
-        .filter(Boolean)
-        .slice(-limit)
-        .map((line) => this.decodeSpoolLine(line))
-        .filter((chunk): chunk is OutputChunk => chunk !== null);
-    } finally {
-      closeSync(fd);
-    }
+    return readLastSpoolLinesFromFile(this.taskSpoolFile(taskId), limit);
   }
 
   private readLastSpoolChunk(taskId: string): OutputChunk | null {
@@ -1352,22 +1401,43 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   loadAllCompletedTasks(): Array<TaskState & { workflowName: string }> {
-    const rows = this.queryAll(`
-      SELECT t.*, w.name AS workflow_name
-      FROM tasks t
-      JOIN workflows w ON w.id = t.workflow_id
-      WHERE t.status = 'completed'
-      ORDER BY t.completed_at DESC
-    `);
-    return rows.map((row: any) => ({
-      ...this.rowToTask(row),
-      workflowName: row.workflow_name,
-    }));
+    return this.taskAttemptRepo.loadAllCompletedTasks();
+  }
+
+  loadAllHistoryTasks(): Array<TaskState & { workflowName: string; lastEventAt: string | null; eventCount: number }> {
+    return this.taskAttemptRepo.loadAllHistoryTasks();
+  }
+
+  deleteTask(taskId: string): void {
+    this.runTransaction(() => {
+      this.db.run('DELETE FROM task_launch_dispatch WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM execution_resource_leases WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM events WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM task_output WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM attempts WHERE node_id = ?', [taskId]);
+      this.db.run('DELETE FROM output_spool WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM terminal_sessions WHERE task_id = ?', [taskId]);
+      this.db.run('DELETE FROM tasks WHERE id = ?', [taskId]);
+    });
+    this.removeOutputFiles([taskId]);
   }
 
   deleteAllTasks(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
+      this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
+      this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
+      this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
+      this.db.run(`
+        DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId, workflowId]);
+      this.db.run(`
+        DELETE FROM execution_resource_leases WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
       this.db.run(`
         DELETE FROM events WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
@@ -1385,6 +1455,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
       `, [workflowId]);
       this.db.run(`
         DELETE FROM output_spool WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
+      this.db.run(`
+        DELETE FROM terminal_sessions WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
       `, [workflowId]);
@@ -1396,10 +1471,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
   deleteAllWorkflows(): void {
     const taskIds = this.getAllTaskIds();
     this.runTransaction(() => {
+      this.db.run('DELETE FROM workflow_mutation_leases');
+      this.db.run('DELETE FROM workflow_mutation_intents');
+      this.db.run('DELETE FROM task_launch_dispatch');
+      this.db.run('DELETE FROM worker_actions');
+      this.db.run('DELETE FROM execution_resource_leases');
       this.db.run('DELETE FROM events');
+      // The AFTER DELETE trigger keeps event_type_counters exact on row-by-row
+      // deletes, but reset the counters explicitly here so a full wipe is correct
+      // even if SQLite ever applies the truncate optimization to the bare DELETE.
+      this.db.run('DELETE FROM event_type_counters');
       this.db.run('DELETE FROM task_output');
       this.db.run('DELETE FROM attempts');
       this.db.run('DELETE FROM output_spool');
+      this.db.run('DELETE FROM terminal_sessions');
       this.db.run('DELETE FROM tasks');
       this.db.run('DELETE FROM workflows');
     });
@@ -1411,37 +1496,45 @@ export class SQLiteAdapter implements PersistenceAdapter {
   deleteWorkflow(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
-      // Delete events first (FK constraint: events -> tasks)
+      this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
+      this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
+      this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
+      this.db.run(`
+        DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId, workflowId]);
+      this.db.run(`
+        DELETE FROM execution_resource_leases WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
       this.db.run(`
         DELETE FROM events WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
       `, [workflowId]);
-
-      // Delete task output (FK constraint: task_output -> tasks)
       this.db.run(`
         DELETE FROM task_output WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
       `, [workflowId]);
-
-      // Delete attempts (FK constraint: attempts -> tasks)
       this.db.run(`
         DELETE FROM attempts WHERE node_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
       `, [workflowId]);
-
       this.db.run(`
         DELETE FROM output_spool WHERE task_id IN (
           SELECT id FROM tasks WHERE workflow_id = ?
         )
       `, [workflowId]);
-
-      // Delete tasks (FK constraint: tasks -> workflows)
+      this.db.run(`
+        DELETE FROM terminal_sessions WHERE task_id IN (
+          SELECT id FROM tasks WHERE workflow_id = ?
+        )
+      `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-
-      // Finally delete the workflow
       this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
     });
     this.removeOutputFiles(taskIds);
@@ -1456,10 +1549,168 @@ export class SQLiteAdapter implements PersistenceAdapter {
     `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
   }
 
-  getEvents(taskId: string): TaskEvent[] {
+  getEvents(taskId: string): TaskEvent[];
+  getEvents(taskId: string, sortBy: 'asc' | 'desc', limit: number, beforeId?: number): TaskEvent[];
+  getEvents(
+    taskId: string,
+    sortBy: 'asc' | 'desc' = 'asc',
+    limit?: number,
+    beforeId?: number,
+  ): TaskEvent[] {
+    const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
+    if (limit === undefined) {
+      const rows = this.queryAll(
+        `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy}`,
+        [taskId],
+      );
+      return rows.map((row: any) => this.rowToTaskEvent(row));
+    }
+    if (limit <= 0) return [];
+    const pageLimit = Math.floor(limit);
+    if (beforeId !== undefined) {
+      const rows = this.queryAll(
+        `SELECT * FROM events WHERE task_id = ? AND id < ? ORDER BY id ${orderBy} LIMIT ?`,
+        [taskId, Math.floor(beforeId), pageLimit],
+      );
+      return rows.map((row: any) => this.rowToTaskEvent(row));
+    }
     const rows = this.queryAll(
-      'SELECT * FROM events WHERE task_id = ? ORDER BY id ASC',
-      [taskId],
+      `SELECT * FROM events WHERE task_id = ? ORDER BY id ${orderBy} LIMIT ?`,
+      [taskId, pageLimit],
+    );
+    return rows.map((row: any) => this.rowToTaskEvent(row));
+  }
+
+  getEventsByTypes(
+    eventTypes: readonly string[],
+    sortBy: 'asc' | 'desc' = 'desc',
+    limit = 50,
+  ): TaskEvent[] {
+    if (eventTypes.length === 0 || limit <= 0) return [];
+    const pageLimit = Math.floor(limit);
+    const orderBy = sortBy === 'desc' ? 'DESC' : 'ASC';
+    // One multi-type IN + ORDER BY created_at forces USE TEMP B-TREE over every
+    // matching row before LIMIT. Query each type via idx_events_type_created
+    // with LIMIT, then merge in process.
+    const merged: TaskEvent[] = [];
+    for (const eventType of eventTypes) {
+      const rows = this.queryAll(
+        `SELECT * FROM events
+         WHERE event_type = ?
+         ORDER BY created_at ${orderBy}, id ${orderBy}
+         LIMIT ?`,
+        [eventType, pageLimit],
+      );
+      for (const row of rows) {
+        merged.push(this.rowToTaskEvent(row));
+      }
+    }
+    merged.sort((a, b) => {
+      const byCreated = a.createdAt.localeCompare(b.createdAt);
+      if (byCreated !== 0) return sortBy === 'desc' ? -byCreated : byCreated;
+      return sortBy === 'desc' ? b.id - a.id : a.id - b.id;
+    });
+    return merged.slice(0, pageLimit);
+  }
+
+  countEventsByTypes(eventTypes: readonly string[]): Array<{
+    eventType: string;
+    count: number;
+    lastCreatedAt: string | null;
+  }> {
+    if (eventTypes.length === 0) return [];
+    const counts = this.readEventTypeCounts(eventTypes);
+    return eventTypes.map((eventType) => ({
+      eventType,
+      count: counts.get(eventType) ?? 0,
+      lastCreatedAt: this.maxCreatedAtForEventType(eventType),
+    }));
+  }
+
+  // Lifetime count per type in O(types): an indexed lookup into the
+  // trigger-maintained event_type_counters table instead of a COUNT(*) scan of
+  // the events table (linear — ~140ms at 2M rows on the main thread). Falls back
+  // to the exact-but-linear COUNT(*) GROUP BY when the counter table is absent —
+  // a read-only open of a database written before the backfill migration ran.
+  private readEventTypeCounts(eventTypes: readonly string[]): Map<string, number> {
+    const placeholders = eventTypes.map(() => '?').join(', ');
+    try {
+      const rows = this.queryAll(
+        `SELECT event_type AS eventType, count
+         FROM event_type_counters
+         WHERE event_type IN (${placeholders})`,
+        [...eventTypes],
+      );
+      return new Map(rows.map((row) => [String(row.eventType), Number(row.count ?? 0)]));
+    } catch (err) {
+      if (!this.eventCounterFallbackLogged) {
+        this.eventCounterFallbackLogged = true;
+        console.warn(
+          '[SQLiteAdapter] event_type_counters unavailable; falling back to linear COUNT(*). '
+          + `Cause: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      const rows = this.queryAll(
+        `SELECT event_type AS eventType, COUNT(*) AS count
+         FROM events
+         WHERE event_type IN (${placeholders})
+         GROUP BY event_type`,
+        [...eventTypes],
+      );
+      return new Map(rows.map((row) => [String(row.eventType), Number(row.count ?? 0)]));
+    }
+  }
+
+  // MAX(created_at) for a single type is an index seek on idx_events_type_created
+  // (O(log n)); the grouped form (MAX ... GROUP BY) degrades to a full scan, so
+  // resolve one type at a time.
+  private maxCreatedAtForEventType(eventType: string): string | null {
+    const row = this.queryOne(
+      'SELECT MAX(created_at) AS lastCreatedAt FROM events WHERE event_type = ?',
+      [eventType],
+    );
+    return (row?.lastCreatedAt as string | null) ?? null;
+  }
+
+  private rowToTaskEvent(row: any): TaskEvent {
+    return {
+      id: row.id,
+      taskId: row.task_id,
+      eventType: row.event_type,
+      payload: row.payload ?? undefined,
+      createdAt: row.created_at,
+    };
+  }
+
+  listTaskEvents(filters: TaskEventListFilters = {}): TaskEvent[] {
+    if (filters.limit !== undefined && Math.floor(filters.limit) <= 0) {
+      return [];
+    }
+    if (filters.eventTypes && filters.eventTypes.length === 0) {
+      return [];
+    }
+
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filters.taskId) {
+      where.push('task_id = ?');
+      params.push(filters.taskId);
+    }
+    if (filters.eventTypes) {
+      where.push(`event_type IN (${filters.eventTypes.map(() => '?').join(', ')})`);
+      params.push(...filters.eventTypes);
+    }
+
+    const orderBy = filters.sortBy === 'asc' ? 'ASC' : 'DESC';
+    let limitSql = '';
+    if (filters.limit !== undefined) {
+      limitSql = ' LIMIT ?';
+      params.push(Math.floor(filters.limit));
+    }
+
+    const rows = this.queryAll(
+      `SELECT * FROM events ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id ${orderBy}${limitSql}`,
+      params,
     );
     return rows.map((row: any) => ({
       id: row.id,
@@ -1470,104 +1721,222 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM worker_actions WHERE worker_kind = ? AND external_key = ?',
+      [workerKind, externalKey],
+    );
+    return row ? this.rowToWorkerAction(row) : undefined;
+  }
+
+  upsertWorkerAction(action: WorkerActionWrite): WorkerActionRecord {
+    return this.runTransaction(() => {
+      const existing = this.queryOne(
+        'SELECT id FROM worker_actions WHERE worker_kind = ? AND external_key = ?',
+        [action.workerKind, action.externalKey],
+      );
+      if (existing && String(existing.id) !== action.id) {
+        throw new Error(
+          `Worker action ${action.workerKind}/${action.externalKey} already exists with id "${String(existing.id)}"`,
+        );
+      }
+      const nowIso = new Date().toISOString();
+      const createdAt = action.createdAt ?? nowIso;
+      const updatedAt = action.updatedAt ?? nowIso;
+      const payloadJson = action.payload === undefined ? null : JSON.stringify(action.payload);
+      const status = normalizeWorkerActionStatus(action.status);
+      this.execRun(
+        `INSERT INTO worker_actions (
+          id, worker_kind, action_type, workflow_id, task_id,
+          subject_type, subject_id, external_key, status, attempt_count,
+          intent_id, agent_name, execution_model, session_id, summary,
+          payload_json, created_at, updated_at, completed_at
+        ) VALUES (
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?
+        )
+        ON CONFLICT(worker_kind, external_key) DO UPDATE SET
+          action_type = excluded.action_type,
+          workflow_id = excluded.workflow_id,
+          task_id = excluded.task_id,
+          subject_type = excluded.subject_type,
+          subject_id = excluded.subject_id,
+          status = excluded.status,
+          attempt_count = excluded.attempt_count,
+          intent_id = excluded.intent_id,
+          agent_name = excluded.agent_name,
+          execution_model = excluded.execution_model,
+          session_id = excluded.session_id,
+          summary = excluded.summary,
+          payload_json = excluded.payload_json,
+          updated_at = excluded.updated_at,
+          completed_at = excluded.completed_at`,
+        [
+          action.id,
+          action.workerKind,
+          action.actionType,
+          action.workflowId ?? null,
+          action.taskId ?? null,
+          action.subjectType,
+          action.subjectId,
+          action.externalKey,
+          status,
+          action.attemptCount ?? 0,
+          action.intentId ?? null,
+          action.agentName ?? null,
+          action.executionModel ?? null,
+          action.sessionId ?? null,
+          action.summary ?? null,
+          payloadJson,
+          createdAt,
+          updatedAt,
+          action.completedAt ?? null,
+        ],
+      );
+      const saved = this.getWorkerAction(action.workerKind, action.externalKey);
+      if (!saved) {
+        throw new Error(`Failed to persist worker action ${action.workerKind}/${action.externalKey}`);
+      }
+      return saved;
+    });
+  }
+
+  listWorkerActions(filters: WorkerActionListFilters = {}): WorkerActionRecord[] {
+    const limit = filters.limit === undefined ? undefined : Math.floor(filters.limit);
+    if (limit !== undefined && (!Number.isFinite(limit) || limit <= 0)) {
+      return [];
+    }
+    const offset = filters.offset === undefined ? undefined : Math.floor(filters.offset);
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (filters.workflowId) {
+      where.push('workflow_id = ?');
+      params.push(filters.workflowId);
+    }
+    if (filters.taskId) {
+      where.push('task_id = ?');
+      params.push(filters.taskId);
+    }
+    if (filters.workerKind) {
+      where.push('worker_kind = ?');
+      params.push(filters.workerKind);
+    }
+    if (filters.status) {
+      where.push('status = ?');
+      params.push(normalizeWorkerActionStatus(String(filters.status)));
+    }
+    if (filters.decision === 'skip') {
+      where.push("status = 'skipped'");
+    } else if (filters.decision === 'act') {
+      where.push("status != 'skipped'");
+    }
+    let pageSql = '';
+    if (limit !== undefined) {
+      pageSql = ' LIMIT ?';
+      params.push(limit);
+    }
+    if (offset !== undefined && Number.isFinite(offset) && offset > 0) {
+      if (limit === undefined) {
+        pageSql = ' LIMIT -1';
+      }
+      pageSql += ' OFFSET ?';
+      params.push(offset);
+    }
+    const rows = this.queryAll(
+      `SELECT * FROM worker_actions ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''} ` +
+        `ORDER BY updated_at DESC, id ASC${pageSql}`,
+      params,
+    );
+    return rows.map((row) => this.rowToWorkerAction(row));
+  }
+
+  getWorkerDesiredState(workerKind: string): WorkerDesiredStateRecord | undefined {
+    const row = this.queryOne(
+      'SELECT worker_kind, desired_enabled, updated_at FROM worker_desired_states WHERE worker_kind = ?',
+      [workerKind],
+    );
+    return row ? this.rowToWorkerDesiredState(row) : undefined;
+  }
+
+  setWorkerDesiredState(workerKind: string, desiredEnabled: boolean): WorkerDesiredStateRecord {
+    const updatedAt = new Date().toISOString();
+    this.execRun(
+      `INSERT INTO worker_desired_states (worker_kind, desired_enabled, updated_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(worker_kind) DO UPDATE SET
+         desired_enabled = excluded.desired_enabled,
+         updated_at = excluded.updated_at`,
+      [workerKind, desiredEnabled ? 1 : 0, updatedAt],
+    );
+    const saved = this.getWorkerDesiredState(workerKind);
+    if (!saved) {
+      throw new Error(`Failed to persist worker desired state for ${workerKind}`);
+    }
+    return saved;
+  }
+
+  listWorkerDesiredStates(): WorkerDesiredStateRecord[] {
+    const rows = this.queryAll(
+      'SELECT worker_kind, desired_enabled, updated_at FROM worker_desired_states ORDER BY worker_kind ASC',
+    );
+    return rows.map((row) => this.rowToWorkerDesiredState(row));
+  }
+
   // ── Queries ─────────────────────────────────────────
 
   getSelectedExperiment(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT selected_experiment FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    return (row?.selected_experiment as string) ?? null;
+    return this.taskAttemptRepo.getSelectedExperiment(taskId);
   }
 
   getWorkspacePath(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT workspace_path FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    return (row?.workspace_path as string) ?? null;
+    return this.taskAttemptRepo.getWorkspacePath(taskId);
   }
 
   getAgentSessionId(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT agent_session_id, last_agent_session_id FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    const val = ((row?.agent_session_id as string) ?? (row?.last_agent_session_id as string) ?? null);
-    return val === 'none' ? null : val;
+    return this.taskAttemptRepo.getAgentSessionId(taskId);
   }
 
   getLastAgentSessionId(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT last_agent_session_id FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    const val = (row?.last_agent_session_id as string) ?? null;
-    return val === 'none' ? null : val;
+    return this.taskAttemptRepo.getLastAgentSessionId(taskId);
   }
 
   getRunnerKind(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT runner_kind FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    const raw = (row?.runner_kind as string) ?? null;
-    if (raw === null) return null;
-    return normalizeRunnerKind(raw) ?? raw;
+    return this.taskAttemptRepo.getRunnerKind(taskId);
   }
 
   getTaskStatus(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT status FROM tasks WHERE id = ?',
-      [taskId],
-    ) as { status?: string } | undefined;
-    if (!row?.status) return null;
-    return row.status;
+    return this.taskAttemptRepo.getTaskStatus(taskId);
   }
 
   getContainerId(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT container_id FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    const val = (row?.container_id as string) ?? null;
-    return val === 'none' ? null : val;
+    return this.taskAttemptRepo.getContainerId(taskId);
   }
 
   getBranch(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT branch FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    return (row?.branch as string) ?? null;
+    return this.taskAttemptRepo.getBranch(taskId);
   }
 
   getExecutionAgent(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT COALESCE(agent_name, execution_agent) AS agent FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    return (row?.agent as string) ?? null;
+    return this.taskAttemptRepo.getExecutionAgent(taskId);
   }
 
   getPoolMemberId(taskId: string): string | null {
-    const row = this.queryOne(
-      'SELECT pool_member_id FROM tasks WHERE id = ?',
-      [taskId],
-    );
-    return (row?.pool_member_id as string) ?? null;
+    return this.taskAttemptRepo.getPoolMemberId(taskId);
   }
 
   // ── Conversations ───────────────────────────────────────
 
   saveConversation(conversation: Conversation): void {
     this.execRun(`
-      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, extracted_plan, plan_submitted, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO conversations (thread_ts, channel_id, user_id, mode, extracted_plan, plan_submitted, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conversation.threadTs,
       conversation.channelId,
       conversation.userId,
+      conversation.mode ?? 'plan',
       conversation.extractedPlan,
       conversation.planSubmitted ? 1 : 0,
       conversation.createdAt,
@@ -1582,6 +1951,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
       userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
@@ -1589,10 +1959,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
     };
   }
 
-  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
+  updateConversation(threadTs: string, changes: Partial<Pick<Conversation, 'mode' | 'extractedPlan' | 'planSubmitted' | 'updatedAt'>>): void {
     const setClauses: string[] = [];
     const values: any[] = [];
 
+    if ('mode' in changes) {
+      setClauses.push('mode = ?');
+      values.push(changes.mode ?? 'plan');
+    }
     if ('extractedPlan' in changes) {
       setClauses.push('extracted_plan = ?');
       values.push(changes.extractedPlan ?? null);
@@ -1624,6 +1998,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       threadTs: row.thread_ts as string,
       channelId: row.channel_id as string,
       userId: row.user_id as string,
+      mode: this.normalizeConversationMode(row.mode),
       extractedPlan: (row.extracted_plan as string) ?? null,
       planSubmitted: row.plan_submitted === 1,
       createdAt: row.created_at as string,
@@ -1645,7 +2020,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
     );
     const changes = this.db.getRowsModified();
     this.dirty = true;
-    this.scheduleFlush();
     return changes;
   }
 
@@ -1679,6 +2053,57 @@ export class SQLiteAdapter implements PersistenceAdapter {
     }));
   }
 
+  // ── Workflow Channels (Slack workflow↔channel mapping) ──
+
+  saveWorkflowChannel(rec: WorkflowChannel): void {
+    this.execRun(`
+      INSERT OR REPLACE INTO workflow_channels
+        (workflow_id, channel_id, requested_by, lobby_channel_id, lobby_thread_ts, harness_preset, repo_url, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      rec.workflowId,
+      rec.channelId,
+      rec.requestedBy ?? null,
+      rec.lobbyChannelId ?? null,
+      rec.lobbyThreadTs ?? null,
+      rec.harnessPreset ?? null,
+      rec.repoUrl ?? null,
+      rec.createdAt,
+    ]);
+  }
+
+  private mapWorkflowChannelRow(row: any): WorkflowChannel {
+    return {
+      workflowId: row.workflow_id as string,
+      channelId: row.channel_id as string,
+      requestedBy: (row.requested_by as string) ?? undefined,
+      lobbyChannelId: (row.lobby_channel_id as string) ?? undefined,
+      lobbyThreadTs: (row.lobby_thread_ts as string) ?? undefined,
+      harnessPreset: (row.harness_preset as string) ?? undefined,
+      repoUrl: (row.repo_url as string) ?? undefined,
+      createdAt: row.created_at as string,
+    };
+  }
+
+  loadWorkflowChannelByWorkflowId(workflowId: string): WorkflowChannel | undefined {
+    const row = this.queryOne('SELECT * FROM workflow_channels WHERE workflow_id = ?', [workflowId]);
+    return row ? this.mapWorkflowChannelRow(row) : undefined;
+  }
+
+  loadWorkflowChannelByChannelId(channelId: string): WorkflowChannel | undefined {
+    const row = this.queryOne('SELECT * FROM workflow_channels WHERE channel_id = ?', [channelId]);
+    return row ? this.mapWorkflowChannelRow(row) : undefined;
+  }
+
+  listWorkflowChannels(): WorkflowChannel[] {
+    const rows = this.queryAll('SELECT * FROM workflow_channels ORDER BY created_at DESC');
+    return rows.map((row: any) => this.mapWorkflowChannelRow(row));
+  }
+
+  deleteWorkflowChannel(workflowId: string): void {
+    this.execRun('DELETE FROM workflow_channels WHERE workflow_id = ?', [workflowId]);
+  }
+
   // ── Task Output ─────────────────────────────────────
 
   appendTaskOutput(taskId: string, data: string): void {
@@ -1688,11 +2113,94 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   getTaskOutput(taskId: string): string {
+    // Prefer the output spool (DB + file) when it has any chunks for this task —
+    // it is the canonical streaming-output store. Otherwise fall back to
+    // task_output DB rows, which avoids returning a duplicated stream when both
+    // stores contain the same data.
+    //
+    // The diagnostic file (written via appendTaskOutput) is always appended.
+    // It is reserved for post-mortem diagnostic blocks (e.g. forced stops or
+    // executor startup failures); the streaming runner output goes through the
+    // spool. Concatenating it lets retrieval surface concrete failure details
+    // that would otherwise be hidden behind a coarse forced-stop reason like
+    // "Application quit".
+    const diagnosticFile = this.readTaskOutputFile(taskId);
+    const spoolChunks = this.getOutputChunks(taskId);
+    if (spoolChunks.length > 0) {
+      return spoolChunks.map((chunk) => chunk.data).join('')
+        + this.readLegacyDiagnosticTaskOutputRows(taskId)
+        + diagnosticFile;
+    }
     const rows = this.queryAll(
       'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
       [taskId],
     ) as Array<{ data: string }>;
-    return rows.map((r) => r.data).join('') + this.readTaskOutputFile(taskId);
+    return rows.map((r) => r.data).join('') + diagnosticFile;
+  }
+
+  private readLegacyDiagnosticTaskOutputRows(taskId: string): string {
+    const rows = this.queryAll(
+      'SELECT data FROM task_output WHERE task_id = ? ORDER BY id ASC',
+      [taskId],
+    ) as Array<{ data: string }>;
+    return rows
+      .map((r) => r.data)
+      .filter((data) => this.isDiagnosticTaskOutput(data))
+      .join('');
+  }
+
+  private isDiagnosticTaskOutput(data: string): boolean {
+    return data.includes('[Shutdown Diagnostic]')
+      || data.includes('[Startup Failure Diagnostic]');
+  }
+
+  /**
+   * Maintenance: delete task_output rows for tasks that already have output_spool
+   * rows. Diagnostic-only task_output rows for tasks with no output_spool rows
+   * are preserved. Writes a DB backup before mutating unless `backup: false` is
+   * passed. Returns the number of rows deleted and the backup path used (or
+   * null for in-memory databases or when `backup: false`).
+   */
+  pruneDuplicateTaskOutputRows(options?: { backup?: boolean; backupPath?: string }): {
+    deletedTaskOutputRows: number;
+    backupPath: string | null;
+  } {
+    this.ensureWritable();
+
+    let backupPath: string | null = null;
+    const shouldBackup = options?.backup !== false;
+    if (shouldBackup && this.dbPath) {
+      backupPath = options?.backupPath ?? `${this.dbPath}.prune-backup-${Date.now()}`;
+      if (!existsSync(backupPath)) {
+        const dir = dirname(backupPath);
+        mkdirSync(dir, { recursive: true });
+        this.checkpointWal('FULL');
+        this.nativeDb.exec(`VACUUM INTO ${sqlStringLiteral(backupPath)}`);
+      }
+    }
+
+    const before = this.queryOne('SELECT COUNT(*) AS c FROM task_output') as
+      | { c: number }
+      | undefined;
+    const beforeCount = Number(before?.c ?? 0);
+
+    this.runTransaction(() => {
+      this.db.run(`
+        DELETE FROM task_output
+        WHERE task_id IN (
+          SELECT DISTINCT task_id FROM output_spool
+        )
+      `);
+    });
+
+    const after = this.queryOne('SELECT COUNT(*) AS c FROM task_output') as
+      | { c: number }
+      | undefined;
+    const afterCount = Number(after?.c ?? 0);
+    return {
+      deletedTaskOutputRows: Math.max(0, beforeCount - afterCount),
+      backupPath,
+    };
   }
 
   // ── Output Spool ────────────────────────────────────────
@@ -1701,7 +2209,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.ensureWritable();
     const nextOffset = this.getNextSpoolOffset(taskId);
     this.ensureOutputSubdir('spool');
-    appendFileSync(this.taskSpoolFile(taskId), this.encodeSpoolLine({ offset: nextOffset, data }), 'utf8');
+    appendFileSync(this.taskSpoolFile(taskId), encodeSpoolLine({ offset: nextOffset, data }), 'utf8');
     this.spoolNextOffsetCache.set(taskId, nextOffset + Buffer.byteLength(data, 'utf8'));
 
     // Update in-memory tail cache
@@ -1732,6 +2240,33 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   getOutputTail(taskId: string): OutputChunk[] {
+    const spoolTail = this.getSpoolOutputTail(taskId);
+
+    const diagnostic = this.readDiagnosticTail(taskId, OUTPUT_DIAGNOSTIC_TAIL_CHARS);
+    if (!diagnostic) return spoolTail;
+    const lastOffset = spoolTail.length > 0
+      ? spoolTail[spoolTail.length - 1].offset + 1
+      : 0;
+    return [...spoolTail, { offset: lastOffset, data: diagnostic }];
+  }
+
+  private readDiagnosticTail(taskId: string, maxChars: number): string {
+    const file = this.taskOutputFile(taskId);
+    if (!existsSync(file)) return '';
+    const size = statSync(file).size;
+    if (size === 0) return '';
+    if (size <= maxChars) return readFileSync(file, 'utf8');
+    const fd = openSync(file, 'r');
+    try {
+      const buffer = Buffer.allocUnsafe(maxChars);
+      readSync(fd, buffer, 0, maxChars, size - maxChars);
+      return '...' + buffer.toString('utf8');
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  private getSpoolOutputTail(taskId: string): OutputChunk[] {
     // Return from cache if available
     const cached = this.outputTailCache.get(taskId);
     if (cached && cached.length > 0) {
@@ -1763,83 +2298,27 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Attempts ────────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.execRun(`
-      INSERT OR REPLACE INTO attempts (
-        id, node_id, attempt_number, queue_priority, status,
-        snapshot_commit, base_branch, upstream_attempt_ids,
-        command_override, prompt_override,
-        claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
-        branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
-        supersedes_attempt_id, created_at, merge_conflict
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?
-      )
-    `, [
-      attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
-      attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
-      JSON.stringify(attempt.upstreamAttemptIds),
-      attempt.commandOverride ?? null, attempt.promptOverride ?? null,
-      attempt.claimedAt?.toISOString() ?? null,
-      attempt.startedAt?.toISOString() ?? null,
-      attempt.completedAt?.toISOString() ?? null,
-      attempt.exitCode ?? null, attempt.error ?? null,
-      attempt.lastHeartbeatAt?.toISOString() ?? null,
-      attempt.leaseExpiresAt?.toISOString() ?? null,
-      attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
-      attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
-      attempt.containerId ?? null,
-      attempt.supersedesAttemptId ?? null,
-      attempt.createdAt.toISOString(),
-      attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
-    ]);
+    this.taskAttemptRepo.saveAttempt(attempt);
   }
 
   loadAttempts(nodeId: string): Attempt[] {
-    const rows = this.queryAll(
-      'SELECT * FROM attempts WHERE node_id = ? ORDER BY created_at ASC',
-      [nodeId],
-    );
-    return rows.map(this.rowToAttempt);
+    return this.taskAttemptRepo.loadAttempts(nodeId);
+  }
+
+  loadActionGraphAttempts(
+    nodeId: string,
+    selectedAttemptId?: string,
+    recentAttemptLimit = ACTION_GRAPH_RECENT_ATTEMPT_LIMIT,
+  ): Attempt[] {
+    return this.taskAttemptRepo.loadActionGraphAttempts(nodeId, selectedAttemptId, recentAttemptLimit);
   }
 
   loadAttempt(attemptId: string): Attempt | undefined {
-    const row = this.queryOne(
-      'SELECT * FROM attempts WHERE id = ?',
-      [attemptId],
-    );
-    if (!row) return undefined;
-    return this.rowToAttempt(row);
+    return this.taskAttemptRepo.loadAttempt(attemptId);
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
-    const setClauses: string[] = [];
-    const values: any[] = [];
-
-    if (changes.status !== undefined) { setClauses.push('status = ?'); values.push(changes.status); }
-    if (changes.claimedAt !== undefined) { setClauses.push('claimed_at = ?'); values.push(changes.claimedAt instanceof Date ? changes.claimedAt.toISOString() : changes.claimedAt ?? null); }
-    if (changes.startedAt !== undefined) { setClauses.push('started_at = ?'); values.push(changes.startedAt instanceof Date ? changes.startedAt.toISOString() : changes.startedAt ?? null); }
-    if (changes.completedAt !== undefined) { setClauses.push('completed_at = ?'); values.push(changes.completedAt instanceof Date ? changes.completedAt.toISOString() : changes.completedAt ?? null); }
-    if (changes.exitCode !== undefined) { setClauses.push('exit_code = ?'); values.push(changes.exitCode); }
-    if (changes.error !== undefined) { setClauses.push('error = ?'); values.push(changes.error); }
-    if (changes.lastHeartbeatAt !== undefined) { setClauses.push('last_heartbeat_at = ?'); values.push(changes.lastHeartbeatAt instanceof Date ? changes.lastHeartbeatAt.toISOString() : changes.lastHeartbeatAt ?? null); }
-    if (changes.leaseExpiresAt !== undefined) { setClauses.push('lease_expires_at = ?'); values.push(changes.leaseExpiresAt instanceof Date ? changes.leaseExpiresAt.toISOString() : changes.leaseExpiresAt ?? null); }
-    if (changes.branch !== undefined) { setClauses.push('branch = ?'); values.push(changes.branch); }
-    if (changes.commit !== undefined) { setClauses.push('commit_hash = ?'); values.push(changes.commit); }
-    if (changes.summary !== undefined) { setClauses.push('summary = ?'); values.push(changes.summary); }
-    if (changes.queuePriority !== undefined) { setClauses.push('queue_priority = ?'); values.push(changes.queuePriority); }
-    if (changes.workspacePath !== undefined) { setClauses.push('workspace_path = ?'); values.push(changes.workspacePath); }
-    if (changes.agentSessionId !== undefined) { setClauses.push('agent_session_id = ?'); values.push(changes.agentSessionId); }
-    if (changes.containerId !== undefined) { setClauses.push('container_id = ?'); values.push(changes.containerId); }
-    if (changes.mergeConflict !== undefined) { setClauses.push('merge_conflict = ?'); values.push(changes.mergeConflict ? JSON.stringify(changes.mergeConflict) : null); }
-
-    if (setClauses.length === 0) return;
-    values.push(attemptId);
-    this.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    this.taskAttemptRepo.updateAttempt(attemptId, changes);
   }
 
   claimAttemptForLaunch(
@@ -1847,40 +2326,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'queuePriority'>>,
     now: Date,
   ): boolean {
-    const setClauses: string[] = [];
-    const values: any[] = [];
-
-    if (changes.status !== undefined) { setClauses.push('status = ?'); values.push(changes.status); }
-    if (changes.claimedAt !== undefined) { setClauses.push('claimed_at = ?'); values.push(changes.claimedAt instanceof Date ? changes.claimedAt.toISOString() : changes.claimedAt ?? null); }
-    if (changes.startedAt !== undefined) { setClauses.push('started_at = ?'); values.push(changes.startedAt instanceof Date ? changes.startedAt.toISOString() : changes.startedAt ?? null); }
-    if (changes.lastHeartbeatAt !== undefined) { setClauses.push('last_heartbeat_at = ?'); values.push(changes.lastHeartbeatAt instanceof Date ? changes.lastHeartbeatAt.toISOString() : changes.lastHeartbeatAt ?? null); }
-    if (changes.leaseExpiresAt !== undefined) { setClauses.push('lease_expires_at = ?'); values.push(changes.leaseExpiresAt instanceof Date ? changes.leaseExpiresAt.toISOString() : changes.leaseExpiresAt ?? null); }
-    if (changes.queuePriority !== undefined) { setClauses.push('queue_priority = ?'); values.push(changes.queuePriority); }
-
-    if (setClauses.length === 0) return false;
-    values.push(attemptId, now.toISOString());
-    this.ensureWritable();
-    this.db.run(
-      `UPDATE attempts SET ${setClauses.join(', ')}
-       WHERE id = ?
-         AND (
-           status = 'pending'
-           OR (
-             status IN ('claimed', 'running')
-             AND lease_expires_at IS NOT NULL
-             AND lease_expires_at <= ?
-           )
-         )`,
-      values,
-    );
-    const claimed = this.db.getRowsModified() > 0;
-    if (claimed) {
-      this.dirty = true;
-      if (this.writeTransactionDepth === 0) {
-        this.scheduleFlush();
-      }
-    }
-    return claimed;
+    return this.taskAttemptRepo.claimAttemptForLaunch(attemptId, changes, now);
   }
 
   failTaskAndAttempt(
@@ -1888,23 +2334,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     taskChanges: TaskStateChanges,
     attemptPatch: Partial<Pick<Attempt, 'status' | 'exitCode' | 'error' | 'completedAt'>>
   ): void {
-    this.runTransaction(() => {
-      // Update task state
-      this.updateTask(taskId, taskChanges);
-
-      // Load the latest attempt for this task
-      const row = this.queryOne(
-        'SELECT id, status FROM attempts WHERE node_id = ? ORDER BY created_at DESC LIMIT 1',
-        [taskId],
-      ) as { id: string; status: string } | undefined;
-
-      // If there's an active attempt, update it with the failure details.
-      // Claimed is included because launch-time failures can happen before
-      // the attempt reaches persisted running state.
-      if (row && (row.status === 'running' || row.status === 'claimed')) {
-        this.updateAttempt(row.id, attemptPatch);
-      }
-    });
+    this.taskAttemptRepo.failTaskAndAttempt(taskId, taskChanges, attemptPatch);
   }
 
   // ── Activity Log ─────────────────────────────────────
@@ -1914,6 +2344,33 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'INSERT INTO activity_log (source, level, message) VALUES (?, ?, ?)',
       [source, level, message],
     );
+    this.activityLogWritesSincePrune += 1;
+    if (this.activityLogWritesSincePrune >= ACTIVITY_LOG_PRUNE_INTERVAL) {
+      this.activityLogWritesSincePrune = 0;
+      try {
+        this.pruneActivityLog();
+      } catch {
+        /* best-effort: a prune failure must not break logging */
+      }
+    }
+  }
+
+  /** Bound activity_log to its newest `maxRows` rows; returns rows deleted. No-op when read-only or maxRows <= 0. */
+  pruneActivityLog(maxRows: number = this.activityLogMaxRows): number {
+    if (this.readOnly || !Number.isFinite(maxRows) || maxRows <= 0) return 0;
+    const total = this.queryOne('SELECT COUNT(*) AS c FROM activity_log') as
+      | { c: number }
+      | undefined;
+    const count = total?.c ?? 0;
+    if (count <= maxRows) return 0;
+    // keep newest maxRows; ids are monotonic so OFFSET is gap-safe
+    const boundary = this.queryOne(
+      'SELECT id FROM activity_log ORDER BY id DESC LIMIT 1 OFFSET ?',
+      [maxRows],
+    ) as { id: number } | undefined;
+    if (!boundary) return 0;
+    this.execRun('DELETE FROM activity_log WHERE id <= ?', [boundary.id]);
+    return count - maxRows;
   }
 
   getActivityLogs(sinceId = 0, limit = 200): ActivityLogEntry[] {
@@ -1933,273 +2390,154 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Lifecycle ─────────────────────────────────────────
 
   close(): void {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
+    if (this.dbPath && !this.readOnly) {
+      this.checkpointWal('PASSIVE');
     }
-    this.flush();
     this.db.close();
+    if (this.dbPath && !this.readOnly) {
+      clearOwnerMarker(this.dbPath);
+    }
   }
 
   // ── Helpers ───────────────────────────────────────────
 
-  private loadWorkflowRollups(workflowIds: string[]): Map<string, WorkflowRollup> {
-    const rollups = new Map<string, WorkflowRollup>();
-    if (workflowIds.length === 0) return rollups;
-
-    const placeholders = workflowIds.map(() => '?').join(', ');
-    const taskRows = this.queryAll(
-      `SELECT id, workflow_id, description, status, dependencies, error, protocol_error_code, protocol_error_message,
-              pending_fix_error, exit_code, completed_at, agent_session_id, agent_name,
-              review_url, input_prompt, is_fixing_with_ai
-       FROM tasks
-       WHERE workflow_id IN (${placeholders})
-       ORDER BY id ASC`,
-      workflowIds,
-    );
-
-    return this.computeWorkflowRollupsFromRows(workflowIds, taskRows);
-  }
-
-  private computeWorkflowRollupsFromRows(
-    workflowIds: string[],
-    taskRows: Record<string, unknown>[],
-  ): Map<string, WorkflowRollup> {
-    const rollups = new Map<string, WorkflowRollup>();
-    const tasksByWorkflow = new Map<string, WorkflowRollupTaskSummary[]>();
-    for (const row of taskRows as any[]) {
-      const workflowId = String(row.workflow_id);
-      const tasks = tasksByWorkflow.get(workflowId) ?? [];
-      tasks.push({
-        id: String(row.id),
-        description: String(row.description),
-        status: row.status as TaskStatus,
-        dependencies: JSON.parse(row.dependencies || '[]'),
-        execution: {
-          error: row.error ?? undefined,
-          protocolErrorCode: row.protocol_error_code ?? undefined,
-          protocolErrorMessage: row.protocol_error_message ?? undefined,
-          pendingFixError: row.pending_fix_error ?? undefined,
-          exitCode: row.exit_code ?? undefined,
-          completedAt: row.completed_at ?? undefined,
-          agentSessionId: row.agent_session_id ?? undefined,
-          agentName: row.agent_name ?? undefined,
-          reviewUrl: row.review_url ?? undefined,
-          inputPrompt: row.input_prompt ?? undefined,
-          isFixingWithAI: row.is_fixing_with_ai === 1,
-        },
-      });
-      tasksByWorkflow.set(workflowId, tasks);
-    }
-
-    for (const workflowId of workflowIds) {
-      const tasks = tasksByWorkflow.get(workflowId) ?? [];
-      rollups.set(workflowId, computeWorkflowRollupFromSummaries(tasks));
-    }
-
-    return rollups;
-  }
-
-  private rowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
+  private mapTerminalSessionRow(row: TerminalSessionRow): TerminalSessionRecord | undefined {
+    if (row.status !== 'running' && row.status !== 'exited') return undefined;
+    if (row.mode !== 'spawn' && row.mode !== 'attached') return undefined;
+    const sessionId = typeof row.session_id === 'string' ? row.session_id : '';
+    const taskId = typeof row.task_id === 'string' ? row.task_id : '';
+    const targetKey = typeof row.target_key === 'string' ? row.target_key : '';
+    const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
+    const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
+    if (!sessionId || !taskId || !targetKey || !createdAt || !updatedAt) return undefined;
     return {
-      id: row.id,
-      name: row.name,
-      description: row.description ?? undefined,
-      visualProof: row.visual_proof === 1,
-      status: rollup?.status ?? 'pending',
-      rollup,
-      planFile: row.plan_file ?? undefined,
-      repoUrl: row.repo_url ?? undefined,
-      intermediateRepoUrl: row.intermediate_repo_url ?? undefined,
-      branch: row.branch ?? undefined,
-      onFinish: row.on_finish ?? undefined,
-      baseBranch: row.base_branch ?? undefined,
-      featureBranch: row.feature_branch ?? undefined,
-      mergeMode: row.merge_mode ?? undefined,
-      reviewProvider: row.review_provider ?? undefined,
-      generation: row.generation ?? 0,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-    };
-  }
-
-  private rowToTask(row: any): TaskState {
-    const normalizedStatus = row.status as TaskStatus;
-    return {
-      id: row.id,
-      description: row.description,
-      status: normalizedStatus,
-      dependencies: JSON.parse(row.dependencies || '[]'),
-      createdAt: new Date(row.created_at),
-      config: {
-        workflowId: row.workflow_id ?? undefined,
-        parentTask: row.parent_task ?? undefined,
-        command: row.command ?? undefined,
-        prompt: row.prompt ?? undefined,
-        externalDependencies: row.external_dependencies ? JSON.parse(row.external_dependencies) : undefined,
-        experimentPrompt: row.experiment_prompt ?? undefined,
-        pivot: row.pivot === 1 ? true : undefined,
-        experimentVariants: row.experiment_variants ? JSON.parse(row.experiment_variants) : undefined,
-        isReconciliation: row.is_reconciliation === 1 ? true : undefined,
-        requiresManualApproval: row.requires_manual_approval === 1 ? true : undefined,
-        featureBranch: row.feature_branch ?? undefined,
-        poolId: row.pool_id ?? undefined,
-        runnerKind: normalizeRunnerKind(row.runner_kind ?? undefined),
-        ...((row.pool_member_id ?? undefined) ? { poolMemberId: row.pool_member_id } : {}),
-        dockerImage: row.docker_image ?? undefined,
-        isMergeNode: row.is_merge_node === 1 ? true : undefined,
-        summary: row.summary ?? undefined,
-        problem: row.problem ?? undefined,
-        approach: row.approach ?? undefined,
-        testPlan: row.test_plan ?? undefined,
-        reproCommand: row.repro_command ?? undefined,
-        executionAgent: row.execution_agent ?? undefined,
-      },
-      execution: {
-        blockedBy: row.blocked_by ?? undefined,
-        inputPrompt: row.input_prompt ?? undefined,
-        exitCode: row.exit_code ?? undefined,
-        error: row.error ?? undefined,
-        protocolErrorCode: row.protocol_error_code ?? undefined,
-        protocolErrorMessage: row.protocol_error_message ?? undefined,
-        startedAt: row.started_at ? new Date(row.started_at) : undefined,
-        completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
-        lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
-        actionRequestId: row.action_request_id ?? undefined,
-        branch: row.branch ?? undefined,
-        commit: row.commit_hash ?? undefined,
-        fixedIntegrationSha: row.fixed_integration_sha ?? undefined,
-        fixedIntegrationRecordedAt: row.fixed_integration_recorded_at ? new Date(row.fixed_integration_recorded_at) : undefined,
-        fixedIntegrationSource: row.fixed_integration_source ?? undefined,
-        agentSessionId: row.agent_session_id || undefined,
-        lastAgentSessionId: row.last_agent_session_id || undefined,
-        agentName: row.agent_name ?? undefined,
-        lastAgentName: row.last_agent_name ?? undefined,
-        workspacePath: row.workspace_path ?? undefined,
-        containerId: row.container_id ?? undefined,
-        experiments: row.experiments ? JSON.parse(row.experiments) : undefined,
-        selectedExperiment: row.selected_experiment ?? undefined,
-        selectedExperiments: row.selected_experiments ? JSON.parse(row.selected_experiments) : undefined,
-        experimentResults: row.experiment_results ? JSON.parse(row.experiment_results) : undefined,
-        pendingFixError: row.pending_fix_error ?? undefined,
-        reviewUrl: row.review_url ?? undefined,
-        reviewId: row.review_id ?? undefined,
-        reviewStatus: row.review_status ?? undefined,
-        reviewProviderId: row.review_provider_id ?? undefined,
-        phase: row.launch_phase ?? undefined,
-        launchStartedAt: row.launch_started_at ? new Date(row.launch_started_at) : undefined,
-        launchCompletedAt: row.launch_completed_at ? new Date(row.launch_completed_at) : undefined,
-        generation: row.execution_generation ?? 0,
-        selectedAttemptId: row.selected_attempt_id ?? undefined,
-        autoFixAttempts: row.auto_fix_attempts ?? undefined,
-      },
-      taskStateVersion: row.task_state_version ?? 1,
-    };
-  }
-
-  private reconcileTaskFromSelectedAttempt(task: TaskState): TaskState {
-    const attemptId = task.execution.selectedAttemptId;
-    if (!attemptId) return task;
-
-    const taskIsTerminal =
-      task.status === 'completed' ||
-      task.status === 'failed' ||
-      task.status === 'fixing_with_ai' ||
-      task.status === 'needs_input' ||
-      task.status === 'awaiting_approval' ||
-      task.status === 'review_ready' ||
-      task.status === 'stale';
-    if (taskIsTerminal) return task;
-
-    const attempt = this.loadAttempt(attemptId);
-    if (!attempt) return task;
-
-    if (isDiscardedAttempt(attempt)) {
-      return {
-        ...task,
-        status: 'stale',
-      };
-    }
-
-    if (attempt.status === 'failed') {
-      return {
-        ...task,
-        status: 'failed',
-        execution: {
-          ...task.execution,
-          exitCode: attempt.exitCode ?? task.execution.exitCode,
-          error: attempt.error ?? task.execution.error,
-          completedAt: attempt.completedAt ?? task.execution.completedAt,
-          lastHeartbeatAt: attempt.lastHeartbeatAt ?? task.execution.lastHeartbeatAt,
-          branch: attempt.branch ?? task.execution.branch,
-          commit: attempt.commit ?? task.execution.commit,
-          workspacePath: attempt.workspacePath ?? task.execution.workspacePath,
-          agentSessionId: attempt.agentSessionId ?? task.execution.agentSessionId,
-          containerId: attempt.containerId ?? task.execution.containerId,
-        },
-      };
-    }
-
-    if (attempt.status === 'completed') {
-      return {
-        ...task,
-        status: 'completed',
-        config: {
-          ...task.config,
-          summary: attempt.summary ?? task.config.summary,
-        },
-        execution: {
-          ...task.execution,
-          exitCode: attempt.exitCode ?? task.execution.exitCode,
-          completedAt: attempt.completedAt ?? task.execution.completedAt,
-          lastHeartbeatAt: attempt.lastHeartbeatAt ?? task.execution.lastHeartbeatAt,
-          branch: attempt.branch ?? task.execution.branch,
-          commit: attempt.commit ?? task.execution.commit,
-          workspacePath: attempt.workspacePath ?? task.execution.workspacePath,
-          agentSessionId: attempt.agentSessionId ?? task.execution.agentSessionId,
-          containerId: attempt.containerId ?? task.execution.containerId,
-        },
-      };
-    }
-
-    if (attempt.status === 'needs_input') {
-      return {
-        ...task,
-        status: 'needs_input',
-      };
-    }
-
-    return task;
-  }
-
-  private rowToAttempt(row: any): Attempt {
-    return {
-      id: row.id,
-      nodeId: row.node_id,
-      queuePriority: Number(row.queue_priority ?? 0),
+      sessionId,
+      taskId,
+      targetKey,
       status: row.status,
-      claimedAt: row.claimed_at ? new Date(row.claimed_at) : undefined,
-      snapshotCommit: row.snapshot_commit ?? undefined,
-      baseBranch: row.base_branch ?? undefined,
-      upstreamAttemptIds: JSON.parse(row.upstream_attempt_ids || '[]'),
-      commandOverride: row.command_override ?? undefined,
-      promptOverride: row.prompt_override ?? undefined,
-      startedAt: row.started_at ? new Date(row.started_at) : undefined,
-      completedAt: row.completed_at ? new Date(row.completed_at) : undefined,
-      exitCode: row.exit_code ?? undefined,
-      error: row.error ?? undefined,
-      lastHeartbeatAt: row.last_heartbeat_at ? new Date(row.last_heartbeat_at) : undefined,
-      leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : undefined,
-      branch: row.branch ?? undefined,
-      commit: row.commit_hash ?? undefined,
-      summary: row.summary ?? undefined,
-      workspacePath: row.workspace_path ?? undefined,
-      agentSessionId: row.agent_session_id || undefined,
-      containerId: row.container_id ?? undefined,
-      supersedesAttemptId: row.supersedes_attempt_id ?? undefined,
-      createdAt: new Date(row.created_at),
-      mergeConflict: row.merge_conflict ? JSON.parse(row.merge_conflict) : undefined,
+      exitCode: typeof row.exit_code === 'number' ? row.exit_code : undefined,
+      cwd: typeof row.cwd === 'string' ? row.cwd : undefined,
+      command: typeof row.command === 'string' ? row.command : undefined,
+      args: parseTerminalArgsJson(row.args_json),
+      linuxTerminalTail:
+        row.linux_terminal_tail === 'exec_bash' || row.linux_terminal_tail === 'pause'
+          ? row.linux_terminal_tail
+          : undefined,
+      mode: row.mode,
+      attached: row.attached === 1,
+      outputSnapshot: typeof row.output_snapshot === 'string' ? row.output_snapshot : '',
+      createdAt,
+      updatedAt,
     };
+  }
+
+  private replaceInAppPlanningMessages(
+    sessionId: string,
+    messages: InAppPlanningChatLine[],
+    fallbackCreatedAt: string,
+  ): void {
+    this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
+    for (const message of messages) {
+      this.db.run(
+        `INSERT INTO in_app_planning_messages (
+          session_id,
+          message_id,
+          role,
+          text,
+          tone,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          sessionId,
+          message.id,
+          message.role,
+          message.text,
+          message.tone ?? null,
+          message.createdAt ?? fallbackCreatedAt,
+        ],
+      );
+    }
+  }
+
+
+  private mapInAppPlanningSessionRow(row: InAppPlanningSessionRow): InAppPlanningSessionRecord | undefined {
+    try {
+      const id = typeof row.session_id === 'string' ? row.session_id : '';
+      const title = typeof row.title === 'string' ? row.title : '';
+      const presetKey = typeof row.preset_key === 'string' ? row.preset_key : '';
+      const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
+      const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
+      if (!id || !title || !presetKey || !createdAt || !updatedAt || !isInAppPlanningSessionStatus(row.status)) {
+        return undefined;
+      }
+      const terminalMode = row.terminal_mode === undefined || row.terminal_mode === null
+        ? 'chat'
+        : isPlanningTerminalMode(row.terminal_mode)
+          ? row.terminal_mode
+          : undefined;
+      if (!terminalMode) {
+        return undefined;
+      }
+      if (!isPlanningTerminalStatus(row.terminal_status)) {
+        return undefined;
+      }
+      if (
+        row.status === 'submitted'
+        && (
+          typeof row.submitted_workflow_id !== 'string'
+          || typeof row.submitted_plan_name !== 'string'
+        )
+      ) {
+        return undefined;
+      }
+
+      const messageRows = this.queryAll(
+        'SELECT * FROM in_app_planning_messages WHERE session_id = ? ORDER BY message_id ASC',
+        [id],
+      ) as InAppPlanningMessageRow[];
+      const draftPlanSummary = parseInAppPlanningPlanSummary(row.draft_plan_summary_json);
+      const messages: InAppPlanningChatLine[] = [];
+      for (const messageRow of messageRows) {
+        if (
+          typeof messageRow.message_id !== 'number'
+          || !isInAppPlanningMessageRole(messageRow.role)
+          || typeof messageRow.text !== 'string'
+          || typeof messageRow.created_at !== 'string'
+          || !isInAppPlanningMessageTone(messageRow.tone)
+        ) {
+          return undefined;
+        }
+        messages.push({
+          id: messageRow.message_id,
+          role: messageRow.role,
+          text: messageRow.text,
+          ...(messageRow.tone ? { tone: messageRow.tone } : {}),
+          createdAt: messageRow.created_at,
+        });
+      }
+
+      return {
+        id,
+        title,
+        presetKey,
+        status: row.status,
+        messages,
+        ...(draftPlanSummary ? { draftPlanSummary } : {}),
+        ...(typeof row.submitted_workflow_id === 'string' ? { submittedWorkflowId: row.submitted_workflow_id } : {}),
+        ...(typeof row.submitted_plan_name === 'string' ? { submittedPlanName: row.submitted_plan_name } : {}),
+        terminalMode,
+        ...(typeof row.terminal_session_id === 'string' ? { terminalSessionId: row.terminal_session_id } : {}),
+        ...(row.terminal_status ? { terminalStatus: row.terminal_status } : {}),
+        ...(typeof row.terminal_exit_code === 'number' ? { terminalExitCode: row.terminal_exit_code } : {}),
+        terminalOutputSnapshot: typeof row.terminal_output_snapshot === 'string' ? row.terminal_output_snapshot : '',
+        ...(typeof row.terminal_updated_at === 'string' ? { terminalUpdatedAt: row.terminal_updated_at } : {}),
+        pendingResponse: row.pending_response === 1,
+        createdAt,
+        updatedAt,
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   enqueueWorkflowMutationIntent(
@@ -2214,7 +2552,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       ) VALUES (?, ?, ?, ?, 'queued')`,
       [workflowId, channel, JSON.stringify(args), priority],
     );
-    const row = this.queryOne('SELECT last_insert_rowid() AS id');
+    const row = this.queryOne('SELECT MAX(id) AS id FROM workflow_mutation_intents');
     return Number(row?.id ?? 0);
   }
 
@@ -2291,6 +2629,34 @@ export class SQLiteAdapter implements PersistenceAdapter {
        WHERE status = 'running'`,
     );
     return Number(running?.count ?? 0);
+  }
+
+  requeueOrphanedWorkflowMutationIntents(now: Date = new Date()): number {
+    const rows = this.queryAll(
+      `SELECT i.id
+         FROM workflow_mutation_intents i
+         LEFT JOIN workflow_mutation_leases l
+           ON l.workflow_id = i.workflow_id
+          AND l.active_intent_id = i.id
+          AND l.lease_expires_at >= ?
+        WHERE i.status = 'running'
+          AND l.workflow_id IS NULL`,
+      [now.toISOString()],
+    );
+    const ids = rows
+      .map((row) => Number(row.id))
+      .filter((id) => Number.isFinite(id));
+    if (ids.length === 0) {
+      return 0;
+    }
+    this.execRun(
+      `UPDATE workflow_mutation_intents
+         SET status = 'queued', owner_id = NULL, started_at = NULL, completed_at = NULL, error = NULL
+       WHERE status = 'running'
+         AND id IN (${ids.map(() => '?').join(', ')})`,
+      ids,
+    );
+    return ids.length;
   }
 
   claimNextWorkflowMutationIntent(
@@ -2444,6 +2810,523 @@ export class SQLiteAdapter implements PersistenceAdapter {
     );
   }
 
+  claimExecutionResourceLease(options: {
+    resourceKey: string;
+    resourceType: string;
+    holderId: string;
+    taskId?: string;
+    poolId?: string;
+    poolMemberId?: string;
+    metadata?: unknown;
+    leaseMs?: number;
+  }): boolean {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const leaseExpiresAt = new Date(now.getTime() + (options.leaseMs ?? EXECUTION_RESOURCE_LEASE_MS)).toISOString();
+    return this.runTransaction(() => {
+      this.execRun(
+        'DELETE FROM execution_resource_leases WHERE resource_key = ? AND lease_expires_at <= ?',
+        [options.resourceKey, nowIso],
+      );
+      const active = this.queryOne(
+        `SELECT holder_id FROM execution_resource_leases
+         WHERE resource_key = ?
+           AND holder_id != ?
+           AND lease_expires_at > ?
+         LIMIT 1`,
+        [options.resourceKey, options.holderId, nowIso],
+      );
+      if (active) return false;
+
+      this.execRun(
+        `INSERT OR REPLACE INTO execution_resource_leases (
+          resource_key, resource_type, holder_id, task_id, pool_id, pool_member_id,
+          acquired_at, last_heartbeat_at, lease_expires_at, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          options.resourceKey,
+          options.resourceType,
+          options.holderId,
+          options.taskId ?? null,
+          options.poolId ?? null,
+          options.poolMemberId ?? null,
+          nowIso,
+          nowIso,
+          leaseExpiresAt,
+          options.metadata === undefined ? null : JSON.stringify(options.metadata),
+        ],
+      );
+      return true;
+    });
+  }
+
+  renewExecutionResourceLease(
+    resourceKey: string,
+    holderId: string,
+    leaseMs = EXECUTION_RESOURCE_LEASE_MS,
+  ): boolean {
+    const now = new Date();
+    this.execRun(
+      `UPDATE execution_resource_leases
+         SET last_heartbeat_at = ?,
+             lease_expires_at = ?
+       WHERE resource_key = ?
+         AND holder_id = ?`,
+      [
+        now.toISOString(),
+        new Date(now.getTime() + leaseMs).toISOString(),
+        resourceKey,
+        holderId,
+      ],
+    );
+    const changed = (this.db.getRowsModified?.() ?? 0) as number;
+    return changed > 0;
+  }
+
+  releaseExecutionResourceLease(resourceKey: string, holderId: string): void {
+    this.execRun(
+      'DELETE FROM execution_resource_leases WHERE resource_key = ? AND holder_id = ?',
+      [resourceKey, holderId],
+    );
+  }
+
+  /**
+   * Globally delete expired execution-resource leases. Claim-time reclaim only
+   * clears the same `resource_key`; after owner restart, orphaned keys would
+   * otherwise sit until something tries that key again.
+   */
+  releaseExpiredExecutionResourceLeases(nowIso?: string): number {
+    const cutoff = nowIso ?? new Date().toISOString();
+    this.execRun(
+      'DELETE FROM execution_resource_leases WHERE lease_expires_at <= ?',
+      [cutoff],
+    );
+    return (this.db.getRowsModified?.() ?? 0) as number;
+  }
+
+  listExecutionResourceLeases(): ExecutionResourceLease[] {
+    return this.queryAll(
+      'SELECT * FROM execution_resource_leases ORDER BY resource_key ASC, acquired_at ASC',
+    ).map((row) => ({
+      resourceKey: String(row.resource_key),
+      resourceType: String(row.resource_type),
+      holderId: String(row.holder_id),
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      poolId: row.pool_id ? String(row.pool_id) : undefined,
+      poolMemberId: row.pool_member_id ? String(row.pool_member_id) : undefined,
+      acquiredAt: String(row.acquired_at),
+      lastHeartbeatAt: String(row.last_heartbeat_at),
+      leaseExpiresAt: String(row.lease_expires_at),
+      metadata: row.metadata_json ? JSON.parse(String(row.metadata_json)) : undefined,
+    }));
+  }
+
+  /**
+   * Return every execution-resource lease held on behalf of a specific
+   * task. Used by the LaunchDispatcher when abandoning a stuck launch
+   * to release any SSH-pool / worktree-pool leases the task acquired
+   * during executor selection but never released (Issue 14).
+   */
+  listExecutionResourceLeasesByTask(taskId: string): ExecutionResourceLease[] {
+    return this.queryAll(
+      'SELECT * FROM execution_resource_leases WHERE task_id = ? ORDER BY acquired_at ASC',
+      [taskId],
+    ).map((row) => ({
+      resourceKey: String(row.resource_key),
+      resourceType: String(row.resource_type),
+      holderId: String(row.holder_id),
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      poolId: row.pool_id ? String(row.pool_id) : undefined,
+      poolMemberId: row.pool_member_id ? String(row.pool_member_id) : undefined,
+      acquiredAt: String(row.acquired_at),
+      lastHeartbeatAt: String(row.last_heartbeat_at),
+      leaseExpiresAt: String(row.lease_expires_at),
+      metadata: row.metadata_json ? JSON.parse(String(row.metadata_json)) : undefined,
+    }));
+  }
+
+  releaseExecutionResourceLeasesForTasks(
+    taskIds: readonly string[],
+    _reason: string,
+    _nowIso?: string,
+  ): ExecutionResourceLeaseReleaseRow[] {
+    const ids = Array.from(new Set(taskIds.filter((id): id is string => typeof id === 'string' && id.length > 0)));
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => '?').join(', ');
+
+    return this.runTransaction(() => {
+      const rows = this.queryAll(
+        `SELECT resource_key, resource_type, holder_id, task_id
+           FROM execution_resource_leases
+          WHERE task_id IN (${placeholders})
+          ORDER BY acquired_at ASC, resource_key ASC`,
+        ids,
+      );
+      if (rows.length === 0) return [];
+
+      this.execRun(
+        `DELETE FROM execution_resource_leases
+          WHERE task_id IN (${placeholders})`,
+        ids,
+      );
+
+      return rows.map((row) => ({
+        resourceKey: String(row.resource_key),
+        resourceType: String(row.resource_type),
+        holderId: String(row.holder_id),
+        taskId: row.task_id ? String(row.task_id) : undefined,
+      }));
+    });
+  }
+
+  enqueueLaunchDispatch(input: {
+    taskId: string;
+    attemptId: string;
+    workflowId: string;
+    priority?: TaskLaunchDispatchPriority;
+    generation: number;
+  }): TaskLaunchDispatch {
+    const priority: TaskLaunchDispatchPriority = input.priority ?? 'normal';
+    return this.runTransaction(() => {
+      const existing = this.queryOne(
+        `SELECT * FROM task_launch_dispatch
+           WHERE attempt_id = ?
+             AND state IN ('enqueued', 'leased')
+           LIMIT 1`,
+        [input.attemptId],
+      );
+      if (existing) {
+        return this.rowToTaskLaunchDispatch(existing);
+      }
+      this.execRun(
+        `INSERT INTO task_launch_dispatch (
+          task_id, attempt_id, workflow_id, state, priority, generation
+        ) VALUES (?, ?, ?, 'enqueued', ?, ?)`,
+        [input.taskId, input.attemptId, input.workflowId, priority, input.generation],
+      );
+      const inserted = this.queryOne(
+        `SELECT * FROM task_launch_dispatch
+           WHERE attempt_id = ?
+             AND state IN ('enqueued', 'leased')
+           LIMIT 1`,
+        [input.attemptId],
+      );
+      if (!inserted) {
+        throw new Error('Failed to read back inserted task_launch_dispatch row');
+      }
+      const dispatch = this.rowToTaskLaunchDispatch(inserted);
+      this.logEvent(input.taskId, 'task.launch_dispatch_enqueued', {
+        dispatchId: dispatch.id,
+        attemptId: input.attemptId,
+        workflowId: input.workflowId,
+        generation: input.generation,
+        priority,
+      });
+      return dispatch;
+    });
+  }
+
+  loadLaunchDispatchById(id: number): TaskLaunchDispatch | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM task_launch_dispatch WHERE id = ?',
+      [id],
+    );
+    return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+  }
+
+  loadLaunchDispatchByAttempt(attemptId: string): TaskLaunchDispatch | undefined {
+    const row = this.queryOne(
+      `SELECT * FROM task_launch_dispatch
+         WHERE attempt_id = ?
+           AND state IN ('enqueued', 'leased')
+         ORDER BY id DESC
+         LIMIT 1`,
+      [attemptId],
+    );
+    return row ? this.rowToTaskLaunchDispatch(row) : undefined;
+  }
+
+  listLaunchDispatchesByState(
+    states: readonly TaskLaunchDispatchState[],
+  ): TaskLaunchDispatch[] {
+    if (states.length === 0) return [];
+    const placeholders = states.map(() => '?').join(', ');
+    const rows = this.queryAll(
+      `SELECT * FROM task_launch_dispatch
+         WHERE state IN (${placeholders})
+         ORDER BY id ASC`,
+      states as unknown as unknown[],
+    );
+    return rows.map((row) => this.rowToTaskLaunchDispatch(row));
+  }
+
+  /**
+   * Atomic lease of the next enqueued dispatch row.
+   *
+   * Selects the oldest enqueued row (priority high < normal < low, then id
+   * ascending) and transitions it to `leased`. Wrapped in an IMMEDIATE
+   * transaction so concurrent dispatchers cannot double-lease. Returns the
+   * freshly leased row or `undefined` when nothing is enqueued or another
+   * dispatcher beat us to it.
+   */
+  claimLaunchDispatchAtomic(options: {
+    ownerId: string;
+    nowIso?: string;
+  }): TaskLaunchDispatch | undefined {
+    const now = options.nowIso ?? new Date().toISOString();
+    const fencedUntil = new Date(
+      new Date(now).getTime() + DISPATCH_LEASE_MS,
+    ).toISOString();
+    return this.runTransaction(() => {
+      while (true) {
+        const candidate = this.queryOne(
+          `SELECT
+             d.*,
+             t.id AS current_task_id,
+             t.status AS current_task_status,
+             t.selected_attempt_id AS current_selected_attempt_id,
+             t.execution_generation AS current_execution_generation
+           FROM task_launch_dispatch d
+           LEFT JOIN tasks t ON t.id = d.task_id
+           WHERE d.state = 'enqueued'
+           ORDER BY CASE d.priority
+             WHEN 'high' THEN 0
+             WHEN 'normal' THEN 1
+             ELSE 2
+           END, d.id
+           LIMIT 1`,
+        );
+        if (!candidate || candidate.id == null) return undefined;
+        const candidateId = Number(candidate.id);
+
+        let staleReason: string | undefined;
+        if (!candidate.current_task_id) {
+          staleReason = `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
+        } else if (String(candidate.current_task_status) !== 'pending') {
+          staleReason =
+            `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
+            `status is ${String(candidate.current_task_status)}`;
+        } else if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
+          staleReason =
+            `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
+            `is not the selected attempt ${String(candidate.current_selected_attempt_id ?? 'none')}`;
+        } else if (Number(candidate.current_execution_generation ?? 0) !== Number(candidate.generation ?? 0)) {
+          staleReason =
+            `Launch dispatch ${candidateId} is stale: generation ${String(candidate.generation)} ` +
+            `does not match task generation ${String(candidate.current_execution_generation ?? 0)}`;
+        }
+
+        if (staleReason) {
+          this.execRun(
+            `UPDATE task_launch_dispatch
+               SET state = 'abandoned',
+                   completed_at = ?,
+                   last_error = ?,
+                   dispatch_owner = NULL,
+                   fenced_until = NULL
+             WHERE id = ?
+               AND state = 'enqueued'`,
+            [now, staleReason, candidateId],
+          );
+          continue;
+        }
+
+        this.execRun(
+          `UPDATE task_launch_dispatch
+             SET state = 'leased',
+                 dispatch_owner = ?,
+                 leased_at = ?,
+                 fenced_until = ?,
+                 attempts_count = attempts_count + 1
+           WHERE id = ?
+             AND state = 'enqueued'`,
+          [options.ownerId, now, fencedUntil, candidateId],
+        );
+        const updated = (this.db.getRowsModified?.() ?? 0) > 0;
+        if (!updated) return undefined;
+        const row = this.queryOne(
+          'SELECT * FROM task_launch_dispatch WHERE id = ?',
+          [candidateId],
+        );
+        if (!row) return undefined;
+        const dispatch = this.rowToTaskLaunchDispatch(row);
+        this.logEvent(dispatch.taskId, 'task.launch_dispatch_claimed', {
+          dispatchId: dispatch.id,
+          ownerId: options.ownerId,
+          attemptId: dispatch.attemptId,
+          workflowId: dispatch.workflowId,
+          generation: dispatch.generation,
+          fencedUntil: dispatch.fencedUntil,
+        });
+        return dispatch;
+      }
+    });
+  }
+
+  markLaunchDispatchCompleted(id: number, nowIso?: string): boolean {
+    const now = nowIso ?? new Date().toISOString();
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET state = 'completed',
+             completed_at = ?
+       WHERE id = ?
+         AND state NOT IN ('completed', 'abandoned')`,
+      [now, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
+  markLaunchDispatchFailed(
+    id: number,
+    errorMessage: string,
+    _nowIso?: string,
+  ): boolean {
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET state = 'enqueued',
+             last_error = ?,
+             dispatch_owner = NULL,
+             fenced_until = NULL
+       WHERE id = ?
+         AND state NOT IN ('completed', 'abandoned')`,
+      [errorMessage, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
+  listAbandonableLaunchDispatchLeases(options: {
+    nowIso?: string;
+    maxAttempts: number;
+    maxLaunchAgeMs?: number;
+  }): TaskLaunchDispatch[] {
+    const now = options.nowIso ?? new Date().toISOString();
+    const maxLaunchAgeMs = options.maxLaunchAgeMs;
+    const ageCutoff = maxLaunchAgeMs === undefined
+      ? null
+      : new Date(new Date(now).getTime() - maxLaunchAgeMs).toISOString();
+    const rows = this.queryAll(
+      `SELECT * FROM task_launch_dispatch
+         WHERE state = 'leased'
+           AND fenced_until IS NOT NULL
+           AND fenced_until < ?
+           AND (
+             attempts_count >= ?
+             OR (? IS NOT NULL AND enqueued_at <= ?)
+           )
+         ORDER BY id ASC`,
+      [now, options.maxAttempts, ageCutoff, ageCutoff],
+    );
+    return rows.map((row) => this.rowToTaskLaunchDispatch(row));
+  }
+
+  /**
+   * Terminal abandon: row leaves the live set. Returns false when the row
+   * is already terminal so callers can treat a race as a no-op.
+   */
+  markLaunchDispatchAbandoned(
+    id: number,
+    errorMessage: string,
+    nowIso?: string,
+  ): boolean {
+    const now = nowIso ?? new Date().toISOString();
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET state = 'abandoned',
+             completed_at = ?,
+             last_error = ?,
+             dispatch_owner = NULL,
+             fenced_until = NULL
+       WHERE id = ?
+         AND state NOT IN ('completed', 'abandoned')`,
+      [now, errorMessage, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
+  abandonLaunchDispatchesForTasks(
+    taskIds: readonly string[],
+    reason: string,
+    nowIso?: string,
+  ): LaunchDispatchInvalidationRow[] {
+    const ids = Array.from(new Set(taskIds.filter((id): id is string => typeof id === 'string' && id.length > 0)));
+    if (ids.length === 0) return [];
+    const now = nowIso ?? new Date().toISOString();
+    const taskPlaceholders = ids.map(() => '?').join(', ');
+
+    return this.runTransaction(() => {
+      const rows = this.queryAll(
+        `SELECT id, task_id, attempt_id, workflow_id, state, generation
+           FROM task_launch_dispatch
+          WHERE task_id IN (${taskPlaceholders})
+            AND state IN ('enqueued', 'leased')
+          ORDER BY id ASC`,
+        ids,
+      );
+      if (rows.length === 0) return [];
+
+      const rowIds = rows.map((row) => Number(row.id));
+      const idPlaceholders = rowIds.map(() => '?').join(', ');
+      this.execRun(
+        `UPDATE task_launch_dispatch
+            SET state = 'abandoned',
+                completed_at = ?,
+                last_error = ?,
+                dispatch_owner = NULL,
+                fenced_until = NULL
+          WHERE id IN (${idPlaceholders})
+            AND state IN ('enqueued', 'leased')`,
+        [now, reason, ...rowIds],
+      );
+
+      return rows.map((row) => ({
+        id: Number(row.id),
+        taskId: String(row.task_id),
+        attemptId: String(row.attempt_id),
+        workflowId: String(row.workflow_id),
+        state: String(row.state),
+        generation: Number(row.generation ?? 0),
+      }));
+    });
+  }
+
+  reapExpiredLaunchDispatchLeases(options: {
+    nowIso?: string;
+    maxAttempts?: number;
+  } = {}): TaskLaunchDispatch[] {
+    const now = options.nowIso ?? new Date().toISOString();
+    const maxAttempts = options.maxAttempts ?? Number.MAX_SAFE_INTEGER;
+    return this.runTransaction(() => {
+      const expired = this.queryAll(
+        `SELECT * FROM task_launch_dispatch
+           WHERE state = 'leased'
+             AND fenced_until IS NOT NULL
+             AND fenced_until < ?
+             AND attempts_count < ?`,
+        [now, maxAttempts],
+      );
+      if (expired.length === 0) return [];
+      this.execRun(
+        `UPDATE task_launch_dispatch
+           SET state = 'enqueued',
+               dispatch_owner = NULL,
+               fenced_until = NULL
+         WHERE state = 'leased'
+           AND fenced_until IS NOT NULL
+           AND fenced_until < ?
+           AND attempts_count < ?`,
+        [now, maxAttempts],
+      );
+      return expired.map((row) => {
+        const reset = { ...row, state: 'enqueued', dispatch_owner: null, fenced_until: null };
+        return this.rowToTaskLaunchDispatch(reset);
+      });
+    });
+  }
+
+  private rowToTaskLaunchDispatch(row: Record<string, unknown>): TaskLaunchDispatch {
+    return mapRowToTaskLaunchDispatch(row);
+  }
+
   listWorkflowMutationLeases(): WorkflowMutationLease[] {
     return this.queryAll(
       'SELECT * FROM workflow_mutation_leases ORDER BY workflow_id ASC',
@@ -2481,32 +3364,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   private rowToWorkflowMutationIntent(row: Record<string, unknown>): WorkflowMutationIntent {
-    return {
-      id: Number(row.id),
-      workflowId: String(row.workflow_id),
-      channel: String(row.channel),
-      args: JSON.parse(String(row.args_json ?? '[]')),
-      priority: row.priority === 'high' ? 'high' : 'normal',
-      status: (row.status as WorkflowMutationIntentStatus) ?? 'queued',
-      ownerId: (row.owner_id as string) ?? undefined,
-      error: (row.error as string) ?? undefined,
-      createdAt: String(row.created_at),
-      startedAt: (row.started_at as string) ?? undefined,
-      completedAt: (row.completed_at as string) ?? undefined,
-    };
+    return mapRowToWorkflowMutationIntent(row);
   }
 
   private rowToWorkflowMutationLease(row: Record<string, unknown>): WorkflowMutationLease {
+    return mapRowToWorkflowMutationLease(row);
+  }
+
+  private rowToWorkerAction(row: Record<string, unknown>): WorkerActionRecord {
+    return mapRowToWorkerAction(row);
+  }
+
+  private rowToWorkerDesiredState(row: Record<string, unknown>): WorkerDesiredStateRecord {
     return {
-      workflowId: String(row.workflow_id),
-      ownerId: String(row.owner_id),
-      activeIntentId: row.active_intent_id === null || row.active_intent_id === undefined
-        ? undefined
-        : Number(row.active_intent_id),
-      activeMutationKind: row.active_mutation_kind ? String(row.active_mutation_kind) : undefined,
-      leasedAt: String(row.leased_at),
-      lastHeartbeatAt: String(row.last_heartbeat_at),
-      leaseExpiresAt: String(row.lease_expires_at),
+      workerKind: String(row.worker_kind),
+      desiredEnabled: Number(row.desired_enabled) !== 0,
+      updatedAt: String(row.updated_at),
     };
   }
 

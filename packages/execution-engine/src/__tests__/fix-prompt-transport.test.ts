@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { spawnAgentFixViaRegistry, spawnRemoteAgentFixImpl } from '../conflict-resolver.js';
-import type { ExecutionAgent } from '../agent.js';
+import type { AgentCommandBuildOptions, ExecutionAgent } from '../agent.js';
 import type { AgentRegistry } from '../agent-registry.js';
 
 vi.mock('node:child_process');
@@ -63,7 +63,7 @@ function mockSpawnChildErrorEvent(err: Error & { code?: string }) {
   return child;
 }
 
-function makeExecutionAgent(buildFixCommand: (prompt: string) => { cmd: string; args: string[]; sessionId?: string }): ExecutionAgent {
+function makeExecutionAgent(buildFixCommand: ExecutionAgent['buildFixCommand']): ExecutionAgent {
   return {
     name: 'codex',
     stdinMode: 'ignore',
@@ -71,12 +71,17 @@ function makeExecutionAgent(buildFixCommand: (prompt: string) => { cmd: string; 
     buildCommand: (fullPrompt: string) => ({ cmd: 'codex', args: ['exec', '--json', fullPrompt] }),
     buildResumeArgs: (sessionId: string) => ({ cmd: 'codex', args: ['resume', sessionId] }),
     buildFixCommand,
+    supportsModel: () => true,
   };
 }
 
 describe('fix prompt transport for oversized prompts', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Reset the spawn mock's once-queue so a test that rejects before calling
+    // spawn cannot leak its queued child into the next test.
+    const { spawn } = await import('node:child_process');
+    vi.mocked(spawn).mockReset();
   });
 
   it('local fix path replaces oversized prompt arg with file-backed bootstrap prompt', async () => {
@@ -96,6 +101,21 @@ describe('fix prompt transport for oversized prompts', () => {
     expect(captured.prompt).toContain('The full task instructions are in this file:');
     expect(captured.prompt).toContain('invoker-agent-prompt-');
     expect(captured.prompt).not.toContain(hugePrompt.slice(0, 200));
+  });
+  it('passes executionModel to local fix command builders', async () => {
+    const { spawn } = await import('node:child_process');
+    const buildFixCommand = vi.fn((prompt: string, options?: { executionModel?: string }) => ({
+      cmd: 'codex',
+      args: ['exec', '--json', ...(options?.executionModel ? ['--model', options.executionModel] : []), prompt],
+      sessionId: 'local-model-sess',
+    }));
+    const agent = makeExecutionAgent(buildFixCommand);
+
+    vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('ok', 0) as any);
+
+    const result = await spawnAgentFixViaRegistry('small prompt', '/tmp', agent, undefined, 'gpt-5.1-codex-max');
+    expect(result.sessionId).toBe('local-model-sess');
+    expect(buildFixCommand).toHaveBeenCalledWith('small prompt', { executionModel: 'gpt-5.1-codex-max' });
   });
 
   it('remote fix path writes oversized prompt to remote temp file and passes short bootstrap prompt', async () => {
@@ -137,6 +157,77 @@ describe('fix prompt transport for oversized prompts', () => {
     expect(stdinScript).toContain('base64 -d > "$PROMPT_FILE"');
     expect(stdinScript).toContain("trap 'rm -f \"$PROMPT_FILE\"' EXIT");
   });
+
+  it('passes resolved executionModel into local OMP fix commands', async () => {
+    const { spawn } = await import('node:child_process');
+    const buildFixCommand = vi.fn((prompt: string, options?: AgentCommandBuildOptions) => ({
+      cmd: 'omp',
+      args: ['--model', options?.executionModel ?? 'missing', '-p', prompt],
+      sessionId: 'omp-local-sess',
+    }));
+    const agent: ExecutionAgent = {
+      name: 'omp',
+      stdinMode: 'ignore',
+      linuxTerminalTail: 'exec_bash',
+      buildCommand: (fullPrompt: string) => ({ cmd: 'omp', args: ['-p', fullPrompt] }),
+      buildResumeArgs: (sessionId: string) => ({ cmd: 'omp', args: ['resume', sessionId] }),
+      buildFixCommand,
+      supportsModel: () => true,
+    };
+
+    vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('ok', 0) as any);
+
+    await spawnAgentFixViaRegistry(
+      'small prompt',
+      '/tmp',
+      agent,
+      undefined,
+      'anthropic/claude-opus-4',
+    );
+
+    expect(buildFixCommand).toHaveBeenCalledWith(
+      'small prompt',
+      { executionModel: 'anthropic/claude-opus-4' },
+    );
+  });
+
+  it('passes resolved executionModel into remote OMP fix commands', async () => {
+    const { spawn } = await import('node:child_process');
+    const buildFixCommand = vi.fn((prompt: string, options?: AgentCommandBuildOptions) => ({
+      cmd: 'omp',
+      args: ['--model', options?.executionModel ?? 'missing', '-p', prompt],
+      sessionId: 'omp-remote-sess',
+    }));
+
+    const child = mockSpawnChild('remote ok', 0) as any;
+    let stdinScript = '';
+    child.stdin.write = vi.fn((chunk: string) => {
+      stdinScript += chunk;
+      return true;
+    });
+    vi.mocked(spawn).mockReturnValueOnce(child);
+
+    const registry = {
+      get: () => ({ name: 'omp', buildFixCommand, supportsModel: () => true }),
+      getOrThrow: () => ({ name: 'omp', buildFixCommand, supportsModel: () => true }),
+      getSessionDriver: () => undefined,
+    } as unknown as AgentRegistry;
+
+    await spawnRemoteAgentFixImpl(
+      'small prompt',
+      '/home/user/worktree',
+      { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      'omp',
+      registry,
+      'anthropic/claude-opus-4',
+    );
+
+    expect(buildFixCommand).toHaveBeenCalledWith(
+      'small prompt',
+      { executionModel: 'anthropic/claude-opus-4' },
+    );
+    expect(stdinScript).toContain('eval "$(echo "');
+  });
 });
 
 /**
@@ -150,8 +241,12 @@ describe('fix prompt transport for oversized prompts', () => {
  * to recognize argv-size and OOM-kill failures.
  */
 describe('spawn errors during agent fix surface diagnostic info', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    // Reset the spawn mock's once-queue so a test that rejects before calling
+    // spawn cannot leak its queued child into the next test.
+    const { spawn } = await import('node:child_process');
+    vi.mocked(spawn).mockReset();
   });
 
   it('surfaces E2BIG when spawn emits an error event (argv too long)', async () => {
@@ -218,6 +313,70 @@ describe('spawn errors during agent fix surface diagnostic info', () => {
     expect(caught).toBeDefined();
     expect(caught!.message).toContain('137');
     expect(caught!.message).toContain('Killed');
+  });
+
+  it('surfaces the codex --json stdout error, not the benign stdin noise, on non-zero exit', async () => {
+    const { spawn } = await import('node:child_process');
+    const agent = makeExecutionAgent((prompt) => ({
+      cmd: 'codex',
+      args: ['exec', '--json', '--dangerously-bypass-approvals-and-sandbox', prompt],
+      sessionId: 'sess-codex-fail',
+    }));
+    const driver = {
+      processOutput: () => '[assistant] Model refused: usage limit reached',
+      extractSessionId: () => undefined,
+      loadSession: () => null,
+      parseSession: () => [],
+      inspectSession: () => ({ state: 'error' as const }),
+    };
+
+    const { EventEmitter } = require('events');
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const child = new EventEmitter();
+    (child as any).stdout = stdout;
+    (child as any).stderr = stderr;
+    (child as any).stdin = { write: vi.fn(), end: vi.fn() };
+    setTimeout(() => {
+      stdout.emit('data', Buffer.from('{"type":"error","message":"usage limit reached"}\n'));
+      stderr.emit('data', Buffer.from('Reading additional input from stdin...\n'));
+      child.emit('close', 1);
+    }, 0);
+    vi.mocked(spawn).mockReturnValueOnce(child as any);
+
+    let caught: Error | undefined;
+    try {
+      await spawnAgentFixViaRegistry('small prompt', '/tmp', agent, driver as any);
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toContain('codex fix exited with code 1');
+    expect(caught!.message).toContain('Model refused: usage limit reached');
+    expect(caught!.message).not.toContain('Reading additional input from stdin');
+  });
+
+  it('gives an actionable hint when codex exits non-zero emitting only the stdin/TTY noise', async () => {
+    const { spawn } = await import('node:child_process');
+    const agent = makeExecutionAgent((prompt) => ({
+      cmd: 'codex',
+      args: ['exec', '--json', prompt],
+      sessionId: 'sess-codex-notty',
+    }));
+
+    vi.mocked(spawn).mockReturnValueOnce(
+      mockSpawnChildExit(1, 'Reading additional input from stdin...\n') as any,
+    );
+
+    let caught: Error | undefined;
+    try {
+      await spawnAgentFixViaRegistry('small prompt', '/tmp', agent, undefined);
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.message).toContain('without a controlling TTY');
+    expect(caught!.message).toContain('openai/codex#19945');
   });
 });
 

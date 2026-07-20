@@ -5,7 +5,7 @@
  */
 
 import type { TaskDelta } from '@invoker/workflow-core';
-import type { SurfaceEvent, WorkflowStatus } from '../surface.js';
+import type { SurfaceEvent, WorkflowStatus, WorkflowProgress } from '../surface.js';
 
 // ── Status Display ──────────────────────────────────────────
 
@@ -15,6 +15,7 @@ const STATUS_EMOJI: Record<string, string> = {
   fixing_with_ai: ':hammer_and_wrench:',
   completed: ':white_check_mark:',
   failed: ':x:',
+  closed: ':black_circle:',
   blocked: ':no_entry_sign:',
   needs_input: ':question:',
   awaiting_approval: ':raised_hand:',
@@ -26,6 +27,7 @@ const STATUS_LABEL: Record<string, string> = {
   fixing_with_ai: 'Fixing with AI',
   completed: 'Completed',
   failed: 'Failed',
+  closed: 'Closed',
   blocked: 'Blocked',
   needs_input: 'Needs Input',
   awaiting_approval: 'Awaiting Approval',
@@ -38,6 +40,10 @@ function statusEmoji(status: string): string {
 function statusLabel(status: string): string {
   return STATUS_LABEL[status] ?? status;
 }
+function clampMrkdwnText(text: string, max = 3000): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
 
 // ── Block Kit Types (subset) ────────────────────────────────
 
@@ -57,13 +63,13 @@ export interface SlackMessage {
 
 export function formatTaskCreated(taskId: string, description: string): SlackMessage {
   return {
-    text: `Task ${taskId}: ${description}`,
+    text: clampMrkdwnText(`Task ${taskId}: ${description}`),
     blocks: [
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `${statusEmoji('pending')} *${taskId}*: ${description}\n_Status: ${statusLabel('pending')}_`,
+          text: clampMrkdwnText(`${statusEmoji('pending')} *${taskId}*: ${description}\n_Status: ${statusLabel('pending')}_`),
         },
       },
     ],
@@ -91,7 +97,7 @@ export function formatTaskUpdated(
   }
 
   const blocks: SlackBlock[] = [
-    { type: 'section', text: { type: 'mrkdwn', text } },
+    { type: 'section', text: { type: 'mrkdwn', text: clampMrkdwnText(text) } },
   ];
 
   // Add action buttons for interactive states
@@ -153,15 +159,54 @@ export function formatWorkflowStatus(status: WorkflowStatus): SlackMessage {
     `Total: ${status.total}`,
     `:white_check_mark: Completed: ${status.completed}`,
     `:x: Failed: ${status.failed}`,
+    `:black_circle: Closed: ${status.closed}`,
     `:large_blue_circle: Running: ${status.running}`,
     `:white_circle: Pending: ${status.pending}`,
   ];
 
   return {
-    text: `Workflow: ${status.completed}/${status.total} completed`,
+    text: clampMrkdwnText(`Workflow: ${status.completed}/${status.total} completed`),
     blocks: [
-      { type: 'section', text: { type: 'mrkdwn', text: lines.join('\n') } },
+      { type: 'section', text: { type: 'mrkdwn', text: clampMrkdwnText(lines.join('\n')) } },
     ],
+  };
+}
+
+// ── Workflow Progress Card ──────────────────────────────────
+
+export function formatWorkflowProgress(p: WorkflowProgress): SlackMessage {
+  const header = clampMrkdwnText(`*${p.name}*  ${p.percentComplete}%  ·  ${STATUS_EMOJI.completed}${p.counts.completed} ${STATUS_EMOJI.running}${p.counts.running} ${STATUS_EMOJI.pending}${p.counts.pending} ${STATUS_EMOJI.failed}${p.counts.failed}`);
+
+  const blocks: SlackBlock[] = [
+    { type: 'section', text: { type: 'mrkdwn', text: header } },
+    { type: 'divider' },
+  ];
+
+  const MAX_ROWS = 40;
+  const shown = p.tasks.slice(0, MAX_ROWS);
+  const lines = shown.map((t) => {
+    let line = `${statusEmoji(t.status)} *${t.id}* ${statusLabel(t.status)}`;
+    if (t.status === 'running' && t.phase) line += ` (${t.phase})`;
+    if (t.reviewUrl) line += ` <${t.reviewUrl}|PR>`;
+    return line;
+  });
+  if (p.tasks.length > MAX_ROWS) {
+    lines.push(`…and ${p.tasks.length - MAX_ROWS} more`);
+  }
+  if (lines.length > 0) {
+    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: clampMrkdwnText(lines.join('\n')) } });
+  }
+
+  if (p.prUrl || p.reviewState) {
+    const footer = clampMrkdwnText(`${p.reviewState ?? ''}${p.prUrl ? ` · <${p.prUrl}|PR>` : ''}`.trim());
+    // Context elements are text objects whose `text` is a plain string, which is
+    // narrower than the shared SlackBlock element shape; cast at this boundary.
+    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: footer }] } as unknown as SlackBlock);
+  }
+
+  return {
+    text: clampMrkdwnText(`${p.name}: ${p.percentComplete}% (${p.counts.completed}/${p.counts.total})`),
+    blocks,
   };
 }
 
@@ -181,7 +226,7 @@ export function formatExperimentSelection(
   }
 
   const blocks: SlackBlock[] = [
-    { type: 'section', text: { type: 'mrkdwn', text } },
+    { type: 'section', text: { type: 'mrkdwn', text: clampMrkdwnText(text) } },
     {
       type: 'actions',
       block_id: `select-${reconTaskId}`,
@@ -204,11 +249,11 @@ export function formatExperimentSelection(
 
 export function formatError(message: string): SlackMessage {
   return {
-    text: `Error: ${message}`,
+    text: clampMrkdwnText(`Error: ${message}`),
     blocks: [
       {
         type: 'section',
-        text: { type: 'mrkdwn', text: `:warning: *Error*: ${message}` },
+        text: { type: 'mrkdwn', text: clampMrkdwnText(`:warning: *Error*: ${message}`) },
       },
     ],
   };
@@ -241,6 +286,10 @@ export function formatSurfaceEvent(event: SurfaceEvent): SlackMessage | null {
     }
     case 'workflow_status':
       return formatWorkflowStatus(event.status);
+    case 'workflow_progress':
+      return formatWorkflowProgress(event.progress);
+    case 'workflow_created':
+      return null;
     case 'error':
       return formatError(event.message);
   }

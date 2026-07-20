@@ -74,6 +74,9 @@ describe('restartTask deprecation shim', () => {
       retryTask: ReturnType<typeof vi.fn>;
       recreateTask: ReturnType<typeof vi.fn>;
       getTask: ReturnType<typeof vi.fn>;
+      cancelTask: ReturnType<typeof vi.fn>;
+      cancelWorkflow: ReturnType<typeof vi.fn>;
+      cascadeInvalidationToDownstream: ReturnType<typeof vi.fn>;
     };
 
     beforeEach(() => {
@@ -83,7 +86,10 @@ describe('restartTask deprecation shim', () => {
         // CommandService consults getTask() to scope the mutex
         // by workflow; returning undefined falls back to global.
         getTask: vi.fn(() => undefined),
-      };
+        cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+        cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+        cascadeInvalidationToDownstream: vi.fn(() => []),
+      } as never;
       // CommandService is a thin mutex-serialized wrapper; for
       // shim testing we just need the orchestrator delegate.
       svc = new CommandService(orchestrator as never);

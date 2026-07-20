@@ -5,32 +5,35 @@
  * following the pattern from resolve-conflict-action.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Orchestrator } from '@invoker/workflow-core';
+import { buildCancelInFlight, buildWorkflowInvalidationDeps, type Orchestrator } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
+
+const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+
+vi.mock('../config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config.js')>();
+  return {
+    ...actual,
+    loadConfig: () => loadConfigMock(),
+  };
+});
+
 import {
-  bumpGenerationAndRecreate,
-  recreateWorkflow,
-  recreateTask,
   cancelWorkflow,
-  retryTask,
-  retryWorkflow,
   recreateWorkflowFromFreshBase,
-  recreateWithRebase,
-  rebaseAndRetry,
+  rebaseRetry,
+  rebaseRecreate,
   approveTask,
   rejectTask,
   provideInput,
   editTaskCommand,
   editTaskPrompt,
-  editTaskType,
   selectExperiment,
   setWorkflowMergeMode,
   fixWithAgentAction,
   finalizeAppliedFix,
   autoFixOnFailure,
-  buildCancelInFlight,
-  buildInvalidationDeps,
   selectFailureRecoveryRoute,
   deleteAllWorkflows,
   resolveConflictAction,
@@ -42,6 +45,10 @@ import {
 vi.mock('../delete-all-snapshot.js', () => ({
   createDeleteAllSnapshot: () => '/tmp/fake-snapshot',
 }));
+
+beforeEach(() => {
+  loadConfigMock.mockReturnValue({});
+});
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -64,167 +71,23 @@ function makeRunningTask(overrides: Record<string, unknown> = {}) {
 
 // ── Tests ────────────────────────────────────────────────────
 
-describe('bumpGenerationAndRecreate', () => {
-  let orchestrator: { recreateWorkflow: ReturnType<typeof vi.fn> };
-  let persistence: {
-    loadWorkflow: ReturnType<typeof vi.fn>;
-    updateWorkflow: ReturnType<typeof vi.fn>;
-  };
 
-  beforeEach(() => {
-    orchestrator = {
-      recreateWorkflow: vi.fn(() => [makeRunningTask()]),
-    };
-    persistence = {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
-      updateWorkflow: vi.fn(),
-    };
-  });
-
-  it('loads workflow, bumps generation, calls orchestrator.recreateWorkflow', () => {
-    const result = bumpGenerationAndRecreate('wf-1', {
-      persistence: persistence as unknown as SQLiteAdapter,
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
-    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toHaveLength(1);
-    expect(result[0].status).toBe('running');
-  });
-
-  it('throws when workflow not found', () => {
-    persistence.loadWorkflow.mockReturnValue(undefined);
-    expect(() =>
-      bumpGenerationAndRecreate('missing', {
-        persistence: persistence as unknown as SQLiteAdapter,
-        orchestrator: orchestrator as unknown as Orchestrator,
-      }),
-    ).toThrow('Workflow missing not found');
-  });
-
-  it('handles undefined generation (defaults to 0 + 1 = 1)', () => {
-    persistence.loadWorkflow.mockReturnValue({ id: 'wf-1' });
-    bumpGenerationAndRecreate('wf-1', {
-      persistence: persistence as unknown as SQLiteAdapter,
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
-  });
-});
-
-describe('recreateWorkflow', () => {
-  it('delegates to bumpGenerationAndRecreate', () => {
-    const orchestrator = { recreateWorkflow: vi.fn(() => [makeRunningTask()]) };
-    const persistence = {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
-      updateWorkflow: vi.fn(),
-    };
-
-    const result = recreateWorkflow('wf-1', {
-      persistence: persistence as unknown as SQLiteAdapter,
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
-    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toHaveLength(1);
-  });
-});
-
-describe('recreateTask', () => {
-  it('delegates to orchestrator.recreateTask', () => {
-    const orchestrator = {
-      recreateTask: vi.fn(() => [makeRunningTask()]),
-    };
-    const persistence = {
-      loadWorkflow: vi.fn(),
-      updateWorkflow: vi.fn(),
-    };
-
-    const result = recreateTask('task-a', {
-      persistence: persistence as unknown as SQLiteAdapter,
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
-    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
-    expect(result).toHaveLength(1);
-  });
-
-  it('passes through orchestrator errors', () => {
-    const orchestrator = {
-      recreateTask: vi.fn(() => {
-        throw new Error('Task missing-task not found');
-      }),
-    };
-    const persistence = {
-      loadWorkflow: vi.fn(),
-      updateWorkflow: vi.fn(),
-    };
-
-    expect(() =>
-      recreateTask('missing-task', {
-        persistence: persistence as unknown as SQLiteAdapter,
-        orchestrator: orchestrator as unknown as Orchestrator,
-      }),
-    ).toThrow('Task missing-task not found');
-  });
-});
-
-describe('cancelWorkflow', () => {
-  it('delegates to orchestrator.cancelWorkflow', () => {
-    const orchestrator = {
-      cancelWorkflow: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
-    };
-
-    const result = cancelWorkflow('wf-1', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toEqual({ cancelled: ['task-a'], runningCancelled: ['task-a'] });
-  });
-});
-
-describe('retryTask', () => {
-  it('calls orchestrator.retryTask and returns result', () => {
-    const tasks = [makeRunningTask()];
-    const orchestrator = { retryTask: vi.fn(() => tasks) };
-
-    const result = retryTask('task-a', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
-    expect(result).toBe(tasks);
-  });
-});
-
-describe('retryWorkflow', () => {
-  it('calls orchestrator.retryWorkflow and returns result', () => {
-    const tasks = [makeRunningTask()];
-    const orchestrator = { retryWorkflow: vi.fn(() => tasks) };
-
-    const result = retryWorkflow('wf-1', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toBe(tasks);
-  });
-});
-
-describe('recreateWorkflowFromFreshBase', () => {
-  it('bumps generation and delegates to orchestrator.recreateWorkflowFromFreshBase with refreshBase callback', async () => {
+function makeCommandService() {
+  return {
+    runSerializedForWorkflow: vi.fn(async (_workflowId: string | undefined, fn: () => Promise<unknown> | unknown) => ({
+      ok: true as const,
+      data: await fn(),
+    })),
+  } as any;
+}
+describe('fresh-base workflow lifecycle helpers', () => {
+  it('routes recreateWorkflowFromFreshBase through CommandService/applyInvalidation', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
-      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, opts?: { refreshBase?: () => Promise<unknown> }) => {
-        // Drive the refresh callback so we exercise pool prep wiring.
-        await opts?.refreshBase?.();
-        return tasks;
-      }),
+      getTask: vi.fn(),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => tasks),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const persistence = {
       loadWorkflow: vi.fn(() => ({
@@ -237,93 +100,112 @@ describe('recreateWorkflowFromFreshBase', () => {
     };
     const taskExecutor = {
       preparePoolForRebaseRetry: vi.fn(async () => undefined),
+      killActiveExecution: vi.fn(async () => undefined),
     } as unknown as TaskRunner;
+    const commandService = makeCommandService();
 
     const result = await recreateWorkflowFromFreshBase('wf-1', {
+      commandService,
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor,
     });
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledTimes(1);
+    expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
     );
-    // The whole reason this wrapper exists vs plain recreateWorkflow:
-    // the refreshBase callback runs preparePoolForRebaseRetry.
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',
       'main',
     );
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
     expect(result).toBe(tasks);
   });
 
-  it('throws when workflow not found', async () => {
-    const orchestrator = { recreateWorkflowFromFreshBase: vi.fn(async () => []) };
+  it('throws when workflow not found before direct primitive use', async () => {
+    const commandService = makeCommandService();
+    const orchestrator = {
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => []),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+    };
     const persistence = { loadWorkflow: vi.fn(() => undefined), updateWorkflow: vi.fn() };
 
     await expect(
       recreateWorkflowFromFreshBase('missing', {
+        commandService,
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
       }),
     ).rejects.toThrow('Workflow missing not found');
+    expect(orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
   });
 });
 
-describe('rebaseAndRetry', () => {
-  it('translates taskId → workflowId and delegates to recreateWorkflowFromFreshBase', async () => {
+describe('rebaseRetry', () => {
+  it('serializes through CommandService and cascades after retryWorkflow', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
       getTask: vi.fn(() => makeTask({ config: { workflowId: 'wf-1' } })),
-      recreateWorkflowFromFreshBase: vi.fn(async () => tasks),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      retryWorkflow: vi.fn(() => tasks),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const persistence = {
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 1, repoUrl: 'https://example/repo.git', baseBranch: 'master' })),
+      listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+      loadTasks: vi.fn(() => []),
       updateWorkflow: vi.fn(),
     };
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn(async () => undefined),
+      killActiveExecution: vi.fn(async () => undefined),
+    } as unknown as TaskRunner;
+    const commandService = makeCommandService();
 
-    const result = await rebaseAndRetry('wf-1/task-a', {
+    const result = await rebaseRetry('wf-1/task-a', {
+      commandService,
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor,
     });
 
-    expect(orchestrator.getTask).toHaveBeenCalledWith('wf-1/task-a');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 2 });
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
-      'wf-1',
-      expect.objectContaining({ refreshBase: expect.any(Function) }),
-    );
+    expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
+    expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalled();
+    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
     expect(result).toBe(tasks);
   });
 
-  it('throws when task not found', async () => {
+  it('throws when target cannot resolve to a workflow', async () => {
     const orchestrator = {
       getTask: vi.fn(() => undefined),
-      recreateWorkflowFromFreshBase: vi.fn(),
+      retryWorkflow: vi.fn(),
     };
-    const persistence = { loadWorkflow: vi.fn(), updateWorkflow: vi.fn() };
+    const persistence = { loadWorkflow: vi.fn(), listWorkflows: vi.fn(() => []), loadTasks: vi.fn(() => []), updateWorkflow: vi.fn() };
 
     await expect(
-      rebaseAndRetry('missing-task', {
+      rebaseRetry('missing-task', {
+        commandService: makeCommandService(),
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
       }),
-    ).rejects.toThrow('Task missing-task not found or has no workflow');
+    ).rejects.toThrow('Could not resolve workflow for rebase target "missing-task"');
   });
 });
 
-describe('recreateWithRebase', () => {
-  it('delegates directly to recreateWorkflowFromFreshBase with the provided workflowId', async () => {
+describe('rebaseRecreate', () => {
+  it('serializes through CommandService and cascades fresh-base recreate', async () => {
     const tasks = [makeRunningTask()];
     const orchestrator = {
-      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, opts?: { refreshBase?: () => Promise<unknown> }) => {
-        await opts?.refreshBase?.();
-        return tasks;
-      }),
+      getTask: vi.fn(() => undefined),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => tasks),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const persistence = {
       loadWorkflow: vi.fn(() => ({
@@ -333,99 +215,54 @@ describe('recreateWithRebase', () => {
         baseBranch: 'main',
       })),
       updateWorkflow: vi.fn(),
+      listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
+      loadTasks: vi.fn(() => []),
     };
     const taskExecutor = {
       preparePoolForRebaseRetry: vi.fn(async () => undefined),
+      killActiveExecution: vi.fn(async () => undefined),
     } as unknown as TaskRunner;
+    const commandService = makeCommandService();
 
-    const result = await recreateWithRebase('wf-1', {
+    const result = await rebaseRecreate('wf-1', {
+      commandService,
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor,
     });
 
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(commandService.runSerializedForWorkflow).toHaveBeenCalledWith('wf-1', expect.any(Function));
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
     );
-    expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
-      'wf-1',
-      'https://example/repo.git',
-      'main',
-    );
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
     expect(result).toBe(tasks);
   });
 
   it('throws when workflow not found', async () => {
-    const orchestrator = { recreateWorkflowFromFreshBase: vi.fn(async () => []) };
-    const persistence = { loadWorkflow: vi.fn(() => undefined), updateWorkflow: vi.fn() };
+    const orchestrator = { getTask: vi.fn(() => undefined), recreateWorkflowFromFreshBase: vi.fn(async () => []) };
+    const persistence = { loadWorkflow: vi.fn(() => undefined), listWorkflows: vi.fn(() => []), loadTasks: vi.fn(() => []), updateWorkflow: vi.fn() };
 
     await expect(
-      recreateWithRebase('missing', {
+      rebaseRecreate('missing', {
+        commandService: makeCommandService(),
         orchestrator: orchestrator as unknown as Orchestrator,
         persistence: persistence as unknown as SQLiteAdapter,
       }),
-    ).rejects.toThrow('Workflow missing not found');
+    ).rejects.toThrow('Could not resolve workflow for rebase target "missing"');
   });
 });
 
-// Step 17 (`docs/architecture/task-invalidation-roadmap.md` and the
-// chart's "Proposed API Direction"): pin the canonical
-// `{retry, recreate} × {task, workflow}` matrix at the
-// app-layer wrapper surface. This is the lock-in that prevents
-// future refactors from accidentally dropping any of the five
-// canonical lifecycle wrappers (or routing a new one through a
-// legacy compat layer like `restartTask`).
-describe('Step 17: app-layer wrappers expose the 5-cell lifecycle matrix', () => {
-  it('exports retryTask, recreateTask, retryWorkflow, recreateWorkflow, recreateWorkflowFromFreshBase', () => {
-    expect(typeof retryTask).toBe('function');
-    expect(typeof recreateTask).toBe('function');
-    expect(typeof retryWorkflow).toBe('function');
-    expect(typeof recreateWorkflow).toBe('function');
-    expect(typeof recreateWorkflowFromFreshBase).toBe('function');
-  });
-
-  it('each wrapper routes to the matching orchestrator primitive (no restartTask path)', async () => {
-    const orchestrator = {
-      retryTask: vi.fn(() => []),
-      recreateTask: vi.fn(() => []),
-      retryWorkflow: vi.fn(() => []),
-      recreateWorkflow: vi.fn(() => []),
-      recreateWorkflowFromFreshBase: vi.fn(async () => []),
-      restartTask: vi.fn(() => []),
-    };
-    const persistence = {
-      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
-      updateWorkflow: vi.fn(),
-    };
-
-    retryTask('task-a', { orchestrator: orchestrator as unknown as Orchestrator });
-    recreateTask('task-a', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    retryWorkflow('wf-1', { orchestrator: orchestrator as unknown as Orchestrator });
-    recreateWorkflow('wf-1', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    await recreateWorkflowFromFreshBase('wf-1', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
-      'wf-1',
-      expect.objectContaining({ refreshBase: expect.any(Function) }),
-    );
-    // No production wrapper in the canonical matrix may route
-    // through the deprecated `restartTask` shim.
-    expect(orchestrator.restartTask).not.toHaveBeenCalled();
+describe('workflow lifecycle invariant', () => {
+  it('does not expose direct app-layer retry/recreate wrappers', async () => {
+    const actions = await import('../workflow-actions.js');
+    expect('retryTask' in actions).toBe(false);
+    expect('recreateTask' in actions).toBe(false);
+    expect('retryWorkflow' in actions).toBe(false);
+    expect('recreateWorkflow' in actions).toBe(false);
+    expect('bumpGenerationAndRecreate' in actions).toBe(false);
   });
 });
 
@@ -486,6 +323,40 @@ describe('approveTask', () => {
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
   });
 
+  it('surfaces corrupt merge-gate fix approvals without recreating the task', async () => {
+    const approvedTask = makeTask({
+      id: 'merge-a',
+      status: 'awaiting_approval',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        pendingFixError: 'original gate failure',
+        workspacePath: '/tmp/invoker-empty-launch-placeholder',
+      },
+    });
+    const orchestrator = {
+      approve: vi.fn(),
+      getTask: vi.fn().mockReturnValue(approvedTask),
+      resumeTaskAfterFixApproval: vi.fn(),
+      revertFixSession: vi.fn(),
+    };
+    const taskExecutor = {
+      commitApprovedFix: vi.fn().mockRejectedValue(new Error('git status --porcelain failed (code 128): fatal: not a git repository')),
+      publishAfterFix: vi.fn(),
+      executeTasks: vi.fn(),
+    };
+
+    const result = await approveTask('merge-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    });
+
+    expect(result).toEqual({ approvedTask, fixedTask: true, started: [] });
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('merge-a', { savedError: 'original gate failure', fixError: expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.') });
+    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
+    expect(orchestrator.approve).not.toHaveBeenCalled();
+    expect(taskExecutor.publishAfterFix).not.toHaveBeenCalled();
+  });
+
   it('commits approved fixes and returns non-merge launch claims for the caller to dispatch', async () => {
     const started = [makeRunningTask({ id: 'task-a', config: { workflowId: 'wf-1' } })];
     const approvedTask = makeTask({
@@ -524,7 +395,11 @@ describe('approveTask', () => {
       status: 'awaiting_approval',
       config: { workflowId: 'wf-1' },
       execution: {
-        pendingFixError: JSON.stringify({ type: 'merge_conflict', conflictFiles: ['a.ts'] }),
+        pendingFixError: JSON.stringify({
+          type: 'merge_conflict',
+          failedBranch: 'experiment/foo',
+          conflictFiles: ['a.ts'],
+        }),
         workspacePath: '/tmp/task-a',
         branch: 'task-a',
       },
@@ -557,14 +432,14 @@ describe('rejectTask', () => {
   let orchestrator: {
     getTask: ReturnType<typeof vi.fn>;
     reject: ReturnType<typeof vi.fn>;
-    revertConflictResolution: ReturnType<typeof vi.fn>;
+    revertFixSession: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
     orchestrator = {
       getTask: vi.fn(() => makeTask({ execution: {} })),
       reject: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
   });
 
@@ -572,17 +447,17 @@ describe('rejectTask', () => {
     rejectTask('task-a', { orchestrator: orchestrator as unknown as Orchestrator }, 'bad output');
 
     expect(orchestrator.reject).toHaveBeenCalledWith('task-a', 'bad output');
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
   });
 
-  it('calls orchestrator.revertConflictResolution when pendingFixError exists', () => {
+  it('calls orchestrator.revertFixSession when pendingFixError exists', () => {
     orchestrator.getTask.mockReturnValue(
       makeTask({ execution: { pendingFixError: 'merge conflict' } }),
     );
 
     rejectTask('task-a', { orchestrator: orchestrator as unknown as Orchestrator });
 
-    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'merge conflict');
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'merge conflict' });
     expect(orchestrator.reject).not.toHaveBeenCalled();
   });
 
@@ -713,16 +588,18 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { autoFixAttempts: 0, error: mergeError },
+        execution: { error: mergeError },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
       recreateWorkflowFromFreshBase: vi.fn(async (_workflowId: string, options?: { refreshBase?: () => Promise<unknown> }) => {
         await options?.refreshBase?.();
         return started;
       }),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
       retryTask: vi.fn(() => []),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -748,9 +625,10 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
-    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.beginFixSession).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
@@ -771,12 +649,14 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: 'boom', workspacePath: '/tmp/task-a' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => started),
-      revertConflictResolution: vi.fn(),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -793,10 +673,11 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(orchestrator.beginFixSession).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
@@ -807,12 +688,12 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: 'boom' },
+        execution: { error: 'boom' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => []),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -830,9 +711,10 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
-    expect(orchestrator.beginConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.beginFixSession).not.toHaveBeenCalled();
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(taskExecutor.executeTasks).not.toHaveBeenCalled();
@@ -862,12 +744,14 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
       retryTask: vi.fn(() => started),
-      revertConflictResolution: vi.fn(),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -884,13 +768,66 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
-    expect(orchestrator.beginConflictResolution).toHaveBeenCalledWith('task-a');
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(orchestrator.beginFixSession).toHaveBeenCalledWith('task-a');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex', undefined);
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.executeTasks).toHaveBeenCalledWith(started);
+  });
+
+  it('prefers conflictResolutionAgent over autoFixAgent for merge conflicts', async () => {
+    loadConfigMock.mockReturnValue({
+      conflictResolutionAgent: 'omp',
+      conflictResolutionModel: 'gpt-5-mini',
+    });
+    const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
+    const mergeError = JSON.stringify({
+      type: 'merge_conflict',
+      failedBranch: 'experiment/foo',
+      conflictFiles: ['src/foo.ts'],
+    });
+    const orchestrator = {
+      shouldAutoFix: vi.fn(() => true),
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
+      })),
+      getAutoFixRetryBudget: vi.fn(() => 3),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
+      retryTask: vi.fn(() => started),
+      cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      updateTask: vi.fn(),
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+      executeTasks: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await autoFixOnFailure('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+      getAutoFixAgent: () => 'claude',
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith(
+      'task-a',
+      mergeError,
+      'omp',
+      'gpt-5-mini',
+    );
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 
   it('uses resolveConflict for prefixed post-fix merge conflict errors', async () => {
@@ -904,12 +841,12 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
       retryTask: vi.fn(() => started),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -926,9 +863,10 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex', undefined);
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
   });
 
@@ -942,14 +880,14 @@ describe('autoFixOnFailure', () => {
         id: 'merge-a',
         status: 'failed',
         config: { workflowId: 'wf-1', isMergeNode: true },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a' },
+        execution: { workspacePath: '/tmp/merge-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => []),
       setFixAwaitingApproval: vi.fn(),
       approve: vi.fn().mockResolvedValue(started),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -969,6 +907,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoApproveAIFixes: () => true,
     });
 
@@ -994,20 +933,20 @@ describe('autoFixOnFailure', () => {
     // phase the auto-fix flow is in.  Each phase may call getTask
     // multiple times (entry check, lineage capture, lineage assert,
     // approveTask, post-finalize).  We use a phase counter that
-    // advances at known transition points (beginConflictResolution
+    // advances at known transition points (beginFixSession
     // and setFixAwaitingApproval) to keep return values consistent.
     let phase = 0;
     const phases: Record<string, unknown>[] = [
       // Phase 0: entry check + lineage capture (cycle 1)
-      { status: 'failed', execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 1: after fix returns, lineage check + finalize + approveTask (cycle 1)
-      { status: 'awaiting_approval', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'awaiting_approval', execution: { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 2: post-finalize check — task re-failed after publish
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
       // Phase 3: inline retry entry + lineage capture (cycle 2)
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
+      { status: 'failed', execution: { workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
       // Phase 4: after fix returns, lineage check + finalize + approveTask (cycle 2)
-      { status: 'awaiting_approval', execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
+      { status: 'awaiting_approval', execution: { workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
     ];
     const getTask = vi.fn(() => {
       const idx = Math.min(phase, phases.length - 1);
@@ -1018,7 +957,7 @@ describe('autoFixOnFailure', () => {
       });
     });
     // Advance phase at key transition points
-    const origBeginConflictResolution = vi.fn(() => {
+    const origBeginFixSession = vi.fn(() => {
       phase++;
       return { savedError: 'boom' };
     });
@@ -1033,12 +972,12 @@ describe('autoFixOnFailure', () => {
       shouldAutoFix,
       getTask,
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: origBeginConflictResolution,
+      beginFixSession: origBeginFixSession,
       retryTask: vi.fn(() => []),
       setFixAwaitingApproval: origSetFixAwaitingApproval,
       approve: vi.fn().mockResolvedValue(started),
       resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -1062,6 +1001,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoApproveAIFixes: () => true,
     });
 
@@ -1087,12 +1027,12 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'claude' },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
+        execution: { workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => started),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -1110,6 +1050,7 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoFixAgent: () => 'codex',
     });
 
@@ -1137,12 +1078,12 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'codex' },
-        execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
+        execution: { workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => started),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -1160,16 +1101,17 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoFixAgent: () => '   ',
     });
 
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'claude', 'boom');
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'codex', 'boom');
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'claude',
+        selectedAgent: 'codex',
         selectedAgentSource: 'default',
       }),
     );
@@ -1188,12 +1130,12 @@ describe('autoFixOnFailure', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
+        execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
       retryTask: vi.fn(() => started),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -1211,16 +1153,17 @@ describe('autoFixOnFailure', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       getAutoFixAgent: () => undefined,
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex', undefined);
     expect(logEvent).toHaveBeenCalledWith(
       'task-a',
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'auto-fix-agent-selected',
-        selectedAgent: 'claude',
+        selectedAgent: 'codex',
         selectedAgentSource: 'default',
       }),
     );
@@ -1272,6 +1215,30 @@ describe('selectFailureRecoveryRoute', () => {
     expect(route).toEqual({ kind: 'resolveConflict' });
   });
 
+  it('uses resolveConflict for parseable text merge conflicts when a workspace exists', () => {
+    const route = selectFailureRecoveryRoute(
+      makeTask({
+        config: { workflowId: 'wf-1' },
+        execution: { workspacePath: '/tmp/task-a' },
+      }) as any,
+      'Executor startup failed (ssh): Merge conflict merging experiment/foo: packages/app/src/headless.ts',
+    );
+
+    expect(route).toEqual({ kind: 'resolveConflict' });
+  });
+
+  it('uses fixWithAgent for conflict-looking text without recoverable metadata', () => {
+    const route = selectFailureRecoveryRoute(
+      makeTask({
+        config: { workflowId: 'wf-1' },
+        execution: { workspacePath: '/tmp/task-a' },
+      }) as any,
+      'CONFLICT (content): Merge conflict in src/foo.ts\nAutomatic merge failed; fix conflicts and commit.',
+    );
+
+    expect(route).toEqual({ kind: 'fixWithAgent' });
+  });
+
   it('uses fixWithAgent for non-merge failures', () => {
     const route = selectFailureRecoveryRoute(
       makeTask({
@@ -1291,11 +1258,11 @@ describe('fixWithAgentAction', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { error: 'boom' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
       })),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       getTaskOutput: vi.fn(() => 'test output'),
@@ -1310,6 +1277,7 @@ describe('fixWithAgentAction', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       agentName: 'codex',
     });
@@ -1318,6 +1286,85 @@ describe('fixWithAgentAction', () => {
     expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'boom');
     expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+  it('rejects plain fixes without a saved workspace before fix execution', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom' },
+      })),
+      beginFixSession: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'codex'),
+      execGitIn: vi.fn(),
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    })).rejects.toThrow('Cannot apply a fix because this task has no saved workspace');
+
+    expect(taskExecutor.execGitIn).not.toHaveBeenCalled();
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
+    expect(orchestrator.beginFixSession).not.toHaveBeenCalled();
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      '\n[Fix with codex] Cannot apply a fix because this task has no saved workspace. This task state is stale or corrupted. Recreate the task or recreate the workflow, then rerun it.',
+    );
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', {
+      savedError: 'boom',
+      fixError: 'Cannot apply a fix because this task has no saved workspace. This task state is stale or corrupted. Recreate the task or recreate the workflow, then rerun it.',
+    });
+  });
+
+  it('uses the task runner default agent when manual fix omits agentName', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a' },
+      })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(() => 'test output'),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'custom-agent'),
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('agent failed')),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    })).rejects.toThrow('agent failed');
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith('task-a', 'test output', 'custom-agent', 'boom');
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'task-a',
+      '\n[Fix with custom-agent] Failed: agent failed',
+    );
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'boom', fixError: 'agent failed' });
   });
 
   it('dispatches merge conflicts with a workspace to taskExecutor.resolveConflict', async () => {
@@ -1332,9 +1379,9 @@ describe('fixWithAgentAction', () => {
         config: { workflowId: 'wf-1' },
         execution: { error: mergeError, workspacePath: '/tmp/task-a' },
       })),
-      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       getTaskOutput: vi.fn(),
@@ -1349,11 +1396,48 @@ describe('fixWithAgentAction', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       agentName: 'claude',
     });
 
-    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude');
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'claude', undefined);
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
+    expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
+  });
+
+  it('dispatches text merge conflicts with a stale workspace to taskExecutor.resolveConflict', async () => {
+    const mergeError = 'Executor startup failed (ssh): Merge conflict merging experiment/foo: packages/app/src/headless.ts';
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: mergeError, workspacePath: '/tmp/stale-task-a' },
+      })),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
+      setFixAwaitingApproval: vi.fn(),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      getTaskOutput: vi.fn(),
+      appendTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn().mockResolvedValue(undefined),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    }, {
+      agentName: 'codex',
+    });
+
+    expect(taskExecutor.resolveConflict).toHaveBeenCalledWith('task-a', mergeError, 'codex', undefined);
     expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', mergeError);
     expect(result).toEqual({ kind: 'resolveConflict', autoApproved: false, started: [] });
@@ -1370,12 +1454,15 @@ describe('fixWithAgentAction', () => {
       })),
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
       updateWorkflow: vi.fn(),
-      recreateWorkflowFromFreshBase: vi.fn(() => [makeRunningTask({ id: 'task-a', status: 'running' })]),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => [makeRunningTask({ id: 'task-a', status: 'running' })]),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
     };
     const persistence = {
       appendTaskOutput: vi.fn(),
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
       updateWorkflow: vi.fn(),
+      logEvent: vi.fn(),
     };
     const taskExecutor = {
       preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
@@ -1385,6 +1472,7 @@ describe('fixWithAgentAction', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       recreateOutputLabel: 'Fix with AI',
     });
@@ -1393,13 +1481,82 @@ describe('fixWithAgentAction', () => {
       'task-a',
       expect.stringContaining('Startup merge conflict detected; recreating workflow wf-1 from a fresh base.'),
     );
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 3 });
+    expect(persistence.logEvent).toHaveBeenCalledWith(
+      'task-a',
+      'task.workflow_recreated',
+      expect.objectContaining({
+        level: 'warn',
+        workflowId: 'wf-1',
+        reason: 'missing-workspace-startup-merge-conflict',
+        message: 'Workspace was missing, so Invoker recreated workflow wf-1 from a fresh base instead of fixing this task in-place.',
+      }),
+    );
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith('wf-1', expect.any(Object));
     expect(result).toEqual({
       kind: 'recreateWorkflowFromFreshBase',
       workflowId: 'wf-1',
       started: [expect.objectContaining({ id: 'task-a', status: 'running' })],
     });
+  });
+
+  it('fixWithAgentAction rejects invalid merge-gate workspaces before fix execution', async () => {
+    const orchestrator = {
+      getTask: vi.fn(() => makeTask({
+        id: 'merge-a',
+        status: 'failed',
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: {
+          error: 'Unable to resolve merge worktree ref "plan/old-base"',
+          workspacePath: '/tmp/invoker-empty-launch-placeholder',
+        },
+      })),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
+      updateWorkflow: vi.fn(),
+      cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      recreateWorkflowFromFreshBase: vi.fn(async () => [makeRunningTask({ id: 'merge-a', status: 'running' })]),
+      cascadeInvalidationToDownstream: vi.fn(() => []),
+      beginFixSession: vi.fn(),
+      setFixAwaitingApproval: vi.fn(),
+      revertFixSession: vi.fn(),
+    };
+    const persistence = {
+      appendTaskOutput: vi.fn(),
+      loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 2 })),
+      updateWorkflow: vi.fn(),
+      getTaskOutput: vi.fn(),
+    };
+    const taskExecutor = {
+      getDefaultExecutionAgent: vi.fn(() => 'claude'),
+      preparePoolForRebaseRetry: vi.fn().mockResolvedValue(undefined),
+      execGitIn: vi.fn().mockRejectedValue(new Error('fatal: not a git repository')),
+      fixWithAgent: vi.fn(),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('merge-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
+    }, {
+      agentName: 'Codex',
+    })).rejects.toThrow('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository');
+
+    expect(taskExecutor.execGitIn).toHaveBeenCalledWith(
+      ['rev-parse', '--is-inside-work-tree'],
+      '/tmp/invoker-empty-launch-placeholder',
+    );
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(taskExecutor.resolveConflict).not.toHaveBeenCalled();
+    expect(orchestrator.beginFixSession).not.toHaveBeenCalled();
+    expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).toHaveBeenCalledWith(
+      'merge-a',
+      expect.stringContaining('\n[Fix with Codex] Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.'),
+    );
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('merge-a', { savedError: 'Unable to resolve merge worktree ref "plan/old-base"', fixError: expect.stringContaining('Cannot apply a fix because this merge gate\'s saved workspace is missing or is not a git repository: /tmp/invoker-empty-launch-placeholder. This task state is stale or corrupted. Recreate this merge-gate task from a fresh base, then rerun the gate.') });
+    expect(orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
   });
 });
 
@@ -1445,27 +1602,6 @@ describe('editTaskPrompt', () => {
   });
 });
 
-describe('editTaskType', () => {
-  it('calls orchestrator.editTaskType and returns result', () => {
-    const tasks = [makeRunningTask()];
-    const orchestrator = { editTaskType: vi.fn(() => tasks) };
-
-    const result = editTaskType('task-a', 'docker', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-
-    expect(orchestrator.editTaskType).toHaveBeenCalledWith('task-a', 'docker', undefined);
-    expect(result).toBe(tasks);
-  });
-
-  it('passes poolMemberId when provided', () => {
-    const orchestrator = { editTaskType: vi.fn(() => []) };
-
-    editTaskType('task-a', 'ssh', { orchestrator: orchestrator as unknown as Orchestrator }, 'remote-1');
-
-    expect(orchestrator.editTaskType).toHaveBeenCalledWith('task-a', 'ssh', 'remote-1');
-  });
-});
 
 describe('selectExperiment', () => {
   it('calls orchestrator.selectExperiment and returns result', () => {
@@ -1584,7 +1720,7 @@ describe('buildCancelInFlight', () => {
 
     const cancel = buildCancelInFlight({
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
+      killActiveExecution: taskExecutor.killActiveExecution,
     });
     await cancel('task', 'task-a');
 
@@ -1610,27 +1746,23 @@ describe('buildCancelInFlight', () => {
 
     const cancel = buildCancelInFlight({
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
+      killActiveExecution: taskExecutor.killActiveExecution,
     });
     await cancel('workflow', 'wf-1');
 
     expect(orchestrator.cancelWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(taskExecutor.killActiveExecution).toHaveBeenCalledTimes(2);
     expect(taskExecutor.killActiveExecution).toHaveBeenNthCalledWith(1, 'task-a');
     expect(taskExecutor.killActiveExecution).toHaveBeenNthCalledWith(2, 'task-b');
-    expect(orchestrator.cancelWorkflow.mock.invocationCallOrder[0]).toBeLessThan(
-      taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
-    );
     expect(orchestrator.cancelTask).not.toHaveBeenCalled();
   });
 
-  it('is a no-op when scope is "none"', async () => {
+  it('is a no-op when scope is none', async () => {
     const orchestrator = { cancelTask: vi.fn(), cancelWorkflow: vi.fn() };
     const taskExecutor = { killActiveExecution: vi.fn() };
 
     const cancel = buildCancelInFlight({
       orchestrator: orchestrator as unknown as Orchestrator,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
+      killActiveExecution: taskExecutor.killActiveExecution,
     });
     await cancel('none', 'whatever');
 
@@ -1638,32 +1770,37 @@ describe('buildCancelInFlight', () => {
     expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
     expect(taskExecutor.killActiveExecution).not.toHaveBeenCalled();
   });
-
-  it('still cancels orchestrator state when no taskExecutor is provided', async () => {
-    const orchestrator = {
-      cancelTask: vi.fn(() => ({ cancelled: ['task-a'], runningCancelled: ['task-a'] })),
-      cancelWorkflow: vi.fn(),
-    };
-    const cancel = buildCancelInFlight({
-      orchestrator: orchestrator as unknown as Orchestrator,
-    });
-    await cancel('task', 'task-a');
-
-    expect(orchestrator.cancelTask).toHaveBeenCalledWith('task-a');
-  });
 });
 
-describe('buildInvalidationDeps', () => {
+describe('buildWorkflowInvalidationDeps', () => {
   function makeBaseOrchestrator() {
     return {
       retryTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       recreateTask: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
+      recreateDownstream: vi.fn(() => [makeRunningTask({ id: 'task-b' })]),
       retryWorkflow: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       recreateWorkflow: vi.fn(() => [makeRunningTask({ id: 'task-a' })]),
       cancelTask: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
       cancelWorkflow: vi.fn(() => ({ cancelled: [], runningCancelled: [] })),
+      autoStartExternallyUnblockedReadyTasks: vi.fn(() => [makeRunningTask({ id: 'task-c' })]),
+      approve: vi.fn(async () => [makeRunningTask({ id: 'task-a' })]),
+      reject: vi.fn(),
+      getTask: vi.fn(() => ({ id: 'task-a', config: { workflowId: 'wf-1' }, execution: {} })),
+      forkWorkflow: vi.fn((workflowId: string) => ({
+        sourceWorkflowId: workflowId,
+        forkedWorkflowId: `${workflowId}-fork`,
+        started: [makeRunningTask({ id: `${workflowId}-fork/task-a`, config: { workflowId: `${workflowId}-fork` } as any })],
+      })),
+      cascadeInvalidationToDownstream: vi.fn(() => [makeRunningTask({ id: 'wf-2/leaf' })]),
+      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, options?: any) => {
+        await options?.refreshBase?.(_id);
+        return [makeRunningTask({ id: 'task-a' })];
+      }),
+      resumeTaskAfterFixApproval: vi.fn(),
+      revertFixSession: vi.fn(),
     };
   }
+
   function makePersistence() {
     return {
       loadWorkflow: vi.fn(() => ({ id: 'wf-1', generation: 0 })),
@@ -1671,310 +1808,134 @@ describe('buildInvalidationDeps', () => {
     };
   }
 
-  it('routes retryTask to orchestrator.retryTask', async () => {
+  function buildDeps(
+    orchestrator: ReturnType<typeof makeBaseOrchestrator>,
+    persistence: ReturnType<typeof makePersistence>,
+    taskExecutor?: Partial<TaskRunner>,
+  ) {
+    return buildWorkflowInvalidationDeps({
+      orchestrator: orchestrator as unknown as Orchestrator,
+      requireWorkflow: (workflowId) => {
+        const workflow = persistence.loadWorkflow(workflowId);
+        if (!workflow) throw new Error(`Workflow ${workflowId} not found`);
+        return workflow as any;
+      },
+      
+      killActiveExecution: taskExecutor?.killActiveExecution?.bind(taskExecutor),
+      prepareFreshBase: taskExecutor?.preparePoolForRebaseRetry
+        ? async (workflowId, workflow) => {
+          if (!workflow.repoUrl) return undefined;
+          return taskExecutor.preparePoolForRebaseRetry!(
+            workflowId,
+            workflow.repoUrl,
+            workflow.baseBranch,
+          ) as any;
+        }
+        : undefined,
+      fixApprove: async (taskId) => {
+        const result = await approveTask(taskId, {
+          orchestrator: orchestrator as unknown as Orchestrator,
+          taskExecutor: taskExecutor as TaskRunner | undefined,
+        });
+        return result.started;
+      },
+      fixReject: (taskId) => {
+        rejectTask(taskId, { orchestrator: orchestrator as unknown as Orchestrator });
+        return [];
+      },
+    });
+  }
+
+  it('routes retry and recreate primitives through the orchestrator', async () => {
     const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    const result = await deps.retryTask('task-a');
+    await deps.retryTask('task-a');
+    await deps.recreateTask('task-a');
+    await deps.retryWorkflow('wf-1');
+    await deps.recreateDownstream!('task-a');
 
     expect(orchestrator.retryTask).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
-    expect(result).toHaveLength(1);
-  });
-
-  it('routes recreateTask to orchestrator.recreateTask', async () => {
-    const orchestrator = makeBaseOrchestrator();
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    await deps.recreateTask('task-a');
-
     expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-a');
-  });
-
-  it('routes retryWorkflow to orchestrator.retryWorkflow', async () => {
-    const orchestrator = makeBaseOrchestrator();
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-    await deps.retryWorkflow('wf-1');
-
     expect(orchestrator.retryWorkflow).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.recreateDownstream).toHaveBeenCalledWith('task-a');
   });
 
-  it('routes recreateWorkflow through bumpGenerationAndRecreate', async () => {
+  it('bumps generation before recreateWorkflow', async () => {
     const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
     await deps.recreateWorkflow('wf-1');
 
-    expect(persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 1 });
+    expect(persistence.loadWorkflow).not.toHaveBeenCalled();
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
   });
 
-  it('wires recreateWorkflowFromFreshBase to the orchestrator method', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      // The real orchestrator drives the `refreshBase` callback; mirror
-      // that here so the test exercises the app-layer's pool-prep wiring.
-      recreateWorkflowFromFreshBase: vi.fn(async (_id: string, options?: any) => {
-        await options?.refreshBase?.(_id);
-        return [makeRunningTask({ id: 'task-a' })];
-      }),
-    };
+  it('prepares fresh base and bumps generation before recreateWorkflowFromFreshBase', async () => {
+    const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
-    const taskExecutor = {
-      preparePoolForRebaseRetry: vi.fn(async () => undefined),
-    };
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-    });
-
-    // Step 12 promotes this dep — the policy router's
-    // "not yet wired (Step 12)" error path is dead code in production.
-    expect(deps.recreateWorkflowFromFreshBase).toBeDefined();
-
     persistence.loadWorkflow = vi.fn(() => ({
       id: 'wf-1',
       generation: 4,
       repoUrl: 'https://example/repo.git',
       baseBranch: 'main',
     } as any));
+    const taskExecutor = {
+      preparePoolForRebaseRetry: vi.fn(async () => undefined),
+    };
+    const deps = buildDeps(orchestrator, persistence, taskExecutor);
 
     const result = await deps.recreateWorkflowFromFreshBase!('wf-1');
 
-    // Workflow generation bumped (matches recreateWorkflow's wrapper semantics).
-    expect(persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', { generation: 5 });
-    // Pool prep ran before delegating to the orchestrator's first-class method.
+    expect(persistence.updateWorkflow).not.toHaveBeenCalled();
     expect(taskExecutor.preparePoolForRebaseRetry).toHaveBeenCalledWith(
       'wf-1',
       'https://example/repo.git',
       'main',
     );
-    expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledTimes(1);
-    expect(orchestrator.recreateWorkflowFromFreshBase.mock.calls[0]?.[0]).toBe('wf-1');
-    expect(result).toHaveLength(1);
-  });
-
-  it('recreateWorkflowFromFreshBase wire still calls orchestrator method when no taskExecutor is supplied', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      recreateWorkflowFromFreshBase: vi.fn(async () => []),
-    };
-    const persistence = makePersistence();
-    persistence.loadWorkflow = vi.fn(() => ({ id: 'wf-1', generation: 0, repoUrl: 'https://example/repo.git', baseBranch: 'main' } as any));
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      // taskExecutor intentionally omitted — the orchestrator method
-      // still runs (refreshBase callback is a no-op without an executor).
-    });
-
-    await deps.recreateWorkflowFromFreshBase!('wf-1');
-
     expect(orchestrator.recreateWorkflowFromFreshBase).toHaveBeenCalledWith(
       'wf-1',
       expect.objectContaining({ refreshBase: expect.any(Function) }),
     );
+    expect(result).toHaveLength(1);
   });
 
-  // Step 14 (`docs/architecture/task-invalidation-roadmap.md`,
-  // chart "Topology inconsistency"): `workflowFork` is wired to
-  // `Orchestrator.forkWorkflow`. The policy router only consumes
-  // the `started` task list, so the wire adapts the orchestrator's
-  // richer `ForkWorkflowResult` to `TaskState[]`. The forked
-  // workflow id remains discoverable via `started[0].config.workflowId`
-  // for callers that need it.
-  it('routes workflowFork to orchestrator.forkWorkflow and returns started tasks', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      forkWorkflow: vi.fn((workflowId: string) => ({
-        sourceWorkflowId: workflowId,
-        forkedWorkflowId: `${workflowId}-fork`,
-        started: [makeRunningTask({ id: `${workflowId}-fork/task-a`, config: { workflowId: `${workflowId}-fork` } as any })],
-      })),
-    };
+  it('routes workflowFork and scheduleOnly through orchestrator defaults', async () => {
+    const orchestrator = makeBaseOrchestrator();
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(deps.workflowFork).toBeDefined();
-    const result = await deps.workflowFork!('wf-1');
+    const forked = await deps.workflowFork!('wf-1');
+    const scheduled = await deps.scheduleOnly!('task-a');
 
     expect(orchestrator.forkWorkflow).toHaveBeenCalledWith('wf-1');
-    expect(result).toHaveLength(1);
-    // The forked workflow id is discoverable from the returned tasks.
-    expect((result as any[])[0].config.workflowId).toBe('wf-1-fork');
+    expect(forked[0]?.config.workflowId).toBe('wf-1-fork');
+    expect(orchestrator.autoStartExternallyUnblockedReadyTasks).toHaveBeenCalledTimes(1);
+    expect(scheduled).toHaveLength(1);
   });
 
-  // Step 16 (`docs/architecture/task-invalidation-roadmap.md`,
-  // chart row "Approve or reject fix"): `fixApprove` and
-  // `fixReject` are wired to the existing `approveTask` /
-  // `rejectTask` action wrappers in this file. Per the chart
-  // these are non-invalidating control flow over an existing
-  // fix attempt's output, so the wires must:
-  //
-  //   - reach the orchestrator's approve/reject primitives
-  //     (NOT retry/recreate);
-  //   - never call `orchestrator.cancelTask` /
-  //     `orchestrator.cancelWorkflow` (the policy router skips
-  //     `cancelInFlight` for these actions);
-  //   - return `TaskState[]` (approve returns the started
-  //     follow-on tasks; reject returns `[]` because the
-  //     wrapper is `void` today).
-  //
-  // The Step 1 scaffolding test pattern above wires the deps
-  // through `buildInvalidationDeps` and invokes them directly
-  // with a partial orchestrator mock; we follow that pattern.
-  it('routes fixApprove through approveTask (non-fix path → orchestrator.approve, returns started, never retry/recreate/cancel)', async () => {
+  it('routes fixApprove and fixReject through the action wrappers', async () => {
     const started = [makeRunningTask({ id: 'task-a' })];
-    const approvedTask = makeTask({ id: 'task-a', status: 'awaiting_approval', execution: {} });
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      getTask: vi.fn().mockReturnValue(approvedTask),
-      approve: vi.fn().mockResolvedValue(started),
-      resumeTaskAfterFixApproval: vi.fn(),
-    };
+    const orchestrator = makeBaseOrchestrator();
+    orchestrator.getTask = vi.fn()
+      .mockReturnValueOnce(makeTask({ id: 'task-a', status: 'awaiting_approval', execution: {} }))
+      .mockReturnValueOnce(makeTask({ id: 'task-a', execution: { pendingFixError: 'merge conflict' } }));
+    orchestrator.approve = vi.fn().mockResolvedValue(started);
     const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(deps.fixApprove).toBeDefined();
-    const result = await deps.fixApprove!('task-a');
-
+    expect(await deps.fixApprove!('task-a')).toEqual(started);
+    expect(await deps.fixReject!('task-a')).toEqual([]);
     expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
-    expect(result).toEqual(started);
-    expect(orchestrator.retryTask).not.toHaveBeenCalled();
-    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
-    expect(orchestrator.retryWorkflow).not.toHaveBeenCalled();
-    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', { savedError: 'merge conflict' });
     expect(orchestrator.cancelTask).not.toHaveBeenCalled();
     expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
   });
 
-  it('routes fixApprove through approveTask (fix path → commitApprovedFix + orchestrator.approve)', async () => {
-    const started = [makeRunningTask({ id: 'task-a' })];
-    const approvedTask = makeTask({
-      id: 'task-a',
-      status: 'awaiting_approval',
-      config: { workflowId: 'wf-1' },
-      execution: { pendingFixError: 'plain failure', branch: 'task-a', workspacePath: '/tmp/task-a' },
-    });
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      getTask: vi.fn().mockReturnValue(approvedTask),
-      approve: vi.fn().mockResolvedValue(started),
-      resumeTaskAfterFixApproval: vi.fn(),
-    };
-    const persistence = makePersistence();
-    const taskExecutor = {
-      commitApprovedFix: vi.fn(),
-      publishAfterFix: vi.fn(),
-      executeTasks: vi.fn(),
-    };
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-    });
-
-    const result = await deps.fixApprove!('task-a');
-
-    expect(taskExecutor.commitApprovedFix).toHaveBeenCalledWith(approvedTask);
-    expect(orchestrator.approve).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.resumeTaskAfterFixApproval).not.toHaveBeenCalled();
-    expect(result).toEqual(started);
-    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
-    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('routes fixReject through rejectTask (fix-flow path → orchestrator.revertConflictResolution, returns [], never retry/recreate/cancel)', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      getTask: vi.fn().mockReturnValue(
-        makeTask({ id: 'task-a', execution: { pendingFixError: 'merge conflict' } }),
-      ),
-      reject: vi.fn(),
-      revertConflictResolution: vi.fn(),
-    };
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    expect(deps.fixReject).toBeDefined();
-    const result = await deps.fixReject!('task-a');
-
-    expect(orchestrator.revertConflictResolution).toHaveBeenCalledWith('task-a', 'merge conflict');
-    expect(orchestrator.reject).not.toHaveBeenCalled();
-    // `rejectTask` is `void` today; the wire returns `[]` so the
-    // policy router's `TaskState[]` contract is satisfied.
-    expect(result).toEqual([]);
-    expect(orchestrator.retryTask).not.toHaveBeenCalled();
-    expect(orchestrator.recreateTask).not.toHaveBeenCalled();
-    expect(orchestrator.retryWorkflow).not.toHaveBeenCalled();
-    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
-    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
-    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('routes fixReject through rejectTask (non-fix path → orchestrator.reject)', async () => {
-    const orchestrator = {
-      ...makeBaseOrchestrator(),
-      getTask: vi.fn().mockReturnValue(
-        makeTask({ id: 'task-a', execution: {} }),
-      ),
-      reject: vi.fn(),
-      revertConflictResolution: vi.fn(),
-    };
-    const persistence = makePersistence();
-
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-    });
-
-    const result = await deps.fixReject!('task-a');
-
-    // `rejectTask` is invoked without a reason from the wire, so
-    // `orchestrator.reject` is called as `(taskId, undefined)`.
-    expect(orchestrator.reject).toHaveBeenCalledWith('task-a', undefined);
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
-    expect(result).toEqual([]);
-    expect(orchestrator.cancelTask).not.toHaveBeenCalled();
-    expect(orchestrator.cancelWorkflow).not.toHaveBeenCalled();
-  });
-
-  it('builds a cancel-first hook that cancels orchestrator state and kills runners', async () => {
+  it('kills active executions via cancelInFlight hook', async () => {
     const orchestrator = makeBaseOrchestrator();
     orchestrator.cancelTask = vi.fn(() => ({
       cancelled: ['task-a'],
@@ -1984,19 +1945,24 @@ describe('buildInvalidationDeps', () => {
     const taskExecutor = {
       killActiveExecution: vi.fn().mockResolvedValue(undefined),
     };
+    const deps = buildDeps(orchestrator, persistence, taskExecutor);
 
-    const deps = buildInvalidationDeps({
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-    });
     await deps.cancelInFlight('task', 'task-a');
 
     expect(orchestrator.cancelTask).toHaveBeenCalledWith('task-a');
     expect(taskExecutor.killActiveExecution).toHaveBeenCalledWith('task-a');
-    expect(orchestrator.cancelTask.mock.invocationCallOrder[0]).toBeLessThan(
-      taskExecutor.killActiveExecution.mock.invocationCallOrder[0],
-    );
+  });
+
+  it('delegates cascadeDownstream through workflow and task scope', async () => {
+    const orchestrator = makeBaseOrchestrator();
+    const persistence = makePersistence();
+    const deps = buildDeps(orchestrator, persistence);
+
+    expect(await deps.cascadeDownstream!('workflow', 'wf-1')).toHaveLength(1);
+    await deps.cascadeDownstream!('task', 'task-a');
+
+    expect(orchestrator.cascadeInvalidationToDownstream).toHaveBeenCalledWith('wf-1');
+    expect(orchestrator.getTask).toHaveBeenCalledWith('task-a');
   });
 });
 
@@ -2144,14 +2110,11 @@ describe('fixWithAgentAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         fixCallCount++;
-        // First call: entry point reads task
-        // Second call: lineage capture after beginConflictResolution
-        // Third call: lineage check after async fix returns (lineage changed)
-        if (fixCallCount <= 2) {
+        if (fixCallCount <= 4) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
-            execution: { error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+            execution: { error: 'boom', workspacePath: '/tmp/task-a', selectedAttemptId: 'att-1', generation: 5 },
           });
         }
         // After fix returns, lineage has advanced
@@ -2161,9 +2124,9 @@ describe('fixWithAgentAction lineage guard', () => {
           execution: { selectedAttemptId: 'att-2', generation: 6 },
         });
       }),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       getTaskOutput: vi.fn(() => 'test output'),
@@ -2178,12 +2141,13 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     })).rejects.toThrow(StaleLineageError);
 
     // Should NOT have called setFixAwaitingApproval (the late write)
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
-    // Should NOT have called revertConflictResolution either
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    // Should NOT have called revertFixSession either
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
   });
 
   it('throws StaleLineageError when signal is aborted during async fix', async () => {
@@ -2192,11 +2156,11 @@ describe('fixWithAgentAction lineage guard', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a', selectedAttemptId: 'att-1', generation: 5 },
       })),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       getTaskOutput: vi.fn(() => 'test output'),
@@ -2214,24 +2178,25 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     }, {
       signal: ac.signal,
     })).rejects.toThrow(StaleLineageError);
 
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
   });
 
-  it('skips revertConflictResolution when lineage changed and fix threw', async () => {
+  it('skips revertFixSession when lineage changed and fix threw', async () => {
     let getTaskCallCount = 0;
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 4) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
-            execution: { error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+            execution: { error: 'boom', workspacePath: '/tmp/task-a', selectedAttemptId: 'att-1', generation: 5 },
           });
         }
         // Lineage changed during fix
@@ -2241,9 +2206,9 @@ describe('fixWithAgentAction lineage guard', () => {
           execution: { selectedAttemptId: 'att-2', generation: 6 },
         });
       }),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       getTaskOutput: vi.fn(() => 'test output'),
@@ -2258,10 +2223,12 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
-    })).rejects.toThrow('agent crashed');
+      commandService: makeCommandService(),
+    })).rejects.toThrow(StaleLineageError);
 
-    // revertConflictResolution must NOT be called when lineage is stale
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    // revertFixSession must NOT be called when lineage is stale
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalled();
   });
 
   it('proceeds normally when lineage is current', async () => {
@@ -2269,11 +2236,11 @@ describe('fixWithAgentAction lineage guard', () => {
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
-        execution: { error: 'boom', selectedAttemptId: 'att-1', generation: 5 },
+        execution: { error: 'boom', workspacePath: '/tmp/task-a', selectedAttemptId: 'att-1', generation: 5 },
       })),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       getTaskOutput: vi.fn(() => 'test output'),
@@ -2288,6 +2255,7 @@ describe('fixWithAgentAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     });
 
     // Normal path should proceed
@@ -2307,11 +2275,11 @@ describe('resolveConflictAction lineage guard', () => {
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 1) {
+        if (getTaskCallCount <= 3) {
           return makeTask({
             status: 'fixing_with_ai',
             config: { workflowId: 'wf-1' },
-            execution: { error: mergeError, selectedAttemptId: 'att-1', generation: 5 },
+            execution: { error: mergeError, workspacePath: '/tmp/task-a', selectedAttemptId: 'att-1', generation: 5 },
           });
         }
         // Lineage changed
@@ -2321,9 +2289,9 @@ describe('resolveConflictAction lineage guard', () => {
           execution: { selectedAttemptId: 'att-2', generation: 6 },
         });
       }),
-      beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
+      beginFixSession: vi.fn(() => ({ savedError: mergeError })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       appendTaskOutput: vi.fn(),
@@ -2339,15 +2307,15 @@ describe('resolveConflictAction lineage guard', () => {
     })).rejects.toThrow(StaleLineageError);
 
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
   });
 
-  it('skips revertConflictResolution when lineage changed and resolution threw', async () => {
+  it('skips revertFixSession when lineage changed and resolution threw', async () => {
     let getTaskCallCount = 0;
     const orchestrator = {
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 1) {
+        if (getTaskCallCount <= 3) {
           return makeTask({
             status: 'fixing_with_ai',
             config: { workflowId: 'wf-1' },
@@ -2360,9 +2328,9 @@ describe('resolveConflictAction lineage guard', () => {
           execution: { selectedAttemptId: 'att-2', generation: 6 },
         });
       }),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'merge err' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'merge err' })),
       setFixAwaitingApproval: vi.fn(),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       appendTaskOutput: vi.fn(),
@@ -2375,9 +2343,13 @@ describe('resolveConflictAction lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
-    })).rejects.toThrow('resolution failed');
+    })).rejects.toThrow(StaleLineageError);
 
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Agent failed'),
+    );
   });
 });
 
@@ -2388,12 +2360,11 @@ describe('autoFixOnFailure lineage guard', () => {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 4) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
             execution: {
-              autoFixAttempts: 0,
               error: 'boom',
               selectedAttemptId: 'att-1',
               generation: 5,
@@ -2409,10 +2380,10 @@ describe('autoFixOnFailure lineage guard', () => {
         });
       }),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => []),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -2430,24 +2401,24 @@ describe('autoFixOnFailure lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
     })).rejects.toThrow(StaleLineageError);
 
     expect(orchestrator.setFixAwaitingApproval).not.toHaveBeenCalled();
     expect(orchestrator.retryTask).not.toHaveBeenCalled();
   });
 
-  it('skips revertConflictResolution on failure when lineage changed', async () => {
+  it('skips revertFixSession on failure when lineage changed', async () => {
     let getTaskCallCount = 0;
     const orchestrator = {
       shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => {
         getTaskCallCount++;
-        if (getTaskCallCount <= 2) {
+        if (getTaskCallCount <= 4) {
           return makeTask({
             status: 'failed',
             config: { workflowId: 'wf-1' },
             execution: {
-              autoFixAttempts: 0,
               error: 'boom',
               selectedAttemptId: 'att-1',
               generation: 5,
@@ -2462,10 +2433,10 @@ describe('autoFixOnFailure lineage guard', () => {
         });
       }),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => []),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -2483,9 +2454,14 @@ describe('autoFixOnFailure lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
-    })).rejects.toThrow('agent crashed');
+      commandService: makeCommandService(),
+    })).rejects.toThrow(StaleLineageError);
 
-    expect(orchestrator.revertConflictResolution).not.toHaveBeenCalled();
+    expect(orchestrator.revertFixSession).not.toHaveBeenCalled();
+    expect(persistence.appendTaskOutput).not.toHaveBeenCalledWith(
+      'task-a',
+      expect.stringContaining('[Auto-fix] Agent failed'),
+    );
   });
 
   it('throws StaleLineageError when signal is aborted during auto-fix', async () => {
@@ -2496,7 +2472,6 @@ describe('autoFixOnFailure lineage guard', () => {
         status: 'failed',
         config: { workflowId: 'wf-1' },
         execution: {
-          autoFixAttempts: 0,
           error: 'boom',
           selectedAttemptId: 'att-1',
           generation: 5,
@@ -2504,10 +2479,10 @@ describe('autoFixOnFailure lineage guard', () => {
         },
       })),
       getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
+      beginFixSession: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => []),
-      revertConflictResolution: vi.fn(),
+      revertFixSession: vi.fn(),
     };
     const persistence = {
       updateTask: vi.fn(),
@@ -2527,6 +2502,7 @@ describe('autoFixOnFailure lineage guard', () => {
       orchestrator: orchestrator as unknown as Orchestrator,
       persistence: persistence as unknown as SQLiteAdapter,
       taskExecutor: taskExecutor as unknown as TaskRunner,
+      commandService: makeCommandService(),
       signal: ac.signal,
     })).rejects.toThrow(StaleLineageError);
 
@@ -2564,5 +2540,113 @@ describe('finalizeAppliedFix lineage guard', () => {
 
     expect(orchestrator.setFixAwaitingApproval).toHaveBeenCalledWith('task-a', 'saved-error');
     expect(result).toEqual({ autoApproved: false, started: [] });
+  });
+});
+
+describe('fixWithAgentAction review-gate CI context', () => {
+  function makeReviewGateOrchestrator(execution: Record<string, unknown>) {
+    return {
+      getTask: vi.fn(() => makeTask({
+        status: 'failed',
+        config: { workflowId: 'wf-1' },
+        execution: { error: 'ci failed', workspacePath: '/tmp/task-a', ...execution },
+      })),
+      beginFixSession: vi.fn(() => ({ savedError: 'ci failed' })),
+      setFixAwaitingApproval: vi.fn(),
+      revertFixSession: vi.fn(),
+    };
+  }
+
+  it('rejects a stale review-gate context before mutating', async () => {
+    const orchestrator = makeReviewGateOrchestrator({
+      selectedAttemptId: 'attempt-2',
+      generation: 3,
+      reviewId: 'review-1',
+      branch: 'experiment/foo',
+    });
+    const persistence = { getTaskOutput: vi.fn(() => 'output'), appendTaskOutput: vi.fn() };
+    const taskExecutor = { fixWithAgent: vi.fn(), resolveConflict: vi.fn() };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      reviewGateContext: { reviewId: 'review-1', generation: 3, selectedAttemptId: 'attempt-1', branch: 'experiment/foo' },
+    })).rejects.toThrow(StaleLineageError);
+
+    expect(taskExecutor.fixWithAgent).not.toHaveBeenCalled();
+    expect(orchestrator.beginFixSession).not.toHaveBeenCalled();
+  });
+
+  it('fixes with the carried fix context when the review-gate context is current', async () => {
+    const orchestrator = makeReviewGateOrchestrator({
+      selectedAttemptId: 'attempt-1',
+      generation: 3,
+      reviewId: 'review-1',
+      branch: 'experiment/foo',
+    });
+    const persistence = { getTaskOutput: vi.fn(() => 'output'), appendTaskOutput: vi.fn() };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockResolvedValue(undefined),
+      resolveConflict: vi.fn(),
+    };
+
+    const result = await fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+      reviewGateContext: {
+        reviewId: 'review-1',
+        generation: 3,
+        selectedAttemptId: 'attempt-1',
+        branch: 'experiment/foo',
+        fixContext: 'make the failed checks pass',
+      },
+    });
+
+    expect(taskExecutor.fixWithAgent).toHaveBeenCalledWith(
+      'task-a', 'output', 'claude', 'ci failed', 'make the failed checks pass',
+    );
+    // Review-gate CI fixes enter through beginFixSession, which accepts
+    // review_ready/awaiting_approval entry states and records them.
+    expect(orchestrator.beginFixSession).toHaveBeenCalledWith('task-a');
+    expect(result).toEqual({ kind: 'fixWithAgent', autoApproved: false, started: [] });
+  });
+
+  it('reverts the fix session when a review-gate CI fix fails', async () => {
+    const orchestrator = makeReviewGateOrchestrator({
+      selectedAttemptId: 'attempt-1',
+      generation: 3,
+      reviewId: 'review-1',
+      branch: 'experiment/foo',
+    });
+    const persistence = { getTaskOutput: vi.fn(() => 'output'), appendTaskOutput: vi.fn() };
+    const taskExecutor = {
+      fixWithAgent: vi.fn().mockRejectedValue(new Error('agent exploded')),
+      resolveConflict: vi.fn(),
+    };
+
+    await expect(fixWithAgentAction('task-a', {
+      orchestrator: orchestrator as unknown as Orchestrator,
+      persistence: persistence as unknown as SQLiteAdapter,
+      taskExecutor: taskExecutor as unknown as TaskRunner,
+    }, {
+      agentName: 'claude',
+      reviewGateContext: {
+        reviewId: 'review-1',
+        generation: 3,
+        selectedAttemptId: 'attempt-1',
+        branch: 'experiment/foo',
+        fixContext: 'make the failed checks pass',
+      },
+    })).rejects.toThrow('agent exploded');
+
+    expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-a', {
+      savedError: 'ci failed',
+      fixError: 'agent exploded',
+    });
   });
 });

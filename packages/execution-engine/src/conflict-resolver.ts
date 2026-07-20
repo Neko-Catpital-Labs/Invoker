@@ -12,15 +12,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import type { Orchestrator } from '@invoker/workflow-core';
-import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
+import { OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { cleanElectronEnv } from './process-utils.js';
-import type { ExecutionAgent } from './agent.js';
+import { buildAgentExitFailureDetail, cleanElectronEnv, resolveExecutableOnCurrentPath } from './process-utils.js';
+import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT, type ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-exec.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { findManagedWorktreeForBranch } from './worktree-discovery.js';
+import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 
 // ── Host interface ───────────────────────────────────────
 
@@ -31,6 +32,8 @@ export interface RemoteTargetConfig {
   port?: number;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
+  use_api_key?: boolean;
+  secretsFile?: string;
 }
 
 /**
@@ -47,7 +50,7 @@ export interface ConflictResolverHost {
   execGitIn(args: string[], dir: string): Promise<string>;
   createMergeWorktree(ref: string, label: string, repoUrl?: string): Promise<string>;
   removeMergeWorktree(dir: string): Promise<void>;
-  spawnAgentFix(prompt: string, cwd: string, agentName?: string): Promise<{ stdout: string; sessionId: string }>;
+  spawnAgentFix(prompt: string, cwd: string, agentName?: string, executionModel?: string): Promise<{ stdout: string; sessionId: string }>;
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
 }
 
@@ -137,7 +140,7 @@ function deriveRemoteManagedWorkspaceInfo(
   };
 }
 
-async function resolveRemoteBranchOwnerPath(
+export async function resolveRemoteBranchOwnerPath(
   branch: string | undefined,
   workspacePath: string,
   target: RemoteTargetConfig,
@@ -167,10 +170,11 @@ export async function resolveConflictImpl(
   taskId: string,
   savedError?: string,
   agentName?: string,
+  resolvedExecutionModel?: string,
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'resolve-conflict-start',
-    agent: agentName ?? 'claude',
+    agent: agentName ?? DEFAULT_EXECUTION_AGENT,
     hasSavedError: savedError !== undefined,
   });
   const task = host.orchestrator.getTask(taskId);
@@ -182,12 +186,8 @@ export async function resolveConflictImpl(
   const errorStr = savedError ?? task.execution.error;
   if (!errorStr) throw new Error(`Task ${taskId} has no error information`);
 
-  let conflictInfo: { failedBranch: string; conflictFiles: string[] };
-  try {
-    const parsed = JSON.parse(errorStr);
-    if (parsed?.type !== 'merge_conflict') throw new Error('not a merge conflict');
-    conflictInfo = { failedBranch: parsed.failedBranch, conflictFiles: parsed.conflictFiles };
-  } catch {
+  const conflictInfo = parseMergeConflictError(errorStr);
+  if (!conflictInfo) {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'resolve-conflict-parse-failed',
       errorPreview: String(errorStr).slice(0, 400),
@@ -206,7 +206,7 @@ export async function resolveConflictImpl(
   }
 
   // SSH tasks: run conflict resolution on the remote host
-  const poolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+  const poolMemberId = resolveSelectedRemoteTargetId(host, taskId, task);
   if (task.config.runnerKind === 'ssh' && poolMemberId && !existsSync(rawCwd)) {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'resolve-conflict-remote-path',
@@ -217,7 +217,7 @@ export async function resolveConflictImpl(
     if (!target) {
       throw new Error(`No remote target config for "${poolMemberId}" — cannot resolve conflict on remote`);
     }
-    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName);
+    await resolveConflictRemote(host, task, taskBranch, conflictInfo, rawCwd, target, agentName, resolvedExecutionModel);
     return;
   }
 
@@ -271,8 +271,8 @@ export async function resolveConflictImpl(
         `4. Staging the resolved files with 'git add'`,
         `5. Completing the merge with 'git commit --no-edit'`,
       ].join('\n');
-
-      await host.spawnAgentFix(prompt, cwd, agentName);
+      const executionModel = resolvedExecutionModel ?? resolveExecutionModelForAgent(task, agentName);
+      await host.spawnAgentFix(prompt, cwd, agentName, executionModel);
     }
 
     console.log(`[resolveConflict] Successfully resolved conflict for ${taskId}`);
@@ -304,6 +304,16 @@ function shellQuote(s: string): string {
 }
 
 /**
+ * Remote `bash -s` invocation for an agent command, forwarding the local PATH so
+ * a bare agent binary (e.g. `codex`) resolves on the remote — mirroring how
+ * ssh-executor runs task payloads. Without this the fix/resolve agent dies with
+ * "command not found" even though normal task execution on the same host works.
+ */
+export function remoteAgentShellInvocation(remotePath: string = process.env.PATH ?? ''): string[] {
+  return remotePath ? ['env', `PATH=${remotePath}`, 'bash', '-s'] : ['bash', '-s'];
+}
+
+/**
  * Build the shell command to run an agent on a remote host.
  * Uses the agent registry when available; falls back to claude CLI.
  */
@@ -311,12 +321,13 @@ function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
+  executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
-  const name = agentName ?? 'claude';
+  const name = agentName ?? DEFAULT_EXECUTION_AGENT;
   if (agentRegistry) {
     const agent = agentRegistry.get(name);
     if (agent?.buildFixCommand) {
-      const spec = agent.buildFixCommand(prompt);
+      const spec = agent.buildFixCommand(prompt, { executionModel });
       const sessionId = spec.sessionId ?? randomUUID();
       const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
       return { shellCommand: cmd, sessionId };
@@ -330,6 +341,38 @@ function buildRemoteAgentCommand(
   };
 }
 
+export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {
+  const direct = (task.config as { poolMemberId?: string }).poolMemberId;
+  if (direct) return direct;
+
+  const events = host.persistence.getEvents?.(taskId) ?? [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event?.eventType !== 'task.executor.selected' || !event.payload) continue;
+    try {
+      const payload = JSON.parse(event.payload) as { poolMemberId?: unknown };
+      if (typeof payload.poolMemberId === 'string' && payload.poolMemberId.trim()) {
+        return payload.poolMemberId;
+      }
+    } catch {
+      // Ignore malformed historical diagnostics.
+    }
+  }
+
+  return undefined;
+}
+
+function resolveExecutionModelForAgent(
+  task: ReturnType<Orchestrator['getTask']> & {},
+  agentName?: string,
+): string | undefined {
+  const taskAgent = task.config.executionAgent?.trim();
+  const effectiveAgent = agentName?.trim() ?? taskAgent;
+  if (!taskAgent || !effectiveAgent || effectiveAgent !== taskAgent) return undefined;
+  const executionModel = task.config.executionModel?.trim();
+  return executionModel || undefined;
+}
+
 async function resolveConflictRemote(
   host: ConflictResolverHost,
   task: ReturnType<Orchestrator['getTask']> & {},
@@ -338,6 +381,7 @@ async function resolveConflictRemote(
   remoteCwd: string,
   target: RemoteTargetConfig,
   agentName?: string,
+  resolvedExecutionModel?: string,
 ): Promise<void> {
   const conflictFilesList = conflictInfo.conflictFiles.join(', ');
   const prompt = [
@@ -357,14 +401,22 @@ async function resolveConflictRemote(
     ? `Merge upstream ${conflictInfo.failedBranch} — ${depTask.description}`
     : `Merge upstream ${conflictInfo.failedBranch}`;
 
-  const { shellCommand: agentCmd } = buildRemoteAgentCommand(prompt, host.agentRegistry, agentName);
+  const executionModel = resolvedExecutionModel ?? resolveExecutionModelForAgent(task, agentName);
+  const { shellCommand: agentCmd } = buildRemoteAgentCommand(
+    prompt,
+    host.agentRegistry,
+    agentName,
+    executionModel,
+  );
   const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
   const mergeMsgB64 = Buffer.from(conflictMergeMsg).toString('base64');
+  const envExports = buildRemoteAgentEnvExports(target.secretsFile, target.use_api_key === true);
 
   const script = `set -euo pipefail
 WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
+${envExports}
 git checkout "${taskBranch}"
 MERGE_MSG=$(echo "${mergeMsgB64}" | base64 -d)
 if git merge --no-edit -m "$MERGE_MSG" "${conflictInfo.failedBranch}" 2>/dev/null; then
@@ -375,8 +427,22 @@ else
 fi
 `;
 
-  await execRemoteSsh(target, script, 'remote_conflict_fix');
-  console.log(`[resolveConflict] Successfully resolved remote conflict for ${task.id}`);
+  const sshArgs = [
+    ...buildSshConnectionArgs({
+      sshKeyPath: target.sshKeyPath,
+      port: target.port,
+      user: target.user,
+      host: target.host,
+    }, { batchMode: true }),
+    ...remoteAgentShellInvocation(),
+  ];
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('ssh', sshArgs, { stdio: ['pipe', 'inherit', 'inherit'], env: cleanElectronEnv() });
+    child.stdin?.write(script);
+    child.stdin?.end();
+    child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`ssh conflict resolve failed (exit=${code})`)));
+    child.on('error', reject);
+  });
 }
 
 /**
@@ -439,10 +505,11 @@ export async function fixWithAgentImpl(
   taskOutput: string,
   agentName?: string,
   savedError?: string,
+  fixContext?: string,
 ): Promise<void> {
   host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
     phase: 'fix-with-agent-start',
-    agent: agentName ?? 'claude',
+    agent: agentName ?? DEFAULT_EXECUTION_AGENT,
     hasSavedError: savedError !== undefined,
     outputLength: taskOutput.length,
   });
@@ -455,11 +522,14 @@ export async function fixWithAgentImpl(
   const taskForPrompt = savedError
     ? { ...task, execution: { ...task.execution, error: savedError } }
     : task;
-  const prompt = buildFixPrompt(taskForPrompt, taskOutput);
+  const basePrompt = buildFixPrompt(taskForPrompt, taskOutput);
+  const prompt = fixContext?.trim()
+    ? `${basePrompt}\n\nAdditional fix context:\n${fixContext.trim()}`
+    : basePrompt;
   const workspacePath = task.execution.workspacePath;
+  const executionModel = resolveExecutionModelForAgent(task, agentName);
 
-  // SSH tasks: run agent on the remote host
-  const poolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
+  const poolMemberId = resolveSelectedRemoteTargetId(host, taskId, task);
   if (task.config.runnerKind === 'ssh' && poolMemberId && workspacePath && !existsSync(workspacePath)) {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'fix-with-agent-remote-path',
@@ -484,13 +554,14 @@ export async function fixWithAgentImpl(
         repairedWorkspacePath: resolvedWorkspacePath,
       });
     }
-    const remoteAgentBin = agentName ?? 'claude';
+    const remoteAgentBin = agentName ?? DEFAULT_EXECUTION_AGENT;
     const { stdout: output, sessionId } = await spawnRemoteAgentFixImpl(
       prompt,
       resolvedWorkspacePath,
       target,
       agentName,
       host.agentRegistry,
+      executionModel,
     );
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${remoteAgentBin} (remote)] Output:\n${output}`);
@@ -513,7 +584,6 @@ export async function fixWithAgentImpl(
     return;
   }
 
-  // Local tasks: require valid workspace before running agent
   if (!workspacePath) {
     throw new Error(
       `fixWithAgent: task "${taskId}" has no valid workspace ` +
@@ -532,14 +602,14 @@ export async function fixWithAgentImpl(
   }
   const cwd = workspacePath;
 
-  const agentLabel = agentName ?? 'claude';
+  const agentLabel = agentName ?? DEFAULT_EXECUTION_AGENT;
   try {
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'fix-with-agent-spawn-local',
       workspacePath: cwd,
       agent: agentLabel,
     });
-    const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName);
+    const { stdout: output, sessionId } = await host.spawnAgentFix(prompt, cwd, agentName, executionModel);
     if (output) {
       host.persistence.appendTaskOutput(taskId, `\n[Fix with ${agentLabel}] Output:\n${output}`);
     }
@@ -558,9 +628,10 @@ export async function fixWithAgentImpl(
       sessionId,
       agent: agentLabel,
     });
-  } catch (err: any) {
-    // Persist session ID even on failure so the session can be audited
-    const failedSessionId = err?.sessionId as string | undefined;
+  } catch (err) {
+    const failedSessionId = err && typeof err === 'object' && 'sessionId' in err && typeof err.sessionId === 'string'
+      ? err.sessionId
+      : undefined;
     if (failedSessionId) {
       host.persistence.updateTask(taskId, {
         execution: {
@@ -572,17 +643,37 @@ export async function fixWithAgentImpl(
       });
       console.log(`[fixWithAgent] Fix failed for ${taskId} via ${agentLabel}, session persisted (session=${failedSessionId})`);
     }
+    const errorRecord = err && typeof err === 'object' ? err : undefined;
+    const exitCode = errorRecord && 'exitCode' in errorRecord && typeof errorRecord.exitCode === 'number'
+      ? errorRecord.exitCode
+      : null;
+    const cmd = errorRecord && 'cmd' in errorRecord && typeof errorRecord.cmd === 'string'
+      ? errorRecord.cmd
+      : null;
+    const args = errorRecord && 'args' in errorRecord && Array.isArray(errorRecord.args)
+      ? errorRecord.args
+      : null;
+    const stdoutTail = errorRecord && 'stdoutTail' in errorRecord
+      ? tailText(errorRecord.stdoutTail)
+      : errorRecord && 'stdout' in errorRecord
+        ? tailText(errorRecord.stdout)
+        : undefined;
+    const stderrTail = errorRecord && 'stderrTail' in errorRecord
+      ? tailText(errorRecord.stderrTail)
+      : errorRecord && 'stderr' in errorRecord
+        ? tailText(errorRecord.stderr)
+        : undefined;
     host.persistence.logEvent?.(taskId, 'debug.auto-fix', {
       phase: 'fix-with-agent-failed',
       agent: agentLabel,
       sessionId: failedSessionId ?? null,
       errorType: err instanceof Error ? err.name : typeof err,
       errorMessage: err instanceof Error ? err.message : String(err),
-      exitCode: typeof err?.exitCode === 'number' ? err.exitCode : null,
-      cmd: typeof err?.cmd === 'string' ? err.cmd : null,
-      args: Array.isArray(err?.args) ? err.args : null,
-      stdoutTail: tailText(err?.stdoutTail ?? err?.stdout),
-      stderrTail: tailText(err?.stderrTail ?? err?.stderr),
+      exitCode,
+      cmd,
+      args,
+      stdoutTail,
+      stderrTail,
     });
     throw err;
   }
@@ -597,12 +688,14 @@ export function spawnRemoteAgentFixImpl(
   target: RemoteTargetConfig,
   agentName?: string,
   agentRegistry?: AgentRegistry,
+  executionModel?: string,
 ): Promise<{ stdout: string; sessionId: string }> {
   const promptTransport = materializeRemotePrompt(prompt);
   const { shellCommand: agentCmd, sessionId } = buildRemoteAgentCommand(
     promptTransport.effectivePrompt,
     agentRegistry,
     agentName,
+    executionModel,
   );
   const agentCmdB64 = Buffer.from(agentCmd).toString('base64');
   const promptWrite = promptTransport.remotePromptFilePath && promptTransport.promptB64
@@ -612,11 +705,13 @@ export function spawnRemoteAgentFixImpl(
         `trap 'rm -f "$PROMPT_FILE"' EXIT`,
       ].join('\n') + '\n'
     : '';
+  const envExports = buildRemoteAgentEnvExports(target.secretsFile, target.use_api_key === true);
 
-const script = `set -euo pipefail
+  const script = `set -euo pipefail
 WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
+${envExports}
 ${promptWrite}
 eval "$(echo "${agentCmdB64}" | base64 -d)"
 `;
@@ -628,7 +723,7 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
       user: target.user,
       host: target.host,
     }, { batchMode: true }),
-    'bash', '-s',
+    ...remoteAgentShellInvocation(),
   ];
 
   console.log(`[spawnAgentFix] remote agent command: ${agentCmd}`);
@@ -648,7 +743,7 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
       // Replace local UUID with real backend session/thread ID for resume
-      const driver = agentRegistry?.getSessionDriver(agentName ?? 'claude');
+      const driver = agentRegistry?.getSessionDriver(agentName ?? DEFAULT_EXECUTION_AGENT);
       const realId = driver?.extractSessionId?.(stdout);
       const effectiveSessionId = realId ?? sessionId;
       if (driver) {
@@ -662,9 +757,6 @@ eval "$(echo "${agentCmdB64}" | base64 -d)"
 }
 
 /**
- * Execute a bash script on a remote host via SSH. Throws on non-zero exit.
- */
-/**
  * Spawn an agent fix using the registry-backed ExecutionAgent.buildFixCommand().
  */
 export function spawnAgentFixViaRegistry(
@@ -672,18 +764,21 @@ export function spawnAgentFixViaRegistry(
   cwd: string,
   agent: ExecutionAgent,
   driver?: SessionDriver,
+  executionModel?: string,
 ): Promise<{ stdout: string; sessionId: string }> {
+  assertExecutionModelSupported(agent, executionModel);
   const promptTransport = materializeLocalPrompt(prompt);
-  const spec = agent.buildFixCommand?.(promptTransport.effectivePrompt);
+  const spec = agent.buildFixCommand?.(promptTransport.effectivePrompt, { executionModel });
   if (!spec) {
     promptTransport.cleanup();
     throw new Error(`Agent "${agent.name}" does not support fix commands`);
   }
   const sessionId = spec.sessionId ?? randomUUID();
-  console.log(`[spawnAgentFix] cmd: ${spec.cmd} ${spec.args.map(a => JSON.stringify(a)).join(' ')}`);
+  const cmd = resolveExecutableOnCurrentPath(spec.cmd) ?? spec.cmd;
+  console.log(`[spawnAgentFix] cmd: ${cmd} ${spec.args.map(a => JSON.stringify(a)).join(' ')}`);
   console.log(`[spawnAgentFix] cwd: ${cwd}`);
   return new Promise<{ stdout: string; sessionId: string }>((resolve, reject) => {
-    const child = spawn(spec.cmd, spec.args, {
+    const child = spawn(cmd, spec.args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: cleanElectronEnv(),
@@ -693,8 +788,6 @@ export function spawnAgentFixViaRegistry(
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code) => {
-      // Extract real backend session/thread ID BEFORE writing the file,
-      // so processOutput stores under the real ID (not the local UUID).
       const realId = driver?.extractSessionId?.(stdout);
       const effectiveSessionId = realId ?? sessionId;
       const displayStdout = driver ? driver.processOutput(effectiveSessionId, stdout) : stdout;
@@ -704,7 +797,7 @@ export function spawnAgentFixViaRegistry(
       } else {
         promptTransport.cleanup();
         reject(Object.assign(
-          new Error(`${agent.name} fix exited with code ${code}: ${stderr.trim()}`),
+          new Error(`${agent.name} fix exited with code ${code}: ${buildAgentExitFailureDetail(stdout, stderr, displayStdout)}`),
           {
             sessionId: effectiveSessionId,
             exitCode: code,
@@ -717,7 +810,7 @@ export function spawnAgentFixViaRegistry(
         ));
       }
     });
-    child.on('error', (err: any) => {
+    child.on('error', (err) => {
       promptTransport.cleanup();
       reject(Object.assign(err, {
         cmd: spec.cmd,
@@ -738,7 +831,7 @@ function execRemoteSsh(target: RemoteTargetConfig, script: string, phase?: strin
       user: target.user,
       host: target.host,
     }, { batchMode: true }),
-    'bash', '-s',
+    ...remoteAgentShellInvocation(),
   ];
 
   return new Promise((resolve, reject) => {

@@ -14,6 +14,7 @@
  */
 
 import { PlanConversation } from './plan-conversation.js';
+import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
 import type { ConversationRepository } from '@invoker/data-store';
 import type { LogFn } from '../surface.js';
 
@@ -64,6 +65,8 @@ export interface SessionMetadata {
   readonly userId: string;
   /** Whether the plan has been submitted (terminal state) */
   planSubmitted: boolean;
+  /** Whether this thread is a normal agent session or an Invoker plan draft. */
+  mode: ConversationMode;
 }
 
 /**
@@ -110,6 +113,15 @@ export class SessionHandle {
    */
   get planSubmitted(): boolean {
     return this.conversation.planSubmitted;
+  }
+
+
+  get conversationMode(): ConversationMode {
+    return this.conversation.conversationMode;
+  }
+  /** Returns the last complete YAML plan drafted in this conversation, or null. */
+  getDraftedPlan(): string | null {
+    return this.conversation.getDraftedPlan();
   }
 
   /**
@@ -160,8 +172,13 @@ export interface SessionManagerConfig {
   /** Default repo URL (e.g. "git@github.com:user/repo.git"). Passed to PlanConversation. */
   repoUrl?: string;
   log?: LogFn;
-  /** Cursor CLI subprocess timeout in ms. Passed to PlanConversation. */
   timeoutMs?: number;
+  planningCommandBuilder?: PlanningCommandBuilder;
+  mode?: ConversationMode;
+  /** Forwarded to PlanConversation for silent-success retries. */
+  plannerRetryLimit?: number;
+  /** Forwarded to PlanConversation for silent-success retries. */
+  plannerRetryBaseDelayMs?: number;
 }
 
 export interface SessionMetrics {
@@ -198,6 +215,10 @@ export class SessionManager {
   private readonly evictionIntervalMs: number;
   private readonly maxActiveSessions: number;
   private readonly timeoutMs?: number;
+  private readonly planningCommandBuilder?: PlanningCommandBuilder;
+  private readonly mode: ConversationMode;
+  private readonly plannerRetryLimit?: number;
+  private readonly plannerRetryBaseDelayMs?: number;
 
   constructor(config: SessionManagerConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -211,6 +232,10 @@ export class SessionManager {
     this.evictionIntervalMs = config.evictionIntervalMs ?? 5 * 60 * 1000; // 5 minutes
     this.maxActiveSessions = config.maxActiveSessions ?? 100;
     this.timeoutMs = config.timeoutMs;
+    this.planningCommandBuilder = config.planningCommandBuilder;
+    this.mode = config.mode ?? 'agent';
+    this.plannerRetryLimit = config.plannerRetryLimit;
+    this.plannerRetryBaseDelayMs = config.plannerRetryBaseDelayMs;
   }
 
   /**
@@ -246,6 +271,7 @@ export class SessionManager {
   async getOrCreateSession(
     id: SessionIdentifier,
     userId: string,
+    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode },
   ): Promise<SessionHandle | null> {
     const key = id.toString();
 
@@ -288,14 +314,19 @@ export class SessionManager {
       this.log('session-manager', 'info', `[TRACE] Recovery path: creating PlanConversation + init() (threadTs=${id.threadTs})`);
       const conversation = new PlanConversation({
         cursorCommand: this.cursorCommand,
-        model: this.model,
-        workingDir: this.workingDir,
+        tool: opts?.tool,
+        model: opts?.model ?? this.model,
+        mode: loaded.mode ?? opts?.mode ?? this.mode ?? 'plan',
+        planningCommandBuilder: this.planningCommandBuilder,
+        workingDir: opts?.workingDir ?? this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
         repoUrl: this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
+        plannerRetryLimit: this.plannerRetryLimit,
+        plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
       await conversation.init(); // Load state from database
       this.log('session-manager', 'info', `[TRACE] Recovery init() done (threadTs=${id.threadTs})`);
@@ -305,6 +336,7 @@ export class SessionManager {
         lastAccessedAt: new Date(loaded.updatedAt),
         userId: loaded.userId,
         planSubmitted: loaded.planSubmitted,
+        mode: loaded.mode ?? opts?.mode ?? this.mode ?? 'plan',
       };
 
       handle = new SessionHandle(id, metadata, conversation);
@@ -315,14 +347,19 @@ export class SessionManager {
       this.log('session-manager', 'info', `[TRACE] Creation path: new PlanConversation (threadTs=${id.threadTs}, hasConversationRepo=true, skipping init)`);
       const conversation = new PlanConversation({
         cursorCommand: this.cursorCommand,
-        model: this.model,
-        workingDir: this.workingDir,
+        tool: opts?.tool,
+        model: opts?.model ?? this.model,
+        mode: opts?.mode ?? this.mode ?? 'agent',
+        planningCommandBuilder: this.planningCommandBuilder,
+        workingDir: opts?.workingDir ?? this.workingDir,
         threadTs: id.threadTs,
         conversationRepo: this.conversationRepo,
         defaultBranch: this.defaultBranch,
         repoUrl: this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
+        plannerRetryLimit: this.plannerRetryLimit,
+        plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
       // Don't call init() for new sessions — nothing to load
 
@@ -331,6 +368,7 @@ export class SessionManager {
         lastAccessedAt: new Date(),
         userId,
         planSubmitted: false,
+        mode: opts?.mode ?? this.mode ?? 'agent',
       };
 
       handle = new SessionHandle(id, metadata, conversation);
@@ -344,6 +382,7 @@ export class SessionManager {
         false, // Not submitted
         id.channelId,
         userId,
+        opts?.mode ?? this.mode ?? 'agent',
       );
     }
 

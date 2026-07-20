@@ -4,8 +4,15 @@ import {
   type WorkflowMutationIntent,
   type WorkflowMutationPriority,
 } from '@invoker/data-store';
-import type { Logger } from '@invoker/contracts';
+import type { Logger, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import { resolveHeadlessTarget } from './headless-command-classification.js';
 import { createWorkflowMutationTiming, type WorkflowMutationTiming } from './workflow-mutation-timing.js';
+import {
+  resolveHeadlessExecCommand,
+  summarizeMutationFailureMessage,
+} from './mutation-failure-message.js';
+
+export type WorkflowMutationFailedHandler = (event: WorkflowMutationFailedEvent) => void;
 
 type Deferred<T> = {
   resolve: (value: T) => void;
@@ -24,6 +31,73 @@ export type WorkflowMutationContext = {
   workflowId: string;
   mutationTiming?: WorkflowMutationTiming;
 };
+
+const TASK_SCOPED_MUTATION_CHANNELS = new Set([
+  'api:approve-task',
+  'api:reject-task',
+  'surface:approve-task',
+  'invoker:approve',
+  'invoker:reject',
+  'invoker:provide-input',
+  'invoker:select-experiment',
+  'invoker:restart-task',
+  'invoker:cancel-task',
+  'invoker:recreate-task',
+  'invoker:recreate-downstream',
+  'invoker:delete-task',
+  'invoker:resolve-conflict',
+  'invoker:fix-with-agent',
+  'invoker:edit-task-command',
+  'invoker:edit-task-prompt',
+  'invoker:edit-task-type',
+  'invoker:edit-task-pool',
+  'invoker:edit-task-agent',
+  'invoker:edit-task-model',
+  'invoker:set-task-external-gate-policies',
+  'invoker:replace-task',
+]);
+
+const TARGET_RESOLVED_MUTATION_CHANNELS = new Set([
+  'invoker:rebase-retry',
+  'invoker:rebase-recreate',
+]);
+
+const TASK_SCOPED_HEADLESS_COMMANDS = new Set([
+  'approve',
+  'reject',
+  'input',
+  'select',
+  'retry-task',
+  'recreate-task',
+  'recreate-downstream',
+  'replace-task',
+  'fix',
+  'resolve-conflict',
+  'cancel',
+  'delete-task',
+  'edit',
+  'edit-executor',
+  'edit-type',
+  'edit-agent',
+]);
+
+const TARGET_RESOLVED_HEADLESS_COMMANDS = new Set([
+  'rebase-retry',
+  'rebase-recreate',
+]);
+
+const TASK_SCOPED_HEADLESS_SET_COMMANDS = new Set([
+  'command',
+  'prompt',
+  'pool',
+  'executor',
+  'agent',
+  'model',
+  'fix-prompt',
+  'fix-context',
+  'gate-policy',
+  'task',
+]);
 
 function envMs(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -62,7 +136,7 @@ export class PersistedWorkflowMutationCoordinator {
     private readonly persistence: SQLiteAdapter,
     private readonly ownerId: string,
     private readonly dispatch: (channel: string, args: unknown[], context: WorkflowMutationContext) => Promise<unknown>,
-    private readonly options?: { logger?: Logger },
+    private readonly options?: { logger?: Logger; onIntentFailed?: WorkflowMutationFailedHandler },
   ) {
     this.enableTraceLogs = process.env.INVOKER_TRACE_MUTATION_QUEUE === '1';
   }
@@ -95,6 +169,19 @@ export class PersistedWorkflowMutationCoordinator {
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number {
+    const coalesced = this.findOpenCoalescibleRetryIntent(workflowId, channel, args);
+    if (coalesced) {
+      this.trace(
+        `submit coalesced workflow=${workflowId} channel=${channel} into intent=${coalesced.id} status=${coalesced.status}`,
+      );
+      if (options?.deferDrain) {
+        this.scheduleWorkflowDrainDeferred(workflowId);
+      } else {
+        this.scheduleWorkflowDrain(workflowId);
+      }
+      return coalesced.id;
+    }
+
     const intentId = this.persistence.enqueueWorkflowMutationIntent(workflowId, channel, args, priority);
     this.enqueueStartedAtMs.set(intentId, Date.now());
     this.createTiming(workflowId, channel, intentId, args)
@@ -114,8 +201,44 @@ export class PersistedWorkflowMutationCoordinator {
     return intentId;
   }
 
+  private findOpenCoalescibleRetryIntent(
+    workflowId: string,
+    channel: string,
+    args: unknown[],
+  ): WorkflowMutationIntent | undefined {
+    const key = this.coalescibleRetryKey(channel, args);
+    if (!key) return undefined;
+    const open = this.persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
+    return open.find((intent) => this.coalescibleRetryKey(intent.channel, intent.args) === key);
+  }
+
+  private coalescibleRetryKey(channel: string, args: unknown[]): string | null {
+    if (channel === 'invoker:start-ready') {
+      return 'start-ready';
+    }
+    if (channel === 'invoker:retry-workflow') {
+      const target = typeof args[0] === 'string' ? args[0] : '';
+      return /^wf-[^/]+$/.test(target) ? `retry-workflow:${target}` : null;
+    }
+    if (channel !== 'headless.exec') {
+      return null;
+    }
+    const payload = args[0] as { args?: unknown[] } | undefined;
+    const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
+    const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
+    const target = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
+    if (command === 'start-ready') {
+      return 'start-ready';
+    }
+    if (command !== 'retry' || !/^wf-[^/]+$/.test(target)) {
+      return null;
+    }
+    return `retry-workflow:${target}`;
+  }
+
   async resumePending(): Promise<void> {
     this.persistence.requeueExpiredWorkflowMutationLeases();
+    this.persistence.requeueOrphanedWorkflowMutationIntents();
     const workflowIds = Array.from(
       new Set(
       this.persistence.listWorkflowMutationIntents(undefined, ['queued']).map((intent) => intent.workflowId),
@@ -258,10 +381,11 @@ export class PersistedWorkflowMutationCoordinator {
       });
       deferred?.resolve(result);
     } catch (error) {
-      const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      const message = summarizeMutationFailureMessage(error);
       const latestIntent = this.persistence.loadWorkflowMutationIntent(intent.id);
       if (latestIntent?.status === 'running') {
         this.persistence.failWorkflowMutationIntent(intent.id, message);
+        this.notifyIntentFailed(intent, message);
       }
       timing.mark('PersistedWorkflowMutationCoordinator.executeIntent', 'failed', {
         durationMs: Date.now() - intentStartedAtMs,
@@ -318,6 +442,9 @@ export class PersistedWorkflowMutationCoordinator {
           fenceChannel: intent.channel,
         });
         const deferred = this.inFlightPromises.get(evictedId);
+        if (evictedIntent) {
+          this.notifyIntentFailed(evictedIntent, evictedIntent.error ?? `Evicted by ${intent.channel}#${intent.id}`);
+        }
         if (!deferred) continue;
         deferred.reject(new Error(`Workflow mutation intent ${evictedId} was evicted by ${intent.channel}#${intent.id}`));
         this.inFlightPromises.delete(evictedId);
@@ -359,39 +486,55 @@ export class PersistedWorkflowMutationCoordinator {
     }
     const activeLease = this.persistence.listWorkflowMutationLeases()
       .find((lease) => lease.workflowId === workflowId);
-    const activeIntentId = activeLease?.activeIntentId;
-    if (!activeIntentId || activeIntentId >= newIntentId) {
+    const activeIntentIds = new Set<number>();
+    if (activeLease?.activeIntentId && activeLease.activeIntentId < newIntentId) {
+      activeIntentIds.add(activeLease.activeIntentId);
+    }
+    for (const runningIntent of this.persistence.listWorkflowMutationIntents(workflowId, ['running'])) {
+      if (runningIntent.id < newIntentId) {
+        activeIntentIds.add(runningIntent.id);
+      }
+    }
+    if (activeIntentIds.size === 0) {
       return;
     }
-    const activeIntent = this.persistence.loadWorkflowMutationIntent(activeIntentId);
-    if (!activeIntent || activeIntent.status !== 'running') {
-      return;
+    for (const activeIntentId of activeIntentIds) {
+      const activeIntent = this.persistence.loadWorkflowMutationIntent(activeIntentId);
+      if (!activeIntent || activeIntent.status !== 'running') {
+        continue;
+      }
+      const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
+      this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
+      this.notifyIntentFailed(activeIntent, reason);
+      this.createTiming(workflowId, activeIntent.channel, activeIntent.id, activeIntent.args)
+        .mark('PersistedWorkflowMutationCoordinator.invalidateSupersededRunningIntent', 'invalidated', {
+          newIntentId,
+          channel,
+          reason,
+        });
+      const invalidation = this.runningIntentInvalidations.get(activeIntentId);
+      invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
+      invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
+      process.stderr.write(
+        `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}\n`,
+      );
     }
-    const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
-    this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
-    this.createTiming(workflowId, activeIntent.channel, activeIntent.id, activeIntent.args)
-      .mark('PersistedWorkflowMutationCoordinator.invalidateSupersededRunningIntent', 'invalidated', {
-        newIntentId,
-        channel,
-        reason,
-      });
-    const invalidation = this.runningIntentInvalidations.get(activeIntentId);
-    invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
-    invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
-    process.stderr.write(
-      `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}\n`,
-    );
   }
 
   private hardPreemptFenceKind(channel: string, args: unknown[]): string | null {
     if (
       channel === 'invoker:recreate-workflow'
       || channel === 'invoker:recreate-task'
-      || channel === 'invoker:recreate-with-rebase'
+      || channel === 'invoker:rebase-recreate'
     ) {
       return 'recreate';
     }
-    if (channel === 'invoker:delete-workflow' || channel === 'invoker:delete-all-workflows' || channel === 'invoker:delete-all-workflows-bulk') {
+    if (
+      channel === 'invoker:delete-workflow'
+      || channel === 'invoker:delete-task'
+      || channel === 'invoker:delete-all-workflows'
+      || channel === 'invoker:delete-all-workflows-bulk'
+    ) {
       return 'delete';
     }
     if (channel !== 'headless.exec') {
@@ -399,13 +542,92 @@ export class PersistedWorkflowMutationCoordinator {
     }
     const payload = args[0] as { args?: unknown[] } | undefined;
     const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
-    if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task' || rawArgs[0] === 'recreate-with-rebase') {
+    if (rawArgs[0] === 'recreate' || rawArgs[0] === 'recreate-task' || rawArgs[0] === 'rebase-recreate') {
       return 'recreate';
     }
-    if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow' || rawArgs[0] === 'delete-all') {
+    if (rawArgs[0] === 'delete' || rawArgs[0] === 'delete-workflow' || rawArgs[0] === 'delete-task' || rawArgs[0] === 'delete-all') {
       return 'delete';
     }
     return null;
+  }
+
+  private notifyIntentFailed(intent: WorkflowMutationIntent, message: string): void {
+    const headlessCommand = intent.channel === 'headless.exec'
+      ? resolveHeadlessExecCommand(intent.args ?? [])
+      : undefined;
+    const event = compactFailedEvent({
+      workflowId: intent.workflowId,
+      intentId: intent.id,
+      channel: intent.channel,
+      message,
+      failedAt: new Date().toISOString(),
+      taskId: this.resolveIntentFailureTaskId(intent),
+      headlessCommand,
+    });
+    try {
+      this.options?.onIntentFailed?.(event);
+    } catch (callbackError) {
+      this.options?.logger?.warn('[workflow-mutation-coordinator] failure notification callback failed', {
+        module: 'workflow-mutation-coordinator',
+        workflowId: intent.workflowId,
+        intentId: intent.id,
+        error: callbackError instanceof Error ? callbackError.message : String(callbackError),
+      });
+    }
+    if (!event.taskId) {
+      return;
+    }
+    try {
+      this.persistence.logEvent(event.taskId, 'workflow.mutation.failed', event);
+    } catch (logError) {
+      this.options?.logger?.warn('[workflow-mutation-coordinator] failed to persist mutation failure event', {
+        module: 'workflow-mutation-coordinator',
+        workflowId: intent.workflowId,
+        intentId: intent.id,
+        taskId: event.taskId,
+        error: logError instanceof Error ? logError.message : String(logError),
+      });
+    }
+  }
+
+  private resolveIntentFailureTaskId(intent: WorkflowMutationIntent): string | undefined {
+    if (intent.channel === 'headless.exec') {
+      return this.resolveHeadlessIntentFailureTaskId(intent.args);
+    }
+    if (TARGET_RESOLVED_MUTATION_CHANNELS.has(intent.channel)) {
+      return this.resolveTaskTarget(intent.args[0]);
+    }
+    if (!TASK_SCOPED_MUTATION_CHANNELS.has(intent.channel)) {
+      return undefined;
+    }
+    const taskId = intent.args[0];
+    return typeof taskId === 'string' && taskId.trim() ? taskId : undefined;
+  }
+
+  private resolveHeadlessIntentFailureTaskId(args: unknown[]): string | undefined {
+    const payload = args[0] as { args?: unknown[] } | undefined;
+    const rawArgs = Array.isArray(payload?.args) ? payload.args : [];
+    const target = this.headlessTaskTargetArg(rawArgs);
+    if (target === undefined) {
+      return undefined;
+    }
+    return this.resolveTaskTarget(target);
+  }
+
+  private resolveTaskTarget(target: unknown): string | undefined {
+    const resolved = resolveHeadlessTarget(target, this.persistence);
+    return resolved.kind === 'task' ? resolved.resolvedTaskId : undefined;
+  }
+
+  private headlessTaskTargetArg(rawArgs: unknown[]): unknown {
+    const command = typeof rawArgs[0] === 'string' ? rawArgs[0] : '';
+    if (command === 'set') {
+      const subCommand = typeof rawArgs[1] === 'string' ? rawArgs[1] : '';
+      return TASK_SCOPED_HEADLESS_SET_COMMANDS.has(subCommand) ? rawArgs[2] : undefined;
+    }
+    return TASK_SCOPED_HEADLESS_COMMANDS.has(command) || TARGET_RESOLVED_HEADLESS_COMMANDS.has(command)
+      ? rawArgs[1]
+      : undefined;
   }
 
   private isWorkflowQueueFenceIntent(intent: WorkflowMutationIntent): boolean {
@@ -413,7 +635,9 @@ export class PersistedWorkflowMutationCoordinator {
       intent.channel === 'invoker:retry-workflow'
       || intent.channel === 'invoker:recreate-workflow'
       || intent.channel === 'invoker:recreate-task'
-      || intent.channel === 'invoker:recreate-with-rebase'
+      || intent.channel === 'invoker:rebase-retry'
+      || intent.channel === 'invoker:rebase-recreate'
+      || intent.channel === 'invoker:delete-task'
       || intent.channel === 'invoker:delete-workflow'
       || intent.channel === 'invoker:delete-all-workflows'
       || intent.channel === 'invoker:delete-all-workflows-bulk'
@@ -430,14 +654,14 @@ export class PersistedWorkflowMutationCoordinator {
     if (command === 'recreate-task') {
       return true;
     }
-    if (command === 'delete' || command === 'delete-workflow' || command === 'delete-all') {
+    if (command === 'delete' || command === 'delete-workflow' || command === 'delete-task' || command === 'delete-all') {
       return true;
     }
     const isWorkflowId = /^wf-[^/]+$/.test(target);
     if (!isWorkflowId) {
       return false;
     }
-    return command === 'recreate' || command === 'recreate-with-rebase' || command === 'retry';
+    return command === 'recreate' || command === 'rebase-retry' || command === 'rebase-recreate' || command === 'retry';
   }
 
   private createTiming(
@@ -455,4 +679,10 @@ export class PersistedWorkflowMutationCoordinator {
       args,
     });
   }
+}
+
+function compactFailedEvent(event: WorkflowMutationFailedEvent): WorkflowMutationFailedEvent {
+  return Object.fromEntries(
+    Object.entries(event).filter(([, value]) => value !== undefined),
+  ) as WorkflowMutationFailedEvent;
 }

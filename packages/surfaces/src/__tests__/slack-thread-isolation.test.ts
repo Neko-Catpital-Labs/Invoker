@@ -46,14 +46,17 @@ vi.mock('@slack/bolt', () => {
 const conversationInstances = new Map<string, any>();
 const mockPlanConversationCtor = vi.fn();
 
-vi.mock('../slack/plan-conversation.js', () => ({
+vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../slack/plan-conversation.js')>()),
   PlanConversation: vi.fn((...args: any[]) => {
     const config = args[0];
     const instance = {
       _config: config,
       _messages: [] as Array<{ role: string; content: string }>,
       submittedPlanText: null as any,
+      getDraftedPlan: () => instance.submittedPlanText,
       planSubmitted: false,
+      conversationMode: config?.mode ?? 'plan',
       init: vi.fn().mockResolvedValue(undefined),
       sendMessage: vi.fn().mockImplementation(async (text: string) => {
         instance._messages.push({ role: 'user', content: text });
@@ -311,29 +314,33 @@ describe('Slack thread isolation', () => {
   });
 
   describe('plan submission removes conversation from thread map', () => {
-    it('removes conversation after plan submission via sendMessage', async () => {
+    it('submits via an explicit submit verb + confirmation, then emits start_plan', async () => {
       await surface.start(async (cmd) => { receivedCommands.push(cmd); });
       const mentionHandler = getMentionHandler(surface);
+      const messageHandler = getMessageHandler(surface);
       const say = vi.fn();
 
       await mentionHandler({
-        event: { text: '<@U_BOT> build something', ts: 'thread-submit', thread_ts: undefined, user: 'U1' },
+        event: { text: '<@U_BOT> plan: build something', ts: 'thread-submit', thread_ts: undefined, user: 'U1' },
         say,
       });
 
       const conv = conversationInstances.get('thread-submit');
-      // Simulate plan submission (sets both planSubmitted and submittedPlanText)
-      conv.submittedPlanText = 'name: "Submit Test"\ntasks:\n  - id: t1\n    description: "Test"\n    dependencies: []\n';
-      conv.planSubmitted = true;
-      conv.sendMessage.mockResolvedValueOnce('Submitting plan.');
+      // The conversation has drafted a plan (exposed via getDraftedPlan).
+      conv.submittedPlanText = 'name: "Submit Test"\ntasks:\n  - id: t1\n    description: "Run the test"\n    dependencies: []\n';
 
-      // Follow-up that triggers submission
+      // Explicit submit verb → confirmation only, no start_plan yet.
       await mentionHandler({
-        event: { text: '<@U_BOT> go ahead', ts: '500.500', thread_ts: 'thread-submit', user: 'U1' },
+        event: { text: '<@UBOT> submit', ts: '500.400', thread_ts: 'thread-submit', user: 'U1' },
         say,
       });
+      expect(receivedCommands.some((c) => c.type === 'start_plan')).toBe(false);
 
-      // Should have emitted start_plan command
+      // Confirm → start_plan emitted.
+      await messageHandler({
+        event: { text: 'yes', ts: '500.500', thread_ts: 'thread-submit', user: 'U1' },
+        say,
+      });
       expect(receivedCommands).toContainEqual(
         expect.objectContaining({ type: 'start_plan' }),
       );
@@ -605,71 +612,55 @@ Want me to execute this?`;
     });
   });
 
-  it('mention → plan response → user confirms → submit_plan → start_plan', async () => {
+  it('mention → plan drafted → explicit submit → confirm → start_plan', async () => {
     await surface.start(async (cmd) => { receivedCommands.push(cmd); });
     const mentionHandler = getMentionHandler(surface);
     const messageHandler = getMessageHandler(surface);
     const say = vi.fn();
 
-    // Step 1: User @mentions with a request
+    // Step 1: User explicitly asks for an Invoker plan.
     await mentionHandler({
-      event: { text: '<@U_BOT> build a REST API', ts: 'thread-e2e', thread_ts: undefined, user: 'U1' },
+      event: { text: '<@U_BOT> plan: build a REST API', ts: 'thread-e2e', thread_ts: undefined, user: 'U1' },
       say,
     });
-
     const conv = conversationInstances.get('thread-e2e');
     expect(conv).toBeDefined();
     expect(conv.sendMessage).toHaveBeenCalledTimes(1);
 
-    // Step 2: Mock sendMessage to return a YAML plan response
+    // Step 2: Bot drafts a YAML plan; nothing submitted.
     say.mockClear();
     conv.sendMessage.mockResolvedValueOnce(YAML_PLAN);
-
     await messageHandler({
       event: { text: 'I want GET and POST for /users', ts: '100.100', thread_ts: 'thread-e2e', user: 'U1' },
       say,
     });
-
-    // Should post the plan text to the thread
     expect(say).toHaveBeenCalledWith(
       expect.objectContaining({ text: YAML_PLAN, thread_ts: 'thread-e2e' }),
     );
-    // No start_plan yet — Claude hasn't called submit_plan
-    expect(receivedCommands).not.toContainEqual(
-      expect.objectContaining({ type: 'start_plan' }),
-    );
+    expect(receivedCommands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
 
-    // Step 3: User confirms → planSubmitted + submittedPlanText set
+    // Step 3: Explicit submit → plain-English summary + confirmation, still no start_plan.
     say.mockClear();
-    const expectedPlanText = 'name: "Add REST API"\ntasks:\n  - id: implement\n    description: "Implement the REST API endpoints"\n  - id: test\n    description: "Test the endpoints"\n    command: "pnpm test"\n';
-    conv.sendMessage.mockImplementationOnce(async () => {
-      conv.planSubmitted = true;
-      conv.submittedPlanText = expectedPlanText;
-      return 'Plan submitted! Starting execution now.';
-    });
-
-    await messageHandler({
-      event: { text: 'execute', ts: '200.200', thread_ts: 'thread-e2e', user: 'U1' },
+    const expectedPlanText = 'name: "Add REST API"\ntasks:\n  - id: implement\n    description: "Implement the REST API endpoints"\n    dependencies: []\n';
+    conv.submittedPlanText = expectedPlanText; // exposed via getDraftedPlan()
+    await mentionHandler({
+      event: { text: '<@UBOT> submit', ts: '150.150', thread_ts: 'thread-e2e', user: 'U1' },
       say,
     });
+    expect(receivedCommands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
 
-    // Should post Claude's reply
-    expect(say).toHaveBeenCalledWith(
-      expect.objectContaining({ text: 'Plan submitted! Starting execution now.', thread_ts: 'thread-e2e' }),
-    );
-
-    // Should post the "Starting" execution message
+    // Step 4: User confirms → start_plan with the raw plan text.
+    say.mockClear();
+    await messageHandler({
+      event: { text: 'yes', ts: '200.200', thread_ts: 'thread-e2e', user: 'U1' },
+      say,
+    });
     expect(say).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining('Starting') }),
     );
-
-    // Should emit start_plan command with the raw plan text
     expect(receivedCommands).toHaveLength(1);
     expect(receivedCommands[0]).toEqual(
-      expect.objectContaining({
-        type: 'start_plan',
-        planText: expectedPlanText,
-      }),
+      expect.objectContaining({ type: 'start_plan', planText: expectedPlanText }),
     );
   });
 });

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 
 const FILES = [
   path.resolve(__dirname, '..', 'main.ts'),
+  path.resolve(__dirname, '..', 'ipc', 'gui-mutation-handlers.ts'),
   path.resolve(__dirname, '..', 'headless.ts'),
 ];
 

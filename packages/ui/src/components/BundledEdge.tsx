@@ -138,7 +138,7 @@ export function BundledEdge({
             width={label.length * 7 + 12}
             height={20}
             rx={4}
-            fill="#1f2937"
+            fill="rgb(var(--card))"
             fillOpacity={0.9}
             stroke={currentStroke}
             strokeWidth={1}

@@ -5,7 +5,10 @@ import type { Executor, ExecutorHandle, PersistedTaskMeta, TerminalSpec, Unsubsc
 import { bashPreserveOrReset, bashMergeUpstreams, bashFetchNodeRemotes, parsePreserveResult, parseMergeError } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import type { AgentRegistry } from './agent-registry.js';
+import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { checkStaleness } from './git-staleness-detector.js';
+import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
+import { childProcessHasExited, terminateChildProcessGroup } from './process-utils.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -39,6 +42,8 @@ export interface BaseEntry {
    * orchestrator lease does not expire in this post-close window.
    */
   finalizingAfterClose?: boolean;
+  /** Child process owned by process-backed executors. */
+  process?: ChildProcess | null;
 }
 
 interface HeartbeatOptions {
@@ -65,6 +70,23 @@ export interface SemanticFailure {
   message: string;
   syntheticExitCode?: number;
 }
+
+const TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS = [
+  /could not resolve host/i,
+  /could not resolve hostname/i,
+  /could not resolve proxy/i,
+  /temporary failure in name resolution/i,
+  /name or service not known/i,
+  /nodename nor servname provided/i,
+  /network is unreachable/i,
+  /no route to host/i,
+  /connection timed out/i,
+  /operation timed out/i,
+  /connection reset by peer/i,
+  /connection refused/i,
+  /failed to connect to .* port \d+/i,
+  /the requested url returned error: 5\d\d/i,
+];
 
 export class MergeConflictError extends Error {
   constructor(
@@ -201,7 +223,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         return;
       }
 
-      if (child.exitCode !== null || child.killed) {
+      if (childProcessHasExited(child) || child.killed) {
         if (entry.finalizingAfterClose) {
           this.emitHeartbeat(executionId);
           return;
@@ -430,6 +452,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     cwd: string,
     opts?: { signal?: AbortSignal },
   ): Promise<string> {
+    assertNotGitConfigMutation(args, `${this.type}.execGitSimple`);
     const stack = new Error().stack;
     const callerFrames = stack?.split('\n').slice(1, 5).map(l => l.trim()).join('\n    ') ?? '(no stack)';
     traceExecution(`[git-trace] git ${args.join(' ')}  cwd=${cwd}\n    ${callerFrames}`);
@@ -529,8 +552,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     setupBranchExplicitBase?: string,
   ): Promise<void> {
     const upstreams = request.inputs.upstreamBranches ?? [];
+    const upstreamsToMerge = this.selectUpstreamBranchesToMerge(
+      upstreams,
+      request.inputs.baseBranch,
+      setupBranchExplicitBase,
+    );
     const baseFromUpstream = !setupBranchExplicitBase && upstreams.length > 0;
-    const upstreamsToMerge = baseFromUpstream ? upstreams.slice(1) : upstreams;
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] upstreamsToMerge=${JSON.stringify(upstreamsToMerge)} ` +
         `(baseFromUpstream=${baseFromUpstream}) mergeCwd=${mergeCwd}`,
@@ -570,6 +597,26 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       }
       throw err;
     }
+  }
+
+  private selectUpstreamBranchesToMerge(
+    upstreamBranches: string[],
+    requestBaseBranch?: string,
+    setupBranchExplicitBase?: string,
+  ): string[] {
+    const requestBase = requestBaseBranch?.trim();
+    // Contract: upstreamBranches may be shaped as
+    // [workflowBase, dependencyBranch, ...]. When the workflow base was already
+    // resolved and supplied explicitly, do not merge that marker again.
+    if (setupBranchExplicitBase && requestBase && upstreamBranches[0] === requestBase) {
+      return upstreamBranches.slice(1);
+    }
+
+    if (!setupBranchExplicitBase && upstreamBranches.length > 0) {
+      return upstreamBranches.slice(1);
+    }
+
+    return upstreamBranches;
   }
 
   protected async setupTaskBranch(
@@ -811,24 +858,33 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         ? this.entries.get(executionId)?.request.inputs.branchRepoUrl
         : undefined);
       const branchRepoUrl = requestBranchRepoUrl?.trim();
+      const remoteName = branchRepoUrl ? BaseExecutor.BRANCH_REMOTE_NAME : 'origin';
       if (branchRepoUrl) {
-        try {
-          await this.execGitSimple(
-            ['remote', 'set-url', BaseExecutor.BRANCH_REMOTE_NAME, branchRepoUrl],
-            cwd,
-          );
-        } catch {
-          await this.execGitSimple(
-            ['remote', 'add', BaseExecutor.BRANCH_REMOTE_NAME, branchRepoUrl],
-            cwd,
-          );
-        }
+        await ensureRemoteUrl({
+          cwd,
+          remote: remoteName,
+          url: branchRepoUrl,
+          context: { caller: `${this.type}.pushBranchToRemote`, detail: branch },
+        });
+      }
+      const branchRef = `${branch}:refs/heads/${branch}`;
+      try {
         await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', '-u', BaseExecutor.BRANCH_REMOTE_NAME, branch],
+          ['push', '--force-with-lease', remoteName, branchRef],
           cwd,
         );
-      } else {
-        await this.execGitSimpleWithNetworkTimeout(['push', '--force-with-lease', '-u', 'origin', branch], cwd);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const missingLocalRef = message.includes('src refspec ')
+          && message.includes(' does not match any');
+        const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
+        if (!missingLocalRef || currentBranch.length > 0) {
+          throw err;
+        }
+        await this.execGitSimpleWithNetworkTimeout(
+          ['push', '--force-with-lease', remoteName, `HEAD:refs/heads/${branch}`],
+          cwd,
+        );
       }
       return undefined;
     } catch (err) {
@@ -837,6 +893,14 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       if (executionId) this.emitOutput(executionId, msg);
       return err instanceof Error ? err.message : String(err);
     }
+  }
+
+  protected isTransientGitTransportError(error: string): boolean {
+    return TRANSIENT_GIT_TRANSPORT_ERROR_PATTERNS.some((pattern) => pattern.test(error));
+  }
+
+  protected isNoRefspecPushError(error: string): boolean {
+    return /src refspec .* does not match any/i.test(error);
   }
 
   // ── Shared command building ─────────────────────────────
@@ -860,16 +924,22 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
     if (request.actionType === 'ai_task') {
       if (opts?.agentRegistry) {
-        const agentName = request.inputs.executionAgent ?? 'claude';
+        const agentName = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
         const agent = opts.agentRegistry.getOrThrow(agentName);
+        assertExecutionModelSupported(agent, request.inputs.executionModel);
         const fullPrompt = this.buildFullPrompt(request);
-        const spec = agent.buildCommand(fullPrompt);
+        const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
       }
       // Fallback: use prepareClaudeSession when no agent registry is available
       const claudeCommand = opts?.claudeCommand ?? 'claude';
       const session = this.prepareClaudeSession(request);
       return { cmd: claudeCommand, args: session.cliArgs, agentSessionId: session.sessionId, fullPrompt: session.fullPrompt };
+    }
+    if (request.actionType === 'merge_gate') {
+      throw new Error(
+        'WorkRequest actionType "merge_gate" must run on MergeGateExecutor, not a worktree/command executor',
+      );
     }
     return { cmd: '/bin/bash', args: ['-c', 'echo "Unsupported action type"'] };
   }
@@ -911,7 +981,6 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     },
   ): Promise<void> {
     const entry = this.entries.get(executionId);
-    if (entry) entry.completed = true;
     const bufferedOutput = entry?.outputBuffer.join('') ?? '';
     const semanticFailure = this.detectSemanticFailure(request, bufferedOutput, exitCode);
     const effectiveExitCode = (exitCode === 0 && semanticFailure)
@@ -944,7 +1013,19 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       pushError = await this.pushBranchToRemote(cwd, opts.branch, executionId);
     }
     if (effectiveExitCode === 0 && pushError !== undefined && opts?.branch) {
-      status = 'failed';
+      if (this.isTransientGitTransportError(pushError)) {
+        this.emitOutput(
+          executionId,
+          `[${this.type}] Branch push failed due to transient git transport error; preserving successful command result.\n`,
+        );
+      } else if (this.isNoRefspecPushError(pushError)) {
+        this.emitOutput(
+          executionId,
+          `[${this.type}] Branch push had no local ref to publish; preserving successful command result.\n`,
+        );
+      } else {
+        status = 'failed';
+      }
     }
 
     if (opts?.originalBranch) {
@@ -1000,7 +1081,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   ): SemanticFailure | undefined {
     if (exitCode !== 0) return undefined;
     if (request.actionType !== 'ai_task') return undefined;
-    if ((request.inputs.executionAgent ?? 'claude') !== 'codex') return undefined;
+    if ((request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT) !== 'codex') return undefined;
     const haystack = output.toLowerCase();
     const codexSandboxDenied =
       haystack.includes('codex(sandbox(denied') ||
@@ -1046,8 +1127,15 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   /**
    * Build CLI args for invoking `claude` with a session ID and prompt.
    */
-  protected buildClaudeArgs(sessionId: string, fullPrompt: string): string[] {
-    return ['--session-id', sessionId, '--dangerously-skip-permissions', '-p', fullPrompt];
+  protected buildClaudeArgs(sessionId: string, fullPrompt: string, executionModel?: string): string[] {
+    return [
+      '--session-id',
+      sessionId,
+      '--dangerously-skip-permissions',
+      ...(executionModel ? ['--model', executionModel] : []),
+      '-p',
+      fullPrompt,
+    ];
   }
 
   /**
@@ -1057,13 +1145,19 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected prepareClaudeSession(request: WorkRequest): ClaudeSessionParams {
     const sessionId = randomUUID();
     const fullPrompt = this.buildFullPrompt(request);
-    const cliArgs = this.buildClaudeArgs(sessionId, fullPrompt);
+    const cliArgs = this.buildClaudeArgs(sessionId, fullPrompt, request.inputs.executionModel);
     return { sessionId, cliArgs, fullPrompt };
+  }
+
+  async kill(handle: ExecutorHandle): Promise<void> {
+    const entry = this.getEntry(handle);
+    if (!entry || entry.completed || !entry.process) return;
+
+    await terminateChildProcessGroup(entry.process, () => entry.completed);
   }
 
   // Abstract methods that subclasses must implement
   abstract start(request: WorkRequest): Promise<ExecutorHandle>;
-  abstract kill(handle: ExecutorHandle): Promise<void>;
   abstract sendInput(handle: ExecutorHandle, input: string): void;
   abstract getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null;
   abstract getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec;

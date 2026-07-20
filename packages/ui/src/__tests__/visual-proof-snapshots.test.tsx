@@ -33,9 +33,15 @@ describe('Visual proof snapshots', () => {
 
   it('empty-state', () => {
     render(<App />);
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
-    expect(screen.getByTestId('rail-open-file')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByText('What to expect')).toBeInTheDocument();
+    expect(screen.getAllByText('Your plan will appear here.').length).toBeGreaterThan(0);
+    expect(screen.getByTestId('sidebar-home')).toHaveTextContent('Invoker');
+    expect(screen.getByTestId('sidebar-workflows')).toHaveTextContent('Workflows');
+    expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('Needs Attention');
+    expect(screen.getByTestId('sidebar-running')).toHaveTextContent('Running');
+    expect(screen.getByText('Describe the change in the terminal to generate a plan.')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-settings')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Home' })).not.toBeInTheDocument();
     expect(screen.queryByText('System Setup')).not.toBeInTheDocument();
   });
 
@@ -60,8 +66,8 @@ describe('Visual proof snapshots', () => {
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
-      expect(screen.getByText('Alpha')).toBeInTheDocument();
-      expect(screen.getByText('Beta')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-alpha')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-beta')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-alpha'));
@@ -69,6 +75,65 @@ describe('Visual proof snapshots', () => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Alpha task DAG');
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha');
     });
+  });
+
+  it('detached-lineage graph state — detached marker distinct from active dependency edge', async () => {
+    // Deterministic fixture: one shared upstream workflow with two downstreams —
+    // one still actively depending on it, one explicitly detached. Proves the
+    // detached lineage renders as a distinct dashed edge + badge, not as an
+    // active solid edge.
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-up', name: 'Upstream', status: 'completed' },
+      {
+        id: 'wf-active',
+        name: 'Active downstream',
+        status: 'running',
+        externalDependencies: [{ workflowId: 'wf-up', requiredStatus: 'completed' }],
+      },
+      {
+        id: 'wf-detached',
+        name: 'Detached downstream',
+        status: 'running',
+        detachedExternalDependencies: [
+          {
+            workflowId: 'wf-up',
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'completed',
+            detachedAt: '2026-01-02T00:00:00.000Z',
+          },
+        ],
+      },
+    ];
+    const upstream = makeUITask({ id: 'task-up', description: 'Upstream task', status: 'completed', workflowId: 'wf-up' });
+    const active = makeUITask({ id: 'task-active', description: 'Active downstream task', status: 'running', workflowId: 'wf-active' });
+    const detached = makeUITask({ id: 'task-detached', description: 'Detached downstream task', status: 'running', workflowId: 'wf-detached' });
+
+    render(<App />);
+    act(() => mock.setTasks([upstream, active, detached], workflows));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-active')).toBeInTheDocument();
+      expect(screen.getByTestId('workflow-node-wf-detached')).toBeInTheDocument();
+    });
+
+    // Active dependency: solid edge (no dash), distinct accessible name.
+    const activeEdge = screen.getByTestId('rf__edge-workflow:active:wf-up->wf-active');
+    expect(activeEdge).toHaveAttribute('data-kind', 'active');
+    expect(activeEdge).toHaveAttribute('data-stroke-dasharray', '');
+    expect(activeEdge).toHaveAccessibleName('Active workflow dependency');
+
+    // Detached lineage: dashed edge, distinct kind + accessible name.
+    const detachedEdge = screen.getByTestId('rf__edge-workflow:detached:wf-up->wf-detached');
+    expect(detachedEdge).toHaveAttribute('data-kind', 'detached');
+    expect(detachedEdge).toHaveAttribute('data-stroke-dasharray', '5 6');
+    expect(detachedEdge).toHaveAccessibleName('Detached workflow lineage');
+
+    // The detached downstream carries the "Detached" badge; the active one does not.
+    const badge = screen.getByTestId('workflow-node-wf-detached-detached-lineage');
+    expect(badge).toHaveTextContent('Detached');
+    expect(badge).toHaveAttribute('title', 'Detached from 1 upstream workflow');
+    expect(screen.queryByTestId('workflow-node-wf-active-detached-lineage')).not.toBeInTheDocument();
   });
 
   it('workflow and task context menus render', async () => {

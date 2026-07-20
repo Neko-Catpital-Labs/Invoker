@@ -9,16 +9,17 @@
 
 export type TaskStatus =
   | 'pending'
+  | 'queued'
   | 'running'
   | 'fixing_with_ai'
   | 'completed'
   | 'failed'
+  | 'closed'
   | 'needs_input'
   | 'blocked'
   | 'review_ready'
   | 'awaiting_approval'
   | 'stale';
-
 // ── Task Config (definition / spec) ────────────────────────
 // Copied wholesale when cloning/forking: clone.config = original.config
 
@@ -39,8 +40,10 @@ export interface BaseTaskConfig {
   readonly approach?: string;
   readonly testPlan?: string;
   readonly reproCommand?: string;
-  /** Name of the execution agent to use (e.g. 'claude', 'codex'). Defaults to 'claude'. */
+  /** Name of the execution agent to use (e.g. 'claude', 'codex', 'omp'). Defaults to 'claude'. */
   readonly executionAgent?: string;
+  /** Agent-specific model selector passed through without central validation. */
+  readonly executionModel?: string;
   /** Cross-workflow prerequisites for this task. */
   readonly externalDependencies?: readonly ExternalDependency[];
   /** Execution pool identifier for shared queue/drain scheduling across substrates. */
@@ -95,11 +98,94 @@ export interface ExternalDependency {
   readonly gatePolicy?: 'completed' | 'review_ready';
 }
 
+export interface ExternalDependencyChange {
+  readonly before?: ExternalDependency;
+  readonly after?: ExternalDependency;
+  readonly changedAt: string;
+  readonly changedBy?: string;
+}
+
+/**
+ * Read-only provenance for an external dependency that `detachWorkflow`
+ * removed from a workflow's active {@link ExternalDependency} list.
+ *
+ * The active dependency is removed so scheduling no longer waits on the
+ * upstream workflow, but the lineage is preserved here so the UI can tell
+ * a genuinely-independent workflow apart from one explicitly detached from
+ * an upstream stack edge. Never re-read by the scheduler.
+ */
+export interface DetachedExternalDependency {
+  /** Upstream workflow the dependency pointed at. */
+  readonly workflowId: string;
+  /** Optional task selector within the upstream workflow, if the removed dependency had one. */
+  readonly taskId?: string;
+  readonly requiredStatus: 'completed';
+  readonly gatePolicy?: 'completed' | 'review_ready';
+  /** When the detach removed this dependency. */
+  readonly detachedAt: string;
+}
+
 // ── Task Execution (runtime state) ─────────────────────────
 // Never copied when cloning. Reset on restart.
 
 export type TaskRunPhase = 'launching' | 'executing';
 export type TaskHeartbeatSource = 'executor' | 'remote_workload';
+
+export type ReviewGateArtifactStatus =
+  | 'pending'
+  | 'open'
+  | 'approved'
+  | 'changes_requested'
+  | 'merged'
+  | 'closed'
+  | 'discarded'
+  | 'unknown';
+
+export interface MergeGateFailedCheck {
+  readonly name: string;
+  readonly conclusion?: string;
+  readonly detailsUrl?: string;
+  readonly summary?: string;
+}
+
+export interface ReviewGateArtifact {
+  readonly id: string;
+  readonly title?: string;
+  readonly url?: string;
+  readonly providerId?: string;
+  readonly provider?: string;
+  readonly branch?: string;
+  readonly baseBranch?: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly required: boolean;
+  readonly status: ReviewGateArtifactStatus;
+  readonly rawStatus?: string;
+  readonly checksState?: 'pending' | 'success' | 'failure';
+  readonly failedChecks?: readonly MergeGateFailedCheck[];
+  readonly mergeState?: 'clean' | 'dirty' | 'unknown';
+  readonly dependsOn?: readonly string[];
+  readonly generation: number;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+  readonly discardedAt?: string;
+  readonly discardReason?: string;
+}
+
+export interface ReviewGateState {
+  readonly activeGeneration: number;
+  readonly completion: {
+    readonly required: 'all';
+    readonly status: 'approved';
+  };
+  readonly artifacts: readonly ReviewGateArtifact[];
+}
+
+export type FailureClass = 'liveness_stall';
+
+export function isLivenessFailureClass(failureClass: FailureClass | undefined): boolean {
+  return failureClass === 'liveness_stall';
+}
 
 export interface TaskExecution {
   readonly generation?: number;
@@ -107,6 +193,7 @@ export interface TaskExecution {
   readonly inputPrompt?: string;
   readonly exitCode?: number;
   readonly error?: string;
+  readonly failureClass?: FailureClass;
   readonly protocolErrorCode?: string;
   readonly protocolErrorMessage?: string;
   readonly startedAt?: Date;
@@ -131,11 +218,19 @@ export interface TaskExecution {
   readonly selectedExperiments?: readonly string[];
   readonly experimentResults?: readonly ExperimentResultEntry[];
   readonly pendingFixError?: string;
+  /**
+   * Resting status recorded when a fix session began (`failed`,
+   * `review_ready`, or `awaiting_approval`). Present only while the session
+   * is open (fixing or parked awaiting approval); `revertFixSession` restores
+   * this status and every session exit clears it.
+   */
+  readonly fixSessionEntryStatus?: TaskStatus;
   readonly isFixingWithAI?: boolean;
   readonly reviewUrl?: string;
   readonly reviewId?: string;
   readonly reviewStatus?: string;
   readonly reviewProviderId?: string;
+  readonly reviewGate?: ReviewGateState;
   readonly phase?: TaskRunPhase;
   readonly launchStartedAt?: Date;
   readonly launchCompletedAt?: Date;
@@ -144,7 +239,10 @@ export interface TaskExecution {
     readonly conflictFiles: readonly string[];
   };
   readonly selectedAttemptId?: string;
-  readonly autoFixAttempts?: number;
+  readonly crashPreservedAt?: Date;
+  readonly crashPreservedOwnerPid?: number;
+  readonly crashPreservedReportPath?: string;
+  readonly crashPreservedDiagnosticSummary?: string;
 }
 
 // ── Task State ──────────────────────────────────────────────
@@ -177,6 +275,7 @@ export interface ExperimentResultEntry {
 // ── Task State Changes (for updates / deltas) ───────────────
 
 export interface TaskStateChanges {
+  readonly description?: string;
   readonly status?: TaskStatus;
   readonly dependencies?: readonly string[];
   readonly config?: Partial<TaskConfig>;
@@ -186,9 +285,9 @@ export interface TaskStateChanges {
 // ── Task Delta (for UI updates) ─────────────────────────────
 
 export type TaskDelta =
-  | { readonly type: 'created'; readonly task: TaskState }
-  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number }
-  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number };
+  | { readonly type: 'created'; readonly task: TaskState; readonly streamSequence?: number }
+  | { readonly type: 'updated'; readonly taskId: string; readonly changes: TaskStateChanges; readonly taskStateVersion: number; readonly previousTaskStateVersion: number; readonly streamSequence?: number }
+  | { readonly type: 'removed'; readonly taskId: string; readonly previousTaskStateVersion: number; readonly streamSequence?: number };
 
 // ── Task Create Options (alias for TaskConfig) ──────────────
 
@@ -219,6 +318,10 @@ export function createTaskState(
     execution: { generation: 0 },
     taskStateVersion: 1,
   };
+}
+
+export function isCrashPreservedExecution(execution: TaskExecution | undefined | null): boolean {
+  return Boolean(execution?.crashPreservedAt);
 }
 
 // ── Attempt Status ──────────────────────────────────────────
