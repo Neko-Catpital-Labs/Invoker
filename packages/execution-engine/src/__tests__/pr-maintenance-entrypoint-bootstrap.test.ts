@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -15,6 +15,7 @@ const PR_MAINTENANCE_ENTRYPOINTS = [
   { kind: 'coderabbit-address', scriptRelativePath: 'scripts/cron-coderabbit-address.sh' },
   { kind: 'pr-conflict-rebase', scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh' },
   { kind: 'pr-ci-failure-scan', scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh' },
+  { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
 ] as const;
 
 describe('PR maintenance entrypoints bootstrap', () => {
@@ -62,4 +63,42 @@ describe('PR maintenance entrypoints bootstrap', () => {
       expect(result.status).toBe(0);
     });
   }
+
+  it('admin-bypass land script passes shared repo and author env controls to the Python entrypoint', () => {
+    rmSync(join(stubBin, 'flock'), { force: true });
+    const capturePath = join(stubBin, 'python-args.txt');
+    const pythonStub = join(stubBin, 'python3');
+    writeFileSync(
+      pythonStub,
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "$CAPTURE_PATH"\n',
+      { mode: 0o755 },
+    );
+    chmodSync(pythonStub, 0o755);
+
+    const result = spawnSync('bash', [resolve(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh')], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        PATH: `${stubBin}:${process.env.PATH ?? ''}`,
+        CAPTURE_PATH: capturePath,
+        INVOKER_PR_CRON_LOCK: lockPath,
+        INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
+        INVOKER_PR_CRON_AUTHOR: 'octocat',
+        INVOKER_PR_CRON_DRY_RUN: '1',
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(capturePath, 'utf8').trim().split('\n')).toEqual([
+      'scripts/mergify_admin_requeue.py',
+      '--once',
+      '--repo',
+      'owner/repo',
+      '--author',
+      'octocat',
+      '--dry-run',
+    ]);
+  });
 });

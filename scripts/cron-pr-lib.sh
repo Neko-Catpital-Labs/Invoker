@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Shared helpers for the two PR-maintenance cron jobs that run co-located with
-# the Invoker owner:
+# Shared helpers for PR-maintenance cron jobs that run co-located with the
+# Invoker owner:
 #
 #   scripts/cron-coderabbit-address.sh  (Job 1) — address new CodeRabbit reviews
 #   scripts/cron-pr-conflict-rebase.sh  (Job 2) — rebase-recreate conflicting PRs
+#   packages/execution-engine/scripts/cron-pr-ci-failure.sh — repair mapped PR CI
+#   scripts/cron-pr-admin-bypass-land.sh — babysit admin-bypass land/requeue flow
 #
 # Source this AFTER `set -euo pipefail`:
 #   source "$(dirname "$0")/cron-pr-lib.sh"
@@ -15,7 +17,7 @@
 #              ledger_marker_seen, ledger_max_marker, gh_json,
 #              resolve_workflow_for_pr, prune_stale_pr_workdirs
 #
-# Both jobs run their mutating operation SYNCHRONOUSLY while holding a single
+# These jobs run their mutating operation SYNCHRONOUSLY while holding a single
 # shared lock, so only one PR cron operation runs at a time (the other exits
 # this tick and retries in 5 min). The lock prefers flock (Linux owner host)
 # and falls back to an atomic mkdir lock where flock is absent (e.g. macOS).
