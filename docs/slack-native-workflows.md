@@ -109,6 +109,7 @@ The bot runs in Socket Mode. Add these bot scopes to the app manifest (reinstall
 
 - `app_mentions:read` — receive `@Invoker` mentions.
 - `chat:write` — post messages.
+- `files:write` — upload artifacts an agent links from its worktree.
 - `channels:history` — read lobby thread replies (public lobby channel).
 - `channels:read` — resolve the lobby channel via `conversations.info` during setup checks.
 - `groups:write` — **create** private `workflow-<id>` channels and invite users.
