@@ -142,9 +142,7 @@ def plan_stack_actions(stack: StackGroup, required_checks: Collection[str], ledg
         return ()
 
     if "admin-bypass" not in bottom.labels:
-        if ledger.count("add_admin_bypass_label", bottom.number, bottom.head_ref_oid, "admin-bypass") >= 1:
-            return (cap_action(bottom, Blocker("admin-bypass", "capped", bottom.number, "admin-bypass label add"), "admin-bypass label add"),)
-        return (Action("add_admin_bypass_label", bottom.number, "admin-bypass", "missing admin-bypass label"),)
+        return (Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label"),)
 
     latest = bottom.latest_mergify
     requeue_reason = ""
