@@ -242,6 +242,19 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
     expect(mock.api.deleteWorkflow).not.toHaveBeenCalled();
   });
 
+  it('task context menu opened from the selected workflow mini DAG layers above the floating graph panel', async () => {
+    await setup();
+    fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
+    const panel = await screen.findByTestId('selected-workflow-mini-dag');
+
+    fireEvent.contextMenu(screen.getByTestId('rf__node-task-alpha'));
+
+    const menu = await screen.findByRole('menu');
+    expect(panel).toBeInTheDocument();
+    expect(menu).toHaveStyle({ zIndex: String(FLOATING_GRAPH_PANEL_Z_INDEX + 100) });
+    expect(Number(menu.style.zIndex)).toBeGreaterThan(FLOATING_GRAPH_PANEL_Z_INDEX);
+  });
+
   it('workflow context menu retries workflow', async () => {
     await setup();
     fireEvent.contextMenu(screen.getByTestId('workflow-node-wf-1'));
