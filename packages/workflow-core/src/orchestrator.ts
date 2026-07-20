@@ -35,6 +35,7 @@ import {
   type HeavyweightCommandRoutingPolicy,
 } from './executor-routing.js';
 import { requireDefaultBranchRemote } from './repo-default-branch.js';
+import { unapprovedRequiredReviewArtifacts } from './review-gate-artifacts.js';
 
 const MERGE_TRACE_LOG = resolve(homedir(), '.invoker', 'merge-trace.log');
 function mergeTrace(tag: string, data: Record<string, unknown>): void {
@@ -49,6 +50,7 @@ export const OrchestratorErrorCode = {
   TASK_NOT_FOUND: 'TASK_NOT_FOUND',
   TASK_ALREADY_TERMINAL: 'TASK_ALREADY_TERMINAL',
   WORKFLOW_NOT_FOUND: 'WORKFLOW_NOT_FOUND',
+  REVIEW_GATE_NOT_APPROVED: 'REVIEW_GATE_NOT_APPROVED',
 } as const;
 
 export type OrchestratorErrorCode = (typeof OrchestratorErrorCode)[keyof typeof OrchestratorErrorCode];
@@ -1774,6 +1776,40 @@ export class Orchestrator {
   }
 
   /**
+   * Completion invariant for review-backed merge gates: a merge node may only
+   * reach `completed` once every current required artifact is `approved`.
+   *
+   * Without this, an approval minted for one state can be spent on another —
+   * an auto-approve intent queued for a fix session drains behind that same
+   * fix session's republish and lands on the freshly published, still-open
+   * gate, reporting an unmerged stack as landed.
+   */
+  private assertReviewGateApprovable(task: TaskState): void {
+    if (!task.config.isMergeNode) return;
+    const unapproved = unapprovedRequiredReviewArtifacts(task);
+    if (unapproved.length === 0) return;
+
+    mergeTrace('APPROVE_SKIPPED_GATE_NOT_APPROVED', {
+      taskId: task.id,
+      workflowId: task.config.workflowId,
+      status: task.status,
+      pendingFixError: task.execution.pendingFixError !== undefined,
+      unapproved: unapproved.map((artifact) => ({ id: artifact.id, status: artifact.status })),
+    });
+    this.logger.warn('[orchestrator.approve] refused: review gate not approved', {
+      taskId: task.id,
+      workflowId: task.config.workflowId,
+      status: task.status,
+      unapproved: unapproved.map((artifact) => `${artifact.id}:${artifact.status}`),
+    });
+    throw new OrchestratorError(
+      OrchestratorErrorCode.REVIEW_GATE_NOT_APPROVED,
+      `Cannot approve merge gate ${task.id}: ${unapproved.length} required review artifact(s) are not approved `
+      + `(${unapproved.map((artifact) => `${artifact.id} is ${artifact.status}`).join(', ')}).`,
+    );
+  }
+
+  /**
    * Approve a task awaiting approval. Fires beforeApproveHook (if set)
    * before transitioning state, so merge nodes get git-merged automatically.
    */
@@ -1797,6 +1833,8 @@ export class Orchestrator {
       });
       return [];
     }
+
+    this.assertReviewGateApprovable(task);
 
     if (this.beforeApproveHook) {
       mergeTrace('APPROVE_HOOK_FIRING', { taskId, workflowId: task.config.workflowId });
