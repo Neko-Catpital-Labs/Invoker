@@ -287,6 +287,7 @@ export type {
   InAppPlanningSessionSummary,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  InAppPlanningTaskGroupSummary,
   PlanningPresetOption,
 } from '@invoker/contracts';
 
