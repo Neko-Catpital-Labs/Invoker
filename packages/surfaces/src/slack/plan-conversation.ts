@@ -183,7 +183,8 @@ Default behavior:
 - Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
 - Do NOT generate Invoker YAML in this thread. If the user asks for an Invoker plan, tell them to start a new plan thread with \`plan: <request>\` — plan drafts from an agent thread cannot be submitted.
 - Do NOT submit or start an Invoker workflow. Agent threads reject \`submit\`; only a \`plan:\` thread can be submitted.
-- Keep Slack replies short and concrete: changed files, verification, and any remaining risk.`;
+- Keep Slack replies short and concrete: changed files, verification, and any remaining risk.
+- To share a generated file (screenshot, diagram, report), write it inside your worktree and link it by absolute path as a markdown link, e.g. \`[chart](/abs/path/in/worktree/chart.png)\`. Files linked that way are uploaded to the thread. Files written outside your worktree cannot be shared, so do not put artifacts in /tmp.`;
 }
 
 function buildStackedWorkflowPrompt(repoUrlLine: string, defaultBranch: string): string {
@@ -337,7 +338,7 @@ export class PlanConversation {
   private messages: ConversationMessage[] = [];
   private _submittedPlanText: string | null = null;
   private _planSubmitted = false;
-  private workingDir?: string;
+  readonly workingDir?: string;
   private timeoutMs: number;
   private threadTs?: string;
   private conversationRepo?: ConversationRepository;
