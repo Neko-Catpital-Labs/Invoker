@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PlanConversation } from '../../../surfaces/src/index.ts';
 import {
+  PLANNING_TERMINAL_SUMMARY_BRIDGE_START,
+  buildPlanningTerminalSummaryBridge,
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
@@ -73,6 +75,41 @@ workflows:
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('buildPlanningTerminalSummaryBridge', () => {
+  it('composes bounded planning tmux context from session metadata', () => {
+    const longUserMessage = `Please wire the tmux bridge ${'details '.repeat(40)}tail-marker`;
+    const bridge = buildPlanningTerminalSummaryBridge({
+      id: 'planning-bridge',
+      title: 'Planning bridge terminal',
+      presetKey: 'omp+codex',
+      status: 'draft_ready',
+      messages: [
+        { id: 1, role: 'user', text: longUserMessage, createdAt: '2026-07-07T00:00:00.000Z' },
+        { id: 2, role: 'assistant', text: 'raw assistant draft that should not be copied when a summary exists', createdAt: '2026-07-07T00:00:01.000Z' },
+      ],
+      conversation: new PlanConversation({}),
+      draftPlanSummary: {
+        name: 'Bridge Plan',
+        taskCount: 2,
+        steps: ['Wire helper', 'Persist snapshot'],
+        taskGroups: [],
+      },
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:01.000Z',
+      nextMessageId: 3,
+    });
+
+    expect(bridge).toContain(PLANNING_TERMINAL_SUMMARY_BRIDGE_START);
+    expect(bridge).toContain('Planning session: Planning bridge terminal');
+    expect(bridge).toContain('Status: draft ready');
+    expect(bridge).toContain('Preset: Codex via OMP (omp+codex)');
+    expect(bridge).toContain('Draft plan: Bridge Plan (2 tasks) - Wire helper; Persist snapshot');
+    expect(bridge).toContain('Next: Review or submit the draft in chat');
+    expect(bridge).not.toContain('tail-marker');
+    expect(bridge).not.toContain('raw assistant draft');
+  });
 });
 
 describe('planFromGoal', () => {
