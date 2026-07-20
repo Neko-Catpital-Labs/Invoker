@@ -610,9 +610,9 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
             recoveryTriggered: shouldRecover,
           },
         );
-        fitView({ padding: 0.2 });
         if (shouldRecover) {
           watchdogRecoveryAttemptedRef.current = true;
+          fitView({ padding: 0.2 });
           setFlowInstanceKey((key) => key + 1);
         }
       } else {
