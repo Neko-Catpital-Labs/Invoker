@@ -13,6 +13,12 @@
 import { useEffect, useRef, useState, useLayoutEffect } from 'react';
 import type { TaskState } from '../types.js';
 import { getMenuItems, type MenuItem } from '../lib/context-menu-items.js';
+import {
+  firstEnabledMenuIndex,
+  isMenuActivationKey,
+  isMenuKeyboardKey,
+  nextEnabledMenuIndex,
+} from '../lib/menu-keyboard.js';
 import { EXPERIMENT_SPAWN_PIVOT_OPEN_TERMINAL_MESSAGE } from '../isExperimentSpawnPivot.js';
 
 interface ContextMenuProps {
@@ -60,16 +66,24 @@ export function ContextMenu({
   const dangerItems = availableItems.filter((item) => item.variant === 'danger');
   const hasMoreButton = dangerItems.length > 0 && !showMore;
   const renderedItems: MenuItem[] = showMore ? [...safeItems, ...dangerItems] : safeItems;
+  const moreIndex = renderedItems.length;
+  const keyboardItems = hasMoreButton
+    ? [...renderedItems, { enabled: true }]
+    : renderedItems;
 
   // Find first enabled item index
-  const firstEnabledIndex = renderedItems.findIndex((item) => item.enabled);
+  const firstEnabledIndex = firstEnabledMenuIndex(keyboardItems);
 
-  // Auto-focus first enabled item on mount
   useEffect(() => {
-    if (firstEnabledIndex >= 0) {
+    menuRef.current?.focus({ preventScroll: true });
+  }, [task.id, x, y]);
+
+  // Auto-highlight first enabled item on mount, or after the item list changes.
+  useEffect(() => {
+    if (firstEnabledIndex >= 0 && !keyboardItems[focusedIndex]?.enabled) {
       setFocusedIndex(firstEnabledIndex);
     }
-  }, [firstEnabledIndex]);
+  }, [firstEnabledIndex, focusedIndex, keyboardItems]);
 
   // Viewport clamping: flip if menu overflows bottom or right
   useLayoutEffect(() => {
@@ -133,24 +147,30 @@ export function ContextMenu({
     };
   }, [onClose]);
 
+  const expandMore = () => {
+    const expandedItems = [...safeItems, ...dangerItems];
+    const nextIndex = firstEnabledMenuIndex(expandedItems, safeItems.length);
+    setShowMore(true);
+    if (nextIndex >= 0) {
+      setFocusedIndex(nextIndex);
+    }
+  };
+
   // Keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    const enabledIndices = renderedItems
-      .map((item, idx) => (item.enabled ? idx : -1))
-      .filter((idx) => idx >= 0);
+    if (!isMenuKeyboardKey(e.key)) return;
 
+    e.preventDefault();
+    e.stopPropagation();
     if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const nextPos = (currentPos + 1) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[nextPos]);
+      setFocusedIndex(nextEnabledMenuIndex(keyboardItems, focusedIndex, 1));
     } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentPos = enabledIndices.indexOf(focusedIndex);
-      const prevPos = (currentPos - 1 + enabledIndices.length) % enabledIndices.length;
-      setFocusedIndex(enabledIndices[prevPos]);
-    } else if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
+      setFocusedIndex(nextEnabledMenuIndex(keyboardItems, focusedIndex, -1));
+    } else if (isMenuActivationKey(e.key)) {
+      if (hasMoreButton && focusedIndex === moreIndex) {
+        expandMore();
+        return;
+      }
       const item = renderedItems[focusedIndex];
       if (item?.enabled) {
         handleItemClick(item);
@@ -254,8 +274,11 @@ export function ContextMenu({
           <div className="border-t border-gray-600 my-1" />
           <button
             role="menuitem"
-            className="w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700"
-            onClick={() => setShowMore(true)}
+            className={`w-full text-left px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 ${
+              focusedIndex === moreIndex ? 'bg-gray-700' : ''
+            }`}
+            onClick={expandMore}
+            onMouseEnter={() => setFocusedIndex(moreIndex)}
           >
             More
           </button>
