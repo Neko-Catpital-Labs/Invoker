@@ -9,5 +9,6 @@ export * from './repo-root.ts';
 export * from './cost-types.ts';
 export * from './launch-timeouts.ts';
 export * from './invoker-home.ts';
+export * from './invoker-config-io.ts';
 export * from './prerequisites.ts';
 export { EXTERNAL_DEPENDENCIES, DEFAULT_DRAFTER_MCP_PACKAGE_SPEC } from './external-dependencies.ts';
