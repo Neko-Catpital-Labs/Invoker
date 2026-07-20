@@ -253,6 +253,44 @@ export interface SystemDiagnostics {
   bundledSkills?: BundledSkillsStatus;
 }
 
+export interface InAppPlanningPreset {
+  key: string;
+  label: string;
+}
+
+export type InAppPlanningTranscriptEntry = {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+};
+
+export interface InAppPlanningDraftSummary {
+  name: string;
+  taskCount: number;
+  steps: string[];
+}
+
+export interface InAppPlanningChatSession {
+  id: string;
+  title: string;
+  status: string;
+  presetKey?: string;
+  messages?: InAppPlanningTranscriptEntry[];
+  draftPlanAvailable?: boolean;
+}
+
+export interface InAppPlanningChatResponse {
+  ok: boolean;
+  sessionId: string;
+  reply: string;
+  draftPlanAvailable: boolean;
+  draftPlanSummary?: InAppPlanningDraftSummary;
+}
+
+export interface InAppPlanningChatStreamEvent {
+  sessionId: string;
+  chunk: string;
+}
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
