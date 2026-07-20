@@ -39,6 +39,8 @@ export interface PlanConversationConfig {
   defaultBranch?: string;
   /** Default repo URL (e.g. "git@github.com:user/repo.git"). Used when plan YAML omits repoUrl. */
   repoUrl?: string;
+  /** When true, discuss and scope before drafting YAML; drafting requires explicit user approval. */
+  conversationalPlanning?: boolean;
   /** Logging callback. Defaults to console.log/console.error. */
   log?: LogFn;
 }
@@ -68,19 +70,11 @@ export function isConfirmation(text: string): boolean {
 
 // ── System Prompt ───────────────────────────────────────────
 
-function buildSystemPrompt(defaultBranch: string, repoUrl?: string): string {
+function buildYamlDraftingPrompt(defaultBranch: string, repoUrl?: string): string {
   const repoUrlLine = repoUrl
     ? `repoUrl: "${repoUrl}"          # git clone URL for the repository`
     : `repoUrl: "git@github.com:user/repo.git"  # git clone URL for the repository`;
-  return `You are an assistant for the Invoker orchestrator. You have two modes:
-
-**Direct answer mode** — For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase). Explore the codebase as needed and report the result directly. Do NOT generate a YAML plan for these.
-
-**Plan mode** — For multi-step implementation tasks (adding features, fixing bugs, refactoring code). Generate a YAML task plan as described below.
-
-Use your judgment: if the request can be answered with 1-2 commands or a short explanation, use direct answer mode. If it requires coordinated changes across multiple files, use plan mode.
-
-A plan has this structure:
+  return `A plan has this structure:
 \`\`\`yaml
 name: "Plan Name"
 ${repoUrlLine}
@@ -103,13 +97,11 @@ tasks:
     autoFix: false               # auto-retry with experiments on failure
 \`\`\`
 
-Rules:
-1. Explore the codebase first (list directories, read key files). Then USE what you learned in your response — reference specific files, components, and patterns you found. Do NOT give generic responses that ignore the code you read.
-2. After exploring, generate the YAML plan directly. Do NOT ask clarifying questions unless absolutely necessary — prefer making reasonable assumptions based on the code you read.
-3. Keep plans focused — 3-8 tasks maximum.
-4. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
-5. Each task should have either a \`command\` or a \`prompt\`, not both.
-6. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` (e.g. \`cd packages/protocol && pnpm test\`, \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
+YAML drafting rules:
+1. Keep plans focused — 3-8 tasks maximum.
+2. File-count guidance is a soft heuristic, not a hard validator gate. Prefer small reviewable slices (for example around 10 files per implementation task when practical), but exceed this when correctness or shared wiring requires broader edits.
+3. Each task should have either a \`command\` or a \`prompt\`, not both.
+4. Every step MUST be testable. Every implementation task MUST have a corresponding test task that verifies it works using a concrete, executable \`command\` (e.g. \`cd packages/protocol && pnpm test\`, \`git diff --name-only\`). The test command must produce a clear pass/fail exit code. Do NOT skip tests for any step. Do NOT use prompts for test tasks — use commands only.
    Test command rules:
    - For focused package tests, ALWAYS cd into the package directory first: \`cd packages/<pkg> && pnpm test\`
    - To target a specific test file: \`cd packages/<pkg> && pnpm test -- src/__tests__/file.test.ts\`
@@ -119,11 +111,49 @@ Rules:
    - That final \`pnpm run test:all\` task MUST depend on every earlier task so it is the terminal regression gate
    - If Invoker config auto-routes heavyweight commands, keep \`pnpm ...\` as a normal command unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
-7. Use meaningful task IDs (kebab-case).
-8. When ready, output the plan inside a \`\`\`yaml code block.
-9. Always include \`dependencies\` (even if empty array).
-10. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
-11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
+5. Use meaningful task IDs (kebab-case).
+6. When ready, output the plan inside a \`\`\`yaml code block.
+7. Always include \`dependencies\` (even if empty array).
+8. After generating a plan, tell the user they can confirm execution by replying with "yes", "go", "execute", etc.
+9. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically when the user confirms.`;
+}
+
+export function buildPlanSystemPrompt(
+  defaultBranch: string,
+  repoUrl?: string,
+  options: { conversationalPlanning?: boolean; draftAuthorized?: boolean } = {},
+): string {
+  if (options.conversationalPlanning && !options.draftAuthorized) {
+    return `You are an assistant for the Invoker orchestrator. This session is a planning conversation before a plan.
+
+Your job is to help the user scope the work before any YAML draft exists:
+1. Start by asking focused questions when the goal is ambiguous, underspecified, or has meaningful product or technical choices.
+2. Discuss edge cases, corner cases, architecture, ambiguity, and likely historic reasons in the codebase before converging on implementation tasks.
+3. Explore the codebase as needed. When you do, USE what you learned in your response — reference specific files, components, and patterns you found.
+4. Do NOT generate a YAML plan, YAML schema, draft file, or executable task list yet.
+5. When enough information exists, explain the assumptions, goals, and high-level task outline in simple ELI5 terms, then ask whether the user wants you to draft the YAML plan.
+6. If the user explicitly asks you to draft, approves drafting, or answers yes to your offer to draft, then draft the YAML plan in the next response using the authorized drafting instructions.
+7. For simple, self-contained requests that can be handled with 1-2 commands or a short explanation, answer directly instead of planning.`;
+  }
+
+  const directDraftIntro = options.conversationalPlanning
+    ? `You are an assistant for the Invoker orchestrator. The user has explicitly authorized drafting. Explore the codebase as needed, then generate a YAML task plan as described below.`
+    : `You are an assistant for the Invoker orchestrator. You have two modes:
+
+**Direct answer mode** — For simple, self-contained requests (counting lines of code, checking versions, running a quick command, answering questions about the codebase). Explore the codebase as needed and report the result directly. Do NOT generate a YAML plan for these.
+
+**Plan mode** — For multi-step implementation tasks (adding features, fixing bugs, refactoring code). Generate a YAML task plan as described below.
+
+Use your judgment: if the request can be answered with 1-2 commands or a short explanation, use direct answer mode. If it requires coordinated changes across multiple files, use plan mode.`;
+
+  return `${directDraftIntro}
+
+${buildYamlDraftingPrompt(defaultBranch, repoUrl)}
+
+Rules:
+1. Explore the codebase first (list directories, read key files). Then USE what you learned in your response — reference specific files, components, and patterns you found. Do NOT give generic responses that ignore the code you read.
+2. After exploring, generate the YAML plan directly. Do NOT ask clarifying questions unless absolutely necessary — prefer making reasonable assumptions based on the code you read.
+3. Follow all YAML drafting rules above.`;
 }
 
 // ── Dangerous Command Detection ─────────────────────────────
@@ -168,6 +198,7 @@ export class PlanConversation {
   private conversationRepo?: ConversationRepository;
   private defaultBranch?: string;
   private repoUrl?: string;
+  private conversationalPlanning: boolean;
   private log: LogFn;
   private _initialized = false;
 
@@ -180,6 +211,7 @@ export class PlanConversation {
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
     this.repoUrl = config.repoUrl;
+    this.conversationalPlanning = config.conversationalPlanning ?? false;
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
@@ -252,12 +284,16 @@ export class PlanConversation {
         this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
         return reply;
       }
-      const errorReply = "I couldn't find a complete YAML plan in this conversation. Could you ask me to regenerate the plan?";
-      this.messages.push({ role: 'assistant', content: errorReply });
-      this.saveState();
-      const tEnd = Date.now();
-      this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation-failed): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
-      return errorReply;
+      if (this.conversationalPlanning) {
+        this.log('plan-conversation', 'info', '[TRACE] confirmation without YAML treated as draft authorization in conversational planning mode');
+      } else {
+        const errorReply = "I couldn't find a complete YAML plan in this conversation. Could you ask me to regenerate the plan?";
+        this.messages.push({ role: 'assistant', content: errorReply });
+        this.saveState();
+        const tEnd = Date.now();
+        this.log('plan-conversation', 'info', `[PERF] sendMessage (confirmation-failed): init=${tInit - t0}ms, total=${tEnd - t0}ms`);
+        return errorReply;
+      }
     }
 
     const prompt = this.buildCursorPrompt();
@@ -308,7 +344,11 @@ export class PlanConversation {
    * and the complete conversation history.
    */
   buildCursorPrompt(): string {
-    const systemPrompt = buildSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl);
+    const draftAuthorized = this.conversationalPlanning && this.isDraftAuthorizedByLatestMessage();
+    const systemPrompt = buildPlanSystemPrompt(this.defaultBranch ?? 'main', this.repoUrl, {
+      conversationalPlanning: this.conversationalPlanning,
+      draftAuthorized,
+    });
     const parts: string[] = [systemPrompt];
 
     if (this.messages.length > 1) {
@@ -323,7 +363,9 @@ export class PlanConversation {
     const lastMessage = this.messages[this.messages.length - 1];
     if (lastMessage) {
       parts.push(`\nUser's latest message:\n${lastMessage.content}`);
-      parts.push('\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.');
+      parts.push(this.conversationalPlanning && !draftAuthorized
+        ? '\nRespond to the latest message as a planning conversation. Ask questions or summarize scope; do not generate YAML until the user explicitly approves drafting.'
+        : '\nRespond to the latest message. If it requires a plan, explore the codebase and generate one.');
     }
 
     return parts.join('\n');
@@ -398,6 +440,14 @@ export class PlanConversation {
       return extractYamlPlan(msg.content);
     }
     return null;
+  }
+
+  private isDraftAuthorizedByLatestMessage(): boolean {
+    const latest = this.messages[this.messages.length - 1]?.content.trim().toLowerCase();
+    if (!latest) return false;
+    return isConfirmation(latest)
+      || /\b(draft|generate|write|create|produce)\b.*\b(plan|yaml)\b/.test(latest)
+      || /\b(plan|yaml)\b.*\b(draft|generate|write|create|produce)\b/.test(latest);
   }
 
   // ── Persistence ────────────────────────────────────────

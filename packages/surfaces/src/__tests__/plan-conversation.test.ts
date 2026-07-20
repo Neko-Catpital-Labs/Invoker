@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { PlanConversation, extractYamlPlan, rewritePnpmTestCommand, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
+import { PlanConversation, buildPlanSystemPrompt, extractYamlPlan, rewritePnpmTestCommand, globToRegex, isDangerousCommand, isConfirmation } from '../slack/plan-conversation.js';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -492,6 +492,20 @@ describe('PlanConversation', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
+  it('in conversational mode, confirmation without plan authorizes drafting instead of submitting', async () => {
+    const conversational = new PlanConversation({ conversationalPlanning: true });
+    mockCursorResponse('Here is the authorized draft.');
+
+    const reply = await conversational.sendMessage('yes');
+
+    expect(reply).toBe('Here is the authorized draft.');
+    expect(conversational.planSubmitted).toBe(false);
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    const prompt = mockSpawn.mock.calls[0][1][1] as string;
+    expect(prompt).toContain('explicitly authorized drafting');
+    expect(prompt).toContain('```yaml');
+  });
+
   it('confirmation with broken YAML returns error, does not call Cursor', async () => {
     // Simulate an assistant message with invalid YAML
     mockCursorResponse('Here is a plan:\n```yaml\nname: "Broken\ntasks: [invalid');
@@ -570,6 +584,38 @@ describe('PlanConversation', () => {
 });
 
 describe('PlanConversation prompt construction', () => {
+  it('buildPlanSystemPrompt preserves default direct-draft behavior', () => {
+    const prompt = buildPlanSystemPrompt('main');
+    expect(prompt).toContain('YAML task plan');
+    expect(prompt).toContain('A plan has this structure');
+    expect(prompt).toContain('```yaml');
+    expect(prompt).toContain('After exploring, generate the YAML plan directly');
+    expect(prompt).toContain('Do NOT ask clarifying questions unless absolutely necessary');
+  });
+
+  it('buildPlanSystemPrompt uses scoping-first instructions in conversational mode', () => {
+    const prompt = buildPlanSystemPrompt('main', undefined, { conversationalPlanning: true });
+    expect(prompt).toContain('planning conversation before a plan');
+    expect(prompt).toContain('Start by asking focused questions');
+    expect(prompt).toContain('Discuss edge cases, corner cases, architecture, ambiguity, and likely historic reasons');
+    expect(prompt).toContain('explain the assumptions, goals, and high-level task outline in simple ELI5 terms');
+    expect(prompt).toContain('ask whether the user wants you to draft the YAML plan');
+    expect(prompt).not.toContain('A plan has this structure');
+    expect(prompt).not.toContain('```yaml');
+  });
+
+  it('buildPlanSystemPrompt includes YAML drafting rules only after conversational draft authorization', () => {
+    const prompt = buildPlanSystemPrompt('main', 'git@github.com:test/repo.git', {
+      conversationalPlanning: true,
+      draftAuthorized: true,
+    });
+    expect(prompt).toContain('explicitly authorized drafting');
+    expect(prompt).toContain('A plan has this structure');
+    expect(prompt).toContain('repoUrl: "git@github.com:test/repo.git"');
+    expect(prompt).toContain('```yaml');
+    expect(prompt).toContain('After exploring, generate the YAML plan directly');
+  });
+
   it('buildCursorPrompt includes system prompt for first message', () => {
     const conv = new PlanConversation({ defaultBranch: 'master' });
     (conv as any).messages.push({ role: 'user', content: 'Hello' });
@@ -606,6 +652,24 @@ describe('PlanConversation prompt construction', () => {
     (conv as any).messages.push({ role: 'user', content: 'Hello' });
     const prompt = conv.buildCursorPrompt();
     expect(prompt).toContain('repoUrl: "git@github.com:user/repo.git"');
+  });
+
+  it('buildCursorPrompt keeps conversational mode in scoping mode before draft authorization', () => {
+    const conv = new PlanConversation({ conversationalPlanning: true });
+    (conv as any).messages.push({ role: 'user', content: 'Add OAuth login' });
+    const prompt = conv.buildCursorPrompt();
+    expect(prompt).toContain('planning conversation before a plan');
+    expect(prompt).toContain('do not generate YAML until the user explicitly approves drafting');
+    expect(prompt).not.toContain('A plan has this structure');
+  });
+
+  it('buildCursorPrompt switches conversational mode to YAML drafting after explicit draft request', () => {
+    const conv = new PlanConversation({ conversationalPlanning: true });
+    (conv as any).messages.push({ role: 'user', content: 'Please draft the YAML plan' });
+    const prompt = conv.buildCursorPrompt();
+    expect(prompt).toContain('explicitly authorized drafting');
+    expect(prompt).toContain('A plan has this structure');
+    expect(prompt).toContain('```yaml');
   });
 });
 
