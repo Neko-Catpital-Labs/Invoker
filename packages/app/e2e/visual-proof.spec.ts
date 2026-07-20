@@ -23,6 +23,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import type { Locator, Page } from '@playwright/test';
+import type { DraftPlanSummary, PlanningChatSendResponse } from '@invoker/contracts';
 
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
@@ -135,6 +136,40 @@ const MENU_PROOF_PLAN = {
   mergeMode: 'external_review',
 };
 
+const INITIAL_PLANNING_DRAFT_SUMMARY: DraftPlanSummary = {
+  planName: 'Initial Planning Terminal Draft',
+  taskCount: 2,
+  taskGroups: [
+    {
+      name: 'Initial setup',
+      tasks: [
+        { id: 'initial-deps', description: 'Install initial dependencies' },
+        { id: 'initial-screen', description: 'Render original summary' },
+      ],
+    },
+  ],
+};
+
+const REVISED_PLANNING_DRAFT_SUMMARY: DraftPlanSummary = {
+  planName: 'Revised Planning Terminal Draft',
+  taskCount: 3,
+  taskGroups: [
+    {
+      name: 'Backend updates',
+      tasks: [
+        { id: 'revised-api', description: 'Add planner API route' },
+        { id: 'revised-store', description: 'Persist revised draft metadata' },
+      ],
+    },
+    {
+      name: 'UI refresh',
+      tasks: [
+        { id: 'revised-ui', description: 'Refresh terminal ready list' },
+      ],
+    },
+  ],
+};
+
 function workflowNode(page: Page, workflowId: string) {
   return page.getByTestId(`workflow-node-${workflowId}`);
 }
@@ -164,6 +199,10 @@ async function openContextMenu(page: Page, locator: Locator) {
   }
   await expect(menu).toBeVisible({ timeout: 10000 });
   return menu;
+}
+
+async function setTestPlanningChatResponse(page: Page, response: PlanningChatSendResponse): Promise<void> {
+  await page.evaluate((planningResponse) => window.invoker.setTestPlanningChatResponse!(planningResponse), response);
 }
 
 async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<string> {
@@ -318,6 +357,59 @@ test.describe('Visual proof capture', () => {
     await expect(statusBar.locator('text=System Log')).not.toBeVisible();
     await captureScreenshot(page, 'status-bar-no-system-log');
     await assertPageScreenshot(page, 'status-bar-no-system-log');
+  });
+
+  test('planning-terminal revised draft summary replaces initial ready summary', async ({ page }) => {
+    const input = page.getByTestId('invoker-terminal-input');
+    const sendButton = page.getByTestId('invoker-terminal-send');
+
+    await page.getByLabel('Expand terminal drawer').click();
+    await expect(input).toBeVisible();
+
+    await setTestPlanningChatResponse(page, {
+      reply: 'Initial draft is ready for review.',
+      draftPlanSummary: INITIAL_PLANNING_DRAFT_SUMMARY,
+    });
+    await input.fill('Draft an initial planning terminal plan');
+    await sendButton.click();
+
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-task-list')).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('Initial Planning Terminal Draft');
+    await expect(page.getByTestId('invoker-terminal-ready-task-count')).toHaveText('2 tasks');
+    await expect(page.getByTestId('invoker-terminal-ready-task-list')).toContainText('Initial setup');
+    await expect(page.getByTestId('invoker-terminal-ready-task-list')).toContainText('Install initial dependencies');
+
+    await expect(input).toHaveValue('');
+    await setTestPlanningChatResponse(page, {
+      reply: 'Revised draft is ready for review.',
+      draftPlanSummary: REVISED_PLANNING_DRAFT_SUMMARY,
+    });
+    await input.fill('Revise that same planning conversation');
+    await sendButton.click();
+
+    const readyBar = page.getByTestId('invoker-terminal-ready-bar');
+    const taskList = page.getByTestId('invoker-terminal-ready-task-list');
+    await expect(readyBar).toBeVisible();
+    await expect(taskList).toBeVisible();
+    await expect(page.getByTestId('invoker-terminal-ready-plan-name')).toHaveText('Revised Planning Terminal Draft');
+    await expect(readyBar).toContainText('3 tasks');
+    await expect(taskList).toContainText('Backend updates');
+    await expect(taskList).toContainText('UI refresh');
+    await expect(taskList).toContainText('Add planner API route');
+    await expect(taskList).toContainText('Refresh terminal ready list');
+    await expect(readyBar).not.toContainText('Initial Planning Terminal Draft');
+    await expect(taskList).not.toContainText('Initial setup');
+    await expect(taskList).not.toContainText('Install initial dependencies');
+
+    const messages = page.getByTestId('invoker-terminal-messages');
+    await expect(messages.locator(':scope > div')).toHaveCount(4);
+    const transcriptText = await messages.innerText();
+    expect(transcriptText).toMatch(
+      /user\s+Draft an initial planning terminal plan\s+assistant\s+Initial draft is ready for review\.\s+user\s+Revise that same planning conversation\s+assistant\s+Revised draft is ready for review\./is,
+    );
+
+    await captureScreenshot(page, 'planning-terminal-revised-draft-summary');
   });
 
   test('fixing-with-ai vs fix-approval colors', async ({ page }) => {

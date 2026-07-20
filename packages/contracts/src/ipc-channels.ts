@@ -253,6 +253,49 @@ export interface SystemDiagnostics {
   bundledSkills?: BundledSkillsStatus;
 }
 
+export interface DraftPlanSummaryTask {
+  readonly id?: string;
+  readonly title?: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly summary?: string;
+}
+
+export interface DraftPlanSummaryTaskGroup {
+  readonly id?: string;
+  readonly title?: string;
+  readonly name?: string;
+  readonly label?: string;
+  readonly taskCount?: number;
+  readonly count?: number;
+  readonly taskIds?: readonly string[];
+  readonly tasks?: readonly (DraftPlanSummaryTask | string)[];
+}
+
+export interface DraftPlanSummary {
+  readonly planName?: string;
+  readonly name?: string;
+  readonly title?: string;
+  readonly taskCount?: number;
+  readonly count?: number;
+  readonly taskGroups?: readonly DraftPlanSummaryTaskGroup[];
+  readonly groups?: readonly DraftPlanSummaryTaskGroup[];
+  readonly tasks?: readonly (DraftPlanSummaryTask | string)[];
+  readonly summary?: string;
+}
+
+export type PlanningChatSendResponse =
+  | string
+  | {
+      readonly reply?: string;
+      readonly content?: string;
+      readonly message?: string;
+      readonly draftPlanSummary?: DraftPlanSummary | null;
+      readonly planSubmitted?: boolean;
+      readonly submittedPlanText?: string | null;
+      readonly planText?: string | null;
+    };
+
 // ── Invoke Channel Registry ─────────────────────────────────
 // Each key is the channel name string; value is { request, response }.
 // `request` is a tuple of the arguments passed after the channel name.
@@ -530,6 +573,14 @@ export const IpcChannels = {
 export const IpcTestOnlyChannels = {
   'invoker:inject-task-states': {} as {
     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
+    response: void;
+  },
+  'invoker:send-planning-chat-message': {} as {
+    request: [message: string];
+    response: PlanningChatSendResponse;
+  },
+  'invoker:set-test-planning-chat-response': {} as {
+    request: [response: PlanningChatSendResponse];
     response: void;
   },
 } as const;
