@@ -57,6 +57,7 @@ async function renderWorkflow(
   workflows: WorkflowMeta[],
 ): Promise<HTMLElement> {
   render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
   act(() => mock.setTasks(tasks, workflows));
 
   await waitFor(() => {

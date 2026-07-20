@@ -8,7 +8,6 @@ import {
   ChevronRightIcon,
   InvokerIcon,
   MoonIcon,
-  PlanningTerminalIcon,
   SettingsIcon,
   SunIcon,
   WorkerIcon,
@@ -105,28 +104,41 @@ export function LeftStatusColumn({
         className={[
           'rounded-md text-left transition-colors duration-100 hover:bg-sidebar-accent/60',
           collapsed ? 'px-2 py-2.5 text-center' : 'px-2.5 py-2',
+          selectedSurface === 'home' ? 'bg-sidebar-accent text-sidebar-accent-foreground' : '',
         ].join(' ')}
       >
         {collapsed ? (
-          <div className="inline-flex text-sidebar-foreground">
+          <div className="relative inline-flex h-9 w-9 items-center justify-center text-sidebar-foreground">
             <InvokerIcon className={ICON_CLASS} />
+            {planningAttentionCount > 0 && (
+              <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none bg-background ${countClass('neutral')}`}>
+                {planningAttentionCount}
+              </span>
+            )}
           </div>
         ) : (
-          <div className="flex items-center gap-3">
-            <span className="inline-flex rounded-md border border-border bg-sidebar-accent/60 p-1.5 text-sidebar-foreground">
-              <InvokerIcon className={ICON_CLASS} />
-            </span>
-            <div>
-              <div className="text-sm font-semibold text-sidebar-foreground">Invoker</div>
-              <div className="mt-0.5 text-[11px] text-muted-foreground">Home</div>
+          <div className="flex w-full items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="inline-flex rounded-md border border-border bg-sidebar-accent/60 p-1.5 text-sidebar-foreground">
+                <InvokerIcon className={ICON_CLASS} />
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-sidebar-foreground">Invoker</div>
+                <div className="mt-0.5 text-[11px] text-muted-foreground">Planning chats</div>
+              </div>
             </div>
+            {planningAttentionCount > 0 && (
+              <span className={`rounded-full px-2 py-0.5 text-[11px] ${countClass('neutral')}`}>
+                {planningAttentionCount}
+              </span>
+            )}
           </div>
         )}
       </button>
 
       <button
         type="button"
-        aria-label="Planning Terminal"
+        aria-label="Plan graph"
         data-testid="sidebar-planning"
         data-sidebar-nav-item
         data-sidebar-nav-order="2"
@@ -139,24 +151,21 @@ export function LeftStatusColumn({
       >
         {collapsed ? (
           <div className="relative inline-flex h-9 w-9 items-center justify-center">
-            <span><PlanningTerminalIcon className={ICON_CLASS} /></span>
-            {planningAttentionCount > 0 && (
-              <span className={`absolute -right-1 -top-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none bg-background ${countClass('neutral')}`}>
-                {planningAttentionCount}
-              </span>
-            )}
+            <span><WorkflowsIcon className={ICON_CLASS} /></span>
           </div>
         ) : (
           <>
             <span className="flex min-w-0 items-center gap-3">
               <span className="inline-flex rounded-md border border-border bg-sidebar-accent/40 p-1.5 text-muted-foreground">
-                <PlanningTerminalIcon className={ICON_CLASS} />
+                <WorkflowsIcon className={ICON_CLASS} />
               </span>
-              <span className="truncate">Planning Terminal</span>
+              <span className="truncate">Plan graph</span>
             </span>
-            <span className={`rounded-full px-2 py-0.5 text-[11px] ${countClass('neutral')}`}>
-              {planningAttentionCount}
-            </span>
+            {workflowCount > 0 && (
+              <span className={`rounded-full px-2 py-0.5 text-[11px] ${countClass('neutral')}`}>
+                {workflowCount}
+              </span>
+            )}
           </>
         )}
       </button>
@@ -221,8 +230,8 @@ export function LeftStatusColumn({
               ? 'Worker status is not available yet.'
               : `${runningWorkers} process${runningWorkers === 1 ? '' : 'es'} running · ${activeWorkerActions} active action${activeWorkerActions === 1 ? '' : 's'}`
           )}
-          {selectedSurface === 'home' && 'Plan graph details live here.'}
-          {selectedSurface === 'planning' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
+          {selectedSurface === 'home' && `${planningSessionCount} planning chat${planningSessionCount === 1 ? '' : 's'}.`}
+          {selectedSurface === 'planning' && 'Workflow graph and task terminals.'}
         </div>
       )}
 

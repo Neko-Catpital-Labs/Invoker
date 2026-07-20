@@ -391,12 +391,12 @@ describe('WorkflowGraph', () => {
     );
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     expect(screen.getByTestId('workflow-node-wf-b')).toBeInTheDocument();
-    expect(screen.queryByText('Your plan will appear here.')).not.toBeInTheDocument();
+    expect(screen.queryByText('No plan yet — draft one from Home.')).not.toBeInTheDocument();
     expect(fitViewMock).not.toHaveBeenCalled();
     expect(setCenterMock).not.toHaveBeenCalled();
 
     fireEvent.pointerUp(screen.getByTestId('rf__pane'));
-    await waitFor(() => expect(screen.getByText('Your plan will appear here.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('No plan yet — draft one from Home.')).toBeInTheDocument());
 
     rerender(
       <WorkflowGraph

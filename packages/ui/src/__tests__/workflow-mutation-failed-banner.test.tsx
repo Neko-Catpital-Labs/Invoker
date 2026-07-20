@@ -68,6 +68,7 @@ describe('Workflow mutation failed handling', () => {
 
   it('does not show the top banner for task-scoped approve failures', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await settleTasks();
 
     act(() => {
@@ -81,8 +82,9 @@ describe('Workflow mutation failed handling', () => {
 
   it('leaves the sidebar surface alone when a task-scoped failure arrives', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await settleTasks();
-    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
 
     act(() => {
       mock.fireWorkflowMutationFailed(approveFailure);
@@ -91,14 +93,15 @@ describe('Workflow mutation failed handling', () => {
     await waitFor(() => {
       expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('1');
     });
-    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('sidebar-attention')).not.toHaveAttribute('aria-current', 'page');
   });
 
   it('leaves the sidebar surface alone when a workflow-scoped failure arrives', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await settleTasks();
-    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
 
     act(() => {
       mock.fireWorkflowMutationFailed({
@@ -113,12 +116,13 @@ describe('Workflow mutation failed handling', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('workflow-mutation-failed-banner')).not.toBeInTheDocument();
     });
-    expect(screen.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('sidebar-workflows')).not.toHaveAttribute('aria-current', 'page');
   });
 
   it('does not steal the selection while the operator is working elsewhere', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await settleTasks();
     fireEvent.click(screen.getByTestId('sidebar-workflows'));
     await waitFor(() => {
@@ -138,6 +142,7 @@ describe('Workflow mutation failed handling', () => {
 
   it('surfaces failure details in the inspector once the operator opens Needs Attention', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await settleTasks();
 
     act(() => {
@@ -169,6 +174,7 @@ describe('Workflow mutation failed handling', () => {
 
   it('keeps mutation failure details visible when reselecting the task from Needs Attention', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await settleTasks();
 
     act(() => {
