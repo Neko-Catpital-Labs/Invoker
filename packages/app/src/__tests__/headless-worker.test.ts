@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PR_SUMMARY_REFRESH_WORKER_KIND } from '@invoker/execution-engine';
-import { runHeadless } from '../headless.js';
+import { resolveHeadlessDiskHeadroomConfig, runHeadless } from '../headless.js';
 
 describe('headless worker registry', () => {
   it('lists the PR summary refresh worker kind', async () => {
@@ -18,5 +18,29 @@ describe('headless worker registry', () => {
 
     expect(stdout).toContain('Worker kinds');
     expect(stdout).toContain(PR_SUMMARY_REFRESH_WORKER_KIND);
+  });
+
+  it('maps configured SSH targets into disk-headroom worker dependencies', () => {
+    const config = resolveHeadlessDiskHeadroomConfig({
+      remoteTargets: {
+        digitalOcean: {
+          host: '203.0.113.10',
+          user: 'invoker',
+          sshKeyPath: '/tmp/test-key',
+          port: 2222,
+        },
+      },
+    });
+
+    expect(config.remoteTargets).toEqual([{
+      name: 'digitalOcean',
+      connection: {
+        host: '203.0.113.10',
+        user: 'invoker',
+        sshKeyPath: '/tmp/test-key',
+        port: 2222,
+      },
+      remotePath: '~/.invoker',
+    }]);
   });
 });
