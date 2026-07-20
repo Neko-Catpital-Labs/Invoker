@@ -53,6 +53,8 @@ export interface SlackSurfaceConfig {
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
   planningHeartbeatIntervalSeconds?: number;
+  /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
+  conversationalPlanning?: boolean;
 }
 
 // ── ConversationLike ─────────────────────────────────────────
@@ -92,6 +94,7 @@ export class SlackSurface implements Surface {
   private model?: string;
   private planningTimeoutSeconds?: number;
   private planningHeartbeatIntervalSeconds?: number;
+  private conversationalPlanning: boolean;
   /** Minimum spacing between thread message posts to avoid Slack burst limits. */
   private readonly messagePacingMs = 1_100;
   /** Session lifecycle metrics */
@@ -126,6 +129,7 @@ export class SlackSurface implements Surface {
     this.useTypingIndicator = config.useTypingIndicator ?? false;
     this.planningTimeoutSeconds = config.planningTimeoutSeconds;
     this.planningHeartbeatIntervalSeconds = config.planningHeartbeatIntervalSeconds;
+    this.conversationalPlanning = config.conversationalPlanning ?? false;
     this.log = config.log ?? ((source, level, msg) => {
       const fn = level === 'error' ? console.error : console.log;
       fn(`[${source}] ${msg}`);
@@ -142,6 +146,7 @@ export class SlackSurface implements Surface {
         repoUrl: config.repoUrl,
         log: this.log,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
+        conversationalPlanning: this.conversationalPlanning,
       });
     }
   }
@@ -701,6 +706,7 @@ export class SlackSurface implements Surface {
         defaultBranch: this.defaultBranch,
         repoUrl: this.repoUrl,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
+        conversationalPlanning: this.conversationalPlanning,
       });
       this.planConversations.set(threadTs, conversation);
     }
@@ -765,6 +771,7 @@ export class SlackSurface implements Surface {
             conversationRepo: this.conversationRepo,
             defaultBranch: this.defaultBranch,
             repoUrl: this.repoUrl,
+            conversationalPlanning: this.conversationalPlanning,
           });
           await conversation.init();
           this.planConversations.set(entry.threadTs, conversation);
