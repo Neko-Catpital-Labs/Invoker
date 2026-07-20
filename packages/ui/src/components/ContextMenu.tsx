@@ -41,6 +41,8 @@ function stopMenuKeyboardEvent(e: KeyboardEvent | React.KeyboardEvent) {
   }
 }
 
+const TASK_CONTEXT_MENU_Z_INDEX = 1100;
+
 export function ContextMenu({
   x,
   y,
@@ -286,8 +288,8 @@ export function ContextMenu({
       ref={menuRef}
       role="menu"
       data-testid="task-context-menu"
-      className="fixed z-50 bg-secondary border border-border-strong rounded-lg shadow-xl py-1 min-w-[160px]"
-      style={{ left: position.left, top: position.top }}
+      className="fixed bg-secondary border border-border-strong rounded-lg shadow-xl py-1 min-w-[160px]"
+      style={{ left: position.left, top: position.top, zIndex: TASK_CONTEXT_MENU_Z_INDEX }}
       onKeyDown={handleKeyDown}
       onClick={(event) => event.stopPropagation()}
       tabIndex={-1}
