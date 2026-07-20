@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import process from 'node:process';
 import { execFile as execFileCb } from 'node:child_process';
-import { existsSync, readFileSync as fsReadFileSync } from 'node:fs';
+import { readFileSync as fsReadFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCb);
@@ -68,13 +68,17 @@ export function findOrphanedAutomationChromeGroups(rows) {
 
 export function readTrackedUserDataDirs(registryPath) {
   if (!registryPath) return [];
-  if (!existsSync(registryPath)) return [];
-  return [...new Set(
-    fsReadFileSync(registryPath, 'utf8')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean),
-  )].sort();
+  try {
+    return [...new Set(
+      fsReadFileSync(registryPath, 'utf8')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean),
+    )].sort();
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
 }
 
 export function findTrackedBrowserGroups(rows, trackedUserDataDirs) {
