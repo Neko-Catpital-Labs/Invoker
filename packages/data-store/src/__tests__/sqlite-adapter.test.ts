@@ -100,6 +100,7 @@ describe('SQLiteAdapter', () => {
         steps: ['Update README'],
         taskGroups: [{ workflow: 'Docs', tasks: ['Update README'] }],
       },
+      draftPlanText: 'name: README plan\ntasks:\n  - id: update-readme\n    description: Update README\n',
       submittedWorkflowId: 'wf-planning',
       submittedPlanName: 'README plan',
       terminalMode: 'chat',
@@ -462,6 +463,7 @@ describe('SQLiteAdapter', () => {
         'preset_key',
         'status',
         'draft_plan_summary_json',
+        'draft_plan_text',
         'submitted_workflow_id',
         'submitted_plan_name',
         'terminal_mode',
@@ -549,6 +551,7 @@ describe('SQLiteAdapter', () => {
           createdAt: '2026-07-07T00:00:04.000Z',
         }],
         draftPlanSummary: undefined,
+        draftPlanText: undefined,
         pendingResponse: false,
         updatedAt: '2026-07-07T00:00:05.000Z',
       });
@@ -572,6 +575,7 @@ describe('SQLiteAdapter', () => {
         updatedAt: '2026-07-07T00:00:05.000Z',
       });
       expect(loaded?.draftPlanSummary).toBeUndefined();
+      expect(loaded?.draftPlanText).toBeUndefined();
     });
 
     it('deletes planning sessions and their visible messages', () => {
