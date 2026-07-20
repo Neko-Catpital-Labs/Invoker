@@ -621,7 +621,11 @@ export async function runHeadlessClientCommand(
     return typeof exitCode === 'number' ? exitCode : 0;
   }
 
-  if (!internalOwnerServe && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)) {
+  if (
+    !internalOwnerServe
+    && !isHeadlessMutatingCommand(args)
+    && await delegateReadOnlyQuery(args, deps.messageBus, deps.refreshMessageBus)
+  ) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   }
