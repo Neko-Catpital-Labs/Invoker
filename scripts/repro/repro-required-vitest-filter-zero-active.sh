@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REQUIRED_SCRIPT="$ROOT_DIR/scripts/test-suites/required/17-merge-gate-concurrency-repro.sh"
+ACTIVE_TEST_HELPER="$ROOT_DIR/scripts/lib/require-vitest-active-tests.sh"
 TEST_NAME="starts an independent merge gate while another merge gate is still preparing review"
 BUG_TARGET="src/__tests__/task-runner.test.ts"
 FIXED_TARGET="src/__tests__/task-runner-fix-publish-and-ssh.test.ts"
@@ -75,12 +76,37 @@ if [[ "$EXPECTATION" == "bug" ]]; then
   echo "repro: active matches in that target for the -t filter: 0"
   echo "repro: relocated matches in packages/execution-engine/$FIXED_TARGET: $fixed_matches"
 else
+  if [[ ! -x "$ACTIVE_TEST_HELPER" ]]; then
+    echo "repro: missing executable active-test helper: $ACTIVE_TEST_HELPER" >&2
+    exit 1
+  fi
+
+  stale_log="$(mktemp)"
+  trap 'rm -f "$stale_log"' EXIT
+
   if [[ "$active_matches" -lt 1 ]]; then
     echo "repro: expected fixed required/17 target to contain at least one active test for the -t filter" >&2
     echo "repro: current target: packages/execution-engine/$target_rel" >&2
     echo "repro: active matches: $active_matches" >&2
     exit 1
   fi
+  if ! bash "$REQUIRED_SCRIPT"; then
+    echo "repro: expected fixed required/17 to pass" >&2
+    exit 1
+  fi
+  if "$ACTIVE_TEST_HELPER" \
+    --package @invoker/execution-engine \
+    --test-file "$BUG_TARGET" \
+    --test-name "$TEST_NAME" >"$stale_log" 2>&1; then
+    echo "repro: expected stale target packages/execution-engine/$BUG_TARGET to fail active-test assertion" >&2
+    exit 1
+  fi
+  if ! grep -Fq "expected at least one passed active test" "$stale_log"; then
+    echo "repro: stale target failed for an unexpected reason" >&2
+    sed -n '1,200p' "$stale_log" >&2
+    exit 1
+  fi
   echo "repro: confirmed fixed behavior"
   echo "repro: required/17 target packages/execution-engine/$target_rel contains $active_matches active match(es)"
+  echo "repro: stale target packages/execution-engine/$BUG_TARGET is rejected by the active-test assertion"
 fi
