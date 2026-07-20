@@ -801,7 +801,7 @@ describe('TaskRunner', () => {
         commit: 'abc1234',
       });
     });
-    it('waits for SSH capacity instead of failing approved-fix publish', async () => {
+    it('waits for wrapped SSH capacity errors instead of failing approved-fix publish', async () => {
       vi.useFakeTimers();
       const publishSpy = vi.spyOn(SshExecutor.prototype, 'publishApprovedFix').mockResolvedValue({
         commitHash: 'queued123',
@@ -846,7 +846,8 @@ describe('TaskRunner', () => {
       const selectExecutorSpy = vi.spyOn(runner, 'selectExecutor');
       const originalSelectExecutor = TaskRunner.prototype.selectExecutor.bind(runner);
       selectExecutorSpy.mockImplementationOnce(() => {
-        throw new ResourceLimitError('Execution pool "pnpm-ssh" has no member capacity available');
+        const message = 'Execution pool "pnpm-ssh" has no member capacity available';
+        throw new Error(message, { cause: new ResourceLimitError(message) });
       });
       selectExecutorSpy.mockImplementation((selectedTask, excludedPoolMemberKeys = new Set()) =>
         originalSelectExecutor(selectedTask, excludedPoolMemberKeys)
