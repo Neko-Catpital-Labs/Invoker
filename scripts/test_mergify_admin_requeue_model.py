@@ -275,6 +275,19 @@ pull_request_rules:
     conditions:
       - base=master
 """
+MERGIFY_YML_WITH_ALIAS = """\
+queue_rules:
+  - name: default
+    merge_conditions: &required_checks
+      - check-success = lint
+      - check-success = build (ubuntu-latest)
+  - name: admin-bypass
+    queue_conditions:
+      - base=master
+      - label=admin-bypass
+    merge_conditions: *required_checks
+"""
+
 
 
 class MergifyRuleLoading(unittest.TestCase):
@@ -289,6 +302,12 @@ class MergifyRuleLoading(unittest.TestCase):
 
     def test_reads_trunk_label_and_required_checks(self):
         trunk, labels, required = m.load_mergify_rules(self._write(MERGIFY_YML))
+        self.assertEqual(trunk, "master")
+        self.assertEqual(labels, frozenset({"admin-bypass"}))
+        self.assertEqual(required, frozenset({"lint", "build (ubuntu-latest)"}))
+
+    def test_reads_required_checks_from_yaml_alias(self):
+        trunk, labels, required = m.load_mergify_rules(self._write(MERGIFY_YML_WITH_ALIAS))
         self.assertEqual(trunk, "master")
         self.assertEqual(labels, frozenset({"admin-bypass"}))
         self.assertEqual(required, frozenset({"lint", "build (ubuntu-latest)"}))

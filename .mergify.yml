@@ -24,7 +24,7 @@ queue_rules:
     # worker-registry + SSH executor drift). "UI Vitest" runs only @invoker/ui
     # and IS required: it holds the UI component guards, so a UI regression
     # cannot merge even when the diff still type-checks.
-    merge_conditions:
+    merge_conditions: &required_checks
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
       - check-success = PR Body
@@ -45,20 +45,8 @@ queue_rules:
       - label=admin-bypass
       - -label=merge-hold
       - "#review-threads-unresolved = 0"
-    # Heavy e2e proof and the full Vitest Workspace run on PRs but do NOT block
-    # Mergify (the whole-workspace suite is currently red on master — unrelated
-    # worker-registry + SSH executor drift). "UI Vitest" runs only @invoker/ui
-    # and IS required: it holds the UI component guards, so a UI regression
-    # cannot merge even when the diff still type-checks.
-    merge_conditions:
-      - check-success = build-artifacts
-      - check-success = quality / Dependency Cruise
-      - check-success = PR Body
-      - check-success = quality / TypeScript Types
-      - check-success = required-fast / Guardrails
-      - check-success = required-fast / Submit Workflow Chain
-      - check-success = UI Vitest
-      - "#review-threads-unresolved = 0"
+    # Same required checks as the default queue — see the comment above.
+    merge_conditions: *required_checks
 
 pull_request_rules:
   - name: autoqueue ready approved PRs to master
