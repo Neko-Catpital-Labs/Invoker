@@ -133,11 +133,11 @@ test('UI actions acknowledge within 200ms under fat DB + large graph', async ({ 
     expect(ack, `worker stop ack ${ack}ms`).toBeLessThanOrEqual(ACK_BUDGET_MS);
   }
 
-  // Home / Workers left-hand nav — the sidebar surfaces users actually click.
+  // Home / Workers / Plan graph left-hand nav — the sidebar surfaces users actually click.
   ack = await measureAck(
     page,
     async () => { await page.getByTestId('sidebar-home').click(); },
-    async () => { await expect(page.getByTestId('workflow-graph-surface')).toBeVisible({ timeout: ACK_BUDGET_MS + 500 }); },
+    async () => { await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: ACK_BUDGET_MS + 500 }); },
   );
   expect(ack, `sidebar-home ack ${ack}ms`).toBeLessThanOrEqual(ACK_BUDGET_MS);
 
@@ -148,7 +148,8 @@ test('UI actions acknowledge within 200ms under fat DB + large graph', async ({ 
   );
   expect(ack, `sidebar-workers ack ${ack}ms`).toBeLessThanOrEqual(ACK_BUDGET_MS + 50);
 
-  await page.getByTestId('sidebar-home').click();
+  await page.getByTestId('sidebar-planning').click();
+  await expect(page.getByTestId('workflow-graph-surface')).toBeVisible({ timeout: 15_000 });
   await expect(page.locator('[data-testid^="workflow-node-"]:visible').first()).toBeVisible({ timeout: 15_000 });
 
   // Workflow select. React-flow nodes carry a `transition-all` class and
