@@ -522,6 +522,8 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
       ?? null;
   }, beforeIds);
   expect(workflow?.id).toBeTruthy();
+  await page.getByTestId('sidebar-planning').click();
+  await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.waitForTimeout(300);
   await selectWorkflowNode(page, workflow!.id);
@@ -673,20 +675,24 @@ test.describe('Visual proof capture', () => {
   });
 
   test('empty state', async ({ page }) => {
-    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('What do you want to build?')).toHaveCount(0);
-    await expect(page.getByText('What to expect')).toBeVisible();
-    await expect(page.getByTestId('workflow-graph-surface').getByText('Your plan will appear here.')).toBeVisible();
+    await expect(page.getByText('What do you want to build?')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('planning-session-rail')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-label', 'Go home');
-    await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-label', 'Planning Terminal');
+    await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-label', 'Plan graph');
     await expect(page.getByTestId('sidebar-workflows')).toHaveAttribute('aria-label', 'Workflows');
     await expect(page.getByTestId('sidebar-attention')).toHaveAttribute('aria-label', 'Needs Attention');
     await expect(page.getByTestId('sidebar-running')).toBeAttached();
     await expect(page.getByTestId('rail-settings')).toBeVisible();
     await expect(page.getByTestId('sidebar-home')).toBeVisible();
     await captureScreenshot(page, 'empty-state');
-    await captureScreenshot(page, 'empty-graph-state');
     await assertPageScreenshot(page, 'empty-state');
+
+    await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(page.getByTestId('empty-plan-graph-cta')).toBeVisible();
+    await expect(page.getByTestId('workflow-graph-surface').getByText('No plan yet — draft one from Home.')).toBeVisible();
+    await captureScreenshot(page, 'empty-graph-state');
   });
 
   test('workflow delete propagation', async ({ page }) => {
@@ -703,7 +709,7 @@ test.describe('Visual proof capture', () => {
   test('mutation failure does not steal focus', async ({ page }) => {
     const workflowId = await loadPlanAndSelectWorkflow(page, TEST_PLAN);
     await expect(workflowNode(page, workflowId)).toBeVisible();
-    await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
     await captureScreenshot(page, 'mutation-failure-focus-1-before');
 
     // Asking for a fix with a harness that is not installed fails inside the
@@ -732,10 +738,10 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply });
     }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow', reply: fullPlanReply });
 
-    await page.getByTestId('sidebar-planning').click();
+    await page.getByTestId('sidebar-home').click();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
-    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Add README');
     await page.getByRole('button', { name: 'Send' }).click();
 
@@ -778,9 +784,9 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('What to expect')).toHaveCount(0);
     await captureScreenshot(page, 'terminal-planned-graph');
 
-    // Returning to the Planning Terminal keeps the full conversation:
+    // Returning to Planning home keeps the full conversation:
     // submitting must not clear or truncate the transcript.
-    await page.getByTestId('sidebar-planning').click();
+    await page.getByTestId('sidebar-home').click();
     await expect(transcript).toContainText('Add README');
     await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
     await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then use Start ready work.');
@@ -830,8 +836,8 @@ test.describe('Visual proof capture', () => {
       }, { planYaml: plannedYaml, nextPlanName: planName, reply: replyText });
     };
 
-    await page.getByTestId('sidebar-planning').click();
-    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
 
     const transcript = page.getByTestId('invoker-terminal-transcript');
     const input = page.getByTestId('invoker-terminal-input');
@@ -895,8 +901,8 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanningChatResponse({ throwError });
     }, exhaustedRetryError);
 
-    await page.getByTestId('sidebar-planning').click();
-    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Draft me an Invoker plan');
     await page.getByRole('button', { name: 'Send' }).click();
 
@@ -943,8 +949,8 @@ test.describe('Visual proof capture', () => {
       ],
     });
 
-    await page.getByTestId('sidebar-planning').click();
-    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
 
     const transcript = page.getByTestId('invoker-terminal-transcript');
     await expect(transcript).toBeVisible();
@@ -989,10 +995,10 @@ test.describe('Visual proof capture', () => {
       await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply: 'I drafted the stacked plan.' });
     }, { planYaml: plannedYaml, planName: 'Workers Surface' });
 
-    await page.getByTestId('sidebar-planning').click();
-    await expect(page.getByRole('heading', { name: 'Planning Terminal' })).toBeVisible();
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await expect(page.getByText('Still discussing')).toBeVisible();
-    await expect(page.getByText('What do you want to build?')).toHaveCount(0);
+    await expect(page.getByText('What do you want to build?')).toBeVisible();
     await expect(page.getByText('Ask Invoker what you want to build.')).toHaveCount(0);
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
@@ -1043,7 +1049,7 @@ test.describe('Visual proof capture', () => {
     });
   });
 
-  test('workflows browser dismiss returns home without changing width', async ({ page }) => {
+  test('workflows browser and home return', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
@@ -1053,8 +1059,8 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'workflows-browser');
 
     await page.getByTestId('browser-rail-dismiss').click();
-    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
@@ -1120,7 +1126,7 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'collapsed-workflow-browsers');
 
     await page.getByTestId('sidebar-home').click();
-    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
 
     await page.getByTestId('sidebar-workflows').click();
@@ -1185,7 +1191,7 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'sidebar-collapse-state-3-workflows-manually-collapsed');
 
     await page.getByTestId('sidebar-home').click();
-    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await captureScreenshot(page, 'sidebar-collapse-state-4-home-still-collapsed');
     await expect(sidebar).toHaveClass(/w-16/);
 
@@ -2724,5 +2730,37 @@ test.describe('Visual proof capture', () => {
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
     await expect(miniDag.locator('.react-flow__node[data-testid$="task-beta"]')).toBeVisible();
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
+  });
+
+  test('start-ready-recreate-failed-and-pending — menu option and preview dialog', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await page.getByTestId('rail-start-ready-menu').click();
+    const menu = page.getByTestId('rail-start-ready-options');
+    await expect(menu).toBeVisible();
+    await expect(page.getByTestId('rail-start-ready-recreate-failed')).toBeVisible();
+    await expect(page.getByTestId('rail-start-ready-recreate-failed-and-pending')).toBeVisible();
+    await expect(page.getByTestId('rail-start-ready-recreate-failed-pending-and-running')).toBeVisible();
+    await captureScreenshot(page, 'start-ready-recreate-failed-and-pending-menu');
+
+    await page.getByTestId('rail-start-ready-recreate-failed-and-pending').click();
+    const dialog = page.getByTestId('start-ready-preview-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Start and recreate failed and pending')).toBeVisible();
+    await expect(dialog.getByText('Pending workflows')).toBeVisible();
+    await captureScreenshot(page, 'start-ready-recreate-failed-and-pending-dialog');
+  });
+
+  test('start-ready-recreate-failed-pending-and-running — menu option and preview dialog', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await page.getByTestId('rail-start-ready-menu').click();
+    await expect(page.getByTestId('rail-start-ready-recreate-failed-pending-and-running')).toBeVisible();
+    await captureScreenshot(page, 'start-ready-recreate-failed-pending-and-running-menu');
+
+    await page.getByTestId('rail-start-ready-recreate-failed-pending-and-running').click();
+    const dialog = page.getByTestId('start-ready-preview-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Start and recreate failed, pending, and running')).toBeVisible();
+    await expect(dialog.getByText('Running workflows')).toBeVisible();
+    await captureScreenshot(page, 'start-ready-recreate-failed-pending-and-running-dialog');
   });
 });
