@@ -11,6 +11,7 @@ import {
   type TerminalUiPerfSink,
 } from './terminal-ui-perf.js';
 import {
+  ensurePlanningTerminalSummaryBridge,
   updatePlanningChatTerminalState,
   type InAppPlanningChatSessions,
   type InAppPlanningSessionStore,
@@ -364,6 +365,10 @@ export function bindPlanningTerminalSessionState(deps: {
         continue;
       }
       try {
+        const outputSnapshot = ensurePlanningTerminalSummaryBridge(
+          session,
+          session.terminalOutputSnapshot ?? '',
+        );
         embeddedTerminalManager.restoreSpawnSession({
           sessionId: session.terminalSessionId,
           taskId: `planning:${session.id}`,
@@ -373,7 +378,7 @@ export function bindPlanningTerminalSessionState(deps: {
           spec: { cwd: repoRoot },
           cwd: repoRoot,
           createdAt: session.terminalUpdatedAt ?? session.updatedAt,
-          outputSnapshot: session.terminalOutputSnapshot ?? '',
+          outputSnapshot,
         });
       } catch (err) {
         logger.warn(
@@ -428,12 +433,17 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
     }
     logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
     try {
+      const outputSnapshot = ensurePlanningTerminalSummaryBridge(
+        planningSession,
+        planningSession.terminalOutputSnapshot ?? '',
+      );
       const session = embeddedTerminalManager.openOrReuse({
         kind: 'planning',
         taskId: `planning:${planningSessionId}`,
         planningSessionId,
         spec: { cwd: repoRoot },
         cwd: repoRoot,
+        outputSnapshot,
       });
       updatePlanningChatTerminalState(planningSessionId, {
         terminalMode: 'tmux',
