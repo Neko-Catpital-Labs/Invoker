@@ -65,6 +65,7 @@ describe('History view (component)', () => {
     act(() => mock.setTasks([completed, failed], workflows));
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await chooseGraphMenuItem('rail-history');
 
     await waitFor(() => {
@@ -104,6 +105,7 @@ describe('History view (component)', () => {
     act(() => mock.setTasks([failed], workflows));
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await chooseGraphMenuItem('rail-history');
 
     await waitFor(() => {
@@ -143,6 +145,7 @@ describe('History view (component)', () => {
     act(() => mock.setTasks([newer, older], workflows));
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await chooseGraphMenuItem('rail-history');
 
     await waitFor(() => {
@@ -183,6 +186,7 @@ describe('History view (component)', () => {
     act(() => mock.setTasks([completed, closed], workflows));
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await chooseGraphMenuItem('rail-history');
 
     await waitFor(() => {
@@ -205,6 +209,7 @@ describe('History view (component)', () => {
     act(() => mock.setTasks([], workflows));
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await chooseGraphMenuItem('rail-history');
 
     await waitFor(() => {

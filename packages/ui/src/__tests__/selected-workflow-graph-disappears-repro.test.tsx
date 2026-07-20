@@ -47,6 +47,7 @@ describe('selected workflow graph metadata-gap regression', () => {
 
   it('keeps the selected mini-DAG visible when workflow metadata briefly omits the selected workflow', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskAlpha, taskBeta], [workflowA, workflowB]));
 
     await waitFor(() => {
@@ -110,6 +111,7 @@ describe('selected workflow graph metadata-gap regression', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta, merge, gamma], [workflowA, workflowB]));
 
     await waitFor(() => {
