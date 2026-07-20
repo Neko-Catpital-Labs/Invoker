@@ -102,6 +102,8 @@ export interface OpenSessionOptions {
   planningSessionId?: string;
   spec: TerminalSpec;
   cwd: string;
+  /** Initial display-only content to seed the terminal snapshot before process output. */
+  outputSnapshot?: string;
   /** When provided, the session attaches to the running executor rather than spawning a child. */
   attach?: AttachContext;
 }
@@ -318,7 +320,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       updatedAt: createdAt,
       status: 'running' as const,
-      outputSnapshot: '',
+      outputSnapshot: opts.outputSnapshot ?? '',
     };
 
     if (opts.attach) {

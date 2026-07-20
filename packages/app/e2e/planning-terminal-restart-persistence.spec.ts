@@ -99,6 +99,13 @@ async function submitPlanningText(page: Page, text: string): Promise<void> {
   await page.getByTestId('invoker-terminal-input').press('Enter');
 }
 
+async function planningTmuxPaneText(page: Page): Promise<string> {
+  const pane = page.getByTestId('invoker-terminal-tmux-pane');
+  const rowsText = await pane.locator('.xterm-rows').textContent().catch(() => null);
+  const paneText = await pane.textContent().catch(() => '');
+  return rowsText ?? paneText ?? '';
+}
+
 base.describe('Planning Terminal restart persistence', () => {
   base('restores a draft-ready planning chat after relaunch', async () => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-planning-restart-'));
@@ -221,6 +228,8 @@ base.describe('Planning Terminal restart persistence', () => {
       await expect(page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' })).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toBeVisible({ timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', firstTerminalSessionId ?? '');
+      await expect.poll(() => planningTmuxPaneText(page!), { timeout: 10000 }).toContain('Invoker planning tmux bridge');
+      await expect.poll(() => planningTmuxPaneText(page!), { timeout: 10000 }).toContain('Draft plan: Planning Terminal Restart (1 task) - Update README');
       await expect.poll(async () => page!.evaluate(async (sessionId) => {
         const list = await window.invoker.planningChatList();
         const session = list.sessions.find((candidate) => candidate.id === sessionId);
