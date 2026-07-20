@@ -68,12 +68,17 @@ export function findOrphanedAutomationChromeGroups(rows) {
 
 export function readTrackedUserDataDirs(registryPath) {
   if (!registryPath) return [];
-  return [...new Set(
-    fsReadFileSync(registryPath, 'utf8')
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean),
-  )].sort();
+  try {
+    return [...new Set(
+      fsReadFileSync(registryPath, 'utf8')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean),
+    )].sort();
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
 }
 
 export function findTrackedBrowserGroups(rows, trackedUserDataDirs) {
