@@ -14,6 +14,7 @@ import type {
   TaskStatus,
   TaskConfig,
   TaskExecution,
+  InAppPlanningSessionSummary,
 } from '../../types.js';
 
 export interface MockInvoker {
@@ -31,12 +32,45 @@ export interface MockInvoker {
   cleanup: () => void;
 }
 
+export function makePlanningSessionSummary(
+  overrides: Partial<InAppPlanningSessionSummary> = {},
+): InAppPlanningSessionSummary {
+  return {
+    id: 'saved-planning-1',
+    title: 'Saved planning chat',
+    status: 'draft_ready',
+    presetKey: 'codex',
+    messages: [
+      {
+        id: 1,
+        role: 'system',
+        text: 'Ask Invoker what you want to build.',
+        tone: 'muted',
+        createdAt: '2026-07-07T00:00:00.000Z',
+      },
+      {
+        id: 2,
+        role: 'assistant',
+        text: 'Draft plan ready.',
+        createdAt: '2026-07-07T00:00:01.000Z',
+      },
+    ],
+    draftPlanAvailable: true,
+    draftPlanSummary: { name: 'Saved plan', taskCount: 1, steps: ['Update README'] },
+    draftPlanText: 'name: Saved plan\ntasks:\n  - id: update-readme\n    description: Update README\n',
+    createdAt: '2026-07-07T00:00:00.000Z',
+    updatedAt: '2026-07-07T00:00:01.000Z',
+    ...overrides,
+  };
+}
+
 export function createMockInvoker(
   initialTasks: TaskState[] = [],
   initialWorkflows: WorkflowMeta[] = [],
 ): MockInvoker {
   let taskSnapshot = initialTasks;
   let workflowSnapshot = initialWorkflows;
+  let planningSessions: InAppPlanningSessionSummary[] = [];
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
 
@@ -65,6 +99,48 @@ export function createMockInvoker(
     onTaskOutput: vi.fn(() => () => {}),
     onActivityLog: vi.fn(() => () => {}),
     loadPlan: vi.fn(async () => {}),
+    planFromGoal: vi.fn(async () => ({ ok: true, planName: 'Mock plan', workflowId: 'wf-1' })),
+    planningChatCreate: vi.fn(async (request) => {
+      const session = makePlanningSessionSummary({
+        id: 'planning-1',
+        title: request?.title ?? 'Untitled plan',
+        presetKey: request?.presetKey ?? 'codex',
+        status: 'still_discussing',
+        messages: [],
+        draftPlanAvailable: false,
+        draftPlanSummary: undefined,
+        draftPlanText: undefined,
+      });
+      planningSessions = [session, ...planningSessions];
+      return { ok: true, session };
+    }),
+    planningChatList: vi.fn(async () => ({ ok: true, sessions: planningSessions })),
+    planningChatGet: vi.fn(async (request) => {
+      const session = planningSessions.find((candidate) => candidate.id === request.sessionId);
+      return session
+        ? { ok: true, session }
+        : { ok: false, error: 'Planning session not found.' };
+    }),
+    planningChatSend: vi.fn(async (request) => {
+      const sessionId = request.sessionId ?? 'planning-1';
+      const draftPlanText = 'name: Mock plan\ntasks:\n  - id: update-readme\n    description: Update README\n';
+      return {
+        ok: true,
+        sessionId,
+        reply: 'Draft plan ready.',
+        draftPlanAvailable: true,
+        draftPlanSummary: { name: 'Mock plan', taskCount: 1, steps: ['Update README'] },
+        draftPlanText,
+      };
+    }),
+    planningChatSubmit: vi.fn(async () => ({ ok: true, planName: 'Mock plan', workflowId: 'wf-1' })),
+    planningChatReset: vi.fn(async (request) => {
+      planningSessions = planningSessions.filter((session) => session.id !== request.sessionId);
+      return { ok: true };
+    }),
+    getPlanningPresets: vi.fn(async () => [
+      { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true },
+    ]),
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
