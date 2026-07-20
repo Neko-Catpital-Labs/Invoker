@@ -820,20 +820,21 @@ describe('PlanConversation prompt construction', () => {
 
     expect(prompt).toContain('mergeMode: external_review');
     expect(prompt).toContain('Prefer small reviewable slices');
-    expect(prompt).toContain('The orchestrator handles plan execution automatically after explicit Slack approval.');
+    expect(prompt).toContain('The Slack orchestrator validates and executes the plan after the user replies `submit` and approves it.');
   });
 
-  it('reproduces the Slack planner CLI handoff escape hatch', () => {
+  it('delegates Slack plan submission to the orchestrator', () => {
     const conv = new PlanConversation({});
     (conv as any).messages.push({ role: 'user', content: 'Build a feature' });
     const prompt = conv.buildCursorPrompt();
 
-    expect(prompt).toContain('The orchestrator handles plan execution automatically after explicit Slack approval.');
-    expect(prompt).not.toContain('invoker-cli');
-    expect(prompt).not.toContain('invoker_submit_plan');
-    expect(prompt).not.toContain('invoker_validate_plan');
-    expect(prompt).not.toContain('submit-plan.sh');
-    expect(prompt).not.toContain('Harness handoff mode');
+    expect(prompt).toContain('Do NOT invoke `invoker-cli` (with any flags)');
+    expect(prompt).toContain('`invoker_submit_plan`');
+    expect(prompt).toContain('`invoker_validate_plan`');
+    expect(prompt).toContain('`submit-plan.sh`');
+    expect(prompt).toContain('Harness handoff mode');
+    expect(prompt).toContain('This rule overrides that skill\'s handoff instructions in this Slack thread');
+    expect(prompt).toContain('remind them to reply with `submit`; never run it yourself');
   });
 
   it('system prompt requires discovered verification commands for target repos', () => {
@@ -890,6 +891,11 @@ describe('PlanConversation prompt construction', () => {
     // The old loophole permitted YAML "unless the user explicitly asks" — that
     // produced drafts Slack silently rejects on submit.
     expect(prompt).not.toContain('unless the user explicitly asks');
+    expect(prompt).toContain('Do NOT invoke `invoker-cli`');
+    expect(prompt).toContain('`invoker_submit_plan`');
+    expect(prompt).toContain('`invoker_validate_plan`');
+    expect(prompt).toContain('`submit-plan.sh`');
+    expect(prompt).toContain('Harness handoff mode');
   });
 });
 
