@@ -7,11 +7,18 @@
 
 import { App, type RespondFn } from '@slack/bolt';
 import { spawn } from 'node:child_process';
+import { statSync } from 'node:fs';
+import { basename } from 'node:path';
 import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress, WorkflowOpName } from '../surface.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
 import { formatSurfaceEvent, formatWorkflowStatus } from './slack-formatter.js';
-import { splitForSlack, sanitizeSlackOutbound } from './slack-message-helpers.js';
+import {
+  splitForSlack,
+  sanitizeSlackOutbound,
+  extractArtifactPaths,
+  MAX_ARTIFACT_BATCH_BYTES,
+} from './slack-message-helpers.js';
 import type { SlackMessage } from './slack-formatter.js';
 import {
   DEFAULT_PLANNER_RETRY_BASE_DELAY_MS,
@@ -379,7 +386,7 @@ interface ConversationLike {
   getDraftedPlan(): string | null;
   readonly conversationMode: ConversationMode;
   readonly planSubmitted: boolean;
-  readonly submittedPlanText: string | null;
+  readonly submittedPlanText: string | null;  readonly workingDir?: string;
 }
 
 /** An action staged for a thread, awaiting a yes/no (text or button) confirmation. */
@@ -1805,6 +1812,8 @@ ${text}`;
       }
       const tPosting = Date.now();
 
+      await this.uploadLinkedArtifacts(reply, conversation.workingDir, channel, threadTs);
+
       const tEnd = Date.now();
 
       this.log('slack', 'info', `[PERF] thread_ts=${threadTs} setup=${tSetup - tEntry}ms cursor=${tCursor - tSetup}ms heartbeatCleanup=${tHeartbeatCleanup - tCursor}ms posting=${tPosting - tHeartbeatCleanup}ms chunks=${chunks.length} total=${tEnd - tEntry}ms`);
@@ -2205,18 +2214,75 @@ ${text}`;
     }
   }
 
-  private async postMessage(message: SlackMessage, channel = this.lobbyChannelId): Promise<string | undefined> {
+  private async postMessage(message: SlackMessage, channel = this.lobbyChannelId, threadTs?: string): Promise<string | undefined> {
     try {
       const result = await this.app.client.chat.postMessage({
         channel,
         text: message.text,
         blocks: message.blocks as any,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
       });
       this.log('slack', 'info', `Posted message: "${message.text.slice(0, 80)}..."`);
       return result.ts;
     } catch (err) {
       this.log('slack', 'error', `Failed to post message: ${err}`);
       return undefined;
+    }
+  }
+
+  private async uploadLinkedArtifacts(
+    reply: string,
+    workingDir: string | undefined,
+    channel: string,
+    threadTs: string,
+  ): Promise<void> {
+    if (!workingDir) return;
+
+    const { paths, rejected } = extractArtifactPaths(reply, workingDir);
+    for (const entry of rejected) {
+      this.log('slack', 'warn', `[UPLOAD] Skipped artifact (thread_ts=${threadTs}, reason=${entry.reason}): ${entry.path}`);
+    }
+
+    const uploads: { file: string; filename: string }[] = [];
+    let batchBytes = 0;
+    for (const filePath of paths) {
+      let size: number;
+      try {
+        const stat = statSync(filePath);
+        if (!stat.isFile()) {
+          this.log('slack', 'warn', `[UPLOAD] Skipped artifact (not a regular file): ${filePath}`);
+          continue;
+        }
+        size = stat.size;
+      } catch (err) {
+        this.log('slack', 'warn', `[UPLOAD] Skipped unreadable artifact ${filePath}: ${err}`);
+        continue;
+      }
+      if (batchBytes + size > MAX_ARTIFACT_BATCH_BYTES) {
+        this.log('slack', 'warn', `[UPLOAD] Skipped artifact (batch would exceed ${MAX_ARTIFACT_BATCH_BYTES} bytes): ${filePath}`);
+        continue;
+      }
+      batchBytes += size;
+      uploads.push({ file: filePath, filename: basename(filePath) });
+    }
+
+    if (uploads.length === 0) return;
+
+    try {
+      await this.app.client.files.uploadV2({
+        channel_id: channel,
+        thread_ts: threadTs,
+        file_uploads: uploads,
+      });
+      this.log('slack', 'info', `[UPLOAD] Uploaded ${uploads.length} artifact(s) (thread_ts=${threadTs})`);
+    } catch (err) {
+      const names = uploads.map((u) => u.filename).join(', ');
+      this.log('slack', 'error', `[UPLOAD] files.uploadV2 failed (channel=${channel}, thread_ts=${threadTs}, files=${names}): ${err}`);
+      await this.postMessage(
+        { text: `Could not upload ${names} to this thread: ${err instanceof Error ? err.message : String(err)}`, blocks: [] },
+        channel,
+        threadTs,
+      );
     }
   }
 
