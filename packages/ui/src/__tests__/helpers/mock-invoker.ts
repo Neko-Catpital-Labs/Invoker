@@ -228,6 +228,12 @@ export function createMockInvoker(
       running: [],
       queued: [],
     })),
+    getActionGraph: vi.fn(async () => ({
+      generatedAt: '2026-07-07T00:00:00.000Z',
+      stallThresholdMs: 60_000,
+      nodes: [],
+      edges: [],
+    })),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
   };
