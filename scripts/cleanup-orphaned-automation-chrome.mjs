@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import process from 'node:process';
 import { execFile as execFileCb } from 'node:child_process';
-import { readFileSync as fsReadFileSync } from 'node:fs';
+import { existsSync, readFileSync as fsReadFileSync } from 'node:fs';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCb);
@@ -68,6 +68,7 @@ export function findOrphanedAutomationChromeGroups(rows) {
 
 export function readTrackedUserDataDirs(registryPath) {
   if (!registryPath) return [];
+  if (!existsSync(registryPath)) return [];
   return [...new Set(
     fsReadFileSync(registryPath, 'utf8')
       .split('\n')

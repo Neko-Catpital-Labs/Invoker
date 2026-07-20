@@ -74,6 +74,12 @@ describe('cleanup-orphaned-automation-chrome', () => {
     assert.deepEqual(readTrackedUserDataDirs(registryPath), ['/tmp/a', '/tmp/b']);
   });
 
+  it('treats a missing registry file as no tracked user-data-dirs', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-registry-test-'));
+    const registryPath = path.join(dir, 'missing-user-data-dirs.txt');
+    assert.deepEqual(readTrackedUserDataDirs(registryPath), []);
+  });
+
   it('merges orphaned and tracked groups by process group', () => {
     const merged = mergeGroups(
       [{ pgid: 58744, pids: [58744], profiles: ['/tmp/puppeteer_dev_chrome_profile-abc'] }],
