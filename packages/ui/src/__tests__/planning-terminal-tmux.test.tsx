@@ -93,6 +93,12 @@ describe('Planning terminal tmux history', () => {
         planningSessionId: 'session-1',
         data: 'hidden tmux output\n',
       });
+      mock.fireTerminalOutput({
+        sessionId: 'mock-planning-terminal-session-1',
+        taskId: 'planning:session-1',
+        kind: 'planning',
+        data: 'hidden fallback output\n',
+      });
     });
     expect(xtermMocks.write).not.toHaveBeenCalled();
 
@@ -107,6 +113,7 @@ describe('Planning terminal tmux history', () => {
     await waitFor(() => {
       expect(xtermMocks.write).toHaveBeenCalledWith(expect.stringContaining('hidden tmux output'));
     });
+    expect(xtermMocks.write).toHaveBeenCalledWith(expect.stringContaining('hidden fallback output'));
     expect(mock.api.planningTerminalOpen).toHaveBeenCalledTimes(1);
   });
 });
