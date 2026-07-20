@@ -58,6 +58,7 @@ interface RebaseRefreshBatch {
 
 const REBASE_REFRESH_BATCH_WINDOW_MS = 25;
 const REBASE_REFRESH_RECENT_REUSE_MS = 30_000;
+const sharedCloneLocks = new Map<string, Promise<string>>();
 
 export class ResourceLimitError extends Error {
   constructor(message: string) {
@@ -71,7 +72,6 @@ export class RepoPool {
   private readonly maxWorktrees: number;
   private readonly worktreeBaseDir?: string;
   private activeWorktrees = new Map<string, Set<string>>();
-  private cloneLocks = new Map<string, Promise<string>>();
   /** Chain of operations per repo to serialize git operations. */
   private repoChains = new Map<string, Promise<unknown>>();
   private pendingRebaseRefreshBatches = new Map<string, RebaseRefreshBatch>();
@@ -346,23 +346,24 @@ export class RepoPool {
       baseMetadata: { repoUrl },
     });
     bench('RepoPool.ensureClone.begin');
-    // Serialize clone operations per repo to prevent concurrent clone races
-    const existing = this.cloneLocks.get(repoUrl);
+    // Serialize clone/fetch operations per clone path across RepoPool instances.
+    const clonePath = this.cloneDir(repoUrl);
+    const existing = sharedCloneLocks.get(clonePath);
     if (existing) {
       bench('RepoPool.ensureClone.waitForExistingLock.before');
-      const clonePath = await existing;
-      bench('RepoPool.ensureClone.waitForExistingLock.after', { clonePath });
-      return clonePath;
+      const lockedClonePath = await existing;
+      bench('RepoPool.ensureClone.waitForExistingLock.after', { clonePath: lockedClonePath });
+      return lockedClonePath;
     }
 
     const promise = this.doEnsureClone(repoUrl);
-    this.cloneLocks.set(repoUrl, promise);
+    sharedCloneLocks.set(clonePath, promise);
     try {
-      const clonePath = await promise;
-      bench('RepoPool.ensureClone.after', { clonePath });
-      return clonePath;
+      const ensuredClonePath = await promise;
+      bench('RepoPool.ensureClone.after', { clonePath: ensuredClonePath });
+      return ensuredClonePath;
     } finally {
-      this.cloneLocks.delete(repoUrl);
+      sharedCloneLocks.delete(clonePath);
       bench('RepoPool.ensureClone.lockDeleted');
     }
   }
