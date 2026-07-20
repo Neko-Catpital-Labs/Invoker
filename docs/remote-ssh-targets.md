@@ -109,6 +109,20 @@ tasks:
 
 Both fields are required for SSH tasks. The executor validates at runtime that the `poolMemberId` exists in config and throws a clear error if it's missing.
 
+## Review-Gate CI Repair
+
+SSH target config only controls where task commands and SSH-backed fix sessions run. Review-gate CI repair is decided by the Invoker owner process against persisted workflow state.
+
+For a workflow-mapped review gate, the built-in `ci-failure` worker consumes live `review_gate.ci_failed` events and runs the persisted PR CI failure scan (`pr-ci-failure-scan`, logged as `worker-ci-failure-scan-*`). The scan is not a remote target, pool member, or plan task. It walks stored merge-gate artifacts and queues the same `fix-with-agent` mutation that the manual `repair-review-gate-ci <prNumber|prUrl>` headless command queues.
+
+The repair path expects a non-conflict CI failure: the mapped merge task is `review_ready` or `awaiting_approval`, the current review artifact is required and open, `checksState` is `failure`, `failedChecks` is present, and `mergeState` is not `dirty`. A dirty merge state is handled by the conflict-resolution path instead of CI repair.
+
+Enablement is split by owner boundary:
+
+- The local or headless owner must have `autoFixRetries` set above `0`, a workflow mutation submitter, provider access for creating or polling review-gate artifacts, and the configured `autoFixAgent` available.
+- The SSH target must have the tools needed to run the original task and, when a fix is applied to an SSH task workspace, the selected agent CLI available on that remote host.
+- Adding `remoteTargets`, `runnerKind: ssh`, or `poolMemberId` does not enable CI repair by itself, and no `autoFix` fields belong in plan YAML.
+
 ## How It Works
 
 1. The plan parser reads `runnerKind` and `poolMemberId` from YAML and carries them through to `TaskConfig`.

@@ -79,9 +79,16 @@
 
   "autoFixRetries": 3,
   "autoApproveAIFixes": true,
+  "autoFixAgent": "codex",
 
   "notes": {
     "fetch_behavior": "Git fetch failures always abort the task. Fix the underlying network/auth issue and rerun.",
+    "ci_repair": [
+      "autoFixRetries is a user-config retry budget for automatic repair attempts. It is not a plan field.",
+      "For workflow-mapped review gates, the built-in ci-failure worker consumes CI-failed events and runs the persisted pr-ci-failure-scan recovery pass.",
+      "repair-review-gate-ci <prNumber|prUrl> uses the same ci-failure/fix-ci-failure queueing policy for one mapped review gate.",
+      "CI repair expects a required open review artifact with checksState=failure, failedChecks present, and mergeState not dirty."
+    ],
     "config_locations": [
       "~/.invoker/config.json - Default user-level settings",
       "INVOKER_REPO_CONFIG_PATH=/path/to/config.json - Explicit override for repo/test-specific config"
