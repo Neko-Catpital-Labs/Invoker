@@ -115,6 +115,16 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Reclaim self-hosted workspace
+        if: ${{ runner.environment == 'self-hosted' }}
+        run: |
+          if [ -d "$GITHUB_WORKSPACE" ]; then
+            if command -v sudo >/dev/null 2>&1; then
+              sudo -n chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true
+            fi
+            chmod -R u+rwX "$GITHUB_WORKSPACE" || true
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
         with:

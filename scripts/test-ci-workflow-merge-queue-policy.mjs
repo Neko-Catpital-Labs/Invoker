@@ -41,6 +41,21 @@ assert(!jobs['quality-required'].if, 'quality-required must run on ordinary PRs'
 assert(jobs['quality-extra'], 'Missing quality-extra job');
 assert(jobs['quality-extra'].if === ORDINARY_PR_GATE, 'quality-extra must run on ordinary PRs and skip merge queue refs');
 
+assert(jobs['ui-vitest'], 'Missing ui-vitest job');
+const uiVitestSteps = jobs['ui-vitest']?.steps ?? [];
+const uiVitestReclaimStepIndex = uiVitestSteps.findIndex((step) => step.name === 'Reclaim self-hosted workspace');
+const uiVitestCheckoutStepIndex = uiVitestSteps.findIndex((step) => step.name === 'Checkout');
+assert(uiVitestReclaimStepIndex >= 0, 'UI Vitest must reclaim self-hosted workspace permissions before checkout');
+assert(uiVitestCheckoutStepIndex >= 0, 'UI Vitest must have a checkout step');
+assert(uiVitestReclaimStepIndex < uiVitestCheckoutStepIndex, 'UI Vitest workspace reclaim must run before checkout');
+assert(
+  uiVitestSteps[uiVitestReclaimStepIndex].if === "${{ runner.environment == 'self-hosted' }}",
+  'UI Vitest workspace reclaim must only run on self-hosted runners',
+);
+assert(
+  String(uiVitestSteps[uiVitestReclaimStepIndex].run ?? '').includes('chown -R'),
+  'UI Vitest workspace reclaim must restore ownership for stale self-hosted workspaces',
+);
 
 assert(jobs.docker, 'Missing docker job');
 assert(jobs.docker.if === NON_PR_GATE, 'docker must not run on pull_request events');
