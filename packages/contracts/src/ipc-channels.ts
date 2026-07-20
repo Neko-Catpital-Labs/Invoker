@@ -220,6 +220,14 @@ export interface InAppPlanningPlanSummary {
   taskCount: number;
   workflowCount?: number;
   steps: string[];
+  taskGroups?: Array<{
+    name?: string;
+    title?: string;
+    workflowName?: string;
+    taskCount?: number;
+    steps: string[];
+    tasks?: string[];
+  }>;
 }
 
 export type InAppPlanningSessionStatus =
