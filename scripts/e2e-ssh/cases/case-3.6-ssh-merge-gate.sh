@@ -36,6 +36,12 @@ if [ -z "$MERGE_ID" ]; then
   exit 1
 fi
 echo "==> case 3.6: merge gate ID=$MERGE_ID"
+WF_ID="${MERGE_ID#__merge__}"
+STM=$(invoker_e2e_task_status "$MERGE_ID")
+if [ "$STM" != "review_ready" ]; then
+  echo "==> case 3.6: resume workflow $WF_ID to let merge gate run"
+  invoker_e2e_run_headless resume "$WF_ID"
+fi
 invoker_e2e_wait_task_status "$MERGE_ID" review_ready
 
 STM=$(invoker_e2e_task_status "$MERGE_ID")

@@ -37,6 +37,16 @@ if [ -z "$MERGE_ID" ]; then
   exit 1
 fi
 echo "==> case 4.2: merge gate ID=$MERGE_ID"
+# headlessApprove may exit before the cascading merge node finishes. Resume only
+# when the gate still needs recovery; it may already be review_ready here.
+WF_ID="${MERGE_ID#__merge__}"
+STM=$(invoker_e2e_task_status "$MERGE_ID")
+if [ "$STM" != "awaiting_approval" ] && [ "$STM" != "review_ready" ]; then
+  echo "==> case 4.2: resume workflow $WF_ID to let merge gate run"
+  invoker_e2e_run_headless resume "$WF_ID"
+else
+  echo "==> case 4.2: merge gate already $STM; resume not needed"
+fi
 invoker_e2e_wait_settled "$MERGE_ID"
 
 STM=$(invoker_e2e_task_status "$MERGE_ID")
@@ -70,6 +80,7 @@ echo "==> case 4.2: confirmed gh PR creation API was called"
 
 echo "==> case 4.2: approve merge gate"
 invoker_e2e_run_headless approve "$MERGE_ID"
+invoker_e2e_wait_task_status "$MERGE_ID" completed
 
 STM=$(invoker_e2e_task_status "$MERGE_ID")
 if [ "$STM" != "completed" ]; then
