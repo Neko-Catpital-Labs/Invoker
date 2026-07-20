@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runHeadless } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
-import { Orchestrator, CommandService } from '@invoker/workflow-core';
+import { Orchestrator, CommandService, type TaskState } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '@invoker/data-store';
 import type { MessageBus } from '@invoker/transport';
 import { LocalBus } from '@invoker/transport';
+
+import { trackWorkflow } from '../headless-watch.js';
 
 const noopLogger = {
   debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
@@ -19,6 +21,23 @@ function makeTask(overrides: Record<string, unknown> = {}) {
     dependencies: [],
     createdAt: new Date('2024-01-01T00:00:00Z'),
     config: { workflowId: 'wf-1', runnerKind: 'worktree', isMergeNode: false },
+    execution: {},
+    ...overrides,
+  };
+}
+
+function makeWorkflowTask(
+  id: string,
+  status: TaskState['status'],
+  overrides: Partial<TaskState> = {},
+): TaskState {
+  return {
+    id,
+    description: id,
+    dependencies: [],
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    status,
+    config: { workflowId: 'wf-1' },
     execution: {},
     ...overrides,
   };
@@ -88,5 +107,51 @@ describe('headless watch', () => {
     await runHeadless(['watch'], mockDeps);
     expect(stdout.mock.calls[0][0]).toContain('No workflows found');
     stdout.mockRestore();
+  });
+});
+
+describe('trackWorkflow', () => {
+  it('does not settle a failed workflow while a sibling launch is still queued', async () => {
+    const tasks = [
+      makeWorkflowTask('wf-1/a', 'completed'),
+      makeWorkflowTask('wf-1/b', 'failed'),
+      makeWorkflowTask('wf-1/c', 'queued' as TaskState['status'], {
+        dependencies: ['wf-1/a'],
+        execution: { phase: 'launching' },
+      }),
+      makeWorkflowTask('wf-1/d', 'pending', {
+        dependencies: ['wf-1/b', 'wf-1/c'],
+      }),
+    ];
+
+    let notify: (() => void) | undefined;
+    setTimeout(() => {
+      tasks[2] = {
+        ...tasks[2]!,
+        status: 'completed',
+        execution: { ...tasks[2]!.execution, phase: 'completed' },
+      };
+      notify?.();
+    }, 20);
+
+    const result = await trackWorkflow({
+      workflowId: 'wf-1',
+      loadTasks: () => tasks,
+      subscribeToChanges: (next) => {
+        notify = next;
+        return () => {
+          notify = undefined;
+        };
+      },
+      printSnapshot: false,
+      printSummary: false,
+      printTaskOutput: false,
+      setExitCodeOnFailure: false,
+      pollIntervalMs: 5,
+      maxWaitMs: 500,
+    });
+
+    expect(result.tasks.find((task) => task.id === 'wf-1/c')?.status).toBe('completed');
+    expect(result.status.failed).toBe(1);
   });
 });

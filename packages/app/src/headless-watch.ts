@@ -242,9 +242,19 @@ function workflowHasSettled(
     return true;
   }
 
-  const noneRunning = !tasks.some((task) => task.status === 'running' || task.status === 'fixing_with_ai');
+  const noneRunning = !tasks.some(isActiveWorkflowTask);
   const hasHumanBlocked = tasks.some((task) => settledStatuses.has(task.status) && task.status !== 'completed');
   return noneRunning && hasHumanBlocked && !hasBackgroundWork?.();
+}
+
+function isActiveWorkflowTask(task: TaskState): boolean {
+  return task.status === 'running'
+    || task.status === 'fixing_with_ai'
+    || (task.status as string) === 'queued'
+    || (
+      task.status === 'pending'
+      && task.execution.phase === 'launching'
+    );
 }
 
 function summarizeWorkflowTasks(tasks: TaskState[]): Pick<TrackWorkflowResult, 'status' | 'reviewUrl'> {
