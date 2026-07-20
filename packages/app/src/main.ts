@@ -77,6 +77,7 @@ import {
   DockerExecutor, WorktreeExecutor, SshExecutor, GitHubMergeGateProvider, ReviewProviderRegistry,
   initializeShellEnvironment,
   RESTART_TO_BRANCH_TRACE,
+  createAutoFixAttemptLedger,
   remoteFetchForPool,
   registerBuiltinAgents,
   type Executor, type ExecutorHandle,
@@ -160,6 +161,11 @@ import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
+import {
+  formatReviewGateCiRepairResult,
+  resolveReviewGateCiRepairWorkflowId,
+  type ReviewGateCiRepairCommandResult,
+} from './review-gate-ci-repair-command.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -217,6 +223,7 @@ let commandService: CommandService;
 let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const reviewGateCiRepairAttemptLedger = createAutoFixAttemptLedger();
 /**
  * The mutation context for the currently executing workflow mutation.
  * Set by the coordinator dispatch callback before invoking the handler,
@@ -303,6 +310,24 @@ function getSafeInvokerConfigForLogging(config: InvokerConfig): Record<string, u
     safeConfig.docker = { ...safeConfig.docker, secretsFile: '<redacted>' };
   }
   return safeConfig;
+}
+
+function isReviewGateCiRepairCommandResult(value: unknown): value is ReviewGateCiRepairCommandResult {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as { decision?: unknown; reason?: unknown; target?: unknown };
+  return (
+    (candidate.decision === 'queued' || candidate.decision === 'skipped' || candidate.decision === 'unmapped') &&
+    typeof candidate.reason === 'string' &&
+    typeof candidate.target === 'string'
+  );
+}
+
+function delegatedRepairResultResponse(value: unknown): { ok: true; message: string } | undefined {
+  if (!isReviewGateCiRepairCommandResult(value)) return undefined;
+  return {
+    ok: true,
+    message: formatReviewGateCiRepairResult(value),
+  };
 }
 
 const effectiveMaxConcurrency = resolveEffectiveMaxConcurrency(invokerConfig.maxConcurrency);
@@ -743,6 +768,7 @@ if (isHeadless) {
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
         runtimeServices,
+        reviewGateCiRepairAttemptLedger,
       };
 
       const createStandaloneTaskExecutor = (): TaskRunner => {
@@ -929,6 +955,13 @@ if (isHeadless) {
             case 'fix':
             case 'resolve-conflict':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
+            case 'repair-review-gate-ci':
+              return {
+                workflowId: arg0 === undefined
+                  ? undefined
+                  : resolveReviewGateCiRepairWorkflowId(arg0, { store: persistence, logger }),
+                priority: 'normal',
+              };
             default:
               return { priority: 'normal' };
           }
@@ -980,6 +1013,14 @@ if (isHeadless) {
             { logger },
           );
         }
+        headlessDeps.reviewGateCiRepairSubmitter = {
+          submit: (...submitArgs) => {
+            if (!workflowMutationCoordinator) {
+              throw new Error('Workflow mutation coordinator is unavailable');
+            }
+            return workflowMutationCoordinator.submit(...submitArgs);
+          },
+        };
 
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
@@ -1098,8 +1139,8 @@ if (isHeadless) {
             );
             return { ok: true, intentId };
           }
-          await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
-            await runHeadless(args, {
+          const headlessResult = await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
+            return await runHeadless(args, {
               ...headlessDeps,
               waitForApproval: delegatedWait,
               noTrack: delegatedNoTrack,
@@ -1107,6 +1148,10 @@ if (isHeadless) {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
           });
+          const repairResponse = delegatedRepairResultResponse(headlessResult);
+          if (repairResponse) {
+            return repairResponse;
+          }
           return { ok: true };
         });
       }
@@ -1774,7 +1819,7 @@ if (isHeadless) {
     ) {
       cancelDeferredWorkflowLaunch(resolvedHeadlessTarget.workflowId, `headless.${headlessCommand}`);
     }
-    await runHeadless(payload.args, {
+    const headlessResult = await runHeadless(payload.args, {
       logger,
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
@@ -1863,7 +1908,20 @@ if (isHeadless) {
         });
       },
       executionAgentRegistry: registerBuiltinAgents(),
+      reviewGateCiRepairSubmitter: {
+        submit: (...submitArgs) => {
+          if (!workflowMutationCoordinator) {
+            throw new Error('Workflow mutation coordinator is unavailable');
+          }
+          return workflowMutationCoordinator.submit(...submitArgs);
+        },
+      },
+      reviewGateCiRepairAttemptLedger,
     });
+    const repairResponse = delegatedRepairResultResponse(headlessResult);
+    if (repairResponse) {
+      return repairResponse;
+    }
     const { workflowId } = classifyHeadlessExecMutation(payload);
     logger.info(`executeHeadlessExec end args="${payload.args.join(' ')}" workflow="${workflowId ?? 'unknown'}"`, {
       module: 'ipc-delegate',
@@ -1912,6 +1970,13 @@ if (isHeadless) {
       case 'fix':
       case 'resolve-conflict':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'normal' };
+      case 'repair-review-gate-ci':
+        return {
+          workflowId: arg0 === undefined
+            ? undefined
+            : resolveReviewGateCiRepairWorkflowId(arg0, { store: persistence, logger }),
+          priority: 'normal',
+        };
       default:
         return { priority: 'normal' };
     }

@@ -20,7 +20,7 @@ type DelegateTrackingOptions = {
 // ---------------------------------------------------------------------------
 
 export type DelegationOutcome =
-  | { kind: 'delegated'; workflowId?: string; tasks?: TaskState[] }
+  | { kind: 'delegated'; workflowId?: string; tasks?: TaskState[]; message?: string }
   | { kind: 'timeout' }
   | { kind: 'no-handler' }
   | { kind: 'protocol-error'; message: string };
@@ -283,9 +283,21 @@ async function tryDelegate(
     process.stdout.write('Delegated to owner\n');
   }
 
+  const delegatedMessage = typeof response.message === 'string' && response.message.length > 0
+    ? response.message
+    : undefined;
+  if (delegatedMessage) {
+    process.stdout.write(delegatedMessage.endsWith('\n') ? delegatedMessage : `${delegatedMessage}\n`);
+  }
+
   const outcome: DelegationOutcome = hasWorkflowId
-    ? { kind: 'delegated', workflowId: response.workflowId as string, tasks: response.tasks as TaskState[] }
-    : { kind: 'delegated' };
+    ? {
+      kind: 'delegated',
+      workflowId: response.workflowId as string,
+      tasks: response.tasks as TaskState[],
+      ...(delegatedMessage ? { message: delegatedMessage } : {}),
+    }
+    : { kind: 'delegated', ...(delegatedMessage ? { message: delegatedMessage } : {}) };
 
   if (options.noTrack) {
     process.stdout.write('--no-track enabled: delegated submission accepted; exiting without tracking.\n');
