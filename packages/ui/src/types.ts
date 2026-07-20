@@ -281,6 +281,7 @@ export type {
   InAppPlanningGetSessionResponse,
   InAppPlanningListSessionsResponse,
   InAppPlanningPlanSummary,
+  InAppPlanningTaskGroupSummary,
   InAppPlanningResetRequest,
   InAppPlanningResetResponse,
   InAppPlanningSessionStatus,
