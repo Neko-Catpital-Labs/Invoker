@@ -83,10 +83,65 @@ interface SubmitErrorView {
   message: string;
 }
 
-function rolePrompt(role: InvokerTerminalLine['role']): string {
-  if (role === 'user') return 'you ›';
-  if (role === 'assistant') return 'invoker ›';
-  return 'system ›';
+function roleLabel(role: InvokerTerminalLine['role']): string {
+  if (role === 'user') return 'You';
+  if (role === 'assistant') return 'Invoker';
+  return 'System';
+}
+
+type MessageSegment =
+  | { kind: 'prose'; text: string }
+  | { kind: 'code'; language: string | null; text: string };
+
+function splitFencedMessageSegments(text: string): MessageSegment[] {
+  const segments: MessageSegment[] = [];
+  const fencePattern = /```([^\n`]*)\n([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = fencePattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({ kind: 'prose', text: text.slice(lastIndex, match.index) });
+    }
+    const language = match[1]?.trim() || null;
+    segments.push({ kind: 'code', language, text: match[2] ?? '' });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    segments.push({ kind: 'prose', text: text.slice(lastIndex) });
+  }
+  return segments.length > 0 ? segments : [{ kind: 'prose', text }];
+}
+
+function MessageBody({ text, toneClass }: { text: string; toneClass: string }): JSX.Element {
+  const segments = splitFencedMessageSegments(text);
+  return (
+    <div className={`space-y-3 ${toneClass}`}>
+      {segments.map((segment, index) => {
+        if (segment.kind === 'code') {
+          return (
+            <pre
+              key={`code-${index}`}
+              className="overflow-x-auto rounded-lg border border-border bg-card/80 px-3 py-2.5 font-mono text-[12px] leading-5 text-foreground"
+            >
+              {segment.language ? (
+                <div className="mb-1.5 font-sans text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {segment.language}
+                </div>
+              ) : null}
+              <code className="whitespace-pre">{segment.text.replace(/\n$/, '')}</code>
+            </pre>
+          );
+        }
+        const prose = segment.text.replace(/^\n+|\n+$/g, '');
+        if (!prose) return null;
+        return (
+          <div key={`prose-${index}`} className="whitespace-pre-wrap font-sans text-[13.5px] leading-6">
+            {prose}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 type SeededOutputSnapshot = {
@@ -149,7 +204,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
     try {
       term = new XTermTerminal({
         fontSize: 12,
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        fontFamily: 'var(--app-font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
         cursorBlink: true,
         convertEol: false,
         scrollback: 5000,
@@ -247,7 +302,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
       {!session && (
         <div
           data-testid="invoker-terminal-tmux-placeholder"
-          className="absolute inset-0 flex items-center justify-center px-4 text-center font-mono text-xs text-muted-foreground"
+          className="absolute inset-0 flex items-center justify-center px-4 text-center font-sans text-xs text-muted-foreground"
         >
           {error || (busy ? 'Starting tmux session…' : 'No tmux session attached.')}
         </div>
@@ -261,14 +316,14 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
         />
       )}
       {session?.status === 'exited' && (
-        <div className="absolute right-3 top-3 rounded-sm border border-border bg-card px-2 py-1 font-mono text-[11px] text-amber-300">
+        <div className="absolute right-3 top-3 rounded-md border border-border bg-card px-2 py-1 font-sans text-[11px] text-amber-300">
           exited{typeof session.exitCode === 'number' ? ` ${session.exitCode}` : ''}
         </div>
       )}
       {session && error && (
         <div
           data-testid="invoker-terminal-tmux-error"
-          className="absolute bottom-3 left-3 right-3 rounded-sm border border-destructive/40 bg-card px-3 py-2 font-mono text-xs text-destructive"
+          className="absolute bottom-3 left-3 right-3 rounded-md border border-destructive/40 bg-card px-3 py-2 font-sans text-xs text-destructive"
         >
           {error}
         </div>
@@ -476,24 +531,31 @@ export function InvokerTerminal({
               ? 'text-muted-foreground'
               : line.role === 'assistant'
                 ? 'text-foreground'
-                : 'text-muted-foreground';
+                : 'text-foreground/90';
+        const bubbleClass = line.role === 'user'
+          ? 'rounded-2xl border border-border/70 bg-secondary/40 px-3.5 py-2.5'
+          : line.role === 'system'
+            ? 'rounded-xl border border-border/50 bg-background/50 px-3.5 py-2.5'
+            : 'rounded-2xl px-1 py-1';
         return (
-          <div key={line.id} className="space-y-1">
-            <div className="text-[11px] text-muted-foreground">{rolePrompt(line.role)}</div>
+          <div key={line.id} className={`space-y-1.5 ${bubbleClass}`}>
+            <div className="text-[11px] font-medium tracking-wide text-muted-foreground">
+              {roleLabel(line.role)}
+            </div>
             {line.reasoning ? (
               <details
                 data-testid="invoker-terminal-thinking"
-                className="rounded-sm border border-border/60 bg-background/40 px-2 py-1 text-muted-foreground"
+                className="rounded-md border border-border/60 bg-background/40 px-2.5 py-1.5 text-muted-foreground"
               >
                 <summary className="cursor-pointer select-none text-[11px] text-muted-foreground">
                   Thinking
                 </summary>
-                <div className="mt-1 whitespace-pre-wrap text-[12px] leading-5 text-muted-foreground">
+                <div className="mt-1 whitespace-pre-wrap font-sans text-[12px] leading-5 text-muted-foreground">
                   {line.reasoning}
                 </div>
               </details>
             ) : null}
-            <div className={`whitespace-pre-wrap ${toneClass}`}>{line.text}</div>
+            <MessageBody text={line.text} toneClass={toneClass} />
           </div>
         );
       })}
@@ -501,19 +563,19 @@ export function InvokerTerminal({
         <div
           data-testid="invoker-terminal-planner-stream"
           data-state={planningStream.status}
-          className={`rounded-sm border px-3 py-2 ${
+          className={`rounded-xl border px-3.5 py-2.5 ${
             planningStream.status === 'failed'
               ? 'border-destructive/50 bg-destructive/10'
               : 'border-border-strong bg-card/70'
           }`}
         >
           <div className="flex items-center justify-between gap-3">
-            <div className="text-[11px] text-muted-foreground">planner stream ›</div>
+            <div className="text-[11px] font-medium text-muted-foreground">Planner stream</div>
             <div className={`text-[11px] ${planningStream.status === 'failed' ? 'text-destructive' : 'text-muted-foreground'}`}>
               {planningStream.status === 'failed' ? 'failed' : 'live'}
             </div>
           </div>
-          <div className={`mt-2 whitespace-pre-wrap ${planningStream.status === 'failed' ? 'text-destructive' : 'text-foreground'}`}>
+          <div className={`mt-2 whitespace-pre-wrap font-sans text-[13.5px] leading-6 ${planningStream.status === 'failed' ? 'text-destructive' : 'text-foreground'}`}>
             {planningStream.text}
           </div>
         </div>
@@ -552,13 +614,13 @@ export function InvokerTerminal({
             </div>
           )}
           {mode === 'chat' && busy && (
-            <span className="font-mono text-[11px] text-muted-foreground">working…</span>
+            <span className="text-[11px] text-muted-foreground">working…</span>
           )}
           {mode === 'tmux' && terminalBusy && (
-            <span className="font-mono text-[11px] text-muted-foreground">starting…</span>
+            <span className="text-[11px] text-muted-foreground">starting…</span>
           )}
           {mode === 'chat' && readOnly && (
-            <span className="font-mono text-[11px] text-muted-foreground">submitted</span>
+            <span className="text-[11px] text-muted-foreground">submitted</span>
           )}
           {expanded ? (
             <button
@@ -602,12 +664,12 @@ export function InvokerTerminal({
             ref={transcriptRef}
             data-testid="invoker-terminal-transcript"
             onScroll={handleTranscriptScroll}
-            className="min-h-0 flex-1 space-y-3 overflow-y-auto bg-background px-4 py-4 font-mono text-[13px] leading-6"
+            className="min-h-0 flex-1 space-y-5 overflow-y-auto bg-background px-5 py-5 font-sans text-[13.5px] leading-6"
           >
             {lines.length === 0 && !planningStream?.text ? (
               <div data-testid="invoker-terminal-empty-hero" className="flex h-full min-h-[220px] flex-col justify-center gap-4">
                 <div>
-                  <h3 className="text-base font-semibold text-foreground">What do you want to build?</h3>
+                  <h3 className="text-lg font-semibold tracking-tight text-foreground">What do you want to build?</h3>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
                     Describe a change, investigate a bug, or ask Invoker to draft a full plan. Review the graph before starting work.
                   </p>
@@ -653,7 +715,7 @@ export function InvokerTerminal({
               className="sticky bottom-0 z-10 border-t border-destructive/40 bg-background px-4 py-3 text-destructive-foreground"
             >
               <div className="text-sm font-medium text-destructive">{submitError.title}</div>
-              <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-5 text-destructive/90">{submitError.message}</div>
+              <div className="mt-2 whitespace-pre-wrap font-sans text-xs leading-5 text-destructive/90">{submitError.message}</div>
               <div className="mt-3 flex flex-wrap gap-2">
                 {draftPlanAvailable && (
                   <button
@@ -686,13 +748,18 @@ export function InvokerTerminal({
           {draftPlanAvailable && !readOnly && (
             <div
               data-testid="invoker-terminal-ready-bar"
-              className="sticky bottom-0 z-10 border-t border-border bg-background px-4 py-3 text-sm text-foreground"
+              className="sticky bottom-0 z-10 border-t border-border bg-card/80 px-4 py-3.5 text-sm text-foreground backdrop-blur-sm"
             >
-              <div className="mb-2 text-sm font-medium text-foreground">Plan draft ready</div>
+              <div className="mb-1 text-sm font-semibold tracking-tight text-foreground">Plan draft ready</div>
+              <p className="mb-3 text-xs text-muted-foreground">
+                {draftPlanSummary
+                  ? `draft ready · "${draftPlanSummary.name}" · ${draftPlanSummary.workflowCount && draftPlanSummary.workflowCount > 1 ? `${draftPlanSummary.workflowCount} workflows · ${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}` : `${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}`}`
+                  : 'draft ready'}
+              </p>
               {draftPlanSummary?.taskGroups && draftPlanSummary.taskGroups.length > 0 && (
                 <div
                   data-testid="invoker-terminal-plan-tasks"
-                  className="mb-3 max-h-52 overflow-y-auto pr-1"
+                  className="mb-3 max-h-52 overflow-y-auto rounded-lg border border-border/70 bg-background/60 px-3 py-2 pr-1"
                 >
                   {draftPlanSummary.taskGroups.map((group, groupIndex) => (
                     <div key={group.workflow ?? `group-${groupIndex}`} className="mb-2 last:mb-0">
@@ -711,39 +778,32 @@ export function InvokerTerminal({
                   ))}
                 </div>
               )}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="font-mono text-xs text-muted-foreground">
-                  {draftPlanSummary
-                    ? `draft ready · "${draftPlanSummary.name}" · ${draftPlanSummary.workflowCount && draftPlanSummary.workflowCount > 1 ? `${draftPlanSummary.workflowCount} workflows · ${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}` : `${draftPlanSummary.taskCount} task${draftPlanSummary.taskCount === 1 ? '' : 's'}`}`
-                    : 'draft ready'}
-                </span>
-                <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onSubmitDraft}
+                  disabled={busy}
+                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-wait disabled:opacity-50"
+                >
+                  Submit to Invoker
+                </button>
+                {onOpenGraph && (
                   <button
                     type="button"
-                    onClick={onSubmitDraft}
-                    disabled={busy}
-                    className="rounded-sm bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-wait disabled:opacity-50"
+                    data-testid="invoker-terminal-open-graph"
+                    onClick={onOpenGraph}
+                    className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
                   >
-                    Submit to Invoker
+                    Open graph
                   </button>
-                  {onOpenGraph && (
-                    <button
-                      type="button"
-                      data-testid="invoker-terminal-open-graph"
-                      onClick={onOpenGraph}
-                      className="rounded-sm border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
-                    >
-                      Open graph
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={focusComposer}
-                    className="rounded-sm border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
-                  >
-                    Keep chatting
-                  </button>
-                </div>
+                )}
+                <button
+                  type="button"
+                  onClick={focusComposer}
+                  className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-border-strong hover:text-foreground"
+                >
+                  Keep chatting
+                </button>
               </div>
             </div>
           )}
@@ -751,17 +811,17 @@ export function InvokerTerminal({
           {readOnly && submittedPlanName && onOpenGraph && (
             <div
               data-testid="invoker-terminal-submitted-bar"
-              className="sticky bottom-0 z-10 border-t border-border bg-background px-4 py-3 text-sm text-foreground"
+              className="sticky bottom-0 z-10 border-t border-border bg-card/80 px-4 py-3.5 text-sm text-foreground backdrop-blur-sm"
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="font-mono text-xs text-muted-foreground">
+                <span className="text-xs text-muted-foreground">
                   Plan ready · &quot;{submittedPlanName}&quot; · review the graph, then Start ready work
                 </span>
                 <button
                   type="button"
                   data-testid="invoker-terminal-open-graph"
                   onClick={onOpenGraph}
-                  className="rounded-sm bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                  className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                 >
                   Open graph
                 </button>
@@ -770,11 +830,10 @@ export function InvokerTerminal({
           )}
 
           <form
-            className="border-t border-border bg-background px-4 py-3"
+            className="border-t border-border bg-background px-4 py-3.5"
             onSubmit={handleFormSubmit}
           >
-            <div className="flex items-start gap-2">
-              <span className="mt-2.5 shrink-0 font-mono text-xs text-muted-foreground" aria-hidden="true">›</span>
+            <div className="rounded-xl border border-border bg-card/40 px-3 py-2 focus-within:border-border-strong">
               <textarea
                 ref={inputRef}
                 data-testid="invoker-terminal-input"
@@ -784,35 +843,35 @@ export function InvokerTerminal({
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
                 placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change, ask questions, or say “draft the full plan”.'}
-                className={`min-h-20 w-full resize-none border-0 bg-transparent py-2 font-mono text-[13px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 ${composerDisabledCursorClass}`}
+                className={`min-h-[4.5rem] w-full resize-none border-0 bg-transparent py-1.5 font-sans text-[13.5px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 ${composerDisabledCursorClass}`}
               />
-            </div>
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-              <label className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
-                <span>ai</span>
-                <select
-                  data-testid="invoker-terminal-harness"
-                  value={selectedPresetKey}
-                  onChange={(event) => onPresetChange(event.target.value)}
-                  disabled={readOnly}
-                  className="rounded-sm border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-2">
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>Agent</span>
+                  <select
+                    data-testid="invoker-terminal-harness"
+                    value={selectedPresetKey}
+                    onChange={(event) => onPresetChange(event.target.value)}
+                    disabled={readOnly}
+                    className="rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                  >
+                    {presetOptions.map((option) => (
+                      <option key={option.key} value={option.key}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="submit"
+                  aria-label="Send"
+                  disabled={sendButtonDisabled}
+                  className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
                 >
-                  {presetOptions.map((option) => (
-                    <option key={option.key} value={option.key}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <button
-                type="submit"
-                aria-label="Send"
-                disabled={sendButtonDisabled}
-                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-amber-400 text-white shadow-sm transition-colors hover:bg-amber-300 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-300 disabled:bg-gray-700 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-700 disabled:opacity-50 ${sendButtonDisabledCursorClass}`}
-              >
-                <SendIcon
-                  data-testid="invoker-terminal-send-icon"
-                  className="h-4 w-4"
-                />
-              </button>
+                  <SendIcon
+                    data-testid="invoker-terminal-send-icon"
+                    className="h-4 w-4"
+                  />
+                </button>
+              </div>
             </div>
           </form>
         </>
