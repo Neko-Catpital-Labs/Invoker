@@ -4,7 +4,60 @@
  * These functions have ZERO Slack API dependencies — they operate only on strings.
  */
 
+import { isAbsolute, resolve, sep } from 'node:path';
+
 const SLACK_CHUNK_LIMIT = 3_800;
+
+export const MAX_ARTIFACT_UPLOADS = 10;
+export const MAX_ARTIFACT_BATCH_BYTES = 25 * 1024 * 1024;
+
+export interface ArtifactExtraction {
+  paths: string[];
+  rejected: { path: string; reason: string }[];
+}
+
+const MARKDOWN_LINK = /\[[^\]]*\]\(([^)\s]+)\)/g;
+
+/**
+ * Collect artifact paths an agent deliberately markdown-linked in its reply, keeping
+ * only those inside the thread's own worktree.
+ *
+ * The reply text is influenced by untrusted content the agent may have read, and the
+ * caller uploads these paths using a token the agent does not own. Confining them to
+ * `workingDir` is what stops a linked `~/.ssh/id_rsa` from reaching Slack, so the
+ * boundary check must run on the resolved path and must not be relaxed.
+ *
+ * Only absolute links are considered: relative ones are ordinary prose references to
+ * repo files, not a request to share them.
+ */
+export function extractArtifactPaths(text: string, workingDir: string): ArtifactExtraction {
+  const root = resolve(workingDir);
+  const prefix = root + sep;
+  const paths: string[] = [];
+  const rejected: { path: string; reason: string }[] = [];
+  const seen = new Set<string>();
+
+  for (const match of text.matchAll(MARKDOWN_LINK)) {
+    const raw = match[1].startsWith('file://') ? match[1].slice('file://'.length) : match[1];
+    if (!isAbsolute(raw)) continue;
+
+    const candidate = resolve(raw);
+    if (candidate !== root && !candidate.startsWith(prefix)) {
+      rejected.push({ path: candidate, reason: 'outside thread worktree' });
+      continue;
+    }
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+
+    if (paths.length >= MAX_ARTIFACT_UPLOADS) {
+      rejected.push({ path: candidate, reason: `exceeds ${MAX_ARTIFACT_UPLOADS}-file limit` });
+      continue;
+    }
+    paths.push(candidate);
+  }
+
+  return { paths, rejected };
+}
 
 /**
  * Split text into Slack-safe chunks, preserving formatting.
