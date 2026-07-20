@@ -247,11 +247,13 @@ export interface InvokerConfig {
     /**
      * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
      * Default: ~/.invoker
-     *
-     * Invoker does not run repo bootstrap automatically. If a repo needs hydration,
-     * make the task command run the repo-owned setup explicitly.
      */
     remoteInvokerHome?: string;
+    /**
+     * Optional repo-owned bootstrap command for managed SSH worktrees.
+     * Runs from the checked-out worktree before the task payload.
+     */
+    provisionCommand?: string;
     /**
      * When true, export agent API keys from the local secrets file into SSH task/fix
      * shells. Default false so remote Claude/Codex CLI account auth is preserved.
