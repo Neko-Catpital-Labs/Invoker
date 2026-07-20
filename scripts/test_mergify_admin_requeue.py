@@ -73,6 +73,7 @@ class MergifyAdminRequeueTests(unittest.TestCase):
             "quality / TypeScript Types",
             "required-fast / Guardrails",
             "required-fast / Submit Workflow Chain",
+            "UI Vitest",
         }))
 
     def test_loads_admin_bypass_rule_from_any_working_directory(self):
