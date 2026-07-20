@@ -59,7 +59,37 @@ class GhClient:
             "number,title,url,headRefName,headRefOid,baseRefName,state,isDraft,labels,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup",
         ]
         value = self._run_json(args)
-        return value if isinstance(value, list) else []
+        seeds = value if isinstance(value, list) else []
+        by_number: dict[int, dict] = {}
+        ordered_numbers: list[int] = []
+
+        def remember(number: int, detail: dict) -> None:
+            if number not in by_number:
+                ordered_numbers.append(number)
+            by_number[number] = detail
+
+        for item in seeds:
+            if not isinstance(item, dict):
+                continue
+            number = int(item.get("number") or 0)
+            if number:
+                remember(number, item)
+
+        queued_stack_numbers: list[int] = []
+        queued_stack_number_set: set[int] = set()
+        for number in list(ordered_numbers):
+            meta = parse_stack_metadata(self.issue_comments(repo, number))
+            if not meta:
+                continue
+            for stack_number in meta[1]:
+                if stack_number not in by_number and stack_number not in queued_stack_number_set:
+                    queued_stack_number_set.add(stack_number)
+                    queued_stack_numbers.append(stack_number)
+
+        for number in queued_stack_numbers:
+            remember(number, self.pr_detail(repo, number))
+
+        return [by_number[number] for number in ordered_numbers]
 
     def pr_detail(self, repo: str, number: int) -> dict:
         owner, name = repo.split("/", 1)
