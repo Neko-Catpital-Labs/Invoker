@@ -436,7 +436,6 @@ let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 let launchDispatcher: LaunchDispatcher | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-const planningChatSessions = createInAppPlanningChatSessions();
 /**
  * The mutation context for the currently executing workflow mutation.
  * Set by the coordinator dispatch callback before invoking the handler,
@@ -680,7 +679,6 @@ function updateInvokerCliFromMenu(): void {
     detail,
   });
 }
-
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
@@ -2441,7 +2439,15 @@ function createEmbeddedTerminalBackendFromConfig(
       getMessageBus: () => messageBus,
       refreshOwnerRoute: refreshGuiMutationOwnerRoute,
       onMutationOwnerUnavailable: markDaemonOwnerUnavailable,
-      translateGuiMutationToHeadless: (payload) => mutationActions.translateGuiMutationToHeadless(payload),
+      translateGuiMutationToHeadless: (payload) => {
+        if (
+          payload.channel === 'invoker:planning-chat-delete'
+          || payload.channel === 'invoker:planning-chat-delete-submitted'
+        ) {
+          return { channel: 'headless.gui-mutation', request: payload };
+        }
+        return mutationActions.translateGuiMutationToHeadless(payload);
+      },
       guiMutationHandlers,
     };
 
@@ -2837,6 +2843,32 @@ function createEmbeddedTerminalBackendFromConfig(
       resolveSetupCliPath,
       getBundledSkillsStatus,
       installPackagedSkills,
+    });
+    const guiPlanningConversationRepo = new ConversationRepository(persistence, {
+      info: (message) => logger.info(message, { module: 'planning-chat' }),
+      warn: (message) => logger.warn(message, { module: 'planning-chat' }),
+      error: (message) => logger.error(message, { module: 'planning-chat' }),
+    });
+    const closePlanningTerminalSession = (terminalSessionId: string): void => {
+      embeddedTerminalManager.close(terminalSessionId);
+    };
+    registrars.registerGuiMutationHandler('invoker:planning-chat-delete', async (request: unknown) => {
+      return deletePlanningChat(request as InAppPlanningDeleteRequest, {
+        sessions: planningChatSessions,
+        planningSessionStore: ownerMode ? persistence : undefined,
+        conversationRepo: guiPlanningConversationRepo,
+        closeTerminal: closePlanningTerminalSession,
+        logger,
+      });
+    });
+    registrars.registerGuiMutationHandler('invoker:planning-chat-delete-submitted', async () => {
+      return deleteSubmittedPlanningChats({
+        sessions: planningChatSessions,
+        planningSessionStore: ownerMode ? persistence : undefined,
+        conversationRepo: guiPlanningConversationRepo,
+        closeTerminal: closePlanningTerminalSession,
+        logger,
+      });
     });
     if (ownerMode) {
       planningTerminalState.restorePersistedPlanningTerminals();
