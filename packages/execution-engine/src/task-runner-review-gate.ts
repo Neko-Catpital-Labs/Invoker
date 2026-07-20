@@ -20,6 +20,19 @@
  */
 
 import type { TaskState } from '@invoker/workflow-core';
+import {
+  getCurrentReviewArtifacts,
+  getCurrentRequiredReviewArtifacts,
+  isCurrentReviewGateArtifact,
+  reviewGateIsApproved,
+} from '@invoker/workflow-core';
+
+export {
+  getCurrentReviewArtifacts,
+  getCurrentRequiredReviewArtifacts,
+  isCurrentReviewGateArtifact,
+  reviewGateIsApproved,
+} from '@invoker/workflow-core';
 
 import type { MergeGateApprovalStatus } from './merge-gate-provider.js';
 import type { TaskRunner } from './task-runner.js';
@@ -111,33 +124,8 @@ export async function closeWorkflowReview(
   }
 }
 
-export function isCurrentReviewGateArtifact(gate: ReviewGateState, artifact: ReviewGateArtifact): boolean {
-  return artifact.generation === gate.activeGeneration
-    && artifact.status !== 'discarded'
-    && !artifact.discardedAt;
-}
 
-export function getCurrentReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
-  const gate = task.execution.reviewGate;
-  if (!gate) {
-    if (!task.execution.reviewId) {
-      return [];
-    }
-    return [{
-      id: task.execution.reviewId,
-      providerId: task.execution.reviewId,
-      required: true,
-      status: 'open',
-      generation: task.execution.generation ?? 0,
-    }];
-  }
 
-  return gate.artifacts.filter((artifact) => isCurrentReviewGateArtifact(gate, artifact));
-}
-
-export function getCurrentRequiredReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
-  return getCurrentReviewArtifacts(task).filter((artifact) => artifact.required && !!artifact.providerId);
-}
 
 export function getCurrentClosableReviewIdentifiers(task: TaskState): string[] {
   return getCurrentReviewArtifacts(task)
@@ -217,13 +205,6 @@ export function updateReviewGateArtifact(
   };
 }
 
-export function reviewGateIsApproved(gate: ReviewGateState): boolean {
-  const currentRequired = gate.artifacts.filter((artifact) =>
-    isCurrentReviewGateArtifact(gate, artifact) && artifact.required,
-  );
-  return currentRequired.length > 0
-    && currentRequired.every((artifact) => artifact.status === 'approved');
-}
 
 export async function handleApprovedMergeGate(
   host: TaskRunnerReviewGateHost,
