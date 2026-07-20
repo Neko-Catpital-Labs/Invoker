@@ -231,6 +231,8 @@ jobs:
 
       - name: Configure git identity and HTTPS auth
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -345,6 +347,8 @@ jobs:
 
       - name: Configure git identity and HTTPS auth
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -416,6 +420,8 @@ jobs:
 
       - name: Configure git identity and HTTPS auth
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -478,6 +484,8 @@ jobs:
 
       - name: Configure git identity and HTTPS auth
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -534,6 +542,8 @@ jobs:
 
       - name: Configure git identity and HTTPS auth
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -690,6 +700,8 @@ jobs:
 
       - name: Configure git identity for E2E repos
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -766,6 +778,8 @@ jobs:
 
       - name: Configure git identity for E2E repos
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -840,6 +854,8 @@ jobs:
 
       - name: Configure git identity and HTTPS auth
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -958,6 +974,8 @@ jobs:
 
       - name: Configure git identity and HTTPS auth
         run: |
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.name "CI Bot"
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
