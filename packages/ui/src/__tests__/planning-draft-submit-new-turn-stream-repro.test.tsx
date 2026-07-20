@@ -29,7 +29,7 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
   });
 
   async function openPlanningTerminal() {
-    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    fireEvent.click(await screen.findByTestId('sidebar-home'));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
     });
@@ -77,7 +77,7 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
     expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
     expect(screen.getByTestId('invoker-terminal-harness')).toBeDisabled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'New' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-input')).not.toBeDisabled();
     });

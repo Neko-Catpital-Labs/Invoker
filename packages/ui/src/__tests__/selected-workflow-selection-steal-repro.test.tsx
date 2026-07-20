@@ -51,6 +51,7 @@ describe('selected workflow selection-steal regression', () => {
 
   it('keeps focus on the selected workflow when it briefly drops out of the graph (home surface)', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     const { alpha, gamma } = buildTasks();
     act(() => mock.setTasks([alpha, gamma], [workflowA, workflowB]));
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
@@ -73,6 +74,7 @@ describe('selected workflow selection-steal regression', () => {
 
   it('keeps focus on the selected workflow during churn (workflows browser surface)', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     const { alpha, gamma } = buildTasks();
     act(() => mock.setTasks([alpha, gamma], [workflowA, workflowB]));
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
@@ -94,6 +96,7 @@ describe('selected workflow selection-steal regression', () => {
 
   it('keeps an open task context menu usable through recreate churn', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     const { alpha, beta, gamma } = buildTasks();
     act(() => mock.setTasks([alpha, beta, gamma], [workflowA, workflowB]));
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
@@ -121,6 +124,7 @@ describe('selected workflow selection-steal regression', () => {
 
   it('still moves off the selected workflow once it is genuinely gone (after the grace window)', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     const { alpha, gamma } = buildTasks();
     act(() => mock.setTasks([alpha, gamma], [workflowA, workflowB]));
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());

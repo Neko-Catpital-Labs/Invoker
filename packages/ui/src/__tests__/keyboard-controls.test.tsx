@@ -54,6 +54,7 @@ const tasks = [
 async function renderKeyboardFixture(mock: MockInvoker) {
   mock.setTasks(tasks, workflows);
   render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
   await screen.findByTestId('workflow-node-wf-a');
   await screen.findByTestId('selected-workflow-mini-dag');
 }
@@ -80,6 +81,7 @@ describe('Side rail controls (component)', () => {
 
   it('Refresh button calls refreshTaskGraph', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     fireEvent.click(screen.getByTestId('rail-refresh'));
 
     await waitFor(() => {
@@ -108,6 +110,7 @@ describe('Side rail controls (component)', () => {
 
   it('Clear button calls clear', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     fireEvent.click(screen.getByTestId('graph-more-button'));
     fireEvent.click(screen.getByTestId('rail-clear'));
     await waitFor(() => {
@@ -198,6 +201,7 @@ describe('Side rail controls (component)', () => {
     try {
       mock.setTasks(reviewTasks, reviewWorkflows);
       render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
       await screen.findByTestId('workflow-node-wf-pr');
       await screen.findByTestId('selected-workflow-mini-dag');
 
@@ -400,6 +404,7 @@ describe('Sidebar keyboard navigation (component)', () => {
   async function renderReviewFixture() {
     mock.setTasks(reviewTasks, reviewWorkflows);
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await screen.findByTestId('workflow-node-wf-r');
     await screen.findByTestId('selected-workflow-mini-dag');
     await screen.findByTestId('inspector-pr-link');
@@ -547,9 +552,14 @@ describe('Camera lock controls (component)', () => {
   ) {
     mock.setTasks(tks, wfs);
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await screen.findByTestId(`workflow-node-${wfs[0].id}`);
     await screen.findByTestId('selected-workflow-mini-dag');
     await waitFor(() => expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2));
+    // Opening Plan graph issues a fit; drain any trailing center/fit from that
+    // transition before tests assert on post-mount camera moves.
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     fitViewMock.mockClear();
     setCenterMock.mockClear();
   }

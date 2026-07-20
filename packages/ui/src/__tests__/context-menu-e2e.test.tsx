@@ -72,6 +72,7 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
     workflowList = workflows,
   ) {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks(tasks, workflowList));
     expect(await screen.findByTestId('workflow-node-wf-1')).toBeInTheDocument();
   }
@@ -364,6 +365,7 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
 
     async function setupStack() {
       render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
       act(() => mock.setTasks([upTask, downTask], stackWorkflows));
       await waitFor(() => {
         expect(screen.getByTestId('workflow-node-wf-down')).toBeInTheDocument();

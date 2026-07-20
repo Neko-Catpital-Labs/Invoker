@@ -23,7 +23,7 @@ describe('CodeRabbit PR #3050 — submitted planning stays read-only after start
   });
 
   async function openPlanningTerminal() {
-    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    fireEvent.click(await screen.findByTestId('sidebar-home'));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
     });
@@ -53,7 +53,7 @@ describe('CodeRabbit PR #3050 — submitted planning stays read-only after start
     await openPlanningTerminal();
     await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
 
-    fireEvent.click(screen.getByTestId('sidebar-home'));
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
     fireEvent.click(await screen.findByTestId('rail-start-ready'));
     await waitFor(() => {
       expect(mock.api.startReady).toHaveBeenCalledTimes(1);

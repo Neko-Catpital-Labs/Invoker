@@ -37,6 +37,7 @@ describe('Task interaction (component)', () => {
 
   it('selecting a workflow shows mini DAG and inspector content', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -53,6 +54,7 @@ describe('Task interaction (component)', () => {
 
   it('clicking a mini DAG task updates prompt details', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -81,6 +83,7 @@ describe('Task interaction (component)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([failedTask], failedWorkflows));
 
     await waitFor(() => {
@@ -117,6 +120,7 @@ describe('Task interaction (component)', () => {
     }]);
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([task], workflows));
 
     fireEvent.click(await screen.findByTestId('rf__node-task-worker-action'));
@@ -148,6 +152,7 @@ describe('Task interaction (component)', () => {
     });
 
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([promptTask], workflows));
 
     await waitFor(() => {
@@ -173,6 +178,7 @@ describe('Task interaction (component)', () => {
 
   it('clicking a task expands a minimized inspector', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -196,15 +202,16 @@ describe('Task interaction (component)', () => {
     expect(screen.queryByLabelText('Maximize inspector')).not.toBeInTheDocument();
   });
 
-  it('clicking workflow graph background keeps the selected mini DAG', async () => {
+  it('clicking workflow graph background dismisses the selected mini DAG', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('rf__node-wf-a'));
+    fireEvent.click(screen.getByTestId('workflow-node-wf-a'));
     await waitFor(() => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
     });
@@ -212,13 +219,13 @@ describe('Task interaction (component)', () => {
     fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Workflow A');
-      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Workflow A');
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
     });
   });
 
   it('clicking inside the mini DAG panel keeps the workflow selected', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -235,6 +242,7 @@ describe('Task interaction (component)', () => {
 
   it('drags the selected workflow mini DAG by its header', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -282,6 +290,7 @@ describe('Task interaction (component)', () => {
 
   it('clamps the selected workflow mini DAG inside the graph surface while dragging', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
@@ -329,6 +338,7 @@ describe('Task interaction (component)', () => {
 
   it('opens and closes the maximized graph without clearing selection', async () => {
     render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([alpha, beta], workflows));
 
     await waitFor(() => {
