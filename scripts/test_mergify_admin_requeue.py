@@ -135,6 +135,17 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number) for a in actions], [("requeue", 2604)])
 
+    def test_labeled_upper_stack_member_allows_unlabeled_bottom_label_repair(self):
+        snapshots = [
+            pr(2605, base="stack/a", head="stack/b", labels={"admin-bypass", "dequeued"}),
+            pr(2604, head="stack/a", labels={"dequeued"}, latest=mergify()),
+        ]
+        meta = {2604: ("s", (2604, 2605)), 2605: ("s", (2604, 2605))}
+        groups = group_stack_prs(snapshots, meta, "master")
+        self.assertEqual([tuple(item.number for item in group.prs) for group in groups], [(2604, 2605)])
+        actions = plan_stack_actions(groups[0], REQUIRED, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("add_admin_bypass_label", 2604)])
+
     def test_upper_stack_blocker_stops_bottom_requeue(self):
         failed = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
         stack = StackGroup("s", (pr(2604, head="stack/a", latest=mergify()), pr(2605, base="stack/a", checks=failed)))
