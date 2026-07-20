@@ -529,6 +529,48 @@ describe('lobby verb routing', () => {
     expect(prompt).toContain('Do NOT generate a YAML plan');
   });
 
+  it('lets a lobby question repro locally but hands off anything that mutates shared state', () => {
+    const prompt = buildLobbyQuestionPrompt('can you land the top of the stack for me?');
+    expect(prompt).toContain('Reproducing a bug locally is always allowed');
+    expect(prompt).toContain('mergify stack push');
+    expect(prompt).toContain('scripts/land-stack.mjs --execute');
+    expect(prompt).toContain('plan: <request>');
+  });
+
+  // Repro: the Slack thread that prompted this asked the bot to investigate a
+  // landing failure. It routed as `question` — the one lobby path whose prompt
+  // never told it to keep its hands off shared state.
+  it('carries the execution boundary into the planner command a lobby question actually spawns', async () => {
+    const prompts: string[] = [];
+    mockSpawn
+      .mockImplementationOnce(() => mockProcess('{"intent":"question","operation":"none","target":"none"}'))
+      .mockImplementationOnce(() => mockProcess('Here is what went wrong.'));
+    const surface = lobbySurface(true, {
+      planningCommandBuilder: ({ prompt }: { prompt: string }) => {
+        prompts.push(prompt);
+        return { command: 'cursor', args: ['--print', prompt] };
+      },
+    });
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> why do we get extra merge stacks when we babysit landing these workflows?',
+        ts: 't1', user: 'U1', channel: 'CLOBBY',
+      },
+      say,
+    });
+
+    expect(prompts).toHaveLength(2);
+    const answerPrompt = prompts[1];
+    expect(answerPrompt).toContain('Never run anything that changes state outside your worktree');
+    expect(answerPrompt).toContain('mergify stack push');
+    expect(answerPrompt).toContain('scripts/land-stack.mjs --execute');
+    expect(answerPrompt).toContain('Reproducing a bug locally is always allowed');
+    expect(received).toHaveLength(0);
+  });
+
   it('stages a bulk verb for confirmation, then runs it on a plain `yes`', async () => {
     runWorkflowOp.mockResolvedValue({ ok: true, summary: 'recreate: 3 ok' });
     const surface = lobbySurface();
