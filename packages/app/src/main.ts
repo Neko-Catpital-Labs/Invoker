@@ -59,6 +59,7 @@ import type {
   InAppPlanRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
+  InAppPlanningDeleteRequest,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
@@ -253,6 +254,8 @@ import {
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
+  deletePlanningChat,
+  deleteSubmittedPlanningChats,
   listPlanningChatSessions,
   planFromGoal as planFromGoalInApp,
   resetPlanningChat,
@@ -433,6 +436,7 @@ let runtimeServices: RuntimeServices;
 let workflowMutationCoordinator: PersistedWorkflowMutationCoordinator | null = null;
 let launchDispatcher: LaunchDispatcher | null = null;
 const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const planningChatSessions = createInAppPlanningChatSessions();
 /**
  * The mutation context for the currently executing workflow mutation.
  * Set by the coordinator dispatch callback before invoking the handler,
@@ -676,6 +680,7 @@ function updateInvokerCliFromMenu(): void {
     detail,
   });
 }
+
 
 async function initServices(options?: InitServicesOptions): Promise<void> {
   const invokerHomeRoot = resolveInvokerHomeRoot();
@@ -1156,6 +1161,22 @@ function startHeadlessMode(): void {
             return resetPlanningChat(payload.args[0] as InAppPlanningResetRequest, {
               sessions: planningChatSessions,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+            });
+          }
+          case 'invoker:planning-chat-delete': {
+            return deletePlanningChat(payload.args[0] as InAppPlanningDeleteRequest, {
+              sessions: planningChatSessions,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
+              conversationRepo: planningConversationRepo,
+              logger,
+            });
+          }
+          case 'invoker:planning-chat-delete-submitted': {
+            return deleteSubmittedPlanningChats({
+              sessions: planningChatSessions,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
+              conversationRepo: planningConversationRepo,
+              logger,
             });
           }
           case 'invoker:load-plan': {
