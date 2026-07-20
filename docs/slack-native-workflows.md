@@ -5,7 +5,7 @@ Drive Invoker from Slack: mention `@Invoker` in a shared **lobby** channel to st
 ## Flow
 
 1. **Start a normal agent thread.** In the lobby channel: `@Invoker [omp+codex] [repo:web] fix the Slack routing bug`. Invoker checks out the repo and runs a normal OMP/Codex-style conversation in the thread.
-2. **Opt into Invoker planning.** Use `@Invoker plan: add a /health endpoint` when you want YAML for an Invoker workflow instead of direct local agent work. You can also reply `plan: add a /health endpoint` in an existing agent thread; Invoker promotes that same thread to planning and retains its selected repo and harness preset.
+2. **Opt into Invoker planning.** Use `@Invoker plan: add a /health endpoint` when you want YAML for an Invoker workflow instead of direct local agent work.
 3. **Submit only when ready.** Run `@Invoker submit` in that plan thread, then approve the short summary. That starts the generated YAML plan as a workflow.
 4. **Workflow channel appears.** Invoker creates private `workflow-<id>`, invites you, posts the workflow summary there, and links it from the lobby thread.
 5. **Operate in the channel.** `@Invoker status`, `@Invoker approve <task>`, `@Invoker reject <task>`, `@Invoker retry <task>`, `@Invoker input <task>: <text>`, or ask a free-form question (answered only from this workflow's planning + task transcripts).
@@ -27,8 +27,7 @@ Normal lobby mentions are local agent sessions. They can answer, edit, and run f
 - `@Invoker local: fix the typo in the Slack docs` — kept as an alias for the same normal agent thread.
 - `@Invoker run local: report back how many workflows are running` — answers through Invoker status directly. Other local queries use the normal agent thread.
 - `@Invoker exec local: pnpm --filter @invoker/surfaces test -- slack-surface-workflows.test.ts` — runs that exact shell command and reports the exit code and output. It does **not** edit files.
-- `@Invoker plan: fix the typo in the Slack docs` — drafts Invoker YAML. Use `@Invoker submit` (or bare `submit`) in that thread to start the approval flow.
-- `plan: turn the discussion above into a migration plan` — promotes the current agent thread to plan mode, keeping its repo and harness selection. This works after a Slack service restart as well.
+- `@Invoker plan: fix the typo in the Slack docs` — drafts Invoker YAML. Use `@Invoker submit` in that thread to start the approval flow.
 
 ## Harness presets
 
