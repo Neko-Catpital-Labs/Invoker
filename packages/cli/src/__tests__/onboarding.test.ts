@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -414,5 +414,89 @@ describe('setExperimentalPlannerFlag', () => {
     const configPath = join(mkdtempSync(join(tmpdir(), 'invoker-planner-flag-')), 'nested', 'config.json');
     setExperimentalPlannerFlag(true, configPath);
     expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({ experimentalPlanner: true });
+  });
+});
+
+describe('runSetup in a non-interactive shell', () => {
+  let home: string;
+  let previousConfig: string | undefined;
+  let previousMcp: string | undefined;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'invoker-setup-tty-'));
+    previousConfig = process.env.INVOKER_REPO_CONFIG_PATH;
+    previousMcp = process.env.INVOKER_MCP_CONFIG_PATH;
+    process.env.INVOKER_REPO_CONFIG_PATH = join(home, 'config.json');
+    process.env.INVOKER_MCP_CONFIG_PATH = join(home, 'mcp.json');
+  });
+
+  afterEach(() => {
+    if (previousConfig === undefined) delete process.env.INVOKER_REPO_CONFIG_PATH;
+    else process.env.INVOKER_REPO_CONFIG_PATH = previousConfig;
+    if (previousMcp === undefined) delete process.env.INVOKER_MCP_CONFIG_PATH;
+    else process.env.INVOKER_MCP_CONFIG_PATH = previousMcp;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  function collectingIO(overrides: Partial<{ prompt: () => Promise<string> }> = {}) {
+    const lines: string[] = [];
+    return {
+      lines,
+      io: {
+        interactive: false,
+        print: (line: string) => { lines.push(line); },
+        prompt: overrides.prompt ?? (async () => ''),
+      },
+    };
+  }
+
+  it('fails loudly instead of silently answering no to every prompt', async () => {
+    const { lines, io } = collectingIO();
+    const code = await runSetup([], io);
+
+    expect(code).toBe(1);
+    expect(lines.join('\n')).toContain('stdin is not a TTY');
+  });
+
+  it('names the non-interactive escape hatches in the failure message', async () => {
+    const { lines, io } = collectingIO();
+    await runSetup([], io);
+
+    const output = lines.join('\n');
+    expect(output).toContain('--yes');
+    expect(output).toContain('--from-env');
+  });
+
+  it('accepts the planner prompt under --yes without reading stdin', async () => {
+    const { lines, io } = collectingIO({
+      prompt: async () => { throw new Error('should not prompt under --yes'); },
+    });
+
+    const code = await runSetup(['--yes'], io);
+
+    expect(code).not.toBe(1);
+    expect(lines.join('\n')).toContain('Enable the experimental planner now?');
+  });
+
+  it('skips Slack under --yes rather than starting a flow it cannot finish', async () => {
+    const { lines, io } = collectingIO({
+      prompt: async () => { throw new Error('should not prompt under --yes'); },
+    });
+
+    await runSetup(['--yes'], io);
+
+    const output = lines.join('\n');
+    expect(output).not.toContain('Bot User OAuth Token');
+    expect(output).toContain('invoker-cli setup slack');
+  });
+
+  it('writes only inside the configured Invoker home', async () => {
+    const { io } = collectingIO({
+      prompt: async () => { throw new Error('should not prompt under --yes'); },
+    });
+
+    await runSetup(['--yes'], io);
+
+    expect(existsSync(join(home, 'mcp.json'))).toBe(true);
   });
 });
