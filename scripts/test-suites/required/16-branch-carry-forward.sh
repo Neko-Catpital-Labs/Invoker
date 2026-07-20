@@ -3,6 +3,9 @@
 # merge/review gates merge only their direct dependency branch.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-cd "$ROOT"
+source "$ROOT/scripts/lib/required-vitest.sh"
 
-pnpm --filter @invoker/execution-engine exec vitest run src/__tests__/branch-chain.test.ts -t 'review gate direct dependency branch'
+run_required_vitest_filter \
+  "$ROOT/packages/execution-engine" \
+  "src/__tests__/branch-chain.test.ts" \
+  "review gate direct dependency branch"
