@@ -10,9 +10,10 @@ cd "$REPO_ROOT"
 export INVOKER_ENABLE_WORKSPACE_CLEANUP=0
 
 BOOTSTRAP_STAMP="$REPO_ROOT/node_modules/.invoker-bootstrap-stamp"
+PNPM_MODULES_METADATA="$REPO_ROOT/node_modules/.modules.yaml"
 
 has_bootstrap_artifacts() {
-  [ -f "$REPO_ROOT/node_modules/.modules.yaml" ] \
+  [ -f "$PNPM_MODULES_METADATA" ] \
     && [ -x "$REPO_ROOT/packages/app/node_modules/.bin/electron" ]
 }
 
@@ -21,13 +22,11 @@ bootstrap_tools_are_healthy() {
 }
 
 # An existing install goes stale when the lockfile changes (e.g. a git pull
-# adds a dependency) but node_modules is left untouched. The artifacts check
-# above only proves *some* install exists, so without this check run.sh would
-# skip the reinstall and then fail the build on the now-missing package. Treat
-# the install as stale when we have no record of it, or when pnpm-lock.yaml is
-# newer than the stamp written after the last successful install.
+# adds a dependency) but node_modules is left untouched. pnpm's installed
+# metadata is the durable freshness signal because preprovisioned checkouts may
+# not have run.sh's private bootstrap stamp.
 workspace_install_is_stale() {
-  [ ! -f "$BOOTSTRAP_STAMP" ] || [ "$REPO_ROOT/pnpm-lock.yaml" -nt "$BOOTSTRAP_STAMP" ]
+  [ ! -f "$PNPM_MODULES_METADATA" ] || [ "$REPO_ROOT/pnpm-lock.yaml" -nt "$PNPM_MODULES_METADATA" ]
 }
 
 ensure_workspace_bootstrapped() {
