@@ -82,6 +82,8 @@ export interface SlackSurfaceConfig {
   planningTimeoutSeconds?: number;
   /** Interval for heartbeat messages posted to Slack during planning in seconds. Default: 120 (2 minutes). Set to 0 to disable. */
   planningHeartbeatIntervalSeconds?: number;
+  /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
+  conversationalPlanning?: boolean;
   /** How many extra planner attempts to make when the CLI exits 0 with empty stdout. Default: 2 (3 total attempts). */
   plannerRetryLimit?: number;
   /** Base delay in milliseconds between empty-output retry attempts (doubles per retry). Default: 500. */
@@ -440,6 +442,7 @@ export class SlackSurface implements Surface {
   private model?: string;
   private planningTimeoutSeconds?: number;
   private planningHeartbeatIntervalSeconds?: number;
+  private conversationalPlanning: boolean;
   private plannerRetryLimit: number;
   private plannerRetryBaseDelayMs: number;
   /** Minimum spacing between thread message posts to avoid Slack burst limits. */
@@ -493,6 +496,7 @@ export class SlackSurface implements Surface {
     this.useTypingIndicator = config.useTypingIndicator ?? false;
     this.planningTimeoutSeconds = config.planningTimeoutSeconds;
     this.planningHeartbeatIntervalSeconds = config.planningHeartbeatIntervalSeconds;
+    this.conversationalPlanning = config.conversationalPlanning ?? false;
     this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);
     this.plannerRetryBaseDelayMs = Math.max(0, config.plannerRetryBaseDelayMs ?? DEFAULT_PLANNER_RETRY_BASE_DELAY_MS);
     this.lobbyChannelId = config.lobbyChannelId ?? config.channelId;
@@ -523,6 +527,7 @@ export class SlackSurface implements Surface {
         log: this.log,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
         planningCommandBuilder: config.planningCommandBuilder,
+        conversationalPlanning: this.conversationalPlanning,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
@@ -2092,6 +2097,7 @@ ${text}`;
         defaultBranch: this.defaultBranch,
         repoUrl: opts?.repoUrl ?? this.defaultRepoUrl,
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
+        conversationalPlanning: this.conversationalPlanning,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
@@ -2159,6 +2165,7 @@ ${text}`;
             conversationRepo: this.conversationRepo,
             defaultBranch: this.defaultBranch,
             repoUrl: this.defaultRepoUrl,
+            conversationalPlanning: this.conversationalPlanning,
             plannerRetryLimit: this.plannerRetryLimit,
             plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
           });

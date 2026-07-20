@@ -885,6 +885,37 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('Build the Workers Surface');
   });
 
+  it('conversational planning asks for scope before drafting', () => {
+    const conv = new PlanConversation({ conversationalPlanning: true });
+    (conv as any).messages.push({ role: 'user', content: 'Build better planning' });
+
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('conversational planning mode');
+    expect(prompt).toContain('Drafting is not authorized yet');
+    expect(prompt).toContain('Ask scoping questions first');
+    expect(prompt).toContain('edge cases, corner cases, architecture choices, ambiguity');
+    expect(prompt).toContain('explain like the user is five');
+    expect(prompt).toContain('asking whether the user wants you to draft the YAML plan');
+    expect(prompt).not.toContain('name: "Plan Name"');
+    expect(prompt).not.toContain('output the plan inside a ```yaml code block');
+  });
+
+  it('conversational planning treats confirmation after a draft question as draft authorization', () => {
+    const conv = new PlanConversation({ conversationalPlanning: true });
+    (conv as any).messages.push(
+      { role: 'assistant', content: 'I understand the scope. Would you like me to draft the YAML plan?' },
+      { role: 'user', content: 'yes' },
+    );
+
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).toContain('The user has explicitly approved drafting');
+    expect(prompt).toContain('name: "Plan Name"');
+    expect(prompt).toContain('Generate a YAML task plan');
+    expect(prompt).toContain('Reply `submit` to submit it.');
+  });
+
   it('agent mode refuses Invoker YAML and redirects to plan:', () => {
     // Agent threads can never submit a plan — handleLobbySubmit rejects a submit
     // unless conversationMode === 'plan'. So the agent prompt must not offer to
