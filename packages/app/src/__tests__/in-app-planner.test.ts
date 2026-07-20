@@ -6,6 +6,7 @@ import {
   listPlanningChatSessions,
   sendPlanningChatMessage,
   submitPlanningChatDraft,
+  summarizePlanText,
 } from '../in-app-planner.js';
 
 const VALID_PLAN_REPLY = `Here is the plan.
@@ -22,6 +23,23 @@ tasks:
     dependencies: [first]
     command: echo second
 \`\`\``;
+
+const VALID_GROUPED_PLAN_TEXT = `
+name: Grouped Plan
+workflows:
+  - id: api
+    name: API workflow
+    tasks:
+      - id: first
+        description: First grouped task
+        command: echo first
+  - id: ui
+    name: UI workflow
+    tasks:
+      - id: second
+        description: Second grouped task
+        command: echo second
+`;
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -80,6 +98,19 @@ describe('planning chat draft YAML plumbing', () => {
         draftPlanAvailable: true,
         draftPlanText: expect.stringContaining('name: Mock Plan'),
       },
+    });
+  });
+
+  it('summarizes grouped workflow plans with taskGroups', () => {
+    expect(summarizePlanText(VALID_GROUPED_PLAN_TEXT)).toMatchObject({
+      name: 'Grouped Plan',
+      taskCount: 2,
+      workflowCount: 2,
+      steps: ['API workflow', 'UI workflow'],
+      taskGroups: [
+        { name: 'API workflow', workflowId: 'api', taskCount: 1, steps: ['First grouped task'] },
+        { name: 'UI workflow', workflowId: 'ui', taskCount: 1, steps: ['Second grouped task'] },
+      ],
     });
   });
 
