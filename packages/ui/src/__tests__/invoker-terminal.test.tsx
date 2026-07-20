@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, type Mock } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { useState } from 'react';
+import * as ReactFlowModule from '@xyflow/react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
 
@@ -14,6 +15,8 @@ vi.mock('@xyflow/react', async () => {
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
+
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
 
@@ -716,6 +719,55 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
     expect(mock.api.start).not.toHaveBeenCalled();
+  });
+
+  it('does not select the submitted workflow when the graph had no selection', async () => {
+    const submittedWorkflow: WorkflowMeta = { id: 'wf-submitted', name: 'Submitted Workflow', status: 'pending' };
+    const submittedTask = makeUITask({
+      id: 'wf-submitted/task-1',
+      workflowId: 'wf-submitted',
+      description: 'Submitted task',
+    });
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Here is the plan.',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 1, steps: ['First'] },
+    })) as any;
+    mock.api.refreshTaskGraph = vi.fn(async () => {
+      mock.fireGraphEvent({
+        type: 'snapshot',
+        tasks: [submittedTask],
+        workflows: [submittedWorkflow],
+        reason: 'mock-refresh',
+        streamSequence: 0,
+      });
+    }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the full plan');
+    await screen.findByTestId('invoker-terminal-ready-bar');
+
+    setCenterMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit to Invoker' }));
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
+      expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
+      expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
+    expect(setCenterMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-node-wf-submitted')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('workflow-node-wf-submitted')).not.toHaveClass('ring-2');
+    expect(screen.getByText('No task selected')).toBeInTheDocument();
   });
 
   it('shows stacked workflow counts and submit messaging', async () => {

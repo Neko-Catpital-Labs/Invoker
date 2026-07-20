@@ -2527,10 +2527,10 @@ export function App() {
       if (result.ok) {
         setPlanningSubmitError(null);
         setHasLoadedPlan(true);
-        setWorkflowSelectionDismissed(false);
-        setGraphActionsMenuOpen(false);
+        if (!selectedTaskId && !selectedWorkflowId) {
+          setWorkflowSelectionDismissed(true);
+        }
         setPlanName(result.planName);
-        setSelectedWorkflowId(result.workflowId);
         updatePlanningSessionById(planningSessionId, (session) => ({
           ...session,
           busy: false,
@@ -2560,7 +2560,7 @@ export function App() {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [activePlanningReadOnly, appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [activePlanningReadOnly, appendTerminalLine, invoker, planningSessionId, refreshTaskGraph, selectedTaskId, selectedWorkflowId, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
