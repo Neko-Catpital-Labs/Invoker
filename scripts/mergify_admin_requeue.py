@@ -30,9 +30,10 @@ def _execute_action(action: Action, repo: str, gh, ledger: Ledger, pr_by_number:
     if action.kind == "requeue":
         gh.comment(repo, action.pr_number, "@mergifyio queue")
         ledger.record("requeue", action.pr_number, pr.head_ref_oid, action.key, now)
-    elif action.kind == "add_admin_bypass_label":
-        gh.edit_label(repo, action.pr_number, add="admin-bypass")
-        ledger.record("add_admin_bypass_label", action.pr_number, pr.head_ref_oid, "admin-bypass", now)
+    elif action.kind == "comment_admin_bypass_nudge":
+        if ledger.count(exec_impl.ADMIN_BYPASS_NUDGE_LEDGER_KIND, action.pr_number, pr.head_ref_oid, action.key) == 0:
+            gh.comment(repo, action.pr_number, exec_impl.admin_bypass_nudge_body())
+            ledger.record(exec_impl.ADMIN_BYPASS_NUDGE_LEDGER_KIND, action.pr_number, pr.head_ref_oid, action.key, now)
     elif action.kind == "remove_merge_hold":
         gh.edit_label(repo, action.pr_number, remove="merge-hold")
         ledger.record("remove-merge-hold", action.pr_number, pr.head_ref_oid, "merge-hold", now)
