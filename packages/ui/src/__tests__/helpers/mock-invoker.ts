@@ -7,6 +7,12 @@
 
 import { vi } from 'vitest';
 import type {
+  InAppPlanningChatResponse,
+  InAppPlanningChatSession,
+  InAppPlanningChatStreamEvent,
+  InAppPlanningPreset,
+} from '@invoker/contracts';
+import type {
   InvokerAPI,
   TaskState,
   TaskDelta,
@@ -16,15 +22,26 @@ import type {
   TaskExecution,
 } from '../../types.js';
 
+interface MockPlanningApi {
+  getPlanningPresets: () => Promise<InAppPlanningPreset[]>;
+  planningChatCreate: (request: { presetKey: string }) => Promise<{ ok: boolean; session: InAppPlanningChatSession }>;
+  planningChatSend: (request: { sessionId?: string; message: string; presetKey: string }) => Promise<InAppPlanningChatResponse>;
+  planningChatSubmit: (request: { sessionId: string }) => Promise<{ ok: boolean; planName?: string; workflowId?: string }>;
+  planningChatReset: (request?: { sessionId?: string }) => Promise<{ ok: boolean }>;
+  onPlanningChatStream: (callback: (event: InAppPlanningChatStreamEvent) => void) => () => void;
+}
+
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
-  api: InvokerAPI;
+  api: InvokerAPI & Partial<MockPlanningApi>;
   /** Replace the task snapshot and fire 'created' deltas for each task. */
   setTasks: (tasks: TaskState[], workflows?: WorkflowMeta[]) => void;
   /** Directly fire a task delta to subscribers. */
   fireDelta: (delta: TaskDelta) => void;
   /** Fire a workflows-changed event. */
   fireWorkflowsChanged: (workflows: WorkflowMeta[]) => void;
+  /** Fire a planning chat stream event. */
+  firePlanningChatStream: (event: InAppPlanningChatStreamEvent) => void;
   /** Install the mock on window.invoker. */
   install: () => void;
   /** Remove window.invoker. */
@@ -39,8 +56,9 @@ export function createMockInvoker(
   let workflowSnapshot = initialWorkflows;
   let deltaCallback: ((delta: TaskDelta) => void) | undefined;
   let workflowsCallback: ((workflows: unknown[]) => void) | undefined;
+  let planningChatStreamCallback: ((event: InAppPlanningChatStreamEvent) => void) | undefined;
 
-  const api: InvokerAPI = {
+  const api: InvokerAPI & Partial<MockPlanningApi> = {
     // Defer resolution one microtask so snapshot is read after synchronous setTasks()
     // in tests (useTasks fetchAll races mount vs setTasks; real IPC resolves later too).
     getTasks: vi.fn(
@@ -154,6 +172,25 @@ export function createMockInvoker(
     })),
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
+    getPlanningPresets: vi.fn(async () => [{ key: 'codex', label: 'Codex' }]),
+    planningChatCreate: vi.fn(async ({ presetKey }) => ({
+      ok: true,
+      session: { id: 'session-1', title: 'Planning session', status: 'active', presetKey },
+    })),
+    planningChatSend: vi.fn(async ({ sessionId }) => ({
+      ok: true,
+      sessionId: sessionId ?? 'session-1',
+      reply: 'Planning reply.',
+      draftPlanAvailable: false,
+    })),
+    planningChatSubmit: vi.fn(async () => ({ ok: true })),
+    planningChatReset: vi.fn(async () => ({ ok: true })),
+    onPlanningChatStream: vi.fn((callback: (event: InAppPlanningChatStreamEvent) => void) => {
+      planningChatStreamCallback = callback;
+      return () => {
+        if (planningChatStreamCallback === callback) planningChatStreamCallback = undefined;
+      };
+    }),
   };
 
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {
@@ -175,8 +212,12 @@ export function createMockInvoker(
     workflowsCallback?.(workflows);
   }
 
+  function firePlanningChatStream(event: InAppPlanningChatStreamEvent) {
+    planningChatStreamCallback?.(event);
+  }
+
   function install() {
-    (window as unknown as { invoker: InvokerAPI }).invoker = api;
+    (window as unknown as { invoker: InvokerAPI & Partial<MockPlanningApi> }).invoker = api;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[] } }).__INVOKER_BOOTSTRAP__ = {
       tasks: taskSnapshot,
       workflows: workflowSnapshot,
@@ -188,7 +229,7 @@ export function createMockInvoker(
     delete (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__;
   }
 
-  return { api, setTasks, fireDelta, fireWorkflowsChanged, install, cleanup };
+  return { api, setTasks, fireDelta, fireWorkflowsChanged, firePlanningChatStream, install, cleanup };
 }
 
 /** Create a minimal TaskState for testing. */
