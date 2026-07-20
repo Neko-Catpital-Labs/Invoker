@@ -342,7 +342,7 @@ export async function openExternalTerminalForTask(
   }
 
   if (process.platform === 'darwin') {
-    if (spec.command) {
+    if (spec.command || spec.displayBridge) {
       const osaArgs = buildMacOSOsascriptArgs(spec, cwd);
       return spawnDetachedTerminal('osascript', osaArgs, {}, onTerminalClose);
     }

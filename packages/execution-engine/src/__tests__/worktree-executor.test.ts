@@ -557,6 +557,22 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
+  it('getTerminalSpec preserves display bridge without changing live command identity', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const request = makeRequest();
+    const handle = await executor.start(request);
+    handle.displayBridge = 'Live context bridge';
+    const spec = executor.getTerminalSpec(handle);
+
+    expect(spec).toEqual({
+      cwd: expect.stringMatching(/^\/fake\/worktrees\//),
+      displayBridge: 'Live context bridge',
+    });
+
+    taskProcess.emit('close', 0, null);
+  });
+
   it('handle.workspacePath is set to worktree directory', async () => {
     const { taskProcess } = setupSpawnMock();
 
@@ -1195,6 +1211,34 @@ describe('WorktreeExecutor', () => {
         command: 'claude',
         args: ['--resume', 'session-wt-1', '--dangerously-skip-permissions'],
         cwd: '/home/user/.invoker/worktrees/wt-abc',
+      });
+    });
+
+    it('preserves display bridge on restored resume, checkout, and cwd-only specs', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const resume = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        agentSessionId: 'session-wt-1',
+        displayBridge: 'Resume context',
+      });
+      const checkout = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        branch: 'plan/my-workflow',
+        displayBridge: 'Checkout context',
+      });
+      const cwdOnly = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge: 'Cwd context',
+      });
+
+      expect(resume).toMatchObject({ displayBridge: 'Resume context' });
+      expect(checkout).toMatchObject({ displayBridge: 'Checkout context' });
+      expect(cwdOnly).toEqual({
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge: 'Cwd context',
       });
     });
 

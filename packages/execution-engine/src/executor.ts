@@ -9,6 +9,8 @@ export interface ExecutorHandle {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  /** Optional display-only text shown before a terminal is resumed or restored. */
+  displayBridge?: string;
 }
 
 export interface TerminalSpec {
@@ -20,6 +22,8 @@ export interface TerminalSpec {
   args?: string[];
   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
   linuxTerminalTail?: 'exec_bash' | 'pause';
+  /** Optional display-only text printed before command or shell output. */
+  displayBridge?: string;
 }
 
 export interface PersistedTaskMeta {
@@ -31,6 +35,8 @@ export interface PersistedTaskMeta {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  /** Optional display-only text shown before a terminal is resumed or restored. */
+  displayBridge?: string;
 }
 
 export interface Executor {
