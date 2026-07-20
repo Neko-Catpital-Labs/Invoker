@@ -1,5 +1,71 @@
 #!/usr/bin/env bash
 
+_required_vitest_has_binary() {
+  local package_dir="$1"
+  (
+    cd "$package_dir" \
+      && pnpm exec vitest --version >/dev/null 2>&1
+  )
+}
+
+_required_vitest_package_name() {
+  local package_dir="$1"
+  node - "$package_dir/package.json" <<'NODE'
+const fs = require('node:fs');
+
+const packagePath = process.argv[2];
+const manifest = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+
+if (typeof manifest.name !== 'string' || manifest.name.length === 0) {
+  process.exit(1);
+}
+
+process.stdout.write(manifest.name);
+NODE
+}
+
+ensure_required_vitest_available() {
+  if [[ $# -ne 1 ]]; then
+    echo "usage: ensure_required_vitest_available <package-dir>" >&2
+    return 2
+  fi
+
+  local package_dir="$1"
+  if [[ ! -d "$package_dir" ]]; then
+    echo "required-vitest: package directory does not exist: $package_dir" >&2
+    return 2
+  fi
+
+  if _required_vitest_has_binary "$package_dir"; then
+    return 0
+  fi
+
+  local workspace_root
+  workspace_root="$(git -C "$package_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -z "$workspace_root" || ! -f "$workspace_root/pnpm-lock.yaml" ]]; then
+    echo "required-vitest: could not find workspace root for $package_dir" >&2
+    return 1
+  fi
+
+  local package_name
+  package_name="$(_required_vitest_package_name "$package_dir" 2>/dev/null || true)"
+  if [[ -z "$package_name" ]]; then
+    echo "required-vitest: could not read package name from $package_dir/package.json" >&2
+    return 1
+  fi
+
+  echo "required-vitest: Vitest binary is unavailable; installing filtered workspace dependencies for $package_name"
+  (
+    cd "$workspace_root" \
+      && pnpm --filter "$package_name..." install --frozen-lockfile --ignore-scripts --prod=false
+  ) || return $?
+
+  if ! _required_vitest_has_binary "$package_dir"; then
+    echo "required-vitest: Vitest binary is still unavailable after filtered install for $package_name" >&2
+    return 1
+  fi
+}
+
 run_required_vitest_filter() {
   if [[ $# -ne 3 ]]; then
     echo "usage: run_required_vitest_filter <package-dir> <test-target> <test-name>" >&2
@@ -19,6 +85,8 @@ run_required_vitest_filter() {
     echo "required-vitest: test target does not exist: $test_target" >&2
     return 2
   fi
+
+  ensure_required_vitest_available "$package_dir" || return $?
 
   local report_file
   local log_file

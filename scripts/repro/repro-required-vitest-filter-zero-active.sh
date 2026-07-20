@@ -14,6 +14,8 @@ usage() {
 }
 
 confirm_raw_vitest_zero_active_bug() {
+  ensure_required_vitest_available "$ROOT_DIR/packages/execution-engine" || return $?
+
   local report_file
   local log_file
   report_file="$(mktemp "${TMPDIR:-/tmp}/raw-vitest-report.XXXXXX.json")"
@@ -162,8 +164,25 @@ else
   fi
 
   echo "repro: verifying stale target fails the active-test guard"
-  if run_required_vitest_filter "$ROOT_DIR/packages/execution-engine" "$BUG_TARGET" "$TEST_NAME"; then
+  set +e
+  stale_output="$(run_required_vitest_filter "$ROOT_DIR/packages/execution-engine" "$BUG_TARGET" "$TEST_NAME" 2>&1)"
+  stale_status=$?
+  set -e
+
+  if [[ -n "$stale_output" ]]; then
+    printf '%s\n' "$stale_output"
+  fi
+
+  if [[ "$stale_status" -eq 0 ]]; then
     echo "repro: stale target unexpectedly passed the active-test guard" >&2
+    exit 1
+  fi
+  if ! grep -Fq "did not execute the required active test" <<<"$stale_output"; then
+    echo "repro: stale target failed for an unexpected reason" >&2
+    exit 1
+  fi
+  if ! grep -Fq "expected at least one passed active test, got 0" <<<"$stale_output"; then
+    echo "repro: stale target did not prove the zero-active filter failure" >&2
     exit 1
   fi
 
