@@ -7,8 +7,10 @@ import {
 
 
 import {
+  assembleReadinessChecks,
   buildReport,
   checkConfig,
+  checkConfigContents,
   checkDefaultPresetTool,
   checkPlanningToolsPresent,
   checkTool,
@@ -142,5 +144,52 @@ describe('buildReport / formatReport', () => {
     const report = buildReport([checkPlanningToolsPresent(presets, installed())]);
     expect(JSON.parse(formatReport(report, { json: true }))).toEqual(report);
     expect(formatReport(report)).toContain('-> Install at least one');
+  });
+});
+
+describe('checkConfigContents', () => {
+  it('passes a config with consistent targets, pools, and routing', () => {
+    const check = checkConfigContents({
+      remoteTargets: { box: { host: 'h', user: 'u', sshKeyPath: '/k' } },
+      executionPools: { fast: { members: [{ type: 'ssh', id: 'box' }] } },
+      defaultPoolId: 'fast',
+    });
+    expect(check.status).toBe('ok');
+  });
+
+  it('fails when a pool references a remote target that is not configured', () => {
+    const check = checkConfigContents({
+      executionPools: { fast: { members: [{ type: 'ssh', id: 'ghost' }] } },
+    });
+    expect(check.status).toBe('error');
+    expect(check.detail).toContain('ghost');
+  });
+
+  it('fails a defaultPoolId that points nowhere even when no pools exist', () => {
+    expect(checkConfigContents({ defaultPoolId: 'fast' }).status).toBe('error');
+  });
+
+  it('warns without failing when one member is shared across pools', () => {
+    const check = checkConfigContents({
+      executionPools: {
+        fast: { members: [{ type: 'worktree', id: 'local' }] },
+        slow: { members: [{ type: 'worktree', id: 'local' }] },
+      },
+    });
+    expect(check.status).toBe('warn');
+  });
+});
+
+describe('assembleReadinessChecks config contents wiring', () => {
+  const noTools = { tools: [], isInstalled: () => true };
+
+  it('omits the semantic check when no config contents are supplied', () => {
+    const ids = assembleReadinessChecks(noTools).map((check) => check.id);
+    expect(ids).not.toContain('config-contents');
+  });
+
+  it('includes the semantic check when config contents are supplied', () => {
+    const checks = assembleReadinessChecks({ ...noTools, configContents: { defaultPoolId: 'missing' } });
+    expect(checks.find((check) => check.id === 'config-contents')?.status).toBe('error');
   });
 });

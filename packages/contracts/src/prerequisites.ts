@@ -2,6 +2,7 @@
 // Pure and browser-safe: callers inject the `isInstalled` probe (Node `spawn`) and the parsed
 // config, so this module never imports `node:child_process`/`node:fs` (the UI bundles contracts).
 
+import { collectInvokerConfigDiagnostics, type ConfigDiagnostic } from './config-diagnostics.ts';
 import { DEFAULT_TOOL_REQUIREMENTS, type ToolRequirement } from './external-dependencies.ts';
 
 export type PrerequisiteStatus = 'ok' | 'warn' | 'error';
@@ -49,6 +50,40 @@ export function checkConfig(state: { path: string; exists: boolean; error?: stri
     status: 'error',
     detail: `Invalid JSON at ${state.path}`,
     remediation: `Fix the JSON syntax: ${state.error}`,
+  };
+}
+
+function describeDiagnostics(diagnostics: readonly ConfigDiagnostic[]): string {
+  return diagnostics.map((entry) => (entry.path ? `${entry.path}: ${entry.message}` : entry.message)).join('; ');
+}
+
+export function checkConfigContents(config: unknown): PrerequisiteCheck {
+  const diagnostics = collectInvokerConfigDiagnostics(config);
+  const errors = diagnostics.filter((entry) => entry.severity === 'error');
+  const warnings = diagnostics.filter((entry) => entry.severity === 'warning');
+
+  if (errors.length > 0) {
+    return {
+      id: 'config-contents',
+      name: 'Config contents',
+      status: 'error',
+      detail: describeDiagnostics(errors),
+      remediation: 'Correct the listed config entries, then re-run `invoker-cli doctor`.',
+    };
+  }
+  if (warnings.length > 0) {
+    return {
+      id: 'config-contents',
+      name: 'Config contents',
+      status: 'warn',
+      detail: describeDiagnostics(warnings),
+    };
+  }
+  return {
+    id: 'config-contents',
+    name: 'Config contents',
+    status: 'ok',
+    detail: 'Execution targets, pools, and routing rules are consistent',
   };
 }
 
@@ -135,6 +170,7 @@ export interface ReadinessInput {
   tools: ToolRequirement[];
   isInstalled: IsInstalled;
   config?: { path: string; exists: boolean; error?: string };
+  configContents?: unknown;
   /** Effective Slack planning presets (config or built-ins); empty skips preset checks. */
   presets?: Record<string, PlanningPresetSpec>;
   defaultPreset?: string;
@@ -144,6 +180,7 @@ export interface ReadinessInput {
 export function assembleReadinessChecks(input: ReadinessInput): PrerequisiteCheck[] {
   const checks: PrerequisiteCheck[] = [];
   if (input.config) checks.push(checkConfig(input.config));
+  if (input.configContents !== undefined) checks.push(checkConfigContents(input.configContents));
   for (const tool of input.tools) checks.push(checkTool(tool, input.isInstalled));
   const presets = input.presets ?? {};
   if (Object.keys(presets).length > 0) {
