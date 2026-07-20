@@ -47,6 +47,13 @@ export const TMP_SCRATCH_GLOBS = [
   'omp-*',
 ] as const;
 
+export const TMP_TRANSIENT_TEST_GLOBS = [
+  'invoker-e2e-db.*',
+  'invoker-e2e-home.*',
+  'invoker-chaos-*-db.*',
+  'invoker-chaos-*-home.*',
+] as const;
+
 /** Leave temp entries newer than this alone — an active run may still hold them. */
 export const TMP_SCRATCH_MIN_AGE_MINUTES = 60;
 
@@ -125,6 +132,7 @@ export function buildInvokerHomeCleanupScript(invokerHome: string): string {
     .map((name) => `"$INVOKER_HOME/${name}"`)
     .join(' ');
   const tmpGlobList = TMP_SCRATCH_GLOBS.join(' ');
+  const transientTestGlobList = TMP_TRANSIENT_TEST_GLOBS.join(' ');
   return `set +e
 INVOKER_HOME=${homeQ}
 ${bashNormalizeTildePath('INVOKER_HOME')}
@@ -173,7 +181,17 @@ reap_tmp() {
   fi
   rm -rf "$1" >/dev/null 2>&1
 }
+reap_transient_test_tmp() {
+  [ -e "$1" ] || return 0
+  rm -rf "$1" >/dev/null 2>&1
+}
 set -f
+for pat in ${transientTestGlobList}; do
+  find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -name "$pat" -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+    ! -path "$INVOKER_HOME" -print0 2>/dev/null | while IFS= read -r -d '' entry; do
+    reap_transient_test_tmp "$entry"
+  done
+done
 for pat in ${tmpGlobList}; do
   find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -name "$pat" -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
     ! -path "$INVOKER_HOME" -print0 2>/dev/null | while IFS= read -r -d '' entry; do
