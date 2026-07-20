@@ -109,6 +109,14 @@ tasks:
 
 Both fields are required for SSH tasks. The executor validates at runtime that the `poolMemberId` exists in config and throws a clear error if it's missing.
 
+## Review-Gate CI Repair and SSH
+
+Review-gate CI repair is control-plane behavior. `query review-gate-ci`, `repair-review-gate-ci`, and operator scans such as `pr-ci-failure-scan` run against Invoker's persisted workflow state; they do not choose or provision an SSH target from PR metadata.
+
+Workflow-mapped review-gate CI repair targets the merge node and its persisted gate workspace. Upstream tasks may have run on SSH targets, but `repair-review-gate-ci` does not infer a remote host from the PR and does not rerun the scan on a remote target. Later task retries still follow their own `runnerKind`, `poolMemberId`, and pool routing.
+
+The CI repair path expects a non-conflicting review gate: open, required, active generation, `checksState: failure`, at least one failed check, and no `mergeState: dirty`. Dirty merge states are merge-conflict cases and should be handled through the merge-conflict repair path, not `repair-review-gate-ci`.
+
 ## How It Works
 
 1. The plan parser reads `runnerKind` and `poolMemberId` from YAML and carries them through to `TaskConfig`.

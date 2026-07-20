@@ -92,6 +92,19 @@ Minimal example:
 
 More examples: [docs/invoker-config-example.json](docs/invoker-config-example.json), [docs/remote-ssh-targets.md](docs/remote-ssh-targets.md), [docs/docker-executor.md](docs/docker-executor.md).
 
+### Review-Gate CI Repair
+
+Review-gate CI repair is controlled by user config and persisted workflow state, not by plan YAML fields. Keep `autoFixRetries` in `~/.invoker/config.json` or the file named by `INVOKER_REPO_CONFIG_PATH`; plan-level and task-level `autoFix` / `autoFixRetries` are rejected.
+
+For workflow-mapped review gates:
+
+- The built-in `ci-failure` worker owns automatic repair queueing. It consumes `review_gate.ci_failed` lifecycle events and also scans persisted current review-gate artifacts. If the gate is still open, required, in the active generation, has `checksState: failure`, has failed checks, has no dirty merge state, has no open fix intent, and still has retry budget, it queues `invoker:fix-with-agent`.
+- `./run.sh --headless query review-gate-ci <prNumber|prUrl>` is the read-only inspection path for a PR target.
+- `./run.sh --headless repair-review-gate-ci <prNumber|prUrl>` is the manual queue path. It resolves the PR back to one workflow-mapped review gate and submits the same `fix-with-agent` mutation through the workflow owner. If the target is unmapped, ambiguous, stale, merge-conflicted, already queued, or out of retry budget, it reports a skipped/unmapped reason.
+- `pr-ci-failure-scan` should stay an operator discovery/check step: find failing PRs, then use `query review-gate-ci` or `repair-review-gate-ci` for Invoker-owned state. It should not add plan schema fields, mutate workflow graphs, or run a separate auto-fix path.
+
+Enablement assumptions are explicit: `autoFixRetries` must be positive, the workflow owner must be able to submit workflow mutation intents, the mapped review gate must have persisted CI failure artifacts, and the selected fix agent must be installed in the workspace where the fix runs. This path is for CI failures on non-conflicting review gates. A PR with `mergeState: dirty` is a merge-conflict case, not a CI-repairable case.
+
 ### Multiple SSH Executors
 
 Define multiple entries under `remoteTargets`, then select them per task with `runnerKind: ssh` and `poolMemberId`.
@@ -232,6 +245,7 @@ Layer rules: [ARCHITECTURE.md](ARCHITECTURE.md). Agent/repo conventions: [CLAUDE
 
 | Doc | Use |
 | --- | --- |
+| [docs/getting-started.md](docs/getting-started.md) | Operator setup and review-gate CI repair workflow |
 | [docs/architecture-overview.md](docs/architecture-overview.md) | Runtime layers, scheduler, comparisons |
 | [docs/invoker-medium-article.md](docs/invoker-medium-article.md) | Product story, glossary, mapping tables |
 | [docs/persistence-architecture-single-writer.md](docs/persistence-architecture-single-writer.md) | SQLite / sql.js single writer |

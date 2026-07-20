@@ -25,7 +25,12 @@ export interface InvokerConfig {
    */
   allowGraphMutation?: boolean;
   /**
-   * Global retry budget for auto-fix attempts per failed task.
+   * Global retry budget for automatic fix attempts per task.
+   *
+   * This also gates review-gate CI repair. The built-in `ci-failure`
+   * worker and the `repair-review-gate-ci` headless command only queue
+   * a fix mutation while the mapped task still has retry budget.
+   *
    * Default: 0 (disabled).
    */
   autoFixRetries?: number;
@@ -38,9 +43,8 @@ export interface InvokerConfig {
    */
   autoApproveAIFixes?: boolean;
   /**
-   * Preferred execution agent for automatic fix retries.
-   * When unset, auto-fix falls back to the task's executionAgent,
-   * then to the built-in default agent.
+   * Preferred execution agent for automatic fix retries and review-gate
+   * CI repair. When unset, fix sessions use the built-in default agent.
    */
   autoFixAgent?: string;
   /**
