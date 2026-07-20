@@ -32,18 +32,23 @@ tasks:
 EOF
 # The recreate client is intentionally still alive while this case samples the
 # first five seconds. In WAL mode a read-only sampler can lose that race; retry
-# only that transient busy-open failure so the assertion still checks reset
-# timing instead of failing on the harness read.
+# transient busy/empty reads so the assertion still checks reset timing instead
+# of failing on the harness read.
 invoker_e2e_case_216_query_json() {
   local out err status attempt
   err="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-query.err.XXXXXX")"
-  for attempt in 1 2 3 4 5; do
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
     if out="$(invoker_e2e_run_headless "$@" --output json 2>"$err")"; then
-      rm -f "$err"
-      printf '%s' "$out"
-      return 0
+      if printf '%s' "$out" | python3 -m json.tool >/dev/null 2>&1; then
+        rm -f "$err"
+        printf '%s' "$out"
+        return 0
+      fi
+      sleep 0.25
+      continue
+    else
+      status=$?
     fi
-    status=$?
     if grep -Fq 'Read-only file open refused while WAL sidecars exist' "$err"; then
       sleep 0.25
       continue
@@ -52,6 +57,9 @@ invoker_e2e_case_216_query_json() {
     rm -f "$err"
     return "$status"
   done
+  if [ -n "${out:-}" ]; then
+    printf '%s\n' "$out" >&2
+  fi
   cat "$err" >&2
   rm -f "$err"
   return 75
