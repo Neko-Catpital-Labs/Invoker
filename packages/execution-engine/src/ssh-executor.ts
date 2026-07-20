@@ -56,6 +56,11 @@ export interface SshExecutorConfig {
   /** Optional local secrets file used when useApiKey is true. */
   secretsFile?: string;
   /**
+   * Optional remote command to hydrate a managed workspace before the task
+   * payload runs. BYO workspaces are expected to be pre-provisioned.
+   */
+  provisionCommand?: string;
+  /**
    * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
    * Default: 30.
    */
@@ -89,6 +94,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly remoteInvokerHome: string;
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
+  private readonly provisionCommand: string | undefined;
   private readonly remoteHeartbeatIntervalSeconds: number;
   private readonly remotePath: string;
 
@@ -103,6 +109,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
+    this.provisionCommand = config.provisionCommand;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
     this.remoteHeartbeatIntervalSeconds =
       typeof configuredRemoteHeartbeatInterval === 'number'
@@ -229,9 +236,20 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
+    const provision = options.managed && this.provisionCommand?.trim()
+      ? this.buildPayloadScript(this.provisionCommand)
+      : undefined;
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const provisionPathDeclaration = provision ? `PROVISION_PATH="$STAGING_DIR/provision.sh"\n` : '';
+    const provisionFile = provision ? this.renderHeredocFile('"$PROVISION_PATH"', provision, 'provision') : '';
+    const provisionChmod = provision ? ' "$PROVISION_PATH"' : '';
+    const provisionSection = provision
+      ? `echo "[SshExecutor] Provisioning remote workspace..."
+"$PROVISION_PATH"
+`
+      : '';
     const runPayloadSection = `echo "[SshExecutor] Running task payload..."
 `;
 
@@ -241,6 +259,7 @@ INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
+${provisionPathDeclaration}
 cleanup_runtime() {
   local status="$1"
   trap - EXIT HUP INT TERM
@@ -275,12 +294,12 @@ trap 'cleanup_runtime 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
-${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
+${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}${provisionFile}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"${provisionChmod}
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
 ${options.envExports}
 start_bootstrap_heartbeat
-${runPayloadSection}stop_bootstrap_heartbeat
+${provisionSection}${runPayloadSection}stop_bootstrap_heartbeat
 "$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
