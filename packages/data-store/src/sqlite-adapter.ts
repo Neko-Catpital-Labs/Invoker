@@ -2029,10 +2029,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteConversation(threadTs: string): void {
-    this.execRun('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
-    this.execRun('DELETE FROM slack_pending_confirmations WHERE thread_ts = ?', [threadTs]);
-    this.execRun('DELETE FROM conversation_messages WHERE thread_ts = ?', [threadTs]);
-    this.execRun('DELETE FROM conversations WHERE thread_ts = ?', [threadTs]);
+    this.runTransaction(() => {
+      this.db.run('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
+      this.db.run('DELETE FROM slack_pending_confirmations WHERE thread_ts = ?', [threadTs]);
+      this.db.run('DELETE FROM conversation_messages WHERE thread_ts = ?', [threadTs]);
+      this.db.run('DELETE FROM conversations WHERE thread_ts = ?', [threadTs]);
+    });
   }
 
   listActiveConversations(): Conversation[] {
@@ -2070,30 +2072,29 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteConversationsOlderThan(cutoffIso: string): number {
-    this.ensureWritable();
-    this.db.run(`
-      DELETE FROM slack_launch_contexts WHERE thread_ts IN (
-        SELECT thread_ts FROM conversations WHERE updated_at < ?
-      )
-    `, [cutoffIso]);
-    this.db.run(`
-      DELETE FROM slack_pending_confirmations WHERE thread_ts IN (
-        SELECT thread_ts FROM conversations WHERE updated_at < ?
-      )
-    `, [cutoffIso]);
-    // Delete messages first (FK constraint)
-    this.db.run(`
-      DELETE FROM conversation_messages WHERE thread_ts IN (
-        SELECT thread_ts FROM conversations WHERE updated_at < ?
-      )
-    `, [cutoffIso]);
-    this.db.run(
-      'DELETE FROM conversations WHERE updated_at < ?',
-      [cutoffIso],
-    );
-    const changes = this.db.getRowsModified();
-    this.dirty = true;
-    return changes;
+    return this.runTransaction(() => {
+      this.db.run(`
+        DELETE FROM slack_launch_contexts WHERE thread_ts IN (
+          SELECT thread_ts FROM conversations WHERE updated_at < ?
+        )
+      `, [cutoffIso]);
+      this.db.run(`
+        DELETE FROM slack_pending_confirmations WHERE thread_ts IN (
+          SELECT thread_ts FROM conversations WHERE updated_at < ?
+        )
+      `, [cutoffIso]);
+      // Delete messages first (FK constraint)
+      this.db.run(`
+        DELETE FROM conversation_messages WHERE thread_ts IN (
+          SELECT thread_ts FROM conversations WHERE updated_at < ?
+        )
+      `, [cutoffIso]);
+      this.db.run(
+        'DELETE FROM conversations WHERE updated_at < ?',
+        [cutoffIso],
+      );
+      return this.db.getRowsModified();
+    });
   }
 
   // ── Conversation Messages ──────────────────────────────

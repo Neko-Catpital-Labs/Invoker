@@ -84,7 +84,7 @@ describe('SlackSessionRepository', () => {
     expect(repo.getPendingConfirmation('confirm-1', createdAt)).toBeNull();
   });
 
-  it('purges expired confirmations before retrieving them', () => {
+  it('ignores expired confirmations upon retrieval and purges them manually', () => {
     const createdAt = new Date('2026-07-19T12:00:00.000Z');
     repo.createPendingConfirmation({
       confirmKey: 'expired-confirmation',
@@ -97,7 +97,36 @@ describe('SlackSessionRepository', () => {
 
     const afterExpiry = new Date(createdAt.getTime() + SLACK_PENDING_CONFIRMATION_TTL_MS);
     expect(repo.getPendingConfirmation('expired-confirmation', afterExpiry)).toBeNull();
-    expect(repo.purgeExpiredPendingConfirmations(afterExpiry)).toBe(0);
+    expect(repo.purgeExpiredPendingConfirmations(afterExpiry)).toBe(1);
+  });
+
+  it('loads pending confirmations from a read-only adapter without purging', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'slack-session-repository-'));
+    const databasePath = join(directory, 'invoker.db');
+    const createdAt = new Date('2026-07-19T12:00:00.000Z');
+    try {
+      const writer = await SQLiteAdapter.create(databasePath, { ownerCapability: true });
+      const confirmation = new SlackSessionRepository(writer).createPendingConfirmation({
+        confirmKey: 'read-only-confirmation',
+        threadTs: 'thread-read-only',
+        channelId: 'C1',
+        userId: 'U1',
+        kind: 'plan_submission',
+        payload: { workflowId: 'wf-1' },
+      }, createdAt);
+      writer.close();
+
+      const reader = await SQLiteAdapter.create(databasePath, { readOnly: true });
+      expect(
+        new SlackSessionRepository(reader).getPendingConfirmation(
+          'read-only-confirmation',
+          createdAt,
+        ),
+      ).toEqual(confirmation);
+      reader.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it('returns only active plan threads for the channel and user', () => {

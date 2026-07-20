@@ -3613,6 +3613,26 @@ describe('SQLiteAdapter', () => {
       ...overrides,
     };
   }
+  function saveSlackConversationState(threadTs: string, confirmKey: string): void {
+    adapter.saveSlackLaunchContext({
+      threadTs,
+      repoUrl: 'https://github.com/acme/repo.git',
+      harnessPreset: 'claude',
+      workingDir: '/tmp/repo',
+      requestedBy: 'U456',
+      lobbyChannelId: 'C123',
+    });
+    adapter.saveSlackPendingConfirmation({
+      confirmKey,
+      threadTs,
+      channelId: 'C123',
+      userId: 'U456',
+      kind: 'plan_submission',
+      payloadJson: JSON.stringify({ workflowId: 'wf-1' }),
+      createdAt: '2026-07-19T12:00:00.000Z',
+      expiresAt: '2099-07-20T12:00:00.000Z',
+    });
+  }
 
   describe('saveConversation + loadConversation', () => {
     it('round-trips a conversation through save and load', () => {
@@ -3685,6 +3705,40 @@ describe('SQLiteAdapter', () => {
 
       expect(adapter.loadConversation('ts-1')).toBeUndefined();
       expect(adapter.loadMessages('ts-1')).toEqual([]);
+    });
+    it('rolls back linked Slack cleanup when deleteConversation fails mid-flight', () => {
+      const threadTs = 'ts-rollback';
+      const confirmKey = 'confirm-rollback';
+      adapter.saveConversation(makeConversation(threadTs));
+      adapter.appendMessage(threadTs, 'user', '"hello"');
+      saveSlackConversationState(threadTs, confirmKey);
+
+      const db = (adapter as unknown as { db: { run: (sql: string, params?: unknown[]) => void } }).db;
+      const originalRun = db.run.bind(db) as (sql: string, params?: unknown[]) => void;
+      let injected = false;
+      const spy = vi.spyOn(db, 'run').mockImplementation((sql: string, params?: unknown[]) => {
+        if (
+          !injected &&
+          sql.includes('DELETE FROM conversation_messages WHERE thread_ts = ?')
+        ) {
+          injected = true;
+          throw new Error('injected delete failure');
+        }
+        return originalRun(sql, params);
+      });
+      try {
+        expect(() => adapter.deleteConversation(threadTs)).toThrow('injected delete failure');
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(injected).toBe(true);
+      expect(adapter.loadConversation(threadTs)?.threadTs).toBe(threadTs);
+      expect(adapter.loadMessages(threadTs)).toHaveLength(1);
+      expect(adapter.loadSlackLaunchContext(threadTs)).toEqual(expect.objectContaining({ threadTs }));
+      expect(adapter.loadSlackPendingConfirmation(confirmKey)).toEqual(
+        expect.objectContaining({ confirmKey, threadTs }),
+      );
     });
   });
 
@@ -5444,6 +5498,52 @@ describe('SQLiteAdapter', () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+    it('rolls back linked Slack cleanup when deleteConversationsOlderThan fails mid-flight', () => {
+      const threadTs = 'ts-old-rollback';
+      const confirmKey = 'confirm-old-rollback';
+      const old = new Date();
+      old.setDate(old.getDate() - 10);
+      const oldIso = old.toISOString();
+
+      adapter.saveConversation(makeConversation(threadTs, {
+        createdAt: oldIso,
+        updatedAt: oldIso,
+      }));
+      adapter.appendMessage(threadTs, 'user', '"old message"');
+      saveSlackConversationState(threadTs, confirmKey);
+
+      const db = (adapter as unknown as { db: { run: (sql: string, params?: unknown[]) => void } }).db;
+      const originalRun = db.run.bind(db) as (sql: string, params?: unknown[]) => void;
+      let injected = false;
+      const spy = vi.spyOn(db, 'run').mockImplementation((sql: string, params?: unknown[]) => {
+        if (
+          !injected &&
+          sql.includes('DELETE FROM conversation_messages WHERE thread_ts IN')
+        ) {
+          injected = true;
+          throw new Error('injected delete failure');
+        }
+        return originalRun(sql, params);
+      });
+
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 7);
+      try {
+        expect(() => adapter.deleteConversationsOlderThan(cutoff.toISOString())).toThrow(
+          'injected delete failure',
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(injected).toBe(true);
+      expect(adapter.loadConversation(threadTs)?.threadTs).toBe(threadTs);
+      expect(adapter.loadMessages(threadTs)).toHaveLength(1);
+      expect(adapter.loadSlackLaunchContext(threadTs)).toEqual(expect.objectContaining({ threadTs }));
+      expect(adapter.loadSlackPendingConfirmation(confirmKey)).toEqual(
+        expect.objectContaining({ confirmKey, threadTs }),
+      );
     });
 
     it('marks deletion mutations as dirty for diagnostics', async () => {
