@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,7 @@ import {
   REQUIRED_BOT_SCOPES,
   slackCredsFromEnv,
   runSetup,
+  setExperimentalPlannerFlag,
   upsertEnvLines,
   validateSlackCredentials,
   type CliConfigState,
@@ -365,3 +366,53 @@ function restoreEnv(key: string, value: string | undefined): void {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
 }
+
+describe('setExperimentalPlannerFlag', () => {
+  function makeConfigPath(): string {
+    return join(mkdtempSync(join(tmpdir(), 'invoker-planner-flag-')), 'config.json');
+  }
+
+  it('preserves unrelated config keys when toggling the flag', () => {
+    const configPath = makeConfigPath();
+    writeFileSync(configPath, JSON.stringify({ maxConcurrency: 9, futureKey: { nested: true } }));
+
+    setExperimentalPlannerFlag(true, configPath);
+
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
+      maxConcurrency: 9,
+      futureKey: { nested: true },
+      experimentalPlanner: true,
+    });
+  });
+
+  it('writes the config with owner-only permissions', () => {
+    const configPath = makeConfigPath();
+    setExperimentalPlannerFlag(true, configPath);
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('tightens permissions on a previously world-readable config', () => {
+    const configPath = makeConfigPath();
+    writeFileSync(configPath, JSON.stringify({ webToken: 'secret' }));
+    chmodSync(configPath, 0o644);
+
+    setExperimentalPlannerFlag(false, configPath);
+
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+  });
+
+  it('backs up the previous config before overwriting it', () => {
+    const configPath = makeConfigPath();
+    writeFileSync(configPath, JSON.stringify({ experimentalPlanner: false }));
+
+    setExperimentalPlannerFlag(true, configPath);
+
+    expect(JSON.parse(readFileSync(`${configPath}.bak`, 'utf8'))).toEqual({ experimentalPlanner: false });
+  });
+
+  it('creates the config directory when it does not exist', () => {
+    const configPath = join(mkdtempSync(join(tmpdir(), 'invoker-planner-flag-')), 'nested', 'config.json');
+    setExperimentalPlannerFlag(true, configPath);
+    expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({ experimentalPlanner: true });
+  });
+});

@@ -13,6 +13,7 @@ import {
   type IsInstalled,
   type PlanningPresetSpec,
   type PrerequisiteCheck,
+  updateInvokerConfigFile,
 } from '@invoker/contracts';
 import { formatCaughtException, logCaughtException } from './logging.js';
 
@@ -166,11 +167,9 @@ export interface ExperimentalPlannerSetupState {
 }
 
 export function setExperimentalPlannerFlag(enabled: boolean, configPath: string = defaultConfigPath()): string {
-  const config = readMutableJson(configPath, {});
-  config.experimentalPlanner = enabled;
-  mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-  return configPath;
+  return updateInvokerConfigFile(configPath, (config) => {
+    config.experimentalPlanner = enabled;
+  });
 }
 
 export function readExperimentalPlannerSetup(options: ExperimentalPlannerSetupOptions = {}): ExperimentalPlannerSetupState {
