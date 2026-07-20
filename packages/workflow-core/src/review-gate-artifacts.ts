@@ -40,6 +40,11 @@ export function getCurrentRequiredReviewArtifacts(task: TaskState): ReviewGateAr
     .filter((artifact) => artifact.required && !!artifact.providerId);
 }
 
+export function unapprovedRequiredReviewArtifacts(task: TaskState): ReviewGateArtifact[] {
+  return getCurrentRequiredReviewArtifacts(task)
+    .filter((artifact) => artifact.status !== 'approved');
+}
+
 export function reviewGateIsApproved(gate: ReviewGateState): boolean {
   const currentRequired = gate.artifacts.filter((artifact) =>
     isCurrentReviewGateArtifact(gate, artifact) && artifact.required,
