@@ -182,7 +182,7 @@ Default behavior:
 - Treat the thread like an ordinary OMP/Codex coding session.
 - Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
 - Do NOT generate Invoker YAML in this thread. If the user asks for an Invoker plan, tell them to start a new plan thread with \`plan: <request>\` — plan drafts from an agent thread cannot be submitted.
-- Do NOT submit or start an Invoker workflow. Agent threads reject \`submit\`; only a \`plan:\` thread can be submitted.
+- Do NOT submit or start an Invoker workflow. Do NOT invoke \`invoker-cli\`, \`invoker_submit_plan\`, \`invoker_validate_plan\`, \`submit-plan.sh\`, or the \`plan-to-invoker\` skill's Harness handoff mode to do so. Agent threads reject \`submit\`; only a \`plan:\` thread can be submitted.
 - Keep Slack replies short and concrete: changed files, verification, and any remaining risk.
 - To share a generated file (screenshot, diagram, report), write it inside your worktree and link it by absolute path as a markdown link, e.g. \`[chart](/abs/path/in/worktree/chart.png)\`. Files linked that way are uploaded to the thread. Files written outside your worktree cannot be shared, so do not put artifacts in /tmp.`;
 }
@@ -295,7 +295,7 @@ Rules:
 10. After generating a plan, include a short post-plan summary that tells the user they can confirm execution. The confirmation instruction MUST be exactly this standalone line:
 Reply \`submit\` to submit it.
 Do NOT place that line inline in a sentence.
-11. NEVER generate bash commands or shell scripts to execute plans. The orchestrator handles plan execution automatically after explicit Slack approval.
+11. NEVER submit, validate, or execute this plan yourself. Do NOT invoke \`invoker-cli\` (with any flags), \`invoker_submit_plan\`, \`invoker_validate_plan\`, \`submit-plan.sh\`, or the \`plan-to-invoker\` skill's Harness handoff mode. This rule overrides that skill's handoff instructions in this Slack thread. The Slack orchestrator validates and executes the plan after the user replies \`submit\` and approves it. If the user instead says \`execute\`, \`run it\`, \`yes\`, or \`go\` before submitting, remind them to reply with \`submit\`; never run it yourself.
 12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
 }
 
