@@ -7,6 +7,7 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { DEFAULT_WORKTREE_PROVISION_COMMAND } from '../default-worktree-provision-command.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -210,6 +211,48 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toMatch(/base64 -d/);
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
+  });
+
+  it('uses default provisioning when managed SSH config provides a blank provision command', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      provisionCommand: '   ',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'pnpm --filter @invoker/surfaces exec vitest run src/__tests__/plan-conversation.test.ts',
+        description: 'run focused surfaces specs',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const encodedProvision = capturedScript.match(/eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"/)?.[1];
+    expect(encodedProvision).toBeDefined();
+    expect(Buffer.from(encodedProvision!, 'base64').toString('utf8')).toBe(DEFAULT_WORKTREE_PROVISION_COMMAND);
   });
 
   it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
