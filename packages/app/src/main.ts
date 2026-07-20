@@ -79,7 +79,9 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   registerBuiltinAgents,
+  parseFixWithAgentMutationArgs,
   type Executor, type ExecutorHandle,
+  type ReviewGateCiContext,
 } from '@invoker/execution-engine';
 import type { Logger } from '@invoker/contracts';
 import { FileAndDbLogger } from './logger.js';
@@ -160,6 +162,14 @@ import {
   buildActionGraphDiagnostics,
   resolveActionDiagnosticsStallThresholdMs,
 } from './action-graph-diagnostics.js';
+import {
+  createReviewGateCiRepairSubmitterFromCoordinator,
+  formatReviewGateCiRepairResult,
+  formatReviewGateQueryResult,
+  queryReviewGate,
+  resolveReviewGateCiRepairTarget,
+  runReviewGateCiRepairCommand,
+} from './review-gate-ci-repair-command.js';
 
 function isTaskInFlightForForcedStop(task: TaskState): boolean {
   return task.status === 'running'
@@ -602,8 +612,9 @@ if (isHeadless) {
     const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve';
     const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
     const queueQueryMode = command === 'queue' || (command === 'query' && cliArgs[1] === 'queue');
+    const reviewGateQueryMode = command === 'query' && cliArgs[1] === 'review-gate';
 
-    const delegatedQueueOutputFormat = (): 'json' | 'jsonl' | 'label' | 'text' => {
+    const delegatedOutputFormat = (): 'json' | 'jsonl' | 'label' | 'text' => {
       const outputIndex = cliArgs.indexOf('--output');
       const value = outputIndex >= 0 ? cliArgs[outputIndex + 1] : undefined;
       if (value === 'json' || value === 'jsonl' || value === 'label') return value;
@@ -611,7 +622,7 @@ if (isHeadless) {
     };
 
     const writeDelegatedQueueStatus = (status: Record<string, unknown>): void => {
-      const format = delegatedQueueOutputFormat();
+      const format = delegatedOutputFormat();
       const running = Array.isArray(status.running) ? status.running as Array<Record<string, unknown>> : [];
       const queued = Array.isArray(status.queued) ? status.queued as Array<Record<string, unknown>> : [];
       if (format === 'json') {
@@ -637,6 +648,36 @@ if (isHeadless) {
       const runningCount = Number(status.runningCount ?? running.length);
       const maxConcurrency = Number(status.maxConcurrency ?? 0);
       process.stdout.write(`running=${runningCount}/${maxConcurrency} queued=${queued.length}\n`);
+    };
+
+    const writeDelegatedReviewGateQuery = (result: Record<string, unknown>): void => {
+      const format = delegatedOutputFormat();
+      if (format === 'json') {
+        process.stdout.write(JSON.stringify(result) + '\n');
+        return;
+      }
+      if (format === 'jsonl') {
+        process.stdout.write(JSON.stringify(result) + '\n');
+        return;
+      }
+      if (format === 'label') {
+        process.stdout.write(String(result.taskId ?? result.workflowId ?? '') + '\n');
+        return;
+      }
+      process.stdout.write(formatReviewGateQueryResult(result as any) + '\n');
+    };
+
+    const delegatedReviewGateQueryTarget = (): string | undefined => {
+      for (let i = 2; i < cliArgs.length; i += 1) {
+        const arg = cliArgs[i];
+        if (arg === '--output') {
+          i += 1;
+          continue;
+        }
+        if (arg?.startsWith('--')) continue;
+        return arg;
+      }
+      return undefined;
     };
 
     // Try delegation for mutating commands first (owner mode).
@@ -691,14 +732,25 @@ if (isHeadless) {
       }
     }
 
-    if (readOnlyMode && queueQueryMode && !standaloneMode) {
+    const reviewGateQueryTarget = reviewGateQueryMode ? delegatedReviewGateQueryTarget() : undefined;
+    if (readOnlyMode && (queueQueryMode || (reviewGateQueryMode && reviewGateQueryTarget)) && !standaloneMode) {
       const delegationBus = new IpcBus(undefined, { allowServe: false });
       try {
         await delegationBus.ready();
-        const delegated = await tryDelegateQuery(delegationBus, { kind: 'queue' }, 5_000);
+        const delegated = await tryDelegateQuery(
+          delegationBus,
+          queueQueryMode
+            ? { kind: 'queue' }
+            : { kind: 'review-gate', target: reviewGateQueryTarget },
+          5_000,
+        );
         delegationBus.disconnect();
         if (delegated) {
-          writeDelegatedQueueStatus(delegated);
+          if (queueQueryMode) {
+            writeDelegatedQueueStatus(delegated);
+          } else {
+            writeDelegatedReviewGateQuery(delegated);
+          }
           process.exit(0);
           return;
         }
@@ -742,6 +794,7 @@ if (isHeadless) {
         executionAgentRegistry: agentRegistry,
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
+        reviewGateCiRepairSubmitter: createReviewGateCiRepairSubmitterFromCoordinator(() => workflowMutationCoordinator),
         runtimeServices,
       };
 
@@ -929,6 +982,10 @@ if (isHeadless) {
             case 'fix':
             case 'resolve-conflict':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'normal' };
+            case 'repair-review-gate-ci': {
+              const resolved = resolveReviewGateCiRepairTarget(String(arg0 ?? ''), { store: persistence });
+              return { workflowId: resolved.workflow?.id, priority: 'normal' };
+            }
             default:
               return { priority: 'normal' };
           }
@@ -948,9 +1005,71 @@ if (isHeadless) {
           return workflowMutationCoordinator.enqueue<T>(workflowId, priority, channel, args);
         };
 
+        const executeStandaloneReviewGateCiRepair = async (target: string): Promise<Record<string, unknown>> => {
+          const result = await runReviewGateCiRepairCommand(target, {
+            store: persistence,
+            submitter: createReviewGateCiRepairSubmitterFromCoordinator(() => workflowMutationCoordinator),
+            logger,
+            defaultAutoFixRetries: invokerConfig.autoFixRetries,
+            getAutoFixAgent: () => loadConfig().autoFixAgent,
+          });
+          return {
+            ok: true,
+            message: formatReviewGateCiRepairResult(result),
+            repairReviewGateCi: result,
+          };
+        };
+
+        const prepareStandaloneReviewGateCiFailureForFix = (
+          taskId: string,
+          context: ReviewGateCiContext,
+        ): void => {
+          const task = orchestrator.getTask(taskId) ?? persistence.loadTask?.(taskId);
+          if (!task) throw new Error(`Task ${taskId} not found`);
+          if (task.status === 'failed' || task.status === 'fixing_with_ai') return;
+          if (task.status !== 'review_ready' && task.status !== 'awaiting_approval') {
+            throw new Error(`Review-gate CI repair cannot fix task "${taskId}" from status ${task.status}`);
+          }
+          const error = context.fixContext ?? `Review-gate CI failed for ${context.reviewId}.`;
+          const completedAt = new Date();
+          persistence.appendTaskOutput(taskId, `\n[Review-gate CI repair]\n${error}\n`);
+          persistence.updateTask(taskId, {
+            status: 'failed',
+            execution: {
+              error,
+              exitCode: 1,
+              completedAt,
+              pendingFixError: undefined,
+            },
+          });
+          if (task.execution.selectedAttemptId) {
+            persistence.updateAttempt(task.execution.selectedAttemptId, {
+              status: 'failed',
+              exitCode: 1,
+              error,
+              completedAt,
+            });
+          }
+          persistence.logEvent?.(taskId, 'task.review_gate_ci_failed', {
+            status: 'failed',
+            execution: {
+              error,
+              exitCode: 1,
+              completedAt,
+            },
+            reviewGateContext: context,
+          });
+          if (task.config.workflowId) {
+            orchestrator.syncFromDb(task.config.workflowId);
+          }
+        };
+
         if (!workflowMutationDispatcher.has('headless.exec')) {
           workflowMutationDispatcher.set('headless.exec', async (payloadArg: unknown) => {
             const payload = payloadArg as HeadlessExecMutationPayload;
+            if (payload.args[0] === 'repair-review-gate-ci') {
+              return executeStandaloneReviewGateCiRepair(String(payload.args[1] ?? ''));
+            }
             await runHeadless(payload.args, {
               ...headlessDeps,
               waitForApproval: payload.waitForApproval,
@@ -959,6 +1078,40 @@ if (isHeadless) {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
             return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
+          workflowMutationDispatcher.set('invoker:fix-with-agent', async (...args: unknown[]) => {
+            const parsed = parseFixWithAgentMutationArgs(args);
+            const reviewGateContext = parsed.context.reviewGateContext;
+            if (reviewGateContext) {
+              prepareStandaloneReviewGateCiFailureForFix(parsed.taskId, reviewGateContext);
+            }
+            const executor = createStandaloneTaskExecutor();
+            const result = await fixWithAgentAction(parsed.taskId, {
+              orchestrator,
+              persistence,
+              taskExecutor: executor,
+              autoApproveAIFixes: invokerConfig.autoApproveAIFixes,
+            }, {
+              agentName: parsed.agentName,
+              recoveryRoute: reviewGateContext ? { kind: 'fixWithAgent' } : undefined,
+              recreateOutputLabel: reviewGateContext ? 'Review-gate CI repair' : 'Fix with AI',
+              failureOutputLabel: reviewGateContext ? 'Review-gate CI repair' : 'Fix with AI',
+              signal: activeMutationContext?.signal,
+            });
+            await finalizeMutationWithGlobalTopup({
+              orchestrator,
+              taskExecutor: executor,
+              logger,
+              context: reviewGateContext ? 'standalone.review-gate-ci-repair.fix-with-agent' : 'standalone.fix-with-agent',
+              started: result.started,
+              mutationTiming: activeMutationContext?.mutationTiming,
+              ...(result.kind === 'recreateWorkflowFromFreshBase'
+                ? { scopedWorkflowId: result.workflowId }
+                : { scopedTaskIds: [parsed.taskId] }),
+            });
+            return result.started;
           });
         }
         if (!workflowMutationCoordinator) {
@@ -1054,6 +1207,11 @@ if (isHeadless) {
           if (kind === 'queue') {
             return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
           }
+          if (kind === 'review-gate') {
+            const target = String((req as { target?: unknown }).target ?? '');
+            if (!target) throw new Error('Missing review-gate query target');
+            return queryReviewGate(target, { store: persistence }) as unknown as Record<string, unknown>;
+          }
           throw new Error(`Unsupported headless query: ${String(kind)}`);
         });
         messageBus.onRequest('headless.resume', async (req: unknown) => {
@@ -1097,6 +1255,15 @@ if (isHeadless) {
               { module: 'ipc-delegate' },
             );
             return { ok: true, intentId };
+          }
+          if (args[0] === 'repair-review-gate-ci') {
+            return runStandaloneWorkflowMutation(
+              workflowId,
+              priority,
+              'headless.exec',
+              [payload],
+              async () => executeStandaloneReviewGateCiRepair(String(args[1] ?? '')),
+            );
           }
           await runStandaloneWorkflowMutation(workflowId, priority, 'headless.exec', [payload], async () => {
             await runHeadless(args, {
@@ -1415,17 +1582,67 @@ if (isHeadless) {
     );
   };
 
+  const prepareReviewGateCiFailureForFix = (
+    taskId: string,
+    context: ReviewGateCiContext,
+  ): void => {
+    const task = orchestrator.getTask(taskId) ?? persistence.loadTask?.(taskId);
+    if (!task) throw new Error(`Task ${taskId} not found`);
+    if (task.status === 'failed' || task.status === 'fixing_with_ai') return;
+    if (task.status !== 'review_ready' && task.status !== 'awaiting_approval') {
+      throw new Error(`Review-gate CI repair cannot fix task "${taskId}" from status ${task.status}`);
+    }
+    const error = context.fixContext ?? `Review-gate CI failed for ${context.reviewId}.`;
+    const completedAt = new Date();
+    persistence.appendTaskOutput(taskId, `\n[Review-gate CI repair]\n${error}\n`);
+    persistence.updateTask(taskId, {
+      status: 'failed',
+      execution: {
+        error,
+        exitCode: 1,
+        completedAt,
+        pendingFixError: undefined,
+      },
+    });
+    if (task.execution.selectedAttemptId) {
+      persistence.updateAttempt(task.execution.selectedAttemptId, {
+        status: 'failed',
+        exitCode: 1,
+        error,
+        completedAt,
+      });
+    }
+    persistence.logEvent?.(taskId, 'task.review_gate_ci_failed', {
+      status: 'failed',
+      execution: {
+        error,
+        exitCode: 1,
+        completedAt,
+      },
+      reviewGateContext: context,
+    });
+    if (task.config.workflowId) {
+      orchestrator.syncFromDb(task.config.workflowId);
+    }
+  };
+
   const executeFixWithAgentMutation = async (
     taskId: string,
     agentName?: string,
     source: 'ipc' | 'auto-fix' = 'ipc',
+    options?: { reviewGateContext?: ReviewGateCiContext },
   ): Promise<TaskState[]> => {
+    if (options?.reviewGateContext) {
+      prepareReviewGateCiFailureForFix(taskId, options.reviewGateContext);
+    }
     const task = orchestrator.getTask(taskId);
     if (!task) {
       throw new Error(`Task ${taskId} not found`);
     }
     const savedError = task.execution.error ?? '';
-    const recoveryRoute = selectFailureRecoveryRoute(task, savedError);
+    const recoveryRoute = options?.reviewGateContext
+      ? { kind: 'fixWithAgent' as const }
+      : selectFailureRecoveryRoute(task, savedError);
     logger.info(
       `fix-with-agent: "${taskId}" agent=${agentName ?? 'claude'} source=${source} route=${recoveryRoute.kind}`,
       { module: 'ipc' },
@@ -1452,8 +1669,8 @@ if (isHeadless) {
       {
         agentName,
         recoveryRoute,
-        recreateOutputLabel: source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
-        failureOutputLabel: source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
+        recreateOutputLabel: options?.reviewGateContext ? 'Review-gate CI repair' : source === 'auto-fix' ? 'Auto-fix' : 'Fix with AI',
+        failureOutputLabel: options?.reviewGateContext ? 'Review-gate CI repair' : source === 'auto-fix' ? 'Auto-fix' : `Fix with ${agentName ?? 'Claude'}`,
         signal: activeMutationContext?.signal,
       },
     );
@@ -1774,11 +1991,26 @@ if (isHeadless) {
     ) {
       cancelDeferredWorkflowLaunch(resolvedHeadlessTarget.workflowId, `headless.${headlessCommand}`);
     }
+    if (headlessCommand === 'repair-review-gate-ci' && !payload.noTrack) {
+      const result = await runReviewGateCiRepairCommand(headlessTarget, {
+        store: persistence,
+        submitter: createReviewGateCiRepairSubmitterFromCoordinator(() => workflowMutationCoordinator),
+        logger,
+        defaultAutoFixRetries: invokerConfig.autoFixRetries,
+        getAutoFixAgent: () => loadConfig().autoFixAgent,
+      });
+      return {
+        ok: true,
+        message: formatReviewGateCiRepairResult(result),
+        repairReviewGateCi: result,
+      };
+    }
     await runHeadless(payload.args, {
       logger,
       orchestrator, persistence, executorRegistry, messageBus,
       commandService,
       repoRoot, invokerConfig, initServices, wireSlackBot,
+      reviewGateCiRepairSubmitter: createReviewGateCiRepairSubmitterFromCoordinator(() => workflowMutationCoordinator),
       signal: activeMutationContext?.signal,
       mutationTiming: activeMutationContext?.mutationTiming,
       cancelTask: (taskId: string) => performCancelTask(taskId),
@@ -1912,6 +2144,10 @@ if (isHeadless) {
       case 'fix':
       case 'resolve-conflict':
         return { workflowId: workflowIdForTaskArg(arg0), priority: 'normal' };
+      case 'repair-review-gate-ci': {
+        const resolved = resolveReviewGateCiRepairTarget(String(arg0 ?? ''), { store: persistence });
+        return { workflowId: resolved.workflow?.id, priority: 'normal' };
+      }
       default:
         return { priority: 'normal' };
     }
@@ -2611,6 +2847,11 @@ if (isHeadless) {
         }
         if (kind === 'queue') {
           return orchestrator.getQueueStatus() as unknown as Record<string, unknown>;
+        }
+        if (kind === 'review-gate') {
+          const target = String((req as { target?: unknown }).target ?? '');
+          if (!target) throw new Error('Missing review-gate query target');
+          return queryReviewGate(target, { store: persistence }) as unknown as Record<string, unknown>;
         }
         throw new Error(`Unsupported headless query: ${String(kind)}`);
       });
@@ -3629,31 +3870,34 @@ if (isHeadless) {
       'invoker:fix-with-agent',
       (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
       'normal',
-      async (taskIdArg: unknown, agentNameArg?: unknown) => {
-      const taskId = String(taskIdArg);
-      const agentName = agentNameArg === undefined ? undefined : String(agentNameArg);
-      try {
-        const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc');
-        await finalizeMutationWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.fix-with-agent',
-          started,
-          mutationTiming: activeMutationContext?.mutationTiming,
-          scopedTaskIds: [taskId],
-        });
-      } catch (err) {
-        await finalizeMutationWithGlobalTopup({
-          orchestrator,
-          taskExecutor: requireTaskExecutor(),
-          logger,
-          context: 'ipc.fix-with-agent.failure',
-          mutationTiming: activeMutationContext?.mutationTiming,
-        });
-        logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
-        throw err;
-      }
+      async (...args: unknown[]) => {
+        const parsed = parseFixWithAgentMutationArgs(args);
+        const taskId = parsed.taskId;
+        const agentName = parsed.agentName;
+        try {
+          const started = await executeFixWithAgentMutation(taskId, agentName, 'ipc', {
+            reviewGateContext: parsed.context.reviewGateContext,
+          });
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.fix-with-agent',
+            started,
+            mutationTiming: activeMutationContext?.mutationTiming,
+            scopedTaskIds: [taskId],
+          });
+        } catch (err) {
+          await finalizeMutationWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'ipc.fix-with-agent.failure',
+            mutationTiming: activeMutationContext?.mutationTiming,
+          });
+          logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
+          throw err;
+        }
       },
     );
 

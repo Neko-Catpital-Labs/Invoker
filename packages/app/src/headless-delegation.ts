@@ -282,6 +282,9 @@ async function tryDelegate(
   } else {
     process.stdout.write('Delegated to owner\n');
   }
+  if (typeof response.message === 'string' && response.message.length > 0) {
+    process.stdout.write(response.message.endsWith('\n') ? response.message : `${response.message}\n`);
+  }
 
   const outcome: DelegationOutcome = hasWorkflowId
     ? { kind: 'delegated', workflowId: response.workflowId as string, tasks: response.tasks as TaskState[] }

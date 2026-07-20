@@ -25,7 +25,9 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
+  type AutoFixAttemptLedger,
   type AgentRegistry,
+  type ReviewGateCiRepairSubmitter,
 } from '@invoker/execution-engine';
 import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { backupPlan } from './plan-backup.js';
@@ -58,6 +60,12 @@ import { preemptWorkflowBeforeMutation, type WorkflowCancelResult } from './work
 import { relaunchOrphansAndStartReady } from './orphan-relaunch.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import type { RuntimeServices } from '@invoker/runtime-service';
+import {
+  formatReviewGateCiRepairResult,
+  formatReviewGateQueryResult,
+  queryReviewGate,
+  runReviewGateCiRepairCommand,
+} from './review-gate-ci-repair-command.js';
 
 export { bumpGenerationAndRecreate } from './workflow-actions.js';
 export {
@@ -102,6 +110,8 @@ export interface HeadlessDeps {
   isStandaloneOwnerIdle?: () => boolean;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
+  reviewGateCiRepairSubmitter?: ReviewGateCiRepairSubmitter;
+  reviewGateCiRepairAttemptLedger?: AutoFixAttemptLedger;
   /** Abort signal from the workflow mutation coordinator, if running inside a coordinated mutation. */
   signal?: AbortSignal;
   mutationTiming?: WorkflowMutationTiming;
@@ -375,7 +385,7 @@ export function parseQueryFlags(args: string[]): QueryFlags {
 async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|cost|cost-events|costs|ui-perf|stats>');
+    throw new Error('Missing query sub-command. Usage: --headless query <workflows|tasks|task|queue|audit|session|review-gate|cost|cost-events|costs|ui-perf|stats>');
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -510,6 +520,26 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       await headlessSession(taskId, deps);
       break;
     }
+    case 'review-gate': {
+      const target = flags.positional[0];
+      if (!target) throw new Error('Usage: --headless query review-gate <prNumber|prUrl>');
+      const result = queryReviewGate(target, { store: deps.persistence });
+      switch (flags.output) {
+        case 'label':
+          process.stdout.write((result.taskId ?? result.workflowId ?? '') + '\n');
+          break;
+        case 'json':
+          process.stdout.write(formatAsJson(result) + '\n');
+          break;
+        case 'jsonl':
+          process.stdout.write(formatAsJsonl([result]) + '\n');
+          break;
+        default:
+          process.stdout.write(formatReviewGateQueryResult(result) + '\n');
+          break;
+      }
+      break;
+    }
     case 'ui-perf': {
       if (flags.reset) {
         deps.resetUiPerfStats?.();
@@ -607,7 +637,7 @@ async function headlessQuery(args: string[], deps: HeadlessDeps): Promise<void> 
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, cost, cost-events, costs, ui-perf, stats`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, tasks, task, queue, audit, session, review-gate, cost, cost-events, costs, ui-perf, stats`);
   }
 }
 
@@ -986,6 +1016,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'resolve-conflict':
       await headlessResolveConflict(args[1], deps, args[2]);
       break;
+    case 'repair-review-gate-ci':
+      await headlessRepairReviewGateCi(args[1], deps);
+      break;
 
     // ── Respond (unchanged) ──
     case 'approve':
@@ -1125,6 +1158,7 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
   query queue [--output F]                            Show queue status
   query audit <taskId> [--output F]                   Print event history
   query session <taskId>                              Print agent session messages
+  query review-gate <prNumber|prUrl> [--output F]    Inspect workflow review-gate mapping
   query ui-perf [--output F] [--reset]               Print live UI perf stats
   query stats [--output F]                           Aggregate stats across all workflows
 
@@ -1142,6 +1176,7 @@ ${BOLD}Execute:${RESET}
   recreate-with-rebase <workflowId|mergeTaskId|taskId> Recreate workflow from fresh upstream base
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
   resolve-conflict <taskId> [claude|codex]            Resolve merge conflict + restart
+  repair-review-gate-ci <prNumber|prUrl>              Queue CI repair for a mapped review gate
 
 ${BOLD}Respond:${RESET}
   approve <taskId>                                    Approve a task
@@ -1633,6 +1668,24 @@ async function headlessResolveConflict(taskId: string, deps: HeadlessDeps, agent
   } finally {
     autoFix.unsubscribe();
   }
+}
+
+async function headlessRepairReviewGateCi(target: string, deps: HeadlessDeps): Promise<void> {
+  if (!target) {
+    throw new Error('Missing arguments. Usage: --headless repair-review-gate-ci <prNumber|prUrl>');
+  }
+  if (!deps.reviewGateCiRepairSubmitter) {
+    throw new Error('Review-gate CI repair submitter is unavailable in this runtime.');
+  }
+  const result = await runReviewGateCiRepairCommand(target, {
+    store: deps.persistence,
+    submitter: deps.reviewGateCiRepairSubmitter,
+    logger: deps.logger,
+    defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
+    getAutoFixAgent: () => loadConfig().autoFixAgent,
+    attemptLedger: deps.reviewGateCiRepairAttemptLedger,
+  });
+  process.stdout.write(formatReviewGateCiRepairResult(result) + '\n');
 }
 
 async function headlessRebaseAndRetry(taskId: string, deps: HeadlessDeps): Promise<void> {
