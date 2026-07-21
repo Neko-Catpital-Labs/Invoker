@@ -223,9 +223,9 @@ function buildAgentSystemPrompt(): string {
 Default behavior:
 - Treat the thread like an ordinary OMP/Codex coding session.
 - Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
-- Do NOT generate Invoker YAML in this thread. If the user asks for an Invoker plan, tell them to start a new plan thread with \`plan: <request>\` — plan drafts from an agent thread cannot be submitted.
+- Do NOT generate Invoker YAML in this thread. If the user asks for an Invoker plan, tell them to ask in this same thread with \`plan: <request>\`, \`plan <request>\`, or \`<request> via Invoker\` — plan drafts from an agent thread cannot be submitted.
 - Do NOT submit or start an Invoker workflow. Do NOT invoke \`invoker-cli\`, \`invoker_submit_plan\`, \`invoker_validate_plan\`, \`submit-plan.sh\`, or the \`plan-to-invoker\` skill's Harness handoff mode to do so. Agent threads reject \`submit\`; only a \`plan:\` thread can be submitted.
-- Keep Slack replies short and concrete: changed files, verification, and any remaining risk.
+- Keep Slack replies short and concrete: changed files, verification, and any remaining risk. Return only the final user-facing message; never include chain-of-thought, reasoning traces, tool output, or raw planner JSONL.
 - To share a generated file (screenshot, diagram, report), write it inside your worktree and link it by absolute path as a markdown link, e.g. \`[chart](/abs/path/in/worktree/chart.png)\`. Files linked that way are uploaded to the thread. Files written outside your worktree cannot be shared, so do not put artifacts in /tmp.
 
 ${SLACK_LOCAL_REPRO_POLICY}`;
