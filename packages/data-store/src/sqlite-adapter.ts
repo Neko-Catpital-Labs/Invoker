@@ -526,6 +526,7 @@ type InAppPlanningSessionRow = {
   preset_key?: unknown;
   status?: unknown;
   draft_plan_summary_json?: unknown;
+  draft_plan_text?: unknown;
   submitted_workflow_id?: unknown;
   submitted_plan_name?: unknown;
   terminal_mode?: unknown;
@@ -1209,6 +1210,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           preset_key,
           status,
           draft_plan_summary_json,
+          draft_plan_text,
           submitted_workflow_id,
           submitted_plan_name,
           terminal_mode,
@@ -1220,12 +1222,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
           pending_response,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
           status = excluded.status,
           draft_plan_summary_json = excluded.draft_plan_summary_json,
+          draft_plan_text = excluded.draft_plan_text,
           submitted_workflow_id = excluded.submitted_workflow_id,
           submitted_plan_name = excluded.submitted_plan_name,
           terminal_mode = excluded.terminal_mode,
@@ -1243,6 +1246,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.presetKey,
           record.status,
           record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
+          record.draftPlanText ?? null,
           record.submittedWorkflowId ?? null,
           record.submittedPlanName ?? null,
           record.terminalMode ?? 'chat',
@@ -1293,6 +1297,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (Object.hasOwn(patch, 'draftPlanSummary')) {
         setClauses.push('draft_plan_summary_json = ?');
         values.push(patch.draftPlanSummary ? JSON.stringify(patch.draftPlanSummary) : null);
+      }
+      if (Object.hasOwn(patch, 'draftPlanText')) {
+        setClauses.push('draft_plan_text = ?');
+        values.push(patch.draftPlanText ?? null);
       }
       if (Object.hasOwn(patch, 'submittedWorkflowId')) {
         setClauses.push('submitted_workflow_id = ?');
@@ -2698,6 +2706,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         status: row.status,
         messages,
         ...(draftPlanSummary ? { draftPlanSummary } : {}),
+        ...(typeof row.draft_plan_text === 'string' ? { draftPlanText: row.draft_plan_text } : {}),
         ...(typeof row.submitted_workflow_id === 'string' ? { submittedWorkflowId: row.submitted_workflow_id } : {}),
         ...(typeof row.submitted_plan_name === 'string' ? { submittedPlanName: row.submitted_plan_name } : {}),
         terminalMode,

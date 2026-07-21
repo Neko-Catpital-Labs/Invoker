@@ -260,6 +260,7 @@ export interface InAppPlanningSessionRecord {
   status: InAppPlanningSessionStatus;
   messages: InAppPlanningChatLine[];
   draftPlanSummary?: InAppPlanningPlanSummary;
+  draftPlanText?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
@@ -279,6 +280,7 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'status'
   | 'messages'
   | 'draftPlanSummary'
+  | 'draftPlanText'
   | 'submittedWorkflowId'
   | 'submittedPlanName'
   | 'terminalMode'
