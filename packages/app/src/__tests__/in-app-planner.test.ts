@@ -32,6 +32,17 @@ tasks:
     command: echo second
 \`\`\``;
 
+const VALID_PLAN_TEXT = `name: Mock Plan
+onFinish: none
+tasks:
+  - id: first
+    description: First task
+    command: echo first
+  - id: second
+    description: Second task
+    dependencies: [first]
+    command: echo second`;
+
 const VALID_PLAN_WITHOUT_CLOSING_FENCE = `Here is the plan.
 
 \`\`\`yaml
@@ -306,6 +317,93 @@ describe('planning chat', () => {
     expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN);
   });
 
+  it('keeps unauthorized YAML from becoming draft-ready or submittable', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
+    const sessions = createInAppPlanningChatSessions();
+    const loadGeneratedPlan = vi.fn();
+
+    const result = await sendPlanningChatMessage({
+      message: 'What would this involve?',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan,
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      reply: VALID_PLAN,
+      draftPlanAvailable: false,
+    });
+    if (!result.ok) throw new Error(result.error);
+    expect(sessions.get(result.sessionId)?.status).toBe('still_discussing');
+    expect(sessions.get(result.sessionId)?.draftPlanText).toBeUndefined();
+
+    await expect(submitPlanningChatDraft({
+      sessionId: result.sessionId,
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toMatchObject({ ok: false });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+  });
+
+  it('accepts short confirmation only after the assistant asks whether to draft', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner')
+      .mockResolvedValueOnce('I found the key choices. Do you want me to draft the YAML plan?')
+      .mockResolvedValueOnce(VALID_PLAN);
+    const sessions = createInAppPlanningChatSessions();
+
+    const scoped = await sendPlanningChatMessage({
+      message: 'Help me scope a cleanup',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!scoped.ok) throw new Error(scoped.error);
+
+    const confirmed = await sendPlanningChatMessage({
+      sessionId: scoped.sessionId,
+      message: 'do it',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(confirmed).toMatchObject({
+      ok: true,
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+    });
+    expect(sessions.get(scoped.sessionId)?.status).toBe('draft_ready');
+  });
+
+  it('does not treat a standalone short confirmation as draft authorization', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
+    const sessions = createInAppPlanningChatSessions();
+
+    const result = await sendPlanningChatMessage({
+      message: 'do it',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(result).toMatchObject({ ok: true, draftPlanAvailable: false });
+    if (!result.ok) throw new Error(result.error);
+    expect(sessions.get(result.sessionId)?.draftPlanText).toBeUndefined();
+  });
+
   it('returns a stacked workflow summary when the assistant drafts workflow bundles', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(WORKERS_SURFACE_STACKED_PLAN);
     const sessions = createInAppPlanningChatSessions();
@@ -566,21 +664,23 @@ tasks:
   });
 
   it('rejects submit when the draft summary cannot be read', async () => {
-    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('```yaml\nname: Bad Summary\ntasks:\n  - id: 1\n    description: Numeric id\n```');
     const sessions = createInAppPlanningChatSessions();
-    const sent = await sendPlanningChatMessage({
-      message: 'draft',
+    sessions.set('bad-summary', {
+      id: 'bad-summary',
+      title: 'Bad summary',
       presetKey: 'codex',
-    }, {
-      config: {},
-      loadGeneratedPlan: vi.fn(),
-      sessions,
-      planningCommandBuilder,
+      status: 'draft_ready',
+      messages: [],
+      conversation: new PlanConversation({}),
+      draftPlanSummary: { name: 'Bad Summary', taskCount: 1, steps: ['Numeric id'] },
+      draftPlanText: 'name: Bad Summary\ntasks:\n  - id: 1\n    description: Numeric id\n',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+      nextMessageId: 1,
     });
-    if (!sent.ok) throw new Error(sent.error);
 
     await expect(submitPlanningChatDraft({
-      sessionId: sent.sessionId,
+      sessionId: 'bad-summary',
     }, {
       sessions,
       loadGeneratedPlan: vi.fn(),
@@ -624,7 +724,33 @@ tasks:
     }
   });
 
-  it('restores draft-ready sessions and submits from hidden planner context', async () => {
+  it('does not submit hidden planner context without approved session draft text', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const conversation = new PlanConversation({}) as PlanConversation & { getDraftedPlan: () => string };
+    conversation.getDraftedPlan = () => VALID_PLAN_TEXT;
+    sessions.set('hidden-yaml', {
+      id: 'hidden-yaml',
+      title: 'Hidden YAML',
+      presetKey: 'codex',
+      status: 'still_discussing',
+      messages: [],
+      conversation,
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+      nextMessageId: 1,
+    });
+    const loadGeneratedPlan = vi.fn();
+
+    const result = await submitPlanningChatDraft({ sessionId: 'hidden-yaml' }, {
+      sessions,
+      loadGeneratedPlan,
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+  });
+
+  it('restores draft-ready sessions and submits from persisted approved draft text', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {
       const conversationRepo = new ConversationRepository(adapter);
@@ -639,6 +765,7 @@ tasks:
           { id: 3, role: 'assistant', text: VALID_PLAN, createdAt: '2026-07-07T00:00:02.000Z' },
         ],
         draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+        draftPlanText: VALID_PLAN_TEXT,
         pendingResponse: false,
         createdAt: '2026-07-07T00:00:00.000Z',
         updatedAt: '2026-07-07T00:00:02.000Z',
@@ -665,6 +792,7 @@ tasks:
         planningSessionStore: adapter,
       })).resolves.toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
       expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+      expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.not.stringContaining('```yaml'));
     } finally {
       adapter.close();
     }
@@ -794,10 +922,12 @@ tasks:
         name: 'Mock Plan',
         taskCount: 2,
       });
+      expect(sessions.get('planning-summary-restore')?.draftPlanText).toContain('name: Mock Plan');
       expect(adapter.loadInAppPlanningSession('planning-summary-restore')?.draftPlanSummary).toMatchObject({
         name: 'Mock Plan',
         taskCount: 2,
       });
+      expect(adapter.loadInAppPlanningSession('planning-summary-restore')?.draftPlanText).toContain('name: Mock Plan');
     } finally {
       adapter.close();
     }
