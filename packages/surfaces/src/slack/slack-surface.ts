@@ -86,6 +86,8 @@ export interface SlackSurfaceConfig {
   plannerRetryLimit?: number;
   /** Base delay in milliseconds between empty-output retry attempts (doubles per retry). Default: 500. */
   plannerRetryBaseDelayMs?: number;
+  /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
+  conversationalPlanning?: boolean;
 
   // ── Slack-native workflow extensions ──────────────────────
   /** Lobby channel where `@Invoker` starts planning. Defaults to channelId. */
@@ -442,6 +444,7 @@ export class SlackSurface implements Surface {
   private planningHeartbeatIntervalSeconds?: number;
   private plannerRetryLimit: number;
   private plannerRetryBaseDelayMs: number;
+  private conversationalPlanning: boolean;
   /** Minimum spacing between thread message posts to avoid Slack burst limits. */
   private readonly messagePacingMs = 1_100;
   /** Session lifecycle metrics */
@@ -495,6 +498,7 @@ export class SlackSurface implements Surface {
     this.planningHeartbeatIntervalSeconds = config.planningHeartbeatIntervalSeconds;
     this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);
     this.plannerRetryBaseDelayMs = Math.max(0, config.plannerRetryBaseDelayMs ?? DEFAULT_PLANNER_RETRY_BASE_DELAY_MS);
+    this.conversationalPlanning = config.conversationalPlanning ?? false;
     this.lobbyChannelId = config.lobbyChannelId ?? config.channelId;
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.prepareRepoCheckout = config.prepareRepoCheckout;
@@ -525,6 +529,7 @@ export class SlackSurface implements Surface {
         planningCommandBuilder: config.planningCommandBuilder,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
+        conversationalPlanning: this.conversationalPlanning,
       });
     }
   }
@@ -2094,6 +2099,7 @@ ${text}`;
         timeoutMs: (this.planningTimeoutSeconds ?? 7_200) * 1_000,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
+        conversationalPlanning: this.conversationalPlanning,
       });
       this.planConversations.set(threadTs, conversation);
     }
@@ -2161,6 +2167,7 @@ ${text}`;
             repoUrl: this.defaultRepoUrl,
             plannerRetryLimit: this.plannerRetryLimit,
             plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
+            conversationalPlanning: this.conversationalPlanning,
           });
           await conversation.init();
           this.planConversations.set(entry.threadTs, conversation);
