@@ -276,7 +276,7 @@ export function classifyReviewUnitsForPath(filePath) {
   ) return ['tooling-policy'];
   if (path.startsWith('packages/app/e2e/visual-proof/')) return ['activation-surface'];
   if (/(benchmark|performance|visual-proof)/.test(lowerPath)) return ['proof'];
-  if (path === 'skills/make-pr/SKILL.md') return ['tooling-policy'];
+  if (path === 'skills/make-pr/SKILL.md' || path === 'skills/plan-to-invoker/SKILL.md') return ['tooling-policy'];
   if (path.startsWith('docs/') || path.startsWith('skills/') || path.endsWith('.md')) return ['docs'];
   if (path.startsWith('.github/')) return ['tooling-policy'];
   if (
