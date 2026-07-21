@@ -269,7 +269,7 @@ case "$SUBCOMMAND" in
     ;;
   validate)
     echo "[visual-proof] Running DOM snapshot tests..." >&2
-    cd packages/ui && pnpm test -- --run src/__tests__/visual-proof-snapshots.test.tsx
+    cd packages/ui && pnpm test -- --run src/__tests__/home-visual-snapshots.test.tsx
     ;;
   compare)
     subcommand_compare
