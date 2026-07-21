@@ -336,6 +336,9 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Install system libraries for Node
+        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1
+
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
