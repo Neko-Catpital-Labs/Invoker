@@ -42,7 +42,7 @@ export function InvokerTerminal({
             onClick={onRefreshPlanningSessions}
             className="rounded border border-gray-700 px-2 py-1 text-[11px] text-gray-300 hover:bg-gray-800"
           >
-            Refresh
+            Sync drafts
           </button>
           <button
             onClick={onToggle}

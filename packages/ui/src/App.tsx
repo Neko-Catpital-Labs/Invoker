@@ -900,7 +900,6 @@ export function App() {
   }, []);
 
   const handleReviewDraft = useCallback((session: InAppPlanningSessionSummary) => {
-    setViewMode('dag');
     setSelectedDraftReviewSessionId(session.id);
     setPlanningPanelMode('draftReview');
     setInspectorCollapsed(false);
