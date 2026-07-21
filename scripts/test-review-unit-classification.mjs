@@ -36,6 +36,7 @@ const stillToolingPolicy = [
   'scripts/review-unit-rules.mjs',
   '.github/workflows/ci.yml',
   'skills/make-pr/SKILL.md',
+  'skills/plan-to-invoker/SKILL.md',
 ];
 for (const path of stillToolingPolicy) {
   assert.deepEqual(
