@@ -4,7 +4,7 @@
  * Owns the poll loop that reconciles each merge-node task's review artifacts
  * against the merge-gate provider, maps provider lifecycle → artifact status,
  * completes approved gates, closes reviews on teardown, and publishes CI-failure
- * lifecycle triggers.
+ * and merge-conflict lifecycle triggers.
  *
  * Stateful functions take a {@link TaskRunnerReviewGateHost} — a
  * `Pick<TaskRunner, …>` — as their first parameter, so the type-only import of
@@ -96,6 +96,8 @@ export type TaskRunnerReviewGateHost = Pick<
   // Review-gate cluster state
   | 'reviewGateCiFailurePublisher'
   | 'reviewGateCiFailureInFlight'
+  | 'reviewGateMergeConflictPublisher'
+  | 'reviewGateMergeConflictInFlight'
 >;
 
 export async function closeWorkflowReview(
@@ -262,6 +264,7 @@ export async function pollMergeGateTask(
         host.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
       } else if (status.lifecycle === 'open') {
         await maybePublishReviewGateCiFailure(host, current!, status, providerId);
+        await maybePublishReviewGateMergeConflict(host, current!, status, providerId);
       }
       continue;
     }
@@ -277,6 +280,7 @@ export async function pollMergeGateTask(
       host.logger.info(`[merge-gate] PR ${providerId} rejected (${source}): ${status.statusText}`);
     } else if (status.lifecycle === 'open') {
       await maybePublishReviewGateCiFailure(host, current!, status, providerId);
+      await maybePublishReviewGateMergeConflict(host, current!, status, providerId);
     }
   }
 }
@@ -346,5 +350,44 @@ export async function maybePublishReviewGateCiFailure(
     });
   } finally {
     host.reviewGateCiFailureInFlight.delete(key);
+  }
+}
+
+export async function maybePublishReviewGateMergeConflict(
+  host: TaskRunnerReviewGateHost,
+  task: TaskState,
+  status: MergeGateApprovalStatus,
+  reviewId: string = task.execution.reviewId ?? '',
+): Promise<void> {
+  if (!host.reviewGateMergeConflictPublisher) return;
+  if (!task.config.workflowId || !reviewId) return;
+  if (!status.hasMergeConflict && status.mergeState !== 'dirty') return;
+
+  const key = [
+    task.id,
+    task.execution.selectedAttemptId ?? 'no-attempt',
+    task.execution.generation ?? 0,
+    status.headSha ?? 'no-head-sha',
+  ].join(':');
+  if (host.reviewGateMergeConflictInFlight.has(key)) return;
+
+  host.reviewGateMergeConflictInFlight.add(key);
+  try {
+    await host.reviewGateMergeConflictPublisher.publish({
+      taskId: task.id,
+      workflowId: task.config.workflowId,
+      status: task.status,
+      taskStateVersion: task.taskStateVersion,
+      reviewId,
+      reviewUrl: status.url,
+      headSha: status.headSha,
+      headRef: status.headRef,
+      branch: task.execution.branch,
+      selectedAttemptId: task.execution.selectedAttemptId,
+      generation: task.execution.generation ?? 0,
+      statusText: status.statusText,
+    });
+  } finally {
+    host.reviewGateMergeConflictInFlight.delete(key);
   }
 }
