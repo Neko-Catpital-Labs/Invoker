@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -15,6 +15,7 @@ const PR_MAINTENANCE_ENTRYPOINTS = [
   { kind: 'coderabbit-address', scriptRelativePath: 'scripts/cron-coderabbit-address.sh' },
   { kind: 'pr-conflict-rebase', scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh' },
   { kind: 'pr-ci-failure-scan', scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh' },
+  { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
 ] as const;
 
 describe('PR maintenance entrypoints bootstrap', () => {
@@ -62,4 +63,47 @@ describe('PR maintenance entrypoints bootstrap', () => {
       expect(result.status).toBe(0);
     });
   }
+
+  it('admin-bypass entrypoint forwards repo, author, and dry-run controls to Python', () => {
+    writeFileSync(join(stubBin, 'flock'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+    const capturePath = join(stubBin, 'python-args.txt');
+    const pythonStub = join(stubBin, 'python3');
+    writeFileSync(
+      pythonStub,
+      [
+        '#!/usr/bin/env bash',
+        '{',
+        '  printf "cwd=%s\\n" "$PWD"',
+        '  printf "args="',
+        '  printf "<%s>" "$@"',
+        '  printf "\\n"',
+        '} > "$PYTHON_CAPTURE"',
+        'exit 0',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync('bash', [resolve(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh')], {
+      cwd: tmpdir(),
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        PATH: `${stubBin}:${process.env.PATH ?? ''}`,
+        INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
+        INVOKER_PR_CRON_AUTHOR: 'octocat',
+        INVOKER_PR_CRON_DRY_RUN: '1',
+        INVOKER_PR_CRON_LOCK: lockPath,
+        PYTHON_CAPTURE: capturePath,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(capturePath, 'utf8')).toBe([
+      `cwd=${repoRoot}`,
+      'args=<scripts/mergify_admin_requeue.py><--once><--repo><owner/repo><--author><octocat><--dry-run>',
+      '',
+    ].join('\n'));
+  });
 });
