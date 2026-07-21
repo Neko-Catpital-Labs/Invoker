@@ -14,6 +14,7 @@ import { CI_FAILURE_WORKER_KIND } from '../workers/ci-failure-worker.js';
 import { AUTO_APPROVE_WORKER_KIND } from '../workers/auto-approve-worker.js';
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
 } from '../workers/pr-maintenance-workers.js';
@@ -82,6 +83,7 @@ describe('worker registry', () => {
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
       PR_CI_FAILURE_SCAN_WORKER_KIND,
+      PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       E2E_AUTOFIX_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
@@ -95,6 +97,8 @@ describe('worker registry', () => {
     expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
     expect(registry.get(CODERABBIT_ADDRESS_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_CONFLICT_REBASE_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_CI_FAILURE_SCAN_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_ADMIN_BYPASS_LAND_WORKER_KIND)).toBeDefined();
     expect(registry.get(E2E_AUTOFIX_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
@@ -126,5 +130,9 @@ describe('worker registry', () => {
       .toBe(CODERABBIT_ADDRESS_WORKER_KIND);
     expect(registry.get(PR_CONFLICT_REBASE_WORKER_KIND)?.factory(deps()).identity.kind)
       .toBe(PR_CONFLICT_REBASE_WORKER_KIND);
+    expect(registry.get(PR_CI_FAILURE_SCAN_WORKER_KIND)?.factory(deps()).identity.kind)
+      .toBe(PR_CI_FAILURE_SCAN_WORKER_KIND);
+    expect(registry.get(PR_ADMIN_BYPASS_LAND_WORKER_KIND)?.factory(deps()).identity.kind)
+      .toBe(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
   });
 });
