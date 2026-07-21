@@ -133,6 +133,8 @@ must_contain "$SKILL_MD" "\"invoker-plan-to-invoker\"" "SKILL frontmatter must t
 must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the slash handoff command"
 must_contain "$SKILL_MD" "## Harness handoff mode" "SKILL must document harness handoff mode"
 must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt." "SKILL must define when handoff mode applies"
+must_contain "$SKILL_MD" "Do not use this mode from a Slack \`plan:\` or agent thread." "SKILL must defer Slack threads to the orchestrator"
+must_contain "$SKILL_MD" "do not invoke CLI or MCP handoff tools yourself." "SKILL must forbid Slack-thread CLI and MCP submission"
 must_contain "$SKILL_MD" "First produce a Markdown planning artifact at \`plans/invoker-handoff.md\`." "SKILL handoff mode must require a Markdown plan"
 must_contain "$SKILL_MD" "In an Invoker source checkout, still run \`bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>\` before submission." "SKILL handoff mode must keep checkout-local skill-doctor validation"
 must_contain "$SKILL_MD" "Outside an Invoker source checkout, \`invoker_validate_plan\` is the deterministic validation gate." "SKILL handoff mode must keep outside-checkout MCP validation"
