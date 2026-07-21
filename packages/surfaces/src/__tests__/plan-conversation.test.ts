@@ -3,6 +3,10 @@ import { PlanConversation, buildPlanSystemPrompt, extractYamlPlan, globToRegex, 
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // ── Mock child_process.spawn ────────────────────────────────
 
@@ -720,6 +724,52 @@ describe('PlanConversation', () => {
       { role: 'user', content: 'Hello' },
       { role: 'assistant', content: 'final reply' },
     ]);
+  });
+
+  it('marks an unverified completion claim when the worktree is unchanged', async () => {
+    const workingDir = mkdtempSync(join(tmpdir(), 'invoker-agent-claim-'));
+    execFileSync('git', ['init'], { cwd: workingDir });
+    const claim = 'Fixed.\nChanged: Slack routing.\nVerified: 4 files, 211 tests passed.';
+    const conv = new PlanConversation({ mode: 'agent', workingDir });
+
+    try {
+      mockCursorResponse(claim);
+
+      await expect(conv.sendMessage('fix the Slack routing')).resolves.toBe(
+        `${claim}\n\nNote: no working-tree changes or new commits were detected in this session checkout, so this completion summary could not be verified.`,
+      );
+    } finally {
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not mark a completion claim when the planner creates a commit', async () => {
+    const workingDir = mkdtempSync(join(tmpdir(), 'invoker-agent-commit-'));
+    execFileSync('git', ['init'], { cwd: workingDir });
+    execFileSync('git', ['config', 'user.email', 'invoker@example.test'], { cwd: workingDir });
+    execFileSync('git', ['config', 'user.name', 'Invoker'], { cwd: workingDir });
+    const claim = 'Fixed.\nVerified: tests passed.';
+    const conv = new PlanConversation({ mode: 'agent', workingDir });
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.kill = vi.fn();
+
+    try {
+      mockSpawn.mockReturnValueOnce(proc);
+      const reply = conv.sendMessage('fix the Slack routing');
+      setTimeout(() => {
+        writeFileSync(join(workingDir, 'fixed.txt'), 'fixed\n');
+        execFileSync('git', ['add', 'fixed.txt'], { cwd: workingDir });
+        execFileSync('git', ['commit', '-m', 'fix routing'], { cwd: workingDir });
+        proc.stdout.emit('data', Buffer.from(claim));
+        proc.emit('close', 0);
+      }, 0);
+
+      await expect(reply).resolves.toBe(claim);
+    } finally {
+      rmSync(workingDir, { recursive: true, force: true });
+    }
   });
 
   it('emits partial stdout before planner failure without persisting assistant history', async () => {
