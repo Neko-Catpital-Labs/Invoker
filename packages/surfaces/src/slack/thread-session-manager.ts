@@ -175,6 +175,8 @@ export interface SessionManagerConfig {
   timeoutMs?: number;
   planningCommandBuilder?: PlanningCommandBuilder;
   mode?: ConversationMode;
+  /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
+  conversationalPlanning?: boolean;
   /** Forwarded to PlanConversation for silent-success retries. */
   plannerRetryLimit?: number;
   /** Forwarded to PlanConversation for silent-success retries. */
@@ -217,6 +219,7 @@ export class SessionManager {
   private readonly timeoutMs?: number;
   private readonly planningCommandBuilder?: PlanningCommandBuilder;
   private readonly mode: ConversationMode;
+  private readonly conversationalPlanning: boolean;
   private readonly plannerRetryLimit?: number;
   private readonly plannerRetryBaseDelayMs?: number;
 
@@ -234,6 +237,7 @@ export class SessionManager {
     this.timeoutMs = config.timeoutMs;
     this.planningCommandBuilder = config.planningCommandBuilder;
     this.mode = config.mode ?? 'agent';
+    this.conversationalPlanning = config.conversationalPlanning ?? false;
     this.plannerRetryLimit = config.plannerRetryLimit;
     this.plannerRetryBaseDelayMs = config.plannerRetryBaseDelayMs;
   }
@@ -325,6 +329,7 @@ export class SessionManager {
         repoUrl: opts?.repoUrl ?? this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
+        conversationalPlanning: this.conversationalPlanning,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
@@ -358,6 +363,7 @@ export class SessionManager {
         repoUrl: opts?.repoUrl ?? this.repoUrl,
         log: this.log,
         timeoutMs: this.timeoutMs,
+        conversationalPlanning: this.conversationalPlanning,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
       });
