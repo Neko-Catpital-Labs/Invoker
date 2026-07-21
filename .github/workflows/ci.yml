@@ -371,6 +371,7 @@ jobs:
           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
 
       - name: Install Playwright system dependencies
+        continue-on-error: true
         run: pnpm --filter @invoker/app exec playwright install-deps chromium
 
       - name: Run suite group
