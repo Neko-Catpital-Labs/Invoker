@@ -7,16 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 
 import { runHeadlessClientCommand } from '../headless-client.js';
+import { openMainProcessDatabase } from '../viewer-db-boundary.js';
 
 /**
- * Repro for the owner-only worker control lockout.
- *
- * `worker stop <kind>` only changes the persisted `desiredEnabled` row that
- * `startAutoStartedWorkers()` reads on boot. That row is reachable offline,
- * but the CLI refuses the command whenever no owner process answers the ping,
- * so an operator cannot disable a worker while the app is down.
+ * `worker start/stop <kind>` only changes the persisted `desiredEnabled` row
+ * that `startAutoStartedWorkers()` reads on boot. That row is reachable with
+ * no owner process running, so the CLI must not refuse the command just
+ * because nothing answers the owner ping.
  */
-describe('worker CLI offline control (repro)', () => {
+describe('worker CLI offline control', () => {
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
   const savedDbDir = process.env.INVOKER_DB_DIR;
   let dbDir: string;
@@ -47,24 +46,47 @@ describe('worker CLI offline control (repro)', () => {
     rmSync(dbDir, { recursive: true, force: true });
   });
 
-  it('currently refuses `worker stop` when no owner process is running', async () => {
+  const readDesiredState = async (kind: string): Promise<boolean | undefined> => {
+    const persistence = await openMainProcessDatabase({
+      dbPath: join(dbDir, 'invoker.db'),
+      detachedViewer: false,
+      readOnly: true,
+      exclusiveLocking: false,
+    });
+    try {
+      return persistence.getWorkerDesiredState(kind)?.desiredEnabled;
+    } finally {
+      persistence.close();
+    }
+  };
+
+  it('records `worker stop` as disabled when no owner process is running', async () => {
     const bus = new LocalBus();
     const deps = makeDeps(bus);
 
-    await expect(runHeadlessClientCommand(['worker', 'stop', 'autofix'], deps))
-      .rejects.toThrow(/No running Invoker owner found to stop the "autofix" worker/);
+    await expect(runHeadlessClientCommand(['worker', 'stop', 'autofix'], deps)).resolves.toBe(0);
 
+    expect(await readDesiredState('autofix')).toBe(false);
     expect(deps.runElectronHeadless).not.toHaveBeenCalled();
   });
 
-  it('currently refuses `worker start` when no owner process is running', async () => {
+  it('records `worker start` as enabled when no owner process is running', async () => {
     const bus = new LocalBus();
     const deps = makeDeps(bus);
 
-    await expect(runHeadlessClientCommand(['worker', 'start', 'autofix'], deps))
-      .rejects.toThrow(/No running Invoker owner found to start the "autofix" worker/);
+    await expect(runHeadlessClientCommand(['worker', 'start', 'autofix'], deps)).resolves.toBe(0);
 
+    expect(await readDesiredState('autofix')).toBe(true);
     expect(deps.runElectronHeadless).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown worker kind instead of writing a junk row', async () => {
+    const bus = new LocalBus();
+
+    await expect(runHeadlessClientCommand(['worker', 'stop', 'not-a-worker'], makeDeps(bus)))
+      .rejects.toThrow(/Unknown worker kind: "not-a-worker"/);
+
+    expect(await readDesiredState('not-a-worker')).toBeUndefined();
   });
 
   it('still delegates worker control to a reachable owner', async () => {
