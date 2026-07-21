@@ -931,7 +931,7 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('Build the Workers Surface');
   });
 
-  it('agent mode refuses Invoker YAML and redirects to plan:', () => {
+  it('agent mode refuses Invoker YAML and redirects within the same thread', () => {
     // Agent threads can never submit a plan — handleLobbySubmit rejects a submit
     // unless conversationMode === 'plan'. So the agent prompt must not offer to
     // draft Invoker YAML (which would be an un-submittable dead end); it must
@@ -945,6 +945,9 @@ describe('PlanConversation prompt construction', () => {
     // Agent mode must refuse YAML unconditionally and point at `plan:`.
     expect(prompt).toContain('Do NOT generate Invoker YAML');
     expect(prompt).toContain('plan:');
+    expect(prompt).toContain('same thread');
+    expect(prompt).not.toContain('start a new plan thread');
+    expect(prompt).toContain('only the final user-facing message');
     // The old loophole permitted YAML "unless the user explicitly asks" — that
     // produced drafts Slack silently rejects on submit.
     expect(prompt).not.toContain('unless the user explicitly asks');
