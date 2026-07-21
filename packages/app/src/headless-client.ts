@@ -35,7 +35,7 @@ import {
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
 import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from './worker-control.js';
-import { resolveWorkerControlMutation } from './worker-control-delegation.js';
+import { resolveWorkerControlMutation, type WorkerControlMutation } from './worker-control-delegation.js';
 import { openMainProcessDatabase } from './viewer-db-boundary.js';
 import {
   canAcknowledgeNoTrackTaskMutationWithoutDb,
@@ -260,9 +260,48 @@ async function delegateGenericReadQuery(
   throw new Error('Live owner is present but did not serve cli-query');
 }
 
+/**
+ * Persist `desiredEnabled` directly when no owner process is reachable.
+ *
+ * Safe precisely because there is no owner: with no live runtime there is
+ * nothing for the persisted desire to diverge from, and `startAutoStartedWorkers()`
+ * reads this same row on the next boot.
+ */
+async function applyOfflineWorkerDesiredState(
+  mutation: WorkerControlMutation,
+  invokerConfig: InvokerConfig,
+): Promise<void> {
+  const registry = registerExternalWorkersFromConfig(
+    invokerConfig.externalWorkers,
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+  );
+  if (!registry.get(mutation.kind)) {
+    const knownKinds = registry.list().map((worker) => worker.kind).join(', ');
+    throw new Error(`Unknown worker kind: "${mutation.kind}". Use: ${knownKinds}`);
+  }
+
+  const persistence = await openMainProcessDatabase({
+    dbPath: join(resolveInvokerHomeRoot(), 'invoker.db'),
+    detachedViewer: false,
+    readOnly: false,
+    exclusiveLocking: false,
+  });
+  try {
+    const desiredEnabled = mutation.action === 'start';
+    persistence.setWorkerDesiredState(mutation.kind, desiredEnabled);
+    process.stdout.write(
+      `[headless] no owner running; recorded "${mutation.kind}" as ${desiredEnabled ? 'enabled' : 'disabled'}. `
+      + `Takes effect when the app next starts.\n`,
+    );
+  } finally {
+    persistence.close();
+  }
+}
+
 async function delegateWorkerControl(
   args: string[],
   bus: MessageBus,
+  invokerConfig: InvokerConfig,
   refreshMessageBus?: () => Promise<MessageBus>,
 ): Promise<boolean> {
   const mutation = resolveWorkerControlMutation(args);
@@ -275,7 +314,8 @@ async function delegateWorkerControl(
     owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
   }
   if (!owner) {
-    throw new Error(`No running Invoker owner found to ${mutation.action} the "${mutation.kind}" worker. Start the app first.`);
+    await applyOfflineWorkerDesiredState(mutation, invokerConfig);
+    return true;
   }
 
   const result = await messageBus.request('headless.gui-mutation', {
@@ -616,7 +656,7 @@ export async function runHeadlessClientCommand(
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
 
-  if (!internalOwnerServe && await delegateWorkerControl(args, deps.messageBus, deps.refreshMessageBus)) {
+  if (!internalOwnerServe && await delegateWorkerControl(args, deps.messageBus, invokerConfig, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   }
