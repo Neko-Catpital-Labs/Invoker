@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
-import { PlanConversation, isConfirmation } from '../slack/plan-conversation.js';
+import { buildPlanSystemPrompt, PlanConversation, isConfirmation } from '../slack/plan-conversation.js';
 
 // Activation side: the planner is told to write the full plan to the draft file
 // and reply with a summary, and each turn starts from a cleared file so a prior
@@ -54,7 +54,7 @@ tasks:
 
 Reply \`submit\` to submit it.`;
 
-describe('plan draft file — activation side', () => {
+describe('plan draft file - activation side', () => {
   let workingDir: string;
 
   beforeEach(() => {
@@ -150,5 +150,48 @@ describe('plan draft file — activation side', () => {
     expect(draftedPlan).not.toBeNull();
     const parsedDraft = parseYaml(draftedPlan!) as Record<string, unknown>;
     expect(parsedDraft.name).toBe('Draft Activation');
+  });
+});
+
+describe('plan draft-file activation prompt policy', () => {
+  it('keeps direct plan mode ready to draft YAML by default', () => {
+    const prompt = buildPlanSystemPrompt('main', 'git@github.com:test/repo.git');
+
+    expect(prompt).toContain('Generate a YAML task plan');
+    expect(prompt).toContain('repoUrl: "git@github.com:test/repo.git"');
+    expect(prompt).toContain('name: "Plan Name"');
+    expect(prompt).toContain('When ready, output the plan inside a ```yaml code block');
+    expect(prompt).toContain('After generating a plan, include a short post-plan summary');
+  });
+
+  it('keeps YAML and draft-file mechanics unavailable before conversational authorization', () => {
+    const prompt = buildPlanSystemPrompt('main', undefined, {
+      conversationalPlanning: true,
+      draftingAuthorized: false,
+    });
+
+    expect(prompt).toContain('conversational planning mode');
+    expect(prompt).toContain('Drafting is not authorized yet');
+    expect(prompt).toContain('do NOT write a draft plan file');
+    expect(prompt).toContain('Ask scoping questions first');
+    expect(prompt).toContain('edge cases, corner cases, architecture choices, ambiguity');
+    expect(prompt).toContain('explain like the user is five');
+    expect(prompt).not.toContain('name: "Plan Name"');
+    expect(prompt).not.toContain('When ready, output the plan inside a ```yaml code block');
+    expect(prompt).not.toContain('Reply `submit` to submit it.');
+  });
+
+  it('restores YAML drafting instructions after conversational authorization', () => {
+    const prompt = buildPlanSystemPrompt('develop', undefined, {
+      conversationalPlanning: true,
+      draftingAuthorized: true,
+    });
+
+    expect(prompt).toContain('The user has explicitly approved drafting');
+    expect(prompt).toContain('baseBranch: develop');
+    expect(prompt).toContain('name: "Plan Name"');
+    expect(prompt).toContain('When ready, output the plan inside a ```yaml code block');
+    expect(prompt).toContain('After generating a plan, include a short post-plan summary');
+    expect(prompt).toContain('Every implementation task MUST have a corresponding test task');
   });
 });
