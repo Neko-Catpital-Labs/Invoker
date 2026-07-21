@@ -326,6 +326,26 @@ describe('WorkflowGraph', () => {
     expect(setCenterMock).not.toHaveBeenCalled();
   });
 
+  it('restores a supplied viewport on remount without running the first-fit', async () => {
+    const workflows = new Map([['wf-a', wf('wf-a', 'running')]]);
+    const savedViewport = { x: -240, y: 96, zoom: 0.72 };
+
+    render(
+      <WorkflowGraph
+        workflows={workflows}
+        selectedWorkflowId={null}
+        initialViewport={savedViewport}
+        statusFilters={new Set()}
+        onSelectWorkflow={() => {}}
+        onWorkflowContextMenu={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+  });
+
   it('preserves the camera across a non-empty workflow snapshot replacement', async () => {
     const workflows = new Map([
       ['wf-a', wf('wf-a', 'running')],

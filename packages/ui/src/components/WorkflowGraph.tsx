@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { WorkflowMeta, WorkflowStatus } from '../types.js';
-import type { GraphCameraCommand } from '../lib/graph-camera.js';
+import type { GraphCameraCommand, GraphCameraViewport } from '../lib/graph-camera.js';
 import type { WorkflowCoreActivity } from '../lib/workflow-core-activity.js';
 import { deriveWorkflowGraph, layoutWorkflowGraph, workflowGraphLayoutKey, type WorkflowGraphEdge, type WorkflowPosition } from '../lib/workflow-graph.js';
 import { WorkflowNode } from './WorkflowNode.js';
@@ -31,10 +31,14 @@ interface WorkflowGraphProps {
    * owning x/y/zoom locally — this is intent, not a controlled viewport.
    */
   cameraCommand?: GraphCameraCommand | null;
+  /** Viewport to restore when this graph remounts after a surface switch. */
+  initialViewport?: GraphCameraViewport | null;
   statusFilters: Set<WorkflowStatus>;
   coreActivityByWorkflow?: Map<string, WorkflowCoreActivity>;
   onSelectWorkflow: (workflowId: string) => void;
   onWorkflowContextMenu: (event: ReactMouseEvent, workflowId: string) => void;
+  /** Fired with the latest viewport so App can restore graph context later. */
+  onViewportSnapshot?: (viewport: GraphCameraViewport) => void;
   /** Fired when the user manually pans or zooms the viewport. */
   onManualViewport?: () => void;
 }
@@ -47,12 +51,6 @@ interface WorkflowNodeData extends Record<string, unknown> {
   onSelect?: () => void;
 }
 
-interface GraphViewport {
-  x: number;
-  y: number;
-  zoom: number;
-}
-
 const nodeTypes = {
   workflowNode: WorkflowFlowNode,
 };
@@ -63,9 +61,9 @@ const PANE_PAN_IMMEDIATE_STEP = 0.65;
 interface PanePan {
   startClientX: number;
   startClientY: number;
-  startViewport: GraphViewport;
-  targetViewport: GraphViewport;
-  visualViewport: GraphViewport;
+  startViewport: GraphCameraViewport;
+  targetViewport: GraphCameraViewport;
+  visualViewport: GraphCameraViewport;
   viewportElement: HTMLElement | null;
   animationFrame: number;
   active: boolean;
@@ -131,7 +129,7 @@ function shouldDeferPanePanFromNode(
 function createPanePan(
   startClientX: number,
   startClientY: number,
-  startViewport: GraphViewport,
+  startViewport: GraphCameraViewport,
   viewportElement: HTMLElement | null,
 ): PanePan {
   return {
@@ -148,7 +146,7 @@ function createPanePan(
   };
 }
 
-function getPanePanViewport(pan: PanePan, clientX: number, clientY: number): GraphViewport {
+function getPanePanViewport(pan: PanePan, clientX: number, clientY: number): GraphCameraViewport {
   return {
     x: pan.startViewport.x + clientX - pan.startClientX,
     y: pan.startViewport.y + clientY - pan.startClientY,
@@ -162,7 +160,7 @@ function movedBeyondPanePanThreshold(pan: PanePan, clientX: number, clientY: num
   return dx * dx + dy * dy >= PANE_PAN_DRAG_THRESHOLD_PX * PANE_PAN_DRAG_THRESHOLD_PX;
 }
 
-function applyViewportTransform(viewportElement: HTMLElement | null, viewport: GraphViewport): void {
+function applyViewportTransform(viewportElement: HTMLElement | null, viewport: GraphCameraViewport): void {
   viewportElement?.style.setProperty(
     'transform',
     `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
@@ -289,16 +287,19 @@ function WorkflowGraphInner({
   workflows,
   selectedWorkflowId,
   cameraCommand,
+  initialViewport,
   statusFilters,
   coreActivityByWorkflow,
   onSelectWorkflow,
   onWorkflowContextMenu,
+  onViewportSnapshot,
   onManualViewport,
 }: WorkflowGraphProps): JSX.Element {
   const { fitView, setCenter, getZoom, getViewport, setViewport } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const reportedVisibleRef = useRef(false);
-  const lastHandledCameraSeqRef = useRef(0);
+  const initialViewportRef = useRef<GraphCameraViewport | null>(initialViewport ?? null);
+  const lastHandledCameraSeqRef = useRef(initialViewportRef.current ? cameraCommand?.sequence ?? 0 : 0);
   const initFitFrameRef = useRef(0);
   const initialFitCompletedRef = useRef(false);
   const watchdogMissCountRef = useRef(0);
@@ -316,6 +317,15 @@ function WorkflowGraphInner({
     () => graphRootRef.current?.querySelector<HTMLElement>('.react-flow__viewport') ?? null,
     [],
   );
+  const snapshotViewport = useCallback(() => {
+    onViewportSnapshot?.(getViewport());
+  }, [getViewport, onViewportSnapshot]);
+  const snapshotViewportAfterMove = useCallback((moveResult: unknown) => {
+    if (!onViewportSnapshot) return;
+    void Promise.resolve(moveResult).then(() => {
+      requestAnimationFrame(() => snapshotViewport());
+    });
+  }, [onViewportSnapshot, snapshotViewport]);
 
   const cancelActivePanePans = useCallback(() => {
     for (const ref of [panePointerPanRef, paneMousePanRef] as const) {
@@ -335,8 +345,8 @@ function WorkflowGraphInner({
   const performFitView = useCallback(() => {
     cancelActivePanePans();
     clearViewportInlineTransform(getViewportElement());
-    fitView({ padding: 0.2 });
-  }, [cancelActivePanePans, fitView, getViewportElement]);
+    snapshotViewportAfterMove(fitView({ padding: 0.2 }));
+  }, [cancelActivePanePans, fitView, getViewportElement, snapshotViewportAfterMove]);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const graphMetricsRef = useRef({ deriveMs: 0, layoutMs: 0, objectsMs: 0 });
   const graph = useMemo(() => {
@@ -468,13 +478,21 @@ function WorkflowGraphInner({
     initFitFrameRef.current = requestAnimationFrame(() => {
       if (initialFitCompletedRef.current) return;
       initialFitCompletedRef.current = true;
+      const restoredViewport = initialViewportRef.current;
+      if (restoredViewport) {
+        snapshotViewportAfterMove(setViewport(restoredViewport, { duration: 0 }));
+        return;
+      }
       performFitView();
     });
-  }, [performFitView]);
+  }, [performFitView, setViewport, snapshotViewportAfterMove]);
 
   // Cancel a pending first-fit frame on unmount so it never fires against a
   // torn-down graph after the component has gone away.
   useEffect(() => () => cancelAnimationFrame(initFitFrameRef.current), []);
+  useEffect(() => () => {
+    snapshotViewport();
+  }, [snapshotViewport]);
   useEffect(() => () => {
     if (emptyGraphClearTimerRef.current) {
       clearTimeout(emptyGraphClearTimerRef.current);
@@ -521,9 +539,14 @@ function WorkflowGraphInner({
       setRfEdges(pendingEdges);
     }
   }, []);
-  const onMoveEnd = useCallback(() => {
+  const onMoveEnd = useCallback((_event?: unknown, viewport?: GraphCameraViewport) => {
     endViewportGesture();
-  }, [endViewportGesture]);
+    if (viewport) {
+      onViewportSnapshot?.(viewport);
+      return;
+    }
+    snapshotViewport();
+  }, [endViewportGesture, onViewportSnapshot, snapshotViewport]);
 
   const onPanePointerDownCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || event.isPrimary === false) return;
@@ -575,9 +598,10 @@ function WorkflowGraphInner({
       pan.animationFrame = 0;
     }
     pan.visualViewport = { ...pan.targetViewport };
-    void setViewport(pan.targetViewport, { duration: 0 });
+    snapshotViewportAfterMove(setViewport(pan.targetViewport, { duration: 0 }));
+    onViewportSnapshot?.(pan.targetViewport);
     clearViewportInlineTransform(pan.viewportElement);
-  }, [setViewport]);
+  }, [onViewportSnapshot, setViewport, snapshotViewportAfterMove]);
 
   const onPanePointerMoveCapture = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     let pan = panePointerPanRef.current;
@@ -798,7 +822,7 @@ function WorkflowGraphInner({
     const frame = requestAnimationFrame(() => {
       if (typeof setCenter === 'function') {
         const zoom = typeof getZoom === 'function' ? getZoom() : 1;
-        setCenter(node.position.x + 110, node.position.y + 45, { zoom, duration: 180 });
+        snapshotViewportAfterMove(setCenter(node.position.x + 110, node.position.y + 45, { zoom, duration: 180 }));
       } else {
         performFitView();
       }

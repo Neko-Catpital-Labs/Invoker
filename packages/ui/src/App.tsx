@@ -70,6 +70,7 @@ import {
   type GraphCameraCommand,
   type GraphCameraCommandInput,
   type GraphCameraCommandIssuer,
+  type GraphCameraViewport,
   type GraphScope,
 } from './lib/graph-camera.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
@@ -935,6 +936,7 @@ export function App() {
   // Temporary, non-persisted suppression of the camera lock after a manual pan
   // or wheel zoom. The next explicit node selection clears it.
   const cameraSuppressedRef = useRef(false);
+  const workflowGraphViewportRef = useRef<GraphCameraViewport | null>(null);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1614,6 +1616,16 @@ export function App() {
   const handleManualViewport = useCallback(() => {
     cameraSuppressedRef.current = true;
   }, []);
+
+  const handleWorkflowGraphViewportSnapshot = useCallback((viewport: GraphCameraViewport) => {
+    workflowGraphViewportRef.current = viewport;
+  }, []);
+
+  useEffect(() => {
+    if (workflows.size === 0) {
+      workflowGraphViewportRef.current = null;
+    }
+  }, [workflows.size]);
 
   const armSuppressDagSurfaceDismiss = useCallback(() => {
     suppressDagSurfaceDismissRef.current = true;
@@ -2596,6 +2608,8 @@ export function App() {
           updatedAt: new Date().toISOString(),
         }));
         await refreshTaskGraph();
+        workflowGraphViewportRef.current = null;
+        cameraSuppressedRef.current = false;
         appendTerminalLine(
           result.workflowCount && result.workflowCount > 1
             ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows. Review them, then use Start ready work.`
@@ -3029,14 +3043,29 @@ export function App() {
     focusKeyboardRegion('planning');
   }, [focusKeyboardRegion]);
 
-  const navigatePlanGraphAndFit = useCallback((reason: string) => {
-    cameraSuppressedRef.current = false;
+  const navigatePlanGraph = useCallback((reason: string, options: { fit: boolean }) => {
     setSidebarSurface('planning');
     setInspectorManualOpen(false);
     setViewMode('dag');
     focusKeyboardRegion('workflowGraph');
-    issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
+
+    if (options.fit) {
+      workflowGraphViewportRef.current = null;
+      cameraSuppressedRef.current = false;
+      issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
+      return;
+    }
+
+    setCameraCommand(null);
   }, [focusKeyboardRegion, issueCameraCommand]);
+
+  const navigatePlanGraphAndFit = useCallback((reason: string) => {
+    navigatePlanGraph(reason, { fit: true });
+  }, [navigatePlanGraph]);
+
+  const navigatePlanGraphPreservingViewport = useCallback((reason: string) => {
+    navigatePlanGraph(reason, { fit: false });
+  }, [navigatePlanGraph]);
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
@@ -3059,6 +3088,10 @@ export function App() {
       return;
     }
     if (nextSurface === 'planning') {
+      if (sidebarSurface === 'home') {
+        navigatePlanGraphPreservingViewport('sidebar-planning');
+        return;
+      }
       navigatePlanGraphAndFit('sidebar-planning');
       return;
     }
@@ -3066,7 +3099,7 @@ export function App() {
     setSidebarSurface(nextSurface);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, [navigatePlanGraphAndFit, navigatePlanningHome, sidebarSurface, viewMode]);
+  }, [navigatePlanGraphAndFit, navigatePlanGraphPreservingViewport, navigatePlanningHome, sidebarSurface, viewMode]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
@@ -3603,10 +3636,12 @@ export function App() {
               workflows={workflows}
               selectedWorkflowId={selectedWorkflow?.id ?? null}
               cameraCommand={cameraCommand}
+              initialViewport={workflowGraphViewportRef.current}
               statusFilters={statusFilters}
               coreActivityByWorkflow={coreActivityByWorkflow}
               onSelectWorkflow={handleWorkflowClick}
               onWorkflowContextMenu={handleWorkflowContextMenu}
+              onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
               onManualViewport={handleManualViewport}
             />
           )}
@@ -4470,10 +4505,12 @@ export function App() {
                 workflows={workflows}
                 selectedWorkflowId={selectedWorkflow?.id ?? null}
                 cameraCommand={cameraCommand}
+                initialViewport={workflowGraphViewportRef.current}
                 statusFilters={statusFilters}
                 coreActivityByWorkflow={coreActivityByWorkflow}
                 onSelectWorkflow={handleWorkflowClick}
                 onWorkflowContextMenu={handleWorkflowContextMenu}
+                onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
                 onManualViewport={handleManualViewport}
               />
             )}
