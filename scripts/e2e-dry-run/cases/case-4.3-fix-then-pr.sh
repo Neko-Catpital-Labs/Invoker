@@ -142,14 +142,17 @@ if ! grep -q "api.*repos.*pulls.*POST" "$GHLOG"; then
   exit 1
 fi
 echo "==> case 4.3: confirmed gh PR creation calls in stub log"
-echo "DIAG case 4.3: before final approve, merge gate status='$(invoker_e2e_case43_task_status "$MERGE_ID")'"
+echo "DIAG case 4.3: before final merge, merge gate status='$(invoker_e2e_case43_task_status "$MERGE_ID")'"
 
-echo "==> case 4.3: approve merge gate"
-invoker_e2e_run_headless approve "$MERGE_ID"
-echo "DIAG case 4.3: final approve command completed, merge gate status='$(invoker_e2e_case43_task_status "$MERGE_ID")'"
-invoker_e2e_wait_settled "$MERGE_ID"
-echo "DIAG case 4.3: final wait settled completed, merge gate status='$(invoker_e2e_case43_task_status "$MERGE_ID")'"
+# A github-mode merge gate completes only when every required PR is MERGED
+# (orchestrator.assertReviewGateApprovable). Simulate the operator merging the
+# stub PR, then run the pr-status worker so the poll reconciles the required
+# artifact to approved and the gate lands. This is the production path: a github
+# gate is finished by the PR-status poll, not by a manual approve on an open PR.
+echo "==> case 4.3: merge stub PR + reconcile via pr-status worker"
+touch "$INVOKER_E2E_MARKER_ROOT/pr-merged"
 for _ in $(seq 1 120); do
+  invoker_e2e_run_headless worker pr-status >/dev/null 2>&1 || true
   STM=$(invoker_e2e_case43_task_status "$MERGE_ID")
   if [ "$STM" = "completed" ]; then
     break
@@ -159,8 +162,8 @@ done
 
 STM=$(invoker_e2e_case43_task_status "$MERGE_ID")
 if [ "$STM" != "completed" ]; then
-  echo "FAIL case 4.3: expected merge gate=completed after approve, got '$STM'"
-  invoker_e2e_case43_dump_state "merge gate was not completed after final approve"
+  echo "FAIL case 4.3: expected merge gate=completed after PR merge, got '$STM'"
+  invoker_e2e_case43_dump_state "merge gate was not completed after PR merge"
   exit 1
 fi
 echo "PASS case 4.3 (fix A → approve → B completed → PR created → gate approved)"

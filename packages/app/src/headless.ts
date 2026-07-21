@@ -481,6 +481,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
     throw err;
   }
   const autoFixAttemptLedger = createAutoFixAttemptLedger();
+  const reviewGateExecutor = createHeadlessExecutor(deps);
   try {
     const worker = definition.factory({
       store: deps.persistence,
@@ -490,6 +491,9 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
         ),
       },
       logger: deps.logger,
+      reviewGate: {
+        checkMergeGateStatuses: () => reviewGateExecutor.checkMergeGateStatuses(),
+      },
       autoFix: {
         defaultAutoFixRetries: deps.invokerConfig.autoFixRetries,
         attemptLedger: autoFixAttemptLedger,

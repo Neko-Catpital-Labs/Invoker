@@ -35,9 +35,17 @@ case "$SUBCMD" in
         exit 1
         ;;
       view)
-        # gh pr view N --json state,reviewDecision,url
+        # gh pr view N --json state,reviewDecision,url,...
+        # The PR stays OPEN until the case "merges" it by touching
+        # $INVOKER_E2E_MARKER_ROOT/pr-merged. Once merged, the merge-gate poll
+        # sees state=MERGED and reconciles the required artifact to approved,
+        # which is the only path that legitimately lets the gate complete.
         PR_NUM="${1:-99}"
-        echo '{"state":"OPEN","reviewDecision":null,"url":"https://github.com/test/repo/pull/'"$PR_NUM"'"}'
+        if [ -n "$ROOT" ] && [ -f "$ROOT/pr-merged" ]; then
+          echo '{"state":"MERGED","reviewDecision":"APPROVED","url":"https://github.com/test/repo/pull/'"$PR_NUM"'"}'
+        else
+          echo '{"state":"OPEN","reviewDecision":null,"url":"https://github.com/test/repo/pull/'"$PR_NUM"'"}'
+        fi
         ;;
       *)
         echo "{}" ;;
