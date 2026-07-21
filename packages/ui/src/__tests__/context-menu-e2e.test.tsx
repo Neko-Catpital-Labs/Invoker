@@ -46,7 +46,7 @@ const workflows: WorkflowMeta[] = [
   { id: 'wf-1', name: 'Test Workflow', status: 'running', baseBranch: 'master' },
 ];
 
-const FLOATING_GRAPH_PANEL_Z_INDEX = 1000;
+const FLOATING_GRAPH_PANEL_LOCAL_Z_INDEX = 10;
 const APP_CONTEXT_MENU_TEST_TIMEOUT_MS = 20_000;
 
 describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS }, () => {
@@ -252,8 +252,9 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
 
     const menu = await screen.findByRole('menu');
     expect(panel).toBeInTheDocument();
-    expect(menu).toHaveStyle({ zIndex: String(FLOATING_GRAPH_PANEL_Z_INDEX + 100) });
-    expect(Number(menu.style.zIndex)).toBeGreaterThan(FLOATING_GRAPH_PANEL_Z_INDEX);
+    expect(panel).toHaveClass(`z-${FLOATING_GRAPH_PANEL_LOCAL_Z_INDEX}`);
+    expect(panel.style.zIndex).toBe('');
+    expect(Number(menu.style.zIndex)).toBeGreaterThan(FLOATING_GRAPH_PANEL_LOCAL_Z_INDEX);
   });
 
   it('workflow context menu retries workflow', async () => {
