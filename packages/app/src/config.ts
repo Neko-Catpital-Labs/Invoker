@@ -25,26 +25,22 @@ export interface InvokerConfig {
    */
   allowGraphMutation?: boolean;
   /**
-   * Global retry budget for config-owned automatic AI repair attempts.
-   * This budget is used by failed-task auto-fix paths and by workflow-mapped
-   * review-gate CI repair (`ci-failure` worker / `repair-review-gate-ci`).
-   * Plan YAML must not declare auto-fix fields.
-   *
+   * Global retry budget for auto-fix attempts per failed task.
    * Default: 0 (disabled).
    */
   autoFixRetries?: number;
   /**
    * When true, successful AI-applied fixes are automatically approved.
    * This skips the manual "Approve Fix" step for fix-with-agent and
-   * resolve-conflict flows, including CI repairs that queue fix-with-agent
-   * intents. It does not approve or merge the external review gate.
+   * resolve-conflict flows.
    *
    * Default: false.
    */
   autoApproveAIFixes?: boolean;
   /**
-   * Preferred execution agent for config-owned automatic repair attempts.
-   * When unset, automatic repair uses the built-in default fix agent.
+   * Preferred execution agent for automatic fix retries.
+   * When unset, auto-fix falls back to the task's executionAgent,
+   * then to the built-in default agent.
    */
   autoFixAgent?: string;
   /**
