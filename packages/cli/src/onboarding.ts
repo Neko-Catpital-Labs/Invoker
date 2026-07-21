@@ -265,6 +265,7 @@ export function runDoctor(argv: string[]): number {
 export const REQUIRED_BOT_SCOPES = [
   'app_mentions:read',
   'chat:write',
+  'files:write',
   'channels:history',
   'channels:read',
   'groups:write',
