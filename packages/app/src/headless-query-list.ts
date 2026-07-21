@@ -31,6 +31,7 @@ import { resolveDefaultExecutionAgent } from './config.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
 import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot, listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
+import { renderWorkerLifecycle } from './headless-worker-lifecycle.js';
 import { createRendererUiPerfCounters } from './renderer-ui-perf.js';
 import {
   collectRecoveryWorkerStatus,
@@ -889,7 +890,7 @@ function formatWorkerStatusSnapshot(snapshot: WorkerStatusSnapshot): string {
     const policy = worker.policyReason ? `${worker.policy} (${worker.policyReason})` : worker.policy;
     const source = worker.source ? ` · ${worker.source}` : '';
     const desired = worker.desiredEnabled === undefined ? '' : ` · desired=${worker.desiredEnabled}`;
-    lines.push(`  - ${worker.kind}: ${worker.lifecycle} · ${policy}${desired}${source}`);
+    lines.push(`  - ${worker.kind}: ${renderWorkerLifecycle(worker)} · ${policy}${desired}${source}`);
   }
   return lines.join('\n');
 }

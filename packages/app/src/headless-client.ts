@@ -35,6 +35,7 @@ import {
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
 import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from './worker-control.js';
+import { renderWorkerLifecycle } from './headless-worker-lifecycle.js';
 import { resolveWorkerControlMutation, type WorkerControlMutation } from './worker-control-delegation.js';
 import { openMainProcessDatabase } from './viewer-db-boundary.js';
 import {
@@ -465,7 +466,7 @@ function writeWorkerSnapshot(snapshot: WorkerStatusSnapshot, args: string[]): vo
   process.stdout.write(`  count: ${snapshot.workers.length}\n`);
   for (const worker of snapshot.workers) {
     const source = worker.source ? ` · ${worker.source}` : '';
-    process.stdout.write(`  - ${worker.kind}: ${worker.lifecycle} · ${worker.policy}${source}\n`);
+    process.stdout.write(`  - ${worker.kind}: ${renderWorkerLifecycle(worker)} · ${worker.policy}${source}\n`);
   }
 }
 
