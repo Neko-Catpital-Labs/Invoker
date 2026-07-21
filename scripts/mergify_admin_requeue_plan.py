@@ -86,7 +86,14 @@ def mergify_failed_check_actions(pr: PrSnapshot, ledger: Ledger) -> tuple[Action
     return ()
 
 
-def plan_stack_actions(stack: StackGroup, required_checks: Collection[str], ledger: Ledger, now_epoch: int) -> tuple[Action, ...]:
+def plan_stack_actions(
+    stack: StackGroup,
+    required_checks: Collection[str],
+    ledger: Ledger,
+    now_epoch: int,
+    max_requeue_attempts: int = 2,
+    max_repair_attempts: int = 3,
+) -> tuple[Action, ...]:
     del now_epoch
     blockers_by_pr = {pr.number: effective_blockers(pr, required_checks, TRUNK) for pr in stack.prs}
     all_blockers = [b for blockers in blockers_by_pr.values() for b in blockers]
@@ -100,11 +107,11 @@ def plan_stack_actions(stack: StackGroup, required_checks: Collection[str], ledg
         for blocker in blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
-                if ledger.count("conflict-repair", pr.number, pr.head_ref_oid, key) >= 3:
+                if ledger.count("conflict-repair", pr.number, pr.head_ref_oid, key) >= max_repair_attempts:
                     return (cap_action(pr, blocker, blocker.detail),)
                 return (Action("repair_conflict", pr.number, key, blocker.detail),)
             if blocker.kind == "failed_check":
-                if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) >= 3:
+                if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
                     return (cap_action(pr, blocker, blocker.detail),)
                 return (Action("repair_check", pr.number, blocker.key, blocker.detail),)
 
@@ -113,7 +120,7 @@ def plan_stack_actions(stack: StackGroup, required_checks: Collection[str], ledg
             if blocker.kind == "bot_review_thread":
                 if ledger.has_different_head("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key):
                     return (Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail),)
-                if ledger.count("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key) >= 3:
+                if ledger.count("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
                     return (cap_action(pr, blocker, blocker.detail),)
                 return (Action("repair_check", pr.number, "bot_review_thread:" + blocker.key, blocker.detail),)
 
@@ -155,8 +162,6 @@ def plan_stack_actions(stack: StackGroup, required_checks: Collection[str], ledg
     elif "dequeued" in bottom.labels:
         requeue_reason = "eligible-after-dequeued-label"
     attempts = ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key)
-    if requeue_key == "ready" and attempts >= 1:
-        return ()
-    if attempts >= 2:
+    if attempts >= max_requeue_attempts:
         return (cap_action(bottom, Blocker(requeue_key, "capped", bottom.number, "requeue"), "requeue"),)
     return (Action("requeue", bottom.number, requeue_key, requeue_reason),)

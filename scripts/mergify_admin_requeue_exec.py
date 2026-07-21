@@ -163,11 +163,40 @@ def load_candidate_stacks(
         for pr in gh.list_open_prs(repo)
     }
     raw_by_number.update({int(pr.get("number") or 0): pr for pr in candidates})
+
+    comments_cache: dict[int, list[dict]] = {}
+
+    def comments_for(number: int) -> list[dict]:
+        if number not in comments_cache:
+            comments_cache[number] = gh.issue_comments(repo, number)
+        return comments_cache[number]
+
+    # Lightweight grouping pass: use only the list-level fields (state, head/base
+    # refs) plus candidate stack metadata to discover which open PRs actually
+    # belong to a candidate's stack. This avoids an O(open-PR-count) fan-out of
+    # pr_detail/issue_comments calls every cycle.
+    lite_snapshots = [snapshot_from_detail(raw, [], required_checks) for raw in raw_by_number.values()]
+    lite_metadata: dict[int, tuple[str, tuple[int, ...]]] = {}
+    for number in candidate_numbers:
+        meta = parse_stack_metadata(comments_for(number))
+        if not meta:
+            continue
+        for pr_number in meta[1]:
+            lite_metadata[pr_number] = meta
+        lite_metadata[number] = meta
+
+    relevant_numbers: set[int] = set()
+    for stack in group_stack_prs(lite_snapshots, lite_metadata, trunk):
+        if any(pr.number in candidate_numbers for pr in stack.prs):
+            relevant_numbers.update(pr.number for pr in stack.prs)
+
+    # Full detail pass: fetch pr_detail/issue_comments only for PRs linked to a
+    # candidate stack.
     details: list[tuple[Mapping[str, object], list[dict]]] = []
-    for raw in raw_by_number.values():
-        number = int(raw.get("number") or 0)
-        detail = raw if "reviewThreads" in raw else gh.pr_detail(repo, number)
-        details.append((detail, gh.issue_comments(repo, number)))
+    for number in sorted(relevant_numbers):
+        raw = raw_by_number.get(number)
+        detail = raw if raw is not None and "reviewThreads" in raw else gh.pr_detail(repo, number)
+        details.append((detail, comments_for(number)))
 
     snapshots = [snapshot_from_detail(detail, comments, required_checks) for detail, comments in details]
     metadata: dict[int, tuple[str, tuple[int, ...]]] = {}
@@ -202,7 +231,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
     pr_by_number = {pr.number: pr for stack in stacks for pr in stack.prs}
     should_poll = False
     for stack in stacks:
-        actions = plan_stack_actions(stack, required_checks, ledger, now)
+        actions = plan_stack_actions(stack, required_checks, ledger, now, args.max_requeue_attempts, args.max_repair_attempts)
         if not actions:
             should_poll = True
             continue
@@ -226,8 +255,11 @@ def run_once(args: argparse.Namespace) -> int:
 
 
 def run_loop(args: argparse.Namespace) -> int:
-    while run_cycle(args):
-        time.sleep(args.poll_seconds)
+    try:
+        while run_cycle(args):
+            time.sleep(args.poll_seconds)
+    except RuntimeError:
+        return 2
     return 0
 
 
