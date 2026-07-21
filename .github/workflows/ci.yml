@@ -305,7 +305,8 @@ jobs:
   required-fast:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu]
+    runs-on:
+      labels: Runner_2_4_core
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -335,9 +336,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-
-      - name: Install system libraries for Node
-        run: sudo apt-get update -qq && sudo apt-get install -y libatomic1
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
