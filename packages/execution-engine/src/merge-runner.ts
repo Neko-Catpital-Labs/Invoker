@@ -927,6 +927,11 @@ export async function runMergeGateActionImpl(
       logTaskProgress(host, task.id, 'error', 'Merge gate failed', {
         error: err instanceof Error ? err.message : String(err),
       });
+      mergeTrace('GATE_WS_EXECUTE_MERGE_FAILED', {
+        taskId: task.id,
+        workflowId,
+        error: err instanceof Error ? err.message : String(err),
+      });
       response = {
         requestId: `merge-${task.id}`,
         actionId: task.id,
