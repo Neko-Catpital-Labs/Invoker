@@ -232,6 +232,24 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const managedWorkspaceBootstrap = options.managed
+      ? `ensure_managed_pnpm_workspace() {
+  if [ "\${INVOKER_SKIP_MANAGED_PNPM_INSTALL:-}" = "1" ]; then
+    return 0
+  fi
+  if [ ! -f pnpm-lock.yaml ] || [ -d node_modules ]; then
+    return 0
+  fi
+  if ! command -v pnpm >/dev/null 2>&1; then
+    echo "[SshExecutor] pnpm-lock.yaml found and node_modules missing, but pnpm is not installed." >&2
+    return 127
+  fi
+  echo "[SshExecutor] Installing pnpm dependencies for managed worktree..."
+  pnpm install --frozen-lockfile
+}
+ensure_managed_pnpm_workspace
+`
+      : '';
     const runPayloadSection = `echo "[SshExecutor] Running task payload..."
 `;
 
@@ -280,7 +298,7 @@ WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
 ${options.envExports}
 start_bootstrap_heartbeat
-${runPayloadSection}stop_bootstrap_heartbeat
+${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
 "$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
@@ -533,7 +551,7 @@ ${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Managed workspace mode: clone, fetch, create worktrees, provision, then execute.
+   * Managed workspace mode: clone, fetch, create worktrees, then execute.
    */
   private async startManagedWorkspace(
     request: WorkRequest,
