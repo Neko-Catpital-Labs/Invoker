@@ -408,14 +408,35 @@ export class SessionManager {
     const handle = this.sessions.get(key);
     if (handle) {
       handle.markPlanSubmitted();
-      this.conversationRepo.saveConversation(
-        id.threadTs,
-        [],
-        undefined,
-        true,
-      );
-      this.log('session-manager', 'info', `Session ${key} marked as submitted (persisted)`);
     }
+    this.conversationRepo.saveConversation(
+      id.threadTs,
+      [],
+      undefined,
+      true,
+    );
+    this.log('session-manager', 'info', `Session ${key} marked as submitted (persisted)`);
+  }
+
+  async promoteToPlanSession(
+    id: SessionIdentifier,
+    userId: string,
+    opts?: { tool?: string; model?: string; workingDir?: string; repoUrl?: string },
+  ): Promise<SessionHandle | null> {
+    const existing = this.conversationRepo.loadConversation(id.threadTs);
+    if (!existing || existing.planSubmitted) return null;
+
+    this.conversationRepo.saveConversation(
+      id.threadTs,
+      existing.messages,
+      existing.extractedPlan,
+      false,
+      existing.channelId,
+      existing.userId || userId,
+      'plan',
+    );
+    this.evictSession(id);
+    return this.getOrCreateSession(id, userId, { ...opts, mode: 'plan' });
   }
 
   /**
@@ -442,9 +463,19 @@ export class SessionManager {
   }
 
   /**
-   * Look up an existing session without creating one.
-   * Returns null if no session exists in memory for this identifier.
+   * Look up an existing session without creating a new persisted conversation.
+   * Rehydrates an active persisted conversation after memory eviction.
    */
+  async getSession(id: SessionIdentifier, userId: string): Promise<SessionHandle | null> {
+    const existing = this.sessions.get(id.toString());
+    if (existing) return existing;
+    const persisted = this.conversationRepo.loadConversation(id.threadTs);
+    if (!persisted || persisted.planSubmitted || (persisted.channelId && persisted.channelId !== id.channelId)) {
+      return null;
+    }
+    return this.getOrCreateSession(id, userId);
+  }
+
   findSession(id: SessionIdentifier): SessionHandle | null {
     return this.sessions.get(id.toString()) ?? null;
   }
