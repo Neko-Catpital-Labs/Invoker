@@ -614,7 +614,7 @@ export function InvokerTerminal({
             </div>
           )}
           {mode === 'chat' && busy && (
-            <span className="text-[11px] text-muted-foreground">working…</span>
+            <span className="text-[11px] text-muted-foreground">Planning your next steps...</span>
           )}
           {mode === 'tmux' && terminalBusy && (
             <span className="text-[11px] text-muted-foreground">starting…</span>
@@ -671,7 +671,7 @@ export function InvokerTerminal({
                 <div>
                   <h3 className="text-lg font-semibold tracking-tight text-foreground">What do you want to build?</h3>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                    Describe a change, investigate a bug, or ask Invoker to draft a full plan. Review the graph before starting work.
+                    Describe a goal, ask questions, or compare approaches. Invoker will help scope the plan before anything is submitted.
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -842,7 +842,7 @@ export function InvokerTerminal({
                 rows={expanded ? 8 : 3}
                 onChange={handleValueChange}
                 onKeyDown={handleInputKeyDown}
-                placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change, ask questions, or say “draft the full plan”.'}
+                placeholder={readOnly ? 'This planning session was already submitted.' : 'Describe the change or ask a planning question.'}
                 className={`min-h-[4.5rem] w-full resize-none border-0 bg-transparent py-1.5 font-sans text-[13.5px] leading-6 text-foreground outline-none placeholder:text-muted-foreground focus:ring-0 ${composerDisabledCursorClass}`}
               />
               <div className="mt-1 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-2">

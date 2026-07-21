@@ -61,7 +61,10 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
     expect(screen.getByText('Still discussing')).toBeInTheDocument();
     expect(screen.getByText('What do you want to build?')).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-empty-hero')).toHaveTextContent('help scope the plan');
+    expect(screen.getByTestId('invoker-terminal-empty-hero')).not.toHaveTextContent('draft a full plan');
     expect(screen.getByTestId('invoker-terminal-empty-hero')).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-input')).toHaveAttribute('placeholder', 'Describe the change or ask a planning question.');
     const transcript = screen.getByTestId('invoker-terminal-transcript');
     const terminalShell = transcript.closest('section');
     expect(terminalShell).not.toBeNull();
@@ -173,6 +176,7 @@ describe('Invoker terminal (component)', () => {
     });
 
     const panel = await screen.findByTestId('invoker-terminal-planner-stream');
+    expect(screen.getByText('Planning your next steps...')).toBeInTheDocument();
     expect(panel).toHaveAttribute('data-state', 'streaming');
     expect(panel).toHaveTextContent('raw planner text');
 
