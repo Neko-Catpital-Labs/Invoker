@@ -469,6 +469,34 @@ function writeWorkerSnapshot(snapshot: WorkerStatusSnapshot, args: string[]): vo
   }
 }
 
+/**
+ * Ask a live owner for its worker snapshot.
+ *
+ * Uses the structured `workers` query kind rather than the generic `cli-query`
+ * path: `cli-query` rebuilds the snapshot from persistence on the owner side,
+ * which cannot see runtime liveness. Only the owner's runtime controller knows
+ * which workers are actually running.
+ */
+async function tryDelegateWorkersQuery(
+  args: string[],
+  bus: MessageBus,
+  refreshMessageBus?: () => Promise<MessageBus>,
+): Promise<boolean> {
+  let messageBus = bus;
+  let owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+  if (!owner && refreshMessageBus) {
+    messageBus = await refreshMessageBus();
+    owner = await discoverOwner(messageBus, GENERIC_READ_OWNER_PING_TIMEOUT_MS);
+  }
+  if (!owner) return false;
+
+  const response = await tryDelegateQuery(messageBus, { kind: 'workers' });
+  if (!response || !Array.isArray(response.workers)) return false;
+
+  writeWorkerSnapshot(response as unknown as WorkerStatusSnapshot, args);
+  return true;
+}
+
 async function runLocalWorkersQuery(args: string[], invokerConfig: InvokerConfig): Promise<number> {
   const dbPath = join(resolveInvokerHomeRoot(), 'invoker.db');
   const persistence = await openMainProcessDatabase({
@@ -683,6 +711,9 @@ export async function runHeadlessClientCommand(
   }
 
   if (!internalOwnerServe && isLocalWorkersQuery(args)) {
+    if (await tryDelegateWorkersQuery(args, deps.messageBus, deps.refreshMessageBus)) {
+      return 0;
+    }
     return runLocalWorkersQuery(args, invokerConfig);
   }
 
