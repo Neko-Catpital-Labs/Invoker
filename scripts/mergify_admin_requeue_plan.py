@@ -102,7 +102,7 @@ def plan_stack_actions(stack: StackGroup, required_checks: Collection[str], ledg
                 key = f"conflict:{pr.number}"
                 if ledger.count("conflict-repair", pr.number, pr.head_ref_oid, key) >= 3:
                     return (cap_action(pr, blocker, blocker.detail),)
-                return (Action("rebase_recreate", pr.number, key, blocker.detail),)
+                return (Action("repair_conflict", pr.number, key, blocker.detail),)
             if blocker.kind == "failed_check":
                 if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) >= 3:
                     return (cap_action(pr, blocker, blocker.detail),)
@@ -145,15 +145,18 @@ def plan_stack_actions(stack: StackGroup, required_checks: Collection[str], ledg
         return (Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label"),)
 
     latest = bottom.latest_mergify
-    requeue_reason = ""
-    requeue_key = "manual"
+    if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:
+        return ()
+    requeue_reason = "eligible-when-ready"
+    requeue_key = "ready"
     if latest and latest.state == "dequeued":
         requeue_reason = "eligible-after-dequeue"
         requeue_key = latest.comment_id or "manual"
     elif "dequeued" in bottom.labels:
         requeue_reason = "eligible-after-dequeued-label"
-    if not requeue_reason:
+    attempts = ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key)
+    if requeue_key == "ready" and attempts >= 1:
         return ()
-    if ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key) >= 2:
+    if attempts >= 2:
         return (cap_action(bottom, Blocker(requeue_key, "capped", bottom.number, "requeue"), "requeue"),)
     return (Action("requeue", bottom.number, requeue_key, requeue_reason),)

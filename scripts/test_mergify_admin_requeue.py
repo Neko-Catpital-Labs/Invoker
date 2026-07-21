@@ -1,9 +1,10 @@
 import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 import scripts.mergify_admin_requeue as requeue
+import scripts.mergify_admin_requeue_exec as exec_impl
 
 from scripts.mergify_admin_requeue import (
     Action,
@@ -208,29 +209,17 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual([(a.kind, a.key) for a in actions], [("resolve_bot_threads", "tbot")])
 
-    def test_conflict_uses_rebase_recreate_cap(self):
+    def test_conflict_uses_claude_repair_cap(self):
         stack = StackGroup("s", (pr(2609, merge_state="DIRTY", latest=mergify()),))
         ledger = self.ledger()
         actions = plan_stack_actions(stack, REQUIRED, ledger, 1)
-        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("rebase_recreate", 2609)])
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("repair_conflict", 2609)])
         for epoch in range(3):
             ledger.record("conflict-repair", 2609, HEAD, "conflict:2609", epoch)
         actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
-    def test_resolve_workflow_turns_command_failure_into_runtime_error(self):
-        original_run = requeue.subprocess.run
-        try:
-            requeue.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(
-                subprocess.CalledProcessError(1, ["./run.sh"], stderr="missing workflow")
-            )
-            with self.assertRaisesRegex(RuntimeError, "missing workflow"):
-                requeue._resolve_workflow(2647)
-        finally:
-            requeue.subprocess.run = original_run
-
-
-    def test_rebase_recreate_without_local_workflow_records_and_caps(self):
+    def test_conflict_repair_records_and_caps_without_invoker(self):
         class FakeGh:
             def __init__(self):
                 self.comments = []
@@ -240,24 +229,70 @@ Failing checks
 
         ledger = self.ledger()
         item = pr(2647, merge_state="DIRTY", latest=mergify())
-        action = Action("rebase_recreate", 2647, "conflict:2647", "GitHub reports merge conflict")
+        action = Action("repair_conflict", 2647, "conflict:2647", "GitHub reports merge conflict")
         fake = FakeGh()
         repairs = []
-        original_resolve = requeue._resolve_workflow
-        original_repair = requeue._repair_conflict
-        try:
-            requeue._resolve_workflow = lambda pr_number: (_ for _ in ()).throw(RuntimeError(f"no local workflow for PR #{pr_number}"))
-            requeue._repair_conflict = lambda repo, pr, reason: repairs.append((repo, pr.number, reason))
+        with mock.patch.object(exec_impl, "repair_conflict", side_effect=lambda repo, pr, reason: repairs.append((repo, pr.number, reason))):
             for epoch in range(3):
                 requeue._execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, epoch)
-        finally:
-            requeue._resolve_workflow = original_resolve
-            requeue._repair_conflict = original_repair
         self.assertEqual(ledger.count("conflict-repair", 2647, HEAD, "conflict:2647"), 3)
         self.assertEqual([repair[1] for repair in repairs], [2647, 2647, 2647])
         self.assertEqual(fake.comments, [])
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
+
+    def test_claude_repair_uses_claude_cli(self):
+        with mock.patch.object(exec_impl.subprocess, "run") as run:
+            exec_impl.run_claude_repair(Path("/tmp/work"), "repair this")
+        run.assert_called_once_with(
+            ["claude", "-p", "repair this", "--dangerously-skip-permissions"],
+            cwd="/tmp/work",
+            check=True,
+            text=True,
+        )
+
+    def test_candidate_stack_includes_unlabeled_upper_prs(self):
+        def raw(number, base, head, labels):
+            return {
+                "number": number,
+                "title": f"PR {number}",
+                "url": f"https://example.invalid/{number}",
+                "state": "OPEN",
+                "isDraft": False,
+                "baseRefName": base,
+                "headRefName": head,
+                "headRefOid": HEAD,
+                "mergeStateStatus": "CLEAN",
+                "mergeable": "MERGEABLE",
+                "labels": {"nodes": [{"name": label} for label in labels]},
+                "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+                "statusCheckRollup": {"contexts": {"nodes": []}},
+            }
+
+        bottom = raw(1, "master", "stack/one", {"admin-bypass"})
+        upper = raw(2, "stack/one", "stack/two", set())
+
+        class FakeGh:
+            def list_candidate_prs(self, repo, author, pr_numbers):
+                return [bottom]
+
+            def list_open_prs(self, repo):
+                return [bottom, upper]
+
+            def issue_comments(self, repo, number):
+                return []
+
+        stacks = exec_impl.load_candidate_stacks(FakeGh(), "owner/repo", None, [], REQUIRED, "master")
+        self.assertEqual(len(stacks), 1)
+        self.assertEqual([item.number for item in stacks[0].prs], [1, 2])
+
+    def test_loop_rescans_after_action_then_stops(self):
+        args = requeue.parse_args(["--loop", "--poll-seconds", "0"])
+        with mock.patch.object(exec_impl, "run_cycle", side_effect=[True, False]) as cycle:
+            with mock.patch.object(exec_impl.time, "sleep") as sleep:
+                self.assertEqual(requeue.run_loop(args), 0)
+        self.assertEqual(cycle.call_count, 2)
+        sleep.assert_called_once_with(0.0)
 
     def test_capped_comment_records_once(self):
         class FakeGh:

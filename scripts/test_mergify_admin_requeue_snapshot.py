@@ -251,6 +251,31 @@ class GhClientCandidateDiscovery(unittest.TestCase):
 
 
 class GhClientLabelEdit(unittest.TestCase):
+    def test_candidate_scan_omits_author_by_default(self):
+        client = s.GhClient()
+        with mock.patch.object(client, "_run_json", return_value=[]) as run_json:
+            client.list_candidate_prs("Neko-Catpital-Labs/Invoker", None, [])
+
+        args = run_json.call_args.args[0]
+        self.assertIn("--label", args)
+        self.assertNotIn("--author", args)
+
+    def test_candidate_scan_includes_explicit_author(self):
+        client = s.GhClient()
+        with mock.patch.object(client, "_run_json", return_value=[]) as run_json:
+            client.list_candidate_prs("Neko-Catpital-Labs/Invoker", "EdbertChan", [])
+
+        args = run_json.call_args.args[0]
+        self.assertEqual(args[args.index("--author") + 1], "EdbertChan")
+
+    def test_list_open_prs_has_no_label_filter(self):
+        client = s.GhClient()
+        with mock.patch.object(client, "_run_json", return_value=[]) as run_json:
+            client.list_open_prs("Neko-Catpital-Labs/Invoker")
+
+        args = run_json.call_args.args[0]
+        self.assertNotIn("--label", args)
+
     def test_add_label_uses_rest_issue_labels_endpoint(self):
         client = s.GhClient()
         with mock.patch("mergify_admin_requeue_snapshot.subprocess.run") as run:
