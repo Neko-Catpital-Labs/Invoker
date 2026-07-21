@@ -541,7 +541,10 @@ function WorkflowContextMenu({
   useEffect(() => {
     menuRef.current?.focus({ preventScroll: true });
     setFocusedIndex(0);
-  }, []);
+    if (autoFocus) return;
+    const frame = requestAnimationFrame(() => menuRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocus]);
 
   const runAction = (action: (workflowId: string) => void) => {
     action(workflowId);
