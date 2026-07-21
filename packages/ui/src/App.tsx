@@ -3594,7 +3594,7 @@ export function App() {
       data-keyboard-region="workflowGraph"
       tabIndex={0}
       data-keyboard-active={keyboardRegion === 'workflowGraph' ? 'true' : 'false'}
-      className={`relative min-h-0 flex-1 overflow-hidden border-r border-border bg-background outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
+      className={`relative isolate z-0 min-h-0 flex-1 overflow-hidden border-r border-border bg-background outline-none ${keyboardRegion === 'workflowGraph' ? 'ring-2 ring-inset ring-ring/50' : ''}`}
       onClick={viewMode === 'dag' ? handleDagSurfaceClick : undefined}
     >
       {viewMode === 'queue' ? (
@@ -3635,18 +3635,20 @@ export function App() {
       ) : (
         <>
           {sidebarSurface === 'planning' && (
-            <WorkflowGraph
-              workflows={workflows}
-              selectedWorkflowId={selectedWorkflow?.id ?? null}
-              cameraCommand={cameraCommand}
-              initialViewport={workflowGraphViewportRef.current}
-              statusFilters={statusFilters}
-              coreActivityByWorkflow={coreActivityByWorkflow}
-              onSelectWorkflow={handleWorkflowClick}
-              onWorkflowContextMenu={handleWorkflowContextMenu}
-              onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
-              onManualViewport={handleManualViewport}
-            />
+            <div data-testid="workflow-graph-content" className="relative z-0 h-full w-full">
+              <WorkflowGraph
+                workflows={workflows}
+                selectedWorkflowId={selectedWorkflow?.id ?? null}
+                cameraCommand={cameraCommand}
+                initialViewport={workflowGraphViewportRef.current}
+                statusFilters={statusFilters}
+                coreActivityByWorkflow={coreActivityByWorkflow}
+                onSelectWorkflow={handleWorkflowClick}
+                onWorkflowContextMenu={handleWorkflowContextMenu}
+                onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
+                onManualViewport={handleManualViewport}
+              />
+            </div>
           )}
           {renderSelectedWorkflowTaskGraph(sidebarSurface === 'planning')}
         </>
