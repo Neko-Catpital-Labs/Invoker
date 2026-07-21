@@ -220,9 +220,9 @@ def run_cycle(args: argparse.Namespace) -> bool:
     rule_path = REPO_ROOT / ".mergify.yml"
     try:
         trunk, _labels, required_checks = load_mergify_rules(rule_path)
-    except ValueError:
+    except ValueError as exc:
         print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
-        raise RuntimeError("failed to load admin-bypass Mergify rule")
+        raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
 
     gh = GhClient()
     stacks = load_candidate_stacks(gh, args.repo, args.author, args.pr, required_checks, trunk)
