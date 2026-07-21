@@ -201,6 +201,10 @@ function clearStarterPromptIfUnused(session: InAppPlanningChatSession): void {
   }
 }
 
+function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary' | 'draftPlanText'>): boolean {
+  return Boolean(session.draftPlanText || session.draftPlanSummary);
+}
+
 function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
   return {
     id: session.id,
@@ -209,6 +213,7 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     status: session.status,
     messages: session.messages,
     draftPlanSummary: session.draftPlanSummary,
+    draftPlanText: session.draftPlanText,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
     terminalMode: session.terminalMode ?? 'chat',
@@ -230,7 +235,7 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     status: session.status,
     presetKey: session.presetKey,
     messages: session.messages,
-    draftPlanAvailable: Boolean(session.draftPlanSummary),
+    draftPlanAvailable: hasDraftPlan(session),
     draftPlanSummary: session.draftPlanSummary,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
@@ -249,8 +254,8 @@ function assertPersistablePlanningSession(
   session: InAppPlanningChatSession,
   pendingResponse: boolean,
 ): void {
-  if (session.status === 'draft_ready' && !session.draftPlanSummary) {
-    throw new Error(`Planning session "${session.id}" is draft_ready without a draft summary.`);
+  if (session.status === 'draft_ready' && (!session.draftPlanSummary || !session.draftPlanText)) {
+    throw new Error(`Planning session "${session.id}" is draft_ready without an approved draft.`);
   }
   if (session.status === 'submitted') {
     if (pendingResponse) {
@@ -312,10 +317,69 @@ function formatConversationalPlanningMessage(message: string): string {
   ].join('\n');
 }
 
+function getConversationDraftedPlan(conversation: Pick<PlanConversation, 'getDraftedPlan'>): string | null {
+  return conversation.getDraftedPlan() ?? null;
+}
+
+export function hasExplicitDraftIntent(message: string): boolean {
+  const normalized = message.trim().toLowerCase().replace(/\s+/g, ' ');
+  return [
+    /^draft$/,
+    /\bdraft\b.*\b(yaml\s+)?plan\b/,
+    /\b(yaml\s+)?plan\b.*\bdraft\b/,
+    /\b(create|generate|write|produce|make)\b.*\b(yaml\s+)?plan\b/,
+    /\bgo ahead\b.*\bdraft\b/,
+    /\bproceed\b.*\b(yaml\s+)?plan\b/,
+    /\bproceed\b/,
+    /\bdraft it\b/,
+    /\bcreate-plan\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function isShortDraftConfirmation(message: string): boolean {
+  const normalized = message.trim().toLowerCase().replace(/[.!]+$/g, '').replace(/\s+/g, ' ');
+  return [
+    'yes',
+    'y',
+    'ok',
+    'okay',
+    'go',
+    'go ahead',
+    'do it',
+    'please do',
+    'sounds good',
+    'confirm',
+    'approved',
+    'lgtm',
+    'ship it',
+  ].includes(normalized);
+}
+
+function assistantAskedWhetherToDraft(text: string): boolean {
+  return text.includes('?')
+    && /\b(draft|create|generate|write|produce)\b/i.test(text)
+    && /\b(yaml\s+)?plan\b/i.test(text);
+}
+
+function previousAssistantAskedWhetherToDraft(messages: InAppPlanningChatLine[]): boolean {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === 'user') return false;
+    if (message.role === 'assistant') return assistantAskedWhetherToDraft(message.text);
+  }
+  return false;
+}
+
+export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: InAppPlanningChatLine[]): boolean {
+  if (hasExplicitDraftIntent(message)) return true;
+  return isShortDraftConfirmation(message) && previousAssistantAskedWhetherToDraft(messagesBeforeTurn);
+}
+
 function planConversationConfig(
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo' | 'onRawPlannerOutput'>,
   threadTs: string,
+  options: { conversationalPlanning?: boolean } = {},
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -327,6 +391,7 @@ function planConversationConfig(
     defaultBranch: deps.config.defaultBranch,
     repoUrl: deps.config.defaultRepoUrl,
     experimentalPlanner: deps.config.experimentalPlanner,
+    conversationalPlanning: options.conversationalPlanning ?? false,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
     plannerRetryLimit: deps.config.plannerRetryLimit,
@@ -364,7 +429,7 @@ async function createSession(
     presetKey,
     status: 'still_discussing',
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id)),
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id, { conversationalPlanning: true })),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
@@ -500,6 +565,7 @@ export async function sendPlanningChatMessage(
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
       clearStarterPromptIfUnused(activeSession);
+      const draftingAuthorized = isDraftingAuthorizedByTurn(message, activeSession.messages);
       appendSessionMessage(activeSession, 'user', message);
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
@@ -519,33 +585,41 @@ export async function sendPlanningChatMessage(
           ? []
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
-        const planText = activeSession.conversation.getDraftedPlan() ?? extractYamlPlan(reply);
-        if (!planText) {
-          activeSession.draftPlanSummary = undefined;
-          activeSession.draftPlanText = undefined;
-          activeSession.status = reply.includes('?') ? 'waiting_for_answer' : 'still_discussing';
+        const candidatePlanText = getConversationDraftedPlan(activeSession.conversation) ?? extractYamlPlan(reply);
+        if (!candidatePlanText || !draftingAuthorized) {
+          activeSession.status = hasDraftPlan(activeSession)
+            ? 'draft_ready'
+            : reply.includes('?')
+              ? 'waiting_for_answer'
+              : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return { ok: true, sessionId: activeSession.id, reply, reasoning, draftPlanAvailable: false } as InAppPlanningChatResponse;
+          return {
+            ok: true,
+            sessionId: activeSession.id,
+            reply,
+            reasoning,
+            draftPlanAvailable: hasDraftPlan(activeSession),
+            draftPlanSummary: activeSession.draftPlanSummary,
+          } as InAppPlanningChatResponse;
         }
 
-        const summary = summarizePlanText(planText);
+        const summary = summarizePlanText(candidatePlanText);
         if (!summary) {
           const fallbackReply = 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.';
-          activeSession.draftPlanSummary = undefined;
-          activeSession.draftPlanText = undefined;
-          activeSession.status = 'still_discussing';
+          activeSession.status = hasDraftPlan(activeSession) ? 'draft_ready' : 'still_discussing';
           appendSessionMessage(activeSession, 'assistant', fallbackReply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
           return {
             ok: true,
             sessionId: activeSession.id,
             reply: fallbackReply,
-            draftPlanAvailable: false,
+            draftPlanAvailable: hasDraftPlan(activeSession),
+            draftPlanSummary: activeSession.draftPlanSummary,
           };
         }
         activeSession.draftPlanSummary = summary;
-        activeSession.draftPlanText = planText;
+        activeSession.draftPlanText = candidatePlanText;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
@@ -598,7 +672,7 @@ export async function submitPlanningChatDraft(
     return session.pendingSubmit;
   }
 
-  const planText = session.conversation.getDraftedPlan() ?? session.draftPlanText;
+  const planText = session.draftPlanText;
   if (!planText) {
     return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
   }
@@ -753,6 +827,7 @@ export async function restorePlanningChatSessions(
       messages: [...record.messages],
       conversation,
       draftPlanSummary: record.draftPlanSummary,
+      draftPlanText: record.draftPlanText,
       submittedWorkflowId: record.submittedWorkflowId,
       submittedPlanName: record.submittedPlanName,
       terminalMode: record.terminalMode ?? 'chat',
@@ -779,9 +854,9 @@ export async function restorePlanningChatSessions(
       shouldPersist = true;
     }
 
-    const draftedPlan = conversation.getDraftedPlan();
     if (session.status === 'draft_ready') {
-      if (!draftedPlan) {
+      const restoredDraftText = session.draftPlanText ?? getConversationDraftedPlan(conversation);
+      if (!restoredDraftText) {
         session.status = 'still_discussing';
         session.draftPlanSummary = undefined;
         session.draftPlanText = undefined;
@@ -793,9 +868,9 @@ export async function restorePlanningChatSessions(
         );
         shouldPersist = true;
       } else {
-        session.draftPlanText = draftedPlan;
+        session.draftPlanText = restoredDraftText;
         if (!session.draftPlanSummary) {
-          const restoredSummary = summarizePlanText(draftedPlan);
+          const restoredSummary = summarizePlanText(restoredDraftText);
           if (!restoredSummary) {
             session.status = 'still_discussing';
             session.draftPlanSummary = undefined;
@@ -813,8 +888,6 @@ export async function restorePlanningChatSessions(
           }
         }
       }
-    } else if (draftedPlan) {
-      session.draftPlanText = draftedPlan;
     }
 
     deps.sessions.set(session.id, session);
