@@ -130,7 +130,7 @@ function usage(): string {
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
     '  invoker-cli doctor [--fix] [--json]',
-    '  invoker-cli setup [planner|slack] [--check|--from-env] [--json]',
+    '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
     '  invoker-cli mcp',
     '  invoker-cli worker [autofix|list]',
     '  invoker-cli --help',

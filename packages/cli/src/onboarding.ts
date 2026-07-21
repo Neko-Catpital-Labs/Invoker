@@ -438,15 +438,33 @@ export function writeSlackEnv(creds: Required<Pick<SlackCredentials, 'botToken' 
 export interface SetupIO {
   print: (line: string) => void;
   prompt: (question: string) => Promise<string>;
+  interactive?: boolean;
+}
+
+export class NonInteractiveSetupError extends Error {
+  constructor(question: string) {
+    super(
+      `Cannot ask "${question.trim()}" because stdin is not a TTY.\n`
+      + 'Re-run with --yes to accept the guided defaults, or use a non-interactive path: '
+      + '`invoker-cli setup planner`, or `invoker-cli setup slack --from-env` with SLACK_* set.',
+    );
+    this.name = 'NonInteractiveSetupError';
+  }
 }
 
 function defaultIO(): SetupIO & { rl: ReturnType<typeof createInterface> } {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return {
     rl,
+    interactive: Boolean(process.stdin.isTTY),
     print: (line) => process.stdout.write(`${line}\n`),
     prompt: async (q) => (await rl.question(q)).trim(),
   };
+}
+
+function askLine(io: SetupIO, question: string): Promise<string> {
+  if (io.interactive === false) throw new NonInteractiveSetupError(question);
+  return io.prompt(question);
 }
 
 function manifestSteps(manifestPath: string): string {
@@ -514,10 +532,11 @@ interface ParsedSetupArgs {
   accessToken?: string;
   plannerPackage?: string;
   fromEnv: boolean;
+  assumeYes: boolean;
 }
 
 function parseSetupArgs(argv: string[]): ParsedSetupArgs {
-  const parsed: ParsedSetupArgs = { checkOnly: false, json: false, uninstall: false, fromEnv: false };
+  const parsed: ParsedSetupArgs = { checkOnly: false, json: false, uninstall: false, fromEnv: false, assumeYes: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === 'slack' || arg === 'planner') {
@@ -529,6 +548,8 @@ function parseSetupArgs(argv: string[]): ParsedSetupArgs {
       parsed.json = true;
     } else if (arg === '--from-env') {
       parsed.fromEnv = true;
+    } else if (arg === '--yes' || arg === '-y') {
+      parsed.assumeYes = true;
     } else if (arg === '--uninstall') {
       parsed.uninstall = true;
     } else if (arg === '--target') {
@@ -591,8 +612,12 @@ async function maybeInstallPlanner(parsed: ParsedSetupArgs, io: SetupIO): Promis
   return 0;
 }
 
-async function promptYes(io: SetupIO, question: string): Promise<boolean> {
-  const answer = (await io.prompt(question)).toLowerCase();
+async function promptYes(io: SetupIO, question: string, assumeYes = false): Promise<boolean> {
+  if (assumeYes) {
+    io.print(`${question}y`);
+    return true;
+  }
+  const answer = (await askLine(io, question)).toLowerCase();
   return answer === 'y' || answer === 'yes';
 }
 
@@ -627,14 +652,14 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     io.print(`experimentalPlanner flag: ${plannerState.experimentalPlanner ? 'on' : 'off'}`);
     io.print('');
 
-    if (!wantSlack && !fromEnv && await promptYes(io, 'Enable the experimental planner now? [y/N] ')) {
+    if (!wantSlack && !fromEnv && await promptYes(io, 'Enable the experimental planner now? [y/N] ', parsed.assumeYes)) {
       await maybeInstallPlanner(parsed, io);
       io.print('');
     }
 
     let doSlack = wantSlack || fromEnv;
     if (!wantSlack && !fromEnv) {
-      doSlack = await promptYes(io, 'Set up the Slack integration now? [y/N] ');
+      doSlack = parsed.assumeYes ? false : await promptYes(io, 'Set up the Slack integration now? [y/N] ');
     }
     if (!doSlack) {
       io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup planner` later to enable the experimental planner. Run `invoker-cli setup slack` later to add Slack.');
@@ -666,17 +691,17 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     writeFileSync(manifestPath, `${JSON.stringify(generateSlackManifest(), null, 2)}\n`);
     io.print(`\n${manifestSteps(manifestPath)}\n`);
 
-    const botToken = await io.prompt('Bot User OAuth Token (xoxb-...): ');
-    const appToken = await io.prompt('App-Level Token (xapp-...): ');
-    const signingSecret = await io.prompt('Signing Secret: ');
-    const channelId = await io.prompt('Lobby channel ID (C...): ');
+    const botToken = await askLine(io, 'Bot User OAuth Token (xoxb-...): ');
+    const appToken = await askLine(io, 'App-Level Token (xapp-...): ');
+    const signingSecret = await askLine(io, 'Signing Secret: ');
+    const channelId = await askLine(io, 'Lobby channel ID (C...): ');
 
     const checks = await validateSlackCredentials({ botToken, appToken, signingSecret, channelId });
     const report = buildReport(checks);
     io.print(`\n${formatReport(report)}`);
 
     if (!report.ok) {
-      const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ');
+      const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ', parsed.assumeYes);
       if (!proceed) {
         io.print('Nothing written. Fix the items above and re-run `invoker-cli setup slack`.');
         return 1;
@@ -686,6 +711,10 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     const envPath = writeSlackEnv({ botToken, appToken, signingSecret, channelId });
     io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
     return report.ok ? 0 : 1;
+  } catch (error) {
+    if (!(error instanceof NonInteractiveSetupError)) throw error;
+    io.print(error.message);
+    return 1;
   } finally {
     rl?.close();
   }
