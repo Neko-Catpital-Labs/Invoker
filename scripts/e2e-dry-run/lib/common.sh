@@ -53,6 +53,13 @@ invoker_e2e_ensure_branch_aliases() {
 invoker_e2e_allow_repo_git_ops() {
   (
     cd "$INVOKER_E2E_REPO_ROOT"
+    # Executors clone the repo with `git clone file://<root>`. In CI containers
+    # the checkout is owned by a different uid than the container user, so git
+    # rejects the source with "detected dubious ownership in repository at
+    # <root>/.git". safe.directory=<root> does NOT cover the check on <root>/.git
+    # — only the "*" wildcard does — so set both. Executors inherit this global
+    # config through the shared HOME.
+    git config --global --add safe.directory "*" >/dev/null 2>&1 || true
     git config --global --add safe.directory "$INVOKER_E2E_REPO_ROOT" >/dev/null 2>&1 || true
   )
 }
