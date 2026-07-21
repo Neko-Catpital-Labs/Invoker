@@ -255,15 +255,27 @@ describe('SSH pool member capacity', () => {
     await sshExecutor.kill(handlesByTaskId.get(secondTask.id));
     firstTask.execution = { ...firstTask.execution, selectedAttemptId: `${firstTask.id}-retry-attempt` };
     secondTask.execution = { ...secondTask.execution, selectedAttemptId: `${secondTask.id}-retry-attempt` };
-    await runner.executeTask(thirdTask);
-    expect(deferTask).toHaveBeenCalledWith(thirdTask.id, expect.objectContaining({
-      reason: 'resource-limit',
-      attemptId: thirdTask.execution.selectedAttemptId,
-    }));
-    expect(sshExecutor.start).toHaveBeenCalledTimes(2);
+    // Both executions were killed but the mock never reaped their in-memory
+    // slots, and each task's live attempt has since advanced. Dispatching a new
+    // task must reclaim those superseded slots (their attempt is no longer live)
+    // rather than read both members as full — releasing the wedged pool capacity
+    // so the third task starts instead of deferring.
+    const thirdRun = runner.executeTask(thirdTask);
+    await vi.waitFor(() => expect(sshExecutor.start).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(completeByTaskId.has(thirdTask.id)).toBe(true));
+    expect(deferTask).not.toHaveBeenCalled();
 
-    expect(await runner.killActiveExecution(firstTask.id)).toBe(true);
-    expect(await runner.killActiveExecution(secondTask.id)).toBe(true);
+    completeByTaskId.get(thirdTask.id)?.({
+      requestId: `complete-${thirdTask.id}`,
+      actionId: thirdTask.id,
+      attemptId: thirdTask.execution.selectedAttemptId,
+      status: 'completed',
+      outputs: { exitCode: 0 },
+    });
+    await thirdRun;
+
+    // A late completion for each reclaimed (superseded) attempt must settle its
+    // original run as a safe no-op without re-wedging member capacity.
     completeByTaskId.get(firstTask.id)?.({
       requestId: `kill-${firstTask.id}`,
       actionId: firstTask.id,
@@ -280,18 +292,6 @@ describe('SSH pool member capacity', () => {
     });
     await firstRun;
     await secondRun;
-
-    const thirdRun = runner.executeTask(thirdTask);
-    await vi.waitFor(() => expect(sshExecutor.start).toHaveBeenCalledTimes(3));
-    await vi.waitFor(() => expect(completeByTaskId.has(thirdTask.id)).toBe(true));
-    completeByTaskId.get(thirdTask.id)?.({
-      requestId: `complete-${thirdTask.id}`,
-      actionId: thirdTask.id,
-      attemptId: thirdTask.execution.selectedAttemptId,
-      status: 'completed',
-      outputs: { exitCode: 0 },
-    });
-    await thirdRun;
   });
 
   it('logs when killActiveExecution cannot kill the executor handle', async () => {
