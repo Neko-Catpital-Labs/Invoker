@@ -179,6 +179,8 @@ export interface SessionManagerConfig {
   plannerRetryLimit?: number;
   /** Forwarded to PlanConversation for silent-success retries. */
   plannerRetryBaseDelayMs?: number;
+  /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
+  conversationalPlanning?: boolean;
 }
 
 export interface SessionMetrics {
@@ -219,6 +221,7 @@ export class SessionManager {
   private readonly mode: ConversationMode;
   private readonly plannerRetryLimit?: number;
   private readonly plannerRetryBaseDelayMs?: number;
+  private readonly conversationalPlanning: boolean;
 
   constructor(config: SessionManagerConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -236,6 +239,7 @@ export class SessionManager {
     this.mode = config.mode ?? 'agent';
     this.plannerRetryLimit = config.plannerRetryLimit;
     this.plannerRetryBaseDelayMs = config.plannerRetryBaseDelayMs;
+    this.conversationalPlanning = config.conversationalPlanning ?? false;
   }
 
   /**
@@ -327,6 +331,7 @@ export class SessionManager {
         timeoutMs: this.timeoutMs,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
+        conversationalPlanning: this.conversationalPlanning,
       });
       await conversation.init(); // Load state from database
       this.log('session-manager', 'info', `[TRACE] Recovery init() done (threadTs=${id.threadTs})`);
@@ -360,6 +365,7 @@ export class SessionManager {
         timeoutMs: this.timeoutMs,
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
+        conversationalPlanning: this.conversationalPlanning,
       });
       // Don't call init() for new sessions — nothing to load
 
