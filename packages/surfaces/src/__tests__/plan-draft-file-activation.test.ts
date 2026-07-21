@@ -90,6 +90,45 @@ describe('plan draft file — activation side', () => {
     expect(prompt).toContain('output the plan inside a ```yaml code block');
   });
 
+  it('keeps draft-file mechanics unavailable before conversational authorization', () => {
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'conv-unauthorized',
+      conversationalPlanning: true,
+      plannerRetryLimit: 0,
+    });
+    const path = conversation.planDraftFilePath();
+    const prompt = conversation.buildCursorPrompt();
+
+    expect(path).not.toBeNull();
+    expect(prompt).toContain('Drafting is not authorized yet');
+    expect(prompt).toContain('do NOT write a draft plan file');
+    expect(prompt).not.toContain(String(path));
+    expect(prompt).not.toContain('HOW TO DELIVER THE PLAN');
+    expect(prompt).not.toContain('name: "Plan Name"');
+  });
+
+  it('restores draft-file mechanics after conversational authorization', () => {
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'conv-authorized',
+      conversationalPlanning: true,
+      plannerRetryLimit: 0,
+    });
+    (conversation as any).messages.push(
+      { role: 'assistant', content: 'I understand the scope. Would you like me to draft the YAML plan?' },
+      { role: 'user', content: 'yes' },
+    );
+    const path = conversation.planDraftFilePath();
+    const prompt = conversation.buildCursorPrompt();
+
+    expect(path).not.toBeNull();
+    expect(prompt).toContain('The user has explicitly approved drafting');
+    expect(prompt).toContain(String(path));
+    expect(prompt).toContain('HOW TO DELIVER THE PLAN');
+    expect(prompt).toContain('name: "Plan Name"');
+  });
+
   it('clears a stale plan file before the turn so getDraftedPlan cannot return it', async () => {
     const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
     const path = conversation.planDraftFilePath();
