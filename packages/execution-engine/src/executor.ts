@@ -20,6 +20,8 @@ export interface TerminalSpec {
   args?: string[];
   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
   linuxTerminalTail?: 'exec_bash' | 'pause';
+  /** Display-only text rendered before the terminal command starts. Never sent to process stdin. */
+  introText?: string;
 }
 
 export interface PersistedTaskMeta {

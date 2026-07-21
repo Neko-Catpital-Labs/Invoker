@@ -323,6 +323,40 @@ describe('EmbeddedTerminalManager', () => {
     );
   });
 
+  it('seeds display-only bridge output before process output and does not duplicate on reuse', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+    const bridge = '=== Invoker task terminal bridge ===\nTask: task-bridge\n=== End Invoker task terminal bridge ===\n\n';
+    const spec: TerminalSpec = {
+      command: 'codex',
+      args: ['resume', 'codex-session-1'],
+      cwd: '/tmp/wt',
+      introText: bridge,
+    };
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-bridge',
+      spec,
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.outputSnapshot).toBe(bridge);
+    child.stdout.emit('data', Buffer.from('agent output\n'));
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe(`${bridge}agent output\n`);
+
+    const reused = mgr.openOrReuse({
+      taskId: 'task-bridge',
+      spec,
+      cwd: '/tmp/wt',
+    });
+    expect(reused.sessionId).toBe(session.sessionId);
+    expect(reused.outputSnapshot).toBe(`${bridge}agent output\n`);
+    expect(bashSpawnFn).toHaveBeenCalledTimes(1);
+  });
+
   it('fans bash stdout and stderr through the output event', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
