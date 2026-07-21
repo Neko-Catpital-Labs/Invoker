@@ -18,6 +18,7 @@ import {
   type PersistedTaskMeta,
   type TerminalSpec,
 } from '@invoker/execution-engine';
+import type { TaskState } from '@invoker/workflow-core';
 import { loadConfig } from './config.js';
 import {
   buildLinuxXTerminalBashScript,
@@ -26,6 +27,10 @@ import {
   type OpenTerminalResult,
 } from './terminal-external-launch.js';
 import { resolveEffectiveMaxConcurrency } from './execution-capacity.js';
+import {
+  buildTaskTerminalSummaryBridge,
+  type TaskTerminalWorkflowSummary,
+} from './terminal-summary-bridge.js';
 
 /** Persistence methods required to resolve terminal cwd / command for a task. */
 export interface OpenTerminalPersistence {
@@ -38,6 +43,8 @@ export interface OpenTerminalPersistence {
   getWorkspacePath(taskId: string): string | null;
   getBranch(taskId: string): string | null;
   getPoolMemberId?(taskId: string): string | null;
+  loadTask?(taskId: string): TaskState | undefined;
+  loadWorkflow?(workflowId: string): TaskTerminalWorkflowSummary | undefined;
   loadAttempts?(taskId: string): Array<{ id: string; agentSessionId?: string }>;
   updateTask?(taskId: string, changes: { execution?: { agentSessionId?: string; lastAgentSessionId?: string } }): void;
   updateAttempt?(attemptId: string, changes: { agentSessionId?: string }): void;
@@ -180,6 +187,20 @@ export function resolveTaskTerminalSpec(
     };
   }
 
+  let task: TaskState | undefined;
+  let workflow: TaskTerminalWorkflowSummary | undefined;
+  let canBuildBridge = true;
+  try {
+    task = persistence.loadTask?.(taskId);
+    const workflowId = task?.config.workflowId;
+    workflow = workflowId ? persistence.loadWorkflow?.(workflowId) : undefined;
+  } catch (err) {
+    canBuildBridge = false;
+    termLogger?.warn?.(
+      `task terminal bridge metadata load failed for task="${taskId}": ${err instanceof Error ? err.message : String(err)}`,
+      { module: 'open-terminal' },
+    );
+  }
   const meta: PersistedTaskMeta = {
     taskId,
     runnerKind: persistence.getRunnerKind(taskId) ?? 'worktree',
@@ -280,6 +301,28 @@ export function resolveTaskTerminalSpec(
   }
 
   const cwd = spec.cwd ?? repoRoot;
+  let introText: string | undefined;
+  if (canBuildBridge) {
+    try {
+      introText = buildTaskTerminalSummaryBridge({
+        taskId,
+        status: taskStatus,
+        task,
+        workflow,
+        meta: repairedMeta,
+        spec,
+        cwd,
+      });
+    } catch (err) {
+      termLogger?.warn?.(
+        `task terminal summary bridge build failed for task="${taskId}": ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'open-terminal' },
+      );
+    }
+  }
+  if (introText) {
+    spec = { ...spec, introText };
+  }
   termLogger?.info(`effective cwd=${cwd} (repoRoot=${repoRoot})`);
 
   return { ok: true, spec, cwd, meta: repairedMeta, executor };

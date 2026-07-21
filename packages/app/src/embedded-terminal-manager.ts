@@ -320,7 +320,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       updatedAt: createdAt,
       status: 'running' as const,
-      outputSnapshot: opts.outputSnapshot ?? '',
+      outputSnapshot: opts.outputSnapshot ?? opts.spec.introText ?? '',
     };
 
     if (opts.attach) {

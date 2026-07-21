@@ -29,6 +29,7 @@ import {
   MergeGateExecutor,
   BaseExecutor,
   getEffectivePath,
+  registerBuiltinAgents,
   type ExecutorHandle, type TerminalSpec, type PersistedTaskMeta,
 } from '@invoker/execution-engine';
 import type { WorkResponse, WorkRequest } from '@invoker/contracts';
@@ -45,7 +46,9 @@ import {
   buildTerminalShellCommand,
   spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
-import { openExternalTerminalForTask } from '../open-terminal-for-task.js';
+import { openExternalTerminalForTask, resolveTaskTerminalSpec } from '../open-terminal-for-task.js';
+import * as terminalSummaryBridgeModule from '../terminal-summary-bridge.js';
+import { TASK_TERMINAL_SUMMARY_BRIDGE_START } from '../terminal-summary-bridge.js';
 import * as configModule from '../config.js';
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -170,6 +173,25 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
 }
 
 const taskHandles = new Map<string, ExecutorHandle>();
+
+function makeBridgeTask(overrides: Partial<TaskState> = {}): TaskState {
+  const base: TaskState = {
+    id: 'task-bridge',
+    description: 'Restore agent terminal context',
+    status: 'completed',
+    dependencies: [],
+    createdAt: new Date('2026-07-20T00:00:00Z'),
+    config: { workflowId: 'wf-bridge' },
+    execution: {},
+    taskStateVersion: 1,
+  };
+  return {
+    ...base,
+    ...overrides,
+    config: { ...base.config, ...overrides.config },
+    execution: { ...base.execution, ...overrides.execution },
+  };
+}
 
 function executeTaskViaExecutor(
   executor: WorktreeExecutor,
@@ -437,6 +459,264 @@ describe('terminal-external-launch', () => {
     const doScriptArg = args.find(a => a.startsWith('do script'));
     expect(doScriptArg).toBeDefined();
     expect(doScriptArg).toContain('\\"');
+  });
+
+  it('prints display-only intro text before the terminal command', () => {
+    const script = buildLinuxXTerminalBashScript(
+      {
+        cwd: '/tmp/wt',
+        command: 'codex',
+        args: ['resume', 'session-1'],
+        introText: `${TASK_TERMINAL_SUMMARY_BRIDGE_START}\nTask: task-1\n`,
+      },
+      '/fallback',
+    );
+
+    expect(script.indexOf('printf %s')).toBeGreaterThan(-1);
+    expect(script.indexOf('printf %s')).toBeLessThan(script.indexOf("'codex'"));
+    expect(script).toContain("'codex' 'resume' 'session-1'");
+  });
+});
+
+describe('task terminal summary bridge resolution', () => {
+  afterEach(() => {
+    vi.mocked(existsSync).mockReset();
+  });
+
+  function makeWorktreeRegistry(agentRegistry = registerBuiltinAgents()) {
+    const registry = new ExecutorRegistry();
+    registry.register('worktree', new WorktreeExecutor({
+      cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
+      worktreeBaseDir: join(tmpdir(), `wt-${randomUUID()}`),
+      agentRegistry,
+    }));
+    return registry;
+  }
+
+  function makePersistence(task: TaskState, overrides: Record<string, unknown> = {}) {
+    return {
+      getTaskStatus: vi.fn(() => task.status),
+      getRunnerKind: vi.fn(() => task.config.runnerKind ?? 'worktree'),
+      getAgentSessionId: vi.fn(() => task.execution.agentSessionId ?? null),
+      getLastAgentSessionId: vi.fn(() => task.execution.lastAgentSessionId ?? null),
+      getExecutionAgent: vi.fn(() => task.config.executionAgent ?? task.execution.agentName ?? null),
+      getContainerId: vi.fn(() => task.execution.containerId ?? null),
+      getWorkspacePath: vi.fn(() => task.execution.workspacePath ?? null),
+      getBranch: vi.fn(() => task.execution.branch ?? null),
+      getPoolMemberId: vi.fn(() => task.config.poolMemberId ?? null),
+      loadTask: vi.fn(() => task),
+      loadWorkflow: vi.fn((workflowId: string) => ({
+        id: workflowId,
+        name: 'Bridge Workflow',
+        status: 'completed',
+      })),
+      ...overrides,
+    };
+  }
+
+  it('adds a bounded bridge for completed Codex task terminals without changing resume argv', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const workspacePath = '/tmp/invoker-worktree-codex';
+    const longPrompt = `Explain this task ${'private details '.repeat(40)}tail-marker`;
+    const task = makeBridgeTask({
+      id: 'task-codex',
+      description: 'Open a completed Codex terminal with local context',
+      config: {
+        workflowId: 'wf-bridge',
+        executionAgent: 'codex',
+        problem: 'Task terminals resume into a blank-looking shell.',
+        approach: 'Render a display-only bridge before resuming the agent.',
+        testPlan: 'Run focused app terminal tests.',
+        summary: 'Bridge context rendered before the Codex resume command.',
+        prompt: longPrompt,
+      },
+      execution: {
+        agentName: 'codex',
+        agentSessionId: 'codex-session-1',
+        inputPrompt: longPrompt,
+        branch: 'experiment/task-codex',
+        workspacePath,
+      },
+    });
+    const agentRegistry = registerBuiltinAgents({ codex: { command: 'codex-test' } });
+    vi.spyOn(agentRegistry.getSessionDriver('codex')!, 'loadSession').mockReturnValue('{"type":"thread.started"}\n');
+
+    const resolved = resolveTaskTerminalSpec({
+      taskId: task.id,
+      persistence: makePersistence(task) as never,
+      executorRegistry: makeWorktreeRegistry(agentRegistry),
+      executionAgentRegistry: agentRegistry,
+      repoRoot: '/repo',
+    });
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.spec.command).toBe('codex-test');
+    expect(resolved.spec.args).toEqual([
+      'resume',
+      '--dangerously-bypass-approvals-and-sandbox',
+      'codex-session-1',
+    ]);
+    expect(resolved.spec.introText).toContain(TASK_TERMINAL_SUMMARY_BRIDGE_START);
+    expect(resolved.spec.introText).toContain('Workflow: Bridge Workflow (wf-bridge)');
+    expect(resolved.spec.introText).toContain('Agent: codex');
+    expect(resolved.spec.introText).toContain('Session: codex-session-1');
+    expect(resolved.spec.introText).toContain('Last summary: Bridge context rendered before the Codex resume command.');
+    expect(resolved.spec.introText).not.toContain('tail-marker');
+  });
+
+  it('adds an OMP bridge while preserving session-dir continue args', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const workspacePath = '/tmp/invoker-worktree-omp';
+    const sessionRoot = join(tmpdir(), 'omp-sessions');
+    const task = makeBridgeTask({
+      id: 'task-omp',
+      description: 'Reopen an OMP task terminal',
+      config: { workflowId: 'wf-bridge', executionAgent: 'omp' },
+      execution: {
+        agentName: 'omp',
+        agentSessionId: 'omp-session-1',
+        workspacePath,
+      },
+    });
+    const agentRegistry = registerBuiltinAgents({
+      omp: { command: 'omp-test', sessionDirRoot: sessionRoot },
+    });
+
+    const resolved = resolveTaskTerminalSpec({
+      taskId: task.id,
+      persistence: makePersistence(task) as never,
+      executorRegistry: makeWorktreeRegistry(agentRegistry),
+      executionAgentRegistry: agentRegistry,
+      repoRoot: '/repo',
+    });
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.spec.command).toBe('omp-test');
+    expect(resolved.spec.args).toEqual([
+      '--session-dir',
+      join(sessionRoot, 'omp-session-1'),
+      '--continue',
+    ]);
+    expect(resolved.spec.introText).toContain(TASK_TERMINAL_SUMMARY_BRIDGE_START);
+    expect(resolved.spec.introText).toContain('Agent: omp');
+  });
+
+  it('does not add an agent bridge for command-only tasks without agent context', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const task = makeBridgeTask({
+      id: 'task-command',
+      description: 'Run a command task',
+      config: { workflowId: 'wf-bridge', command: 'pnpm test' },
+      execution: { workspacePath: '/tmp/invoker-worktree-command' },
+    });
+
+    const resolved = resolveTaskTerminalSpec({
+      taskId: task.id,
+      persistence: makePersistence(task) as never,
+      executorRegistry: makeWorktreeRegistry(),
+      repoRoot: '/repo',
+    });
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.spec.introText).toBeUndefined();
+  });
+  it('keeps terminal resolution working when task or workflow bridge metadata load throws', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const task = makeBridgeTask({
+      id: 'task-bridge-load-failure',
+      config: { workflowId: 'wf-bridge', executionAgent: 'codex' },
+      execution: {
+        agentName: 'codex',
+        agentSessionId: 'codex-session-bridge-load-failure',
+        workspacePath: '/tmp/invoker-worktree-bridge-load-failure',
+      },
+    });
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: vi.fn(),
+    } as any;
+    const persistence = makePersistence(task, {
+      loadTask: vi.fn(() => {
+        throw new Error('corrupt persisted task');
+      }),
+    });
+    const agentRegistry = registerBuiltinAgents({ codex: { command: 'codex-test' } });
+    vi.spyOn(agentRegistry.getSessionDriver('codex')!, 'loadSession').mockReturnValue('{"type":"thread.started"}\n');
+
+    const resolved = resolveTaskTerminalSpec({
+      taskId: task.id,
+      persistence: persistence as never,
+      executorRegistry: makeWorktreeRegistry(agentRegistry),
+      executionAgentRegistry: agentRegistry,
+      repoRoot: '/repo',
+      logger,
+    });
+
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.spec.command).toBe('codex-test');
+    expect(resolved.spec.introText).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'task terminal bridge metadata load failed for task="task-bridge-load-failure": corrupt persisted task',
+      { module: 'open-terminal' },
+    );
+  });
+
+  it('keeps terminal resolution working when bridge rendering throws', () => {
+    vi.mocked(existsSync).mockReturnValue(true);
+    const task = makeBridgeTask({
+      id: 'task-bridge-render-failure',
+      config: { workflowId: 'wf-bridge', executionAgent: 'codex' },
+      execution: {
+        agentName: 'codex',
+        agentSessionId: 'codex-session-bridge-render-failure',
+        workspacePath: '/tmp/invoker-worktree-bridge-render-failure',
+      },
+    });
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      child: vi.fn(),
+    } as any;
+    const agentRegistry = registerBuiltinAgents({ codex: { command: 'codex-test' } });
+    vi.spyOn(agentRegistry.getSessionDriver('codex')!, 'loadSession').mockReturnValue('{"type":"thread.started"}\n');
+    const bridgeSpy = vi
+      .spyOn(terminalSummaryBridgeModule, 'buildTaskTerminalSummaryBridge')
+      .mockImplementation(() => {
+        throw new Error('bridge rendering failed');
+      });
+
+    let resolved: ReturnType<typeof resolveTaskTerminalSpec> | undefined;
+    try {
+      resolved = resolveTaskTerminalSpec({
+        taskId: task.id,
+        persistence: makePersistence(task) as never,
+        executorRegistry: makeWorktreeRegistry(agentRegistry),
+        executionAgentRegistry: agentRegistry,
+        repoRoot: '/repo',
+        logger,
+      });
+    } finally {
+      bridgeSpy.mockRestore();
+    }
+    expect(resolved).toBeDefined();
+    if (!resolved) return;
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.spec.command).toBe('codex-test');
+    expect(resolved.spec.introText).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'task terminal summary bridge build failed for task="task-bridge-render-failure": bridge rendering failed',
+      { module: 'open-terminal' },
+    );
   });
 });
 
