@@ -142,6 +142,11 @@ elif [[ "\${INVOKER_HOME:0:2}" == '~/' ]]; then
 fi
 CLONE="$INVOKER_HOME/repos/$H"
 mkdir -p "$(dirname "$CLONE")"
+# The remote ssh session has its own HOME/git config, so a local file:// $REPO
+# owned by another uid is rejected with "detected dubious ownership". Only the
+# safe.directory "*" wildcard covers the check on $REPO/.git (the -c form and a
+# specific path do not), so set it in the remote global config before cloning.
+git config --global --add safe.directory '*' >/dev/null 2>&1 || true
 if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi
 if ! git -C "$CLONE" fetch --all --prune; then
   echo "[WARNING] Git fetch failed for $CLONE" >&2
