@@ -95,7 +95,10 @@ export function ContextMenu({
 
   useEffect(() => {
     menuRef.current?.focus({ preventScroll: true });
-  }, []);
+    if (autoFocus) return;
+    const frame = requestAnimationFrame(() => menuRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
+  }, [autoFocus]);
 
   // Auto-focus first enabled item on mount
   useEffect(() => {
