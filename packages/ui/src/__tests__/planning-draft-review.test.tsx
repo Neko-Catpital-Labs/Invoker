@@ -49,7 +49,7 @@ describe('planning draft review', () => {
     mock.cleanup();
   });
 
-  it('opens draft review in the right context panel without leaving Home', async () => {
+  it('opens draft review in the right context panel without submitting', async () => {
     vi.mocked(mock.api.planningChatList).mockResolvedValue({ ok: true, sessions: [makeGroupedDraft()] });
 
     render(<App />);
@@ -58,14 +58,40 @@ describe('planning draft review', () => {
     fireEvent.click(screen.getByTestId('ready-bar-review-draft'));
 
     expect(await screen.findByRole('heading', { name: 'Review draft' })).toBeInTheDocument();
-    expect(screen.getByText('Load a plan to render workflow graph')).toBeInTheDocument();
+    expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
+    expect(mock.api.start).not.toHaveBeenCalled();
     expect(screen.queryByText('No actions recorded')).not.toBeInTheDocument();
     expect(screen.getByText('Backend workflow')).toBeInTheDocument();
+    expect(screen.getAllByTestId('draft-task-group')).toHaveLength(2);
+    expect(screen.getAllByTestId('draft-step-summary')).toHaveLength(3);
     expect(screen.getByText('Add API endpoint')).toBeInTheDocument();
+    expect(screen.getByText('Add review sidebar')).toBeInTheDocument();
     expect(screen.getByText('Wire ready bar actions')).toBeInTheDocument();
     expect(screen.getByTestId('draft-raw-yaml')).toHaveTextContent('name: Grouped plan');
     expect(screen.getByTestId('draft-raw-yaml')).toHaveTextContent('description: Add API endpoint');
     await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('planning-context-panel')));
+  });
+
+  it('submits only from an explicit draft review action', async () => {
+    vi.mocked(mock.api.planningChatList).mockResolvedValue({ ok: true, sessions: [makeGroupedDraft()] });
+    vi.mocked(mock.api.planningChatSubmit).mockResolvedValue({
+      ok: true,
+      planName: 'Grouped plan',
+      workflowId: 'wf-created',
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTestId('terminal-ready-bar')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('ready-bar-review-draft'));
+    expect(await screen.findByRole('heading', { name: 'Review draft' })).toBeInTheDocument();
+    expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('draft-review-create-workflow'));
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'draft-1' });
+    });
   });
 
   it('keeps Open graph as explicit secondary navigation', async () => {
