@@ -1048,13 +1048,11 @@ tasks:
 
     const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
     await mentionHandler(surface)({ event: { text: '<@BOT> submit', thread_ts: 't1', ts: 't2', user: 'U1' }, say: say2 });
-    // Shows a deterministic per-task summary in execution order, does not submit yet.
     const confirmationText = say2.mock.calls[0][0].text as string;
-    expect(confirmationText).toContain('4 tasks');
-    expect(confirmationText).toContain('Add a simple /health endpoint for uptime checks');
-    expect(confirmationText).toContain('Wire the new /health route through the HTTP server');
-    expect(confirmationText).toContain('Add regression coverage for healthy and unhealthy responses');
-    expect(confirmationText).toContain('Run the focused surface test suite and record the result');
+    expect(confirmationText).toContain('Drafted *Health API rollout with several detailed implementation tasks* (4 tasks).');
+    expect(confirmationText).toContain('1) Add a simple /health endpoint for uptime');
+    expect(confirmationText).toContain('2) Wire the new /health route through the');
+    expect(confirmationText.split(/\s+/).length).toBeLessThan(100);
     expect(received.some((c) => c.type === 'start_plan')).toBe(false);
 
     const say3 = vi.fn().mockResolvedValue({ ts: 'c' });

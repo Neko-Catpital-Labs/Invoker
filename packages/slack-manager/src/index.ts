@@ -9,6 +9,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
@@ -26,6 +27,7 @@ import { startEventSubscription } from './event-subscription.js';
 import { createPlanningCommandBuilder, createPrepareRepoCheckout, createGatherWorkflowContext } from './host-seams.js';
 import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
+import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
 const VERSION = '0.0.7';
 
 const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
@@ -47,9 +49,9 @@ over IPC. Install via: npm i -g @neko-catpital-labs/invoker-slack
   process.exit(0);
 }
 
-function makeLog(): { log: (level: string, message: string) => void; logFn: (source: string, level: string, message: string) => void } {
+function makeLog(instanceId: string): { log: (level: string, message: string) => void; logFn: (source: string, level: string, message: string) => void } {
   const log = (level: string, message: string): void => {
-    const line = `[slack-manager] ${new Date().toISOString()} ${level.toUpperCase()} ${message}`;
+    const line = `[slack-manager] ${new Date().toISOString()} ${level.toUpperCase()} instance=${instanceId} ${message}`;
     if (level === 'error') console.error(line);
     else console.log(line);
   };
@@ -67,7 +69,8 @@ function detectRepoUrl(repoRoot: string, log: (level: string, message: string) =
 }
 
 async function main(): Promise<void> {
-  const { log, logFn } = makeLog();
+  const instanceId = randomUUID();
+  const { log, logFn } = makeLog(instanceId);
 
   const ownerEnvPath = process.env.INVOKER_SLACK_OWNER_ENV ?? path.join(homedir(), '.invoker', '.slack-owner.env');
   dotenv.config({ path: ownerEnvPath });
@@ -80,6 +83,7 @@ async function main(): Promise<void> {
 
   const managerHome = process.env.INVOKER_SLACK_MANAGER_DIR ?? path.join(homedir(), '.invoker', 'slack-manager');
   mkdirSync(managerHome, { recursive: true });
+  const consumerLock = acquireSlackConsumerLock(path.join(homedir(), '.invoker'), instanceId);
   const checkoutsRoot = path.join(managerHome, 'checkouts');
   const plansDir = path.join(homedir(), '.invoker', 'plans');
 
@@ -113,6 +117,7 @@ async function main(): Promise<void> {
     cursorCommand: process.env.CURSOR_COMMAND ?? 'agent',
     model: process.env.CURSOR_MODEL,
     defaultHarnessPreset,
+    instanceId,
     workingDir: repoRoot,
     conversationRepo,
     slackSessionRepo,
@@ -158,6 +163,7 @@ async function main(): Promise<void> {
     await slack.stop().catch((err) => log('warn', `slack.stop failed: ${errMessage(err)}`));
     client.disconnect();
     adapter.close();
+    consumerLock.release();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));

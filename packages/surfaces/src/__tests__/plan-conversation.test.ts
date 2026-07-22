@@ -527,6 +527,13 @@ describe('PlanConversation', () => {
     );
   });
 
+  it('refuses to silently fall back to cursor for a selected non-cursor tool', async () => {
+    const conv = new PlanConversation({ tool: 'omp', cursorCommand: 'cursor' });
+
+    await expect(conv.sendMessage('Hello')).rejects.toThrow('Planner command builder is required for selected tool "omp"');
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
   it('falls back to cursor --print shape when no builder is injected', async () => {
     const conv = new PlanConversation({ cursorCommand: 'agent', model: 'sonnet' });
     mockCursorResponse('Hi');

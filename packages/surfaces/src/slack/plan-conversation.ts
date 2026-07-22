@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
@@ -670,9 +670,16 @@ export class PlanConversation {
   // ── Planner CLI Subprocess ─────────────────────────────
 
   async spawnPlanner(prompt: string): Promise<string> {
+    const requiresRegisteredBuilder = this.tool === 'omp' || this.tool === 'codex';
+    if (requiresRegisteredBuilder && !this.planningCommandBuilder) {
+      throw new Error(`Planner command builder is required for selected tool "${this.tool}"`);
+    }
     const { command, args } = this.planningCommandBuilder
       ? this.planningCommandBuilder({ tool: this.tool ?? 'cursor', model: this.model, prompt })
       : defaultPlanningCommand(this.cursorCommand, { model: this.model, prompt });
+    if (requiresRegisteredBuilder && this.planningCommandBuilder && basename(command) !== this.tool) {
+      throw new Error(`Planner command mismatch: selected tool "${this.tool}" resolved to "${command}"`);
+    }
     const plannerLabel = this.tool ?? command;
     const totalAttempts = this.plannerRetryLimit + 1;
     let lastStderrTail = '';
@@ -723,7 +730,7 @@ export class PlanConversation {
       let stdoutChunks = 0;
       let stderrChunks = 0;
 
-      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}, attempt=${attemptNumber}/${totalAttempts}`);
+      this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, tool=${plannerLabel}, model=${this.model ?? 'default'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}, attempt=${attemptNumber}/${totalAttempts}`);
 
       child.stdout?.on('data', (chunk: Buffer) => {
         const chunkStr = chunk.toString();

@@ -110,6 +110,30 @@ describe('SlackSurface', () => {
       const app = surface.getApp() as any;
       expect(app.client.auth.test).toHaveBeenCalled();
     });
+
+    it('logs receipt and route for every app mention before replying', async () => {
+      const log = vi.fn();
+      surface = new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-lobby',
+        lobbyChannelId: 'C-lobby',
+        instanceId: 'do1-proof',
+        log,
+      });
+      await surface.start(async () => {});
+      const app = surface.getApp() as any;
+      const mention = app._eventHandlers.find((handler: MockHandler) => handler.pattern === 'app_mention').handler;
+
+      await mention({
+        event: { text: '<@U_BOT> hello', ts: 'event-1', user: 'U1', channel: 'C-other' },
+        say: vi.fn().mockResolvedValue(undefined),
+      });
+
+      expect(log).toHaveBeenCalledWith('slack', 'info', expect.stringContaining('[MENTION_RECEIVED] instance=do1-proof event_ts=event-1'));
+      expect(log).toHaveBeenCalledWith('slack', 'info', expect.stringContaining('[MENTION_ROUTE] instance=do1-proof event_ts=event-1 route=non-lobby'));
+    });
   });
 
   describe('stop', () => {
@@ -505,7 +529,7 @@ describe('SlackSurface', () => {
       });
     });
 
-    it('submits the drafted plan only after an explicit submit + confirmation', async () => {
+    it('submits the drafted plan from its inline approval button', async () => {
       const planText = 'name: "Test Plan"\ntasks:\n  - id: t1\n    description: "Do something useful"\n    dependencies: []\n';
       mockSendMessage.mockResolvedValue('Here is your plan.');
       mockDraftedPlan = planText;
@@ -516,22 +540,23 @@ describe('SlackSurface', () => {
 
       const app = surfaceWithApi.getApp() as any;
       const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
-      const messageHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'message')?.handler;
+      const confirmHandler = app._actionHandlers.find((h: MockHandler) => h.pattern === 'lobby_confirm')?.handler;
 
-      // Explicit plan request → a planning conversation in the thread; nothing submitted.
+      // Explicit plan request → a planning conversation with inline approval; nothing submitted.
       const say1 = vi.fn().mockResolvedValue({ ts: '1111.001' });
       await mentionHandler({ event: { text: '<@U_BOT> plan: build me a REST API', ts: '1111', thread_ts: undefined }, say: say1 });
       expect(receivedCommands).toHaveLength(0);
+      expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining('Approve to execute'),
+        blocks: expect.arrayContaining([expect.objectContaining({ type: 'actions' })]),
+      }));
 
-      // Explicit submit → plain-English summary + confirmation, still no start_plan.
-      const say2 = vi.fn().mockResolvedValue({ ts: '1111.002' });
-      await mentionHandler({ event: { text: '<@UBOT> submit', ts: '1111.5', thread_ts: '1111' }, say: say2 });
-      expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Do something useful') }));
-      expect(receivedCommands).toHaveLength(0);
-
-      // Confirm → start_plan with the raw plan text.
-      const say3 = vi.fn().mockResolvedValue({ ts: '1111.003' });
-      await messageHandler({ event: { text: 'yes', ts: '1111.6', thread_ts: '1111', user: 'U1' }, say: say3 });
+      await confirmHandler({
+        action: { type: 'button', value: '1111' },
+        body: { channel: { id: 'C-test' }, message: { thread_ts: '1111' } },
+        ack: vi.fn().mockResolvedValue(undefined),
+        respond: vi.fn().mockResolvedValue(undefined),
+      });
       expect(receivedCommands).toEqual([
         expect.objectContaining({ type: 'start_plan', planText }),
       ]);

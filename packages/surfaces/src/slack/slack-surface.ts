@@ -33,7 +33,7 @@ import {
 import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
-import { summarizePlanText, formatPlanSummaryLines, type PlanSummary } from './plan-summary.js';
+import { summarizePlanText, formatSlackPlanBrief, type PlanSummary } from './plan-summary.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import { buildAssistantPrompt, parseWorkflowControl, SLACK_DIRECT_ANSWER_GUIDANCE } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
@@ -45,8 +45,6 @@ function truncateWords(text: string, maxWords: number): string {
   if (words.length <= maxWords) return words.join(' ');
   return `${words.slice(0, maxWords).join(' ')} ...`;
 }
-
-const DRAFT_SUBMIT_INSTRUCTION = 'Reply `submit` to submit it.';
 
 // ── Config ──────────────────────────────────────────────────
 
@@ -117,6 +115,8 @@ export interface SlackSurfaceConfig {
   runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
   /** Relaunches Invoker (host-owned). Enables the `restart` lobby verb. */
   onRestartInvoker?: () => Promise<void>;
+  /** Identifies the owning Slack manager process in request and reply logs. */
+  instanceId?: string;
 }
 
 export interface HarnessPreset {
@@ -531,6 +531,7 @@ export class SlackSurface implements Surface {
   private gatherWorkflowContext?: (workflowId: string) => Promise<WorkflowContext>;
   private runWorkflowOp?: (op: WorkflowOp, onProgress?: (p: WorkflowOpProgress) => void) => Promise<WorkflowOpResult>;
   private onRestartInvoker?: () => Promise<void>;
+  private instanceId: string;
 
   constructor(config: SlackSurfaceConfig) {
     this.app = new App({
@@ -569,6 +570,7 @@ export class SlackSurface implements Surface {
     this.gatherWorkflowContext = config.gatherWorkflowContext;
     this.runWorkflowOp = config.runWorkflowOp;
     this.onRestartInvoker = config.onRestartInvoker;
+    this.instanceId = config.instanceId ?? 'local';
     this.log = config.log ?? ((source, level, msg) => {
       const fn = level === 'error' ? console.error : console.log;
       fn(`[${source}] ${msg}`);
@@ -846,16 +848,19 @@ export class SlackSurface implements Surface {
   private registerMentionHandler(): void {
     this.app.event('app_mention', async ({ event, say }) => {
       const channel: string | undefined = event.channel;
+      const threadTs = event.thread_ts ?? event.ts;
+      this.log('slack', 'info', `[MENTION_RECEIVED] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} channel=${channel ?? 'unknown'} user=${event.user ?? 'unknown'}`);
 
       const mapping = channel ? this.workflowChannelRepo?.getByChannelId(channel) : null;
       if (mapping) {
+        this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=workflow workflow=${mapping.workflowId}`);
         await this.handleWorkflowAssistantMention(mapping, event, say);
         return;
       }
 
       const isLobbyOrDm = !channel || channel === this.lobbyChannelId || channel.startsWith('D');
       if (!isLobbyOrDm) {
-        this.log('slack', 'info', `Ignoring @mention in non-lobby channel ${channel}`);
+        this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=non-lobby channel=${channel}`);
         await say({
           text: 'I only plan in the lobby channel (or DMs), and only run workflow controls in a mapped workflow channel. Mention me there instead.',
           thread_ts: event.thread_ts ?? event.ts,
@@ -863,6 +868,7 @@ export class SlackSurface implements Surface {
         return;
       }
 
+      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=lobby`);
       await this.handlePlanningMention(event, say, channel ?? this.lobbyChannelId);
     });
   }
@@ -879,7 +885,7 @@ export class SlackSurface implements Surface {
       Object.keys(this.harnessPresets),
       this.defaultHarnessPreset,
     );
-    this.log('slack', 'info', `@mention: "${parsed.text.slice(0, 100)}${parsed.text.length > 100 ? '...' : ''}" (user=${event.user}, preset=${parsed.presetKey}, repo=${parsed.repo ?? 'default'})`);
+    this.log('slack', 'info', `@mention: instance=${this.instanceId} event_ts=${event.ts} "${parsed.text.slice(0, 100)}${parsed.text.length > 100 ? '...' : ''}" (user=${event.user}, preset=${parsed.presetKey}, repo=${parsed.repo ?? 'default'})`);
     if (parsed.unknownPreset) {
       await say({
         text: `Unknown preset \`[${parsed.unknownPreset}]\`. Valid presets: ${Object.keys(this.harnessPresets).join(', ')}. Omit the tag to use the default (\`${this.defaultHarnessPreset}\`).`,
@@ -1211,14 +1217,8 @@ export class SlackSurface implements Surface {
     await this.stageConfirm(threadTs, channel, { kind: 'submit', planText, ctx, channel, lobbyThreadTs: threadTs }, this.renderPlanSummary(summary), say);
   }
 
-  /** Per-task plan view: the user approves this, not YAML. */
   private renderPlanSummary(summary: PlanSummary): string {
-    const title = truncateWords(summary.name, 8);
-    const workflowNote = summary.workflowCount && summary.workflowCount > 1
-      ? `${summary.workflowCount} workflows, `
-      : '';
-    const header = `*${title}* — ${workflowNote}${summary.taskCount} task${summary.taskCount === 1 ? '' : 's'}:`;
-    return [header, ...formatPlanSummaryLines(summary)].join('\n');
+    return formatSlackPlanBrief(summary);
   }
 
   private buildConfirmBlocks(prompt: string, confirmKey: string): unknown[] {
@@ -1242,6 +1242,15 @@ export class SlackSurface implements Surface {
     prompt: string,
     say: SayFn,
   ): Promise<void> {
+    this.stagePendingConfirm(threadTs, channel, pending);
+    await say({
+      text: `${prompt}\n_Approve to proceed, or reply \`no\` to cancel._`,
+      thread_ts: threadTs,
+      blocks: this.buildConfirmBlocks(prompt, threadTs),
+    });
+  }
+
+  private stagePendingConfirm(threadTs: string, channel: string, pending: PendingConfirm): void {
     this.pendingConfirms.set(threadTs, pending);
     if (pending.kind === 'submit') {
       this.slackSessionRepo?.createPendingConfirmation({
@@ -1253,11 +1262,6 @@ export class SlackSurface implements Surface {
         payload: pending,
       });
     }
-    await say({
-      text: `${prompt}\n_Approve to proceed, or reply \`no\` to cancel._`,
-      thread_ts: threadTs,
-      blocks: this.buildConfirmBlocks(prompt, threadTs),
-    });
   }
 
 
@@ -1678,6 +1682,7 @@ ${text}`;
   ): Promise<void> {
     const threadTs = event.thread_ts ?? event.ts;
     const text = (event.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
+    this.log('slack', 'info', `[WORKFLOW_MENTION] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} workflow=${mapping.workflowId}`);
     if (!text) {
       await say({
         text: `I answer questions about workflow \`${mapping.workflowId}\` and run controls: \`status\`, \`approve <id>\`, \`reject <id>\`, \`retry <id>\`, \`input <id>: <text>\`.`,
@@ -1700,6 +1705,7 @@ ${text}`;
     try {
       const ctx = await this.gatherWorkflowContext(mapping.workflowId);
       const harness = this.resolveHarnessPreset(mapping.harnessPreset ?? this.defaultHarnessPreset);
+      this.log('slack', 'info', `[WORKFLOW_PLANNER] instance=${this.instanceId} event_ts=${event.ts} tool=${harness.tool} model=${harness.model ?? 'default'}`);
       const reply = await this.runOneShotPlanner(harness, buildAssistantPrompt(text, ctx));
       const chunks = splitForSlack(sanitizeSlackOutbound(reply));
       for (let i = 0; i < chunks.length; i++) {
@@ -2028,39 +2034,55 @@ ${text}`;
         ? conversation.getDraftedPlan()
         : undefined;
       const summary = draftedPlan ? summarizePlanText(draftedPlan) : null;
-      const replyWithoutSubmitInstruction = reply
-        .replace(/\n*Reply `submit` to submit it\.\s*$/i, '')
-        .trimEnd();
-      const renderedReply = summary
-        ? [replyWithoutSubmitInstruction, this.renderPlanSummary(summary), DRAFT_SUBMIT_INSTRUCTION]
-          .filter(Boolean)
-          .join('\n\n')
-        : draftedPlan && !reply.includes(DRAFT_SUBMIT_INSTRUCTION)
-          ? `${reply.trimEnd()}\n\n${DRAFT_SUBMIT_INSTRUCTION}`
-          : reply;
+      const planPrompt = summary ? this.renderPlanSummary(summary) : undefined;
+      if (draftedPlan && planPrompt) {
+        const ctx = this.loadPlanningContext(threadTs);
+        this.stagePendingConfirm(threadTs, channel, {
+          kind: 'submit',
+          planText: draftedPlan,
+          ctx,
+          channel,
+          lobbyThreadTs: threadTs,
+        });
+      }
+      const renderedReply = planPrompt
+        ? `${planPrompt}\n_Approve to execute, or reply \`no\` to cancel._`
+        : reply;
       const chunks = splitForSlack(sanitizeSlackOutbound(renderedReply));
+      const blocks = planPrompt ? this.buildConfirmBlocks(planPrompt, threadTs) : [];
+      const firstMessage = {
+        text: chunks[0],
+        thread_ts: threadTs,
+        ...(blocks.length > 0 ? { blocks } : {}),
+      };
       const revision = process.env.INVOKER_REVISION ?? process.env.GIT_COMMIT ?? 'unknown';
       this.log('slack', 'info',
-        `[RESPONSE_PROVENANCE] thread_ts=${threadTs} source_event_ts=${sourceEventTs ?? threadTs} mode=${conversation.conversationMode} revision=${revision} reply_chars=${renderedReply.length} chunks=${chunks.length}`);
+        `[RESPONSE_PROVENANCE] instance=${this.instanceId} thread_ts=${threadTs} source_event_ts=${sourceEventTs ?? threadTs} mode=${conversation.conversationMode} revision=${revision} reply_chars=${renderedReply.length} chunks=${chunks.length}`);
 
       const ackTs = this.ackMessages.get(threadTs);
       if (ackTs) {
-        const updated = await this.updateMessage(channel, ackTs, { text: chunks[0], blocks: [] });
+        const updated = await this.updateMessage(channel, ackTs, {
+          text: chunks[0],
+          blocks: blocks as SlackMessage['blocks'],
+        });
         this.ackMessages.delete(threadTs);
         if (updated) {
-          this.log('slack', 'info', `[ACK] Replaced immediate acknowledgment with actual response (thread_ts=${threadTs}, ack_ts=${ackTs}, chunks=${chunks.length})`);
+          this.log('slack', 'info', `[RESPONSE_POSTED] instance=${this.instanceId} thread_ts=${threadTs} source_event_ts=${sourceEventTs ?? threadTs} reply_ts=${ackTs} disposition=ack-replaced`);
         } else {
           this.log('slack', 'warn', `[ACK] Failed to replace ack, falling back to new message (thread_ts=${threadTs}, ack_ts=${ackTs})`);
           await this.deleteMessage(channel, ackTs);
-          await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
+          const posted = await this.sayWithRateLimitRetry(say, firstMessage);
+          this.logResponsePosted(threadTs, sourceEventTs, posted?.ts, 'new-message');
         }
       } else {
-        await this.sayWithRateLimitRetry(say, { text: chunks[0], thread_ts: threadTs });
+        const posted = await this.sayWithRateLimitRetry(say, firstMessage);
+        this.logResponsePosted(threadTs, sourceEventTs, posted?.ts, 'new-message');
       }
 
       for (let i = 1; i < chunks.length; i++) {
         await this.sleep(this.messagePacingMs);
-        await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
+        const posted = await this.sayWithRateLimitRetry(say, { text: chunks[i], thread_ts: threadTs });
+        this.logResponsePosted(threadTs, sourceEventTs, posted?.ts, 'chunk');
       }
       const tPosting = Date.now();
 
@@ -2097,6 +2119,10 @@ ${text}`;
         thread_ts: threadTs,
       });
     }
+  }
+
+  private logResponsePosted(threadTs: string, sourceEventTs: string | undefined, replyTs: string | undefined, disposition: string): void {
+    this.log('slack', 'info', `[RESPONSE_POSTED] instance=${this.instanceId} thread_ts=${threadTs} source_event_ts=${sourceEventTs ?? threadTs} reply_ts=${replyTs ?? 'unknown'} disposition=${disposition}`);
   }
 
   private async sleep(ms: number): Promise<void> {

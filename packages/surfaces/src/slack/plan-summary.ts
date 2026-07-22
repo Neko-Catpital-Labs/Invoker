@@ -93,6 +93,23 @@ export function formatPlanSummaryLines(summary: PlanSummary): string[] {
   return lines;
 }
 
+export function formatSlackPlanBrief(summary: PlanSummary): string {
+  const deliverySlices = summary.taskGroups
+    .flatMap((group) => group.tasks)
+    .filter((task) => !isVerificationOnly(task))
+    .map(summarizeDeliverySlice)
+    .filter(Boolean);
+  const slices = dedupe(deliverySlices).slice(0, 6);
+  const fallbackSlices = summary.steps.map(summarizeDeliverySlice).filter(Boolean).slice(0, 3);
+  const orderedSlices = slices.length > 0 ? slices : fallbackSlices;
+  const title = truncateWords(summary.name, 8);
+  const order = orderedSlices
+    .map((slice, index) => `${index + 1}) ${slice}`)
+    .join('; ');
+  const brief = `Drafted *${title}* (${summary.taskCount} task${summary.taskCount === 1 ? '' : 's'}). Delivery order: ${order}. Each slice includes focused verification.`;
+  return truncateWords(brief, 72);
+}
+
 // ── Internals ───────────────────────────────────────────────
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -168,4 +185,32 @@ function topoSort(tasks: PlanTask[]): PlanTask[] {
 
 function summarizeDescription(description: string): string {
   return description.replace(/\s+/g, ' ').trim();
+}
+
+function isVerificationOnly(description: string): boolean {
+  return /\bLayer:\s*app_regression\b/i.test(description)
+    || /\bGoal:\s*(?:run|verify|build|type-check)\b/i.test(description);
+}
+
+function summarizeDeliverySlice(description: string): string {
+  const normalized = summarizeDescription(description);
+  const goal = normalized.match(/\bGoal:\s*(.+?)(?=\s+(?:Motivation|Alternative considerations|Implementation details|Acceptance criteria|Non-goals|Layer|Feature state):|$)/i)?.[1]
+    ?? normalized.split(/(?<=[.!?])\s+/)[0];
+  return truncateWords(goal.replace(/[.:;]+$/, ''), 7);
+}
+
+function dedupe(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = value.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function truncateWords(text: string, maxWords: number): string {
+  const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
+  if (words.length <= maxWords) return words.join(' ');
+  return `${words.slice(0, maxWords).join(' ')}…`;
 }
