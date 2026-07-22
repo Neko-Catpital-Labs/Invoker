@@ -4,8 +4,8 @@ Drive Invoker from Slack: mention `@Invoker` in a shared **lobby** channel to st
 
 ## Flow
 
-1. **Start a normal agent thread.** In the lobby channel: `@Invoker [omp+codex] [repo:web] fix the Slack routing bug`. Invoker checks out the repo and runs a normal OMP/Codex-style conversation in the thread.
-2. **Opt into Invoker planning.** Use `@Invoker plan: add a /health endpoint` when you want YAML for an Invoker workflow instead of direct local agent work. You can also reply `plan: add a /health endpoint` in an existing agent thread; Invoker promotes that same thread to planning and retains its selected repo and harness preset.
+1. **Start a normal agent thread.** In the lobby channel: `@Invoker [omp+codex] [repo:web] fix the Slack routing bug` or `@Invoker fix this in https://github.com/acme/web`. Invoker checks out the selected repo and runs a normal OMP/Codex-style conversation in the thread.
+2. **Opt into Invoker planning.** Use `@Invoker plan: add a /health endpoint` when you want YAML for an Invoker workflow instead of direct local agent work. In an existing agent thread, reply `plan: add a /health endpoint`, `plan add a /health endpoint`, or `add a /health endpoint via Invoker`; Invoker promotes that same thread to planning and retains its selected repo and harness preset.
 3. **Submit only when ready.** Run `@Invoker submit` in that plan thread, then approve the short summary. That starts the generated YAML plan as a workflow.
 4. **Workflow channel appears.** Invoker creates private `workflow-<id>`, invites you, posts the workflow summary there, and links it from the lobby thread.
 5. **Operate in the channel.** `@Invoker status`, `@Invoker approve <task>`, `@Invoker reject <task>`, `@Invoker retry <task>`, `@Invoker input <task>: <text>`, or ask a free-form question (answered only from this workflow's planning + task transcripts).
@@ -15,9 +15,11 @@ Drive Invoker from Slack: mention `@Invoker` in a shared **lobby** channel to st
 Leading `[...]` tags select how planning runs. Order does not matter; everything after the tags is the request.
 
 - `[<preset>]` — pick a harness preset (CLI tool + model). No tag ⇒ the default preset.
-- `[repo:<alias|git-url>]` — pick the target repo. No tag ⇒ `defaultRepoUrl`.
+- `[repo:<alias|git-url>]` — explicitly pick the target repo. One unambiguous GitHub or git URL in the tagged request also selects that repo. Multiple URLs, or a URL that conflicts with `[repo:…]`, are rejected. No selector ⇒ `defaultRepoUrl`.
 
 `@Invoker raise a PR that adds rate limiting` (no tags) uses the default preset and default repo as a normal agent thread.
+
+The repository and harness are pinned when the thread starts. Start a new thread to use another repository or preset.
 
 ## Local and plan modes
 
@@ -29,6 +31,7 @@ Normal lobby mentions are local agent sessions. They can answer, edit, and run f
 - `@Invoker exec local: pnpm --filter @invoker/surfaces test -- slack-surface-workflows.test.ts` — runs that exact shell command and reports the exit code and output. It does **not** edit files.
 - `@Invoker plan: fix the typo in the Slack docs` — drafts Invoker YAML. Use `@Invoker submit` (or bare `submit`) in that thread to start the approval flow.
 - `plan: turn the discussion above into a migration plan` — promotes the current agent thread to plan mode, keeping its repo and harness selection. This works after a Slack service restart as well.
+- `turn the discussion above into a plan` — promotes the current agent thread without requiring a second thread.
 
 ## Harness presets
 

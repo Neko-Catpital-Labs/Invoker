@@ -87,7 +87,7 @@
   },
   "defaultSlackHarnessPreset": "cursor+claude",
   "slackRepos": {
-    "comment": "Slack repo aliases: alias -> git URL, resolved from a [repo:<alias>] tag",
+    "comment": "Slack repo aliases: alias -> git URL, selected with [repo:<alias>] in a tagged request",
     "web": "git@github.com:acme/web.git",
     "api": "git@github.com:acme/api.git"
   },
