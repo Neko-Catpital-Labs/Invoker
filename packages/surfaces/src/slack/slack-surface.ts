@@ -266,7 +266,7 @@ ${text}
 
 /** Q&A prompt for a lobby question: answer directly, never emit a plan. */
 export function buildLobbyQuestionPrompt(text: string): string {
-  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. ${SLACK_DIRECT_ANSWER_GUIDANCE} Do NOT generate a YAML plan and do NOT create a workflow. If answering well requires changing code, say in prose what the fix would be and tell the user they can ask for a plan in this same thread with \`plan: <request>\`, \`plan <request>\`, or \`<request> via Invoker\`. Return only the final user-facing answer; never include chain-of-thought, reasoning traces, tool output, or raw planner JSONL.\n\n${SLACK_LOCAL_REPRO_POLICY}\n\nQuestion:\n${text}`;
+  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. ${SLACK_DIRECT_ANSWER_GUIDANCE} Do NOT generate a YAML plan and do NOT create a workflow. If answering well requires changing code, say in prose what the fix would be and tell the user that Invoker can draft a plan in this same thread. Return only the final user-facing answer; never include chain-of-thought, reasoning traces, tool output, or raw planner JSONL.\n\n${SLACK_LOCAL_REPRO_POLICY}\n\nQuestion:\n${text}`;
 }
 
 /** Parse the classifier's raw stdout into a validated classification; never throws. */
@@ -901,14 +901,13 @@ export class SlackSurface implements Surface {
     }
 
     const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
-    const requestedThreadMode = parseThreadRequest(parsed.text);
+    let threadRequest = parseThreadRequest(parsed.text);
 
     // Slower paths (LLM classifier, repo checkout, agent) acknowledge receipt up front.
     if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
 
     try {
-      // Fallback classifier: only when a non-verb message looks operational.
-      if (!explicitLocalAgent && requestedThreadMode?.mode !== 'plan' && looksOperational(parsed.text)) {
+      if (!explicitLocalAgent && threadRequest?.mode !== 'plan') {
         const cls = await this.classifyLobbyIntent(parsed.text, preset);
         this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
         if (cls.intent === 'command') {
@@ -921,10 +920,11 @@ export class SlackSurface implements Surface {
           await this.answerLobbyQuestion(parsed.text, preset, threadTs, say);
           return;
         }
-        // invalid-command / plan → fall through to a planning conversation.
+        if (cls.intent === 'plan') {
+          threadRequest = { mode: 'plan', text: parsed.text };
+        }
       }
 
-      const threadRequest = requestedThreadMode;
       if (!threadRequest) return;
 
       const storedContext = this.loadPlanningContext(threadTs);
@@ -976,7 +976,10 @@ export class SlackSurface implements Surface {
         this.persistLaunchContext(threadTs, { ...context, workingDir });
       }
 
-      await this.handleConversationMessage(conversation, threadRequest.text, threadTs, say, channel);
+      const messageText = threadRequest.mode === 'plan'
+        ? await this.withThreadContext(channel, threadTs, threadRequest.text)
+        : threadRequest.text;
+      await this.handleConversationMessage(conversation, messageText, threadTs, say, channel);
     } finally {
       // Drop any leftover Processing… ack (success paths already replace/delete it).
       await this.clearImmediateAck(channel, threadTs);
@@ -1011,6 +1014,26 @@ export class SlackSurface implements Surface {
       return { intent: 'plan' };
     }
     return parseLobbyClassification(raw);
+  }
+
+  private async withThreadContext(channel: string, threadTs: string, request: string): Promise<string> {
+    try {
+      const replies = await this.app.client.conversations.replies({ channel, ts: threadTs, limit: 100 });
+      const context = (replies.messages ?? [])
+        .filter((message) => !message.bot_id && !message.subtype && typeof message.text === 'string')
+        .map((message) => message.text.trim())
+        .filter((text) => text && text !== request)
+        .slice(-20)
+        .map((text) => `- ${text.slice(0, 1_000)}`)
+        .join('\n')
+        .slice(-12_000);
+      return context
+        ? `Slack thread context:\n${context}\n\nCurrent plan request:\n${request}`
+        : request;
+    } catch (err) {
+      this.log('slack', 'warn', `[THREAD_CONTEXT] Failed to load thread ${threadTs}: ${err}`);
+      return request;
+    }
   }
 
   private async handleLobbyOp(
@@ -1866,7 +1889,17 @@ ${text}`;
         return;
       }
 
-      const threadRequest = parseThreadRequest(text);
+      let threadRequest = parseThreadRequest(text);
+      const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
+      if (!explicitLocalAgent && threadRequest?.mode !== 'plan') {
+        const context = this.loadPlanningContext(msg.thread_ts);
+        const preset = this.resolveHarnessPreset(context?.presetKey ?? this.defaultHarnessPreset);
+        const cls = await this.classifyLobbyIntent(text, preset);
+        this.log('slack', 'info', `[CLASSIFY] thread_ts=${msg.thread_ts} intent=${cls.intent}`);
+        if (cls.intent === 'plan') {
+          threadRequest = { mode: 'plan', text };
+        }
+      }
       let messageText = text;
       if (threadRequest?.mode === 'plan') {
         const id = new SessionIdentifier(channel, msg.thread_ts);
@@ -1900,6 +1933,9 @@ ${text}`;
 
       this.log('slack', 'info', `[SESSION_MESSAGE] Thread reply (thread_ts=${msg.thread_ts}, user=${msg.user}, preview="${text.slice(0, 100)}${text.length > 100 ? '...' : ''}")`);
 
+      if (threadRequest?.mode === 'plan') {
+        messageText = await this.withThreadContext(channel, msg.thread_ts, messageText);
+      }
       await this.handleConversationMessage(conversation, messageText, msg.thread_ts, say, channel);
     });
   }
@@ -1961,6 +1997,9 @@ ${text}`;
       }
 
       const chunks = splitForSlack(sanitizeSlackOutbound(reply));
+      const revision = process.env.INVOKER_REVISION ?? process.env.GIT_COMMIT ?? 'unknown';
+      this.log('slack', 'info',
+        `[RESPONSE_PROVENANCE] thread_ts=${threadTs} mode=${conversation.conversationMode} revision=${revision} reply_chars=${reply.length} chunks=${chunks.length}`);
 
       const ackTs = this.ackMessages.get(threadTs);
       if (ackTs) {

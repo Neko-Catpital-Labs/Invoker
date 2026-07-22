@@ -31,6 +31,11 @@ import type {
   InAppPlanningSessionRecord,
 } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
+import {
+  hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
+  isDraftingAuthorized,
+  type PlanningMessage,
+} from '@invoker/planning-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
@@ -322,57 +327,15 @@ function getConversationDraftedPlan(conversation: Pick<PlanConversation, 'getDra
 }
 
 export function hasExplicitDraftIntent(message: string): boolean {
-  const normalized = message.trim().toLowerCase().replace(/\s+/g, ' ');
-  return [
-    /^draft$/,
-    /\bdraft\b.*\b(yaml\s+)?plan\b/,
-    /\b(yaml\s+)?plan\b.*\bdraft\b/,
-    /\b(create|generate|write|produce|make)\b.*\b(yaml\s+)?plan\b/,
-    /\bgo ahead\b.*\bdraft\b/,
-    /\bproceed\b.*\b(yaml\s+)?plan\b/,
-    /\bproceed\b/,
-    /\bdraft it\b/,
-    /\bcreate-plan\b/,
-  ].some((pattern) => pattern.test(normalized));
-}
-
-function isShortDraftConfirmation(message: string): boolean {
-  const normalized = message.trim().toLowerCase().replace(/[.!]+$/g, '').replace(/\s+/g, ' ');
-  return [
-    'yes',
-    'y',
-    'ok',
-    'okay',
-    'go',
-    'go ahead',
-    'do it',
-    'please do',
-    'sounds good',
-    'confirm',
-    'approved',
-    'lgtm',
-    'ship it',
-  ].includes(normalized);
-}
-
-function assistantAskedWhetherToDraft(text: string): boolean {
-  return text.includes('?')
-    && /\b(draft|create|generate|write|produce)\b/i.test(text)
-    && /\b(yaml\s+)?plan\b/i.test(text);
-}
-
-function previousAssistantAskedWhetherToDraft(messages: InAppPlanningChatLine[]): boolean {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message.role === 'user') return false;
-    if (message.role === 'assistant') return assistantAskedWhetherToDraft(message.text);
-  }
-  return false;
+  return hasCoreExplicitDraftIntent(message);
 }
 
 export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: InAppPlanningChatLine[]): boolean {
-  if (hasExplicitDraftIntent(message)) return true;
-  return isShortDraftConfirmation(message) && previousAssistantAskedWhetherToDraft(messagesBeforeTurn);
+  const normalizedMessages: PlanningMessage[] = messagesBeforeTurn.map((entry) => ({
+    role: entry.role,
+    content: entry.text,
+  }));
+  return isDraftingAuthorized(message, normalizedMessages);
 }
 
 function planConversationConfig(

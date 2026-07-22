@@ -20,6 +20,7 @@ const sharedSlack = vi.hoisted(() => ({
       delete: vi.fn().mockResolvedValue({}),
     },
     reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
+    conversations: { replies: vi.fn().mockResolvedValue({ messages: [] }) },
   },
 }));
 
@@ -128,6 +129,8 @@ describe('Slack plan submission restart repro contracts', () => {
     sharedSlack.client.chat.postMessage.mockClear();
     sharedSlack.client.chat.update.mockClear();
     sharedSlack.client.chat.delete.mockClear();
+    sharedSlack.client.conversations.replies.mockReset();
+    sharedSlack.client.conversations.replies.mockResolvedValue({ messages: [] });
     adapter = await SQLiteAdapter.create(':memory:');
     repo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
     slackSessions = new SlackSessionRepository(adapter);
@@ -156,9 +159,34 @@ describe('Slack plan submission restart repro contracts', () => {
     const say = await reply(slack, 'plan: draft a real migration plan', 'thread-agent');
     const current = (slack as any).sessionManager.findSession(new SessionIdentifier('C_LOBBY', 'thread-agent'));
     expect(current?.conversationMode).toBe('plan');
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: plan }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: `${plan}\n\nReply \`submit\` to submit it.` }));
     const submitSay = await mention(slack, 'submit', 'submit-agent', 'thread-agent');
     expect(submitSay).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Approve to proceed') }));
+  });
+
+  it('drafts a submittable plan from the incident wording and its source thread context', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands);
+    sharedSlack.client.conversations.replies.mockResolvedValue({
+      messages: [
+        { text: 'Please prioritize the Orca-inspired reply: attention inbox, workflow cards, gates, batch review notes, presets, mobile polish, and usage chips.' },
+        { text: '@Invoker Can you create a plan for this to submit to invoker for all these features?' },
+      ],
+    });
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+
+    const say = await mention(
+      slack,
+      'Can you create a plan for this to submit to invoker for all these features?',
+      'incident-thread',
+    );
+
+    expect((slack as any).sessionManager.findSession(new SessionIdentifier('C_LOBBY', 'incident-thread'))?.conversationMode).toBe('plan');
+    expect(JSON.stringify(mockSpawn.mock.calls[0])).toContain('attention inbox');
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('Reply `submit` to submit it.'),
+    }));
   });
 
   it('stages a bare thread submit for confirmation instead of routing it to the planner', async () => {
@@ -290,7 +318,7 @@ describe('Slack plan submission restart repro contracts', () => {
     mockSpawn.mockImplementationOnce(() => processWith('Planner received the non-confirmation'));
     const nonConfirmationSay = await reply(slack, 'add a note before submitting', 'thread-reply');
     expect((slack as any).pendingConfirms.get('thread-reply')).toEqual(expect.objectContaining({ kind: 'submit' }));
-    expect(mockSpawn).toHaveBeenCalledTimes(2);
+    expect(mockSpawn).toHaveBeenCalledTimes(3);
     const yesSay = await reply(slack, 'yes', 'thread-reply');
     expect(yesSay).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Starting plan execution') }));
     expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));

@@ -214,8 +214,8 @@ export function splitCodeBlockChunk(text: string, limit: number): string[] {
  */
 export function sanitizeSlashCommands(text: string): string {
   return text.replace(
-    /(?:use |run |type |try )?`?\/invoker\s+(?!conversations\b)\w+[^`\n]*`?/gi,
-    'reply with "yes", "go", or "execute" to confirm',
+    /(^|[\s([])(?:use |run |type |try )?`?\/invoker\s+(?!conversations\b)\w+[^`\n]*`?/gim,
+    (_match, boundary: string) => `${boundary}reply with "yes", "go", or "execute" to confirm`,
   );
 }
 
