@@ -151,14 +151,16 @@ export function looksLikeCodexJsonl(raw: string): boolean {
     if (!trimmed) continue;
     try {
       const entry = JSON.parse(trimmed);
-      return Boolean(
+      if (
         entry
         && typeof entry === 'object'
         && typeof entry.type === 'string'
-        && CODEX_JSONL_EVENT_TYPES.has(entry.type),
-      );
+        && CODEX_JSONL_EVENT_TYPES.has(entry.type)
+      ) {
+        return true;
+      }
     } catch {
-      return false;
+      continue;
     }
   }
   return false;
@@ -213,7 +215,7 @@ export function formatCodexPlannerStdout(raw: string): CodexPlannerStdout {
   }
 
   return {
-    message: messages.join('\n\n'),
+    message: messages.at(-1) ?? '',
     reasoning,
   };
 }
