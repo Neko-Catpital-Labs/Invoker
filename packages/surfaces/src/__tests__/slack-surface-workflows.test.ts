@@ -179,12 +179,23 @@ describe('parseWorkflowStatusQuery', () => {
   });
 });
 describe('parseThreadRequest', () => {
-  it('defaults to a normal agent thread and requires an explicit plan prefix for Invoker YAML', () => {
+  it('defaults to a normal agent thread unless the request clearly asks for an Invoker plan', () => {
     expect(parseThreadRequest('fix the Slack routing bug')).toEqual({ mode: 'agent', text: 'fix the Slack routing bug' });
     expect(parseThreadRequest('local: fix the Slack routing bug')).toEqual({ mode: 'agent', text: 'fix the Slack routing bug' });
     expect(parseThreadRequest('run local: report back how many workflows are running')).toEqual({ mode: 'agent', text: 'report back how many workflows are running' });
     expect(parseThreadRequest('plan: fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
     expect(parseThreadRequest('draft an Invoker plan: fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
+    expect(parseThreadRequest('plan fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
+    expect(parseThreadRequest('make that fix via Invoker')).toEqual({ mode: 'plan', text: 'make that fix' });
+    expect(parseThreadRequest('draft an Invoker plan for the Slack routing bug')).toEqual({ mode: 'plan', text: 'the Slack routing bug' });
+    expect(parseThreadRequest('turn the discussion above into a plan')).toEqual({
+      mode: 'plan',
+      text: 'turn the discussion above into a plan',
+    });
+    expect(parseThreadRequest('why are you dumping the chain of thought')).toEqual({
+      mode: 'agent',
+      text: 'why are you dumping the chain of thought',
+    });
   });
 
   it('treats a sole fenced plan: block as plan mode', () => {
@@ -535,6 +546,33 @@ describe('lobby verb routing', () => {
     expect(prompt).toContain('mergify stack push');
     expect(prompt).toContain('scripts/land-stack.mjs --execute');
     expect(prompt).toContain('plan: <request>');
+    expect(prompt).toContain('same thread');
+    expect(prompt).toContain('only the final user-facing answer');
+    expect(prompt).not.toContain('start a plan thread');
+  });
+
+  it('returns only the final Codex message from one-shot Slack replies', async () => {
+    const raw = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'reasoning', text: 'Inspecting the repository.' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'Progress update.' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'Final user-facing answer.' },
+      }),
+    ].join('\n');
+    mockSpawn.mockImplementationOnce(() => mockProcess(raw));
+    const surface = lobbySurface();
+
+    await expect((surface as any).runOneShotPlanner({ tool: 'codex' }, 'answer this')).resolves.toBe(
+      'Final user-facing answer.',
+    );
   });
 
   // Repro: the Slack thread that prompted this asked the bot to investigate a

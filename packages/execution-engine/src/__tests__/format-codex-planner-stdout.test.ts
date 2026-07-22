@@ -69,7 +69,7 @@ describe('formatCodexPlannerStdout', () => {
     });
   });
 
-  it('joins multiple agent_message items', () => {
+  it('returns only the final agent_message', () => {
     const raw = [
       JSON.stringify({ type: 'turn.started' }),
       JSON.stringify({
@@ -82,6 +82,26 @@ describe('formatCodexPlannerStdout', () => {
       }),
     ].join('\n');
 
-    expect(formatCodexPlannerStdout(raw).message).toBe('First part.\n\nSecond part.');
+    expect(formatCodexPlannerStdout(raw).message).toBe('Second part.');
+  });
+
+  it('finds Codex JSONL after a non-JSON preamble', () => {
+    const raw = [
+      'Codex CLI v1.0',
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'reasoning', text: 'Inspecting the repository.' },
+      }),
+      JSON.stringify({
+        type: 'item.completed',
+        item: { type: 'agent_message', text: 'The final answer.' },
+      }),
+    ].join('\n');
+
+    expect(looksLikeCodexJsonl(raw)).toBe(true);
+    expect(formatCodexPlannerStdout(raw)).toEqual({
+      message: 'The final answer.',
+      reasoning: ['Inspecting the repository.'],
+    });
   });
 });
