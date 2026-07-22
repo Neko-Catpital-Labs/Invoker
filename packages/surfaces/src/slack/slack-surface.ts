@@ -179,10 +179,31 @@ function capTailChars(value: string, max: number): string {
 // ── Planning request parsing ─────────────────────────────────
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
+const URL_CANDIDATE_RE = /https?:\/\/[^\s<>()\[\]{}"'|]+/gi;
+const TRAILING_URL_PUNCTUATION_RE = /[.,;:!?]+$/;
+const SLACK_LINK_RE = /<((?:https?:\/\/)[^>|]+)(?:\|[^>]*)?>/gi;
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
+}
+
+export function extractRepoUrlFromMessage(text: string): string | undefined {
+  const unwrapped = text.replace(SLACK_LINK_RE, '$1');
+  for (const match of unwrapped.matchAll(URL_CANDIDATE_RE)) {
+    const candidate = match[0].replace(TRAILING_URL_PUNCTUATION_RE, '');
+    let url: URL;
+    try {
+      url = new URL(candidate);
+    } catch {
+      continue;
+    }
+    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) continue;
+    if (url.search || url.hash) continue;
+    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) continue;
+    return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
+  }
+  return undefined;
 }
 
 /** Peel leading `[preset]` and `[repo:]` tags off a lobby mention; the rest is the request text. A preset-shaped tag matching no key is returned as `unknownPreset` so the caller can reject it instead of silently using the default. */
