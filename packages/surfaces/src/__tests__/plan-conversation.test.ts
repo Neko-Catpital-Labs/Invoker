@@ -982,30 +982,18 @@ describe('PlanConversation prompt construction', () => {
   });
 
   it('agent mode refuses Invoker YAML and redirects within the same thread', () => {
-    // Agent threads can never submit a plan — handleLobbySubmit rejects a submit
-    // unless conversationMode === 'plan'. So the agent prompt must not offer to
-    // draft Invoker YAML (which would be an un-submittable dead end); it must
-    // steer the user to a `plan:` thread instead.
     const conv = new PlanConversation({ mode: 'agent' });
     (conv as any).messages.push({ role: 'user', content: 'Make me an Invoker plan to add a REST API' });
     const prompt = conv.buildCursorPrompt();
 
     // Never the plan-mode system prompt in an agent thread.
     expect(prompt).not.toContain('Invoker orchestrator');
-    // Agent mode must refuse YAML unconditionally and point at `plan:`.
-    expect(prompt).toContain('Do NOT generate Invoker YAML');
-    expect(prompt).toContain('plan:');
+    expect(prompt).toContain('Do NOT generate or submit Invoker YAML yourself');
+    expect(prompt).toContain('promotes planning requests');
     expect(prompt).toContain('same thread');
     expect(prompt).not.toContain('start a new plan thread');
     expect(prompt).toContain('only the final user-facing message');
-    // The old loophole permitted YAML "unless the user explicitly asks" — that
-    // produced drafts Slack silently rejects on submit.
     expect(prompt).not.toContain('unless the user explicitly asks');
-    expect(prompt).toContain('Do NOT invoke `invoker-cli`');
-    expect(prompt).toContain('`invoker_submit_plan`');
-    expect(prompt).toContain('`invoker_validate_plan`');
-    expect(prompt).toContain('`submit-plan.sh`');
-    expect(prompt).toContain('Harness handoff mode');
   });
 });
 

@@ -74,6 +74,7 @@
     "@invoker/contracts": "workspace:*",
     "@invoker/data-store": "workspace:*",
     "@invoker/execution-engine": "workspace:*",
+    "@invoker/planning-core": "workspace:*",
     "@invoker/runtime-adapters": "workspace:*",
     "@invoker/runtime-service": "workspace:*",
     "@invoker/surfaces": "workspace:*",

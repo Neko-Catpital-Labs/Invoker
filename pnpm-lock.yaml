@@ -53,6 +53,9 @@ importers:
       '@invoker/execution-engine':
         specifier: workspace:*
         version: link:../execution-engine
+      '@invoker/planning-core':
+        specifier: workspace:*
+        version: link:../planning-core
       '@invoker/runtime-adapters':
         specifier: workspace:*
         version: link:../runtime-adapters
@@ -295,6 +298,31 @@ importers:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
 
+  packages/planning-core:
+    dependencies:
+      '@invoker/data-store':
+        specifier: workspace:*
+        version: link:../data-store
+      '@invoker/execution-engine':
+        specifier: workspace:*
+        version: link:../execution-engine
+      yaml:
+        specifier: ^2.7.0
+        version: 2.8.2
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.3
+        version: 25.3.3
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
+
   packages/protocol:
     dependencies:
       '@invoker/contracts':
@@ -433,6 +461,9 @@ importers:
       '@invoker/execution-engine':
         specifier: workspace:*
         version: link:../execution-engine
+      '@invoker/planning-core':
+        specifier: workspace:*
+        version: link:../planning-core
       '@invoker/transport':
         specifier: workspace:*
         version: link:../transport
