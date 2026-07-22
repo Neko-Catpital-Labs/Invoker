@@ -304,6 +304,106 @@ describe('SshExecutor managed workspace mode', () => {
     }
   });
 
+  it('managed mode repairs partial pnpm workspace installs before filtered package payloads', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 1,
+      remoteInvokerHome: '~/.invoker',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "test -d packages/workflow-core/node_modules && printf 'payload-ran\\n' > payload.out",
+        description: 'run filtered package tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const bootstrapScript = writeMock.mock.calls[0]![0] as string;
+    const workspaceMatch = bootstrapScript.match(/WT=\$\(normalize_remote_path '([^']+)'\)/);
+    if (!workspaceMatch?.[1]) {
+      throw new Error('Managed SSH bootstrap did not embed a workspace path');
+    }
+
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-partial-pnpm-home-'));
+    try {
+      const workspacePath = workspaceMatch[1].replace(/^~(?=\/|$)/, fakeHome);
+      const binDir = join(fakeHome, 'bin');
+      const rootModulesDir = join(workspacePath, 'node_modules');
+      const packageDir = join(workspacePath, 'packages', 'workflow-core');
+      mkdirSync(rootModulesDir, { recursive: true });
+      mkdirSync(packageDir, { recursive: true });
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(join(rootModulesDir, '.modules.yaml'), 'layoutVersion: 5\n');
+      writeFileSync(join(workspacePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+      writeFileSync(join(workspacePath, 'pnpm-workspace.yaml'), 'packages:\n  - "packages/*"\n');
+      writeFileSync(
+        join(packageDir, 'package.json'),
+        JSON.stringify({
+          name: '@invoker/workflow-core',
+          version: '0.0.0',
+          devDependencies: { vitest: '^3.0.0' },
+        }),
+      );
+      const pnpmPath = join(binDir, 'pnpm');
+      writeFileSync(
+        pnpmPath,
+        [
+          '#!/usr/bin/env bash',
+          'if [ "$*" = "-r list --depth -1 --parseable" ]; then',
+          '  printf "%s\\n" "$PWD" "$PWD/packages/workflow-core"',
+          '  exit 0',
+          'fi',
+          'if [ "$*" = "install --frozen-lockfile" ]; then',
+          '  printf "%s\\n" "$*" > "$HOME/pnpm-args.txt"',
+          '  mkdir -p packages/workflow-core/node_modules',
+          '  exit 0',
+          'fi',
+          'exit 99',
+          '',
+        ].join('\n'),
+      );
+      chmodSync(pnpmPath, 0o755);
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', bootstrapScript], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome, PATH: `${binDir}:${process.env.PATH ?? ''}` },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(
+        '[SshExecutor] Missing package node_modules for managed worktree: packages/workflow-core',
+      );
+      expect(result.stdout).toContain('[SshExecutor] Installing pnpm dependencies for managed worktree...');
+      expect(result.stdout).toContain('[SshExecutor] Running task payload...');
+      expect(readFileSync(join(fakeHome, 'pnpm-args.txt'), 'utf8')).toBe('install --frozen-lockfile\n');
+      expect(existsSync(join(packageDir, 'node_modules'))).toBe(true);
+      expect(readFileSync(join(workspacePath, 'payload.out'), 'utf8')).toBe('payload-ran\n');
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+      proc.emit('close', 0, null);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  });
+
   it('keeps the managed pnpm bootstrap when legacy provisionCommand is whitespace', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

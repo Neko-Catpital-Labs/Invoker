@@ -233,15 +233,67 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
     const managedWorkspaceBootstrap = options.managed
-      ? `ensure_managed_pnpm_workspace() {
+      ? `workspace_package_dirs() {
+  if command -v pnpm >/dev/null 2>&1; then
+    local listed_workspaces
+    listed_workspaces=$(pnpm -r list --depth -1 --parseable 2>/dev/null || true)
+    if [ -n "$listed_workspaces" ]; then
+      printf '%s\\n' "$listed_workspaces"
+      return 0
+    fi
+  fi
+  if [ -d packages ]; then
+    find packages -mindepth 2 -maxdepth 2 -name package.json -type f -exec dirname {} \\; 2>/dev/null || true
+  fi
+}
+package_manifest_declares_install_deps() {
+  local manifest="$1"
+  if command -v node >/dev/null 2>&1; then
+    node - "$manifest" <<'NODE'
+const fs = require('fs');
+try {
+  const pkg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+  const fields = ['dependencies', 'devDependencies', 'optionalDependencies'];
+  process.exit(fields.some((field) => pkg[field] && Object.keys(pkg[field]).length > 0) ? 0 : 1);
+} catch {
+  process.exit(0);
+}
+NODE
+    return $?
+  fi
+  grep -Eq '"(dependencies|devDependencies|optionalDependencies)"[[:space:]]*:[[:space:]]*\\{' "$manifest"
+}
+managed_pnpm_workspace_needs_install() {
+  if [ ! -f node_modules/.modules.yaml ]; then
+    return 0
+  fi
+  local workspace_dir manifest relative_dir
+  while IFS= read -r workspace_dir; do
+    [ -n "$workspace_dir" ] || continue
+    [ "$workspace_dir" != "$PWD" ] || continue
+    manifest="$workspace_dir/package.json"
+    relative_dir="$workspace_dir"
+    if [[ "$workspace_dir" == "$PWD/"* ]]; then
+      relative_dir="\${workspace_dir#$PWD/}"
+    fi
+    [ -f "$manifest" ] || continue
+    [ -d "$workspace_dir/node_modules" ] && continue
+    if package_manifest_declares_install_deps "$manifest"; then
+      echo "[SshExecutor] Missing package node_modules for managed worktree: $relative_dir"
+      return 0
+    fi
+  done < <(workspace_package_dirs)
+  return 1
+}
+ensure_managed_pnpm_workspace() {
   if [ "\${INVOKER_SKIP_MANAGED_PNPM_INSTALL:-}" = "1" ]; then
     return 0
   fi
-  if [ ! -f pnpm-lock.yaml ] || [ -d node_modules ]; then
+  if [ ! -f pnpm-lock.yaml ] || ! managed_pnpm_workspace_needs_install; then
     return 0
   fi
   if ! command -v pnpm >/dev/null 2>&1; then
-    echo "[SshExecutor] pnpm-lock.yaml found and node_modules missing, but pnpm is not installed." >&2
+    echo "[SshExecutor] pnpm-lock.yaml found and managed worktree dependencies are missing, but pnpm is not installed." >&2
     return 127
   fi
   echo "[SshExecutor] Installing pnpm dependencies for managed worktree..."
