@@ -6,9 +6,8 @@
  * `displayedSelectedWorkflowGraph`, which is a brand-new object on every streamed
  * task delta. Each tick therefore re-issued fitInitial + centerSelection and
  * yanked the viewport back to the selection while the user was panning the graph.
- * The effect now keys off a stable "graph available" boolean, so a live update
- * that changes neither the selection nor the graph topology issues no camera
- * command.
+ * The effect now keys off stable surface-entry signals, so live updates and
+ * selection changes while already on the surface issue no camera command.
  *
  * The effect is shared by every non-home browser surface (its guard only excludes
  * `home`), so this drives the Workflows surface — the jsdom harness cannot render
@@ -102,19 +101,6 @@ describe('Browser-surface camera (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
-    // jsdom here ships without localStorage; App persists the camera lock there.
-    const store = new Map<string, string>();
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: {
-        getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
-        setItem: (k: string, v: string) => { store.set(k, String(v)); },
-        removeItem: (k: string) => { store.delete(k); },
-        clear: () => { store.clear(); },
-        key: (i: number) => [...store.keys()][i] ?? null,
-        get length() { return store.size; },
-      },
-    });
     mock = createMockInvoker();
     mock.install();
     fitViewMock.mockClear();
@@ -129,17 +115,16 @@ describe('Browser-surface camera (component)', () => {
 
   afterEach(() => {
     mock.cleanup();
-    delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 
   it('does not re-center or re-fit on a live task update that leaves selection and topology unchanged', async () => {
     mock.setTasks(tasks, workflows);
     render(<App />);
 
-    // Open the Workflows browser surface and select a task node so the camera
-    // lock has a target. The initial framing is intentionally drained below
-    // instead of asserted as a setup requirement; jsdom can coalesce that camera
-    // move differently under the full parallel Vitest run.
+    // Open the Workflows browser surface and select a task node. The initial
+    // framing is intentionally drained below instead of asserted as a setup
+    // requirement; jsdom can coalesce that camera move differently under the
+    // full parallel Vitest run.
     fireEvent.click(await screen.findByTestId('sidebar-workflows'));
     await screen.findByTestId('selected-workflow-mini-dag');
     fireEvent.click(await screen.findByTestId('rf__node-wf-a/one'));
@@ -170,6 +155,29 @@ describe('Browser-surface camera (component)', () => {
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
   });
+
+  it('does not re-center or re-fit when the selected task changes while already on a browser surface', async () => {
+    mock.setTasks(tasks, workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    await screen.findByTestId('selected-workflow-mini-dag');
+    fireEvent.click(await screen.findByTestId('rf__node-wf-a/one'));
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    fireEvent.click(screen.getByTestId('rf__node-wf-a/two'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task Two');
+    });
+    await flushFrames(6);
+
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
   it('clicking the left-nav home icon returns to the workflow graph and issues the Home fit command', async () => {
     mock.setTasks(tasks, workflows);
     render(<App />);

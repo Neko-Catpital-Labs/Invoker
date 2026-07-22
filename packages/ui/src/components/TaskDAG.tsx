@@ -184,6 +184,8 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const browserRemountDoneRef = useRef(false);
   const initFitFrameRef = useRef(0);
   const nodesRef = useRef<typeof nodes>([]);
+  const selectedTaskIdRef = useRef<string | null>(selectedTaskId ?? null);
+  selectedTaskIdRef.current = selectedTaskId ?? null;
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
   const lastLayoutRef = useRef<TaskGraphLayout | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
@@ -523,6 +525,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     const frame = requestAnimationFrame(() => {
       if (cancelled) return;
       fitView({ padding: 0.2 });
+      const selectedTaskId = selectedTaskIdRef.current;
       if (!selectedTaskId) return;
       const node = nodesRef.current.find((candidate) => candidate.id === selectedTaskId);
       if (!node) return;
@@ -537,7 +540,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [fitView, getZoom, rawGraph.layoutKey, selectedTaskId, setCenter, surfaceMode]);
+  }, [fitView, getZoom, rawGraph.layoutKey, setCenter, surfaceMode]);
 
   useEffect(() => {
     if (surfaceMode !== 'browser' || nodesRef.current.length === 0 || browserRemountDoneRef.current) return;

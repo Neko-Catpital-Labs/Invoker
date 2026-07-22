@@ -1,121 +1,18 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  CAMERA_LOCK_PREFERENCE_STORAGE_KEY,
-  DEFAULT_CAMERA_LOCK_PREFERENCE,
   createGraphCameraCommandIssuer,
-  isCameraMode,
   isGraphScope,
-  loadCameraLockPreference,
-  saveCameraLockPreference,
-  type CameraLockPreference,
-  type PreferenceStorage,
 } from '../lib/graph-camera.js';
 
-/** In-memory storage double matching the {@link PreferenceStorage} surface. */
-function createMemoryStorage(seed?: Record<string, string>): PreferenceStorage & {
-  raw: Map<string, string>;
-} {
-  const raw = new Map<string, string>(Object.entries(seed ?? {}));
-  return {
-    raw,
-    getItem: (key) => (raw.has(key) ? (raw.get(key) as string) : null),
-    setItem: (key, value) => {
-      raw.set(key, value);
-    },
-  };
-}
-
-describe('graph-camera defaults', () => {
-  it('defaults to toggle mode with the lock enabled', () => {
-    expect(DEFAULT_CAMERA_LOCK_PREFERENCE.mode).toBe('toggle');
-    expect(DEFAULT_CAMERA_LOCK_PREFERENCE.enabled).toBe(true);
-  });
-
-  it('freezes the default so callers cannot mutate the shared constant', () => {
-    expect(Object.isFrozen(DEFAULT_CAMERA_LOCK_PREFERENCE)).toBe(true);
-  });
-
-  it('returns the default for empty storage', () => {
-    const storage = createMemoryStorage();
-    expect(loadCameraLockPreference(storage)).toEqual({ mode: 'toggle', enabled: true });
-  });
-
-  it('returns a fresh copy, not the shared frozen default', () => {
-    const loaded = loadCameraLockPreference(createMemoryStorage());
-    expect(loaded).not.toBe(DEFAULT_CAMERA_LOCK_PREFERENCE);
-    expect(Object.isFrozen(loaded)).toBe(false);
-  });
-});
-
 describe('graph-camera type guards', () => {
-  it('recognizes valid camera modes and scopes', () => {
-    expect(isCameraMode('toggle')).toBe(true);
-    expect(isCameraMode('once')).toBe(true);
+  it('recognizes valid graph scopes', () => {
     expect(isGraphScope('workflow')).toBe(true);
     expect(isGraphScope('task')).toBe(true);
   });
 
-  it('rejects invalid camera modes and scopes', () => {
-    expect(isCameraMode('always')).toBe(false);
-    expect(isCameraMode(undefined)).toBe(false);
-    expect(isCameraMode(2)).toBe(false);
+  it('rejects invalid graph scopes', () => {
     expect(isGraphScope('graph')).toBe(false);
     expect(isGraphScope(null)).toBe(false);
-  });
-});
-
-describe('graph-camera persistence', () => {
-  it('loads a valid persisted preference', () => {
-    const stored: CameraLockPreference = { mode: 'once', enabled: false };
-    const storage = createMemoryStorage({
-      [CAMERA_LOCK_PREFERENCE_STORAGE_KEY]: JSON.stringify(stored),
-    });
-    expect(loadCameraLockPreference(storage)).toEqual(stored);
-  });
-
-  it('round-trips through save and load', () => {
-    const storage = createMemoryStorage();
-    const preference: CameraLockPreference = { mode: 'once', enabled: false };
-
-    expect(saveCameraLockPreference(preference, storage)).toBe(true);
-    expect(storage.raw.has(CAMERA_LOCK_PREFERENCE_STORAGE_KEY)).toBe(true);
-    expect(loadCameraLockPreference(storage)).toEqual(preference);
-  });
-
-  it.each([
-    ['not json at all', 'this is not json{'],
-    ['a json primitive', '42'],
-    ['a json null', 'null'],
-    ['a json array', '[]'],
-    ['an unknown mode', JSON.stringify({ mode: 'always', enabled: true })],
-    ['a non-boolean enabled', JSON.stringify({ mode: 'toggle', enabled: 'yes' })],
-    ['a missing mode', JSON.stringify({ enabled: true })],
-    ['a missing enabled', JSON.stringify({ mode: 'toggle' })],
-  ])('falls back to defaults for malformed storage: %s', (_label, rawValue) => {
-    const storage = createMemoryStorage({
-      [CAMERA_LOCK_PREFERENCE_STORAGE_KEY]: rawValue,
-    });
-    expect(loadCameraLockPreference(storage)).toEqual(DEFAULT_CAMERA_LOCK_PREFERENCE);
-  });
-
-  it('falls back to defaults when storage getItem throws', () => {
-    const throwingStorage: PreferenceStorage = {
-      getItem: () => {
-        throw new Error('storage disabled');
-      },
-      setItem: () => {},
-    };
-    expect(loadCameraLockPreference(throwingStorage)).toEqual(DEFAULT_CAMERA_LOCK_PREFERENCE);
-  });
-
-  it('reports failure when saving to storage that throws', () => {
-    const throwingStorage: PreferenceStorage = {
-      getItem: () => null,
-      setItem: () => {
-        throw new Error('quota exceeded');
-      },
-    };
-    expect(saveCameraLockPreference({ mode: 'toggle', enabled: true }, throwingStorage)).toBe(false);
   });
 });
 
