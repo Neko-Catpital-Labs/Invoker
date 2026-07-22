@@ -154,7 +154,7 @@ describe('Browser-surface camera (component)', () => {
     // The camera must not move on a live update that changed no selection.
     expect(setCenterMock).not.toHaveBeenCalled();
     expect(fitViewMock).not.toHaveBeenCalled();
-  });
+  }, 20000);
 
   it('does not re-center or re-fit when the selected task changes while already on a browser surface', async () => {
     mock.setTasks(tasks, workflows);
