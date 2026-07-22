@@ -362,14 +362,20 @@ async function delegateReadOnlyQuery(
   const ownerResult = await resolver.waitForAny(
     isUiPerf ? READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS : OPTIONAL_READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS,
   );
-  if (!ownerResult.resolved) {
+  let messageBus = bus;
+  if (ownerResult.resolved) {
+    messageBus = ownerResult.bus;
+  } else if (!hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'))) {
+    // No owner holds the DB: a file-backed read is safe (queue/action-graph),
+    // or the query genuinely needs an owner (ui-perf).
     if (isQueue || isActionGraph) return false;
     throw new Error(isUiPerf
       ? 'query ui-perf requires a running shared owner process'
       : 'query queue requires a running shared owner process');
   }
-
-  let messageBus = ownerResult.bus;
+  // else: discovery timed out but a live writable owner still holds the DB — it
+  // is present but momentarily too busy to answer. Keep delegating below rather
+  // than falling back to a file read its live WAL sidecars would reject.
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   let response: Record<string, unknown> | null = null;
   while (Date.now() < deadline) {
