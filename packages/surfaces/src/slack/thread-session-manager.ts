@@ -190,6 +190,8 @@ export interface SessionMetrics {
   active: number;
 }
 
+type SessionOptions = { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode; repoUrl?: string };
+
 const defaultLog: LogFn = (component, level, message) => {
   const prefix = `[${component}]`;
   if (level === 'error') console.error(prefix, message);
@@ -275,7 +277,7 @@ export class SessionManager {
   async getOrCreateSession(
     id: SessionIdentifier,
     userId: string,
-    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode; repoUrl?: string },
+    opts?: SessionOptions,
   ): Promise<SessionHandle | null> {
     const key = id.toString();
 
@@ -466,14 +468,14 @@ export class SessionManager {
    * Look up an existing session without creating a new persisted conversation.
    * Rehydrates an active persisted conversation after memory eviction.
    */
-  async getSession(id: SessionIdentifier, userId: string): Promise<SessionHandle | null> {
+  async getSession(id: SessionIdentifier, userId: string, opts?: SessionOptions): Promise<SessionHandle | null> {
     const existing = this.sessions.get(id.toString());
     if (existing) return existing;
     const persisted = this.conversationRepo.loadConversation(id.threadTs);
     if (!persisted || persisted.planSubmitted || (persisted.channelId && persisted.channelId !== id.channelId)) {
       return null;
     }
-    return this.getOrCreateSession(id, userId);
+    return this.getOrCreateSession(id, userId, opts);
   }
 
   findSession(id: SessionIdentifier): SessionHandle | null {
