@@ -192,11 +192,19 @@ export function parsePlanningRequest(
   text: string,
   presetKeys: string[],
   defaultPresetKey: string,
-): { presetKey: string; repo?: string; text: string; unknownPreset?: string } {
+): {
+  presetKey: string;
+  repo?: string;
+  repositoryUrls?: string[];
+  hasExplicitPreset?: boolean;
+  text: string;
+  unknownPreset?: string;
+} {
   let rest = text.replace(/<@[^>]+>/g, '').trim();
   let presetKey = defaultPresetKey;
   let repo: string | undefined;
   let unknownPreset: string | undefined;
+  let hasExplicitPreset = false;
   const keyset = new Set(presetKeys.map((k) => k.toLowerCase()));
   const tagRe = /^\[([^\]]*)\]\s*/;
 
@@ -212,6 +220,7 @@ export function parsePlanningRequest(
     const normalized = raw.toLowerCase().replace(/\s+/g, '').replace(/^plain/, '');
     if (keyset.has(normalized)) {
       presetKey = normalized;
+      hasExplicitPreset = true;
       rest = rest.slice(m[0].length);
       continue;
     }
@@ -222,7 +231,34 @@ export function parsePlanningRequest(
     break;
   }
 
-  return { presetKey, repo, text: rest.trim(), unknownPreset };
+  const repositoryUrls = extractRepositoryUrls(rest);
+  return {
+    presetKey,
+    repo,
+    text: rest.trim(),
+    ...(repositoryUrls.length > 0 ? { repositoryUrls } : {}),
+    ...(hasExplicitPreset ? { hasExplicitPreset } : {}),
+    ...(unknownPreset ? { unknownPreset } : {}),
+  };
+}
+
+function extractRepositoryUrls(text: string): string[] {
+  const slackLinks = [...text.matchAll(/<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>/gi)];
+  const withoutSlackLinks = text.replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ');
+  const candidates = [
+    ...slackLinks,
+    ...withoutSlackLinks.matchAll(/\bhttps?:\/\/[^\s<>]+/gi),
+    ...withoutSlackLinks.matchAll(/\bssh:\/\/[^\s<>]+/gi),
+    ...withoutSlackLinks.matchAll(/\bgit@[\w.-]+:[^\s<>]+/gi),
+  ].map((match) => (match[1] ?? match[0]).replace(/[),.;]+$/, ''));
+  return [...new Set(candidates)];
+}
+
+function repositoryIdentity(repoUrl: string): string {
+  const github = repoUrl.trim().match(/^(?:https?:\/\/|ssh:\/\/git@|git@)github\.com(?::|\/)([^/]+)\/(.+?)(?:\.git)?\/?$/i);
+  return github
+    ? `github.com/${github[1].toLowerCase()}/${github[2].toLowerCase()}`
+    : repoUrl.trim().replace(/\/+$/, '').toLowerCase();
 }
 
 // ── Lobby intent routing ─────────────────────────────────────
@@ -572,10 +608,7 @@ export class SlackSurface implements Surface {
     // Start SessionManager eviction loop
     this.sessionManager?.start();
 
-    // Run post-connect initialization in background — don't block event delivery
-    this.postConnectInit().catch((err) => {
-      this.log('slack', 'error', `Post-connect initialization failed: ${err}`);
-    });
+    await this.postConnectInit();
   }
 
   private async postConnectInit(): Promise<void> {
@@ -863,12 +896,32 @@ export class SlackSurface implements Surface {
     }
 
     const preset = this.resolveHarnessPreset(parsed.presetKey);
-    const repoResolution = this.resolveRepoUrl(parsed.repo);
-    if (repoResolution.error) {
-      await say({ text: repoResolution.error, thread_ts: event.ts });
+    const explicitRepoResolution = parsed.repo ? this.resolveRepoUrl(parsed.repo) : {};
+    if (explicitRepoResolution.error) {
+      await say({ text: explicitRepoResolution.error, thread_ts: event.ts });
       return;
     }
-    const repoUrl = repoResolution.url;
+    const repositoryUrls = parsed.repositoryUrls ?? [];
+    if (repositoryUrls.length > 1) {
+      await say({ text: 'I found multiple repository URLs. Use one repository URL or one `[repo:…]` selector per request.', thread_ts: event.ts });
+      return;
+    }
+    const detectedRepoResolution = repositoryUrls.length === 1
+      ? this.resolveRepoUrl(repositoryUrls[0])
+      : {};
+    if (detectedRepoResolution.error) {
+      await say({ text: detectedRepoResolution.error, thread_ts: event.ts });
+      return;
+    }
+    if (
+      explicitRepoResolution.url
+      && detectedRepoResolution.url
+      && repositoryIdentity(explicitRepoResolution.url) !== repositoryIdentity(detectedRepoResolution.url)
+    ) {
+      await say({ text: 'The `[repo:…]` selector and repository URL disagree. Use one repository target per request.', thread_ts: event.ts });
+      return;
+    }
+    const repoUrl = explicitRepoResolution.url ?? detectedRepoResolution.url ?? this.resolveRepoUrl().url;
 
     const threadTs = event.thread_ts ?? event.ts;
 
@@ -930,9 +983,19 @@ export class SlackSurface implements Surface {
       if (!threadRequest) return;
 
       const storedContext = this.loadPlanningContext(threadTs);
+      if (storedContext) {
+        if ((parsed.repo || repositoryUrls.length > 0) && repoUrl && storedContext.repoUrl && repositoryIdentity(repoUrl) !== repositoryIdentity(storedContext.repoUrl)) {
+          await say({ text: 'This thread is already pinned to a different repository. Start a new thread to use another repository.', thread_ts: threadTs });
+          return;
+        }
+        if (parsed.hasExplicitPreset && parsed.presetKey !== storedContext.presetKey) {
+          await say({ text: 'This thread is already pinned to a different planner preset. Start a new thread to use another preset.', thread_ts: threadTs });
+          return;
+        }
+      }
       const isPromotion = threadRequest.mode === 'plan'
         && this.sessionManager?.findSession(new SessionIdentifier(channel, threadTs))?.conversationMode === 'agent';
-      const context = isPromotion && storedContext
+      const context = storedContext
         ? storedContext
         : {
             repoUrl,
@@ -943,9 +1006,10 @@ export class SlackSurface implements Surface {
           };
       const contextPreset = this.resolveHarnessPreset(context.presetKey);
       let workingDir = context.workingDir ?? this.workingDir;
-      if (context.repoUrl && this.prepareRepoCheckout && !context.workingDir) {
+      const prepareRepoCheckout = this.prepareRepoCheckout;
+      if (this.shouldPrepareRepoCheckout(context.repoUrl) && prepareRepoCheckout) {
         try {
-          workingDir = await this.prepareRepoCheckout(context.repoUrl);
+          workingDir = await prepareRepoCheckout(context.repoUrl);
         } catch (err) {
           this.log('slack', 'error', `Failed to prepare repo checkout for ${context.repoUrl}: ${err}`);
           await say({ text: `Failed to check out repo: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
@@ -1585,13 +1649,24 @@ ${text}`;
   }
 
   private resolveRepoUrl(repo?: string): { url?: string; error?: string } {
-    if (!repo) return { url: this.defaultRepoUrl };
-    const alias = this.repoAliases[repo];
-    if (alias) return { url: alias };
-    if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return { url: repo };
+    if (!repo) return { url: this.defaultRepoUrl && this.normalizeRepositoryUrl(this.defaultRepoUrl) };
+    const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repo.toLowerCase());
+    const alias = aliasKey && this.repoAliases[aliasKey];
+    if (alias) return { url: this.normalizeRepositoryUrl(alias) };
+    if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return { url: this.normalizeRepositoryUrl(repo) };
     const known = Object.keys(this.repoAliases);
     const list = known.length ? known.join(', ') : '(none configured)';
     return { error: `Unknown repo "${repo}". Known aliases: ${list}. Or pass a full git URL.` };
+  }
+
+  private normalizeRepositoryUrl(repoUrl: string): string {
+    return repoUrl.trim().replace(/^<([^|>]+)(?:\|[^>]+)?>$/, '$1').replace(/\/+$/, '');
+  }
+
+  private shouldPrepareRepoCheckout(repoUrl: string | undefined): repoUrl is string {
+    return !!repoUrl
+      && !!this.prepareRepoCheckout
+      && (!this.defaultRepoUrl || repositoryIdentity(repoUrl) !== repositoryIdentity(this.defaultRepoUrl));
   }
 
   // ── In-channel workflow assistant ──────────────────────
@@ -2319,7 +2394,14 @@ ${text}`;
         // Delegate recovery to SessionManager
         for (const entry of active) {
           const context = this.loadPlanningContext(entry.threadTs);
+          if (context && !this.harnessPresets[context.presetKey]) {
+            this.log('slack', 'error', `[SESSION_RECOVERY] Unknown persisted harness preset "${context.presetKey}" for ${entry.threadTs}`);
+            this.sessionMetrics.errors++;
+            continue;
+          }
           const harness = this.resolveHarnessPreset(context?.presetKey ?? this.defaultHarnessPreset);
+          const workingDir = await this.prepareRecoveredWorkingDir(entry.threadTs, context);
+          if (workingDir === undefined && this.shouldPrepareRepoCheckout(context?.repoUrl)) continue;
           const id = new SessionIdentifier(
             entry.channelId || this.channelId,
             entry.threadTs,
@@ -2327,7 +2409,8 @@ ${text}`;
           await this.sessionManager.getOrCreateSession(id, entry.userId, {
             tool: harness.tool,
             model: harness.model,
-            workingDir: context?.workingDir ?? this.workingDir,
+            workingDir,
+            mode: entry.mode ?? 'plan',
             repoUrl: context?.repoUrl ?? this.defaultRepoUrl,
           });
           this.sessionMetrics.recovered++;
@@ -2336,14 +2419,21 @@ ${text}`;
         // Fallback: direct Map recovery
         for (const entry of active) {
           const context = this.loadPlanningContext(entry.threadTs);
+          if (context && !this.harnessPresets[context.presetKey]) {
+            this.log('slack', 'error', `[SESSION_RECOVERY] Unknown persisted harness preset "${context.presetKey}" for ${entry.threadTs}`);
+            this.sessionMetrics.errors++;
+            continue;
+          }
           const harness = this.resolveHarnessPreset(context?.presetKey ?? this.defaultHarnessPreset);
+          const workingDir = await this.prepareRecoveredWorkingDir(entry.threadTs, context);
+          if (workingDir === undefined && this.shouldPrepareRepoCheckout(context?.repoUrl)) continue;
           const conversation = new PlanConversation({
             cursorCommand: this.cursorCommand,
             tool: harness.tool,
             model: harness.model,
             mode: entry.mode ?? 'plan',
             planningCommandBuilder: this.planningCommandBuilder,
-            workingDir: context?.workingDir ?? this.workingDir,
+            workingDir,
             threadTs: entry.threadTs,
             conversationRepo: this.conversationRepo,
             defaultBranch: this.defaultBranch,
@@ -2362,6 +2452,21 @@ ${text}`;
     } catch (err) {
       this.log('slack', 'error', `[SESSION_ERROR] Failed to recover conversations from DB: ${err}`);
       this.sessionMetrics.errors++;
+    }
+  }
+
+  private async prepareRecoveredWorkingDir(threadTs: string, context: PlanningContext | undefined): Promise<string | undefined> {
+    const prepareRepoCheckout = this.prepareRepoCheckout;
+    if (!this.shouldPrepareRepoCheckout(context?.repoUrl) || !prepareRepoCheckout) {
+      return context?.workingDir ?? this.workingDir;
+    }
+    try {
+      const workingDir = await prepareRepoCheckout(context.repoUrl);
+      if (context) this.savePlanningContext(threadTs, { ...context, workingDir });
+      return workingDir;
+    } catch (err) {
+      this.log('slack', 'error', `[SESSION_RECOVERY] Failed to prepare repo checkout for ${threadTs}: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
     }
   }
 

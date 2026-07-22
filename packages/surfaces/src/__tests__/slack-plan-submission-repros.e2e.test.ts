@@ -268,6 +268,57 @@ describe('Slack plan submission restart repro contracts', () => {
     }));
   });
 
+  it('reacquires an external repository checkout before restoring its thread', async () => {
+    const commands: SurfaceCommand[] = [];
+    const firstCheckout = vi.fn().mockResolvedValue('/planning-clones/proof-first');
+    const first = surface(commands, {
+      repoAliases: { proof: 'https://example.test/proof.git' },
+      defaultRepoUrl: 'https://example.test/default.git',
+      prepareRepoCheckout: firstCheckout,
+    });
+    await start(first, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(first, '[repo:proof] plan: preserve checkout', 'thread-reacquire');
+    expect(firstCheckout).toHaveBeenCalledWith('https://example.test/proof.git');
+    await first.stop();
+    surfaces = surfaces.filter((candidate) => candidate !== first);
+
+    const restoredCheckout = vi.fn().mockResolvedValue('/planning-clones/proof-restored');
+    const second = surface(commands, {
+      repoAliases: { proof: 'https://example.test/proof.git' },
+      defaultRepoUrl: 'https://example.test/default.git',
+      prepareRepoCheckout: restoredCheckout,
+    });
+    await start(second, commands);
+
+    expect(restoredCheckout).toHaveBeenCalledWith('https://example.test/proof.git');
+    expect((second as any).planningContexts.get('thread-reacquire')).toEqual(expect.objectContaining({
+      workingDir: '/planning-clones/proof-restored',
+    }));
+  });
+
+  it('refuses an owned thread retarget to a different repository', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands, {
+      repoAliases: {
+        proof: 'https://example.test/proof.git',
+        other: 'https://example.test/other.git',
+      },
+      defaultRepoUrl: 'https://example.test/default.git',
+    });
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, '[repo:proof] plan: pin this repository', 'thread-retarget');
+
+    const say = await mention(slack, '[repo:other] plan: switch repositories', 'retarget-turn', 'thread-retarget');
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('already pinned to a different repository'),
+    }));
+    expect((slack as any).planningContexts.get('thread-retarget')).toEqual(expect.objectContaining({
+      repoUrl: 'https://example.test/proof.git',
+    }));
+  });
+
   it('restores a staged submit confirmation after a SlackSurface restart', async () => {
     const commands: SurfaceCommand[] = [];
     const first = surface(commands);

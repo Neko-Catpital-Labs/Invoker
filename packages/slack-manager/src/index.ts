@@ -15,11 +15,11 @@ import path from 'node:path';
 import dotenv from 'dotenv';
 
 import { SlackSurface, type SlackSurfaceConfig } from '@invoker/surfaces';
-import { ConversationRepository, SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
+import { ConversationRepository, SlackSessionRepository, SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
 
 import { IpcInvokerClient } from './invoker-client.js';
 import { createInvokerLauncher } from './invoker-launcher.js';
-import { resolveDefaultHarnessPreset, readDefaultSlackHarnessPreset } from './runtime-config.js';
+import { readSlackRuntimeConfig, resolveDefaultHarnessPreset } from './runtime-config.js';
 import { createRunWorkflowOp } from './workflow-ops.js';
 import { createCommandHandler } from './command-handler.js';
 import { startEventSubscription } from './event-subscription.js';
@@ -86,12 +86,13 @@ async function main(): Promise<void> {
   // Manager-owned store — survives while Invoker's DB is owned or its process is down.
   const adapter = await SQLiteAdapter.create(path.join(managerHome, 'slack-manager.db'), { ownerCapability: true });
   const conversationRepo = new ConversationRepository(adapter);
+  const slackSessionRepo = new SlackSessionRepository(adapter);
   const workflowChannelRepo = new WorkflowChannelRepository(adapter);
 
   const repoRoot = process.env.INVOKER_REPO_ROOT ?? process.cwd();
-  const repoUrl = detectRepoUrl(repoRoot, log);
-  const configDefaultHarnessPreset = readDefaultSlackHarnessPreset();
-  const defaultHarnessPreset = resolveDefaultHarnessPreset(process.env.INVOKER_SLACK_DEFAULT_PRESET, configDefaultHarnessPreset);
+  const runtimeConfig = readSlackRuntimeConfig();
+  const repoUrl = process.env.INVOKER_REPO_URL ?? runtimeConfig.defaultRepoUrl ?? detectRepoUrl(repoRoot, log);
+  const defaultHarnessPreset = resolveDefaultHarnessPreset(process.env.INVOKER_SLACK_DEFAULT_PRESET, runtimeConfig.defaultHarnessPreset);
 
   const launcher = createInvokerLauncher({
     repoRoot,
@@ -114,12 +115,14 @@ async function main(): Promise<void> {
     defaultHarnessPreset,
     workingDir: repoRoot,
     conversationRepo,
+    slackSessionRepo,
     workflowChannelRepo,
     planningCommandBuilder: createPlanningCommandBuilder(),
     prepareRepoCheckout: createPrepareRepoCheckout(path.join(managerHome, 'planning-clones')),
     defaultBranch: process.env.INVOKER_DEFAULT_BRANCH ?? 'master',
     repoUrl,
     defaultRepoUrl: repoUrl,
+    repoAliases: runtimeConfig.repoAliases,
     runWorkflowOp,
     gatherWorkflowContext,
     onRestartInvoker: async () => {
