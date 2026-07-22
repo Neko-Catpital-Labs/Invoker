@@ -73,13 +73,10 @@ const TRIGGER_SIGNALS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
  *
  *  (A) the shared auto-fix worker engine in `@invoker/execution-engine`,
  *  (B) the shared fix action / operator-facing `fix ... --auto-fix` command
- *      route in `@invoker/app`, and
- *  (C) one legacy helper module that is no longer wired into `main.ts`.
+ *      route in `@invoker/app`.
  *
  * Adding an entry here is a deliberate act: it either declares a sanctioned
- * auto-fix site or documents an unreachable legacy file that still needs its
- * own cleanup slice. Anything not listed here that trips a signal fails the
- * build.
+ * auto-fix site. Anything not listed here that trips a signal fails the build.
  */
 const ALLOWLIST: ReadonlySet<string> = new Set([
   // (A) shared worker engine — now extracted into @invoker/execution-engine
@@ -92,9 +89,6 @@ const ALLOWLIST: ReadonlySet<string> = new Set([
   'packages/app/src/workers/auto-fix-recovery.ts',
   'packages/app/src/workflow-actions.ts',
   'packages/app/src/headless.ts',
-  // (C) dead legacy helper not imported by main.ts; tracked separately so this
-  // guard still catches any new live in-app auto-fix path.
-  'packages/app/src/ipc/gui-mutation-handlers.ts',
   'packages/execution-engine/src/review-gate-ci-repair.ts',
 ]);
 
@@ -264,10 +258,10 @@ describe('no auto-fix outside the shared worker engine', () => {
   });
 
   it('catches the incident-2026-07-12 pattern: app scheduling an automatic fix', () => {
-    // The removed main.ts scheduleAutoFix built an automatic fix intent and
-    // enqueued it directly on a failed-task delta — bypassing the worker.
+    // The removed GUI scheduler built an automatic fix intent and enqueued it
+    // directly on a failed-task delta, bypassing the worker.
     const planted: SourceFile = {
-      path: 'packages/app/src/main.ts',
+      path: 'packages/app/src/ipc/gui-mutation-handlers.ts',
       content: [
         'const scheduleAutoFix = (taskId: string): void => {',
         "  void runWorkflowMutation(wf, 'normal', 'invoker:fix-with-agent',",

@@ -64,7 +64,6 @@ import { submitWorkflowMutationOrAcknowledgeDeleted } from '../workflow-mutation
 import type { WorkflowMutationContext } from '../persisted-workflow-mutation-coordinator.js';
 import {
   buildHeadlessFixArgs,
-  listOpenFixIntentsForTask,
   parseFixWithAgentMutationArgs,
   type ReviewGateCiContext,
 } from '../auto-fix-intents.js';
@@ -109,11 +108,6 @@ import { createRendererTaskFeed } from '../window/renderer-task-feed.js';
 import { createTaskGraphEventPublisher } from '../task-graph-event-publisher.js';
 import type { GuiMutationPayload, GuiMutationRegistrars } from './ipc-registration.js';
 import { resolveInvokerHomeRoot } from '../delete-all-snapshot.js';
-import {
-  buildRecoveryWorkerAuditPayload,
-  classifyAutoFixRecoveryPhase,
-  recoveryWorkerEventType,
-} from '../recovery-worker-observability.js';
 
 export interface HeadlessRunMutationPayload {
   planPath: string;
@@ -226,8 +220,6 @@ type RendererTaskFeed = ReturnType<typeof createRendererTaskFeed>;
 type TaskGraphEventPublisher = ReturnType<typeof createTaskGraphEventPublisher>;
 
 export interface GuiMutationTaskActions {
-  scheduleAutoFix: (taskId: string) => void;
-  logAutoFixDebug: (taskId: string, phase: string, details?: Record<string, unknown>) => void;
   performDeleteWorkflow: (workflowId: string) => Promise<void>;
   performDetachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
   performCancelTask: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
@@ -376,72 +368,6 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     orchestrator = context.getOrchestrator();
     commandService = context.getCommandService();
   };
-  const buildAutoFixQueueSnapshot = (taskId: string): Record<string, unknown> => {
-    const workflowId = workflowIdForTaskArg(taskId);
-    if (!workflowId) {
-      return {
-        workflowId: null,
-        openIntentCountForWorkflow: 0,
-        openFixIntentCountForWorkflow: 0,
-        openFixIntentCountForTask: 0,
-        openFixIntentForTask: false,
-        openFixIntentHead: null,
-        openFixIntentPreview: [],
-      };
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openFixIntents = openIntents.filter((intent) => (
-      intent.channel === 'invoker:fix-with-agent' || intent.channel === 'headless.exec'
-    ));
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    return {
-      workflowId,
-      openIntentCountForWorkflow: openIntents.length,
-      openFixIntentCountForWorkflow: openFixIntents.length,
-      openFixIntentCountForTask: openTaskFixIntents.length,
-      openFixIntentForTask: openTaskFixIntents.length > 0,
-      openFixIntentHead: openTaskFixIntents[0]
-        ? {
-          id: openTaskFixIntents[0].id,
-          status: openTaskFixIntents[0].status,
-          channel: openTaskFixIntents[0].channel,
-        }
-        : null,
-      openFixIntentPreview: openTaskFixIntents.slice(0, 5).map((intent) => ({
-        id: intent.id,
-        status: intent.status,
-        channel: intent.channel,
-      })),
-    };
-  };
-
-  const logAutoFixDebug = (
-    taskId: string,
-    phase: string,
-    details: Record<string, unknown> = {},
-  ): void => {
-    const task = orchestrator.getTask(taskId);
-    const payload = {
-      phase,
-      status: task?.status ?? 'missing',
-      ...buildAutoFixQueueSnapshot(taskId),
-      ...details,
-    };
-    persistence.logEvent?.(taskId, 'debug.auto-fix', payload);
-    const recoveryAction = classifyAutoFixRecoveryPhase(phase, payload);
-    if (recoveryAction) {
-      persistence.logEvent?.(
-        taskId,
-        recoveryWorkerEventType(recoveryAction),
-        buildRecoveryWorkerAuditPayload(recoveryAction, phase, payload),
-      );
-    }
-    logger.info(
-      `[auto-fix-debug] task="${taskId}" phase=${phase} payload=${JSON.stringify(payload)}`,
-      { module: 'auto-fix' },
-    );
-  };
-
   const executeFixWithAgentMutation = async (
     taskId: string,
     agentName?: string,
@@ -480,64 +406,6 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       },
     );
     return result.started;
-  };
-
-  const scheduleAutoFix = (taskId: string): void => {
-    logAutoFixDebug(taskId, 'schedule-enter');
-    const workflowMutationCoordinator = getWorkflowMutationCoordinator();
-    if (!workflowMutationCoordinator) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'no-workflow-mutation-coordinator' });
-      return;
-    }
-    if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'fix-handler-not-ready' });
-      return;
-    }
-    const workflowId = workflowIdForTaskArg(taskId);
-    if (!workflowId) {
-      logAutoFixDebug(taskId, 'schedule-skip', { reason: 'workflow-not-found' });
-      return;
-    }
-    const shouldAutoFixNow = orchestrator.shouldAutoFix(taskId);
-    if (!shouldAutoFixNow) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'shouldAutoFix-false',
-        shouldAutoFix: shouldAutoFixNow,
-      });
-      return;
-    }
-    const openIntents = persistence.listWorkflowMutationIntents(workflowId, ['queued', 'running']);
-    const openTaskFixIntents = listOpenFixIntentsForTask(openIntents, taskId);
-    if (openTaskFixIntents.length > 0) {
-      logAutoFixDebug(taskId, 'schedule-skip', {
-        reason: 'already-queued-intent',
-        existingIntentIds: openTaskFixIntents.map((intent) => intent.id),
-      });
-      return;
-    }
-    const configuredAgent = loadConfig().autoFixAgent?.trim();
-    const selectedAgent = configuredAgent && configuredAgent.length > 0 ? configuredAgent : undefined;
-    logAutoFixDebug(taskId, 'schedule-enqueue');
-    logAutoFixDebug(taskId, 'schedule-enqueued');
-    void runWorkflowMutation(
-      workflowId,
-      'normal',
-      'invoker:fix-with-agent',
-      [taskId, selectedAgent],
-      async () => executeFixWithAgentMutation(taskId, selectedAgent, 'auto-fix'),
-    )
-      .then(() => {
-        logAutoFixDebug(taskId, 'schedule-dispatch-finished');
-      })
-      .catch((err) => {
-        if (err instanceof StaleLineageError) {
-          logger.info(`auto-fix discarded stale result for "${taskId}": ${err.message}`, { module: 'auto-fix' });
-          return;
-        }
-        logAutoFixDebug(taskId, 'schedule-dispatch-error', {
-          error: err instanceof Error ? err.stack ?? err.message : String(err),
-        });
-      });
   };
 
   /** Cancel a task and cascade-kill all downstream DAG dependents. Shared by IPC, headless, and API. */
@@ -1002,8 +870,6 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
 
 
   return {
-    scheduleAutoFix,
-    logAutoFixDebug,
     performDeleteWorkflow,
     performDetachWorkflow,
     performCancelTask,
