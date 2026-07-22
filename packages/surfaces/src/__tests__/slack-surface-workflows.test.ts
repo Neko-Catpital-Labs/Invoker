@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
-import { SlackSurface, parsePlanningRequest, parseLobbyClassification, parseLocalRequest, parseThreadRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
+import { SlackSurface, extractRepoUrlFromMessage, parsePlanningRequest, parseLobbyClassification, parseLocalRequest, parseThreadRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
@@ -156,6 +156,40 @@ describe('parsePlanningRequest', () => {
       text: 'go',
       unknownPreset: 'omp+gpt5',
     });
+  });
+});
+
+describe('extractRepoUrlFromMessage', () => {
+  it('extracts wrapped and labeled Slack links', () => {
+    expect(extractRepoUrlFromMessage('use <https://github.com/openai/invoker> please')).toBe('https://github.com/openai/invoker');
+    expect(extractRepoUrlFromMessage('use <https://github.com/openai/invoker|repo> please')).toBe('https://github.com/openai/invoker');
+  });
+
+  it('extracts a plain repo URL', () => {
+    expect(extractRepoUrlFromMessage('repo is https://github.com/openai/invoker')).toBe('https://github.com/openai/invoker');
+  });
+
+  it('normalizes a trailing slash', () => {
+    expect(extractRepoUrlFromMessage('repo is https://github.com/EdbertChan/notarepo/')).toBe('https://github.com/EdbertChan/notarepo');
+  });
+
+  it('keeps a .git suffix', () => {
+    expect(extractRepoUrlFromMessage('repo is https://github.com/EdbertChan/notarepo.git')).toBe('https://github.com/EdbertChan/notarepo.git');
+  });
+
+  it('rejects deep links', () => {
+    expect(extractRepoUrlFromMessage('https://github.com/openai/invoker/issues/12')).toBeUndefined();
+    expect(extractRepoUrlFromMessage('https://github.com/openai/invoker/pull/5')).toBeUndefined();
+    expect(extractRepoUrlFromMessage('https://github.com/openai/invoker/tree/main')).toBeUndefined();
+    expect(extractRepoUrlFromMessage('https://github.com/openai/invoker/blob/main/README.md')).toBeUndefined();
+  });
+
+  it('returns the first repo-root URL when multiple are present', () => {
+    expect(extractRepoUrlFromMessage('try https://gitlab.com/first/repo then https://github.com/second/repo')).toBe('https://gitlab.com/first/repo');
+  });
+
+  it('returns undefined when no repo URL is present', () => {
+    expect(extractRepoUrlFromMessage('please plan this without a repo link')).toBeUndefined();
   });
 });
 
