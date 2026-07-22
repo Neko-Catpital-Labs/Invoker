@@ -19,6 +19,7 @@ export default defineConfig({
     '@invoker/runtime-service',
     '@invoker/transport',
     '@invoker/execution-engine',
+    '@invoker/planning-core',
     'yaml',
   ],
   clean: true,
