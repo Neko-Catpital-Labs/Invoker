@@ -159,7 +159,12 @@ describe('Slack plan submission restart repro contracts', () => {
     const say = await mention(slack, 'plan: draft a real migration plan', 'thread-agent-plan', 'thread-agent');
     const current = (slack as any).sessionManager.findSession(new SessionIdentifier('C_LOBBY', 'thread-agent'));
     expect(current?.conversationMode).toBe('plan');
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: `${plan}\n\nReply \`submit\` to submit it.` }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('*Proof plan* — 1 task:\n• Exercise the submission flow'),
+    }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('Reply `submit` to submit it.'),
+    }));
     const submitSay = await mention(slack, 'submit', 'submit-agent', 'thread-agent');
     expect(submitSay).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Approve to proceed') }));
   });
@@ -186,6 +191,9 @@ describe('Slack plan submission restart repro contracts', () => {
     expect(JSON.stringify(mockSpawn.mock.calls[0])).toContain('attention inbox');
     expect(say).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringContaining('Reply `submit` to submit it.'),
+    }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('*Proof plan* — 1 task:\n• Exercise the submission flow'),
     }));
   });
 
