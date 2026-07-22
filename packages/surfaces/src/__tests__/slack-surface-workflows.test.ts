@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
 import { SlackSurface, extractRepoUrlFromMessage, parsePlanningRequest, parseLobbyClassification, parseLocalRequest, parseThreadRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
-import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
+import { SQLiteAdapter, ConversationRepository, SlackSessionRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
 
@@ -574,6 +574,14 @@ describe('lobby verb routing', () => {
     });
   }
 
+  async function persistentLobbySurface(extra: Partial<ConstructorParameters<typeof SlackSurface>[0]> = {}) {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    const conversationRepo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
+    const slackSessionRepo = new SlackSessionRepository(adapter);
+    const surface = lobbySurface(true, { conversationRepo, slackSessionRepo, ...extra });
+    return { adapter, slackSessionRepo, surface };
+  }
+
   it('asks lobby question answers to be short ELI5 Slack prose except for clearly technical questions', () => {
     const prompt = buildLobbyQuestionPrompt('how many workflows are running?');
     expect(prompt).toContain('ELI5 Slack prose');
@@ -999,6 +1007,140 @@ describe('lobby verb routing', () => {
     expect(planConversationConfigs).toHaveLength(1);
     expect(planConversationConfigs[0].repoUrl).toBe('git@github.com:default/repo.git');
     expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
+  });
+
+  it('rebinds a follow-up repo-root URL, clears workingDir, and checks out the new repo on the next turn', async () => {
+    const oldRepo = 'https://github.com/openai/old-repo';
+    const newRepo = 'https://github.com/openai/new-repo';
+    const prepareRepoCheckout = vi.fn().mockResolvedValue('/checkouts/new-repo');
+    const { adapter, slackSessionRepo, surface } = await persistentLobbySurface({
+      defaultRepoUrl: oldRepo,
+      workingDir: '/checkouts/old-repo',
+      prepareRepoCheckout,
+    });
+
+    try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> local: start in the current repo', ts: 't1', user: 'U1', channel: 'CLOBBY' },
+        say: vi.fn().mockResolvedValue({ ts: 'a' }),
+      });
+      expect(slackSessionRepo.getLaunchContext('t1')).toEqual(expect.objectContaining({
+        repoUrl: oldRepo,
+        workingDir: '/checkouts/old-repo',
+      }));
+
+      const rebindSay = vi.fn().mockResolvedValue({ ts: 'b' });
+      await messageHandler(surface)({
+        event: { thread_ts: 't1', ts: 't2', user: 'U1', text: `Please use ${newRepo} instead`, channel: 'CLOBBY' },
+        say: rebindSay,
+      });
+
+      expect(prepareRepoCheckout).not.toHaveBeenCalled();
+      expect(slackSessionRepo.getLaunchContext('t1')).toEqual(expect.objectContaining({
+        repoUrl: newRepo,
+        workingDir: '',
+      }));
+      expect(rebindSay).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining('openai/new-repo'),
+        thread_ts: 't1',
+      }));
+      expect(rebindSay.mock.calls[0][0].text).toContain('previous working state for this thread was discarded');
+      expect(planConversationConfigs).toHaveLength(1);
+
+      await messageHandler(surface)({
+        event: { thread_ts: 't1', ts: 't3', user: 'U1', text: 'run local: make the update now', channel: 'CLOBBY' },
+        say: vi.fn().mockResolvedValue({ ts: 'c' }),
+      });
+
+      expect(prepareRepoCheckout).toHaveBeenCalledWith(newRepo);
+      expect(slackSessionRepo.getLaunchContext('t1')).toEqual(expect.objectContaining({
+        repoUrl: newRepo,
+        workingDir: '/checkouts/new-repo',
+      }));
+      expect(planConversationConfigs.at(-1)).toEqual(expect.objectContaining({
+        mode: 'agent',
+        repoUrl: newRepo,
+        workingDir: '/checkouts/new-repo',
+      }));
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('treats a follow-up URL for the already-bound repo as a no-op', async () => {
+    const boundRepo = 'git@github.com:openai/invoker.git';
+    const prepareRepoCheckout = vi.fn().mockResolvedValue('/checkouts/unused');
+    const { adapter, slackSessionRepo, surface } = await persistentLobbySurface({
+      defaultRepoUrl: boundRepo,
+      workingDir: '/checkouts/invoker',
+      prepareRepoCheckout,
+    });
+
+    try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> local: start in invoker', ts: 't1', user: 'U1', channel: 'CLOBBY' },
+        say: vi.fn().mockResolvedValue({ ts: 'a' }),
+      });
+
+      const sameRepoSay = vi.fn().mockResolvedValue({ ts: 'b' });
+      await messageHandler(surface)({
+        event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'run local: continue in https://github.com/openai/invoker', channel: 'CLOBBY' },
+        say: sameRepoSay,
+      });
+
+      expect(prepareRepoCheckout).not.toHaveBeenCalled();
+      expect(slackSessionRepo.getLaunchContext('t1')).toEqual(expect.objectContaining({
+        repoUrl: boundRepo,
+        workingDir: '/checkouts/invoker',
+      }));
+      expect(planConversationConfigs).toHaveLength(1);
+      const texts = sameRepoSay.mock.calls.map((call) => call[0].text).join('\n');
+      expect(texts).not.toContain('switched this thread');
+      expect(texts).not.toContain('previous working state');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('does not rebind a follow-up deep link', async () => {
+    const boundRepo = 'https://github.com/openai/invoker';
+    const prepareRepoCheckout = vi.fn().mockResolvedValue('/checkouts/unused');
+    const { adapter, slackSessionRepo, surface } = await persistentLobbySurface({
+      defaultRepoUrl: boundRepo,
+      workingDir: '/checkouts/invoker',
+      prepareRepoCheckout,
+    });
+
+    try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> local: start in invoker', ts: 't1', user: 'U1', channel: 'CLOBBY' },
+        say: vi.fn().mockResolvedValue({ ts: 'a' }),
+      });
+
+      const deepLinkSay = vi.fn().mockResolvedValue({ ts: 'b' });
+      await messageHandler(surface)({
+        event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'run local: inspect https://github.com/openai/new-repo/pull/123', channel: 'CLOBBY' },
+        say: deepLinkSay,
+      });
+
+      expect(prepareRepoCheckout).not.toHaveBeenCalled();
+      expect(slackSessionRepo.getLaunchContext('t1')).toEqual(expect.objectContaining({
+        repoUrl: boundRepo,
+        workingDir: '/checkouts/invoker',
+      }));
+      expect(planConversationConfigs).toHaveLength(1);
+      const texts = deepLinkSay.mock.calls.map((call) => call[0].text).join('\n');
+      expect(texts).not.toContain('switched this thread');
+      expect(texts).not.toContain('previous working state');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
   });
 
   it('asks for a repo instead of planning when a plan mention has no tag, repo URL, or default', async () => {
