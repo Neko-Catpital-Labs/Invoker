@@ -11,7 +11,7 @@
 #
 # Fixed behavior:
 #   1. The stall guard stamps execution.failureClass='liveness_stall' (persisted).
-#   2. The auto-fix engine and orchestrator.shouldAutoFix SKIP liveness failures.
+#   2. The auto-fix engine skips liveness failures.
 #   3. A dedicated requeue worker re-runs the task via the normal `retry-task`
 #      command with a bounded budget (default 3) and backoff (default 2m), then
 #      escalates to needs_input once exhausted — no infinite loop.
@@ -32,7 +32,7 @@ echo "== auto-fix excludes liveness + requeue single-engine guard =="
     src/__tests__/auto-fix-recovery.test.ts \
     src/__tests__/no-requeue-outside-worker.test.ts )
 
-echo "== shouldAutoFix skips liveness + escalateStalledToNeedsInput =="
+echo "== workflow-core liveness escalation =="
 ( cd packages/workflow-core && npx vitest run src/__tests__/orchestrator.test.ts )
 
 echo "== failure_class persistence round-trip =="

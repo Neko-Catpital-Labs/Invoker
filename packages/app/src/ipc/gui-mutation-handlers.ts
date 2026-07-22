@@ -34,7 +34,7 @@ import {
   resolveDefaultTaskExecutionSettings,
   type InvokerConfig,
 } from '../config.js';
-import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
+import { resolveAutoApproveAIFixes } from '../autofix-defaults.js';
 import { backupPlan } from '../plan-backup.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
@@ -1305,7 +1305,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       messageBus,
       taskRepository: new SqliteTaskRepository(persistence),
       maxConcurrency: effectiveMaxConcurrency,
-      defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
       executorRoutingRules: invokerConfig.executorRoutingRules ?? [],
       defaultPoolId: invokerConfig.defaultPoolId,
       availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),

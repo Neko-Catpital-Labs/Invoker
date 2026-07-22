@@ -122,9 +122,9 @@ re-runs the same step, re-stalls, and loops.
 Such failures are tagged with a structured `execution.failureClass` of
 `liveness_stall` when the stall guard records them. Two rules follow:
 
-- **Auto-fix skips liveness failures.** Both `orchestrator.shouldAutoFix` and the
-  auto-fix worker's eligibility check return false for a `liveness_stall`, the
-  same way they already skip user-cancelled failures.
+- **Auto-fix skips liveness failures.** The auto-fix worker's eligibility check
+  returns false for a `liveness_stall`, the same way it already skips
+  user-cancelled failures.
 - **The requeue worker owns them.** A dedicated subscriber worker wakes on
   lifecycle events, scans persisted state for `failed` + `liveness_stall` tasks,
   and submits the normal `retry-task` command (a requeue — re-run the same work,

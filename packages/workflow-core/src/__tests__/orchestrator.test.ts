@@ -743,38 +743,6 @@ describe('Orchestrator', () => {
       expect(persistence.listWorkflows().find((workflow) => workflow.id === workflowId)?.status).toBe('running');
     });
 
-    it('keeps auto-fix eligibility after a workflow is recreated', () => {
-      orchestrator = new Orchestrator({
-        persistence,
-        messageBus: bus,
-        maxConcurrency: 3,
-        defaultAutoFixRetries: 1,
-      });
-
-      orchestrator.loadPlan({
-        name: 'Recreate workflow resets auto-fix',
-        onFinish: 'none',
-        tasks: [
-          { id: 't1', description: 'First', command: 'exit 1' },
-          { id: 't2', description: 'Second', command: 'echo 2', dependencies: ['t1'] },
-        ],
-      });
-
-      const workflowId = orchestrator.getWorkflowIds()[0]!;
-      const taskId = orchestrator.getAllTasks().find(
-        (task) => task.config.workflowId === workflowId && task.id.endsWith('/t1'),
-      )!.id;
-
-      persistence.updateTask(taskId, { status: 'failed' });
-      orchestrator.syncAllFromDb();
-      expect(orchestrator.shouldAutoFix(taskId)).toBe(true);
-
-      orchestrator.recreateWorkflow(workflowId);
-      persistence.updateTask(taskId, { status: 'failed' });
-      orchestrator.syncAllFromDb();
-      expect(orchestrator.shouldAutoFix(taskId)).toBe(true);
-    });
-
     it('ignores a stale completed response after recreateWorkflow resets descendants', () => {
       const reproPersistence = new InMemoryPersistence();
       const reproBus = new InMemoryBus();
@@ -3516,60 +3484,9 @@ describe('Orchestrator', () => {
     });
   });
 
-  // ── Auto-Fix ────────────────────────────────────────────
+  // ── Synthetic spawn_experiments ──────────────────────────
 
-  describe('auto-fix via synthetic spawn_experiments', () => {
-    it('shouldAutoFix only depends on failed eligible tasks and positive retry config', () => {
-      const hydratePersistence = new InMemoryPersistence();
-      const hydrateBus = new InMemoryBus();
-
-      hydratePersistence.saveTask('wf-hydrated', {
-        id: 't1',
-        description: 'Hydrated failed task',
-        status: 'failed',
-        dependencies: [],
-        createdAt: new Date(),
-        config: {},
-        execution: {
-          exitCode: 1,
-          error: 'boom',
-        },
-      });
-
-      const disabledOrchestrator = new Orchestrator({
-        persistence: hydratePersistence,
-        messageBus: hydrateBus,
-        defaultAutoFixRetries: 0,
-      });
-      disabledOrchestrator.syncFromDb('wf-hydrated');
-      expect(disabledOrchestrator.shouldAutoFix('t1')).toBe(false);
-
-      const enabledOrchestrator = new Orchestrator({
-        persistence: hydratePersistence,
-        messageBus: hydrateBus,
-        defaultAutoFixRetries: 3,
-      });
-      enabledOrchestrator.syncFromDb('wf-hydrated');
-      expect(enabledOrchestrator.shouldAutoFix('t1')).toBe(true);
-    });
-
-    it('shouldAutoFix is false for a liveness stall even with retry budget', () => {
-      const p = new InMemoryPersistence();
-      const b = new InMemoryBus();
-      p.saveTask('wf-stall', {
-        id: 't1',
-        description: 'stalled task',
-        status: 'failed',
-        dependencies: [],
-        createdAt: new Date(),
-        config: {},
-        execution: { exitCode: 1, error: 'Execution stalled: ...', failureClass: 'liveness_stall' },
-      });
-      const o = new Orchestrator({ persistence: p, messageBus: b, defaultAutoFixRetries: 3 });
-      o.syncFromDb('wf-stall');
-      expect(o.shouldAutoFix('t1')).toBe(false);
-    });
-
+  describe('synthetic spawn_experiments', () => {
     it('escalateStalledToNeedsInput parks a failed liveness task and is idempotent/scoped', () => {
       const p = new InMemoryPersistence();
       const b = new InMemoryBus();
@@ -3582,7 +3499,7 @@ describe('Orchestrator', () => {
         config: {},
         execution: { exitCode: 1, error: 'Execution stalled: ...', failureClass: 'liveness_stall' },
       });
-      const o = new Orchestrator({ persistence: p, messageBus: b, defaultAutoFixRetries: 3 });
+      const o = new Orchestrator({ persistence: p, messageBus: b });
       o.syncFromDb('wf-stall');
 
       o.escalateStalledToNeedsInput('t1', 'stalled too many times');
@@ -3608,7 +3525,7 @@ describe('Orchestrator', () => {
         config: {},
         execution: { exitCode: 1, error: 'assertion failed' },
       });
-      const o = new Orchestrator({ persistence: p, messageBus: b, defaultAutoFixRetries: 3 });
+      const o = new Orchestrator({ persistence: p, messageBus: b });
       o.syncFromDb('wf-bug');
       o.escalateStalledToNeedsInput('t1', 'nope');
       expect(o.getTask('t1')!.status).toBe('failed');
@@ -3618,7 +3535,6 @@ describe('Orchestrator', () => {
         persistence,
         messageBus: bus,
         maxConcurrency: 3,
-        defaultAutoFixRetries: 3,
       });
       orchestrator.loadPlan({
         name: 'autofix-test',
@@ -3650,7 +3566,6 @@ describe('Orchestrator', () => {
         persistence,
         messageBus: bus,
         maxConcurrency: 3,
-        defaultAutoFixRetries: 3,
       });
       orchestrator.loadPlan({
         name: 'autofix-recon-test',
