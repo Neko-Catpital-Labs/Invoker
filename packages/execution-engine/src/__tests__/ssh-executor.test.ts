@@ -304,6 +304,52 @@ describe('SshExecutor managed workspace mode', () => {
     }
   });
 
+  it('keeps the managed pnpm bootstrap when legacy provisionCommand is whitespace', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 1,
+      provisionCommand: '  \n\t  ',
+    } as ConstructorParameters<typeof SshExecutor>[0] & { provisionCommand: string }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'payload-ran\\n'",
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    expect(capturedScript).toContain('ensure_managed_pnpm_workspace');
+    expect(capturedScript).toContain('pnpm install --frozen-lockfile');
+    expect(capturedScript).not.toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+    expect(capturedScript).not.toContain('base64 -d');
+    expect(capturedScript.indexOf('pnpm install --frozen-lockfile')).toBeLessThan(
+      capturedScript.indexOf('echo "[SshExecutor] Running task payload..."'),
+    );
+  });
+
   it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
