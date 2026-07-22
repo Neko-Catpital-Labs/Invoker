@@ -2573,6 +2573,41 @@ describe('TaskRunner', () => {
       expect(provider).toHaveBeenCalledTimes(2);
     });
 
+    it('passes provisionCommand into cached SSH executors and refreshes when it changes', () => {
+      const provider = vi.fn()
+        .mockReturnValueOnce({
+          'do-droplet': { host: '1.2.3.4', user: 'root', sshKeyPath: '/key', provisionCommand: 'echo first' },
+        })
+        .mockReturnValueOnce({
+          'do-droplet': { host: '1.2.3.4', user: 'root', sshKeyPath: '/key', provisionCommand: 'echo first' },
+        })
+        .mockReturnValueOnce({
+          'do-droplet': { host: '1.2.3.4', user: 'root', sshKeyPath: '/key', provisionCommand: 'echo second' },
+        });
+
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: provider,
+      });
+
+      const task = makeTask({
+        id: 'ssh-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'do-droplet' },
+      });
+
+      const first = executor.selectExecutor(task);
+      const cached = executor.selectExecutor(task);
+      const changed = executor.selectExecutor(task);
+
+      expect((first.executor as any).provisionCommand).toBe('echo first');
+      expect(cached.executor).toBe(first.executor);
+      expect(changed.executor).not.toBe(first.executor);
+      expect((changed.executor as any).provisionCommand).toBe('echo second');
+    });
+
     it('throws when provider returns no entry for the target ID', () => {
       const provider = vi.fn().mockReturnValue({});
       const executor = new TaskRunner({
