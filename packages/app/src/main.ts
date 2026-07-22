@@ -2389,9 +2389,6 @@ function createEmbeddedTerminalBackendFromConfig(
       getMainWindow: () => mainWindow,
       setStartupWorkflowId: (workflowId) => { startupWorkflowId = workflowId; },
       requestWorkflowMetadataPublish,
-      scheduleAutoFix: (taskId) => requireGuiMutationTaskActions().scheduleAutoFix(taskId),
-      logAutoFixDebug: (taskId, phase, details) =>
-        requireGuiMutationTaskActions().logAutoFixDebug(taskId, phase, details),
       uiPerfStats,
       traceUiDeltaFlow,
       traceDbPollPerTask,
