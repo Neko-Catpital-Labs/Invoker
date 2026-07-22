@@ -109,6 +109,7 @@ describe('parsePlanningRequest', () => {
     expect(parsePlanningRequest('<@BOT> [omp+claude] [repo:web] do X', keys, 'cursor+claude')).toEqual({
       presetKey: 'omp+claude',
       repo: 'web',
+      hasExplicitPreset: true,
       text: 'do X',
     });
   });
@@ -126,6 +127,7 @@ describe('parsePlanningRequest', () => {
     expect(parsePlanningRequest('[plain codex] go', keys, 'cursor+claude')).toEqual({
       presetKey: 'codex',
       repo: undefined,
+      hasExplicitPreset: true,
       text: 'go',
     });
     expect(parsePlanningRequest('[unknown] go', keys, 'cursor+claude')).toEqual({
@@ -139,6 +141,7 @@ describe('parsePlanningRequest', () => {
     expect(parsePlanningRequest('[omp] add a /health endpoint', keys, 'cursor+claude')).toEqual({
       presetKey: 'omp',
       repo: undefined,
+      hasExplicitPreset: true,
       text: 'add a /health endpoint',
     });
   });
@@ -155,6 +158,24 @@ describe('parsePlanningRequest', () => {
       repo: undefined,
       text: 'go',
       unknownPreset: 'omp+gpt5',
+    });
+  });
+
+  it('extracts one direct repository URL from Slack markup or prose', () => {
+    expect(parsePlanningRequest(
+      '<@BOT> plan this in <https://github.com/EdbertChan/notarepo/|notarepo>',
+      keys,
+      'cursor+claude',
+    )).toMatchObject({
+      presetKey: 'cursor+claude',
+      repositoryUrls: ['https://github.com/EdbertChan/notarepo/'],
+    });
+    expect(parsePlanningRequest(
+      'plan this in git@github.com:EdbertChan/notarepo.git',
+      keys,
+      'cursor+claude',
+    )).toMatchObject({
+      repositoryUrls: ['git@github.com:EdbertChan/notarepo.git'],
     });
   });
 });
@@ -228,6 +249,7 @@ describe('BUILTIN_HARNESS_PRESETS', () => {
     expect(parsePlanningRequest('<@BOT> [omp+codex] add a /health endpoint', keys, 'cursor+claude')).toEqual({
       presetKey: 'omp+codex',
       repo: undefined,
+      hasExplicitPreset: true,
       text: 'add a /health endpoint',
     });
   });
@@ -890,6 +912,61 @@ describe('lobby verb routing', () => {
     expect(planConversationConfigs).toHaveLength(1);
     expect(planConversationConfigs[0].mode).toBe('plan');
     expect(runWorkflowOp).not.toHaveBeenCalled();
+  });
+
+  it('uses a direct repository URL for a clone-backed planning session', async () => {
+    const prepareRepoCheckout = vi.fn().mockResolvedValue('/planning-clones/notarepo');
+    const surface = lobbySurface(true, {
+      defaultRepoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+      workingDir: '/manager/Invoker',
+      prepareRepoCheckout,
+    });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> plan this in <https://github.com/EdbertChan/notarepo/|notarepo>',
+        ts: 'direct-repo',
+        user: 'U1',
+      },
+      say,
+    });
+
+    expect(prepareRepoCheckout).toHaveBeenCalledWith('https://github.com/EdbertChan/notarepo');
+    expect(planConversationConfigs.at(-1)).toEqual(expect.objectContaining({
+      repoUrl: 'https://github.com/EdbertChan/notarepo',
+      workingDir: '/planning-clones/notarepo',
+    }));
+  });
+
+  it('rejects conflicting or multiple repository selectors before creating a session', async () => {
+    const surface = lobbySurface(true, {
+      repoAliases: { proof: 'https://github.com/example/proof.git' },
+    });
+    await surface.start(async () => {});
+    const conflictSay = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> [repo:proof] plan https://github.com/example/other',
+        ts: 'repo-conflict',
+        user: 'U1',
+      },
+      say: conflictSay,
+    });
+    expect(conflictSay).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('disagree') }));
+    expect(planConversationConfigs).toHaveLength(0);
+
+    const multipleSay = vi.fn().mockResolvedValue({ ts: 'b' });
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> plan https://github.com/example/one and https://github.com/example/two',
+        ts: 'repo-multiple',
+        user: 'U1',
+      },
+      say: multipleSay,
+    });
+    expect(multipleSay).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('multiple repository URLs') }));
+    expect(planConversationConfigs).toHaveLength(0);
   });
 
 
