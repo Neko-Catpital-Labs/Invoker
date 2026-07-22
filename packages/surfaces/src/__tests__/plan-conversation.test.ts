@@ -585,7 +585,7 @@ describe('PlanConversation', () => {
 
     const reply = await conversational.sendMessage('yes');
 
-    expect(reply).toBe(`${VALID_YAML_PLAN}\n\nReply \`submit\` to submit it.`);
+    expect(reply).toBe(VALID_YAML_PLAN);
     expect(conversational.planSubmitted).toBe(false);
     expect(conversational.submittedPlanText).toBeNull();
     expect(mockSpawn).toHaveBeenCalledTimes(1);
