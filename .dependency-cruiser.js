@@ -120,14 +120,14 @@ module.exports = {
     {
       name: 'layer-0-no-deps',
       comment:
-        'Layer 0 packages (contracts, workflow-graph, transport, runtime-domain, runtime-service, shell, ui) should not depend on other workspace packages.',
+        'Layer 0 packages (contracts, workflow-graph, transport, runtime-domain, runtime-service, shell, ui, planning-core) should not depend on other workspace packages.',
       severity: 'error',
       from: {
-        path: '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+        path: '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|planning-core)/',
       },
       to: {
         path: '^packages/',
-        pathNot: '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+        pathNot: '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|planning-core)/',
       },
     },
     {
@@ -142,7 +142,7 @@ module.exports = {
         path: '^packages/',
         pathNot: [
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
-          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|planning-core)/',
         ],
       },
     },
@@ -159,7 +159,7 @@ module.exports = {
         pathNot: [
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
-          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|planning-core)/',
         ],
       },
     },
@@ -177,7 +177,7 @@ module.exports = {
           '^packages/(execution-engine|surfaces)/',
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
-          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|planning-core)/',
         ],
       },
     },
@@ -196,7 +196,7 @@ module.exports = {
           '^packages/(execution-engine|surfaces)/',
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
-          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
+          '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui|planning-core)/',
         ],
       },
     },
