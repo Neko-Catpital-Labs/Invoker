@@ -1761,6 +1761,12 @@ run_same_workflow_tracked_fix_vs_recreate() {
     ov_wait_task_status "$workflow_id/root" failed "$seed_timeout_seconds"
   done
 
+  # The `query-queue` diagnostic probe below is fired into a deliberate overload
+  # storm. When the live owner is momentarily too busy to serve it, the headless
+  # client keeps delegating (rather than a doomed file read) and surfaces a clean,
+  # transient "did not serve queue query". Tolerate only that message so a real
+  # crash (a different message) still fails the storm.
+  OVERLOAD_ALLOWED_BACKGROUND_FAILURE_PATTERN="did not serve queue query"
   echo "==> overload: starting tracked fix against same-workflow recreate pressure"
   ov_spawn_command_timed "tracked-fix" 120 invoker_e2e_run_headless fix "$target_task" codex
   ov_wait_task_status_any "$target_task" "fixing_with_ai,awaiting_approval,completed,failed" 30
