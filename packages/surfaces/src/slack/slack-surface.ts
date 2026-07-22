@@ -379,6 +379,10 @@ export function parseThreadRequest(text: string): ThreadRequest | null {
     }
   }
 
+  if (/^(?:can|could|would)\s+you\s+(?:please\s+)?(?:create|make|draft|write)\s+(?:an?\s+)?plan\b[\s\S]*\bsubmit(?:\s+(?:it|this))?\s+to\s+invoker\b/i.test(trimmed)) {
+    return { mode: 'plan', text: trimmed };
+  }
+
   const viaInvoker = /^(.*?\S)\s+(?:via|with)\s+invoker[.!]?$/i.exec(trimmed);
   if (viaInvoker) {
     return { mode: 'plan', text: viaInvoker[1] };
