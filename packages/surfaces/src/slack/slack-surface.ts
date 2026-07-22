@@ -979,7 +979,7 @@ export class SlackSurface implements Surface {
       const messageText = threadRequest.mode === 'plan'
         ? await this.withThreadContext(channel, threadTs, threadRequest.text)
         : threadRequest.text;
-      await this.handleConversationMessage(conversation, messageText, threadTs, say, channel);
+      await this.handleConversationMessage(conversation, messageText, threadTs, say, channel, event.ts);
     } finally {
       // Drop any leftover Processing… ack (success paths already replace/delete it).
       await this.clearImmediateAck(channel, threadTs);
@@ -1019,9 +1019,10 @@ export class SlackSurface implements Surface {
   private async withThreadContext(channel: string, threadTs: string, request: string): Promise<string> {
     try {
       const replies = await this.app.client.conversations.replies({ channel, ts: threadTs, limit: 100 });
-      const context = (replies.messages ?? [])
+      const messages = (replies.messages ?? []) as Array<{ bot_id?: string; subtype?: string; text?: string }>;
+      const context = messages
         .filter((message) => !message.bot_id && !message.subtype && typeof message.text === 'string')
-        .map((message) => message.text.trim())
+        .map((message) => message.text!.trim())
         .filter((text) => text && text !== request)
         .slice(-20)
         .map((text) => `- ${text.slice(0, 1_000)}`)
@@ -1881,62 +1882,11 @@ ${text}`;
         await this.handleLobbySubmit(channel, msg.thread_ts, msg.user ?? 'unknown', say);
         return;
       }
-
-      const localRequest = parseLocalRequest(text);
-      if (localRequest?.kind === 'command') {
-        const preset = this.resolveHarnessPreset(this.defaultHarnessPreset);
-        await this.handleLocalRequest(localRequest, preset, msg.thread_ts, say, channel, { userId: msg.user });
-        return;
-      }
-
-      let threadRequest = parseThreadRequest(text);
-      const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
-      if (!explicitLocalAgent && threadRequest?.mode !== 'plan') {
-        const context = this.loadPlanningContext(msg.thread_ts);
-        const preset = this.resolveHarnessPreset(context?.presetKey ?? this.defaultHarnessPreset);
-        const cls = await this.classifyLobbyIntent(text, preset);
-        this.log('slack', 'info', `[CLASSIFY] thread_ts=${msg.thread_ts} intent=${cls.intent}`);
-        if (cls.intent === 'plan') {
-          threadRequest = { mode: 'plan', text };
-        }
-      }
-      let messageText = text;
-      if (threadRequest?.mode === 'plan') {
-        const id = new SessionIdentifier(channel, msg.thread_ts);
-        const current = this.sessionManager
-          ? await this.sessionManager.getSession(id, msg.user ?? 'unknown')
-          : undefined;
-        if (current?.conversationMode === 'agent' && this.sessionManager) {
-          const context: PlanningContext = this.loadPlanningContext(msg.thread_ts) ?? {
-            presetKey: this.defaultHarnessPreset,
-            workingDir: this.workingDir,
-            requestedBy: msg.user,
-            lobbyChannel: channel,
-          };
-          const preset = this.resolveHarnessPreset(context.presetKey);
-          const promoted = await this.sessionManager.promoteToPlanSession(id, msg.user ?? 'unknown', {
-            tool: preset.tool,
-            model: preset.model,
-            workingDir: context.workingDir,
-            repoUrl: context.repoUrl,
-          });
-          if (!promoted) return;
-          this.savePlanningContext(msg.thread_ts, context);
-          messageText = threadRequest.text;
-        }
-      }
-
-      // Look up or recover session (don't create new sessions for random thread replies in fallback mode)
       const conversation = await this.getSession(channel, msg.thread_ts, msg.user ?? 'unknown', false);
       if (!conversation) return;
       if (!text) return;
 
-      this.log('slack', 'info', `[SESSION_MESSAGE] Thread reply (thread_ts=${msg.thread_ts}, user=${msg.user}, preview="${text.slice(0, 100)}${text.length > 100 ? '...' : ''}")`);
-
-      if (threadRequest?.mode === 'plan') {
-        messageText = await this.withThreadContext(channel, msg.thread_ts, messageText);
-      }
-      await this.handleConversationMessage(conversation, messageText, msg.thread_ts, say, channel);
+      this.log('slack', 'info', `[PASSIVE_THREAD_CONTEXT] thread_ts=${msg.thread_ts} user=${msg.user} preview="${text.slice(0, 100)}${text.length > 100 ? '...' : ''}"`);
     });
   }
 
@@ -1948,6 +1898,7 @@ ${text}`;
     threadTs: string,
     say: SayFn,
     channel: string = this.lobbyChannelId,
+    sourceEventTs?: string,
   ): Promise<void> {
     const tEntry = Date.now();
     this.log('slack', 'info', `[TRACE] handleConversationMessage (thread_ts=${threadTs}, text="${text.slice(0, 80)}")`);
@@ -1996,10 +1947,15 @@ ${text}`;
         await this.stopTypingIndicator(channel, threadTs);
       }
 
-      const chunks = splitForSlack(sanitizeSlackOutbound(reply));
+      const renderedReply = conversation.conversationMode === 'plan'
+        && conversation.getDraftedPlan()
+        && !reply.includes('Reply `submit` to submit it.')
+        ? `${reply.trimEnd()}\n\nReply \`submit\` to submit it.`
+        : reply;
+      const chunks = splitForSlack(sanitizeSlackOutbound(renderedReply));
       const revision = process.env.INVOKER_REVISION ?? process.env.GIT_COMMIT ?? 'unknown';
       this.log('slack', 'info',
-        `[RESPONSE_PROVENANCE] thread_ts=${threadTs} mode=${conversation.conversationMode} revision=${revision} reply_chars=${reply.length} chunks=${chunks.length}`);
+        `[RESPONSE_PROVENANCE] thread_ts=${threadTs} source_event_ts=${sourceEventTs ?? threadTs} mode=${conversation.conversationMode} revision=${revision} reply_chars=${renderedReply.length} chunks=${chunks.length}`);
 
       const ackTs = this.ackMessages.get(threadTs);
       if (ackTs) {
