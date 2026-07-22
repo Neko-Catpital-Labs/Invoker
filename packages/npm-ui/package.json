@@ -1,6 +1,6 @@
 {
   "name": "@neko-catpital-labs/invoker-ui",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "description": "Invoker desktop UI launcher",
   "type": "module",
   "repository": {

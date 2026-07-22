@@ -40,7 +40,7 @@ import { logCaughtException } from './logging.js';
 import { runMcpServer } from './mcp-server.js';
 import { runDoctor, runSetup } from './onboarding.js';
 
-const VERSION = '0.0.7';
+const VERSION = '0.0.8';
 
 type CliOptions = {
   dbDir?: string;

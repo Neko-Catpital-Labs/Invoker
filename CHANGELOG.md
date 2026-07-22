@@ -4,6 +4,10 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+## 0.0.8
+
+- Improve Slack thread planning: promote same-thread plan requests, infer plans from conversation, share a transport-neutral planning lifecycle, pin repository/harness context across manager restarts, and approve compact plan drafts inline.
+
 - Stop graph node selection from moving the camera. Clicking a workflow or task node now changes only selection/focus; camera movement is limited to explicit fit/framing commands, Home navigation, and F1 as a one-shot center-on-selection. The persisted camera-lock preference has been removed, and stale `localStorage` entries are ignored.
 
 - Make SSH pool capacity lease-backed. Member admission for SSH hosts is decided by unexpired host-keyed rows in `execution_resource_leases` (claimed at select time, counted up to `maxConcurrentTasksPerMember`), not by in-memory `activeExecutions` / `pendingPoolSelections` ghosts. Worktree members still use in-memory load. Inspect live holders with `./run.sh --headless query execution-leases` (owner-delegated). Reclaim helpers still kill orphan executors, but they are no longer the capacity safety net. Gate regressions with `bash scripts/repro/repro-ssh-lease-capacity-battery.sh --gate`.
