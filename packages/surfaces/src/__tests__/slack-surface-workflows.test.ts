@@ -274,7 +274,11 @@ describe('harness routing', () => {
 
   it('constructs the planning conversation with the preset tool/model and injected builder', async () => {
     const builder = vi.fn(() => ({ command: 'cursor', args: [] }));
-    const surface = new SlackSurface({ ...baseConfig(), planningCommandBuilder: builder });
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      defaultRepoUrl: 'git@github.com:default/repo.git',
+      planningCommandBuilder: builder,
+    });
     await surface.start(async () => {});
 
     await mentionHandler(surface)({
@@ -906,7 +910,7 @@ describe('lobby verb routing', () => {
   });
 
   it('routes a build request to an inferred Invoker plan thread', async () => {
-    const surface = lobbySurface();
+    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> add a /health endpoint', ts: 't1', user: 'U1' }, say });
@@ -917,13 +921,103 @@ describe('lobby verb routing', () => {
   });
 
   it('routes an explicit plan request to an Invoker plan thread', async () => {
-    const surface = lobbySurface();
+    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> plan: add a /health endpoint', ts: 't1', user: 'U1' }, say });
     expect(planConversationConfigs).toHaveLength(1);
     expect(planConversationConfigs[0].mode).toBe('plan');
     expect(runWorkflowOp).not.toHaveBeenCalled();
+  });
+
+  it('uses a repo-root URL in the first plan message instead of defaultRepoUrl and announces it', async () => {
+    mockSpawn.mockImplementationOnce(() => mockProcess('{"intent":"plan","operation":"none","target":"none"}'));
+    const surface = lobbySurface(true, {
+      defaultRepoUrl: 'git@github.com:default/repo.git',
+      enableImmediateAck: true,
+    });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> add a /health endpoint to https://github.com/openai/invoker',
+        ts: 't1',
+        user: 'U1',
+        channel: 'CLOBBY',
+      },
+      say,
+    });
+
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].repoUrl).toBe('https://github.com/openai/invoker');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(say).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      text: expect.stringContaining('I picked repo `https://github.com/openai/invoker`'),
+      thread_ts: 't1',
+    }));
+  });
+
+  it('lets a [repo:] tag win over a repo URL in the same first plan message', async () => {
+    const surface = lobbySurface(true, {
+      defaultRepoUrl: 'git@github.com:default/repo.git',
+      repoAliases: { foo: 'git@github.com:me/foo.git' },
+    });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> [repo:foo] plan: add a /health endpoint to https://github.com/openai/invoker',
+        ts: 't1',
+        user: 'U1',
+        channel: 'CLOBBY',
+      },
+      say,
+    });
+
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].repoUrl).toBe('git@github.com:me/foo.git');
+    expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
+  });
+
+  it('ignores a deep link in the first plan message and falls through to defaultRepoUrl', async () => {
+    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> plan: fix the issue at https://github.com/openai/invoker/pull/123',
+        ts: 't1',
+        user: 'U1',
+        channel: 'CLOBBY',
+      },
+      say,
+    });
+
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].repoUrl).toBe('git@github.com:default/repo.git');
+    expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
+  });
+
+  it('asks for a repo instead of planning when a plan mention has no tag, repo URL, or default', async () => {
+    const surface = lobbySurface();
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> plan: add a /health endpoint', ts: 't1', user: 'U1', channel: 'CLOBBY' },
+      say,
+    });
+
+    expect(planConversationConfigs).toHaveLength(0);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('[repo:<alias>]'),
+      thread_ts: 't1',
+    }));
+    expect(say.mock.calls[0][0].text).toContain('git URL');
   });
 
 
@@ -981,7 +1075,7 @@ describe('lobby verb routing', () => {
   });
 
   it('submit shows every task in the plan summary and emits start_plan on confirmation', async () => {
-    const surface = lobbySurface();
+    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
     await surface.start(async (cmd) => { received.push(cmd); });
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     // Open a planning conversation in the thread, then arm its drafted plan.
