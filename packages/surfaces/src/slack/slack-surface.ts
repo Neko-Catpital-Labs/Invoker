@@ -46,6 +46,8 @@ function truncateWords(text: string, maxWords: number): string {
   return `${words.slice(0, maxWords).join(' ')} ...`;
 }
 
+const DRAFT_SUBMIT_INSTRUCTION = 'Reply `submit` to submit it.';
+
 // ── Config ──────────────────────────────────────────────────
 
 export interface SlackSurfaceConfig {
@@ -1947,11 +1949,20 @@ ${text}`;
         await this.stopTypingIndicator(channel, threadTs);
       }
 
-      const renderedReply = conversation.conversationMode === 'plan'
-        && conversation.getDraftedPlan()
-        && !reply.includes('Reply `submit` to submit it.')
-        ? `${reply.trimEnd()}\n\nReply \`submit\` to submit it.`
-        : reply;
+      const draftedPlan = conversation.conversationMode === 'plan'
+        ? conversation.getDraftedPlan()
+        : undefined;
+      const summary = draftedPlan ? summarizePlanText(draftedPlan) : null;
+      const replyWithoutSubmitInstruction = reply
+        .replace(/\n*Reply `submit` to submit it\.\s*$/i, '')
+        .trimEnd();
+      const renderedReply = summary
+        ? [replyWithoutSubmitInstruction, this.renderPlanSummary(summary), DRAFT_SUBMIT_INSTRUCTION]
+          .filter(Boolean)
+          .join('\n\n')
+        : draftedPlan && !reply.includes(DRAFT_SUBMIT_INSTRUCTION)
+          ? `${reply.trimEnd()}\n\n${DRAFT_SUBMIT_INSTRUCTION}`
+          : reply;
       const chunks = splitForSlack(sanitizeSlackOutbound(renderedReply));
       const revision = process.env.INVOKER_REVISION ?? process.env.GIT_COMMIT ?? 'unknown';
       this.log('slack', 'info',
