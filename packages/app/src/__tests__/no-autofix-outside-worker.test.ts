@@ -73,8 +73,7 @@ const TRIGGER_SIGNALS: ReadonlyArray<{ name: string; pattern: RegExp }> = [
  *
  *  (A) the shared auto-fix worker engine in `@invoker/execution-engine`,
  *  (B) the shared fix action / operator-facing `fix ... --auto-fix` command
- *      route in `@invoker/app`, and
- *  (C) one legacy helper module that is no longer wired into `main.ts`.
+ *      route in `@invoker/app`.
  *
  * Adding an entry here is a deliberate act: it either declares a sanctioned
  * auto-fix site or documents an unreachable legacy file that still needs its
@@ -92,9 +91,6 @@ const ALLOWLIST: ReadonlySet<string> = new Set([
   'packages/app/src/workers/auto-fix-recovery.ts',
   'packages/app/src/workflow-actions.ts',
   'packages/app/src/headless.ts',
-  // (C) dead legacy helper not imported by main.ts; tracked separately so this
-  // guard still catches any new live in-app auto-fix path.
-  'packages/app/src/ipc/gui-mutation-handlers.ts',
   'packages/execution-engine/src/review-gate-ci-repair.ts',
 ]);
 

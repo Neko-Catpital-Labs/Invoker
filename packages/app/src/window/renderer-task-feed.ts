@@ -69,8 +69,6 @@ export interface RendererTaskFeedDeps {
   getMainWindow: () => BrowserWindow | null;
   setStartupWorkflowId: (workflowId: string | null) => void;
   requestWorkflowMetadataPublish: (reason: string) => void;
-  scheduleAutoFix?: (taskId: string) => void;
-  logAutoFixDebug?: (taskId: string, phase: string, details?: Record<string, unknown>) => void;
   uiPerfStats: RendererTaskFeedUiPerfStats;
   traceUiDeltaFlow: boolean;
   traceDbPollPerTask: boolean;
