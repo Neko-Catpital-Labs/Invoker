@@ -254,8 +254,11 @@ describe('Slack plan submission restart repro contracts', () => {
       defaultRepoUrl: 'https://example.test/default.git',
     });
     await start(second, commands);
+    const restored = (second as any).sessionManager.findSession(new SessionIdentifier('C_LOBBY', 'thread-context'));
+    expect(restored?.conversationMode).toBe('plan');
+    expect((restored?.conversation as any).tool).toBe('special-tool');
+    expect((restored?.conversation as any).model).toBe('special-model');
     const say = await mention(second, 'submit', 'submit-context', 'thread-context');
-    expect((second as any).sessionManager.findSession(new SessionIdentifier('C_LOBBY', 'thread-context'))?.conversationMode).toBe('plan');
     await mention(second, 'yes', 'confirm-context', 'thread-context');
     expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Approve to proceed') }));
     expect(commands).toContainEqual(expect.objectContaining({

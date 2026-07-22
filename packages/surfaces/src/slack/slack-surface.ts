@@ -2318,25 +2318,36 @@ ${text}`;
       if (this.sessionManager) {
         // Delegate recovery to SessionManager
         for (const entry of active) {
+          const context = this.loadPlanningContext(entry.threadTs);
+          const harness = this.resolveHarnessPreset(context?.presetKey ?? this.defaultHarnessPreset);
           const id = new SessionIdentifier(
             entry.channelId || this.channelId,
             entry.threadTs,
           );
-          await this.sessionManager.getOrCreateSession(id, entry.userId);
+          await this.sessionManager.getOrCreateSession(id, entry.userId, {
+            tool: harness.tool,
+            model: harness.model,
+            workingDir: context?.workingDir ?? this.workingDir,
+            repoUrl: context?.repoUrl ?? this.defaultRepoUrl,
+          });
           this.sessionMetrics.recovered++;
         }
       } else {
         // Fallback: direct Map recovery
         for (const entry of active) {
+          const context = this.loadPlanningContext(entry.threadTs);
+          const harness = this.resolveHarnessPreset(context?.presetKey ?? this.defaultHarnessPreset);
           const conversation = new PlanConversation({
             cursorCommand: this.cursorCommand,
-            model: this.model,
+            tool: harness.tool,
+            model: harness.model,
             mode: entry.mode ?? 'plan',
-            workingDir: this.workingDir,
+            planningCommandBuilder: this.planningCommandBuilder,
+            workingDir: context?.workingDir ?? this.workingDir,
             threadTs: entry.threadTs,
             conversationRepo: this.conversationRepo,
             defaultBranch: this.defaultBranch,
-            repoUrl: this.defaultRepoUrl,
+            repoUrl: context?.repoUrl ?? this.defaultRepoUrl,
             plannerRetryLimit: this.plannerRetryLimit,
             plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
             conversationalPlanning: this.conversationalPlanning,
