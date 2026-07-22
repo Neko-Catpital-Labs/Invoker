@@ -951,7 +951,7 @@ export class SlackSurface implements Surface {
     const routeRepoUrl = repoResolution.url;
 
     const threadTs = event.thread_ts ?? event.ts;
-    const requiresPlanningRepo = channel === this.lobbyChannelId;
+    const requiresPlanningRepo = channel === this.lobbyChannelId && !!this.planningCommandBuilder;
     const messageRepoUrl = requiresPlanningRepo && !parsed.repo
       ? extractRepoUrlFromMessage(event.text ?? '')
       : undefined;
