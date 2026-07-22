@@ -549,7 +549,7 @@ describe('lobby verb routing', () => {
     expect(prompt).toContain('Reproducing a bug locally is always allowed');
     expect(prompt).toContain('mergify stack push');
     expect(prompt).toContain('scripts/land-stack.mjs --execute');
-    expect(prompt).toContain('plan: <request>');
+    expect(prompt).toContain('draft a plan in this same thread');
     expect(prompt).toContain('same thread');
     expect(prompt).toContain('only the final user-facing answer');
     expect(prompt).not.toContain('start a plan thread');
@@ -871,14 +871,14 @@ describe('lobby verb routing', () => {
     expect(received).toHaveLength(0);
   });
 
-  it('routes a build request to a normal agent thread without classifying', async () => {
+  it('routes a build request to an inferred Invoker plan thread', async () => {
     const surface = lobbySurface();
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> add a /health endpoint', ts: 't1', user: 'U1' }, say });
     expect(planConversationConfigs).toHaveLength(1);
-    expect(planConversationConfigs[0].mode).toBe('agent');
-    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(planConversationConfigs[0].mode).toBe('plan');
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(runWorkflowOp).not.toHaveBeenCalled();
   });
 

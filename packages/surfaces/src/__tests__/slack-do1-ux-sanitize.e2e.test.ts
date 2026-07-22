@@ -32,4 +32,10 @@ describe('DO1 e2e: sanitizeSlashCommands leaves Invoker plan prose alone', () =>
       'reply with "yes", "go", or "execute" to confirm now',
     );
   });
+
+  it('does not splice a replacement into a backtick-adjacent confirmation word', () => {
+    expect(sanitizeSlashCommands('reply with "yes", "go", or "execute" to confirm`/invoker submit`')).toBe(
+      'reply with "yes", "go", or "execute" to confirm`/invoker submit`',
+    );
+  });
 });
