@@ -13,6 +13,7 @@ export default defineConfig({
     '@invoker/contracts',
     '@invoker/data-store',
     '@invoker/execution-engine',
+    '@invoker/planning-core',
     '@invoker/transport',
     'yaml',
   ],
