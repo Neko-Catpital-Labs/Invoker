@@ -64,9 +64,6 @@ import {
 } from './isExperimentSpawnPivot.js';
 import {
   createGraphCameraCommandIssuer,
-  loadCameraLockPreference,
-  saveCameraLockPreference,
-  type CameraLockPreference,
   type GraphCameraCommand,
   type GraphCameraCommandInput,
   type GraphCameraCommandIssuer,
@@ -824,6 +821,8 @@ export function App() {
   const [sidebarSurface, setSidebarSurface] = useState<SidebarSurface>('home');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const selectedTaskIdRef = useRef<string | null>(selectedTaskId);
+  selectedTaskIdRef.current = selectedTaskId;
   const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
@@ -927,18 +926,6 @@ export function App() {
     cameraIssuerRef.current = createGraphCameraCommandIssuer();
   }
   const [cameraCommand, setCameraCommand] = useState<GraphCameraCommand | null>(null);
-  const [cameraPreference, setCameraPreference] = useState<CameraLockPreference>(() =>
-    loadCameraLockPreference(),
-  );
-  // Mirror preference into a ref so event handlers read the live value without
-  // being re-created on every preference change.
-  const cameraPreferenceRef = useRef(cameraPreference);
-  useEffect(() => {
-    cameraPreferenceRef.current = cameraPreference;
-  }, [cameraPreference]);
-  // Temporary, non-persisted suppression of the camera lock after a manual pan
-  // or wheel zoom. The next explicit node selection clears it.
-  const cameraSuppressedRef = useRef(false);
   const workflowGraphViewportRef = useRef<GraphCameraViewport | null>(null);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1605,21 +1592,6 @@ export function App() {
     return command;
   }, []);
 
-  // An explicit node selection (mouse click or arrow key) clears any temporary
-  // manual suppression and re-centers the targeted graph when the lock is on.
-  const recenterForSelection = useCallback((scope: GraphScope, target: string) => {
-    cameraSuppressedRef.current = false;
-    if (cameraPreferenceRef.current.enabled) {
-      issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'selection' });
-    }
-  }, [issueCameraCommand]);
-
-  // A manual pan or wheel zoom temporarily suppresses the lock and must not
-  // autofocus the graph — no camera command is issued here.
-  const handleManualViewport = useCallback(() => {
-    cameraSuppressedRef.current = true;
-  }, []);
-
   const handleWorkflowGraphViewportSnapshot = useCallback((viewport: GraphCameraViewport) => {
     workflowGraphViewportRef.current = viewport;
   }, []);
@@ -1644,9 +1616,8 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    recenterForSelection('workflow', workflowId);
     focusKeyboardRegion('workflowGraph');
-  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion, recenterForSelection]);
+  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion]);
 
   const selectTaskById = useCallback((taskId: string) => {
     const task = tasksRef.current.get(taskId);
@@ -1660,9 +1631,8 @@ export function App() {
     setInspectorManualOpen(true);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    recenterForSelection('task', task.id);
     focusKeyboardRegion('taskGraph');
-  }, [focusKeyboardRegion, recenterForSelection]);
+  }, [focusKeyboardRegion]);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
@@ -1798,28 +1768,15 @@ export function App() {
       }
       if (isEditableKeyboardTarget(event.target) || modal.type !== 'none') return;
 
-      // F1 is the keyboard-only camera lock control. It is already ignored for
-      // input/modal/terminal/editable targets by the guard above.
+      // F1 is the keyboard-only one-shot center on selection. It is already
+      // ignored for input/modal/terminal/editable targets by the guard above.
       if (event.key === 'F1') {
         event.preventDefault();
         const inTaskGraph = keyboardRegion === 'taskGraph';
         const scope: GraphScope = inTaskGraph ? 'task' : 'workflow';
         const target = inTaskGraph ? selectedTaskId : (selectedWorkflow?.id ?? selectedWorkflowId);
-        const preference = cameraPreferenceRef.current;
-        cameraSuppressedRef.current = false;
-        if (preference.mode === 'toggle') {
-          // Toggle mode flips the lock; enabling it immediately centers the
-          // current selection.
-          const nextEnabled = !preference.enabled;
-          const nextPreference: CameraLockPreference = { mode: preference.mode, enabled: nextEnabled };
-          setCameraPreference(nextPreference);
-          saveCameraLockPreference(nextPreference);
-          if (nextEnabled && target) {
-            issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'f1-toggle-enable' });
-          }
-        } else if (target) {
-          // Once mode centers a single time without changing the preference.
-          issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'f1-once' });
+        if (target) {
+          issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'f1-center' });
         }
         return;
       }
@@ -2034,8 +1991,7 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-    recenterForSelection('workflow', workflowId);
-  }, [armSuppressDagSurfaceDismiss, recenterForSelection]);
+  }, [armSuppressDagSurfaceDismiss]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<Element>, workflowId: string) => {
     event.preventDefault();
@@ -2116,6 +2072,7 @@ export function App() {
       if (cancelled) return;
       issueCameraCommand({ kind: 'fitInitial', scope: 'task', reason: 'browser-surface' });
 
+      const selectedTaskId = selectedTaskIdRef.current;
       if (!selectedTaskId) return;
       requestAnimationFrame(() => {
         if (cancelled) return;
@@ -2132,7 +2089,6 @@ export function App() {
     };
   }, [
     issueCameraCommand,
-    selectedTaskId,
     selectedWorkflowGraphAvailable,
     sidebarSurface,
     viewMode,
@@ -2612,7 +2568,6 @@ export function App() {
         }));
         await refreshTaskGraph();
         workflowGraphViewportRef.current = null;
-        cameraSuppressedRef.current = false;
         appendTerminalLine(
           result.workflowCount && result.workflowCount > 1
             ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows. Review them, then use Start ready work.`
@@ -3054,7 +3009,6 @@ export function App() {
 
     if (options.fit) {
       workflowGraphViewportRef.current = null;
-      cameraSuppressedRef.current = false;
       issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
       return;
     }
@@ -3547,7 +3501,6 @@ export function App() {
           onTaskClick={handleTaskClick}
           onTaskDoubleClick={handleTaskDoubleClick}
           onTaskContextMenu={handleTaskContextMenu}
-          onManualViewport={handleManualViewport}
           statusFilters={new Set<string>()}
           runningTaskIds={runningTaskIds}
           surfaceMode={floating ? 'default' : 'browser'}
@@ -3646,7 +3599,6 @@ export function App() {
                 onSelectWorkflow={handleWorkflowClick}
                 onWorkflowContextMenu={handleWorkflowContextMenu}
                 onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
-                onManualViewport={handleManualViewport}
               />
             </div>
           )}
@@ -4500,7 +4452,6 @@ export function App() {
                 onTaskClick={handleTaskClick}
                 onTaskDoubleClick={handleTaskDoubleClick}
                 onTaskContextMenu={handleTaskContextMenu}
-                onManualViewport={handleManualViewport}
                 statusFilters={new Set<string>()}
                 runningTaskIds={runningTaskIds}
                 surfaceMode="overlay"
@@ -4516,7 +4467,6 @@ export function App() {
                 onSelectWorkflow={handleWorkflowClick}
                 onWorkflowContextMenu={handleWorkflowContextMenu}
                 onViewportSnapshot={handleWorkflowGraphViewportSnapshot}
-                onManualViewport={handleManualViewport}
               />
             )}
           </div>
