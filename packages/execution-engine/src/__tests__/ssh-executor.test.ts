@@ -304,6 +304,43 @@ describe('SshExecutor managed workspace mode', () => {
     }
   });
 
+  it('ignores a legacy whitespace provisionCommand and keeps managed pnpm bootstrap', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      provisionCommand: '  \n\t  ',
+    } as any) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'pnpm test',
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const [, , , callScript] = spawnStub.mock.calls[0]!;
+    expect(callScript).toContain('ensure_managed_pnpm_workspace');
+    expect(callScript).toContain('pnpm install --frozen-lockfile');
+    expect(callScript).not.toContain('PROVISION_PATH="$STAGING_DIR/provision.sh"');
+  });
+
   it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
