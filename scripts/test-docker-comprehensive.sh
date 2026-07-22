@@ -188,12 +188,26 @@ task_output() {
   ./run.sh --headless query task-output "$1" 2>/dev/null || true
 }
 
+# In standalone headless mode the query CLI interleaves diagnostic lines
+# (`[delegation] …`, `Effective configuration …`, `[init] …`, SQLite
+# ExperimentalWarning) with the actual result on stdout. Extract just the
+# result token so exact-match comparisons and the terminal wait loop are not
+# defeated by that noise.
 task_status() {
-  ./run.sh --headless query task "$1" 2>/dev/null || echo "unknown"
+  local raw status
+  raw="$(./run.sh --headless query task "$1" 2>/dev/null || true)"
+  status="$(printf '%s\n' "$raw" | grep -Ex 'pending|queued|running|launching|fixing_with_ai|completed|failed|needs_input|awaiting_approval|review_ready|blocked|stale|cancelled' | tail -1 || true)"
+  if [[ -z "$status" ]]; then
+    echo "unknown"
+  else
+    echo "$status"
+  fi
 }
 
 task_container_id() {
-  ./run.sh --headless query container-id "$1" 2>/dev/null || echo ""
+  local raw
+  raw="$(./run.sh --headless query container-id "$1" 2>/dev/null || true)"
+  printf '%s\n' "$raw" | grep -Eo '^[0-9a-f]{12,64}$' | tail -1 || true
 }
 
 wait_for_task_terminal() {
