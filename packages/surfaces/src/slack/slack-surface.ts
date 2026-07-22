@@ -38,6 +38,7 @@ import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import { buildAssistantPrompt, parseWorkflowControl, SLACK_DIRECT_ANSWER_GUIDANCE } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
+import { formatCodexPlannerStdout } from '@invoker/execution-engine';
 
 function truncateWords(text: string, maxWords: number): string {
   const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
@@ -265,7 +266,7 @@ ${text}
 
 /** Q&A prompt for a lobby question: answer directly, never emit a plan. */
 export function buildLobbyQuestionPrompt(text: string): string {
-  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. ${SLACK_DIRECT_ANSWER_GUIDANCE} Do NOT generate a YAML plan and do NOT create a workflow. If answering well requires changing code, say in prose what the fix would be and tell the user to start a plan thread with \`plan: <request>\`.\n\n${SLACK_LOCAL_REPRO_POLICY}\n\nQuestion:\n${text}`;
+  return `Answer the user's question about this repository and Invoker. Explore the codebase if needed. ${SLACK_DIRECT_ANSWER_GUIDANCE} Do NOT generate a YAML plan and do NOT create a workflow. If answering well requires changing code, say in prose what the fix would be and tell the user they can ask for a plan in this same thread with \`plan: <request>\`, \`plan <request>\`, or \`<request> via Invoker\`. Return only the final user-facing answer; never include chain-of-thought, reasoning traces, tool output, or raw planner JSONL.\n\n${SLACK_LOCAL_REPRO_POLICY}\n\nQuestion:\n${text}`;
 }
 
 /** Parse the classifier's raw stdout into a validated classification; never throws. */
@@ -367,6 +368,8 @@ export function parseThreadRequest(text: string): ThreadRequest | null {
   const planPatterns = [
     /^(?:invoker\s+)?plan\s*:\s*/i,
     /^draft\s+(?:an?\s+)?invoker\s+plan\s*:\s*/i,
+    /^(?:invoker\s+)?plan\s+(?!mode\b)/i,
+    /^(?:draft|write|create|make)\s+(?:an?\s+)?invoker\s+plan(?:\s+(?:for|to))?\s*/i,
   ];
   for (const pattern of planPatterns) {
     const match = pattern.exec(trimmed);
@@ -374,6 +377,15 @@ export function parseThreadRequest(text: string): ThreadRequest | null {
       const rest = trimmed.slice(match[0].length).trim();
       return rest ? { mode: 'plan', text: rest } : null;
     }
+  }
+
+  const viaInvoker = /^(.*?\S)\s+(?:via|with)\s+invoker[.!]?$/i.exec(trimmed);
+  if (viaInvoker) {
+    return { mode: 'plan', text: viaInvoker[1] };
+  }
+
+  if (/^turn\s+(?:this|the (?:discussion|thread) above)\s+into\s+(?:an?\s+)?(?:invoker\s+)?plan[.!]?$/i.test(trimmed)) {
+    return { mode: 'plan', text: trimmed };
   }
 
   const localRequest = parseLocalRequest(trimmed);
@@ -885,13 +897,14 @@ export class SlackSurface implements Surface {
     }
 
     const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
+    const requestedThreadMode = parseThreadRequest(parsed.text);
 
     // Slower paths (LLM classifier, repo checkout, agent) acknowledge receipt up front.
     if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
 
     try {
       // Fallback classifier: only when a non-verb message looks operational.
-      if (!explicitLocalAgent && looksOperational(parsed.text)) {
+      if (!explicitLocalAgent && requestedThreadMode?.mode !== 'plan' && looksOperational(parsed.text)) {
         const cls = await this.classifyLobbyIntent(parsed.text, preset);
         this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
         if (cls.intent === 'command') {
@@ -907,7 +920,7 @@ export class SlackSurface implements Surface {
         // invalid-command / plan → fall through to a planning conversation.
       }
 
-      const threadRequest = parseThreadRequest(parsed.text);
+      const threadRequest = requestedThreadMode;
       if (!threadRequest) return;
 
       const storedContext = this.loadPlanningContext(threadTs);
@@ -1087,7 +1100,7 @@ export class SlackSurface implements Surface {
   private async handleLobbySubmit(channel: string, threadTs: string, userId: string, say: SayFn): Promise<void> {
     const conversation = await this.getSession(channel, threadTs, userId, false);
     if (!conversation || conversation.conversationMode !== 'plan') {
-      await say({ text: "No Invoker plan draft here yet. Start one with `@Invoker plan: ...`, then run `submit`.", thread_ts: threadTs });
+      await say({ text: "No Invoker plan draft here yet. In this thread, reply `plan: ...`, then run `submit`.", thread_ts: threadTs });
       return;
     }
     const planText = conversation.getDraftedPlan();
@@ -1709,7 +1722,8 @@ ${text}`;
         if (code === 0) {
           const trimmed = stdout.trim();
           if (trimmed) {
-            resolve(trimmed);
+            const message = formatCodexPlannerStdout(trimmed).message;
+            resolve(message || 'The planner completed without a final user-facing reply.');
           } else {
             reject(new EmptyOutputAttemptError(stderr));
           }
