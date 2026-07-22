@@ -16,6 +16,7 @@ import { dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
+import { isDraftingAuthorized } from '@invoker/planning-core';
 import type { LogFn } from '../surface.js';
 import {
   buildUnverifiedNotice,
@@ -181,33 +182,10 @@ export function isNegation(text: string): boolean {
   return NEGATION_PATTERNS.some((re) => re.test(trimmed));
 }
 
-function isExplicitDraftRequest(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return [
-    /\bdraft\b.*\b(yaml\s+)?plan\b/,
-    /\b(generate|write|create|produce)\b.*\b(yaml\s+)?plan\b/,
-    /\b(yaml\s+)?plan\b.*\b(draft|yaml)\b/,
-    /\bgo ahead\b.*\bdraft\b/,
-    /\bdraft it\b/,
-  ].some((re) => re.test(normalized));
-}
-
-function previousAssistantAskedToDraft(messages: ConversationMessage[]): boolean {
-  for (let i = messages.length - 2; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== 'assistant') continue;
-    return /\bdraft\b/i.test(msg.content)
-      && /\b(plan|yaml)\b/i.test(msg.content)
-      && msg.content.includes('?');
-  }
-  return false;
-}
-
 function isDraftingAuthorizedForPrompt(messages: ConversationMessage[]): boolean {
   const latest = messages[messages.length - 1];
   if (!latest || latest.role !== 'user') return false;
-  if (isExplicitDraftRequest(latest.content)) return true;
-  return isConfirmation(latest.content) && previousAssistantAskedToDraft(messages);
+  return isDraftingAuthorized(latest.content, messages.slice(0, -1));
 }
 
 // ── System Prompt ───────────────────────────────────────────
@@ -546,9 +524,6 @@ export class PlanConversation {
     const tCursor = Date.now();
     const formatted = formatCodexPlannerStdout(response);
     let message = formatted.message;
-    if (this.mode === 'plan' && extractYamlPlan(message) && !message.includes('Reply `submit` to submit it.')) {
-      message = `${message.trimEnd()}\n\nReply \`submit\` to submit it.`;
-    }
     const repoStateAfter = this.mode === 'agent'
       ? await captureRepoState(this.workingDir)
       : null;
