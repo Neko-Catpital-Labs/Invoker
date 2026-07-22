@@ -99,7 +99,11 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.agentRegistry = config.agentRegistry;
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
-    this.provisionCommand = config.provisionCommand ?? DEFAULT_WORKTREE_PROVISION_COMMAND;
+    const configuredProvisionCommand = config.provisionCommand;
+    this.provisionCommand =
+      typeof configuredProvisionCommand === 'string' && configuredProvisionCommand.trim().length > 0
+        ? configuredProvisionCommand
+        : DEFAULT_WORKTREE_PROVISION_COMMAND;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
     this.remoteHeartbeatIntervalSeconds =
       typeof configuredRemoteHeartbeatInterval === 'number'
