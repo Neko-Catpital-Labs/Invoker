@@ -192,6 +192,10 @@ describe('parseThreadRequest', () => {
       mode: 'plan',
       text: 'turn the discussion above into a plan',
     });
+    expect(parseThreadRequest('Can you create a plan for this to submit to Invoker for all these features?')).toEqual({
+      mode: 'plan',
+      text: 'Can you create a plan for this to submit to Invoker for all these features?',
+    });
     expect(parseThreadRequest('why are you dumping the chain of thought')).toEqual({
       mode: 'agent',
       text: 'why are you dumping the chain of thought',
