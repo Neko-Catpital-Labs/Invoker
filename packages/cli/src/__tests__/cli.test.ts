@@ -200,7 +200,7 @@ describe('invoker-cli', () => {
     expect(result.stderr).toContain('Invalid YAML');
   });
 
-  it('--live delegates run to a reachable GUI owner', async () => {
+  it('--live delegates run to a reachable headless owner', async () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();
     const runHandler = vi.fn(async (req: unknown) => {
@@ -210,7 +210,7 @@ describe('invoker-cli', () => {
       }));
       return { workflowId: 'wf-live-1', tasks: [] };
     });
-    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'gui-1', mode: 'gui' }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
     bus.onRequest('headless.run', runHandler);
 
     const code = await main(['run', fixturePlan, '--live'], { createMessageBus: () => bus });
@@ -221,14 +221,14 @@ describe('invoker-cli', () => {
     output.restore();
   });
 
-  it('--live exits non-zero when no GUI owner is reachable', async () => {
+  it('--live exits non-zero when no owner is reachable', async () => {
     const output = captureProcessOutput();
     const bus = new LocalBus();
 
     const code = await main(['run', fixturePlan, '--live'], { createMessageBus: () => bus });
 
     expect(code).toBe(1);
-    expect(output.stderr).toContain('No running Invoker UI owner is reachable');
+    expect(output.stderr).toContain('No running Invoker owner is reachable');
     output.restore();
   });
 
@@ -271,6 +271,20 @@ tasks:
     expect(code).toBe(0);
     expect(runHandler).toHaveBeenCalledTimes(1);
     expect(output.stdout).toContain('wf-auto-live');
+    output.restore();
+  });
+  it('auto mode delegates when a headless owner exists', async () => {
+    const output = captureProcessOutput();
+    const bus = new LocalBus();
+    const runHandler = vi.fn(async () => ({ workflowId: 'wf-auto-headless', tasks: [] }));
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-1', mode: 'standalone' }));
+    bus.onRequest('headless.run', runHandler);
+
+    const code = await main(['run', fixturePlan], { createMessageBus: () => bus });
+
+    expect(code).toBe(0);
+    expect(runHandler).toHaveBeenCalledTimes(1);
+    expect(output.stdout).toContain('wf-auto-headless');
     output.restore();
   });
 
