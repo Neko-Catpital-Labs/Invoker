@@ -594,7 +594,7 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Maximum auto-fix attempts per failed task. Positive finite values are caps; zero disables auto-fix. */
+  /** Unused; accepted only so existing callers keep compiling. */
   defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
@@ -661,7 +661,6 @@ export class Orchestrator {
   private readonly executorRoutingRules: ExecutorRoutingRule[];
   private readonly availablePoolIds: Set<string>;
   private readonly defaultPoolId: string | undefined;
-  private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
   private readonly launchDeferralBackoffMs?: number;
   private readonly resolveRepoDefaultBranch: (repoUrl: string) => string;
@@ -720,7 +719,6 @@ export class Orchestrator {
     ];
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
     this.defaultPoolId = config.defaultPoolId;
-    this.defaultAutoFixRetries = Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0));
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
     this.launchDeferralBackoffMs = config.launchDeferralBackoffMs;
     this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
@@ -3006,27 +3004,6 @@ export class Orchestrator {
     const updated = this.writeAndSync(task.id, changes, { skipWorkflowStatusSync: true });
     this.messageBus.publish(TASK_DELTA_CHANNEL, this.buildUpdateDelta(task, updated, changes));
     return updated;
-  }
-
-  getAutoFixRetryBudget(taskId: string): number {
-    return this.defaultAutoFixRetries;
-  }
-
-
-  private isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
-    if (task.config.isReconciliation) return false;
-    if (task.config.parentTask) return false;
-    return true;
-  }
-
-  shouldAutoFix(taskId: string): boolean {
-    const task = this.stateGetTask(taskId);
-    if (!task) return false;
-    if (task.status !== 'failed') return false;
-    // Liveness stalls are requeued by the requeue worker, never AI-auto-fixed.
-    if (isLivenessFailureClass(task.execution.failureClass)) return false;
-    if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
-    return this.getAutoFixRetryBudget(taskId) > 0;
   }
 
   getAllTasks(): TaskState[] {
