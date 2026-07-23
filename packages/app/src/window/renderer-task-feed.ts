@@ -3,7 +3,6 @@ import type { Logger, WorkResponse } from '@invoker/contracts';
 import type { Workflow } from '@invoker/data-store';
 import { Channels, type MessageBus } from '@invoker/transport';
 import type { TaskDelta, TaskState } from '@invoker/workflow-core';
-import { shouldSkipAutoFixForError } from '../auto-fix-gating.js';
 import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from '../delta-merge.js';
 import { evaluateExecutingStall, taskNeedsExecutingStallCheck } from '../executing-stall.js';
 import { persistShutdownDiagnostic, type ShutdownDiagnosticDb } from '../shutdown-diagnostic.js';
@@ -36,7 +35,6 @@ export interface RendererTaskFeedPersistence extends ShutdownDiagnosticDb {
 export interface RendererTaskFeedOrchestrator {
   getAllTasks(): TaskState[];
   getMergeNode(workflowId: string): TaskState | undefined;
-  shouldAutoFix(taskId: string): boolean;
   syncAllFromDb(): void;
   handleWorkerResponse(response: WorkResponse): void;
   reclaimStalledFixSession(
@@ -226,31 +224,12 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
   );
 
   // Apply one owner task delta to the local cache and forward results to the
-  // renderer (and drive owner-side auto-fix). Extracted so the detached viewer
-  // can replay deltas that were buffered during hydration.
+  // renderer. Extracted so the detached viewer can replay deltas that were
+  // buffered during hydration.
   const processIncomingTaskDelta = (delta: TaskDelta): void => {
     deps.uiPerfStats.mainDeltaToUi += 1;
     if (deps.traceUiDeltaFlow) {
       deps.logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
-    }
-    const deltaTaskId = delta.type === 'updated' || delta.type === 'removed' ? delta.taskId : undefined;
-    if (delta.type === 'updated' && delta.changes.status === 'failed') {
-      const cancellationError = shouldSkipAutoFixForError(delta.changes.execution?.error);
-      const shouldAutoFixFromOrchestrator = deps.getOrchestrator().shouldAutoFix(delta.taskId);
-      deps.logAutoFixDebug(delta.taskId, 'delta-failed', {
-        shouldSkipForCancellation: cancellationError,
-        shouldAutoFixFromOrchestrator,
-      });
-      if (!cancellationError && shouldAutoFixFromOrchestrator && deltaTaskId) {
-        deps.logAutoFixDebug(deltaTaskId, 'delta-trigger-schedule');
-        deps.scheduleAutoFix(deltaTaskId);
-      } else if (deltaTaskId) {
-        deps.logAutoFixDebug(deltaTaskId, 'delta-skip', {
-          reason: cancellationError ? 'cancellation-error' : 'shouldAutoFix-false',
-          shouldSkipForCancellation: cancellationError,
-          shouldAutoFixFromOrchestrator,
-        });
-      }
     }
     for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(delta)) {
       publishTaskDeltaToRenderer(rendererDelta);
