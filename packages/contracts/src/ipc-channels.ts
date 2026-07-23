@@ -480,6 +480,7 @@ export interface InAppPlanningSessionSummary {
   messages: InAppPlanningChatLine[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: InAppPlanningPlanSummary;
+  draftPlanText?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
@@ -530,6 +531,7 @@ export type InAppPlanningChatResponse =
       reply: string;
       draftPlanAvailable: boolean;
       draftPlanSummary?: InAppPlanningPlanSummary;
+      draftPlanText?: string;
     }
   | {
       ok: false;
