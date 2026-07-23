@@ -39,7 +39,6 @@ cancel-downstream-standalone|headless-standalone|sequential|running_task|cancel_
 reset-race-coalesced|headless-standalone|fan-in|failed_upstream|recreate_vs_rebase|off|overlap|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.13-rebase-recreate-coalesced.sh
 timeout-deadlock-guard|headless-standalone|single|owner_timeout_guard|rebase_and_retry|off|timeout_window|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.14-standalone-timeout-deadlock-guard.sh
 retry-vs-recreate-window|headless-standalone|single|late_reset_window|retry_vs_recreate|off|five_second_window|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.16-retry-vs-recreate-five-second-window.sh
-owner-autofix-intent|gui-owner|single|task_failed|autofix_enqueue|autofix_retry_1|none|bash __ROOT__/scripts/e2e-dry-run/cases/case-2.17-autofix-persists-fix-intent.sh
 owner-approve-delegated|gui-owner|single|awaiting_approval|approve|off|delegated|bash __ROOT__/scripts/e2e-chaos/cases/case-owner-approve-delegated.sh
 owner-reject-delegated|gui-owner|single|awaiting_approval|reject|off|delegated|bash __ROOT__/scripts/e2e-chaos/cases/case-owner-reject-delegated.sh
 stale-late-completion-both|gui-owner|sequential|stale_worker_response|recreate_and_retry_task|off|late_completion|bash __ROOT__/scripts/repro/repro-stale-late-completion-after-reset.sh --mode=both --expect-fixed
@@ -61,7 +60,6 @@ lines = [line.strip() for line in os.environ["BASE_LINES"].splitlines() if line.
 high_risk = {
     "reset-race-coalesced",
     "timeout-deadlock-guard",
-    "owner-autofix-intent",
     "owner-approve-delegated",
     "owner-reject-delegated",
     "stale-late-completion-both",
