@@ -195,7 +195,7 @@ jobs:
   e2e-proof:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu]
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
@@ -272,7 +272,7 @@ jobs:
   e2e-proof-aggregate:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: e2e-proof
-    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu]
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 15
@@ -457,7 +457,7 @@ jobs:
   reset-rulebook-repro:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu]
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 45
@@ -578,7 +578,7 @@ jobs:
   playwright:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu]
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 5
@@ -744,7 +744,7 @@ jobs:
   playwright-nightly-perf:
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     needs: build-artifacts
-    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu]
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 30
@@ -819,7 +819,7 @@ jobs:
   ssh:
     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
-    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu]
+    runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
     timeout-minutes: 60
