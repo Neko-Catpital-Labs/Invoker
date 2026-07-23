@@ -742,13 +742,13 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
     await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
     await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
-    await page.getByTestId('invoker-terminal-input').fill('Add README');
+    await page.getByTestId('invoker-terminal-input').fill('Draft a YAML plan to add a README');
     await page.getByRole('button', { name: 'Send' }).click();
 
     // The conversation renders in the terminal transcript: the user message,
     // the assistant prose, and the drafted plan YAML from first to last line.
     const transcript = page.getByTestId('invoker-terminal-transcript');
-    await expect(transcript).toContainText('Add README');
+    await expect(transcript).toContainText('Draft a YAML plan to add a README');
     await expect(transcript).toContainText('I drafted the plan.');
     await expect(transcript).toContainText('name: Terminal Planned Flow');
     await expect(transcript).toContainText('sleep 5 && echo hello-alpha');
@@ -789,7 +789,7 @@ test.describe('Visual proof capture', () => {
     // Returning to Planning home keeps the full conversation:
     // submitting must not clear or truncate the transcript.
     await page.getByTestId('sidebar-home').click();
-    await expect(transcript).toContainText('Add README');
+    await expect(transcript).toContainText('Draft a YAML plan to add a README');
     await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
     await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then use Start ready work.');
     await captureScreenshot(page, 'terminal-planned-conversation-after-submit');
@@ -1003,7 +1003,7 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByText('What do you want to build?')).toBeVisible();
     await expect(page.getByText('Ask Invoker what you want to build.')).toHaveCount(0);
     await expect(page.getByTestId('invoker-terminal-input')).toBeVisible();
-    await page.getByTestId('invoker-terminal-input').fill('Build the Workers Surface');
+    await page.getByTestId('invoker-terminal-input').fill('Draft a YAML plan for the Workers Surface');
     await page.getByRole('button', { name: 'Send' }).click();
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
     await page.getByRole('button', { name: 'Submit to Invoker' }).click();

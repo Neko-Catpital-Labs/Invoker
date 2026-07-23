@@ -14,6 +14,8 @@ test.describe('Action Graph visual proof', () => {
       return graph.nodes.length > 0;
     });
 
+    await page.getByTestId('sidebar-planning').click();
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
     await page.getByTestId('graph-more-button').click();
     await expect(page.getByTestId('graph-more-menu')).toBeVisible();
     await page.getByTestId('rail-action-graph').click();
