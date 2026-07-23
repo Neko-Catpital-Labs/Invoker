@@ -362,14 +362,18 @@ async function delegateReadOnlyQuery(
   const ownerResult = await resolver.waitForAny(
     isUiPerf ? READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS : OPTIONAL_READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS,
   );
-  if (!ownerResult.resolved) {
+  let messageBus = bus;
+  if (ownerResult.resolved) {
+    messageBus = ownerResult.bus;
+  } else if (
+    !isQueue ||
+    !hasLiveWritableOwner(resolve(resolveInvokerHomeRoot(), 'invoker.db'))
+  ) {
     if (isQueue || isActionGraph) return false;
     throw new Error(isUiPerf
       ? 'query ui-perf requires a running shared owner process'
       : 'query queue requires a running shared owner process');
   }
-
-  let messageBus = ownerResult.bus;
   const deadline = Date.now() + READ_ONLY_QUERY_OWNER_READY_TIMEOUT_MS;
   let response: Record<string, unknown> | null = null;
   while (Date.now() < deadline) {
