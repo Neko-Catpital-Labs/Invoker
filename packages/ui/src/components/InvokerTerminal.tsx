@@ -69,6 +69,7 @@ interface InvokerTerminalProps {
   onExpand: () => void;
   onCloseExpanded?: () => void;
   onOpenGraph?: () => void;
+  onReviewDraft?: () => void;
   submittedPlanName?: string;
   activeConversationKey: string;
 }
@@ -341,6 +342,7 @@ export function InvokerTerminal({
   onExpand,
   onCloseExpanded,
   onOpenGraph,
+  onReviewDraft,
   submittedPlanName,
   activeConversationKey,
 }: InvokerTerminalProps): JSX.Element {
@@ -656,11 +658,11 @@ export function InvokerTerminal({
                   : 'Draft ready'}
               </p>
               <div className="flex flex-wrap items-center gap-2">
-                {onOpenGraph && (
+                {(onReviewDraft ?? onOpenGraph) && (
                   <button
                     type="button"
-                    data-testid="invoker-terminal-open-graph"
-                    onClick={onOpenGraph}
+                    data-testid="invoker-terminal-review-draft"
+                    onClick={onReviewDraft ?? onOpenGraph}
                     className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
                   >
                     Review draft

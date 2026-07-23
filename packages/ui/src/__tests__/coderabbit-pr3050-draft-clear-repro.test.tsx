@@ -31,6 +31,8 @@ describe('CodeRabbit PR #3050 — draft state cleared after submit', () => {
 
   async function openPlanningTerminal() {
     fireEvent.click(await screen.findByTestId('sidebar-home'));
+    const expandPlanningChats = screen.queryByRole('button', { name: 'Expand planning chats' });
+    if (expandPlanningChats) fireEvent.click(expandPlanningChats);
     fireEvent.click(await screen.findByRole('button', { name: 'Options' }));
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
@@ -59,7 +61,6 @@ describe('CodeRabbit PR #3050 — draft state cleared after submit', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(1);
     });
-    await openPlanningTerminal();
     await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
     // The submit succeeded; the ready bar must be gone so it cannot resubmit the same session.
     await waitFor(() => {
