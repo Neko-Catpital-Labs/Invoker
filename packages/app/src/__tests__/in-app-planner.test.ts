@@ -17,6 +17,8 @@ import {
 } from '../in-app-planner.js';
 import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
 
+const PLAN_SUBMIT_HINT = '\n\nReply `submit` to submit it.';
+
 const VALID_PLAN = `Here is the plan.
 
 \`\`\`yaml
@@ -31,6 +33,8 @@ tasks:
     dependencies: [first]
     command: echo second
 \`\`\``;
+
+const VALID_PLAN_REPLY = `${VALID_PLAN}${PLAN_SUBMIT_HINT}`;
 
 const VALID_PLAN_TEXT = `name: Mock Plan
 onFinish: none
@@ -308,13 +312,13 @@ describe('planning chat', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      reply: VALID_PLAN,
+      reply: VALID_PLAN_REPLY,
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
     });
     expect(result.ok && result.reply).toContain('```yaml');
     expect(result.ok && result.reply).toContain('name: Mock Plan');
-    expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN);
+    expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN_REPLY);
   });
 
   it('keeps unauthorized YAML from becoming draft-ready or submittable', async () => {
@@ -334,7 +338,7 @@ describe('planning chat', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      reply: VALID_PLAN,
+      reply: VALID_PLAN_REPLY,
       draftPlanAvailable: false,
     });
     if (!result.ok) throw new Error(result.error);
