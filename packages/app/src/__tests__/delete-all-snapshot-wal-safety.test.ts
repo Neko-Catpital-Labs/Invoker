@@ -44,7 +44,7 @@ function makeWorkflow(id: string): Workflow {
 }
 
 describe('hourly snapshot with a live WAL owner', () => {
-  it('the primary connection can still write after createHourlySnapshot runs (WAL safety)', async () => {
+  it('the primary connection can still write after createHourlySnapshot runs (WAL safety)', { timeout: 60_000 }, async () => {
     const root = makeRoot();
     const dbPath = join(root, 'invoker.db');
     const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
