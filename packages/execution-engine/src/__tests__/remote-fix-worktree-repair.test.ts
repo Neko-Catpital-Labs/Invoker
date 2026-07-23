@@ -8,7 +8,7 @@ import { registerBuiltinAgents } from '../agents/index.js';
 
 vi.mock('node:child_process');
 
-function mockSshChild(stdoutData: string, exitCode: number) {
+function mockSshChild(stdoutData: string, exitCode: number, stderrData = '') {
   const { EventEmitter } = require('events');
   const stdout = new EventEmitter();
   const stderr = new EventEmitter();
@@ -19,6 +19,7 @@ function mockSshChild(stdoutData: string, exitCode: number) {
 
   setTimeout(() => {
     if (stdoutData) stdout.emit('data', Buffer.from(stdoutData));
+    if (stderrData) stderr.emit('data', Buffer.from(stderrData));
     child.emit('close', exitCode);
   }, 0);
 
@@ -246,5 +247,50 @@ branch refs/heads/${branch}
       branch,
       commit: 'deadbeef',
     });
+  });
+
+  it('continues with the recorded remote workspace when branch-owner lookup cannot list worktrees', async () => {
+    const { spawn } = await import('node:child_process');
+    const workspacePath = '/home/invoker/.invoker/worktrees/647faa73e90e/experiment-test-task-deadbeef';
+    const branch = 'experiment/test-task/deadbeef';
+    const task = {
+      id: 'wf-1/test-task',
+      status: 'failed' as const,
+      execution: {
+        error: 'Test failed',
+        workspacePath,
+        branch,
+      },
+      config: {
+        command: 'pnpm test',
+        runnerKind: 'ssh' as const,
+        poolMemberId: 'remote-1',
+      },
+    };
+
+    const { host, updateTask, appendTaskOutput } = makeHost(task);
+    const listFailure = mockSshChild(
+      '',
+      128,
+      "fatal: cannot change to '/home/invoker/.invoker/repos/647faa73e90e': No such file or directory\n",
+    );
+    const fixSession = mockSshChild('Codex session: real-session-456\nremote fix applied', 0);
+    vi.mocked(spawn)
+      .mockReturnValueOnce(listFailure as any)
+      .mockReturnValueOnce(fixSession as any);
+
+    await fixWithAgentImpl(host, task.id, 'error output', 'codex');
+
+    expect(updateTask).not.toHaveBeenCalledWith(task.id, {
+      execution: {
+        workspacePath: expect.any(String),
+      },
+    });
+    const remoteFixScript = ((fixSession as any).stdin.write as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    expect(remoteFixScript).toContain(`WT="${workspacePath}"`);
+    expect(appendTaskOutput).toHaveBeenCalledWith(
+      task.id,
+      expect.stringContaining('[Fix with codex (remote)] Output:'),
+    );
   });
 });
