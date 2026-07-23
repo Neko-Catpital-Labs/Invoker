@@ -143,6 +143,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
     it('sends immediate ack, processes request, then replaces ack with actual response', async () => {
       // Setup: Create surface with immediate ack enabled (default)
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -202,6 +203,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
 
     it('handles the explicit plan submission flow correctly', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -250,6 +252,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
 
     it('clears a leftover Processing ack when plan: is empty', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -281,6 +284,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
 
     it('clears a leftover Processing ack when the planner throws', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -313,6 +317,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
   describe('Configuration Options', () => {
     it('disables immediate ack when enableImmediateAck is false', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -360,6 +365,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       const customMessage = 'Hold on, thinking...';
 
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -401,6 +407,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
   describe('Typing Indicator Integration', () => {
     it('adds reaction before processing, removes after response', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -463,6 +470,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
 
     it('does not add reactions when useTypingIndicator is false', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -505,6 +513,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
 
     it('removes reaction even when message processing fails', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -551,6 +560,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
   describe('Edge Cases and Error Handling', () => {
     it('handles ack posting failure gracefully', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -600,6 +610,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
 
     it('falls back to new message when chat.update fails (msg_too_long)', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -658,6 +669,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
 
     it('maintains correct message sequence in threaded conversation', async () => {
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',

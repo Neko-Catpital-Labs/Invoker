@@ -70,6 +70,7 @@ describe('SlackSurface', () => {
   beforeEach(() => {
     receivedCommands = [];
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -114,6 +115,7 @@ describe('SlackSurface', () => {
     it('logs receipt and route for every app mention before replying', async () => {
       const log = vi.fn();
       surface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -155,6 +157,7 @@ describe('SlackSurface', () => {
         delete: vi.fn(),
       };
       return new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -268,6 +271,7 @@ describe('SlackSurface', () => {
         delete: vi.fn(),
       };
       const cardSurface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 's',
@@ -400,6 +404,7 @@ describe('SlackSurface', () => {
   describe('conversation admin commands', () => {
     it('denies non-admin users', async () => {
       const adminSurface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -431,6 +436,7 @@ describe('SlackSurface', () => {
       };
 
       const adminSurface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -456,6 +462,7 @@ describe('SlackSurface', () => {
 
     it('returns error when persistence is not configured', async () => {
       const adminSurface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -487,6 +494,7 @@ describe('SlackSurface', () => {
       };
 
       const adminSurface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -519,6 +527,7 @@ describe('SlackSurface', () => {
       };
 
       const adminSurface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -553,6 +562,7 @@ describe('SlackSurface', () => {
       mockDraftedPlan = null;
 
       surfaceWithApi = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -633,6 +643,7 @@ describe('SlackSurface', () => {
       });
 
       const surfaceNoAck = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -665,6 +676,7 @@ describe('SlackSurface', () => {
   describe('typing indicator', () => {
     it('adds and removes reaction when useTypingIndicator is enabled', async () => {
       const surfaceWithTyping = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -709,6 +721,7 @@ describe('SlackSurface', () => {
 
     it('does not add reaction when useTypingIndicator is false', async () => {
       const surfaceNoTyping = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -741,6 +754,7 @@ describe('SlackSurface', () => {
   describe('planning config threading', () => {
     it('accepts planningTimeoutSeconds and planningHeartbeatIntervalSeconds config', () => {
       const configuredSurface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -758,6 +772,7 @@ describe('SlackSurface', () => {
       MockedPlanConversation.mockClear();
 
       const multiRepoSurface = new SlackSurface({
+        defaultRepoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
@@ -789,6 +804,7 @@ describe('SlackSurface', () => {
       MockedPlanConversation.mockClear();
 
       const multiRepoSurface = new SlackSurface({
+        defaultRepoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
         botToken: 'xoxb-test',
         appToken: 'xapp-test',
         signingSecret: 'test-secret',
