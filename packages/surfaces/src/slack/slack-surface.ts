@@ -264,16 +264,8 @@ function parseRepoParts(repoUrl: string): RepoParts | undefined {
   }
 }
 
-function repoIdentity(repoUrl: string): string {
-  const parts = parseRepoParts(repoUrl);
-  if (!parts) return stripGitSuffix(repoUrl.trim()).toLowerCase();
-  const host = parts.host.toLowerCase();
-  const path = host === 'github.com' ? parts.path.toLowerCase() : parts.path;
-  return `${host}/${path}`;
-}
-
 function sameRepoUrl(a: string, b: string): boolean {
-  return repoIdentity(a) === repoIdentity(b);
+  return repositoryIdentity(a) === repositoryIdentity(b);
 }
 
 function repoDisplayName(repoUrl: string): string {
@@ -351,10 +343,11 @@ function extractRepositoryUrls(text: string): string[] {
 }
 
 function repositoryIdentity(repoUrl: string): string {
-  const github = repoUrl.trim().match(/^(?:https?:\/\/|ssh:\/\/git@|git@)github\.com(?::|\/)([^/]+)\/(.+?)(?:\.git)?\/?$/i);
-  return github
-    ? `github.com/${github[1].toLowerCase()}/${github[2].toLowerCase()}`
-    : repoUrl.trim().replace(/\/+$/, '').toLowerCase();
+  const parts = parseRepoParts(repoUrl);
+  if (!parts) return stripGitSuffix(repoUrl.trim()).toLowerCase();
+  const host = parts.host.toLowerCase();
+  const path = host === 'github.com' ? parts.path.toLowerCase() : parts.path;
+  return `${host}/${path}`;
 }
 
 // ── Lobby intent routing ─────────────────────────────────────
@@ -1671,8 +1664,8 @@ export class SlackSurface implements Surface {
       requestedBy: context.requestedBy ?? userId,
       lobbyChannel: context.lobbyChannel ?? channel,
     };
-    this.savePlanningContext(threadTs, updated);
     this.discardThreadSession(channel, threadTs);
+    this.savePlanningContext(threadTs, updated);
 
     await say({
       text: `I switched this thread to repo \`${repoDisplayName(repoUrl)}\`. The previous working state for this thread was discarded.`,
@@ -1682,6 +1675,7 @@ export class SlackSurface implements Surface {
   }
 
   private discardThreadSession(channel: string, threadTs: string): void {
+    this.conversationRepo?.deleteConversation(threadTs);
     if (this.sessionManager) {
       this.sessionManager.evictSession(new SessionIdentifier(channel, threadTs));
       return;
@@ -2318,7 +2312,7 @@ ${text}`;
             channel,
             msg.thread_ts,
             msg.user ?? 'unknown',
-            false,
+            !!preparedContext,
             preparedContext ? this.sessionOptionsFromContext(preparedContext, 'agent') : undefined,
           );
           if (!conversation) return;

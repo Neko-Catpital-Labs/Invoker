@@ -681,7 +681,7 @@ describe('lobby verb routing', () => {
     const conversationRepo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
     const slackSessionRepo = new SlackSessionRepository(adapter);
     const surface = lobbySurface(true, { conversationRepo, slackSessionRepo, ...extra });
-    return { adapter, slackSessionRepo, surface };
+    return { adapter, conversationRepo, slackSessionRepo, surface };
   }
 
   it('asks lobby question answers to be short ELI5 Slack prose except for clearly technical questions', () => {
@@ -1245,6 +1245,72 @@ describe('lobby verb routing', () => {
       const texts = sameRepoSay.mock.calls.map((call) => call[0].text).join('\n');
       expect(texts).not.toContain('switched this thread');
       expect(texts).not.toContain('previous working state');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('accepts an equivalent non-GitHub repo URL in a thread mention', async () => {
+    const boundRepo = 'git@gitlab.com:openai/invoker.git';
+    const prepareRepoCheckout = vi.fn().mockResolvedValue('/checkouts/unused');
+    const { adapter, surface } = await persistentLobbySurface({
+      defaultRepoUrl: boundRepo,
+      workingDir: '/checkouts/invoker',
+      prepareRepoCheckout,
+    });
+
+    try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> local: start in invoker', ts: 't1', user: 'U1', channel: 'CLOBBY' },
+        say: vi.fn().mockResolvedValue({ ts: 'a' }),
+      });
+
+      const sameRepoSay = vi.fn().mockResolvedValue({ ts: 'b' });
+      await mentionHandler(surface)({
+        event: {
+          text: '<@BOT> local: continue in https://gitlab.com/openai/invoker',
+          thread_ts: 't1',
+          ts: 't2',
+          user: 'U1',
+          channel: 'CLOBBY',
+        },
+        say: sameRepoSay,
+      });
+
+      expect(prepareRepoCheckout).not.toHaveBeenCalled();
+      expect(planConversationConfigs).toHaveLength(1);
+      expect(sameRepoSay.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('already pinned to a different repository');
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
+
+  it('clears persisted conversation state when rebinding a thread repo', async () => {
+    const { adapter, conversationRepo, surface } = await persistentLobbySurface();
+
+    try {
+      conversationRepo.saveConversation(
+        't1',
+        [
+          { role: 'user', content: 'old repo question' },
+          { role: 'assistant', content: 'old repo answer' },
+        ],
+        null,
+        false,
+        'CLOBBY',
+        'U1',
+        'agent',
+      );
+
+      expect(conversationRepo.loadConversation('t1')).not.toBeNull();
+      const discardThreadSession = surface as unknown as {
+        discardThreadSession(channel: string, threadTs: string): void;
+      };
+      discardThreadSession.discardThreadSession('CLOBBY', 't1');
+      expect(conversationRepo.loadConversation('t1')).toBeNull();
     } finally {
       await surface.stop();
       adapter.close();
