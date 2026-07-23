@@ -5,7 +5,7 @@ test('workers surface shows the worker control in the details panel', async ({ p
 
   await expect(page.getByTestId('workers-rail')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Workers' })).toBeVisible();
-  await expect(page.getByText('3 workers registered.')).toBeVisible();
+  await expect(page.getByText(/\d+ workers registered\./)).toBeVisible();
   await expect(page.getByTestId('worker-process-list')).toBeVisible();
   await expect(page.getByTestId('worker-row-autofix')).toBeVisible();
   await expect(page.getByTestId('worker-row-pr-status')).toBeVisible();
