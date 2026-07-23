@@ -8,8 +8,9 @@ const BUDGETED_JOBS = new Set([
   'quality-required',
   'ui-vitest',
   'quality-extra',
-  'playwright',
 ]);
+
+const MAX_PLAYWRIGHT_TIMEOUT_MINUTES = 30;
 
 const EXEMPT_JOBS = new Set([
   'build-artifacts',
@@ -21,6 +22,7 @@ const EXEMPT_JOBS = new Set([
   'optional-other',
   'docker',
   'scheduled-repros',
+  'playwright',
   'playwright-nightly-perf',
   'reset-rulebook-repro',
 ]);
@@ -50,13 +52,22 @@ for (const jobName of BUDGETED_JOBS) {
 
 const playwright = jobs.playwright;
 if (playwright) {
+  const playwrightTimeout = playwright['timeout-minutes'];
+  assert(
+    typeof playwrightTimeout === 'number',
+    'playwright must declare timeout-minutes',
+  );
+  assert(
+    playwrightTimeout <= MAX_PLAYWRIGHT_TIMEOUT_MINUTES,
+    `playwright timeout-minutes=${playwrightTimeout} exceeds hard invariant of ${MAX_PLAYWRIGHT_TIMEOUT_MINUTES} minutes`,
+  );
   const shards = playwright.strategy?.matrix?.include ?? [];
-  assert(shards.length >= 6, `playwright must use at least 6 shards to stay under ${MAX_PR_FACING_TIMEOUT_MINUTES}m (found ${shards.length})`);
+  assert(shards.length >= 6, `playwright must use at least 6 shards (found ${shards.length})`);
   for (const shard of shards) {
     const files = String(shard.files ?? '').trim().split(/\s+/).filter(Boolean);
     assert(
       files.length > 0 && files.length <= 6,
-      `playwright shard ${shard.name} has ${files.length} specs; keep <= 6 per shard for the ${MAX_PR_FACING_TIMEOUT_MINUTES}m budget`,
+      `playwright shard ${shard.name} has ${files.length} specs; keep <= 6 per shard`,
     );
   }
   const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
@@ -91,5 +102,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `CI duration invariant ok: budgeted jobs <= ${MAX_PR_FACING_TIMEOUT_MINUTES}m; playwright shards include hitch e2e.`,
+  `CI duration invariant ok: budgeted jobs <= ${MAX_PR_FACING_TIMEOUT_MINUTES}m; playwright <= ${MAX_PLAYWRIGHT_TIMEOUT_MINUTES}m; hitch e2e shards present.`,
 );
