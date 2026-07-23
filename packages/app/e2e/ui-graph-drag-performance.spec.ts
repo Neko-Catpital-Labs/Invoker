@@ -74,12 +74,20 @@ function buildPlan(index: number) {
 }
 
 async function dismissKnownOverlays(page: Page): Promise<void> {
-  const dismissButtons = page.getByRole('button', { name: /^(Dismiss|Close|Skip for now|Not now)$/i });
-  const count = await dismissButtons.count();
-  for (let index = 0; index < count; index += 1) {
-    const button = dismissButtons.nth(index);
-    if (await button.isVisible().catch(() => false)) {
-      await button.dispatchEvent('click', { bubbles: true, cancelable: true });
+  while (true) {
+    const dismissButtons = page.getByRole('button', { name: /^(Dismiss|Close|Skip for now|Not now)$/i });
+    const count = await dismissButtons.count();
+    let dismissed = false;
+    for (let index = 0; index < count; index += 1) {
+      const button = dismissButtons.nth(index);
+      if (await button.isVisible().catch(() => false)) {
+        await button.dispatchEvent('click', { bubbles: true, cancelable: true });
+        dismissed = true;
+        break;
+      }
+    }
+    if (!dismissed) {
+      return;
     }
   }
 }
