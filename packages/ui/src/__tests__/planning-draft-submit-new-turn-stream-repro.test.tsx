@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { InAppPlanningChatResponse } from '@invoker/contracts';
-import { createMockInvoker, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makePlanningSessionSummary, type MockInvoker } from './helpers/mock-invoker.js';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -76,7 +76,6 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
     });
-    await openPlanningTerminal();
     expect(await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.')).toBeInTheDocument();
     expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
     expect(screen.getByTestId('invoker-terminal-harness')).toBeDisabled();
@@ -115,6 +114,47 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Final assistant reply for the new turn.');
+    });
+  });
+
+  it('opens a draft review sidebar before explicitly submitting the workflow', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [makePlanningSessionSummary({
+        id: 'draft-1',
+        draftPlanSummary: {
+          name: 'Grouped plan',
+          taskCount: 3,
+          steps: ['Backend workflow', 'UI review'],
+          taskGroups: [
+            { workflow: 'Backend workflow', tasks: ['Add API endpoint'] },
+            { workflow: 'UI review', tasks: ['Add review sidebar', 'Wire ready bar actions'] },
+          ],
+        },
+        draftPlanText: 'name: Grouped plan\ntasks:\n  - id: review\n    description: Add review sidebar\n',
+      })],
+    }));
+    mock.api.planningChatSubmit = vi.fn(async () => ({
+      ok: true,
+      planName: 'Grouped plan',
+      workflowId: 'wf-created',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.click(await screen.findByTestId('invoker-terminal-review-draft'));
+
+    expect(await screen.findByRole('heading', { name: 'Review draft' })).toBeInTheDocument();
+    expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
+    expect(screen.getAllByTestId('draft-task-group')).toHaveLength(2);
+    expect(screen.getAllByTestId('draft-step-summary')).toHaveLength(3);
+    expect(screen.getByTestId('draft-raw-yaml')).toHaveTextContent('name: Grouped plan');
+
+    fireEvent.click(screen.getByTestId('planning-create-workflow'));
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'draft-1' });
     });
   });
 });
