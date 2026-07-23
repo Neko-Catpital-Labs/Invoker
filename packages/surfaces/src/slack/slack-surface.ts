@@ -645,6 +645,10 @@ export class SlackSurface implements Surface {
       if (!message) return;
       const workflowId = event.progress.workflowId;
       const channel = this.resolveChannelForWorkflow(workflowId);
+      if (!channel) {
+        this.log('slack', 'warn', `[WORKFLOW_PROGRESS] Suppressed unmapped workflow update (workflowId=${workflowId})`);
+        return;
+      }
       const existingTs = this.progressCardTs.get(workflowId);
       if (existingTs) {
         const updated = await this.updateMessage(channel, existingTs, message);
@@ -664,6 +668,10 @@ export class SlackSurface implements Surface {
     if (!message) return;
 
     const channel = this.resolveChannelForWorkflow(this.deriveWorkflowId(event));
+    if (!channel) {
+      this.log('slack', 'warn', `[WORKFLOW_EVENT] Suppressed unmapped workflow update (type=${event.type})`);
+      return;
+    }
 
     // For task deltas, try to update existing message or post new one
     if (event.type === 'task_delta') {
@@ -705,9 +713,9 @@ export class SlackSurface implements Surface {
     return undefined;
   }
 
-  private resolveChannelForWorkflow(workflowId: string | undefined): string {
-    if (!workflowId) return this.lobbyChannelId;
-    return this.workflowChannelRepo?.getByWorkflowId(workflowId)?.channelId ?? this.lobbyChannelId;
+  private resolveChannelForWorkflow(workflowId: string | undefined): string | undefined {
+    if (!workflowId) return undefined;
+    return this.workflowChannelRepo?.getByWorkflowId(workflowId)?.channelId ?? undefined;
   }
 
   private restoreProgressCardTimestamps(): void {
