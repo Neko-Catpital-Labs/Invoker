@@ -963,11 +963,17 @@ export class SlackSurface implements Surface {
 
     const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
     let threadRequest = parseThreadRequest(parsed.text);
+    const barePlanPrefix = /^(?:invoker\s+)?plan\s*:\s*$/i.test(parsed.text.trim());
 
     // Slower paths (LLM classifier, repo checkout, agent) acknowledge receipt up front.
     if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
 
     try {
+      // Bare `plan:` has no body. Clear the Processing ack and stop — do not classify or plan.
+      if (!threadRequest && barePlanPrefix) {
+        return;
+      }
+
       if (!explicitLocalAgent && threadRequest?.mode !== 'plan') {
         const cls = await this.classifyLobbyIntent(parsed.text, preset);
         this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
