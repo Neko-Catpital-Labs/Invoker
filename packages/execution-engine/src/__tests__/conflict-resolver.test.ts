@@ -785,13 +785,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
 });
 
 describe('remoteAgentShellInvocation', () => {
-  it('forwards PATH so a bare agent binary resolves on the remote, like task execution', () => {
-    expect(remoteAgentShellInvocation('/opt/stub:/usr/bin')).toEqual([
-      'env', 'PATH=/opt/stub:/usr/bin', 'bash', '-s',
-    ]);
-  });
-
-  it('falls back to a bare bash invocation when no PATH is available', () => {
-    expect(remoteAgentShellInvocation('')).toEqual(['bash', '-s']);
+  it('uses a remote login shell so ~/.profile PATH (flutter, agents) applies', () => {
+    expect(remoteAgentShellInvocation()).toEqual(['bash', '-l', '-s']);
   });
 });
