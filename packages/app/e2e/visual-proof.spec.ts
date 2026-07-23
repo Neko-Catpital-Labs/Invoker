@@ -739,8 +739,7 @@ test.describe('Visual proof capture', () => {
     }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow', reply: fullPlanReply });
 
     await page.getByTestId('sidebar-home').click();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
-    await expect(page.getByTestId('planning-session-rail')).toHaveClass(/w-64/);
+    await page.getByRole('button', { name: 'Options' }).click();
     await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await page.getByTestId('invoker-terminal-input').fill('Draft a YAML plan to add a README');
     await page.getByRole('button', { name: 'Send' }).click();
@@ -768,6 +767,7 @@ test.describe('Visual proof capture', () => {
       return el.scrollHeight - el.scrollTop - el.clientHeight;
     });
     expect(scrollGap).toBeLessThanOrEqual(1);
+    await expandedTranscript.locator('details').last().locator('summary').click();
     const codePanel = expandedTranscript.locator('pre code').last();
     await expect(codePanel).toBeVisible();
     await expect(codePanel).toContainText('command: echo B');
@@ -778,13 +778,11 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('invoker-terminal-expanded')).toHaveCount(0);
 
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
-    await page.getByRole('button', { name: 'Submit to Invoker' }).click();
-
-    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-    await expect(page.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
-    await expect(page.getByTestId('workflow-inspector-title')).toContainText('Terminal Planned Flow');
-    await expect(page.getByText('What to expect')).toHaveCount(0);
-    await captureScreenshot(page, 'terminal-planned-graph');
+    await page.getByRole('button', { name: 'Review draft' }).click();
+    await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
+    await expect(page.getByTestId('draft-raw-yaml')).toContainText('name: Terminal Planned Flow');
+    await captureScreenshot(page, 'terminal-planned-draft-review');
+    await page.getByTestId('planning-create-workflow').click();
 
     // Returning to Planning home keeps the full conversation:
     // submitting must not clear or truncate the transcript.
