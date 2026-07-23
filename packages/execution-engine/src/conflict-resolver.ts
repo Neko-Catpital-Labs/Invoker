@@ -304,13 +304,12 @@ function shellQuote(s: string): string {
 }
 
 /**
- * Remote `bash -s` invocation for an agent command, forwarding the local PATH so
- * a bare agent binary (e.g. `codex`) resolves on the remote — mirroring how
- * ssh-executor runs task payloads. Without this the fix/resolve agent dies with
- * "command not found" even though normal task execution on the same host works.
+ * Remote shell for agent fix/resolve commands. Use a login shell so the remote
+ * user's ~/.profile PATH is applied (same as SshExecutor task payloads). Do not
+ * forward the local host PATH — that clobbers Linux remotes with macOS paths.
  */
-export function remoteAgentShellInvocation(remotePath: string = process.env.PATH ?? ''): string[] {
-  return remotePath ? ['env', `PATH=${remotePath}`, 'bash', '-s'] : ['bash', '-s'];
+export function remoteAgentShellInvocation(): string[] {
+  return ['bash', '-l', '-s'];
 }
 
 /**
