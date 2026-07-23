@@ -73,6 +73,22 @@ function buildPlan(index: number) {
   };
 }
 
+async function dismissKnownOverlays(page: Page): Promise<void> {
+  const dismissButtons = page.getByRole('button', { name: /^(Dismiss|Close|Skip for now|Not now)$/i });
+  const count = await dismissButtons.count();
+  for (let index = 0; index < count; index += 1) {
+    const button = dismissButtons.nth(index);
+    if (await button.isVisible().catch(() => false)) {
+      await button.dispatchEvent('click', { bubbles: true, cancelable: true });
+    }
+  }
+}
+
+async function openPlanGraph(page: Page): Promise<void> {
+  await dismissKnownOverlays(page);
+  await page.getByTestId('sidebar-planning').dispatchEvent('click', { bubbles: true, cancelable: true });
+  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 30_000 });
+}
 
 async function seedLargeWorkflowGraph(page: Page): Promise<void> {
   const plans = Array.from({ length: WORKFLOW_COUNT }, (_, index) => yamlStringify(buildPlan(index)));
@@ -86,14 +102,10 @@ async function seedLargeWorkflowGraph(page: Page): Promise<void> {
     WORKFLOW_COUNT,
     { timeout: 30_000 },
   );
-  const dismiss = page.getByRole('button', { name: 'Dismiss' });
-  if (await dismiss.isVisible().catch(() => false)) {
-    await dismiss.click();
-  }
-  await page.getByTestId('sidebar-planning').click({ force: true });
-  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 15_000 });
-  await page.getByRole('button', { name: 'Refresh' }).click();
-  await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 15_000 });
+  await openPlanGraph(page);
+  await dismissKnownOverlays(page);
+  await page.getByRole('button', { name: 'Refresh' }).dispatchEvent('click', { bubbles: true, cancelable: true });
+  await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 30_000 });
 }
 
 async function recordDragPerformance(
