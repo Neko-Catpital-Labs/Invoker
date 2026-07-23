@@ -1651,11 +1651,18 @@ export class SlackSurface implements Surface {
     userId: string | undefined,
     text: string,
     say: SayFn,
-  ): Promise<{ context?: PlanningContext; rebound: boolean }> {
+  ): Promise<{ context?: PlanningContext; rebound: boolean; blocked: boolean }> {
     const context = this.loadPlanningContext(threadTs);
     const repoUrl = extractRepoUrlFromMessage(text);
-    if (!repoUrl || !context?.repoUrl) return { context, rebound: false };
-    if (sameRepoUrl(context.repoUrl, repoUrl)) return { context, rebound: false };
+    if (!repoUrl || !context?.repoUrl) return { context, rebound: false, blocked: false };
+    if (sameRepoUrl(context.repoUrl, repoUrl)) return { context, rebound: false, blocked: false };
+    if (!userId || (context.requestedBy !== userId && !this.adminUserIds.has(userId))) {
+      await say({
+        text: 'Permission denied. Only the user who started this thread or an admin can switch it to a different repository.',
+        thread_ts: threadTs,
+      });
+      return { context, rebound: false, blocked: true };
+    }
 
     const updated: PlanningContext = {
       ...context,
@@ -1671,7 +1678,7 @@ export class SlackSurface implements Surface {
       text: `I switched this thread to repo \`${repoDisplayName(repoUrl)}\`. The previous working state for this thread was discarded.`,
       thread_ts: threadTs,
     });
-    return { context: updated, rebound: true };
+    return { context: updated, rebound: true, blocked: false };
   }
 
   private discardThreadSession(channel: string, threadTs: string): void {
@@ -2298,7 +2305,7 @@ ${text}`;
       if (!text) return;
 
       const rebind = await this.maybeRebindThreadRepo(channel, msg.thread_ts, msg.user, text, say);
-      if (rebind.rebound) return;
+      if (rebind.rebound || rebind.blocked) return;
 
       const localRequest = parseLocalRequest(text);
       if (localRequest) {

@@ -1213,6 +1213,46 @@ describe('lobby verb routing', () => {
       adapter.close();
     }
   });
+  it('refuses a repo rebind from a different non-admin participant', async () => {
+    const oldRepo = 'https://github.com/openai/old-repo';
+    const newRepo = 'https://github.com/openai/new-repo';
+    const prepareRepoCheckout = vi.fn().mockResolvedValue('/checkouts/new-repo');
+    const { adapter, slackSessionRepo, surface } = await persistentLobbySurface({
+      defaultRepoUrl: oldRepo,
+      workingDir: '/checkouts/old-repo',
+      adminUserIds: ['U_ADMIN'],
+      prepareRepoCheckout,
+    });
+
+    try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> local: start in the current repo', ts: 't1', user: 'U1', channel: 'CLOBBY' },
+        say: vi.fn().mockResolvedValue({ ts: 'a' }),
+      });
+
+      const deniedSay = vi.fn().mockResolvedValue({ ts: 'b' });
+      await messageHandler(surface)({
+        event: { thread_ts: 't1', ts: 't2', user: 'U2', text: `Please use ${newRepo} instead`, channel: 'CLOBBY' },
+        say: deniedSay,
+      });
+
+      expect(prepareRepoCheckout).not.toHaveBeenCalled();
+      expect(slackSessionRepo.getLaunchContext('t1')).toEqual(expect.objectContaining({
+        repoUrl: oldRepo,
+        workingDir: '/checkouts/old-repo',
+      }));
+      expect(deniedSay).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining('Permission denied'),
+        thread_ts: 't1',
+      }));
+      expect(deniedSay.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('switched this thread');
+      expect(planConversationConfigs).toHaveLength(1);
+    } finally {
+      await surface.stop();
+      adapter.close();
+    }
+  });
 
   it('treats a follow-up URL for the already-bound repo as a no-op', async () => {
     const boundRepo = 'git@github.com:openai/invoker.git';
