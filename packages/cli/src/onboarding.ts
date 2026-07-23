@@ -273,6 +273,7 @@ export const REQUIRED_BOT_SCOPES = [
   'app_mentions:read',
   'chat:write',
   'files:write',
+  'pins:write',
   'channels:history',
   'channels:read',
   'groups:write',
