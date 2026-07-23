@@ -35,7 +35,7 @@ describe('resolveHeadlessOwnerLaunchSpec', () => {
       existsSync: () => false,
     })).toEqual({
       command: '/usr/local/bin/custom-owner',
-      args: ['--flag'],
+      args: ['--flag', '--headless', 'owner-serve'],
     });
   });
 
