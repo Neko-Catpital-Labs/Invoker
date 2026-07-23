@@ -845,6 +845,7 @@ export function App() {
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
   const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
+  const [reviewDraftSessionId, setReviewDraftSessionId] = useState<string | null>(null);
   const activePlanningSession = useMemo(
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
     [activePlanningSessionId, planningSessions],
@@ -856,6 +857,7 @@ export function App() {
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
+  const draftPlanText = activePlanningSession.draftPlanText;
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const activePlanningMode = activePlanningSession.mode ?? 'chat';
@@ -2553,8 +2555,11 @@ export function App() {
         setHasLoadedPlan(true);
         setWorkflowSelectionDismissed(false);
         setGraphActionsMenuOpen(false);
+        setReviewDraftSessionId(null);
         setPlanName(result.planName);
         setSelectedWorkflowId(result.workflowId);
+        setSidebarSurface('home');
+        setViewMode('dag');
         issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'planning-submit' });
         updatePlanningSessionById(planningSessionId, (session) => ({
           ...session,
@@ -2564,6 +2569,7 @@ export function App() {
           submittedPlanName: result.planName,
           draftPlanAvailable: false,
           draftPlanSummary: undefined,
+          draftPlanText: undefined,
           updatedAt: new Date().toISOString(),
         }));
         await refreshTaskGraph();
@@ -2662,6 +2668,7 @@ export function App() {
             messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant', ...((result as { reasoning?: string }).reasoning ? { reasoning: (result as { reasoning?: string }).reasoning } : {}) }],
             draftPlanAvailable: result.draftPlanAvailable,
             draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
+            draftPlanText: result.draftPlanAvailable ? result.draftPlanText : undefined,
             updatedAt,
           };
         }));
@@ -3842,23 +3849,6 @@ export function App() {
     : `${workerStatus.workers.length} worker${workerStatus.workers.length === 1 ? '' : 's'} registered.`;
 
   const renderWorkersSurface = (): JSX.Element => (
-    viewMode === 'queue' ? (
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <QueueView
-          tasks={tasks}
-          workflows={workflows}
-          queueStatus={queueStatus}
-          workerStatus={workerStatus}
-          readOnly={runtimeStatus?.readOnly === true}
-          onStartWorker={handleStartWorker}
-          onStopWorker={handleStopWorker}
-          onTaskClick={handleTaskClick}
-          selectedTaskId={selectedTaskId}
-          selectedWorkerKind={selectedWorkerKind}
-          onSelectWorker={setSelectedWorkerKind}
-        />
-      </div>
-    ) : (
     <div className="flex-1 flex overflow-hidden">
       <div data-testid="workers-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
         <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
@@ -3891,7 +3881,6 @@ export function App() {
         {renderWorkersDetail()}
       </div>
     </div>
-    )
   );
 
 
@@ -3937,14 +3926,19 @@ export function App() {
     .filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed)
     .map((tool) => tool.name.replace(/\s+CLI$/i, ''));
 
-  const renderPlanningContextPanel = (): JSX.Element => (
-    <aside
+  const renderPlanningContextPanel = (): JSX.Element => {
+    const reviewingDraft = reviewDraftSessionId === activePlanningSession.id && Boolean(draftPlanSummary);
+    const draftTaskGroups = draftPlanSummary?.taskGroups ?? (
+      draftPlanSummary ? [{ workflow: null, tasks: draftPlanSummary.steps }] : []
+    );
+    return (
+      <aside
       data-testid="planning-context-panel"
       className={`${planningContextCollapsed ? 'w-16' : 'w-72'} shrink-0 border-l border-border bg-card/60 transition-all duration-150`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
         {!planningContextCollapsed && (
-          <h2 className="text-sm font-semibold text-foreground">Current plan</h2>
+          <h2 className="text-sm font-semibold text-foreground">{reviewingDraft ? 'Review draft' : 'Current plan'}</h2>
         )}
         <button
           type="button"
@@ -3957,7 +3951,43 @@ export function App() {
         </button>
       </div>
       {!planningContextCollapsed && (
-        <div className="space-y-4 p-4 text-sm">
+        reviewingDraft ? (
+          <div className="space-y-4 p-4 text-sm">
+            {draftTaskGroups.map((group, groupIndex) => (
+              <section key={`${group.workflow ?? 'plan'}-${groupIndex}`} data-testid="draft-task-group">
+                {group.workflow && <h3 className="text-xs font-medium text-foreground">{group.workflow}</h3>}
+                <ul className={group.workflow ? 'mt-2 space-y-1.5' : 'space-y-1.5'}>
+                  {group.tasks.map((task, taskIndex) => (
+                    <li key={`${task}-${taskIndex}`} data-testid="draft-step-summary" className="text-xs leading-5 text-muted-foreground">
+                      {task}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+            {draftPlanText && (
+              <pre data-testid="draft-raw-yaml" className="max-h-56 overflow-auto rounded-md border border-border bg-background p-3 text-[11px] leading-5 text-muted-foreground">
+                {draftPlanText}
+              </pre>
+            )}
+            <Button
+              type="button"
+              data-testid="planning-create-workflow"
+              onClick={() => void handlePlanningSubmitDraft()}
+              className="w-full"
+            >
+              Create workflow
+            </Button>
+            <button
+              type="button"
+              onClick={() => navigatePlanGraphAndFit('planning-draft-review')}
+              className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
+            >
+              Open graph
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4 p-4 text-sm">
           <div>
             <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Goal</div>
             <p className="mt-1 text-foreground">
@@ -3990,10 +4020,12 @@ export function App() {
               Open graph
             </button>
           )}
-        </div>
+          </div>
+        )
       )}
     </aside>
-  );
+    );
+  };
 
   const renderPlanningTerminalSurface = (): JSX.Element => (
     <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -4103,6 +4135,10 @@ export function App() {
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
             onOpenGraph={() => navigatePlanGraphAndFit('planning-open-graph')}
+            onReviewDraft={() => {
+              setReviewDraftSessionId(activePlanningSession.id);
+              setPlanningContextCollapsed(false);
+            }}
           />
         </div>
       </div>
@@ -4434,6 +4470,11 @@ export function App() {
             onOpenGraph={() => {
               setPlanningTerminalExpanded(false);
               navigatePlanGraphAndFit('planning-expanded-open-graph');
+            }}
+            onReviewDraft={() => {
+              setPlanningTerminalExpanded(false);
+              setReviewDraftSessionId(activePlanningSession.id);
+              setPlanningContextCollapsed(false);
             }}
           />
         </div>
