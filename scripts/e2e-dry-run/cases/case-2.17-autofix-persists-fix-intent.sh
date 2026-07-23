@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Group 2.17 — owner-mode auto-fix must enqueue persisted fix mutation intents.
+# Group 2.17 — owner task failures must not trigger in-app auto-fix.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -92,29 +92,43 @@ if [ -z "$WF_ID" ]; then
 fi
 TASK_ID="$WF_ID/fail-for-autofix"
 
-echo "==> case 2.17: verify failed delta enqueued persisted fix intent"
-FOUND=0
+echo "==> case 2.17: wait for failed task"
+FAILED=0
 for i in $(seq 1 90); do
+  if python3 - <<'PY' "$DB_PATH" "$TASK_ID"
+import sqlite3
+import sys
+
+db_path, task_id = sys.argv[1], sys.argv[2]
+conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+has_failed = conn.execute(
+    "SELECT 1 FROM events WHERE task_id = ? AND event_type = 'task.failed' LIMIT 1",
+    (task_id,),
+).fetchone()
+raise SystemExit(0 if has_failed else 1)
+PY
+  then
+    FAILED=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$FAILED" -ne 1 ]; then
+  echo "FAIL case 2.17: expected task.failed"
+  cat "$OWNER_LOG"
+  exit 1
+fi
+
+echo "==> case 2.17: verify failed task does not auto-enqueue fix intent"
+UNEXPECTED=0
+for i in $(seq 1 10); do
   if python3 - <<'PY' "$DB_PATH" "$TASK_ID"
 import json
 import sqlite3
 import sys
 
 db_path, task_id = sys.argv[1], sys.argv[2]
-
-def parse_payload(raw):
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    if isinstance(parsed, str):
-        try:
-            parsed = json.loads(parsed)
-        except json.JSONDecodeError:
-            return {}
-    return parsed if isinstance(parsed, dict) else {}
 conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 conn.row_factory = sqlite3.Row
 
@@ -122,11 +136,12 @@ events = conn.execute(
     "SELECT event_type, payload FROM events WHERE task_id = ? ORDER BY id ASC",
     (task_id,),
 ).fetchall()
-
-has_failed = any(row["event_type"] == "task.failed" for row in events)
 has_worker_submit = False
 for row in events:
-    payload = parse_payload(row["payload"])
+    try:
+        payload = json.loads(row["payload"]) if row["payload"] else {}
+    except json.JSONDecodeError:
+        payload = {}
     if row["event_type"] == "debug.auto-fix" and payload.get("phase") == "worker-autofix-submitted":
         has_worker_submit = True
         break
@@ -135,29 +150,24 @@ for row in events:
         break
 
 intents = conn.execute(
-    "SELECT channel, args_json, status FROM workflow_mutation_intents ORDER BY id ASC",
+    "SELECT args_json FROM workflow_mutation_intents WHERE channel = 'invoker:fix-with-agent'",
 ).fetchall()
+has_fix_intent = any(
+    (json.loads(row["args_json"]) if row["args_json"] else [])[0:1] == [task_id]
+    for row in intents
+)
 
-has_fix_intent = False
-for row in intents:
-    if row["channel"] != "invoker:fix-with-agent":
-        continue
-    args = json.loads(row["args_json"]) if row["args_json"] else []
-    if len(args) > 0 and args[0] == task_id and row["status"] in ("queued", "running", "completed", "failed"):
-        has_fix_intent = True
-        break
-
-raise SystemExit(0 if (has_failed and has_worker_submit and has_fix_intent) else 1)
+raise SystemExit(0 if has_worker_submit or has_fix_intent else 1)
 PY
   then
-    FOUND=1
+    UNEXPECTED=1
     break
   fi
   sleep 1
 done
 
-if [ "$FOUND" -ne 1 ]; then
-  echo "FAIL case 2.17: expected task.failed + worker-autofix-submitted/recovery.worker.submit + persisted invoker:fix-with-agent intent"
+if [ "$UNEXPECTED" -ne 0 ]; then
+  echo "FAIL case 2.17: task failure unexpectedly auto-enqueued worker autofix or invoker:fix-with-agent intent"
   python3 - <<'PY' "$DB_PATH" "$TASK_ID"
 import sqlite3, sys
 db_path, task_id = sys.argv[1], sys.argv[2]
@@ -172,4 +182,4 @@ PY
   exit 1
 fi
 
-echo "PASS case 2.17 (owner-mode auto-fix intent persisted and observed in workflow_mutation_intents)"
+echo "PASS case 2.17 (failed task did not trigger in-app auto-fix)"
