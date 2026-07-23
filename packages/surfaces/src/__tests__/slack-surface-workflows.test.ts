@@ -209,6 +209,10 @@ describe('parseThreadRequest', () => {
     expect(parseThreadRequest('plan fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
     expect(parseThreadRequest('make that fix via Invoker')).toEqual({ mode: 'plan', text: 'make that fix' });
     expect(parseThreadRequest('draft an Invoker plan for the Slack routing bug')).toEqual({ mode: 'plan', text: 'the Slack routing bug' });
+    expect(parseThreadRequest('please draft a plan for this')).toEqual({
+      mode: 'plan',
+      text: 'please draft a plan for this',
+    });
     expect(parseThreadRequest('turn the discussion above into a plan')).toEqual({
       mode: 'plan',
       text: 'turn the discussion above into a plan',
@@ -1020,7 +1024,8 @@ describe('lobby verb routing', () => {
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> submit', ts: 't1', user: 'U1' }, say });
     expect(received).toHaveLength(0);
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No Invoker plan draft') }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No complete Invoker draft') }));
+    expect(say.mock.calls[0][0].text).not.toContain('plan:');
   });
 
   it('submit shows every task in the plan summary and emits start_plan on confirmation', async () => {
