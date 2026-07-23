@@ -236,6 +236,53 @@ export function extractRepoUrlFromMessage(text: string): string | undefined {
   return undefined;
 }
 
+type RepoParts = {
+  host: string;
+  path: string;
+};
+
+function stripGitSuffix(path: string): string {
+  return path.replace(/\/+$/g, '').replace(/\.git$/i, '');
+}
+
+function parseRepoParts(repoUrl: string): RepoParts | undefined {
+  const trimmed = repoUrl.trim().replace(/\/+$/g, '');
+  const scpLike = /^git@([^:]+):(.+)$/.exec(trimmed);
+  if (scpLike) return { host: scpLike[1], path: stripGitSuffix(scpLike[2]) };
+
+  const sshUrl = /^ssh:\/\/git@([^/]+)\/(.+)$/i.exec(trimmed);
+  if (sshUrl) return { host: sshUrl[1], path: stripGitSuffix(sshUrl[2]) };
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!parsed.host || !['http:', 'https:', 'ssh:'].includes(parsed.protocol)) return undefined;
+    const path = parsed.pathname.replace(/^\/+/, '');
+    if (!path) return undefined;
+    return { host: parsed.host, path: stripGitSuffix(path) };
+  } catch {
+    return undefined;
+  }
+}
+
+function repoIdentity(repoUrl: string): string {
+  const parts = parseRepoParts(repoUrl);
+  if (!parts) return stripGitSuffix(repoUrl.trim()).toLowerCase();
+  const host = parts.host.toLowerCase();
+  const path = host === 'github.com' ? parts.path.toLowerCase() : parts.path;
+  return `${host}/${path}`;
+}
+
+function sameRepoUrl(a: string, b: string): boolean {
+  return repoIdentity(a) === repoIdentity(b);
+}
+
+function repoDisplayName(repoUrl: string): string {
+  const parts = parseRepoParts(repoUrl);
+  if (!parts) return repoUrl;
+  const segments = parts.path.split('/').filter(Boolean);
+  return segments.length >= 2 ? segments.slice(-2).join('/') : parts.path;
+}
+
 /** Peel leading `[preset]` and `[repo:]` tags off a lobby mention; the rest is the request text. A preset-shaped tag matching no key is returned as `unknownPreset` so the caller can reject it instead of silently using the default. */
 export function parsePlanningRequest(
   text: string,
@@ -518,6 +565,14 @@ type PlanningRepoResolution = {
   url?: string;
   error?: string;
   source: 'tag' | 'message-url' | 'default' | 'none';
+};
+
+type ConversationSessionOptions = {
+  tool?: string;
+  model?: string;
+  workingDir?: string;
+  mode?: ConversationMode;
+  repoUrl?: string;
 };
 
 interface SlackMentionEvent {
@@ -997,7 +1052,7 @@ export class SlackSurface implements Surface {
     const routeRepoUrl = explicitRepoResolution.url ?? detectedRepoResolution.url ?? this.resolveRepoUrl().url;
 
     const threadTs = event.thread_ts ?? event.ts;
-    const requiresPlanningRepo = channel === this.lobbyChannelId;
+    const requiresPlanningRepo = channel === this.lobbyChannelId && !!this.planningCommandBuilder;
     const messageRepoUrl = requiresPlanningRepo && !parsed.repo
       ? extractRepoUrlFromMessage(event.text ?? '')
       : undefined;
@@ -1597,6 +1652,72 @@ export class SlackSurface implements Surface {
     });
   }
 
+  private async maybeRebindThreadRepo(
+    channel: string,
+    threadTs: string,
+    userId: string | undefined,
+    text: string,
+    say: SayFn,
+  ): Promise<{ context?: PlanningContext; rebound: boolean }> {
+    const context = this.loadPlanningContext(threadTs);
+    const repoUrl = extractRepoUrlFromMessage(text);
+    if (!repoUrl || !context?.repoUrl) return { context, rebound: false };
+    if (sameRepoUrl(context.repoUrl, repoUrl)) return { context, rebound: false };
+
+    const updated: PlanningContext = {
+      ...context,
+      repoUrl,
+      workingDir: undefined,
+      requestedBy: context.requestedBy ?? userId,
+      lobbyChannel: context.lobbyChannel ?? channel,
+    };
+    this.savePlanningContext(threadTs, updated);
+    this.discardThreadSession(channel, threadTs);
+
+    await say({
+      text: `I switched this thread to repo \`${repoDisplayName(repoUrl)}\`. The previous working state for this thread was discarded.`,
+      thread_ts: threadTs,
+    });
+    return { context: updated, rebound: true };
+  }
+
+  private discardThreadSession(channel: string, threadTs: string): void {
+    if (this.sessionManager) {
+      this.sessionManager.evictSession(new SessionIdentifier(channel, threadTs));
+      return;
+    }
+    this.planConversations.delete(threadTs);
+  }
+
+  private async preparePlanningContextForSession(
+    threadTs: string,
+    context: PlanningContext,
+    say: SayFn,
+  ): Promise<PlanningContext | undefined> {
+    if (!context.repoUrl || context.workingDir || !this.prepareRepoCheckout) return context;
+    try {
+      const workingDir = await this.prepareRepoCheckout(context.repoUrl);
+      const updated = { ...context, workingDir };
+      this.savePlanningContext(threadTs, updated);
+      return updated;
+    } catch (err) {
+      this.log('slack', 'error', `Failed to prepare repo checkout for ${context.repoUrl}: ${err}`);
+      await say({ text: `Failed to check out repo: ${err instanceof Error ? err.message : String(err)}`, thread_ts: threadTs });
+      return undefined;
+    }
+  }
+
+  private sessionOptionsFromContext(context: PlanningContext, mode?: ConversationMode): ConversationSessionOptions {
+    const preset = this.resolveHarnessPreset(context.presetKey);
+    return {
+      tool: preset.tool,
+      model: preset.model,
+      workingDir: context.workingDir,
+      mode,
+      repoUrl: context.repoUrl,
+    };
+  }
+
   private getPendingConfirm(key: string): PendingConfirm | undefined {
     const inMemory = this.pendingConfirms.get(key);
     if (inMemory) return inMemory;
@@ -1660,7 +1781,7 @@ export class SlackSurface implements Surface {
     threadTs: string,
     say: SayFn,
     channel: string,
-    opts: { userId?: string; repoUrl?: string } = {},
+    opts: { userId?: string; repoUrl?: string; workingDir?: string } = {},
   ): Promise<void> {
     if (request.kind === 'command') {
       // Raw shell on the host is admin-only: this runs `/bin/bash -lc` with the
@@ -1669,7 +1790,7 @@ export class SlackSurface implements Surface {
         await say({ text: 'Permission denied. Raw local shell commands (`exec local:`) require admin access.', thread_ts: threadTs });
         return;
       }
-      const dir = await this.resolveLocalWorkingDir(opts.repoUrl, threadTs, say);
+      const dir = await this.resolveLocalWorkingDir(opts.repoUrl, threadTs, say, opts.workingDir);
       if (!dir.ok) return;
       await say({ text: `Running locally on DO1: \`${truncateWords(request.text, 12)}\``, thread_ts: threadTs });
       try {
@@ -1689,7 +1810,7 @@ export class SlackSurface implements Surface {
       return;
     }
 
-    const dir = await this.resolveLocalWorkingDir(opts.repoUrl, threadTs, say);
+    const dir = await this.resolveLocalWorkingDir(opts.repoUrl, threadTs, say, opts.workingDir);
     if (!dir.ok) return;
     await say({ text: 'Making that local change on DO1. I will not create or submit an Invoker plan.', thread_ts: threadTs });
     try {
@@ -1717,9 +1838,10 @@ export class SlackSurface implements Surface {
     repoUrl: string | undefined,
     threadTs: string,
     say: SayFn,
+    existingWorkingDir?: string,
   ): Promise<{ ok: true; workingDir?: string } | { ok: false }> {
-    let workingDir = this.workingDir;
-    if (repoUrl && this.prepareRepoCheckout) {
+    let workingDir = existingWorkingDir ?? this.workingDir;
+    if (repoUrl && this.prepareRepoCheckout && existingWorkingDir === undefined) {
       try {
         workingDir = await this.prepareRepoCheckout(repoUrl);
       } catch (err) {
@@ -2179,9 +2301,41 @@ ${text}`;
         await this.handleLobbySubmit(channel, msg.thread_ts, msg.user ?? 'unknown', say);
         return;
       }
+      if (!text) return;
+
+      const rebind = await this.maybeRebindThreadRepo(channel, msg.thread_ts, msg.user, text, say);
+      if (rebind.rebound) return;
+
+      const localRequest = parseLocalRequest(text);
+      if (localRequest) {
+        const context = rebind.context;
+        const preparedContext = context
+          ? await this.preparePlanningContextForSession(msg.thread_ts, context, say)
+          : undefined;
+        if (context && !preparedContext) return;
+        if (localRequest.kind !== 'command') {
+          const conversation = await this.getSession(
+            channel,
+            msg.thread_ts,
+            msg.user ?? 'unknown',
+            false,
+            preparedContext ? this.sessionOptionsFromContext(preparedContext, 'agent') : undefined,
+          );
+          if (!conversation) return;
+          await this.handleConversationMessage(conversation, localRequest.text, msg.thread_ts, say, channel);
+          return;
+        }
+        const preset = this.resolveHarnessPreset(preparedContext?.presetKey ?? this.defaultHarnessPreset);
+        await this.handleLocalRequest(localRequest, preset, msg.thread_ts, say, channel, {
+          userId: msg.user,
+          repoUrl: preparedContext?.repoUrl,
+          workingDir: preparedContext?.workingDir,
+        });
+        return;
+      }
+
       const conversation = await this.getSession(channel, msg.thread_ts, msg.user ?? 'unknown', false);
       if (!conversation) return;
-      if (!text) return;
 
       this.log('slack', 'info', `[PASSIVE_THREAD_CONTEXT] thread_ts=${msg.thread_ts} user=${msg.user} preview="${text.slice(0, 100)}${text.length > 100 ? '...' : ''}"`);
     });
@@ -2542,7 +2696,7 @@ ${text}`;
     threadTs: string,
     userId: string,
     create = true,
-    opts?: { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode; repoUrl?: string },
+    opts?: ConversationSessionOptions,
   ): Promise<ConversationLike | null> {
     this.log('slack', 'info', `[TRACE] getSession (channelId=${channelId}, threadTs=${threadTs}, userId=${userId}, create=${create}, hasSessionManager=${!!this.sessionManager})`);
     if (this.sessionManager) {
@@ -2553,6 +2707,7 @@ ${text}`;
         const found = await this.sessionManager.getSession(
           new SessionIdentifier(channelId, threadTs),
           userId,
+          opts,
         );
         this.log('slack', 'info', `[TRACE] findSession returned ${found ? 'session' : 'null'} (threadTs=${threadTs})`);
         return found;
