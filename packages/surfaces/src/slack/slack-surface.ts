@@ -818,7 +818,7 @@ export class SlackSurface implements Surface {
       await ack();
       if (action.type !== 'button' || !action.value) return;
       const key = action.value;
-      const pending = this.getPendingConfirm(key);
+      const pending = this.getPendingConfirm(key) ?? await this.recoverSubmitConfirmation(key, body);
       if (!pending) {
         await respond?.({ text: 'This confirmation has expired.', replace_original: true });
         return;
@@ -826,9 +826,17 @@ export class SlackSurface implements Surface {
       this.pendingConfirms.delete(key);
       this.slackSessionRepo?.deletePendingConfirmation(key);
       this.log('slack', 'info', `Button: lobby_confirm key=${key} kind=${pending.kind}`);
-      // Acknowledge instantly by replacing the buttons. The op itself can take
-      // minutes (e.g. rebase-recreate all), and silence here reads as "nothing happened".
-      await respond?.({ text: '✅ Approved.', replace_original: true });
+      if (pending.kind === 'submit') {
+        await this.replaceConfirmationMessage(
+          body,
+          respond,
+          this.renderSubmittedPlanSummary(pending.planText),
+        );
+      } else {
+        // Acknowledge instantly by replacing the buttons. The op itself can take
+        // minutes (e.g. rebase-recreate all), and silence here reads as "nothing happened".
+        await respond?.({ text: '✅ Approved.', replace_original: true });
+      }
       // Follow-ups post in-thread via the bot client: a response_url expires after
       // 30 minutes / 5 uses, which a long bulk op can outlast.
       const opChannel = (body as { channel?: { id?: string } })?.channel?.id;
@@ -1201,6 +1209,24 @@ export class SlackSurface implements Surface {
     };
   }
 
+  private renderSubmittedPlanSummary(planText: string): string {
+    const summary = summarizePlanText(planText);
+    return summary
+      ? `✅ Plan submitted.\n\n${this.renderPlanSummary(summary)}`
+      : '✅ Plan submitted.';
+  }
+
+  private async replaceConfirmationMessage(body: unknown, respond: RespondFn | undefined, text: string): Promise<void> {
+    const message = body as { channel?: { id?: string }; message?: { ts?: string } };
+    const channel = message.channel?.id;
+    const ts = message.message?.ts;
+    if (channel && ts) {
+      await this.app.client.chat.update({ channel, ts, text, blocks: [] });
+      return;
+    }
+    await respond?.({ text, replace_original: true });
+  }
+
   private describeOp(op: WorkflowOp): string {
     const target = 'all' in op.target ? 'ALL workflows' : `\`${op.target.workflow}\``;
     return `${op.operation} ${target}`;
@@ -1486,6 +1512,29 @@ export class SlackSurface implements Surface {
     if (!persisted || persisted.kind !== 'submit' || !this.isPendingConfirm(persisted.payload)) return undefined;
     this.pendingConfirms.set(key, persisted.payload);
     return persisted.payload;
+  }
+
+  private async recoverSubmitConfirmation(key: string, body: unknown): Promise<PendingConfirm | undefined> {
+    const action = body as {
+      channel?: { id?: string };
+      message?: { thread_ts?: string };
+      container?: { thread_ts?: string };
+      user?: { id?: string };
+    };
+    const channel = action.channel?.id;
+    const threadTs = action.message?.thread_ts ?? action.container?.thread_ts;
+    if (!channel || !threadTs || key !== threadTs) return undefined;
+    const conversation = await this.getSession(channel, threadTs, action.user?.id ?? 'unknown', false);
+    if (!conversation || conversation.conversationMode !== 'plan' || conversation.planSubmitted) return undefined;
+    const planText = conversation.getDraftedPlan();
+    if (!planText) return undefined;
+    return {
+      kind: 'submit',
+      planText,
+      ctx: this.loadPlanningContext(threadTs),
+      channel,
+      lobbyThreadTs: threadTs,
+    };
   }
 
   private isPendingConfirm(value: unknown): value is PendingConfirm {
