@@ -181,10 +181,59 @@ function capTailChars(value: string, max: number): string {
 // ── Planning request parsing ─────────────────────────────────
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
+const URL_TOKEN_TERMINATORS = new Set([' ', '\t', '\n', '\r', '<', '>', '(', ')', '[', ']', '{', '}', '"', "'", '|']);
+const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?']);
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
+}
+
+export function extractRepoUrlFromMessage(text: string): string | undefined {
+  let start = 0;
+  while (start < text.length) {
+    const httpIndex = text.indexOf('http://', start);
+    const httpsIndex = text.indexOf('https://', start);
+    const candidateStart = httpIndex === -1
+      ? httpsIndex
+      : httpsIndex === -1
+        ? httpIndex
+        : Math.min(httpIndex, httpsIndex);
+    if (candidateStart === -1) return undefined;
+    let candidateEnd = candidateStart;
+    while (candidateEnd < text.length && !URL_TOKEN_TERMINATORS.has(text[candidateEnd])) {
+      candidateEnd += 1;
+    }
+    let candidate = text.slice(candidateStart, candidateEnd);
+    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
+      candidate = candidate.slice(0, -1);
+    }
+    let url: URL;
+    try {
+      url = new URL(candidate);
+    } catch {
+      start = candidateEnd + 1;
+      continue;
+    }
+    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
+      start = candidateEnd + 1;
+      continue;
+    }
+    if (url.username || url.password) {
+      start = candidateEnd + 1;
+      continue;
+    }
+    if (url.search || url.hash) {
+      start = candidateEnd + 1;
+      continue;
+    }
+    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) {
+      start = candidateEnd + 1;
+      continue;
+    }
+    return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
+  }
+  return undefined;
 }
 
 /** Peel leading `[preset]` and `[repo:]` tags off a lobby mention; the rest is the request text. A preset-shaped tag matching no key is returned as `unknownPreset` so the caller can reject it instead of silently using the default. */
