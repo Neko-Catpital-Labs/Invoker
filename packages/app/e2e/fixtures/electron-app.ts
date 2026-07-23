@@ -305,6 +305,12 @@ export async function loadPlan(page: Page, plan: { tasks: readonly { id: string 
   await page.locator(`.react-flow__node[data-testid$="${plan.tasks[0].id}"]`).first().waitFor({ state: 'visible', timeout: 10000 });
 }
 
+/** Open Plan graph so rail Refresh / DAG chrome exist (default surface is Planning home). */
+export async function openPlanGraph(page: Page): Promise<void> {
+  await page.getByTestId('sidebar-planning').click();
+  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 10000 });
+}
+
 /** Test-only: inject task status/execution into persistence and UI without running commands. */
 export async function injectTaskStates(
   page: Page,

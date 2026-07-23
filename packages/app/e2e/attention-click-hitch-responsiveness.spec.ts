@@ -1,4 +1,4 @@
-import { expect, injectTaskStates, test } from './fixtures/electron-app.js';
+import { expect, injectTaskStates, openPlanGraph, test } from './fixtures/electron-app.js';
 
 const MAX_P95_RTT_MS = 100;
 const MAX_SAMPLE_RTT_MS = 250;
@@ -38,6 +38,7 @@ test('Needs Attention list clicks keep listWorkflows IPC responsive under a fat 
     })),
   );
 
+  await openPlanGraph(page);
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.getByTestId('sidebar-attention').click();
   await expect(page.getByTestId('browser-rail').getByRole('heading', { name: 'Needs Attention' })).toBeVisible({

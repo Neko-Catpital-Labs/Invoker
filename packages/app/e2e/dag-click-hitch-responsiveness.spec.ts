@@ -1,4 +1,4 @@
-import { expect, test, E2E_REPO_URL } from './fixtures/electron-app.js';
+import { expect, openPlanGraph, test, E2E_REPO_URL } from './fixtures/electron-app.js';
 import { stringify as yamlStringify } from 'yaml';
 import type { Page } from '@playwright/test';
 
@@ -43,6 +43,8 @@ test('workflow select shows mini-DAG within 100ms under a fat events table', asy
     return window.invoker.seedMainProcessHitchFixture();
   });
   expect(seeded.eventCount).toBeGreaterThanOrEqual(10_000);
+
+  await openPlanGraph(page);
 
   // Small plan so React Flow paint cost is not the variable under test; the fat
   // hitch fixture keeps the main-thread SQLite poll busy in the background.
@@ -106,6 +108,7 @@ test('DAG task clicks keep listWorkflows IPC responsive under a fat events table
   expect(seeded.eventCount).toBeGreaterThanOrEqual(10_000);
   expect(seeded.taskCount).toBeGreaterThan(0);
 
+  await openPlanGraph(page);
   await page.getByRole('button', { name: 'Refresh' }).click();
   const miniDag = await selectWorkflowForMiniDag(page, seeded.workflowId);
   await expect(miniDag.locator('.react-flow__node').first()).toBeAttached({ timeout: 10_000 });
