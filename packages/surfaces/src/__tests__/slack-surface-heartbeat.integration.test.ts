@@ -117,6 +117,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
 
   it('sends heartbeat messages at configured interval during processing', async () => {
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -150,6 +151,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
 
   it('clears heartbeat timer after successful response', async () => {
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -184,6 +186,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
 
   it('clears heartbeat timer on error', async () => {
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -216,6 +219,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
 
   it('does not send heartbeats when interval is 0', async () => {
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -236,6 +240,7 @@ describe('SlackSurface Heartbeat - Integration Tests', () => {
 
   it('does not send heartbeats when using default (120s) and response is fast', async () => {
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',

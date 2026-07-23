@@ -95,6 +95,7 @@ describe('SlackSurface artifact upload', () => {
     mockSendMessage.mockReset();
     workingDir = mkdtempSync(join(tmpdir(), 'slack-artifact-'));
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
