@@ -21,6 +21,8 @@ export interface MainProcessHitchFixtureOptions {
   taskCount?: number;
   eventsPerTask?: number;
   actionsPerKind?: number;
+  /** Defaults to completed so dbPoll does not keep syncing a perpetual running workflow. */
+  workflowStatus?: Workflow['status'];
 }
 
 export interface MainProcessHitchFixtureResult {
@@ -30,11 +32,11 @@ export interface MainProcessHitchFixtureResult {
   workerActionCount: number;
 }
 
-function makeWorkflow(id: string, name: string): Workflow {
+function makeWorkflow(id: string, name: string, status: Workflow['status']): Workflow {
   return {
     id,
     name,
-    status: 'running',
+    status,
     createdAt: '2026-07-01T00:00:00.000Z',
     updatedAt: '2026-07-01T00:00:00.000Z',
   };
@@ -60,11 +62,12 @@ export function seedMainProcessHitchFixture(
   const taskCount = options.taskCount ?? DEFAULT_TASK_COUNT;
   const eventsPerTask = options.eventsPerTask ?? DEFAULT_EVENTS_PER_TASK;
   const actionsPerKind = options.actionsPerKind ?? DEFAULT_ACTIONS_PER_KIND;
+  const workflowStatus = options.workflowStatus ?? 'completed';
   const workflowId = MAIN_PROCESS_HITCH_FIXTURE_WORKFLOW_ID;
   let workerActionCount = 0;
 
   persistence.runInTransaction(() => {
-    persistence.saveWorkflow(makeWorkflow(workflowId, 'Main-process hitch fixture'));
+    persistence.saveWorkflow(makeWorkflow(workflowId, 'Main-process hitch fixture', workflowStatus));
 
     for (let t = 0; t < taskCount; t += 1) {
       const taskId = `${workflowId}/t${t}`;
