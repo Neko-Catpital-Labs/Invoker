@@ -721,7 +721,7 @@ describe('Invoker terminal (component)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Review draft' })).toBeInTheDocument();
       expect(screen.getByTestId('planning-create-workflow')).toBeInTheDocument();
     });
     expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
