@@ -90,7 +90,6 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
   private readonly remoteHeartbeatIntervalSeconds: number;
-  private readonly remotePath: string;
 
   constructor(config: SshExecutorConfig) {
     super();
@@ -110,7 +109,6 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
       && configuredRemoteHeartbeatInterval > 0
         ? configuredRemoteHeartbeatInterval
         : SshExecutor.DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS;
-    this.remotePath = process.env.PATH ?? '';
   }
 
   private buildSshArgs(): string[] {
@@ -303,9 +301,13 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
 `;
   }
 
+  /**
+   * Remote shell for task scripts. Use a login shell so the remote user's
+   * ~/.profile PATH (flutter, android-sdk, etc.) is applied. Never forward the
+   * local host PATH — that clobbers Linux remotes with macOS Homebrew paths.
+   */
   private buildRemoteCommand(): string[] {
-    if (!this.remotePath) return ['bash', '-s'];
-    return ['env', `PATH=${this.remotePath}`, 'bash', '-s'];
+    return ['bash', '-l', '-s'];
   }
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
