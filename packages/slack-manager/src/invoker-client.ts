@@ -77,7 +77,7 @@ export interface InvokerClient {
 }
 
 export interface InvokerClientOptions {
-  /** Starts a fresh detached Invoker GUI process. Owns kill-and-respawn for force restarts. */
+  /** Starts a fresh detached Invoker owner process. Owns kill-and-respawn for force restarts. */
   spawnInvoker: () => void;
   log: (level: string, message: string) => void;
   socketPath?: string;
