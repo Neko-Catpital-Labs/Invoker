@@ -386,11 +386,52 @@ describe('Slack plan submission restart repro contracts', () => {
     const respond = vi.fn().mockResolvedValue(undefined);
     await actionHandler(second, 'lobby_confirm')({
       action: { type: 'button', value: 'thread-button-confirm' },
-      body: { channel: { id: 'C_LOBBY' }, message: { thread_ts: 'thread-button-confirm' } },
+      body: {
+        channel: { id: 'C_LOBBY' },
+        message: { ts: 'submitted-plan-message', thread_ts: 'thread-button-confirm' },
+      },
       ack: vi.fn().mockResolvedValue(undefined),
       respond,
     });
-    expect(respond).toHaveBeenCalledWith({ text: '✅ Approved.', replace_original: true });
+    expect(sharedSlack.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C_LOBBY',
+      ts: 'submitted-plan-message',
+      text: expect.stringContaining('✅ Plan submitted.'),
+      blocks: [],
+    }));
+    expect(sharedSlack.client.chat.update.mock.calls[0][0].text).toContain('Drafted *Proof plan* (1 task).');
+    expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+  });
+
+  it('recovers a plan submission from its thread when the pending confirmation is unavailable', async () => {
+    const commands: SurfaceCommand[] = [];
+    const first = surface(commands);
+    await start(first, commands);
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(first, 'plan: recover a missing confirmation', 'thread-recover-confirm');
+    slackSessions.deletePendingConfirmation('thread-recover-confirm');
+    await first.stop();
+    surfaces = surfaces.filter((candidate) => candidate !== first);
+
+    const second = surface(commands);
+    await start(second, commands);
+    await actionHandler(second, 'lobby_confirm')({
+      action: { type: 'button', value: 'thread-recover-confirm' },
+      body: {
+        channel: { id: 'C_LOBBY' },
+        message: { ts: 'recovered-plan-message', thread_ts: 'thread-recover-confirm' },
+        user: { id: 'U_PROOF' },
+      },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(sharedSlack.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C_LOBBY',
+      ts: 'recovered-plan-message',
+      text: expect.stringContaining('✅ Plan submitted.'),
+      blocks: [],
+    }));
     expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
   });
 
