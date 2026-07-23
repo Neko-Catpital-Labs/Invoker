@@ -3842,6 +3842,23 @@ export function App() {
     : `${workerStatus.workers.length} worker${workerStatus.workers.length === 1 ? '' : 's'} registered.`;
 
   const renderWorkersSurface = (): JSX.Element => (
+    viewMode === 'queue' ? (
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <QueueView
+          tasks={tasks}
+          workflows={workflows}
+          queueStatus={queueStatus}
+          workerStatus={workerStatus}
+          readOnly={runtimeStatus?.readOnly === true}
+          onStartWorker={handleStartWorker}
+          onStopWorker={handleStopWorker}
+          onTaskClick={handleTaskClick}
+          selectedTaskId={selectedTaskId}
+          selectedWorkerKind={selectedWorkerKind}
+          onSelectWorker={setSelectedWorkerKind}
+        />
+      </div>
+    ) : (
     <div className="flex-1 flex overflow-hidden">
       <div data-testid="workers-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
         <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
@@ -3874,6 +3891,7 @@ export function App() {
         {renderWorkersDetail()}
       </div>
     </div>
+    )
   );
 
 
