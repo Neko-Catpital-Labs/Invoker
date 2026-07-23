@@ -242,6 +242,7 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     messages: session.messages,
     draftPlanAvailable: hasDraftPlan(session),
     draftPlanSummary: session.draftPlanSummary,
+    draftPlanText: session.draftPlanText,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
     terminalMode: session.terminalMode ?? 'chat',
@@ -564,6 +565,7 @@ export async function sendPlanningChatMessage(
             reasoning,
             draftPlanAvailable: hasDraftPlan(activeSession),
             draftPlanSummary: activeSession.draftPlanSummary,
+            draftPlanText: activeSession.draftPlanText,
           } as InAppPlanningChatResponse;
         }
 
@@ -579,6 +581,7 @@ export async function sendPlanningChatMessage(
             reply: fallbackReply,
             draftPlanAvailable: hasDraftPlan(activeSession),
             draftPlanSummary: activeSession.draftPlanSummary,
+            draftPlanText: activeSession.draftPlanText,
           };
         }
         activeSession.draftPlanSummary = summary;
@@ -593,6 +596,7 @@ export async function sendPlanningChatMessage(
           reasoning,
           draftPlanAvailable: true,
           draftPlanSummary: summary,
+          draftPlanText: candidatePlanText,
         } as InAppPlanningChatResponse;
       } catch (error) {
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
