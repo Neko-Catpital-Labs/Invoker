@@ -39,6 +39,8 @@ const FAILING_PLAN = {
   ],
 };
 
+test.use({ repoConfig: { autoFixRetries: 0, autoApproveAIFixes: false } });
+
 test.describe('Fix with Claude', () => {
   async function openFixWithClaude(page: any, taskId: string) {
     const readStatus = async () => page.evaluate(async (id: string) => {

@@ -41,6 +41,8 @@ const QUEUE_SPLIT_PLAN = {
 test.describe('queue running vs queued', () => {
   test('home bottom chrome shows executing and queued chips', async ({ page }) => {
     await loadPlan(page, QUEUE_SPLIT_PLAN);
+    // Queue chips live on Plan graph bottom chrome (not Planning home).
+    await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
     await startPlan(page);
 
     await expect.poll(async () => {
@@ -62,6 +64,7 @@ test.describe('queue running vs queued', () => {
     await captureScreenshot(page, 'home-queue-capacity-chips');
 
     await page.getByTestId('queue-chip-running').click();
+    await expect(page.getByRole('heading', { name: /Worker Actions/ })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('running-queue-section-running')).toContainText('In flight (1)');
     await expect(page.getByTestId('running-queue-section-queued')).toContainText('Queued (1)');
     await captureScreenshot(page, 'running-queued-split');
