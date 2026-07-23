@@ -12,4 +12,5 @@ export * from './invoker-home.ts';
 export * from './invoker-config-io.ts';
 export * from './config-diagnostics.ts';
 export * from './prerequisites.ts';
+export * from './headless-owner-launch.ts';
 export { EXTERNAL_DEPENDENCIES, DEFAULT_DRAFTER_MCP_PACKAGE_SPEC } from './external-dependencies.ts';
