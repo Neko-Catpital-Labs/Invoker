@@ -315,6 +315,7 @@ describe('planning chat', () => {
       reply: VALID_PLAN_REPLY,
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+      draftPlanText: expect.stringContaining('name: Mock Plan'),
     });
     expect(result.ok && result.reply).toContain('```yaml');
     expect(result.ok && result.reply).toContain('name: Mock Plan');
