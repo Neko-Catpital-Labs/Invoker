@@ -118,6 +118,7 @@ describe('Slack thread isolation', () => {
     mockPlanConversationCtor.mockClear();
 
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -452,6 +453,7 @@ describe('Slack conversation recovery with persistence', () => {
     ]);
 
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -479,6 +481,7 @@ describe('Slack conversation recovery with persistence', () => {
     ], { name: 'Plan', tasks: [{ id: 't1', description: 'Test', dependencies: [] }] } as any, true);
 
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -497,6 +500,7 @@ describe('Slack conversation recovery with persistence', () => {
 
   it('skips recovery when no conversationRepo is configured', async () => {
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -519,6 +523,7 @@ describe('Slack conversation recovery with persistence', () => {
     ]);
 
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -551,6 +556,7 @@ describe('Slack conversation recovery with persistence', () => {
 
   it('stop clears in-memory conversations', async () => {
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
@@ -606,6 +612,7 @@ Want me to execute this?`;
     mockPlanConversationCtor.mockClear();
 
     surface = new SlackSurface({
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',

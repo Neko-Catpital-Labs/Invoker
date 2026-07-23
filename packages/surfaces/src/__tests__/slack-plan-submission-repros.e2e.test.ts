@@ -84,6 +84,7 @@ function config(repo: ConversationRepository, extra: Partial<ConstructorParamete
     appToken: 'xapp-proof',
     signingSecret: 'proof',
     channelId: 'C_DEFAULT',
+    defaultRepoUrl: 'https://github.com/example/repo.git',
     lobbyChannelId: 'C_LOBBY',
     conversationRepo: repo,
     enableImmediateAck: false,
