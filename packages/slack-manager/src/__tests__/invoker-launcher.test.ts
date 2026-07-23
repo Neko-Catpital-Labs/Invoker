@@ -1,45 +1,40 @@
 import { describe, it, expect } from 'vitest';
-import { resolveGuiLaunch } from '../invoker-launcher.js';
 
-describe('resolveGuiLaunch', () => {
+import { LINUX_HEADLESS_ELECTRON_FLAGS } from '@invoker/contracts';
+
+import { resolveOwnerLaunch } from '../invoker-launcher.js';
+
+describe('resolveOwnerLaunch', () => {
   it('prefers INVOKER_GUI_COMMAND when set', () => {
-    const spec = resolveGuiLaunch({
+    const spec = resolveOwnerLaunch({
       repoRoot: '/repo',
       platform: 'darwin',
-      env: { INVOKER_GUI_COMMAND: '/opt/Invoker.app/Contents/MacOS/Invoker --flag' },
+      env: { INVOKER_GUI_COMMAND: '/opt/invoker-owner --flag' },
       which: () => undefined,
       existsSync: () => false,
     });
     expect(spec).toEqual({
-      command: '/opt/Invoker.app/Contents/MacOS/Invoker',
+      command: '/opt/invoker-owner',
       args: ['--flag'],
     });
   });
 
-  it('uses invoker-ui on PATH before macOS open', () => {
-    const spec = resolveGuiLaunch({
+  it('uses invoker-ui in headless owner mode when it is on PATH', () => {
+    const spec = resolveOwnerLaunch({
       repoRoot: '/repo',
       platform: 'darwin',
       env: {},
-      which: (cmd) => (cmd === 'invoker-ui' ? '/usr/local/bin/invoker-ui' : undefined),
+      which: (command) => (command === 'invoker-ui' ? '/usr/local/bin/invoker-ui' : undefined),
       existsSync: () => false,
     });
-    expect(spec).toEqual({ command: '/usr/local/bin/invoker-ui', args: [] });
-  });
-
-  it('falls back to open -a Invoker on macOS', () => {
-    const spec = resolveGuiLaunch({
-      repoRoot: '/repo',
-      platform: 'darwin',
-      env: {},
-      which: () => undefined,
-      existsSync: () => false,
+    expect(spec).toEqual({
+      command: '/usr/local/bin/invoker-ui',
+      args: ['--headless', 'owner-serve'],
     });
-    expect(spec).toEqual({ command: 'open', args: ['-a', 'Invoker'] });
   });
 
-  it('uses monorepo xvfb-run path on Linux when checkout artifacts exist', () => {
-    const spec = resolveGuiLaunch({
+  it('uses the repo headless owner path on Linux when checkout artifacts exist', () => {
+    const spec = resolveOwnerLaunch({
       repoRoot: '/repo',
       platform: 'linux',
       env: {},
@@ -49,20 +44,27 @@ describe('resolveGuiLaunch', () => {
     });
     expect(spec).toEqual({
       command: 'xvfb-run',
-      args: ['--auto-servernum', './scripts/electron.cjs', 'packages/app/dist/main.js', '--no-sandbox'],
+      args: [
+        '--auto-servernum',
+        './scripts/electron.cjs',
+        ...LINUX_HEADLESS_ELECTRON_FLAGS,
+        'packages/app/dist/main.js',
+        '--headless',
+        'owner-serve',
+      ],
       cwd: '/repo',
     });
   });
 
-  it('throws on Linux when no GUI launch path is available', () => {
+  it('throws when no headless owner launch path is available', () => {
     expect(() =>
-      resolveGuiLaunch({
+      resolveOwnerLaunch({
         repoRoot: '/repo',
         platform: 'linux',
         env: {},
         which: () => undefined,
         existsSync: () => false,
       }),
-    ).toThrow(/Cannot launch Invoker GUI/);
+    ).toThrow(/Cannot launch Invoker headless owner/);
   });
 });
