@@ -709,13 +709,11 @@ describe('autoFixOnFailure', () => {
       conflictFiles: ['src/foo.ts'],
     });
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
         execution: { autoFixAttempts: 0, error: mergeError },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
       recreateWorkflowFromFreshBase: vi.fn(async (_workflowId: string, options?: { refreshBase?: () => Promise<unknown> }) => {
         await options?.refreshBase?.();
@@ -768,12 +766,10 @@ describe('autoFixOnFailure', () => {
   it('uses fixWithAgent for non-merge failures and restarts the task directly', async () => {
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         execution: { autoFixAttempts: 0, error: 'boom', workspacePath: '/tmp/task-a' },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
@@ -804,12 +800,10 @@ describe('autoFixOnFailure', () => {
 
   it('skips auto-fix when workspacePath is missing for non-recreate routes', async () => {
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         execution: { autoFixAttempts: 0, error: 'boom' },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => []),
       revertConflictResolution: vi.fn(),
@@ -859,12 +853,10 @@ describe('autoFixOnFailure', () => {
       conflictFiles: ['src/foo.ts'],
     });
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
       retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
@@ -901,12 +893,10 @@ describe('autoFixOnFailure', () => {
       conflictFiles: ['src/foo.ts'],
     })}`;
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
       retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
@@ -937,14 +927,12 @@ describe('autoFixOnFailure', () => {
       makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
     ];
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         id: 'merge-a',
         status: 'failed',
         config: { workflowId: 'wf-1', isMergeNode: true },
         execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a' },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => []),
       setFixAwaitingApproval: vi.fn(),
@@ -986,110 +974,16 @@ describe('autoFixOnFailure', () => {
     expect(taskExecutor.publishAfterFix).toHaveBeenCalledWith(started[0]);
   });
 
-  it('retries inline when merge post-fix publish fails during auto-fix dispatch', async () => {
-    const started = [
-      makeRunningTask({ id: 'merge-a', config: { workflowId: 'wf-1', isMergeNode: true } }),
-    ];
-    // The getTask mock is driven by a state machine that tracks which
-    // phase the auto-fix flow is in.  Each phase may call getTask
-    // multiple times (entry check, lineage capture, lineage assert,
-    // approveTask, post-finalize).  We use a phase counter that
-    // advances at known transition points (beginConflictResolution
-    // and setFixAwaitingApproval) to keep return values consistent.
-    let phase = 0;
-    const phases: Record<string, unknown>[] = [
-      // Phase 0: entry check + lineage capture (cycle 1)
-      { status: 'failed', execution: { autoFixAttempts: 0, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-1', generation: 1 } },
-      // Phase 1: after fix returns, lineage check + finalize + approveTask (cycle 1)
-      { status: 'awaiting_approval', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-1', generation: 1 } },
-      // Phase 2: post-finalize check — task re-failed after publish
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', error: 'Post-fix PR prep failed: conflict', selectedAttemptId: 'att-1', generation: 1 } },
-      // Phase 3: inline retry entry + lineage capture (cycle 2)
-      { status: 'failed', execution: { autoFixAttempts: 1, workspacePath: '/tmp/merge-a', selectedAttemptId: 'att-3', generation: 3 } },
-      // Phase 4: after fix returns, lineage check + finalize + approveTask (cycle 2)
-      { status: 'awaiting_approval', execution: { autoFixAttempts: 2, workspacePath: '/tmp/merge-a', pendingFixError: 'boom', selectedAttemptId: 'att-3', generation: 3 } },
-    ];
-    const getTask = vi.fn(() => {
-      const idx = Math.min(phase, phases.length - 1);
-      return makeTask({
-        id: 'merge-a',
-        config: { workflowId: 'wf-1', isMergeNode: true },
-        ...phases[idx],
-      });
-    });
-    // Advance phase at key transition points
-    const origBeginConflictResolution = vi.fn(() => {
-      phase++;
-      return { savedError: 'boom' };
-    });
-    const origSetFixAwaitingApproval = vi.fn(() => { phase++; });
-    const shouldAutoFix = vi
-      .fn()
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(true)
-      .mockReturnValueOnce(true)
-      .mockReturnValue(false);
-    const orchestrator = {
-      shouldAutoFix,
-      getTask,
-      getAutoFixRetryBudget: vi.fn(() => 3),
-      beginConflictResolution: origBeginConflictResolution,
-      retryTask: vi.fn(() => []),
-      setFixAwaitingApproval: origSetFixAwaitingApproval,
-      approve: vi.fn().mockResolvedValue(started),
-      resumeTaskAfterFixApproval: vi.fn().mockResolvedValue(started),
-      revertConflictResolution: vi.fn(),
-    };
-    const persistence = {
-      updateTask: vi.fn(),
-      getTaskOutput: vi.fn(() => 'test output'),
-      appendTaskOutput: vi.fn(),
-      logEvent: vi.fn(),
-    };
-    const taskExecutor = {
-      fixWithAgent: vi.fn().mockResolvedValue(undefined),
-      resolveConflict: vi.fn(),
-      commitApprovedFix: vi.fn().mockResolvedValue(undefined),
-      execGitIn: vi.fn().mockResolvedValue('abc123'),
-      publishAfterFix: vi
-        .fn()
-        .mockImplementationOnce(async () => undefined)
-        .mockImplementationOnce(async () => undefined),
-      executeTasks: vi.fn().mockResolvedValue(undefined),
-    };
-
-    await autoFixOnFailure('merge-a', {
-      orchestrator: orchestrator as unknown as Orchestrator,
-      persistence: persistence as unknown as SQLiteAdapter,
-      taskExecutor: taskExecutor as unknown as TaskRunner,
-      getAutoApproveAIFixes: () => true,
-    });
-
-    expect(taskExecutor.fixWithAgent).toHaveBeenCalledTimes(2);
-    expect(taskExecutor.execGitIn).toHaveBeenCalledTimes(2);
-    expect(taskExecutor.publishAfterFix).toHaveBeenCalledTimes(2);
-    expect(persistence.logEvent).toHaveBeenCalledWith(
-      'merge-a',
-      'debug.auto-fix',
-      expect.objectContaining({
-        phase: 'auto-fix-post-route-inline-retry',
-      }),
-    );
-    expect(orchestrator.retryTask).not.toHaveBeenCalled();
-  });
-
   it('prefers config.autoFixAgent over task executionAgent', async () => {
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const logEvent = vi.fn();
     const appendTaskOutput = vi.fn();
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'claude' },
         execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
@@ -1133,13 +1027,11 @@ describe('autoFixOnFailure', () => {
     const started = [makeRunningTask({ id: 'task-a', status: 'running' })];
     const logEvent = vi.fn();
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1', executionAgent: 'codex' },
         execution: { autoFixAttempts: 0, workspacePath: '/tmp/task-a' },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
@@ -1184,13 +1076,11 @@ describe('autoFixOnFailure', () => {
     });
     const logEvent = vi.fn();
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
         execution: { autoFixAttempts: 0, error: mergeError, workspacePath: '/tmp/task-a' },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: mergeError })),
       retryTask: vi.fn(() => started),
       revertConflictResolution: vi.fn(),
@@ -2385,7 +2275,6 @@ describe('autoFixOnFailure lineage guard', () => {
   it('throws StaleLineageError when lineage changes after async fix', async () => {
     let getTaskCallCount = 0;
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => {
         getTaskCallCount++;
         if (getTaskCallCount <= 2) {
@@ -2408,7 +2297,6 @@ describe('autoFixOnFailure lineage guard', () => {
           execution: { selectedAttemptId: 'att-2', generation: 6 },
         });
       }),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => []),
@@ -2439,7 +2327,6 @@ describe('autoFixOnFailure lineage guard', () => {
   it('skips revertConflictResolution on failure when lineage changed', async () => {
     let getTaskCallCount = 0;
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => {
         getTaskCallCount++;
         if (getTaskCallCount <= 2) {
@@ -2461,7 +2348,6 @@ describe('autoFixOnFailure lineage guard', () => {
           execution: { selectedAttemptId: 'att-2', generation: 6 },
         });
       }),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => []),
@@ -2491,7 +2377,6 @@ describe('autoFixOnFailure lineage guard', () => {
   it('throws StaleLineageError when signal is aborted during auto-fix', async () => {
     const ac = new AbortController();
     const orchestrator = {
-      shouldAutoFix: vi.fn(() => true),
       getTask: vi.fn(() => makeTask({
         status: 'failed',
         config: { workflowId: 'wf-1' },
@@ -2503,7 +2388,6 @@ describe('autoFixOnFailure lineage guard', () => {
           workspacePath: '/tmp/task-a',
         },
       })),
-      getAutoFixRetryBudget: vi.fn(() => 3),
       beginConflictResolution: vi.fn(() => ({ savedError: 'boom' })),
       setFixAwaitingApproval: vi.fn(),
       retryTask: vi.fn(() => []),

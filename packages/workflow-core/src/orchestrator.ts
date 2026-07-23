@@ -691,8 +691,6 @@ export interface OrchestratorConfig {
   /** Optional; defaults to an adapter wrapping `persistence`. */
   taskRepository?: TaskRepository;
   maxConcurrency?: number;
-  /** Default auto-fix retry budget for older tasks missing persisted per-task config. */
-  defaultAutoFixRetries?: number;
   /**
    * Rules that validate task execution environment against command patterns.
    * When loading a plan, the orchestrator validates that tasks with commands matching
@@ -734,7 +732,6 @@ export class Orchestrator {
   private readonly executorRoutingRules: ExecutorRoutingRule[];
   private readonly availablePoolIds: Set<string>;
   private readonly defaultPoolId: string | undefined;
-  private readonly defaultAutoFixRetries: number;
   private readonly deferRunningUntilLaunch: boolean;
 
   private activeWorkflowIds = new Set<string>();
@@ -800,7 +797,6 @@ export class Orchestrator {
     ];
     this.availablePoolIds = new Set(config.availablePoolIds ?? []);
     this.defaultPoolId = config.defaultPoolId;
-    this.defaultAutoFixRetries = Math.min(Math.max(0, Math.floor(config.defaultAutoFixRetries ?? 0)), 10);
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
@@ -3829,26 +3825,6 @@ export class Orchestrator {
 
   getTask(taskId: string): TaskState | undefined {
     return this.stateGetTask(taskId);
-  }
-
-  getAutoFixRetryBudget(taskId: string): number {
-    return this.defaultAutoFixRetries;
-  }
-
-  private isRuntimeAutoFixEligibleTask(task: TaskState): boolean {
-    if (task.config.isReconciliation) return false;
-    if (task.config.parentTask) return false;
-    return true;
-  }
-
-  shouldAutoFix(taskId: string): boolean {
-    const task = this.stateGetTask(taskId);
-    if (!task) return false;
-    if (task.status !== 'failed') return false;
-    if (!this.isRuntimeAutoFixEligibleTask(task)) return false;
-    const max = this.getAutoFixRetryBudget(taskId);
-    if (max <= 0) return false;
-    return (task.execution.autoFixAttempts ?? 0) < max;
   }
 
   getAllTasks(): TaskState[] {
