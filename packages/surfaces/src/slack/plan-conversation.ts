@@ -254,7 +254,7 @@ export interface BuildPlanSystemPromptOptions {
 function buildDirectPlanSystemPrompt(
   defaultBranch: string,
   repoUrl?: string,
-  preferStackedWorkflows = false,
+  preferStackedWorkflows = true,
   planFilePath?: string,
 ): string {
   const repoUrlLine = repoUrl
@@ -338,7 +338,7 @@ function buildConversationalPlanSystemPrompt(
 The user has explicitly approved drafting. You may now produce the YAML task plan.
 
 Use the authorized drafting contract below:
-${buildDirectPlanSystemPrompt(defaultBranch, repoUrl, options.preferStackedWorkflows ?? false, options.planFilePath)}`
+${buildDirectPlanSystemPrompt(defaultBranch, repoUrl, options.preferStackedWorkflows ?? true, options.planFilePath)}`
     : `
 Drafting is not authorized yet. Do NOT output a \`\`\`yaml code block, do NOT write a draft plan file, and do NOT tell the user the plan can be executed.
 
@@ -376,7 +376,7 @@ export function buildPlanSystemPrompt(
   return buildDirectPlanSystemPrompt(
     defaultBranch,
     repoUrl,
-    resolvedOptions.preferStackedWorkflows ?? false,
+    resolvedOptions.preferStackedWorkflows ?? true,
     resolvedOptions.planFilePath,
   );
 }
@@ -449,7 +449,7 @@ export class PlanConversation {
     this.defaultBranch = config.defaultBranch;
     this.repoUrl = config.repoUrl;
     this.experimentalPlanner = config.experimentalPlanner;
-    this.preferStackedWorkflows = config.preferStackedWorkflows;
+    this.preferStackedWorkflows = config.preferStackedWorkflows ?? true;
     this.conversationalPlanning = config.conversationalPlanning ?? false;
     this.onRawPlannerOutput = config.onRawPlannerOutput;
     this.plannerRetryLimit = Math.max(0, config.plannerRetryLimit ?? DEFAULT_PLANNER_RETRY_LIMIT);

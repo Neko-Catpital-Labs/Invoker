@@ -974,10 +974,9 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('"automatic"');
   });
 
-  it('buildCursorPrompt can prefer stacked workflows', () => {
+  it('buildCursorPrompt prefers stacked workflows by default', () => {
     const conv = new PlanConversation({
       repoUrl: 'git@github.com:test/repo.git',
-      preferStackedWorkflows: true,
     });
     (conv as any).messages.push({ role: 'user', content: 'Build the Workers Surface' });
     const prompt = conv.buildCursorPrompt();
@@ -986,6 +985,15 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('workflows:');
     expect(prompt).toContain('Each downstream workflow is based on the previous workflow');
     expect(prompt).toContain('Build the Workers Surface');
+  });
+
+  it('buildCursorPrompt can opt out of stacked workflows', () => {
+    const conv = new PlanConversation({
+      preferStackedWorkflows: false,
+    });
+    (conv as any).messages.push({ role: 'user', content: 'Implement a small feature' });
+
+    expect(conv.buildCursorPrompt()).not.toContain('prefer a workflow stack');
   });
 
   it('agent mode refuses Invoker YAML and redirects within the same thread', () => {
