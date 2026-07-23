@@ -146,74 +146,106 @@ describe('SlackSurface', () => {
   });
 
   describe('handleEvent', () => {
-    it('posts a new message for task_delta created', async () => {
-      await surface.start(async () => {});
-      const app = surface.getApp() as any;
-
-      const event: SurfaceEvent = {
-        type: 'task_delta',
-        delta: {
-          type: 'created',
-          task: { id: 't1', description: 'Test task', status: 'pending', dependencies: [], createdAt: new Date(), config: {}, execution: {} },
-        },
+    function surfaceWithMappedWorkflow(): SlackSurface {
+      const mockRepo = {
+        getByWorkflowId: vi.fn((id: string) => (id === 'wf-1' ? { channelId: 'C-mapped', workflowId: 'wf-1' } : null)),
+        getByChannelId: vi.fn(() => undefined),
+        list: vi.fn(() => [{ channelId: 'C-mapped', workflowId: 'wf-1' }]),
+        save: vi.fn(),
+        delete: vi.fn(),
       };
+      return new SlackSurface({
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        workflowChannelRepo: mockRepo as any,
+      });
+    }
 
-      await surface.handleEvent(event);
-
-      expect(app.client.chat.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: 'C-test',
-        }),
-      );
-
-      // Should track the message timestamp
-      expect(surface.getTaskMessages().get('t1')).toBe('1234567890.123456');
-    });
-
-    it('updates existing message for task_delta updated', async () => {
+    it('suppresses task_delta created when the workflow channel is unmapped', async () => {
       await surface.start(async () => {});
       const app = surface.getApp() as any;
 
-      // First, create the task (posts new message)
       await surface.handleEvent({
         type: 'task_delta',
         delta: {
           type: 'created',
-          task: { id: 't1', description: 'Test', status: 'pending', dependencies: [], createdAt: new Date(), config: {}, execution: {} },
+          task: { id: 'wf-1/t1', description: 'Test task', status: 'pending', dependencies: [], createdAt: new Date(), config: {}, execution: {} },
         },
       });
 
-      // Then update it (should update, not post new)
+      expect(app.client.chat.postMessage).not.toHaveBeenCalled();
+      expect(surface.getTaskMessages().has('wf-1/t1')).toBe(false);
+    });
+
+    it('posts a new message for task_delta created on a mapped workflow channel', async () => {
+      const mapped = surfaceWithMappedWorkflow();
+      await mapped.start(async () => {});
+      const app = mapped.getApp() as any;
+
+      await mapped.handleEvent({
+        type: 'task_delta',
+        delta: {
+          type: 'created',
+          task: { id: 'wf-1/t1', description: 'Test task', status: 'pending', dependencies: [], createdAt: new Date(), config: {}, execution: {} },
+        },
+      });
+
+      expect(app.client.chat.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: 'C-mapped',
+        }),
+      );
+      expect(mapped.getTaskMessages().get('wf-1/t1')).toBe('1234567890.123456');
+    });
+
+    it('updates existing message for task_delta updated on a mapped workflow channel', async () => {
+      const mapped = surfaceWithMappedWorkflow();
+      await mapped.start(async () => {});
+      const app = mapped.getApp() as any;
+
+      await mapped.handleEvent({
+        type: 'task_delta',
+        delta: {
+          type: 'created',
+          task: { id: 'wf-1/t1', description: 'Test', status: 'pending', dependencies: [], createdAt: new Date(), config: {}, execution: {} },
+        },
+      });
+
       app.client.chat.postMessage.mockClear();
 
-      await surface.handleEvent({
+      await mapped.handleEvent({
         type: 'task_delta',
-        delta: { type: 'updated', taskId: 't1', changes: { status: 'running' } },
+        delta: { type: 'updated', taskId: 'wf-1/t1', changes: { status: 'running' } },
       });
 
       expect(app.client.chat.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          channel: 'C-test',
+          channel: 'C-mapped',
           ts: '1234567890.123456',
         }),
       );
-      // Should not post a new message
       expect(app.client.chat.postMessage).not.toHaveBeenCalled();
     });
 
-    it('posts message for workflow_status event', async () => {
-      await surface.start(async () => {});
-      const app = surface.getApp() as any;
+    it('posts workflow_status only when the workflow channel is mapped', async () => {
+      const mapped = surfaceWithMappedWorkflow();
+      await mapped.start(async () => {});
+      const app = mapped.getApp() as any;
 
-      await surface.handleEvent({
+      await mapped.handleEvent({
         type: 'workflow_status',
+        workflowId: 'wf-1',
         status: { total: 5, completed: 2, failed: 0, closed: 0, running: 1, pending: 2 },
       });
 
-      expect(app.client.chat.postMessage).toHaveBeenCalled();
+      expect(app.client.chat.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: 'C-mapped' }),
+      );
     });
 
-    it('posts message for error event', async () => {
+    it('suppresses error events that do not resolve to a mapped workflow channel', async () => {
       await surface.start(async () => {});
       const app = surface.getApp() as any;
 
@@ -222,7 +254,7 @@ describe('SlackSurface', () => {
         message: 'Something broke',
       });
 
-      expect(app.client.chat.postMessage).toHaveBeenCalled();
+      expect(app.client.chat.postMessage).not.toHaveBeenCalled();
     });
   });
 
