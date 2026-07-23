@@ -421,14 +421,24 @@ describe('outbound routing', () => {
     expect(client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'C123' }));
   });
 
-  it('falls back to the lobby channel for an unmapped workflow', async () => {
+  it('suppresses unmapped workflow updates instead of posting to the lobby', async () => {
     const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
     const client = (surface.getApp() as any).client;
     await surface.handleEvent({
       type: 'task_delta',
       delta: { type: 'updated', taskId: 'wf-9/api', changes: { status: 'running' }, taskStateVersion: 1, previousTaskStateVersion: 0 },
     });
-    expect(client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({ channel: 'CLOBBY' }));
+    await surface.handleEvent({
+      type: 'workflow_progress',
+      progress: {
+        workflowId: 'wf-9',
+        name: 'Unmapped',
+        percentComplete: 0,
+        counts: { total: 1, completed: 0, failed: 0, closed: 0, running: 0, pending: 1 },
+        tasks: [],
+      },
+    });
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
   it('posts a replacement progress card when chat.update rejects invalid_blocks', async () => {
     const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
