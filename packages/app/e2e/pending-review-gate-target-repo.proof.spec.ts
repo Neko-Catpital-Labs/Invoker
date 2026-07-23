@@ -1,5 +1,4 @@
-import { test, expect, captureScreenshot } from './fixtures/electron-app.js';
-import { stringify as yamlStringify } from 'yaml';
+import { test, expect, captureScreenshot, loadPlan } from './fixtures/electron-app.js';
 
 const REVIEW_GATE_PROOF_PLAN = {
   name: 'Pending review gate target repo proof',
@@ -18,7 +17,7 @@ const REVIEW_GATE_PROOF_PLAN = {
 };
 
 test('pending review gate target repo row', async ({ page }) => {
-  await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(REVIEW_GATE_PROOF_PLAN));
+  await loadPlan(page, REVIEW_GATE_PROOF_PLAN);
   await page.locator('.react-flow__node[data-testid$="review-gate-proof-task"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
   const mergeGateTaskId = await page.evaluate(async () => {
@@ -50,7 +49,7 @@ test('pending review gate target repo row', async ({ page }) => {
 });
 
 test('pending review gate merge mode selector', async ({ page }) => {
-  await page.evaluate((yaml) => window.invoker.loadPlan(yaml), yamlStringify(REVIEW_GATE_PROOF_PLAN));
+  await loadPlan(page, REVIEW_GATE_PROOF_PLAN);
   await page.locator('.react-flow__node[data-testid$="review-gate-proof-task"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
   const mergeGateTaskId = await page.evaluate(async () => {
