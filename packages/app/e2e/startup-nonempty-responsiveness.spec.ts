@@ -174,6 +174,8 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       await page.waitForLoadState('domcontentloaded');
       await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
 
+      await page.getByTestId('sidebar-planning').click();
+      await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10_000 });
       await waitForWorkflowGraphVisible(page, 5000);
       await dragGraphAndAssertViewportMoves(page);
 

@@ -88,6 +88,8 @@ async function loadPlan(page: Page): Promise<void> {
     const tasks = Array.isArray(result) ? result : result.tasks;
     return tasks.some((task: { id: string }) => task.id.endsWith('/terminal-task'));
   }), null, { timeout: 10000 });
+  await page.getByTestId('sidebar-planning').click();
+  await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10000 });
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.locator('.react-flow__node[data-testid$="terminal-task"]').first().waitFor({ state: 'visible', timeout: 10000 });
 }

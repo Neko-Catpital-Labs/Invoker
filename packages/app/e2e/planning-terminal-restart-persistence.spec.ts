@@ -125,7 +125,7 @@ base.describe('Planning Terminal restart persistence', () => {
       }, { yaml: planYaml });
 
       await openPlanningTerminal(page);
-      await submitPlanningText(page, 'Add README');
+      await submitPlanningText(page, 'Draft a YAML plan to add a README');
       await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready', { timeout: 10000 });
       const savedSessionId = await page.evaluate(async () => {
         const list = await window.invoker.planningChatList();
@@ -141,7 +141,7 @@ base.describe('Planning Terminal restart persistence', () => {
       ({ app, page } = await launchApp({ dbDir: testDir, userDataDir, ipcSocketPath, configPath }));
       await openPlanningTerminal(page);
 
-      await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('Add README', { timeout: 10000 });
+      await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('Draft a YAML plan to add a README', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('I drafted the restart plan.');
       await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready · "Planning Terminal Restart"');
       await expect(page.getByTestId('invoker-terminal-input')).toBeEnabled();
@@ -186,7 +186,7 @@ base.describe('Planning Terminal restart persistence', () => {
       }, { yaml: planYaml });
 
       await openPlanningTerminal(page);
-      await submitPlanningText(page, 'Add README');
+      await submitPlanningText(page, 'Draft a YAML plan to add a README');
       await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready', { timeout: 10000 });
       const savedSessionId = await page.evaluate(async () => {
         const list = await window.invoker.planningChatList();
