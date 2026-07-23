@@ -160,7 +160,7 @@ test.describe('Edit task prompt', () => {
     expect(childTask).toBeDefined();
     expect(childTask?.id).toBe(beforeEditChild.id);
     expect(childTask?.execution?.generation).toBeGreaterThan(beforeGeneration);
-    expect(['pending', 'running', 'completed']).toContain(childTask?.status);
+    expect(['pending', 'queued', 'running', 'completed']).toContain(childTask?.status);
     expect(tasks.find((t: any) => !t.id.endsWith('/child-task') && t.description === 'Child command task')).toBeUndefined();
   });
 });

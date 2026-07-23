@@ -8,7 +8,7 @@ import {
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
 
-test.use({ repoConfig: { autoFixRetries: 1, autoFixAgent: 'claude', autoApproveAIFixes: false } });
+test.use({ repoConfig: { autoFixRetries: 2, autoFixAgent: 'claude', autoApproveAIFixes: false } });
 
 const PLAN = {
   name: 'E2E Autofix Worker UI Plan',
@@ -21,6 +21,9 @@ const PLAN = {
 };
 
 test('worker-triggered autofix reaches approval UI with mocked Claude', async ({ page }) => {
+  await page.evaluate(async () => {
+    await window.invoker.startWorker('autofix');
+  });
   await loadPlan(page, PLAN);
   await startPlan(page);
   await waitForTaskStatus(page, 'task-pass', 'completed');

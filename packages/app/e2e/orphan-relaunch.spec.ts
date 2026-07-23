@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
+import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
 
@@ -95,23 +96,38 @@ base.describe('Orphan task relaunch on restart', () => {
       const loadedSlow = findTask(loadedTasks, 'slow-task');
       expect(loadedSlow).toBeDefined();
 
-      await page1.evaluate(async ({ taskId }) => {
-        const now = new Date().toISOString();
+      const loadedFast = findTask(loadedTasks, 'fast-task');
+      expect(loadedFast).toBeDefined();
+      const staleIso = new Date(Date.now() - ATTEMPT_LEASE_MS - 1_000).toISOString();
+      await page1.evaluate(async ({ slowTaskId, fastTaskId, staleIso }) => {
         await window.invoker.injectTaskStates?.([
           {
-            taskId,
+            taskId: fastTaskId,
+            changes: {
+              status: 'completed',
+              execution: {
+                phase: 'executing',
+                startedAt: staleIso,
+                lastHeartbeatAt: staleIso,
+                launchStartedAt: staleIso,
+                completedAt: staleIso,
+              },
+            },
+          },
+          {
+            taskId: slowTaskId,
             changes: {
               status: 'running',
               execution: {
                 phase: 'launching',
-                startedAt: now,
-                lastHeartbeatAt: now,
-                launchStartedAt: now,
+                startedAt: staleIso,
+                lastHeartbeatAt: staleIso,
+                launchStartedAt: staleIso,
               },
             },
           },
         ]);
-      }, { taskId: loadedSlow!.id });
+      }, { slowTaskId: loadedSlow!.id, fastTaskId: loadedFast!.id, staleIso });
 
       await page1.evaluate(() => window.invoker.resumeWorkflow());
 

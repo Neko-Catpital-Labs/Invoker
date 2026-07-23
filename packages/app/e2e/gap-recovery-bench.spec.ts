@@ -75,6 +75,8 @@ function buildPlan(index: number) {
 }
 
 async function waitForWorkflowGraphVisible(page: Page, timeoutMs: number): Promise<void> {
+  await page.getByTestId('sidebar-planning').click();
+  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: Math.min(timeoutMs, 10_000) });
   await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({
     state: 'visible',
     timeout: timeoutMs,

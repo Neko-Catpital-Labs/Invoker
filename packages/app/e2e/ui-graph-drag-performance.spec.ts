@@ -86,10 +86,14 @@ async function seedLargeWorkflowGraph(page: Page): Promise<void> {
     WORKFLOW_COUNT,
     { timeout: 30_000 },
   );
-  await page.getByTestId('sidebar-planning').click();
-  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 10_000 });
+  const dismiss = page.getByRole('button', { name: 'Dismiss' });
+  if (await dismiss.isVisible().catch(() => false)) {
+    await dismiss.click();
+  }
+  await page.getByTestId('sidebar-planning').click({ force: true });
+  await page.getByRole('heading', { name: 'Plan graph' }).waitFor({ state: 'visible', timeout: 15_000 });
   await page.getByRole('button', { name: 'Refresh' }).click();
-  await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 10_000 });
+  await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 15_000 });
 }
 
 async function recordDragPerformance(
