@@ -7,7 +7,7 @@
 
 import { App, type RespondFn } from '@slack/bolt';
 import { spawn } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress, WorkflowOpName } from '../surface.js';
 import { parseSlackCommand } from './slack-commands.js';
@@ -1977,6 +1977,7 @@ ${text}`;
       },
       channelId,
     );
+    await this.publishWorkflowPlanCard(channelId, event.workflowId, event.planFile);
 
     if (event.lobbyChannel) {
       if (inviteFailed) {
@@ -2000,6 +2001,54 @@ ${text}`;
       });
     } catch (err) {
       this.log('slack', 'error', `Failed to post to thread: ${err}`);
+    }
+  }
+
+  private async publishWorkflowPlanCard(channel: string, workflowId: string, planFile: string | undefined): Promise<void> {
+    if (!planFile) return;
+    let planText: string;
+    try {
+      planText = readFileSync(planFile, 'utf8');
+    } catch (err) {
+      this.log('slack', 'error', `[PLAN] Failed to read workflow plan ${planFile}: ${err}`);
+      await this.postMessage(
+        { text: `Could not read the workflow plan file: ${err instanceof Error ? err.message : String(err)}`, blocks: [] },
+        channel,
+      );
+      return;
+    }
+    const summary = summarizePlanText(planText);
+    if (!summary) {
+      await this.postMessage(
+        { text: `Could not summarize the workflow plan for \`${workflowId}\`.`, blocks: [] },
+        channel,
+      );
+      return;
+    }
+    const text = `*Plan for workflow \`${workflowId}\`*\n${this.renderPlanSummary(summary)}`;
+    const summaryTs = await this.postMessage({ text, blocks: [] }, channel);
+    if (summaryTs) {
+      try {
+        await this.app.client.pins.add({ channel, timestamp: summaryTs });
+      } catch (err) {
+        this.log('slack', 'error', `[PLAN] Failed to pin workflow plan (channel=${channel}, workflow=${workflowId}): ${err}`);
+        await this.postMessage(
+          { text: 'Could not pin the workflow plan. Add the `pins:write` bot scope and reinstall the Slack app.', blocks: [] },
+          channel,
+        );
+      }
+    }
+    try {
+      await this.app.client.files.uploadV2({
+        channel_id: channel,
+        file_uploads: [{ file: planFile, filename: `workflow-${workflowId}-plan.yaml` }],
+      });
+    } catch (err) {
+      this.log('slack', 'error', `[PLAN] Failed to upload workflow plan (channel=${channel}, workflow=${workflowId}): ${err}`);
+      await this.postMessage(
+        { text: `Could not upload the workflow plan YAML: ${err instanceof Error ? err.message : String(err)}`, blocks: [] },
+        channel,
+      );
     }
   }
 
