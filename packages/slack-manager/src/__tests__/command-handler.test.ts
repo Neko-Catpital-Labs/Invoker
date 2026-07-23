@@ -94,6 +94,7 @@ describe('createCommandHandler', () => {
       lobbyThreadTs: '123.45',
       harnessPreset: 'cursor+claude',
       repoUrl: 'git@example:repo.git',
+      planFile: planPath,
     });
   });
 

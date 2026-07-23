@@ -78,6 +78,7 @@ async function dispatch(deps: CommandHandlerDeps, command: SurfaceCommand): Prom
         lobbyThreadTs: command.lobbyThreadTs,
         harnessPreset: command.harnessPreset,
         repoUrl: command.repoUrl,
+        planFile: planPath,
       });
       return;
     }
