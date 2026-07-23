@@ -514,6 +514,12 @@ interface SayResult {
 
 type SayFn = (msg: { text: string; thread_ts: string; blocks?: unknown[] }) => Promise<SayResult>;
 
+type PlanningRepoResolution = {
+  url?: string;
+  error?: string;
+  source: 'tag' | 'message-url' | 'default' | 'none';
+};
+
 interface SlackMentionEvent {
   text?: string;
   ts: string;
@@ -988,17 +994,18 @@ export class SlackSurface implements Surface {
       await say({ text: detectedRepoResolution.error, thread_ts: event.ts });
       return;
     }
-    if (
-      explicitRepoResolution.url
-      && detectedRepoResolution.url
-      && repositoryIdentity(explicitRepoResolution.url) !== repositoryIdentity(detectedRepoResolution.url)
-    ) {
-      await say({ text: 'The `[repo:…]` selector and repository URL disagree. Use one repository target per request.', thread_ts: event.ts });
-      return;
-    }
-    const repoUrl = explicitRepoResolution.url ?? detectedRepoResolution.url ?? this.resolveRepoUrl().url;
+    const routeRepoUrl = explicitRepoResolution.url ?? detectedRepoResolution.url ?? this.resolveRepoUrl().url;
 
     const threadTs = event.thread_ts ?? event.ts;
+    const requiresPlanningRepo = channel === this.lobbyChannelId;
+    const messageRepoUrl = requiresPlanningRepo && !parsed.repo
+      ? extractRepoUrlFromMessage(event.text ?? '')
+      : undefined;
+    let planningRepoResolution: PlanningRepoResolution | undefined;
+    const resolvePlanningRepo = (): PlanningRepoResolution => {
+      planningRepoResolution ??= this.resolvePlanningRepoUrl(parsed.repo, messageRepoUrl);
+      return planningRepoResolution;
+    };
 
     // Confirm/cancel a staged action first (plain yes/no in-thread).
     if (await this.resolveConfirm(threadTs, parsed.text, say, channel)) return;
@@ -1020,7 +1027,7 @@ export class SlackSurface implements Surface {
 
     const localRequest = parseLocalRequest(parsed.text);
     if (localRequest?.kind === 'command') {
-      await this.handleLocalRequest(localRequest, preset, threadTs, say, channel, { userId: event.user, repoUrl });
+      await this.handleLocalRequest(localRequest, preset, threadTs, say, channel, { userId: event.user, repoUrl: routeRepoUrl });
       return;
     }
 
@@ -1034,8 +1041,19 @@ export class SlackSurface implements Surface {
     let threadRequest = parseThreadRequest(parsed.text);
     const barePlanPrefix = /^(?:invoker\s+)?plan\s*:\s*$/i.test(parsed.text.trim());
 
+    if (requiresPlanningRepo && threadRequest?.mode === 'plan' && !resolvePlanningRepo().url) {
+      await say({ text: this.missingPlanningRepoMessage(), thread_ts: threadTs });
+      return;
+    }
+
     // Slower paths (LLM classifier, repo checkout, agent) acknowledge receipt up front.
-    if (this.enableImmediateAck) await this.sendImmediateAck(threadTs, say);
+    if (
+      this.enableImmediateAck
+      && !(threadRequest?.mode === 'plan' && resolvePlanningRepo().source === 'message-url')
+      && !(!explicitLocalAgent && threadRequest?.mode !== 'plan' && messageRepoUrl)
+    ) {
+      await this.sendImmediateAck(threadTs, say);
+    }
 
     try {
       // Bare `plan:` has no body. Clear the Processing ack and stop — do not classify or plan.
@@ -1063,9 +1081,25 @@ export class SlackSurface implements Surface {
 
       if (!threadRequest) return;
 
+      let planningRepo: PlanningRepoResolution | undefined;
+      if (threadRequest.mode === 'plan') {
+        planningRepo = resolvePlanningRepo();
+        if (requiresPlanningRepo && !planningRepo.url) {
+          await this.clearImmediateAck(channel, threadTs);
+          await say({ text: this.missingPlanningRepoMessage(), thread_ts: threadTs });
+          return;
+        }
+        if (planningRepo.source === 'message-url') {
+          await say({
+            text: `I picked repo \`${planningRepo.url}\` from the URL in your message. If that's wrong, start the planning request again with a \`[repo:<alias>]\` tag or a git URL.`,
+            thread_ts: threadTs,
+          });
+        }
+      }
+
       const storedContext = this.loadPlanningContext(threadTs);
       if (storedContext) {
-        if ((parsed.repo || repositoryUrls.length > 0) && repoUrl && storedContext.repoUrl && repositoryIdentity(repoUrl) !== repositoryIdentity(storedContext.repoUrl)) {
+        if ((parsed.repo || repositoryUrls.length > 0) && routeRepoUrl && storedContext.repoUrl && repositoryIdentity(routeRepoUrl) !== repositoryIdentity(storedContext.repoUrl)) {
           await say({ text: 'This thread is already pinned to a different repository. Start a new thread to use another repository.', thread_ts: threadTs });
           return;
         }
@@ -1079,7 +1113,7 @@ export class SlackSurface implements Surface {
       const context = storedContext
         ? storedContext
         : {
-            repoUrl,
+            repoUrl: threadRequest.mode === 'plan' ? planningRepo?.url : routeRepoUrl,
             presetKey: parsed.presetKey,
             workingDir: this.workingDir,
             requestedBy: event.user,
@@ -1168,8 +1202,9 @@ export class SlackSurface implements Surface {
       const replies = await this.app.client.conversations.replies({ channel, ts: threadTs, limit: 100 });
       const messages = (replies.messages ?? []) as Array<{ bot_id?: string; subtype?: string; text?: string }>;
       const context = messages
-        .filter((message) => !message.bot_id && !message.subtype && typeof message.text === 'string')
-        .map((message) => message.text!.trim())
+        .filter((message): message is { text: string; bot_id?: string; subtype?: string } =>
+          !message.bot_id && !message.subtype && typeof message.text === 'string')
+        .map((message) => message.text.trim())
         .filter((text) => text && text !== request)
         .slice(-20)
         .map((text) => `- ${text.slice(0, 1_000)}`)
@@ -1787,6 +1822,20 @@ ${text}`;
     return !!repoUrl
       && !!this.prepareRepoCheckout
       && (!this.defaultRepoUrl || repositoryIdentity(repoUrl) !== repositoryIdentity(this.defaultRepoUrl));
+  }
+
+  private resolvePlanningRepoUrl(repo: string | undefined, messageRepoUrl: string | undefined): PlanningRepoResolution {
+    if (repo) {
+      const resolved = this.resolveRepoUrl(repo);
+      return { ...resolved, source: 'tag' };
+    }
+    if (messageRepoUrl) return { url: messageRepoUrl, source: 'message-url' };
+    if (this.defaultRepoUrl) return { url: this.resolveRepoUrl().url, source: 'default' };
+    return { source: 'none' };
+  }
+
+  private missingPlanningRepoMessage(): string {
+    return 'I need a repository before drafting an Invoker plan. Add a `[repo:<alias>]` tag or include a repo-root git URL like `https://github.com/org/repo` in the first message.';
   }
 
   // ── In-channel workflow assistant ──────────────────────
