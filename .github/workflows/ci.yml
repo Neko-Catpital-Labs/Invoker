@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.head_ref) || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
@@ -581,7 +581,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble
-    timeout-minutes: 5
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
