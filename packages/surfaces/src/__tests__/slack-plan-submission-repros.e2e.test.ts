@@ -180,13 +180,13 @@ describe('Slack plan submission restart repro contracts', () => {
     expect(commands).toContainEqual(expect.objectContaining({ type: 'start_plan' }));
   });
 
-  it('drafts a submittable plan from the incident wording and its source thread context', async () => {
+  it('drafts a submittable plan from the exact live-thread wording and its source thread context', async () => {
     const commands: SurfaceCommand[] = [];
     const slack = surface(commands);
     sharedSlack.client.conversations.replies.mockResolvedValue({
       messages: [
         { text: 'Please prioritize the Orca-inspired reply: attention inbox, workflow cards, gates, batch review notes, presets, mobile polish, and usage chips.' },
-        { text: '@Invoker Can you create a plan for this to submit to invoker for all these features?' },
+        { text: '@Invoker please draft a plan for this' },
       ],
     });
     await start(slack, commands);
@@ -194,7 +194,7 @@ describe('Slack plan submission restart repro contracts', () => {
 
     const say = await mention(
       slack,
-      'Can you create a plan for this to submit to invoker for all these features?',
+      'please draft a plan for this',
       'incident-thread',
     );
 
@@ -206,6 +206,14 @@ describe('Slack plan submission restart repro contracts', () => {
     expect(say).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringContaining('Drafted *Proof plan* (1 task). Delivery order: 1) Exercise the submission flow.'),
     }));
+    expect(say.mock.calls[0][0].blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        elements: expect.arrayContaining([
+          expect.objectContaining({ action_id: 'lobby_confirm', text: expect.objectContaining({ text: 'Approve' }) }),
+          expect.objectContaining({ action_id: 'lobby_cancel', text: expect.objectContaining({ text: 'Reject' }) }),
+        ]),
+      }),
+    ]));
   });
 
   it('uses untagged replies as context only when Invoker is tagged again', async () => {
