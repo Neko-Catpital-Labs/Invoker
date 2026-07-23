@@ -102,6 +102,7 @@ export type SurfaceEvent =
       lobbyThreadTs?: string;
       harnessPreset?: string;
       repoUrl?: string;
+      planFile?: string;
     }
   | { type: 'error'; message: string };
 
