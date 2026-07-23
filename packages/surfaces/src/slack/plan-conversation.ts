@@ -525,6 +525,13 @@ export class PlanConversation {
     const formatted = formatCodexPlannerStdout(response);
     let message = formatted.message;
     if (this.mode === 'plan' && extractYamlPlan(message) && !message.includes('Reply `submit` to submit it.')) {
+      const fenceStart = message.lastIndexOf('```yaml\n');
+      if (fenceStart !== -1) {
+        const afterFence = message.slice(fenceStart + '```yaml\n'.length);
+        if (!/^```\s*$/m.test(afterFence)) {
+          message = `${message.trimEnd()}\n\`\`\``;
+        }
+      }
       message = `${message.trimEnd()}\n\nReply \`submit\` to submit it.`;
     }
     const repoStateAfter = this.mode === 'agent'
