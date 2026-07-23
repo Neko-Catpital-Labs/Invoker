@@ -27,6 +27,19 @@ const INLINE_REPLY = [
   '```',
 ].join('\n');
 
+const DIFFERENT_INLINE_REPLY = [
+  'Here is another plan.',
+  '',
+  '```yaml',
+  'name: "Inline plan"',
+  'onFinish: none',
+  'tasks:',
+  '  - id: inline',
+  '    description: Inline task',
+  '    command: echo inline',
+  '```',
+].join('\n');
+
 describe('plan draft file — read side', () => {
   let workingDir: string;
 
@@ -49,6 +62,13 @@ describe('plan draft file — read side', () => {
     );
   });
 
+  it('sanitizes threadTs in the plan draft file path', () => {
+    const conversation = conversationWith('abc:123/456');
+    expect(conversation.planDraftFilePath()).toBe(
+      join(workingDir, '.invoker', 'plan-drafts', 'abc_123_456.yaml'),
+    );
+  });
+
   it('has no plan draft path without a threadTs', () => {
     expect(conversationWith(undefined).planDraftFilePath()).toBeNull();
   });
@@ -59,6 +79,18 @@ describe('plan draft file — read side', () => {
     if (!path) throw new Error('expected a plan draft path');
     mkdirSync(join(workingDir, '.invoker', 'plan-drafts'), { recursive: true });
     writeFileSync(path, COMPLETE_PLAN, 'utf8');
+
+    expect(conversation.getDraftedPlan()).toBe(COMPLETE_PLAN);
+  });
+
+  it('prefers the plan draft file over inline YAML in history', () => {
+    const conversation = conversationWith('abc-123');
+    const path = conversation.planDraftFilePath();
+    if (!path) throw new Error('expected a plan draft path');
+    mkdirSync(join(workingDir, '.invoker', 'plan-drafts'), { recursive: true });
+    writeFileSync(path, COMPLETE_PLAN, 'utf8');
+    (conversation as unknown as { messages: Array<{ role: string; content: string }> })
+      .messages.push({ role: 'assistant', content: DIFFERENT_INLINE_REPLY });
 
     expect(conversation.getDraftedPlan()).toBe(COMPLETE_PLAN);
   });
