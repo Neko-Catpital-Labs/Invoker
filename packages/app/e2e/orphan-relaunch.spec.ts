@@ -1,10 +1,6 @@
 /**
- * E2E: Orphan task relaunch — verify that tasks stuck in 'running' from a
- * previous session are automatically relaunched when the app restarts.
- *
- * Simulates an app crash by force-killing the Electron process while a task
- * is still running. On relaunch, startup reconciliation should detect and
- * relaunch the orphaned task.
+ * E2E: Orphan task reconciliation — stale in-flight tasks from a previous
+ * session are failed on boot ("Application quit"), not silently relaunched.
  */
 
 import { test as base, _electron as electron, expect, type Page } from '@playwright/test';
@@ -15,6 +11,7 @@ import { stringify as yamlStringify } from 'yaml';
 import { E2E_REPO_URL } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import { ATTEMPT_LEASE_MS } from '@invoker/contracts';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
 
@@ -47,7 +44,7 @@ function launchArgs(): string[] {
   ];
 }
 
-function findTask(tasks: Array<{ id: string; status: string }>, taskId: string) {
+function findTask(tasks: Array<{ id: string; status: string; execution?: { error?: string } }>, taskId: string) {
   return tasks.find((t) => t.id === taskId || t.id.endsWith(`/${taskId}`));
 }
 
@@ -57,47 +54,47 @@ async function waitForInvoker(page: Page): Promise<void> {
 }
 
 base.describe('Orphan task relaunch on restart', () => {
-  base('orphaned running task is relaunched after app restart', async () => {
+  base('orphaned running task is failed on app restart', async () => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-'));
     const configPath = path.join(testDir, 'e2e-config.json');
     const electronUserDataDir = path.join(testDir, 'electron-user-data');
-    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
+    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0, disableAutoRunOnStartup: true }), 'utf8');
     rmSync(electronUserDataDir, { recursive: true, force: true });
     registerTrackedBrowserUserDataDir(electronUserDataDir);
 
+    const env = {
+      ...process.env,
+      NODE_ENV: 'test',
+      INVOKER_TEST_WORKFLOW_IDS: '1',
+      INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
+      INVOKER_DB_DIR: testDir,
+      INVOKER_ALLOW_DELETE_ALL: '1',
+      INVOKER_E2E_ENABLE_COMPOSITOR: '1',
+      INVOKER_REPO_CONFIG_PATH: configPath,
+      INVOKER_USER_DATA_DIR: electronUserDataDir,
+    };
+
+    let app = await electron.launch({
+      args: [`--user-data-dir=${electronUserDataDir}`, ...launchArgs()],
+      env,
+    });
     try {
-      const app1 = await electron.launch({
-        args: [`--user-data-dir=${electronUserDataDir}`, ...launchArgs()],
-        env: {
-          ...process.env,
-          NODE_ENV: 'test',
-          INVOKER_TEST_WORKFLOW_IDS: '1',
-          INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
-          INVOKER_DB_DIR: testDir,
-          INVOKER_ALLOW_DELETE_ALL: '1',
-          INVOKER_E2E_ENABLE_COMPOSITOR: '1',
-          INVOKER_REPO_CONFIG_PATH: configPath,
-          INVOKER_USER_DATA_DIR: electronUserDataDir,
-        },
-      });
-      const page1 = await app1.firstWindow();
+      const page1 = await app.firstWindow();
       await waitForInvoker(page1);
 
-      // Clear any leftover state
       await page1.evaluate(async () => {
         await window.invoker.clear();
         await window.invoker.deleteAllWorkflows();
       });
 
-      // Load the plan and synthesize an orphaned running task with no live handle.
       await page1.evaluate((planYaml) => window.invoker.loadPlan(planYaml), yamlStringify(RELAUNCH_PLAN));
       const loadedResult = await page1.evaluate(() => window.invoker.getTasks());
       const loadedTasks = Array.isArray(loadedResult) ? loadedResult : loadedResult.tasks;
       const loadedSlow = findTask(loadedTasks, 'slow-task');
-      expect(loadedSlow).toBeDefined();
-
       const loadedFast = findTask(loadedTasks, 'fast-task');
+      expect(loadedSlow).toBeDefined();
       expect(loadedFast).toBeDefined();
+
       const staleIso = new Date(Date.now() - ATTEMPT_LEASE_MS - 1_000).toISOString();
       await page1.evaluate(async ({ slowTaskId, fastTaskId, staleIso }) => {
         await window.invoker.injectTaskStates?.([
@@ -129,30 +126,31 @@ base.describe('Orphan task relaunch on restart', () => {
         ]);
       }, { slowTaskId: loadedSlow!.id, fastTaskId: loadedFast!.id, staleIso });
 
-      await page1.evaluate(() => window.invoker.resumeWorkflow());
+      await app.close();
+      app = undefined as never;
+      await delay(1500);
 
-      const deadline2 = Date.now() + 60_000;
-      let observedSlow: any;
-      while (Date.now() < deadline2) {
-        const snapshot = await page1.evaluate(() => window.invoker.getTasks());
+      app = await electron.launch({
+        args: [`--user-data-dir=${electronUserDataDir}`, ...launchArgs()],
+        env,
+      });
+      const page2 = await app.firstWindow();
+      await waitForInvoker(page2);
+
+      await expect.poll(async () => {
+        const snapshot = await page2.evaluate(() => window.invoker.getTasks());
         const tasks = Array.isArray(snapshot) ? snapshot : snapshot.tasks;
-        observedSlow = findTask(tasks, 'slow-task');
-        if (observedSlow?.status === 'running' && observedSlow?.execution?.phase !== 'launching') {
-          break;
-        }
-        await page1.waitForTimeout(300);
-      }
-      expect(observedSlow).toBeDefined();
-      expect(observedSlow?.status).toBe('running');
-      expect(observedSlow?.execution?.phase).not.toBe('launching');
-
-      const postResult = await page1.evaluate(() => window.invoker.getTasks());
-      const postTasks = Array.isArray(postResult) ? postResult : postResult.tasks;
-      const postSlow = findTask(postTasks, 'slow-task');
-      expect(postSlow).toBeDefined();
-      expect(postSlow?.status).toBe('running');
-      await app1.close();
+        const slow = findTask(tasks, 'slow-task');
+        return {
+          status: slow?.status,
+          error: slow?.execution?.error ?? null,
+        };
+      }, { timeout: 30_000 }).toEqual({
+        status: 'failed',
+        error: 'Application quit',
+      });
     } finally {
+      if (app) await app.close().catch(() => undefined);
       if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
         rmSync(testDir, { recursive: true, force: true });
       }

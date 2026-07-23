@@ -185,6 +185,9 @@ base.describe('Embedded terminal restart persistence', () => {
       const after = await page.evaluate(() => window.invoker.terminalList());
       expect(after).toHaveLength(1);
       expect(after[0].sessionId).toBe(sessionId);
+      // Terminal drawer chrome mounts only on Plan graph, not Planning home.
+      await page.getByTestId('sidebar-planning').click();
+      await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10000 });
       await expect(page.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial', { timeout: 10000 });
       await expect(page.getByTestId(`terminal-tab-${fullTaskId}`)).toBeVisible();
       const restoredPane = page.getByTestId(`terminal-pane-${fullTaskId}`);
