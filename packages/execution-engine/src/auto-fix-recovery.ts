@@ -280,7 +280,9 @@ function autoFixDecisionExternalKey(candidate: AutoFixRecoveryCandidate): string
 }
 
 function autoFixBareRetryExternalKey(candidate: AutoFixRecoveryCandidate): string {
-  return `${AUTO_FIX_WORKER_KIND}:retry:${candidate.taskId}:${candidate.generation}:${candidate.attemptId ?? ''}`;
+  // Bare retry is once-per-task: after restart-task bumps generation, the next
+  // failure must escalate to fix-with-agent instead of another bare retry.
+  return `${AUTO_FIX_WORKER_KIND}:retry:${candidate.taskId}`;
 }
 
 function recordAutoFixDecisionRow(

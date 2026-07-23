@@ -102,7 +102,7 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
     expect(channel).toBe('invoker:restart-task');
     expect(args).toEqual(['wf-1/build']);
 
-    const retryRow = harness.actions.get(`${AUTO_FIX_WORKER_KIND}:${AUTO_FIX_WORKER_KIND}:retry:wf-1/build:2:attempt-1`);
+    const retryRow = harness.actions.get(`${AUTO_FIX_WORKER_KIND}:${AUTO_FIX_WORKER_KIND}:retry:wf-1/build`);
     expect(retryRow).toBeDefined();
     expect(retryRow?.actionType).toBe('auto-retry');
     expect(retryRow?.attemptCount).toBe(1);
@@ -153,11 +153,11 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
 
   it('respects existing bare-retry row across ledger resets (persistence path)', async () => {
     const harness = makeHarness();
-    const retryKey = `${AUTO_FIX_WORKER_KIND}:${AUTO_FIX_WORKER_KIND}:retry:wf-1/build:2:attempt-1`;
+    const retryKey = `${AUTO_FIX_WORKER_KIND}:${AUTO_FIX_WORKER_KIND}:retry:wf-1/build`;
     harness.actions.set(retryKey, toRecord({
       id: retryKey,
       workerKind: AUTO_FIX_WORKER_KIND,
-      externalKey: `${AUTO_FIX_WORKER_KIND}:retry:wf-1/build:2:attempt-1`,
+      externalKey: `${AUTO_FIX_WORKER_KIND}:retry:wf-1/build`,
       actionType: 'auto-retry',
       subjectType: 'task',
       subjectId: 'wf-1/build',
@@ -178,6 +178,37 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
 
     await tick({ reason: 'poll' } as never);
 
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:fix-with-agent');
+  });
+
+  it('escalates after a generation bump once the bare retry row exists', async () => {
+    const harness = makeHarness();
+    const tick = createAutoFixRecoveryTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 3,
+      getAutoFixAgent: () => 'codex',
+    });
+
+    await tick({ reason: 'poll' } as never);
+    expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:restart-task');
+    harness.submit.mockClear();
+
+    // Bare retry succeeded then failed again under a new generation/attempt.
+    harness.tasks.set('wf-1/build', makeFailedTask({
+      execution: {
+        generation: 3,
+        selectedAttemptId: 'attempt-2',
+        branch: 'feature/build',
+        error: 'pnpm build failed with exit code 1',
+      },
+      taskStateVersion: 8,
+    }));
+
+    await tick({ reason: 'poll' } as never);
     expect(harness.submit).toHaveBeenCalledTimes(1);
     expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:fix-with-agent');
   });
