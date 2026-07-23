@@ -421,6 +421,10 @@ export function parseThreadRequest(text: string): ThreadRequest | null {
     return { mode: 'plan', text: trimmed };
   }
 
+  if (/^(?:please\s+)?(?:draft|create|make|write)\s+(?:an?\s+)?plan\s+for\s+(?:this|the\s+(?:above|thread|discussion))[.!?]*$/i.test(trimmed)) {
+    return { mode: 'plan', text: trimmed };
+  }
+
   const viaInvoker = /^(.*?\S)\s+(?:via|with)\s+invoker[.!]?$/i.exec(trimmed);
   if (viaInvoker) {
     return { mode: 'plan', text: viaInvoker[1] };
@@ -1206,12 +1210,12 @@ export class SlackSurface implements Surface {
   private async handleLobbySubmit(channel: string, threadTs: string, userId: string, say: SayFn): Promise<void> {
     const conversation = await this.getSession(channel, threadTs, userId, false);
     if (!conversation || conversation.conversationMode !== 'plan') {
-      await say({ text: "No Invoker plan draft here yet. In this thread, reply `plan: ...`, then run `submit`.", thread_ts: threadTs });
+      await say({ text: 'No complete Invoker draft is available in this thread yet. Ask me to draft the plan here, then submit it.', thread_ts: threadTs });
       return;
     }
     const planText = conversation.getDraftedPlan();
     if (!planText) {
-      await say({ text: "I don't see a complete plan drafted yet — use `plan:` to ask for an Invoker plan, then submit again.", thread_ts: threadTs });
+      await say({ text: "I don't see a complete plan drafted yet. Ask me to draft it in this thread, then submit again.", thread_ts: threadTs });
       return;
     }
     const summary = summarizePlanText(planText);
@@ -1234,7 +1238,7 @@ export class SlackSurface implements Surface {
         type: 'actions',
         elements: [
           { type: 'button', action_id: 'lobby_confirm', style: 'primary', text: { type: 'plain_text', text: 'Approve' }, value: confirmKey },
-          { type: 'button', action_id: 'lobby_cancel', text: { type: 'plain_text', text: 'Cancel' }, value: confirmKey },
+          { type: 'button', action_id: 'lobby_cancel', text: { type: 'plain_text', text: 'Reject' }, value: confirmKey },
         ],
       },
     ];
