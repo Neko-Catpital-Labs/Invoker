@@ -148,7 +148,7 @@ function usage(): string {
     '  invoker-cli --version',
     '',
     'Commands:',
-    '  run <plan.yaml>  Submit to a live Invoker UI when available, otherwise run standalone.',
+    '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
@@ -161,7 +161,7 @@ function usage(): string {
     `  --planner-package <spec>  Planner MCP package spec for \`setup planner\`. Defaults to ${DEFAULT_DRAFTER_MCP_PACKAGE_SPEC}.`,
     '  --target <path>       MCP config path for planner setup. Defaults to ~/.invoker/mcp.json.',
     '  --uninstall           Remove the experimental planner MCP entry and disable its Invoker flag.',
-    '  --live           Require a running Invoker UI owner and submit over IPC.',
+    '  --live           Require a running Invoker owner and submit over IPC.',
     '  --standalone     Skip IPC and run with an isolated CLI database.',
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
@@ -243,10 +243,12 @@ async function discoverLiveOwner(bus: MessageBus, timeoutMs = 10_000): Promise<L
     );
     if (!raw || typeof raw !== 'object') return null;
     const response = raw as Record<string, unknown>;
-    if (response.mode !== 'gui') return null;
+    if (typeof response.mode !== 'string' || response.mode.length === 0) {
+      return null;
+    }
     return {
       ownerId: typeof response.ownerId === 'string' ? response.ownerId : '',
-      mode: 'gui',
+      mode: response.mode,
     };
   } catch (err) {
     if (err instanceof TransportError && err.code === TransportErrorCode.NO_HANDLER) {
@@ -668,7 +670,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
 
     if (parsed.options.mode === 'live' && parsed.options.dbDir) {
-      throw new Error('--db-dir cannot be used with --live because the UI owner database is authoritative');
+      throw new Error('--db-dir cannot be used with --live because the owner database is authoritative');
     }
 
     if (parsed.options.mode !== 'standalone') {
@@ -676,7 +678,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       const owner = await discoverLiveOwner(bus);
       if (owner) {
         if (parsed.options.dbDir) {
-          throw new Error('--db-dir cannot be used when a live UI owner accepts the run; use --standalone to force an isolated database');
+          throw new Error('--db-dir cannot be used when a live owner accepts the run; use --standalone to force an isolated database');
         }
         const submitted = await submitPlanToLiveOwner(parsed.planPath, bus, owner);
         printRunResult({
@@ -689,7 +691,7 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
         return 0;
       }
       if (parsed.options.mode === 'live') {
-        throw new Error('No running Invoker UI owner is reachable; start the UI or omit --live to run standalone');
+        throw new Error('No running Invoker owner is reachable; start the owner or omit --live to run standalone');
       }
     }
 
