@@ -166,15 +166,15 @@ module.exports = {
     {
       name: 'layer-3-deps',
       comment:
-        'Layer 3 packages (execution-engine, surfaces) can only depend on Layers 0, 1, and 2.',
+        'Layer 3 packages (execution-engine, surfaces, planning-core) can only depend on Layers 0, 1, and 2.',
       severity: 'error',
       from: {
-        path: '^packages/(execution-engine|surfaces)/',
+        path: '^packages/(execution-engine|surfaces|planning-core)/',
       },
       to: {
         path: '^packages/',
         pathNot: [
-          '^packages/(execution-engine|surfaces)/',
+          '^packages/(execution-engine|surfaces|planning-core)/',
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
           '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
@@ -193,7 +193,7 @@ module.exports = {
         path: '^packages/',
         pathNot: [
           '^packages/(test-kit|app)/',
-          '^packages/(execution-engine|surfaces)/',
+          '^packages/(execution-engine|surfaces|planning-core)/',
           '^packages/(data-store|persistence|core)/',
           '^packages/(workflow-core|protocol|runtime-adapters|graph)/',
           '^packages/(contracts|workflow-graph|transport|runtime-domain|runtime-service|shell|ui)/',
