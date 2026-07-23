@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SlackSurface, parsePlanningRequest, parseLobbyClassification, parseLocalRequest, parseThreadRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
@@ -31,6 +34,8 @@ vi.mock('@slack/bolt', () => {
       },
       auth: { test: vi.fn().mockResolvedValue({ user_id: 'U_BOT' }) },
       reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
+      pins: { add: vi.fn().mockResolvedValue({}) },
+      files: { uploadV2: vi.fn().mockResolvedValue({}) },
       conversations: {
         create: vi.fn().mockResolvedValue({ channel: { id: 'C_NEW' } }),
         invite: vi.fn().mockResolvedValue({}),
@@ -307,6 +312,62 @@ describe('workflow channel creation', () => {
     const postChannels = client.chat.postMessage.mock.calls.map((c: any[]) => c[0].channel);
     expect(postChannels).toContain('C_NEW');
     expect(postChannels).toContain('CLOBBY');
+  });
+
+  it('pins a workflow plan summary and uploads its YAML file', async () => {
+    const planDir = mkdtempSync(join(tmpdir(), 'workflow-plan-'));
+    const planFile = join(planDir, 'submitted.yaml');
+    writeFileSync(planFile, [
+      'name: Workflow plan',
+      'tasks:',
+      '  - id: task-1',
+      '    description: Deliver the workflow plan',
+      '    dependencies: []',
+      '',
+    ].join('\n'));
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+
+    await surface.handleEvent({ type: 'workflow_created', workflowId: 'wf-1-2', planFile });
+
+    const planCard = client.chat.postMessage.mock.calls
+      .map((call: any[]) => call[0])
+      .find((message: { text?: string }) => message.text?.includes('Plan for workflow'));
+    expect(planCard).toEqual(expect.objectContaining({ channel: 'C_NEW', text: expect.stringContaining('Workflow plan') }));
+    expect(client.pins.add).toHaveBeenCalledWith({ channel: 'C_NEW', timestamp: '1.1' });
+    expect(client.files.uploadV2).toHaveBeenCalledWith({
+      channel_id: 'C_NEW',
+      file_uploads: [{ file: planFile, filename: 'workflow-wf-1-2-plan.yaml' }],
+    });
+    rmSync(planDir, { recursive: true, force: true });
+  });
+
+  it('continues publishing the workflow plan when Slack cannot pin it', async () => {
+    const planDir = mkdtempSync(join(tmpdir(), 'workflow-plan-'));
+    const planFile = join(planDir, 'submitted.yaml');
+    writeFileSync(planFile, [
+      'name: Workflow plan',
+      'tasks:',
+      '  - id: task-1',
+      '    description: Deliver the workflow plan',
+      '    dependencies: []',
+      '',
+    ].join('\n'));
+    const surface = new SlackSurface({ ...baseConfig(), workflowChannelRepo: repo });
+    const client = (surface.getApp() as any).client;
+    client.pins.add.mockRejectedValueOnce(new Error('missing_scope'));
+
+    await surface.handleEvent({ type: 'workflow_created', workflowId: 'wf-1-2', planFile });
+
+    expect(client.files.uploadV2).toHaveBeenCalledWith(expect.objectContaining({
+      channel_id: 'C_NEW',
+      file_uploads: [{ file: planFile, filename: 'workflow-wf-1-2-plan.yaml' }],
+    }));
+    expect(client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C_NEW',
+      text: expect.stringContaining('pins:write'),
+    }));
+    rmSync(planDir, { recursive: true, force: true });
   });
 
   it('reuses an existing channel id on name_taken', async () => {
