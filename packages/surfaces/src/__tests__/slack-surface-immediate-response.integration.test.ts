@@ -210,7 +210,7 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       });
 
       const planText = 'name: "Debug Issue"\ntasks:\n  - id: t1\n    description: "Run the debugger"\n    dependencies: []\n';
-      mockSendMessage.mockResolvedValue('Plan ready. Say `submit` to run it.');
+      mockSendMessage.mockResolvedValue('unused planner reply');
       mockDraftedPlan = planText;
 
       await surface.start(async (cmd) => {
@@ -234,19 +234,13 @@ describe('SlackSurface Immediate Response - Integration Tests', () => {
       });
       expect(apiCalls[0].text).toBe('Processing your request...');
       expect(apiCalls[1].method).toBe('update');
-      expect(apiCalls[1].text).toBe('Plan ready. Say `submit` to run it.');
+      expect(apiCalls[1].text).toContain('Drafted *Debug Issue*');
+      expect(apiCalls[1].text).toContain('Approve to execute');
       expect(receivedCommands).toHaveLength(0);
 
-      // Explicit submit → summary + confirmation, still no start_plan.
+      // Approve-inline stages a pending submit confirm; plain submit/yes executes it.
       await mentionHandler({
         event: { text: '<@UBOT123456> submit', ts: '1111.5', thread_ts: '1111.001', user: 'U123' },
-        say,
-      });
-      expect(receivedCommands).toHaveLength(0);
-
-      // Confirm → start_plan with the raw plan text.
-      await messageHandler({
-        event: { text: 'yes', ts: '1111.6', thread_ts: '1111.001', user: 'U123' },
         say,
       });
       expect(receivedCommands).toEqual([
