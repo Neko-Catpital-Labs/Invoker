@@ -1329,9 +1329,19 @@ describe('lobby verb routing', () => {
   });
 
   it('clears persisted conversation state when rebinding a thread repo', async () => {
-    const { adapter, conversationRepo, surface } = await persistentLobbySurface();
+    const oldRepo = 'https://github.com/openai/old-repo';
+    const newRepo = 'https://github.com/openai/new-repo';
+    const { adapter, conversationRepo, surface } = await persistentLobbySurface({
+      defaultRepoUrl: oldRepo,
+      workingDir: '/checkouts/old-repo',
+    });
 
     try {
+      await surface.start(async () => {});
+      await mentionHandler(surface)({
+        event: { text: '<@BOT> local: start in the current repo', ts: 't1', user: 'U1', channel: 'CLOBBY' },
+        say: vi.fn().mockResolvedValue({ ts: 'a' }),
+      });
       conversationRepo.saveConversation(
         't1',
         [
@@ -1344,12 +1354,18 @@ describe('lobby verb routing', () => {
         'U1',
         'agent',
       );
-
       expect(conversationRepo.loadConversation('t1')).not.toBeNull();
-      const discardThreadSession = surface as unknown as {
-        discardThreadSession(channel: string, threadTs: string): void;
-      };
-      discardThreadSession.discardThreadSession('CLOBBY', 't1');
+
+      const rebindSay = vi.fn().mockResolvedValue({ ts: 'b' });
+      await messageHandler(surface)({
+        event: { thread_ts: 't1', ts: 't2', user: 'U1', text: `Please use ${newRepo} instead`, channel: 'CLOBBY' },
+        say: rebindSay,
+      });
+
+      expect(rebindSay).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining('openai/new-repo'),
+        thread_ts: 't1',
+      }));
       expect(conversationRepo.loadConversation('t1')).toBeNull();
     } finally {
       await surface.stop();
