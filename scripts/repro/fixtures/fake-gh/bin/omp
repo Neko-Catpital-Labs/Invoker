@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Fake `omp` agent for PR-babysitting battle tests: records the invocation
+# (cwd + argv, including the -p prompt) to $FAKE_GH_STATE_DIR/omp-calls.log and
+# exits 0. Set FAKE_OMP_SCRIPT to a script to simulate agent side effects
+# (e.g. pushing a fix); it runs with the same argv and cwd.
+set -euo pipefail
+: "${FAKE_GH_STATE_DIR:?FAKE_GH_STATE_DIR not set}"
+printf 'omp cwd=%s args=%s\n' "$PWD" "$*" >> "$FAKE_GH_STATE_DIR/omp-calls.log"
+if [ -n "${FAKE_OMP_SCRIPT:-}" ]; then
+  bash "$FAKE_OMP_SCRIPT" "$@"
+fi
