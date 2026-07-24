@@ -610,8 +610,10 @@ describe('in-channel workflow assistant', () => {
     const planningCommandBuilder = vi.fn(({ prompt }: { prompt: string }) => {
       const match = prompt.match(/file: (.+)\n/);
       promptFile = match?.[1] ?? '';
+      const promptContents = readFileSync(promptFile, 'utf8');
       expect(prompt).toContain('The full task instructions are in this file:');
-      expect(readFileSync(promptFile, 'utf8')).toContain('Task wf-1-2/api (status=running');
+      expect(promptContents).toContain('Task wf-1-2/api (status=running');
+      expect(promptContents).toContain(hugeOutput);
       return { command: 'cursor', args: ['--print', prompt] };
     });
     mockSpawn.mockImplementationOnce(() => mockProcess('The running task is wf-1-2/api.') as any);
