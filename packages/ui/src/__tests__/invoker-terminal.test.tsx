@@ -701,7 +701,7 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
-  it('reviews a draft before explicitly creating the workflow', async () => {
+  it('submits a draft and starts ready work when the user types submit', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
       sessionId: 'session-1',
@@ -718,23 +718,18 @@ describe('Invoker terminal (component)', () => {
       expect(screen.getByTestId('invoker-terminal-ready-bar')).toHaveTextContent('Draft ready · Mock Plan · 2 tasks');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Review draft' })).toBeInTheDocument();
-      expect(screen.getByTestId('planning-create-workflow')).toBeInTheDocument();
-    });
     expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
-    expect(mock.api.start).not.toHaveBeenCalled();
+    expect(mock.api.startReady).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByTestId('planning-create-workflow'));
+    submitPlanningText('submit');
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
+      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Mock Plan" submitted to Invoker. No ready work to start.');
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
@@ -782,11 +777,12 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
+      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.',
+      'Plan "Workers Surface" submitted as 2 stacked workflows. No ready work to start.',
     );
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
@@ -824,10 +820,11 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledTimes(2);
       expect(mock.api.refreshTaskGraph).toHaveBeenCalled();
+      expect(mock.api.startReady).toHaveBeenCalledWith({});
     });
     fireEvent.click(screen.getByTestId('sidebar-home'));
     expect(screen.getByRole('heading', { name: 'Planning chat' })).toBeInTheDocument();
-    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. Review it, then use Start ready work.');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Plan "Selected lists scroll" submitted to Invoker. No ready work to start.');
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
