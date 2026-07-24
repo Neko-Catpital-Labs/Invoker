@@ -981,17 +981,7 @@ export class SlackSurface implements Surface {
         return;
       }
 
-      const isLobbyOrDm = !channel || channel === this.lobbyChannelId || channel.startsWith('D');
-      if (!isLobbyOrDm) {
-        this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=non-lobby channel=${channel}`);
-        await say({
-          text: 'I only plan in the lobby channel (or DMs), and only run workflow controls in a mapped workflow channel. Mention me there instead.',
-          thread_ts: event.thread_ts ?? event.ts,
-        });
-        return;
-      }
-
-      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=lobby`);
+      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=planning`);
       await this.handlePlanningMention(event, say, channel ?? this.lobbyChannelId);
     });
   }
@@ -1045,7 +1035,7 @@ export class SlackSurface implements Surface {
     const routeRepoUrl = explicitRepoResolution.url ?? detectedRepoResolution.url ?? this.resolveRepoUrl().url;
 
     const threadTs = event.thread_ts ?? event.ts;
-    const requiresPlanningRepo = channel === this.lobbyChannelId && !!this.planningCommandBuilder;
+    const requiresPlanningRepo = !!this.planningCommandBuilder;
     const messageRepoUrl = requiresPlanningRepo && !parsed.repo
       ? extractRepoUrlFromMessage(event.text ?? '')
       : undefined;
