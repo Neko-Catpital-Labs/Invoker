@@ -1,5 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import { pidWasRecycledSince, readProcessStartTimeMs } from './process-start-time.js';
 
 export interface GuiInstanceLock {
   readonly lockDir: string;
@@ -25,6 +27,7 @@ function processIsAlive(pid: number): boolean {
 export function tryAcquireGuiInstanceLock(
   invokerHomeRoot: string,
   pid: number = process.pid,
+  readStartTimeMs: (pid: number) => number | null = readProcessStartTimeMs,
 ): GuiInstanceLock | null {
   const lockDir = join(invokerHomeRoot, 'gui-window.lock');
   try {
@@ -36,10 +39,20 @@ export function tryAcquireGuiInstanceLock(
 
     const pidPath = join(lockDir, 'pid');
     const existingPid = existsSync(pidPath) ? parsePid(readFileSync(pidPath, 'utf8')) : null;
-    if (existingPid && processIsAlive(existingPid)) return null;
+    if (existingPid && processIsAlive(existingPid)) {
+      let lockCreatedAtMs: number | null = null;
+      try {
+        lockCreatedAtMs = statSync(pidPath).mtimeMs;
+      } catch (statErr) {
+        // Rare race (owner may be releasing right now): keep the lock held
+        // conservatively for this attempt. Logged for debuggability.
+        console.warn(`[gui-instance-lock] could not stat ${pidPath}:`, statErr);
+      }
+      if (!pidWasRecycledSince(existingPid, lockCreatedAtMs, readStartTimeMs)) return null;
+    }
 
     rmSync(lockDir, { recursive: true, force: true });
-    return tryAcquireGuiInstanceLock(invokerHomeRoot, pid);
+    return tryAcquireGuiInstanceLock(invokerHomeRoot, pid, readStartTimeMs);
   }
 
   let released = false;
