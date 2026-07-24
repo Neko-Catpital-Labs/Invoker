@@ -539,6 +539,9 @@ export async function sendPlanningChatMessage(
       try {
         const { extractYamlPlan, summarizePlanText } = await loadPlannerSurfaces();
         const formattedMessage = formatConversationalPlanningMessage(message);
+        const priorDraftText = draftingAuthorized
+          ? getConversationDraftedPlan(activeSession.conversation)
+          : null;
         const reply = deps.plannerReplyOverride
           ? await deps.plannerReplyOverride(formattedMessage)
           : await activeSession.conversation.sendMessage(formattedMessage);
@@ -549,7 +552,9 @@ export async function sendPlanningChatMessage(
           ? []
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
-        const candidatePlanText = getConversationDraftedPlan(activeSession.conversation) ?? extractYamlPlan(reply);
+        const candidatePlanText = getConversationDraftedPlan(activeSession.conversation)
+          ?? extractYamlPlan(reply)
+          ?? priorDraftText;
         if (!candidatePlanText || !draftingAuthorized) {
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'

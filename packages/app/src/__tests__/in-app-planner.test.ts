@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { PlanConversation } from '../../../surfaces/src/index.ts';
 import {
   createInAppPlanningChatSessions,
@@ -353,6 +356,63 @@ describe('planning chat', () => {
       loadGeneratedPlan,
     })).resolves.toMatchObject({ ok: false });
     expect(loadGeneratedPlan).not.toHaveBeenCalled();
+  });
+
+  it('promotes an existing on-disk draft when the user authorizes drafting', async () => {
+    const workingDir = mkdtempSync(join(tmpdir(), 'in-app-draft-'));
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const created = await createPlanningChatSession({}, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        workingDir,
+      });
+      if (!created.ok) throw new Error(created.error);
+      const session = sessions.get(created.session.id);
+      if (!session) throw new Error('expected session in map');
+
+      const draftPath = session.conversation.planDraftFilePath();
+      if (!draftPath) throw new Error('expected draft path');
+      mkdirSync(dirname(draftPath), { recursive: true });
+      writeFileSync(draftPath, VALID_PLAN_TEXT, 'utf8');
+
+      vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(
+        `Plan written.${PLAN_SUBMIT_HINT}`,
+      );
+
+      const result = await sendPlanningChatMessage({
+        sessionId: session.id,
+        message: 'draft it',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        workingDir,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        draftPlanAvailable: true,
+        draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+      });
+      expect(sessions.get(session.id)?.draftPlanText).toContain('name: Mock Plan');
+
+      const loadGeneratedPlan = vi.fn().mockResolvedValue({
+        planName: 'Mock Plan',
+        workflowId: 'wf-1',
+      } satisfies LoadedGeneratedPlan);
+      await expect(submitPlanningChatDraft({ sessionId: session.id }, {
+        sessions,
+        loadGeneratedPlan,
+      })).resolves.toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
+      expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+    } finally {
+      rmSync(workingDir, { recursive: true, force: true });
+    }
   });
 
   it('accepts short confirmation only after the assistant asks whether to draft', async () => {
