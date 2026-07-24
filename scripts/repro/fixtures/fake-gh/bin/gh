@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Reusable fake `gh` for PR-babysitting battle tests.
+
+Reads/writes a single JSON state file at $FAKE_GH_STATE_DIR/state.json and
+appends every invocation (argv, plus stdin when piped) to
+$FAKE_GH_STATE_DIR/calls.log so repro scripts can assert exactly what the code
+under test asked GitHub for. Mutating verbs update state.json so subsequent
+reads observe the mutation. Unknown argv exits 64 with the argv echoed: a
+scenario gap fails tests loudly instead of silently succeeding.
+
+State schema (see scripts/repro/fixtures/fake-gh/scenarios/*.json):
+  {
+    "prs": [{
+      "number": 501, "title": "...", "url": "...", "state": "OPEN",
+      "isDraft": false, "baseRefName": "master", "headRefName": "stack/501",
+      "headRefOid": "<40-hex>", "mergeStateStatus": "DIRTY",
+      "mergeable": "CONFLICTING", "labels": ["admin-bypass"],
+      "reviewThreads": [], "checks": {"*": "SUCCESS", "PR Body": "FAILURE"}
+    }],
+    "issue_comments": {"501": [ ...gh api issues/N/comments shape... ]}
+  }
+
+`checks` maps check name -> conclusion; "*" applies to every required check
+named in $FAKE_GH_REQUIRED_CHECKS (newline-separated; check names contain
+spaces and slashes, never newlines).
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+STATE_DIR = os.environ.get("FAKE_GH_STATE_DIR", "")
+if not STATE_DIR:
+    print("fake gh: FAKE_GH_STATE_DIR not set", file=sys.stderr)
+    sys.exit(64)
+
+ARGS = sys.argv[1:]
+STDIN = "" if sys.stdin.isatty() else sys.stdin.read()
+with open(Path(STATE_DIR) / "calls.log", "a", encoding="utf-8") as log:
+    log.write("gh " + " ".join(ARGS) + ("\n<<< " + STDIN.replace("\n", "\\n") if STDIN else "") + "\n")
+
+STATE_PATH = Path(STATE_DIR) / "state.json"
+
+
+def load_state() -> dict:
+    with open(STATE_PATH, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def save_state(state: dict) -> None:
+    with open(STATE_PATH, "w", encoding="utf-8") as handle:
+        json.dump(state, handle, indent=2)
+
+
+def required_checks() -> list[str]:
+    raw = os.environ.get("FAKE_GH_REQUIRED_CHECKS", "")
+    return [name for name in raw.split("\n") if name.strip()]
+
+
+def unhandled() -> None:
+    print(f"fake gh: unhandled argv: {ARGS}", file=sys.stderr)
+    sys.exit(64)
+
+
+def flag_value(name: str) -> str | None:
+    for index, arg in enumerate(ARGS):
+        if arg == name and index + 1 < len(ARGS):
+            return ARGS[index + 1]
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def check_nodes(pr: dict) -> list[dict]:
+    checks = pr.get("checks") or {}
+    default = checks.get("*")
+    names: set[str] = {name for name in checks if name != "*"}
+    if default is not None:
+        names.update(required_checks())
+    nodes = []
+    for name in sorted(names):
+        conclusion = checks.get(name, default)
+        if conclusion is None:
+            continue
+        nodes.append({
+            "__typename": "CheckRun",
+            "name": name,
+            "conclusion": conclusion,
+            "status": "COMPLETED",
+            "completedAt": "2026-07-20T00:00:00Z",
+            "startedAt": "2026-07-20T00:00:00Z",
+            "detailsUrl": "https://github.com/fake/repo/actions/runs/1/job/2",
+            "checkSuite": {"commit": {"oid": pr.get("headRefOid", "")}},
+        })
+    return nodes
+
+
+def project_pr(pr: dict, fields: list[str]) -> dict:
+    out: dict = {}
+    for field in fields:
+        if field == "labels":
+            out["labels"] = [{"name": name} for name in pr.get("labels", [])]
+        elif field == "statusCheckRollup":
+            out["statusCheckRollup"] = check_nodes(pr)
+        elif field == "reviewDecision":
+            out["reviewDecision"] = pr.get("reviewDecision", "")
+        else:
+            out[field] = pr.get(field)
+    return out
+
+
+def graphql_detail(pr: dict) -> dict:
+    return {
+        "number": pr.get("number"),
+        "title": pr.get("title", ""),
+        "url": pr.get("url", ""),
+        "isDraft": pr.get("isDraft", False),
+        "state": pr.get("state", "OPEN"),
+        "baseRefName": pr.get("baseRefName", ""),
+        "headRefName": pr.get("headRefName", ""),
+        "headRefOid": pr.get("headRefOid", ""),
+        "mergeStateStatus": pr.get("mergeStateStatus", ""),
+        "mergeable": pr.get("mergeable", ""),
+        "labels": {"nodes": [{"name": name} for name in pr.get("labels", [])]},
+        "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": pr.get("reviewThreads", [])},
+        "statusCheckRollup": {"contexts": {"nodes": check_nodes(pr)}},
+    }
+
+
+def find_pr(state: dict, number: int) -> dict | None:
+    for pr in state.get("prs", []):
+        if int(pr.get("number", 0)) == number:
+            return pr
+    return None
+
+
+def main() -> None:
+    state = load_state()
+
+    if ARGS[:2] == ["pr", "list"]:
+        fields = (flag_value("--json") or "number").split(",")
+        label = flag_value("--label")
+        state_filter = flag_value("--state") or "open"
+        prs = state.get("prs", [])
+        if state_filter == "open":
+            prs = [pr for pr in prs if pr.get("state", "OPEN") == "OPEN"]
+        if label:
+            prs = [pr for pr in prs if label in pr.get("labels", [])]
+        print(json.dumps([project_pr(pr, fields) for pr in prs]))
+        return
+
+    if ARGS[:2] == ["pr", "view"]:
+        number = int(ARGS[2])
+        pr = find_pr(state, number)
+        if pr is None:
+            print(f"fake gh: no PR #{number} in state", file=sys.stderr)
+            sys.exit(1)
+        fields = (flag_value("--json") or "number").split(",")
+        print(json.dumps(project_pr(pr, fields)))
+        return
+
+    if ARGS[:2] == ["pr", "comment"]:
+        number = ARGS[2]
+        body = flag_value("--body") or ""
+        comments = state.setdefault("issue_comments", {}).setdefault(str(number), [])
+        comments.append({
+            "id": f"fake-comment-{len(comments) + 1}",
+            "user": {"login": "invoker-bot"},
+            "body": body,
+            "updated_at": "2026-07-20T00:00:00Z",
+            "html_url": f"https://github.com/fake/repo/pull/{number}#fake",
+        })
+        save_state(state)
+        return
+
+    if ARGS[:2] == ["api", "graphql"]:
+        number = 0
+        for arg in ARGS:
+            if arg.startswith("number="):
+                number = int(arg.split("=", 1)[1])
+        if number:
+            pr = find_pr(state, number)
+            if pr is None:
+                print(f"fake gh: no PR #{number} in state", file=sys.stderr)
+                sys.exit(1)
+            print(json.dumps({"data": {"repository": {"pullRequest": graphql_detail(pr)}}}))
+            return
+        if any("resolveReviewThread" in arg for arg in ARGS):
+            # Thread resolution is observable via calls.log only.
+            print(json.dumps({"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}))
+            return
+        unhandled()
+
+    if ARGS[0] == "api":
+        path = next((arg for arg in ARGS[1:] if not arg.startswith("-")), "")
+        comments_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/comments", path)
+        if comments_match and flag_value("--method") in (None, "GET"):
+            print(json.dumps(state.get("issue_comments", {}).get(comments_match.group(1), [])))
+            return
+        add_label_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/labels", path)
+        if add_label_match and flag_value("--method") == "POST":
+            pr = find_pr(state, int(add_label_match.group(1)))
+            label = (flag_value("-f") or "").split("=", 1)[-1]
+            if pr is not None and label and label not in pr.setdefault("labels", []):
+                pr["labels"].append(label)
+                save_state(state)
+            return
+        remove_label_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/labels/(.+)", path)
+        if remove_label_match and flag_value("--method") == "DELETE":
+            pr = find_pr(state, int(remove_label_match.group(1)))
+            if pr is not None:
+                pr["labels"] = [l for l in pr.get("labels", []) if l != remove_label_match.group(2)]
+                save_state(state)
+            return
+        unhandled()
+
+    if ARGS[:2] == ["auth", "status"]:
+        return
+
+    unhandled()
+
+
+main()

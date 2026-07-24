@@ -1,0 +1,46 @@
+{
+  "prs": [
+    {
+      "number": 701,
+      "title": "Landable stack bottom",
+      "url": "https://github.com/fake/repo/pull/701",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/701",
+      "headRefOid": "dddddddddddddddddddddddddddddddddddddddd",
+      "mergeStateStatus": "CLEAN",
+      "mergeable": "MERGEABLE",
+      "labels": ["admin-bypass", "dequeued"],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS"}
+    },
+    {
+      "number": 702,
+      "title": "Landable stack top",
+      "url": "https://github.com/fake/repo/pull/702",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "stack/701",
+      "headRefName": "stack/702",
+      "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "mergeStateStatus": "BLOCKED",
+      "mergeable": "MERGEABLE",
+      "labels": ["admin-bypass"],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS"}
+    }
+  ],
+  "issue_comments": {
+    "701": [
+      {
+        "id": "m701",
+        "user": {"login": "mergify[bot]"},
+        "updated_at": "2026-07-20T00:00:00Z",
+        "html_url": "https://github.com/fake/repo/pull/701#m701",
+        "body": "Left the queue `admin-bypass` at `dddddddddddddddddddddddddddddddddddddddd`.\n-*- Mergify Payload -*-\n{\"state\":\"dequeued\",\"queue_rule_name\":\"admin-bypass\"}\n"
+      }
+    ],
+    "702": []
+  }
+}
