@@ -112,6 +112,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -123,6 +124,13 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+function appendPlanningTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${snapshot ?? ''}${chunk}`;
+  if (nextSnapshot.length <= PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS) return nextSnapshot;
+  return nextSnapshot.slice(nextSnapshot.length - PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS);
+}
+
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
@@ -1118,6 +1126,38 @@ export function App() {
             : session
         )),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || event.data.length === 0) return;
+
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const matchesPlanningSession = event.planningSessionId
+            ? session.id === event.planningSessionId
+            : false;
+          const matchesTerminalSession = !event.planningSessionId
+            && session.terminalSession?.sessionId === event.sessionId;
+          if (!matchesPlanningSession && !matchesTerminalSession) return session;
+
+          const terminalSession = session.terminalSession;
+          if (!terminalSession) return session;
+
+          changed = true;
+          return {
+            ...session,
+            terminalSession: {
+              ...terminalSession,
+              outputSnapshot: appendPlanningTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data),
+            },
+          };
+        });
+        return changed ? next : prev;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
