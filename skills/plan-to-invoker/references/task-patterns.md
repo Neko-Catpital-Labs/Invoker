@@ -230,6 +230,10 @@ For plans whose goal is fixing a bug, regression, or error, **prefer** a single 
 
 **Intent:** Demonstrate failure on the broken baseline where possible; re-run after the fix **when still meaningful**. If the fix invalidates the original repro (common), **replace** it with another explicit verification task—**do not** block on repro purity. Pairing early/final repro tasks is **not** enforced by `skill-doctor` or atomicity lint.
 
+### Stateful edge matrix
+
+For conversation, session, file, cache, or workflow-state bugs, list the state transitions in Phase 1a and include a deterministic regression case beyond the happy path. Cover an intervening action that could lose or reuse state, such as plan creation → intervening message → summary-only reply → authorization/submit. When the state behavior is shared across surfaces, include a case for every affected surface or document the concrete reason a surface is unaffected.
+
 See `SKILL.md` (bugfix repro blurb) and this repo’s `scripts/repro-*.sh` examples.
 
 ## Command Task Guidelines
