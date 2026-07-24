@@ -53,15 +53,6 @@ export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
 ] as const;
 
 /**
- * @deprecated Transitional flat list for callers not yet migrated to
- * `autoStartedOwnerWorkerKindsForConfig`; dropped in the follow-up slice.
- */
-export const AUTO_STARTED_OWNER_WORKER_KINDS = [
-  ...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS,
-  ...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS,
-] as const;
-
-/**
  * Compute the owner worker kinds that auto-start on boot. The PR-maintenance
  * cron kinds are gated on `prMaintenance.enabled` (matching the config
  * docstring); everything else always auto-starts. Saved per-worker desired
