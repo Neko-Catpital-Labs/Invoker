@@ -7,9 +7,7 @@
 
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 
 import type { Orchestrator } from '@invoker/workflow-core';
 import { OrchestratorError, OrchestratorErrorCode, parseMergeConflictError } from '@invoker/workflow-core';
@@ -22,6 +20,11 @@ import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-e
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { findManagedWorktreeForBranch } from './worktree-discovery.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
+import {
+  buildAgentPromptFileBootstrap,
+  materializeLocalAgentPrompt,
+  shouldInlineAgentPrompt,
+} from './agent-prompt-transport.js';
 
 // ── Host interface ───────────────────────────────────────
 
@@ -54,13 +57,6 @@ export interface ConflictResolverHost {
   getRemoteTargetConfig?(targetId: string): RemoteTargetConfig | undefined;
 }
 
-const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
-const MAX_INLINE_PROMPT_BYTES = (() => {
-  const raw = process.env.INVOKER_MAX_INLINE_AGENT_PROMPT_BYTES;
-  if (!raw) return DEFAULT_MAX_INLINE_PROMPT_BYTES;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_INLINE_PROMPT_BYTES;
-})();
 const DEBUG_IO_TAIL_CHARS = 2000;
 
 function tailText(value: unknown, maxChars: number = DEBUG_IO_TAIL_CHARS): string | undefined {
@@ -69,44 +65,13 @@ function tailText(value: unknown, maxChars: number = DEBUG_IO_TAIL_CHARS): strin
   return value.slice(-maxChars);
 }
 
-function promptByteLength(prompt: string): number {
-  return Buffer.byteLength(prompt, 'utf8');
-}
-
-function buildPromptFileBootstrap(promptPath: string): string {
-  return [
-    `The full task instructions are in this file: ${promptPath}`,
-    `Read the file completely, then execute those instructions in this workspace.`,
-    `Do not ask for the file contents.`,
-  ].join('\n');
-}
-
-function materializeLocalPrompt(prompt: string): { effectivePrompt: string; cleanup: () => void } {
-  if (promptByteLength(prompt) <= MAX_INLINE_PROMPT_BYTES) {
-    return { effectivePrompt: prompt, cleanup: () => {} };
-  }
-  const dir = mkdtempSync(join(tmpdir(), 'invoker-agent-prompt-'));
-  const promptPath = join(dir, 'prompt.md');
-  writeFileSync(promptPath, prompt, 'utf8');
-  return {
-    effectivePrompt: buildPromptFileBootstrap(promptPath),
-    cleanup: () => {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        /* best effort */
-      }
-    },
-  };
-}
-
 function materializeRemotePrompt(prompt: string): { effectivePrompt: string; remotePromptFilePath?: string; promptB64?: string } {
-  if (promptByteLength(prompt) <= MAX_INLINE_PROMPT_BYTES) {
+  if (shouldInlineAgentPrompt(prompt)) {
     return { effectivePrompt: prompt };
   }
   const remotePromptFilePath = `/tmp/invoker-agent-prompt-${randomUUID()}.md`;
   return {
-    effectivePrompt: buildPromptFileBootstrap(remotePromptFilePath),
+    effectivePrompt: buildAgentPromptFileBootstrap(remotePromptFilePath),
     remotePromptFilePath,
     promptB64: Buffer.from(prompt, 'utf8').toString('base64'),
   };
@@ -770,7 +735,7 @@ export function spawnAgentFixViaRegistry(
   executionModel?: string,
 ): Promise<{ stdout: string; sessionId: string }> {
   assertExecutionModelSupported(agent, executionModel);
-  const promptTransport = materializeLocalPrompt(prompt);
+  const promptTransport = materializeLocalAgentPrompt(prompt);
   const spec = agent.buildFixCommand?.(promptTransport.effectivePrompt, { executionModel });
   if (!spec) {
     promptTransport.cleanup();

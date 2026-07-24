@@ -11,6 +11,7 @@ export {
 export * from './executor.js';
 export * from './base-executor.js';
 export * from './process-utils.js';
+export * from './agent-prompt-transport.js';
 export * from './docker-executor.js';
 export * from './worktree-executor.js';
 export * from './merge-gate-executor.js';
