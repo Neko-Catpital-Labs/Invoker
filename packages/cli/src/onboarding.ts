@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import {
@@ -15,6 +15,7 @@ import {
   type PrerequisiteCheck,
   updateInvokerConfigFile,
 } from '@invoker/contracts';
+import { parsePlanFile } from '@invoker/workflow-core';
 import { formatCaughtException, logCaughtException } from './logging.js';
 
 // ── Paths ────────────────────────────────────────────────────
@@ -265,6 +266,121 @@ export function runDoctor(argv: string[]): number {
     process.stdout.write('\nFix the items above, then re-run `invoker-cli doctor`. For planner MCP, run `invoker-cli setup planner`; for Slack, run `invoker-cli setup slack`.\n');
   }
   return report.ok ? 0 : 1;
+}
+
+// ── setup readiness extras (GitHub auth + smoke + oneshot ending) ─
+
+export interface CommandRunnerResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+export type CommandRunner = (command: string, args: readonly string[]) => CommandRunnerResult;
+
+export function defaultCommandRunner(command: string, args: readonly string[]): CommandRunnerResult {
+  const result = spawnSync(command, [...args], { encoding: 'utf8' });
+  return {
+    status: result.status,
+    stdout: typeof result.stdout === 'string' ? result.stdout : '',
+    stderr: typeof result.stderr === 'string' ? result.stderr : '',
+  };
+}
+
+export function skippedGithubAuthCheck(): PrerequisiteCheck {
+  return {
+    id: 'github-auth',
+    name: 'GitHub auth',
+    status: 'warn',
+    detail: 'gh not installed; skipped auth check',
+    remediation: 'Install GitHub CLI (`brew install gh` or `apt-get install gh`), then run `gh auth login`',
+  };
+}
+
+/** Probe `gh auth status`. Injectable `runner` keeps tests offline. */
+export function checkGithubAuth(runner: CommandRunner = defaultCommandRunner): PrerequisiteCheck {
+  const result = runner('gh', ['auth', 'status']);
+  if (result.status === 0) {
+    return {
+      id: 'github-auth',
+      name: 'GitHub auth',
+      status: 'ok',
+      detail: 'gh is authenticated',
+    };
+  }
+  const detail = (result.stderr || result.stdout || 'gh auth status failed').trim().split('\n')[0]
+    || 'gh auth status failed';
+  return {
+    id: 'github-auth',
+    name: 'GitHub auth',
+    status: 'error',
+    detail,
+    remediation: 'Run `gh auth login` and re-run `invoker-cli setup`',
+  };
+}
+
+const SETUP_SMOKE_PLAN = `name: Setup Smoke
+description: Tiny offline plan used by invoker-cli setup.
+repoUrl: .
+onFinish: none
+tasks:
+  - id: smoke
+    description: Validate plan parsing during setup.
+    command: echo setup-smoke
+`;
+
+/** Parse a one-task temp plan with no network. Confirms the local plan pipeline works. */
+export async function runPlanValidationSmoke(): Promise<PrerequisiteCheck> {
+  const dir = mkdtempSync(join(tmpdir(), 'invoker-setup-smoke-'));
+  const planPath = join(dir, 'smoke.yaml');
+  try {
+    writeFileSync(planPath, SETUP_SMOKE_PLAN);
+    const plan = await parsePlanFile(planPath);
+    if (!plan.tasks.length) {
+      return {
+        id: 'smoke-plan',
+        name: 'Smoke plan validation',
+        status: 'error',
+        detail: 'Parsed plan has no tasks',
+        remediation: 'Reinstall invoker-cli; plan parsing returned an empty task list',
+      };
+    }
+    return {
+      id: 'smoke-plan',
+      name: 'Smoke plan validation',
+      status: 'ok',
+      detail: `Parsed ${plan.tasks.length} task(s) from a local smoke plan`,
+    };
+  } catch (error) {
+    return {
+      id: 'smoke-plan',
+      name: 'Smoke plan validation',
+      status: 'error',
+      detail: formatCaughtException(error),
+      remediation: 'Reinstall invoker-cli or report a plan-parser regression',
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** First hard failure — the single thing setup tells the user to fix. */
+export function firstSetupFailure(checks: readonly PrerequisiteCheck[]): PrerequisiteCheck | undefined {
+  return checks.find((check) => check.status === 'error');
+}
+
+export function formatSetupEnding(checks: readonly PrerequisiteCheck[]): string {
+  const failure = firstSetupFailure(checks);
+  if (!failure) return "You're ready.";
+  const remediation = failure.remediation ? ` ${failure.remediation}` : '';
+  return `Fix this first: ${failure.name}: ${failure.detail}.${remediation}`;
+}
+
+export interface SetupDeps {
+  isInstalled?: IsInstalled;
+  commandRunner?: CommandRunner;
+  githubAuthCheck?: (runner: CommandRunner) => PrerequisiteCheck | Promise<PrerequisiteCheck>;
+  smokePlanValidation?: () => Promise<PrerequisiteCheck>;
 }
 
 // ── Slack manifest ───────────────────────────────────────────
@@ -622,11 +738,47 @@ async function promptYes(io: SetupIO, question: string, assumeYes = false): Prom
   return answer === 'y' || answer === 'yes';
 }
 
-export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promise<number> {
+function plannerMcpCheck(state: ExperimentalPlannerSetupState): PrerequisiteCheck {
+  return {
+    id: 'planner-mcp',
+    name: 'Experimental planner MCP',
+    status: state.installed ? 'ok' : 'error',
+    detail: state.installed
+      ? `Installed into ${state.targetPath} (experimentalPlanner ${state.experimentalPlanner ? 'on' : 'off'})`
+      : `Missing at ${state.targetPath}`,
+    remediation: state.installed ? undefined : 'Re-run `invoker-cli setup` or `invoker-cli setup planner`',
+  };
+}
+
+async function collectGithubAndSmokeChecks(options: SetupDeps): Promise<PrerequisiteCheck[]> {
+  const isInstalled = options.isInstalled ?? commandExists;
+  const commandRunner = options.commandRunner ?? defaultCommandRunner;
+  const runGithubAuth = options.githubAuthCheck ?? checkGithubAuth;
+  const runSmokePlanValidation = options.smokePlanValidation ?? (() => runPlanValidationSmoke());
+
+  const checks: PrerequisiteCheck[] = [];
+  checks.push(isInstalled('gh') ? await runGithubAuth(commandRunner) : skippedGithubAuthCheck());
+  checks.push(await runSmokePlanValidation());
+  return checks;
+}
+
+function printSetupEnding(io: SetupIO, checks: readonly PrerequisiteCheck[]): number {
+  const report = buildReport([...checks]);
+  io.print('');
+  io.print(formatSetupEnding(report.checks));
+  return report.ok ? 0 : 1;
+}
+
+export async function runSetup(
+  argv: string[],
+  io: SetupIO = defaultIO(),
+  options: SetupDeps = {},
+): Promise<number> {
   const parsed = parseSetupArgs(argv);
   const wantSlack = parsed.subcommand === 'slack';
   const fromEnv = parsed.fromEnv;
   const rl = (io as { rl?: { close: () => void } }).rl;
+  const isInstalled = options.isInstalled ?? commandExists;
   try {
     if (parsed.subcommand === 'planner') {
       return await maybeInstallPlanner(parsed, io);
@@ -641,8 +793,9 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     }
 
     io.print('Invoker setup\n');
-    const core = buildReport(buildDoctorChecks(loadCliConfig()));
-    io.print(formatReport(core));
+    const doctorChecks = buildDoctorChecks(loadCliConfig(), isInstalled);
+    const checks: PrerequisiteCheck[] = [...doctorChecks];
+    io.print(formatReport(buildReport(doctorChecks)));
     io.print('');
 
     const plannerState = ensureExperimentalPlannerMcp({
@@ -652,30 +805,30 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
     io.print(`Experimental planner MCP installed into ${plannerState.targetPath}.`);
     io.print(`experimentalPlanner flag: ${plannerState.experimentalPlanner ? 'on' : 'off'}`);
     io.print('');
+    checks.push(plannerMcpCheck(plannerState));
 
     if (!wantSlack && !fromEnv && await promptYes(io, 'Enable the experimental planner now? [y/N] ', parsed.assumeYes)) {
       await maybeInstallPlanner(parsed, io);
       io.print('');
+      checks.push(plannerMcpCheck(readExperimentalPlannerSetup({ targetPath: parsed.targetPath })));
     }
 
     let doSlack = wantSlack || fromEnv;
     if (!wantSlack && !fromEnv) {
       doSlack = parsed.assumeYes ? false : await promptYes(io, 'Set up the Slack integration now? [y/N] ');
     }
-    if (!doSlack) {
-      io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup planner` later to enable the experimental planner. Run `invoker-cli setup slack` later to add Slack.');
-      return core.ok ? 0 : 1;
-    }
 
-    if (fromEnv) {
+    if (doSlack && fromEnv) {
       loadInvokerEnv();
       const creds = slackCredsFromEnv();
-      const checks = await validateSlackCredentials(creds);
-      const report = buildReport(checks);
+      const slackChecks = await validateSlackCredentials(creds);
+      checks.push(...slackChecks);
+      const report = buildReport(slackChecks);
       io.print(`\n${formatReport(report, { json: parsed.json })}`);
       if (!creds.botToken || !creds.appToken || !creds.signingSecret || !creds.channelId || !report.ok) {
-        io.print('Nothing written. Fix the items above and re-run setup.');
-        return 1;
+        io.print('Nothing written.');
+        checks.push(...await collectGithubAndSmokeChecks(options));
+        return printSetupEnding(io, checks);
       }
       const envPath = writeSlackEnv({
         botToken: creds.botToken,
@@ -684,34 +837,41 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
         channelId: creds.channelId,
       });
       io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
-      return 0;
-    }
+    } else if (doSlack) {
+      const manifestPath = manifestFilePath();
+      mkdirSync(invokerHomeDir(), { recursive: true });
+      writeFileSync(manifestPath, `${JSON.stringify(generateSlackManifest(), null, 2)}\n`);
+      io.print(`\n${manifestSteps(manifestPath)}\n`);
 
-    const manifestPath = manifestFilePath();
-    mkdirSync(invokerHomeDir(), { recursive: true });
-    writeFileSync(manifestPath, `${JSON.stringify(generateSlackManifest(), null, 2)}\n`);
-    io.print(`\n${manifestSteps(manifestPath)}\n`);
+      const botToken = await askLine(io, 'Bot User OAuth Token (xoxb-...): ');
+      const appToken = await askLine(io, 'App-Level Token (xapp-...): ');
+      const signingSecret = await askLine(io, 'Signing Secret: ');
+      const channelId = await askLine(io, 'Lobby channel ID (C...): ');
 
-    const botToken = await askLine(io, 'Bot User OAuth Token (xoxb-...): ');
-    const appToken = await askLine(io, 'App-Level Token (xapp-...): ');
-    const signingSecret = await askLine(io, 'Signing Secret: ');
-    const channelId = await askLine(io, 'Lobby channel ID (C...): ');
+      const slackChecks = await validateSlackCredentials({ botToken, appToken, signingSecret, channelId });
+      checks.push(...slackChecks);
+      const report = buildReport(slackChecks);
+      io.print(`\n${formatReport(report)}`);
 
-    const checks = await validateSlackCredentials({ botToken, appToken, signingSecret, channelId });
-    const report = buildReport(checks);
-    io.print(`\n${formatReport(report)}`);
-
-    if (!report.ok) {
-      const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ', parsed.assumeYes);
-      if (!proceed) {
-        io.print('Nothing written. Fix the items above and re-run `invoker-cli setup slack`.');
-        return 1;
+      if (!report.ok) {
+        const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ', parsed.assumeYes);
+        if (!proceed) {
+          io.print('Nothing written.');
+          checks.push(...await collectGithubAndSmokeChecks(options));
+          return printSetupEnding(io, checks);
+        }
       }
+
+      const envPath = writeSlackEnv({ botToken, appToken, signingSecret, channelId });
+      io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
     }
 
-    const envPath = writeSlackEnv({ botToken, appToken, signingSecret, channelId });
-    io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
-    return report.ok ? 0 : 1;
+    const extras = await collectGithubAndSmokeChecks(options);
+    checks.push(...extras);
+    io.print('');
+    io.print(formatReport(buildReport(extras)));
+
+    return printSetupEnding(io, checks);
   } catch (error) {
     if (!(error instanceof NonInteractiveSetupError)) throw error;
     io.print(error.message);
