@@ -135,6 +135,7 @@ describe('Slack manager host integration', () => {
       lobbyChannelId: 'C_LOBBY',
       conversationRepo: conversations,
       workflowChannelRepo: workflowChannels,
+      defaultRepoUrl: 'https://github.com/example/repo.git',
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
