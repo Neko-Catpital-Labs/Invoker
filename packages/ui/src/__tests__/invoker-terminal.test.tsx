@@ -1124,3 +1124,100 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
   });
 });
+
+function submitContextWorkflow(id: string, name = id): WorkflowMeta {
+  return {
+    id,
+    name,
+    status: 'pending',
+  };
+}
+
+describe('Invoker terminal submit context (component)', () => {
+  let mock: MockInvoker;
+
+  beforeEach(() => {
+    mock = createMockInvoker(
+      [makeUITask({ id: 'task-a', workflowId: 'workflow-a', description: 'Initial task' })],
+      [submitContextWorkflow('workflow-a', 'Initial Plan')],
+    );
+    mock.install();
+  });
+
+  afterEach(() => {
+    mock.cleanup();
+    vi.restoreAllMocks();
+  });
+
+  function stubSubmitStyleRefresh() {
+    const nextTasks = [
+      makeUITask({ id: 'task-a', workflowId: 'workflow-a', description: 'Initial task' }),
+      makeUITask({ id: 'task-b', workflowId: 'workflow-b', description: 'Submitted planning task' }),
+    ];
+    const nextWorkflows = [
+      submitContextWorkflow('workflow-a', 'Initial Plan'),
+      submitContextWorkflow('workflow-b', 'Submitted Plan'),
+    ];
+    vi.mocked(mock.api.refreshTaskGraph).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          queueMicrotask(() => {
+            mock.fireGraphEvent({
+              type: 'snapshot',
+              tasks: nextTasks,
+              workflows: nextWorkflows,
+              reason: 'submit-style-refresh',
+              streamSequence: 1,
+            });
+            resolve();
+          });
+        }),
+    );
+  }
+
+  it('preserves a cleared graph selection when submit-style refresh adds a workflow', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+
+    expect(await screen.findByTestId('workflow-node-workflow-a')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('workflow-graph-surface'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    });
+
+    stubSubmitStyleRefresh();
+    fireEvent.click(screen.getByTestId('rail-refresh'));
+
+    expect(await screen.findByTestId('workflow-node-workflow-b')).toBeInTheDocument();
+    expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-workflow-a').className).not.toContain('ring-2');
+    expect(screen.getByTestId('workflow-node-workflow-b').className).not.toContain('ring-2');
+    expect(mock.api.start).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing workflow selection stable across submit-style refresh', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+
+    expect(await screen.findByTestId('workflow-node-workflow-a')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('workflow-node-workflow-a'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
+    });
+
+    stubSubmitStyleRefresh();
+    fireEvent.click(screen.getByTestId('rail-refresh'));
+
+    expect(await screen.findByTestId('workflow-node-workflow-b')).toBeInTheDocument();
+    expect(screen.getByTestId('selected-workflow-mini-dag')).toHaveTextContent('Initial Plan task DAG');
+    expect(screen.getByTestId('workflow-node-workflow-a').className).toContain('ring-2');
+    expect(screen.getByTestId('workflow-node-workflow-b').className).not.toContain('ring-2');
+    expect(mock.api.start).not.toHaveBeenCalled();
+  });
+});
