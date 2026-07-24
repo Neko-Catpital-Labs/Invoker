@@ -789,7 +789,7 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('sidebar-home').click();
     await expect(transcript).toContainText('Draft a YAML plan to add a README');
     await expect(transcript).toContainText('sleep 2 && echo hello-gamma');
-    await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker. Review it, then use Start ready work.');
+    await expect(transcript).toContainText('Plan "Terminal Planned Flow" submitted to Invoker.');
     await captureScreenshot(page, 'terminal-planned-conversation-after-submit');
 
     await page.evaluate(async () => {
@@ -1007,7 +1007,7 @@ test.describe('Visual proof capture', () => {
     await page.getByRole('button', { name: 'Submit to Invoker' }).click();
 
     const transcript = page.getByTestId('invoker-terminal-transcript');
-    await expect(transcript).toContainText('Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.');
+    await expect(transcript).toContainText('Plan "Workers Surface" submitted as 2 stacked workflows.');
     await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('heading', { name: 'Planning chat window' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toHaveCount(0);
