@@ -30,7 +30,7 @@ import {
 import { resolveDefaultExecutionAgent } from './config.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import { loadAllEventsPaged } from './load-all-events-paged.js';
-import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot, listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
+import { autoStartedOwnerWorkerKindsForConfig, createLocalWorkerStatusSnapshot, listWorkerDecisions, toWorkerActionSummary } from './worker-control.js';
 import { renderWorkerLifecycle } from './headless-worker-lifecycle.js';
 import { createRendererUiPerfCounters } from './renderer-ui-perf.js';
 import {
@@ -876,7 +876,7 @@ function createHeadlessWorkerStatusSnapshot(
   return createLocalWorkerStatusSnapshot({
     registry,
     persistence: deps.persistence,
-    autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+    autoStartKinds: autoStartedOwnerWorkerKindsForConfig(deps.invokerConfig),
   });
 }
 

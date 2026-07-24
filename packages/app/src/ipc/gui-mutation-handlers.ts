@@ -89,7 +89,7 @@ import { seedStressFixture, type StressFixtureOptions } from '../stress-fixture.
 import { buildReviewGateQueryResponse } from '../review-gate-query.js';
 import { recordRendererUiPerfMetric, type RendererUiPerfCounters } from '../renderer-ui-perf.js';
 import {
-  AUTO_STARTED_OWNER_WORKER_KINDS,
+  autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
 } from '../worker-control.js';
 import { runStartReady } from '../start-ready.js';
@@ -1717,13 +1717,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       return createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
       });
     }
     return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
       registry: createRegisteredWorkerRegistry(),
       persistence,
-      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
     });
   });
 

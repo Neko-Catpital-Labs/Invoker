@@ -34,7 +34,7 @@ import {
   isStandaloneCapable,
 } from './owner-endpoint.js';
 import { createOwnerResolver, type ResolvedOwner } from './owner-resolver.js';
-import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from './worker-control.js';
+import { autoStartedOwnerWorkerKindsForConfig, createLocalWorkerStatusSnapshot } from './worker-control.js';
 import { renderWorkerLifecycle } from './headless-worker-lifecycle.js';
 import { resolveWorkerControlMutation, type WorkerControlMutation } from './worker-control-delegation.js';
 import { openMainProcessDatabase } from './viewer-db-boundary.js';
@@ -503,7 +503,7 @@ async function runLocalWorkersQuery(args: string[], invokerConfig: InvokerConfig
     const snapshot = createLocalWorkerStatusSnapshot({
       registry,
       persistence,
-      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
     });
     writeWorkerSnapshot(snapshot, args);
     return 0;
