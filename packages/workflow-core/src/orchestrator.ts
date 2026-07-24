@@ -19,7 +19,7 @@ import { TaskStateMachine } from './state-machine.js';
 import { ResponseHandler } from './response-handler.js';
 import type { ParsedResponse } from './response-handler.js';
 import { TaskScheduler } from './scheduler.js';
-import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
+import type { TaskState, TaskDelta, TaskStateChanges, TaskConfig, TaskExecution, Attempt, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency, ExternalGatePolicy, TaskStatus, TaskHeartbeatSource } from '@invoker/workflow-graph';
 import type { RunnerKind } from '@invoker/workflow-graph';
 import { createTaskState, createAttempt, hasFailedDependencyPath, isCrashPreservedExecution, isLivenessFailureClass } from '@invoker/workflow-graph';
 import type { WorkflowDerivedStatus } from '@invoker/workflow-graph';
@@ -394,7 +394,7 @@ export interface PlanDefinition {
     workflowId: string;
     taskId?: string;
     requiredStatus?: 'completed';
-    gatePolicy?: 'completed' | 'review_ready';
+    gatePolicy?: ExternalGatePolicy;
   }>;
   tasks: Array<{
     id: string;
@@ -407,7 +407,7 @@ export interface PlanDefinition {
       workflowId: string;
       taskId?: string;
       requiredStatus?: 'completed';
-      gatePolicy?: 'completed' | 'review_ready';
+      gatePolicy?: ExternalGatePolicy;
     }>;
     pivot?: boolean;
     experimentVariants?: Array<{ id: string; description: string; prompt?: string; command?: string }>;
@@ -534,7 +534,15 @@ export interface TaskReplacementDef {
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
-  gatePolicy: 'completed' | 'review_ready';
+  gatePolicy: ExternalGatePolicy;
+}
+
+function isExternalGatePolicy(value: unknown): value is ExternalGatePolicy {
+  return value === 'completed' || value === 'review_ready' || value === 'ci_failed';
+}
+
+function isReviewReadyLikeGatePolicy(gatePolicy: ExternalGatePolicy): boolean {
+  return gatePolicy === 'review_ready' || gatePolicy === 'ci_failed';
 }
 
 export {
@@ -2295,7 +2303,7 @@ export class Orchestrator {
 
     const byKey = new Map<string, ExternalGatePolicyUpdate>();
     for (const update of updates) {
-      if (update.gatePolicy !== 'completed' && update.gatePolicy !== 'review_ready') {
+      if (!isExternalGatePolicy(update.gatePolicy)) {
         throw new Error(`Invalid gatePolicy "${String(update.gatePolicy)}" for workflow ${workflowId}`);
       }
       byKey.set(keyOf(update.workflowId, update.taskId), update);
@@ -3458,7 +3466,7 @@ export class Orchestrator {
     return `${workflowId}/${normalizedTaskId}`;
   }
 
-  private defaultExternalGatePolicy(taskId?: string): 'completed' | 'review_ready' {
+  private defaultExternalGatePolicy(taskId?: string): ExternalGatePolicy {
     const normalizedTaskId = taskId?.trim() || '__merge__';
     return normalizedTaskId === '__merge__' ? 'completed' : 'review_ready';
   }
@@ -3468,7 +3476,7 @@ export class Orchestrator {
       workflowId: string;
       taskId?: string;
       requiredStatus?: 'completed';
-      gatePolicy?: 'completed' | 'review_ready';
+      gatePolicy?: ExternalGatePolicy;
     }>,
   ): ExternalDependency[] {
     const byKey = new Map<string, ExternalDependency>();
@@ -3481,7 +3489,7 @@ export class Orchestrator {
       const gatePolicy =
         existing?.gatePolicy === 'completed' || dep.gatePolicy === 'completed'
           ? 'completed'
-          : dep.gatePolicy ?? this.defaultExternalGatePolicy(taskId);
+          : dep.gatePolicy ?? existing?.gatePolicy ?? this.defaultExternalGatePolicy(taskId);
       byKey.set(key, {
         workflowId,
         taskId,
@@ -3528,7 +3536,7 @@ export class Orchestrator {
       const satisfied =
         prerequisite.status === required
         || (
-          gatePolicy === 'review_ready'
+          isReviewReadyLikeGatePolicy(gatePolicy)
           && isMergeGateDep
           && required === 'completed'
           && (prerequisite.status === 'review_ready' || prerequisite.status === 'awaiting_approval')
@@ -3694,7 +3702,7 @@ export class Orchestrator {
     // gatePolicy) so repeated detach attempts or sync/reload cycles never
     // append the same provenance entry twice.
     const existingProvenance = targetWorkflow?.detachedExternalDependencies ?? [];
-    const provenanceKey = (dep: { workflowId: string; taskId?: string; requiredStatus: 'completed'; gatePolicy?: 'completed' | 'review_ready' }) =>
+    const provenanceKey = (dep: { workflowId: string; taskId?: string; requiredStatus: 'completed'; gatePolicy?: ExternalGatePolicy }) =>
       `${dep.workflowId}/${dep.taskId?.trim() ?? ''}/${dep.requiredStatus}/${dep.gatePolicy ?? ''}`;
     const seenProvenance = new Set(existingProvenance.map(provenanceKey));
     const detachedProvenance: DetachedExternalDependency[] = [...existingProvenance];

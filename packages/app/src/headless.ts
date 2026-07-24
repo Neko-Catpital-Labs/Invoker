@@ -592,7 +592,7 @@ ${BOLD}Configure:${RESET}
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
   set fix-context <taskId> <text>                     Update fix-session context and retry
   set gate-policy <taskId> <wfId> [depTaskId] <policy>
-                                                      policy: completed | review_ready
+                                                      policy: completed | review_ready | ci_failed
   set workflow <workflowId> <fieldPath> <value>      Safely update workflow metadata/config
   set task <taskId> <fieldPath> <value>              Safely update task metadata/config
   migrate-compat                                     Normalize persisted compatibility workflow/task state
@@ -890,16 +890,16 @@ async function headlessSetGatePolicy(args: string[], deps: HeadlessDeps): Promis
   const [taskIdRaw, workflowId, arg3, arg4] = args;
   if (!taskIdRaw || !workflowId || !arg3) {
     throw new Error(
-      'Missing arguments. Usage: --headless set gate-policy <taskId> <workflowId> [depTaskId] <completed|review_ready>',
+      'Missing arguments. Usage: --headless set gate-policy <taskId> <workflowId> [depTaskId] <completed|review_ready|ci_failed>',
     );
   }
   await withRestoredTaskUnlessDeleteAllWon(taskIdRaw, deps, 'set gate-policy', async (restored) => {
     const taskId = restored.resolvedTaskId;
     const hasDepTaskId = arg4 !== undefined;
     const depTaskId = hasDepTaskId ? arg3 : '__merge__';
-    const gatePolicy = (hasDepTaskId ? arg4 : arg3) as 'completed' | 'review_ready';
-    if (gatePolicy !== 'completed' && gatePolicy !== 'review_ready') {
-      throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected completed|review_ready`);
+    const gatePolicy = (hasDepTaskId ? arg4 : arg3) as 'completed' | 'review_ready' | 'ci_failed';
+    if (gatePolicy !== 'completed' && gatePolicy !== 'review_ready' && gatePolicy !== 'ci_failed') {
+      throw new Error(`Invalid gate policy "${String(gatePolicy)}". Expected completed|review_ready|ci_failed`);
     }
 
     const envelope = makeEnvelope('set-gate-policies', 'headless', 'task', {

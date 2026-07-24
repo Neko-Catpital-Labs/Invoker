@@ -903,7 +903,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { channel: 'headless.exec', request: { args: ['set', 'model', String(arg0), arg1 == null ? '' : String(arg1)], noTrack: true } };
       case 'invoker:set-task-external-gate-policies': {
         const taskId = String(arg0);
-        const updates = Array.isArray(arg1) ? arg1 as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }> : [];
+        const updates = Array.isArray(arg1) ? arg1 as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' | 'ci_failed' }> : [];
         if (updates.length !== 1) return null;
         const update = updates[0];
         if (!update) return null;
@@ -2395,7 +2395,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     'normal',
     async (taskIdArg: unknown, updatesArg: unknown) => {
       const taskId = String(taskIdArg);
-      const updates = updatesArg as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>;
+      const updates = updatesArg as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' | 'ci_failed' }>;
       logger.info(`set-task-external-gate-policies: "${taskId}" updates=${updates.length}`, { module: 'ipc' });
       try {
         const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });

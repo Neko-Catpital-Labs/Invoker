@@ -1,4 +1,9 @@
-import type { ExternalDependency } from '@invoker/workflow-core';
+import type { ExternalDependency, ExternalGatePolicy } from '@invoker/workflow-core';
+
+function normalizeGatePolicy(value: unknown, fallback: ExternalGatePolicy): ExternalGatePolicy {
+  if (value === 'completed' || value === 'review_ready' || value === 'ci_failed') return value;
+  return fallback;
+}
 
 export function normalizeExternalDependencies(raw: unknown): ExternalDependency[] {
   if (!Array.isArray(raw)) return [];
@@ -8,7 +13,7 @@ export function normalizeExternalDependencies(raw: unknown): ExternalDependency[
     const dep = item as Record<string, unknown>;
     if (typeof dep.workflowId !== 'string' || dep.workflowId.trim() === '') continue;
     const taskId = typeof dep.taskId === 'string' && dep.taskId.trim() !== '' ? dep.taskId.trim() : '__merge__';
-    const gatePolicy = dep.gatePolicy === 'review_ready' ? 'review_ready' : 'completed';
+    const gatePolicy = normalizeGatePolicy(dep.gatePolicy, 'completed');
     normalized.push({
       workflowId: dep.workflowId.trim(),
       taskId,
@@ -25,10 +30,11 @@ export function mergeExternalDependencySets(existing: ExternalDependency[], inco
     const taskId = dep.taskId?.trim() || '__merge__';
     const key = `${dep.workflowId}::${taskId}`;
     const previous = byKey.get(key);
+    const depGatePolicy = dep.gatePolicy === undefined ? undefined : normalizeGatePolicy(dep.gatePolicy, 'review_ready');
     const gatePolicy =
-      previous?.gatePolicy === 'completed' || dep.gatePolicy === 'completed'
+      previous?.gatePolicy === 'completed' || depGatePolicy === 'completed'
         ? 'completed'
-        : 'review_ready';
+        : depGatePolicy ?? previous?.gatePolicy ?? 'review_ready';
     byKey.set(key, {
       workflowId: dep.workflowId,
       taskId,

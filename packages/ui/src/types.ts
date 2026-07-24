@@ -35,12 +35,14 @@ export interface ExperimentResultEntry {
   readonly exitCode?: number;
 }
 
+export type ExternalGatePolicy = 'completed' | 'review_ready' | 'ci_failed';
+
 export interface ExternalDependency {
   readonly workflowId: string;
   /** Optional task selector within the external workflow. Omit to depend on that workflow's merge gate. */
   readonly taskId?: string;
   readonly requiredStatus: 'completed';
-  readonly gatePolicy?: 'completed' | 'review_ready';
+  readonly gatePolicy?: ExternalGatePolicy;
 }
 
 export interface ExternalDependencyChange {
@@ -59,14 +61,14 @@ export interface DetachedExternalDependency {
   readonly workflowId: string;
   readonly taskId?: string;
   readonly requiredStatus: 'completed';
-  readonly gatePolicy?: 'completed' | 'review_ready';
+  readonly gatePolicy?: ExternalGatePolicy;
   readonly detachedAt: string;
 }
 
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
-  gatePolicy: 'completed' | 'review_ready';
+  gatePolicy: ExternalGatePolicy;
 }
 
 // ── Task Config (plan-time / static fields) ────────────────
