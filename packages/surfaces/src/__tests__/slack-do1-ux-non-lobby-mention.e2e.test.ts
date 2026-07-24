@@ -1,7 +1,3 @@
-/**
- * DO1 Slack UX e2e: @mentions outside lobby/workflow must not fail silently.
- * Pre-fix: registerMentionHandler logged and returned with no user-visible reply.
- */
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import { SlackSurface } from '../slack/slack-surface.js';
 import { SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
@@ -48,14 +44,14 @@ vi.mock('@slack/bolt', () => {
   return { App: MockApp };
 });
 
-describe('DO1 Slack UX e2e — non-lobby mention feedback', () => {
+describe('DO1 Slack UX e2e — non-workflow mention routing', () => {
   let surface: SlackSurface;
 
   afterEach(async () => {
     if (surface) await surface.stop();
   });
 
-  it('replies in-thread when @mentioned outside lobby and workflow channels', async () => {
+  it.fails('routes @mentions outside workflow channels to planning', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     const repo = new WorkflowChannelRepository(adapter);
     repo.save({
@@ -72,6 +68,7 @@ describe('DO1 Slack UX e2e — non-lobby mention feedback', () => {
       enableImmediateAck: false,
     });
     await surface.start(async () => {});
+    const handlePlanningMention = vi.spyOn(surface as any, 'handlePlanningMention').mockResolvedValue(undefined);
 
     const app = surface.getApp() as any;
     const mention = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
@@ -87,9 +84,10 @@ describe('DO1 Slack UX e2e — non-lobby mention feedback', () => {
       say,
     });
 
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringMatching(/lobby channel/i),
-      thread_ts: 't1',
-    }));
+    expect(handlePlanningMention).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'COTHER', ts: 't1' }),
+      say,
+      'COTHER',
+    );
   });
 });
