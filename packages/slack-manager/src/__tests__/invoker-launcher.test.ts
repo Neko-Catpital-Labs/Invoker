@@ -15,7 +15,7 @@ describe('resolveOwnerLaunch', () => {
     });
     expect(spec).toEqual({
       command: '/opt/invoker-owner',
-      args: ['--flag'],
+      args: ['--flag', '--headless', 'owner-serve'],
     });
   });
 
