@@ -37,7 +37,14 @@ export function materializeLocalAgentPrompt(
   }
   const directory = mkdtempSync(join(tmpdir(), directoryPrefix));
   const promptPath = join(directory, 'prompt.md');
-  writeFileSync(promptPath, prompt, 'utf8');
+  try {
+    writeFileSync(promptPath, prompt, 'utf8');
+  } catch (error) {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+    } catch {}
+    throw error;
+  }
   return {
     effectivePrompt: buildAgentPromptFileBootstrap(promptPath),
     cleanup: () => {
