@@ -1,6 +1,6 @@
 import type { SQLiteAdapter, Workflow, WorkerActionWrite } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
-import { AUTO_STARTED_OWNER_WORKER_KINDS } from './worker-control.js';
+import { ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS } from './worker-control.js';
 import {
   buildRecoveryWorkerAuditPayload,
   recoveryWorkerEventType,
@@ -14,7 +14,8 @@ const DEFAULT_ACTIONS_PER_KIND = 80;
 
 const ACTION_WORKER_KINDS = [
   'autofix',
-  ...AUTO_STARTED_OWNER_WORKER_KINDS,
+  ...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS,
+  ...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS,
 ] as const;
 
 export interface MainProcessHitchFixtureOptions {

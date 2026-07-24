@@ -19,11 +19,13 @@ import {
   CODERABBIT_ADDRESS_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
   PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REQUEUE_WORKER_KIND,
+  REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
@@ -31,17 +33,52 @@ import {
 } from '@invoker/execution-engine';
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
-export const AUTO_STARTED_OWNER_WORKER_KINDS = [
+/** Worker kinds auto-started on every owner boot, regardless of config. */
+export const ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS = [
   PR_STATUS_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   REQUEUE_WORKER_KIND,
   AUTO_APPROVE_WORKER_KIND,
+] as const;
+
+/** Cron-scan PR-maintenance worker kinds, auto-started only when `prMaintenance.enabled` is true. */
+export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_CI_FAILURE_SCAN_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
 ] as const;
+
+/**
+ * @deprecated Transitional flat list for callers not yet migrated to
+ * `autoStartedOwnerWorkerKindsForConfig`; dropped in the follow-up slice.
+ */
+export const AUTO_STARTED_OWNER_WORKER_KINDS = [
+  ...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS,
+  ...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS,
+] as const;
+
+/**
+ * Compute the owner worker kinds that auto-start on boot. The PR-maintenance
+ * cron kinds are gated on `prMaintenance.enabled` (matching the config
+ * docstring); everything else always auto-starts. Saved per-worker desired
+ * state still overrides in both directions.
+ */
+export function autoStartedOwnerWorkerKinds(options: { prMaintenanceEnabled: boolean }): readonly string[] {
+  return options.prMaintenanceEnabled
+    ? [...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, ...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS]
+    : ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS;
+}
+
+/** Convenience wrapper: derive the auto-start list straight from Invoker config. */
+export function autoStartedOwnerWorkerKindsForConfig(
+  config?: { prMaintenance?: { enabled?: boolean } },
+): readonly string[] {
+  return autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled) });
+}
 
 export interface WorkerRuntimeController {
   startAutoStartedWorkers(): void;

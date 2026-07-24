@@ -200,7 +200,7 @@ import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
-  AUTO_STARTED_OWNER_WORKER_KINDS,
+  autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
   createWorkerRuntimeController,
   type WorkerRuntimeController,
@@ -1570,12 +1570,12 @@ function startHeadlessMode(): void {
             getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
               registry: createRegisteredWorkerRegistry(),
               persistence,
-              autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+              autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
             }),
             getWorkers: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
               registry: createRegisteredWorkerRegistry(),
               persistence,
-              autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+              autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
             }),
             resolveInvokerHomeRoot,
             orchestrator,
@@ -1660,8 +1660,8 @@ function startHeadlessMode(): void {
             },
           ),
           autoStartKinds: invokerConfig.e2eAutoFixEnabled
-            ? [...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]
-            : AUTO_STARTED_OWNER_WORKER_KINDS,
+            ? [...autoStartedOwnerWorkerKindsForConfig(invokerConfig), E2E_AUTOFIX_WORKER_KIND]
+            : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           persistence,
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
@@ -2261,7 +2261,7 @@ function createEmbeddedTerminalBackendFromConfig(
           getWorkers: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
             registry: createRegisteredWorkerRegistry(),
             persistence,
-            autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+            autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           }),
           getSystemDiagnostics: () => collectSystemDiagnostics({
             appVersion: app.getVersion(),
@@ -2565,12 +2565,12 @@ function createEmbeddedTerminalBackendFromConfig(
           getWorkerStatus: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
             registry: createRegisteredWorkerRegistry(),
             persistence,
-            autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+            autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           }),
           getWorkers: () => workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
             registry: createRegisteredWorkerRegistry(),
             persistence,
-            autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+            autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           }),
           getStreamSequence: () => getTaskDeltaStreamSequence(),
           resolveInvokerHomeRoot,
@@ -2699,8 +2699,8 @@ function createEmbeddedTerminalBackendFromConfig(
           },
         ),
         autoStartKinds: invokerConfig.e2eAutoFixEnabled
-          ? [...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]
-          : AUTO_STARTED_OWNER_WORKER_KINDS,
+          ? [...autoStartedOwnerWorkerKindsForConfig(invokerConfig), E2E_AUTOFIX_WORKER_KIND]
+          : autoStartedOwnerWorkerKindsForConfig(invokerConfig),
         persistence,
         autoFixRetries: resolveAutoFixRetries(invokerConfig),
         canControl: () => ownerMode,
@@ -2890,13 +2890,13 @@ function createEmbeddedTerminalBackendFromConfig(
         return createLocalWorkerStatusSnapshot({
           registry: createRegisteredWorkerRegistry(),
           persistence,
-          autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+          autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
         });
       }
       return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
         registry: createRegisteredWorkerRegistry(),
         persistence,
-        autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+        autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
       });
     });
 

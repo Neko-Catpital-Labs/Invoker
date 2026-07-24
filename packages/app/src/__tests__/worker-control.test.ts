@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   CODERABBIT_ADDRESS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
@@ -9,6 +10,7 @@ import {
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
+  REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -16,7 +18,7 @@ import {
 
 import type { WorkerActionRecord } from '@invoker/data-store';
 import {
-  AUTO_STARTED_OWNER_WORKER_KINDS,
+  autoStartedOwnerWorkerKinds,
   createLocalWorkerStatusSnapshot,
   createWorkerRuntimeController,
   listWorkerActionHistory,
@@ -93,7 +95,7 @@ function deps(): WorkerRuntimeDependencies {
 }
 
 function controller(
-  autoStartKinds: readonly string[] = AUTO_STARTED_OWNER_WORKER_KINDS,
+  autoStartKinds: readonly string[] = autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: true }),
   desiredState: Record<string, boolean> = {},
 ) {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
@@ -119,6 +121,8 @@ function controller(
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
   register(PR_CI_FAILURE_SCAN_WORKER_KIND, 'Scans mapped PRs for failing CI.');
+  register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Lands eligible PRs via admin bypass.');
+  register(REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND, 'Orders rebase-recreate on merge conflicts.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
@@ -146,17 +150,34 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CI_FAILURE_SCAN_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_LAND_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.startable).toBe(true);
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
 
+  it('gates PR-maintenance cron workers on prMaintenance.enabled but always starts review-gate-merge-conflict', () => {
+    const setup = controller(autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: false }));
+
+    setup.controller.startAutoStartedWorkers();
+    const snapshot = setup.controller.snapshot();
+
+    for (const kind of [CODERABBIT_ADDRESS_WORKER_KIND, PR_CONFLICT_REBASE_WORKER_KIND, PR_CI_FAILURE_SCAN_WORKER_KIND, PR_ADMIN_BYPASS_LAND_WORKER_KIND]) {
+      const row = snapshot.workers.find((worker) => worker.kind === kind);
+      expect(row?.lifecycle).toBe('stopped');
+      expect(row?.startable).toBe(true);
+    }
+    expect(snapshot.workers.find((worker) => worker.kind === REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
+  });
+
   it('restores saved desired worker states over built-in launch defaults', () => {
-    const setup = controller(AUTO_STARTED_OWNER_WORKER_KINDS, {
+    const setup = controller(autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: true }), {
       [PR_STATUS_WORKER_KIND]: false,
       [WORKFLOW_RESUME_WORKER_KIND]: true,
     });
@@ -193,7 +214,7 @@ describe('createWorkerRuntimeController', () => {
   });
 
   it('auto-starts e2e-autofix only when its kind is in autoStartKinds', () => {
-    const gated = controller([...AUTO_STARTED_OWNER_WORKER_KINDS, E2E_AUTOFIX_WORKER_KIND]);
+    const gated = controller([...autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: true }), E2E_AUTOFIX_WORKER_KIND]);
     gated.controller.startAutoStartedWorkers();
     const gatedRow = gated.controller.snapshot().workers.find((worker) => worker.kind === E2E_AUTOFIX_WORKER_KIND);
     expect(gatedRow?.lifecycle).toBe('running');
@@ -316,7 +337,7 @@ describe('createWorkerRuntimeController', () => {
 
     const snapshot = createLocalWorkerStatusSnapshot({
       registry,
-      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      autoStartKinds: autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: true }),
       persistence: {
         listWorkerActions: vi.fn(() => [{
           id: 'action-1',
