@@ -21,6 +21,8 @@ const PLAN = {
 };
 
 test('worker-triggered autofix reaches approval UI with mocked Claude', async ({ page }) => {
+  // Bare-restart then escalate can exceed the default 120s Playwright budget on CI.
+  test.setTimeout(240_000);
   await page.evaluate(async () => {
     await window.invoker.startWorker('autofix');
   });
