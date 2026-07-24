@@ -29,7 +29,7 @@
  *   POST   /api/tasks/:id/edit-prompt  body: { prompt }
  *   POST   /api/tasks/:id/edit-type    body: { runnerKind, poolMemberId? }
  *   POST   /api/tasks/:id/edit-agent   body: { agent }
- *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy }] }
+ *   POST   /api/tasks/:id/gate-policy  body: { updates: [{ workflowId, taskId?, gatePolicy: completed|review_ready|ci_failed }] }
  *   DELETE /api/tasks/:id
  *   POST   /api/workflows/:id/detach  body: { upstreamWorkflowId }
  *   POST   /api/workflows/:id/restart

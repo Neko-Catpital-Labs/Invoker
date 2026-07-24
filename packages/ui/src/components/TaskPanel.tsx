@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import type { TaskState, ExternalDependency, ExternalGatePolicyUpdate, TaskStatus } from '../types.js';
+import type { TaskState, ExternalDependency, ExternalGatePolicy, ExternalGatePolicyUpdate, TaskStatus } from '../types.js';
 import {
   getStatusColor,
   getEffectiveVisualStatus,
@@ -96,6 +96,38 @@ function resolveExternalDepStatus(dep: ExternalDependency, allTasks?: Map<string
     return allTasks.get(normalizedTaskId)?.status ?? 'missing';
   }
   return allTasks.get(`${dep.workflowId}/${normalizedTaskId}`)?.status ?? allTasks.get(normalizedTaskId)?.status ?? 'missing';
+}
+
+const GATE_POLICY_OPTIONS: readonly ExternalGatePolicy[] = ['review_ready', 'ci_failed', 'completed'];
+
+function gatePolicyLabel(policy: ExternalGatePolicy): string {
+  switch (policy) {
+    case 'completed':
+      return 'Completed';
+    case 'review_ready':
+      return 'Review Ready';
+    case 'ci_failed':
+      return 'CI Failed';
+  }
+}
+
+function gatePolicyTooltip(policy: ExternalGatePolicy): string {
+  switch (policy) {
+    case 'completed':
+      return 'Wait until the upstream task is completed.';
+    case 'review_ready':
+      return 'Start when the upstream merge gate reaches review or approval.';
+    case 'ci_failed':
+      return 'CI repair: start when the upstream merge gate reaches review or approval.';
+  }
+}
+
+function gatePolicyThresholdStatus(policy: ExternalGatePolicy): TaskStatus {
+  return policy === 'completed' ? 'completed' : 'review_ready';
+}
+
+function isReviewReadyLikeGatePolicy(policy: ExternalGatePolicy): boolean {
+  return policy === 'review_ready' || policy === 'ci_failed';
 }
 
 interface TaskPanelProps {
@@ -243,7 +275,7 @@ export function TaskPanel({
   const [showAdvanced, setShowAdvanced] = useState(true);
   const [isEditingGatePolicies, setIsEditingGatePolicies] = useState(false);
   const [isSavingGatePolicies, setIsSavingGatePolicies] = useState(false);
-  const [gatePolicyDraft, setGatePolicyDraft] = useState<Record<string, 'completed' | 'review_ready'>>({});
+  const [gatePolicyDraft, setGatePolicyDraft] = useState<Record<string, ExternalGatePolicy>>({});
   const [isSatisfiedListExpanded, setIsSatisfiedListExpanded] = useState(false);
   const [workspaceSetupFailures, setWorkspaceSetupFailures] = useState<string[]>([]);
 
@@ -256,7 +288,7 @@ export function TaskPanel({
     setIsEditingGatePolicies(false);
     setIsSavingGatePolicies(false);
     setIsSatisfiedListExpanded(false);
-    const nextDraft: Record<string, 'completed' | 'review_ready'> = {};
+    const nextDraft: Record<string, ExternalGatePolicy> = {};
     for (const dep of task?.config.externalDependencies ?? []) {
       nextDraft[externalDepKey(dep)] = dep.gatePolicy ?? 'review_ready';
     }
@@ -754,7 +786,7 @@ export function TaskPanel({
           return (
             status === requiredStatus
             || (
-              gatePolicy === 'review_ready'
+              isReviewReadyLikeGatePolicy(gatePolicy)
               && isMergeGateDep
               && requiredStatus === 'completed'
               && (status === 'review_ready' || status === 'awaiting_approval')
@@ -841,7 +873,7 @@ export function TaskPanel({
 
                   // Compute impact
                   const steps = status !== 'missing' && !hasMixedPolicy
-                    ? computeSteps(status as TaskStatus, draftPolicy as TaskStatus)
+                    ? computeSteps(status as TaskStatus, gatePolicyThresholdStatus(draftPolicy))
                     : Infinity;
                   let impactText = '';
                   if (isEditingGatePolicies && !hasMixedPolicy && status !== 'missing') {
@@ -909,19 +941,23 @@ export function TaskPanel({
                               <select
                                 value={draftPolicy}
                                 onChange={(e) => {
-                                  const next = e.target.value as 'completed' | 'review_ready';
+                                  const next = e.target.value as ExternalGatePolicy;
                                   setGatePolicyDraft((prev) => ({ ...prev, [key]: next }));
                                 }}
+                                title={gatePolicyTooltip(draftPolicy)}
                                 className="bg-muted text-foreground text-xs rounded px-2 py-0.5 border border-border-strong focus:outline-none focus:border-border-strong"
                                 data-testid={`gate-policy-select-${index}`}
                               >
-                                <option value="review_ready">Review Ready</option>
-                                <option value="completed">Completed</option>
+                                {GATE_POLICY_OPTIONS.map((policy) => (
+                                  <option key={policy} value={policy} title={gatePolicyTooltip(policy)}>
+                                    {gatePolicyLabel(policy)}
+                                  </option>
+                                ))}
                               </select>
                             ) : (
                               <>
-                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${getStatusColor(draftPolicy as TaskStatus).dot}`} />
-                                <span className="text-muted-foreground">{formatStatusLabel(draftPolicy as TaskStatus)}</span>
+                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${getStatusColor(gatePolicyThresholdStatus(draftPolicy)).dot}`} />
+                                <span className="text-muted-foreground" title={gatePolicyTooltip(draftPolicy)}>{gatePolicyLabel(draftPolicy)}</span>
                               </>
                             )}
                             {impactText && (
@@ -975,14 +1011,18 @@ export function TaskPanel({
                               <select
                                 value={draftPolicy}
                                 onChange={(e) => {
-                                  const next = e.target.value as 'completed' | 'review_ready';
+                                  const next = e.target.value as ExternalGatePolicy;
                                   setGatePolicyDraft((prev) => ({ ...prev, [key]: next }));
                                 }}
+                                title={gatePolicyTooltip(draftPolicy)}
                                 className="ml-auto bg-muted text-foreground text-xs rounded px-2 py-0.5 border border-border-strong focus:outline-none focus:border-border-strong"
                                 data-testid={`gate-policy-select-${externalDeps.indexOf(dep)}`}
                               >
-                                <option value="review_ready">Review Ready</option>
-                                <option value="completed">Completed</option>
+                                {GATE_POLICY_OPTIONS.map((policy) => (
+                                  <option key={policy} value={policy} title={gatePolicyTooltip(policy)}>
+                                    {gatePolicyLabel(policy)}
+                                  </option>
+                                ))}
                               </select>
                               {reviewUrl && (
                                 <a
@@ -1040,7 +1080,7 @@ export function TaskPanel({
                   </button>
                   <button
                     onClick={() => {
-                      const resetDraft: Record<string, 'completed' | 'review_ready'> = {};
+                      const resetDraft: Record<string, ExternalGatePolicy> = {};
                       for (const dep of externalDeps) {
                         resetDraft[externalDepKey(dep)] = dep.gatePolicy ?? 'review_ready';
                       }
