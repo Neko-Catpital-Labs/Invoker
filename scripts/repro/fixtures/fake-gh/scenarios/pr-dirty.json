@@ -1,0 +1,22 @@
+{
+  "prs": [
+    {
+      "number": 501,
+      "title": "Conflicting stack PR",
+      "url": "https://github.com/fake/repo/pull/501",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/501",
+      "headRefOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "mergeStateStatus": "DIRTY",
+      "mergeable": "CONFLICTING",
+      "labels": ["admin-bypass"],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS"}
+    }
+  ],
+  "issue_comments": {
+    "501": []
+  }
+}

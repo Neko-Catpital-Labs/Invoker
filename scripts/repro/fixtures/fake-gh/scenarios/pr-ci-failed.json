@@ -1,0 +1,46 @@
+{
+  "prs": [
+    {
+      "number": 601,
+      "title": "CI-failed PR",
+      "url": "https://github.com/fake/repo/pull/601",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/601",
+      "headRefOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mergeStateStatus": "BLOCKED",
+      "mergeable": "MERGEABLE",
+      "labels": ["admin-bypass", "dequeued"],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS", "PR Body": "FAILURE"}
+    },
+    {
+      "number": 602,
+      "title": "Conflicting PR the CI scan must skip",
+      "url": "https://github.com/fake/repo/pull/602",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/602",
+      "headRefOid": "cccccccccccccccccccccccccccccccccccccccc",
+      "mergeStateStatus": "DIRTY",
+      "mergeable": "CONFLICTING",
+      "labels": [],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS"}
+    }
+  ],
+  "issue_comments": {
+    "601": [
+      {
+        "id": "m601",
+        "user": {"login": "mergify[bot]"},
+        "updated_at": "2026-07-20T00:00:00Z",
+        "html_url": "https://github.com/fake/repo/pull/601#m601",
+        "body": "Left the queue `admin-bypass` at `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`.\n-*- Mergify Payload -*-\n{\"state\":\"dequeued\",\"queue_rule_name\":\"admin-bypass\"}\n"
+      }
+    ],
+    "602": []
+  }
+}
