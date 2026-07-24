@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as child_process from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SlackSurface, extractRepoUrlFromMessage, parsePlanningRequest, parseLobbyClassification, parseLocalRequest, parseThreadRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, SlackSessionRepository, WorkflowChannelRepository } from '@invoker/data-store';
+import * as executionEngine from '@invoker/execution-engine';
 import type { SurfaceCommand } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
 
@@ -596,6 +597,79 @@ describe('in-channel workflow assistant', () => {
     expect(gather).toHaveBeenCalledWith('wf-1-2');
     expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('/health') }));
     expect(received).toHaveLength(0);
+  });
+
+  it('uses a temporary prompt file for oversized workflow assistant context', async () => {
+    const hugeOutput = 'running task details\n'.repeat(10_000);
+    const gather = vi.fn(async (): Promise<WorkflowContext> => ({
+      workflowId: 'wf-1-2',
+      planning: [{ role: 'user', content: 'track progress' }],
+      tasks: [{ id: 'wf-1-2/api', status: 'running', agentName: 'omp', transcript: [], output: hugeOutput }],
+    }));
+    let promptFile = '';
+    const planningCommandBuilder = vi.fn(({ prompt }: { prompt: string }) => {
+      const match = prompt.match(/file: (.+)\n/);
+      promptFile = match?.[1] ?? '';
+      const promptContents = readFileSync(promptFile, 'utf8');
+      expect(prompt).toContain('The full task instructions are in this file:');
+      expect(promptContents).toContain('Task wf-1-2/api (status=running');
+      expect(promptContents).toContain(hugeOutput);
+      return { command: 'cursor', args: ['--print', prompt] };
+    });
+    mockSpawn.mockImplementationOnce(() => mockProcess('The running task is wf-1-2/api.') as any);
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      conversationRepo: convoRepo,
+      workflowChannelRepo: repo,
+      planningCommandBuilder,
+      gatherWorkflowContext: gather,
+    });
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> how are we doing', ts: 't1', user: 'U1', channel: 'C123' },
+      say,
+    });
+
+    expect(planningCommandBuilder).toHaveBeenCalledOnce();
+    expect(promptFile).toContain('invoker-slack-prompt-');
+    expect(existsSync(promptFile)).toBe(false);
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('wf-1-2/api') }));
+  });
+
+  it('logs prompt cleanup failures after workflow assistant planning', async () => {
+    const cleanupError = new Error('device busy');
+    const logSpy = vi.fn();
+    const materializeSpy = vi.spyOn(executionEngine, 'materializeLocalAgentPrompt').mockReturnValue({
+      effectivePrompt: 'materialized prompt',
+      cleanup: () => ({ directory: '/tmp/invoker-slack-prompt-test-1234', error: cleanupError }),
+    });
+    mockSpawn.mockImplementationOnce(() => mockProcess('The running task is wf-1-2/api.'));
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      log: logSpy,
+      conversationRepo: convoRepo,
+      workflowChannelRepo: repo,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'materialized prompt'] }),
+    });
+    const runOneShotPlanner = Reflect.get(surface, 'runOneShotPlanner') as (
+      harness: { tool: string; model: string },
+      prompt: string,
+    ) => Promise<string>;
+
+    try {
+      await expect(runOneShotPlanner.call(surface, { tool: 'omp', model: 'claude-sonnet-4-5' }, 'ignored prompt')).resolves.toBe(
+        'The running task is wf-1-2/api.',
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        'slack-surface',
+        'warn',
+        '[PROMPT_CLEANUP] failed to remove materialized planner prompt at /tmp/invoker-slack-prompt-test-1234: device busy',
+      );
+    } finally {
+      materializeSpy.mockRestore();
+    }
   });
 });
 

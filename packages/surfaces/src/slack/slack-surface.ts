@@ -38,7 +38,7 @@ import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
 import { buildAssistantPrompt, parseWorkflowControl, SLACK_DIRECT_ANSWER_GUIDANCE } from './workflow-assistant.js';
 import type { WorkflowContext, WorkflowControl } from './workflow-assistant.js';
 import type { ConversationRepository, SlackSessionRepository, WorkflowChannelRepository, WorkflowChannel } from '@invoker/data-store';
-import { formatCodexPlannerStdout } from '@invoker/execution-engine';
+import { formatCodexPlannerStdout, materializeLocalAgentPrompt } from '@invoker/execution-engine';
 
 function truncateWords(text: string, maxWords: number): string {
   const words = text.replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
@@ -2086,36 +2086,48 @@ ${text}`;
   }
 
   private async runOneShotPlanner(harness: HarnessPreset, prompt: string): Promise<string> {
-    const { command, args } = this.planningCommandBuilder
-      ? this.planningCommandBuilder({ tool: harness.tool, model: harness.model, prompt })
-      : defaultPlanningCommand(this.cursorCommand, { model: harness.model, prompt });
-    const plannerLabel = harness.tool ?? command;
-    const timeoutMs = (this.planningTimeoutSeconds ?? 7_200) * 1_000;
-    const totalAttempts = this.plannerRetryLimit + 1;
-    let lastStderrTail = '';
+    const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-slack-prompt-');
+    try {
+      const { command, args } = this.planningCommandBuilder
+        ? this.planningCommandBuilder({ tool: harness.tool, model: harness.model, prompt: promptTransport.effectivePrompt })
+        : defaultPlanningCommand(this.cursorCommand, { model: harness.model, prompt: promptTransport.effectivePrompt });
+      const plannerLabel = harness.tool ?? command;
+      const timeoutMs = (this.planningTimeoutSeconds ?? 7_200) * 1_000;
+      const totalAttempts = this.plannerRetryLimit + 1;
+      let lastStderrTail = '';
 
-    for (let attempt = 0; attempt < totalAttempts; attempt++) {
-      if (attempt > 0) {
-        const backoffMs = this.plannerRetryBaseDelayMs * (2 ** (attempt - 1));
-        this.log?.('slack-surface', 'warn',
-          `[PLANNER_RETRY] backing off ${backoffMs}ms before attempt=${attempt + 1}/${totalAttempts} (planner=${plannerLabel})`);
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
-      }
-      try {
-        return await this.runOneShotPlannerAttempt(command, args, plannerLabel, timeoutMs, attempt + 1, totalAttempts);
-      } catch (err) {
-        if (isEmptyOutputAttemptError(err)) {
-          lastStderrTail = err.stderrTail;
-          const isLast = attempt >= totalAttempts - 1;
+      for (let attempt = 0; attempt < totalAttempts; attempt++) {
+        if (attempt > 0) {
+          const backoffMs = this.plannerRetryBaseDelayMs * (2 ** (attempt - 1));
           this.log?.('slack-surface', 'warn',
-            `[PLANNER_RETRY] attempt=${attempt + 1}/${totalAttempts} produced no output (planner=${plannerLabel}, willRetry=${!isLast}, stderrBytes=${err.stderrTail.length}, stderrTail="${err.stderrTail.slice(-200).replace(/\n/g, '\\n')}")`);
-          if (!isLast) continue;
-          throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
+            `[PLANNER_RETRY] backing off ${backoffMs}ms before attempt=${attempt + 1}/${totalAttempts} (planner=${plannerLabel})`);
+          await new Promise((resolve) => setTimeout(resolve, backoffMs));
         }
-        throw err;
+        try {
+          return await this.runOneShotPlannerAttempt(command, args, plannerLabel, timeoutMs, attempt + 1, totalAttempts);
+        } catch (err) {
+          if (isEmptyOutputAttemptError(err)) {
+            lastStderrTail = err.stderrTail;
+            const isLast = attempt >= totalAttempts - 1;
+            this.log?.('slack-surface', 'warn',
+              `[PLANNER_RETRY] attempt=${attempt + 1}/${totalAttempts} produced no output (planner=${plannerLabel}, willRetry=${!isLast}, stderrBytes=${err.stderrTail.length}, stderrTail="${err.stderrTail.slice(-200).replace(/\n/g, '\\n')}")`);
+            if (!isLast) continue;
+            throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
+          }
+          throw err;
+        }
+      }
+      throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
+    } finally {
+      const cleanupResult = promptTransport.cleanup();
+      if (cleanupResult) {
+        this.log?.(
+          'slack-surface',
+          'warn',
+          `[PROMPT_CLEANUP] failed to remove materialized planner prompt at ${cleanupResult.directory}: ${cleanupResult.error.message}`,
+        );
       }
     }
-    throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
   }
 
   private runOneShotPlannerAttempt(
@@ -2136,14 +2148,19 @@ ${text}`;
         `[PERF] one_shot_spawn: pid=${child.pid ?? 'none'}, planner=${plannerLabel}, attempt=${attemptNumber}/${totalAttempts}`);
       let stdout = '';
       let stderr = '';
+      let timedOut = false;
       child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
       child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       const timer = setTimeout(() => {
+        timedOut = true;
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
-        reject(new Error(`Planner timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       child.on('close', (code) => {
         clearTimeout(timer);
+        if (timedOut) {
+          reject(new Error(`Planner timed out after ${timeoutMs}ms`));
+          return;
+        }
         if (code === 0) {
           const trimmed = stdout.trim();
           if (trimmed) {

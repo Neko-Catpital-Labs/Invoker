@@ -23,6 +23,7 @@ export function buildAssistantPrompt(question: string, ctx: WorkflowContext): st
     "Answer ONLY from this workflow's planning conversation and task transcripts below.",
     'If the answer is not present in this context, say you do not know — never guess or use outside knowledge.',
     SLACK_DIRECT_ANSWER_GUIDANCE,
+    'For overall-status questions such as "how are we doing", list every task with status=running using its task id and status. If none are running, say so.',
     '',
     '=== Planning conversation ===',
   ];
