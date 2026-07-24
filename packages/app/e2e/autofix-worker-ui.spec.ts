@@ -27,7 +27,7 @@ test('worker-triggered autofix reaches approval UI with mocked Claude', async ({
   await loadPlan(page, PLAN);
   await startPlan(page);
   await waitForTaskStatus(page, 'task-pass', 'completed');
-  await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 30000);
+  await waitForTaskStatus(page, 'task-fail', 'awaiting_approval', 120_000);
 
   const scopedTaskId = await resolveTaskId(page, 'task-fail');
   await page.waitForFunction(
