@@ -211,30 +211,6 @@ function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryP
   return true;
 }
 
-function candidateFromWakeup(wakeup: RecoveryWorkerWakeupHint): AutoFixRecoveryCandidate | undefined {
-  if (!wakeup.taskId || wakeup.taskStateVersion == null) return undefined;
-  return {
-    taskId: wakeup.taskId,
-    workflowId: wakeup.workflowId,
-    generation: wakeup.generation,
-    taskStateVersion: wakeup.taskStateVersion,
-    attemptId: wakeup.attemptId,
-    source: 'wakeup',
-  };
-}
-
-function dedupeCandidates(candidates: AutoFixRecoveryCandidate[]): AutoFixRecoveryCandidate[] {
-  const seen = new Set<string>();
-  const deduped: AutoFixRecoveryCandidate[] = [];
-  for (const candidate of candidates) {
-    const key = `${candidate.taskId}:${candidate.generation}:${candidate.taskStateVersion}:${candidate.attemptId ?? ''}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(candidate);
-  }
-  return deduped;
-}
-
 function loadLatestTask(
   candidate: AutoFixRecoveryCandidate,
   options: AutoFixRecoveryPolicyOptions,
@@ -488,13 +464,10 @@ export function collectValidatedAutoFixRecoveryCandidates(
 export function createAutoFixRecoveryTick(options: AutoFixRecoveryPolicyOptions): WorkerTick {
   return async (ctx) => {
     ctx.signal?.throwIfAborted();
-    const wakeups = options.drainWakeupHints?.() ?? [];
-    const wakeupCandidates = wakeups.map(candidateFromWakeup).filter((c): c is AutoFixRecoveryCandidate => Boolean(c));
-    const candidates = dedupeCandidates(
-      wakeupCandidates.length > 0 && ctx.reason === 'wake'
-        ? wakeupCandidates
-        : listAutoFixRecoveryScanCandidates(options),
-    );
+    // Drain wake hints (coalesce only). Discover work from a fresh scan —
+    // wake snapshots go stale across bare-retry generation bumps.
+    options.drainWakeupHints?.();
+    const candidates = listAutoFixRecoveryScanCandidates(options);
     const submittedThisTick = new Set<string>();
 
     for (const candidate of collectValidatedAutoFixRecoveryCandidates(options, candidates)) {

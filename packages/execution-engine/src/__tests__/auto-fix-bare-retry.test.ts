@@ -213,6 +213,48 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
     expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:fix-with-agent');
   });
 
+  it('escalates on wake even when drained hints only carry the pre-retry generation', async () => {
+    const harness = makeHarness();
+    const tick = createAutoFixRecoveryTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      getAutoFixAgent: () => 'codex',
+      drainWakeupHints: () => [{
+        eventKey: 'stale-failure',
+        eventKind: 'task.failed',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/build',
+        taskStateVersion: 7,
+        generation: 2,
+        attemptId: 'attempt-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        reason: 'task_failure',
+        authoritative: false,
+      }],
+    });
+
+    await tick({ reason: 'poll' } as never);
+    expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:restart-task');
+    harness.submit.mockClear();
+
+    harness.tasks.set('wf-1/build', makeFailedTask({
+      execution: {
+        generation: 3,
+        selectedAttemptId: 'attempt-2',
+        branch: 'feature/build',
+        error: 'pnpm build failed with exit code 1',
+      },
+      taskStateVersion: 8,
+    }));
+
+    await tick({ reason: 'wake' } as never);
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:fix-with-agent');
+  });
+
   it('records a recovery.worker.submit audit event for the bare retry', async () => {
     const harness = makeHarness();
     const tick = createAutoFixRecoveryTick({

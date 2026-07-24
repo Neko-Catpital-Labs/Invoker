@@ -370,7 +370,7 @@ describe('auto-fix recovery candidate validation', () => {
     expect(harness.submit).toHaveBeenCalledTimes(1);
   });
 
-  it('skips stale generation wakeups without submitting a command', async () => {
+  it('still scans and submits when a wake hint is stale after bare-retry generation bump', async () => {
     const task = makeTask({ execution: { error: 'boom', generation: 2, selectedAttemptId: 'attempt-2' } });
     const wakeup = {
       eventKey: 'event-old',
@@ -393,15 +393,13 @@ describe('auto-fix recovery candidate validation', () => {
       tickNumber: 1,
     });
 
-    expect(harness.submit).not.toHaveBeenCalled();
-    expect(harness.logEvent).toHaveBeenCalledWith(
-      'wf-1/task-1',
-      'debug.auto-fix',
-      expect.objectContaining({
-        phase: 'worker-autofix-skip',
-        reason: 'stale-generation',
-        latestGeneration: 2,
-      }),
+    // Stale wake hints must not suppress the authoritative failed-task scan.
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.submit).toHaveBeenCalledWith(
+      'wf-1',
+      'normal',
+      'invoker:restart-task',
+      ['wf-1/task-1'],
     );
   });
 });
