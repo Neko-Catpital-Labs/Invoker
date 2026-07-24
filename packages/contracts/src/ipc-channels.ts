@@ -130,7 +130,7 @@ export interface AgentSessionData {
 export interface ExternalGatePolicyUpdate {
   workflowId: string;
   taskId?: string;
-  gatePolicy: 'completed' | 'review_ready';
+  gatePolicy: 'completed' | 'review_ready' | 'ci_failed';
 }
 
 export interface TaskEvent {

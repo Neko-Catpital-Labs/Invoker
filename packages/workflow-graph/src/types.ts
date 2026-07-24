@@ -89,13 +89,15 @@ export interface MergeTaskConfig extends BaseTaskConfig {
 
 export type TaskConfig = WorktreeTaskConfig | DockerTaskConfig | SshTaskConfig | MergeTaskConfig;
 
+export type ExternalGatePolicy = 'completed' | 'review_ready' | 'ci_failed';
+
 export interface ExternalDependency {
   readonly workflowId: string;
   /** Optional task selector within the external workflow. Omit to depend on that workflow's merge gate. */
   readonly taskId?: string;
   readonly requiredStatus: 'completed';
-  /** review_ready (default): merge gate review_ready/awaiting_approval/completed count as satisfied. completed: strict — only 'completed' satisfies. */
-  readonly gatePolicy?: 'completed' | 'review_ready';
+  /** review_ready/ci_failed: merge gate review_ready/awaiting_approval/completed count as satisfied. completed: strict. */
+  readonly gatePolicy?: ExternalGatePolicy;
 }
 
 export interface ExternalDependencyChange {
@@ -120,7 +122,7 @@ export interface DetachedExternalDependency {
   /** Optional task selector within the upstream workflow, if the removed dependency had one. */
   readonly taskId?: string;
   readonly requiredStatus: 'completed';
-  readonly gatePolicy?: 'completed' | 'review_ready';
+  readonly gatePolicy?: ExternalGatePolicy;
   /** When the detach removed this dependency. */
   readonly detachedAt: string;
 }
