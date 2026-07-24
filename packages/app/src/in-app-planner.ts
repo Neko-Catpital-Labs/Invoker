@@ -640,16 +640,22 @@ export async function submitPlanningChatDraft(
     return session.pendingSubmit;
   }
 
-  const planText = session.draftPlanText;
-  if (!planText) {
-    return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
-  }
-
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
     try {
       const { summarizePlanText } = await loadPlannerSurfaces();
-      if (!summarizePlanText(planText)) {
+      const planText = session.draftPlanText ?? getConversationDraftedPlan(session.conversation);
+      if (!planText) {
+        return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
+      }
+      const summary = summarizePlanText(planText);
+      if (!summary) {
         return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
+      }
+      if (!session.draftPlanText) {
+        session.draftPlanText = planText;
+        session.draftPlanSummary = summary;
+        session.status = 'draft_ready';
+        persistPlanningSession(session, deps.planningSessionStore, false);
       }
 
       const loaded = await deps.loadGeneratedPlan(planText);
@@ -661,8 +667,8 @@ export async function submitPlanningChatDraft(
         session,
         'system',
         loaded.workflowCount && loaded.workflowCount > 1
-          ? `Plan "${loaded.planName}" submitted as ${loaded.workflowCount} stacked workflows. Review them, then use Start ready work.`
-          : `Plan "${loaded.planName}" submitted to Invoker. Review it, then use Start ready work.`,
+          ? `Plan "${loaded.planName}" submitted as ${loaded.workflowCount} stacked workflows.`
+          : `Plan "${loaded.planName}" submitted to Invoker.`,
         'success',
       );
       persistPlanningSession(session, deps.planningSessionStore, false);
