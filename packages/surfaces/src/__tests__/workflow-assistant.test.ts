@@ -47,6 +47,13 @@ describe('buildAssistantPrompt', () => {
     expect(prompt).toContain('Answer ONLY from');
   });
 
+  it('directs overall-status questions to list running tasks', () => {
+    const prompt = buildAssistantPrompt('how are we doing?', ctx);
+
+    expect(prompt).toContain('list every task with status=running');
+    expect(prompt).toContain('If none are running, say so.');
+  });
+
   it('asks workflow question answers to be short ELI5 Slack prose except for clearly technical questions', () => {
     const prompt = buildAssistantPrompt('what changed?', ctx);
     expect(prompt).toContain('ELI5 Slack prose');

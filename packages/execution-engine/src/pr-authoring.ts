@@ -1,12 +1,13 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import { buildAgentExitFailureDetail, cleanElectronEnv, killProcessGroup, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { materializeLocalAgentPrompt } from './agent-prompt-transport.js';
 
 export interface MakePrStackArtifactOutput {
   readonly id: string;
@@ -82,14 +83,7 @@ const REVIEW_STACK_METADATA_SECTIONS = [
   '## Slice Rationale',
 ] as const;
 const DISCOURAGED_HEADINGS = ['## Testing', '## Notes'] as const;
-const DEFAULT_MAX_INLINE_PROMPT_BYTES = 64 * 1024;
 const DEFAULT_PR_AUTHORING_TIMEOUT_MS = 20 * 60 * 1000;
-const MAX_INLINE_PROMPT_BYTES = (() => {
-  const raw = process.env.INVOKER_MAX_INLINE_AGENT_PROMPT_BYTES;
-  if (!raw) return DEFAULT_MAX_INLINE_PROMPT_BYTES;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_INLINE_PROMPT_BYTES;
-})();
 
 function getPrAuthoringTimeoutMs(): number {
   const raw = process.env.INVOKER_PR_AUTHORING_TIMEOUT_MS?.trim();
@@ -257,37 +251,6 @@ export function validateReviewStackPrBody(body: string): string[] {
   }
 
   return errors;
-}
-
-function promptByteLength(prompt: string): number {
-  return Buffer.byteLength(prompt, 'utf8');
-}
-
-function buildPromptFileBootstrap(promptPath: string): string {
-  return [
-    `The full task instructions are in this file: ${promptPath}`,
-    'Read the file completely, then execute those instructions in this workspace.',
-    'Do not ask for the file contents.',
-  ].join('\n');
-}
-
-function materializeLocalPrompt(prompt: string): { effectivePrompt: string; cleanup: () => void } {
-  if (promptByteLength(prompt) <= MAX_INLINE_PROMPT_BYTES) {
-    return { effectivePrompt: prompt, cleanup: () => {} };
-  }
-  const dir = mkdtempSync(join(tmpdir(), 'invoker-pr-author-prompt-'));
-  const promptPath = join(dir, 'prompt.md');
-  writeFileSync(promptPath, prompt, 'utf8');
-  return {
-    effectivePrompt: buildPromptFileBootstrap(promptPath),
-    cleanup: () => {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        /* best effort */
-      }
-    },
-  };
 }
 
 function extractAssistantBody(driver: SessionDriver | undefined, sessionId: string, fallback: string): string {
@@ -727,7 +690,7 @@ export function spawnAgentPrAuthorViaRegistry(
   agent: ExecutionAgent,
   driver?: SessionDriver,
 ): Promise<{ body: string; stdout: string; sessionId: string }> {
-  const promptTransport = materializeLocalPrompt(prompt);
+  const promptTransport = materializeLocalAgentPrompt(prompt, 'invoker-pr-author-prompt-');
   const spec = agent.buildCommand(promptTransport.effectivePrompt);
   const sessionId = spec.sessionId ?? randomUUID();
   const cmd = resolveExecutableOnCurrentPath(spec.cmd) ?? spec.cmd;
