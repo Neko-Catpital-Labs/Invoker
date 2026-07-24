@@ -325,10 +325,13 @@ describe('planning chat', () => {
     expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN_REPLY);
   });
 
-  it('keeps unauthorized YAML from becoming draft-ready or submittable', async () => {
+  it('keeps unauthorized YAML from becoming draft-ready until explicit submit promotes it', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
-    const loadGeneratedPlan = vi.fn();
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    } satisfies LoadedGeneratedPlan);
 
     const result = await sendPlanningChatMessage({
       message: 'What would this involve?',
@@ -354,11 +357,11 @@ describe('planning chat', () => {
     }, {
       sessions,
       loadGeneratedPlan,
-    })).resolves.toMatchObject({ ok: false });
-    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+    })).resolves.toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
+    expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
   });
 
-  it('promotes a plan written before an intervening summary-only turn when the user authorizes drafting', async () => {
+  it('promotes a plan written before an intervening summary-only turn when the user submits it', async () => {
     const workingDir = mkdtempSync(join(tmpdir(), 'in-app-draft-'));
     try {
       const sessions = createInAppPlanningChatSessions();
@@ -382,7 +385,6 @@ describe('planning chat', () => {
           writeFileSync(draftPath, VALID_PLAN_TEXT, 'utf8');
           return `Plan written.${PLAN_SUBMIT_HINT}`;
         })
-        .mockResolvedValueOnce('Plan summary.')
         .mockResolvedValueOnce('Plan summary.');
 
       const draftedBeforeAuthorization = await sendPlanningChatMessage({
@@ -409,23 +411,7 @@ describe('planning chat', () => {
         workingDir,
       });
 
-      const result = await sendPlanningChatMessage({
-        sessionId: session.id,
-        message: 'draft it',
-      }, {
-        config: {},
-        loadGeneratedPlan: vi.fn(),
-        sessions,
-        planningCommandBuilder,
-        workingDir,
-      });
-
-      expect(result).toMatchObject({
-        ok: true,
-        draftPlanAvailable: true,
-        draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
-      });
-      expect(sessions.get(session.id)?.draftPlanText).toContain('name: Mock Plan');
+      expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
 
       const loadGeneratedPlan = vi.fn().mockResolvedValue({
         planName: 'Mock Plan',
@@ -436,6 +422,7 @@ describe('planning chat', () => {
         loadGeneratedPlan,
       })).resolves.toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
       expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+      expect(sessions.get(session.id)?.draftPlanText).toContain('name: Mock Plan');
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }
@@ -742,7 +729,7 @@ tasks:
       workflowCount: 2,
     });
     expect(sessions.get(sent.sessionId)?.messages.at(-1)?.text).toBe(
-      'Plan "Workers Surface" submitted as 2 stacked workflows. Review them, then use Start ready work.',
+      'Plan "Workers Surface" submitted as 2 stacked workflows.',
     );
   });
 
@@ -838,7 +825,7 @@ tasks:
     }
   });
 
-  it('does not submit hidden planner context without approved session draft text', async () => {
+  it('promotes hidden planner context when the user explicitly submits it', async () => {
     const sessions = createInAppPlanningChatSessions();
     const conversation = new PlanConversation({}) as PlanConversation & { getDraftedPlan: () => string };
     conversation.getDraftedPlan = () => VALID_PLAN_TEXT;
@@ -853,15 +840,18 @@ tasks:
       updatedAt: '2026-07-07T00:00:00.000Z',
       nextMessageId: 1,
     });
-    const loadGeneratedPlan = vi.fn();
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    } satisfies LoadedGeneratedPlan);
 
     const result = await submitPlanningChatDraft({ sessionId: 'hidden-yaml' }, {
       sessions,
       loadGeneratedPlan,
     });
 
-    expect(result).toMatchObject({ ok: false });
-    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
+    expect(loadGeneratedPlan).toHaveBeenCalledWith(VALID_PLAN_TEXT);
   });
 
   it('restores draft-ready sessions and submits from persisted approved draft text', async () => {
