@@ -6,3 +6,4 @@ export * from './conversation-repository.js';
 export * from './slack-session-repository.js';
 export * from './sqlite-task-repository.js';
 export * from './workflow-channel-repository.js';
+export * from './sync-journal.js';
