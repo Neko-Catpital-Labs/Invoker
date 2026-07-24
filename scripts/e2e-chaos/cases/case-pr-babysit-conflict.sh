@@ -206,24 +206,30 @@ touch "$MARKER_ROOT/pr-ci-failed"
 
 CI_DECIDED=0
 for _ in $(seq 1 120); do
-  DECISIONS_JSON="$(invoker_e2e_run_headless query worker-decisions --workflow "$WF_ID" --output json 2>/dev/null || true)"
-  if python3 - "$WF_ID" "$MERGE_ID" "$DECISIONS_JSON" <<'PY'
+  # worker-actions (not worker-decisions) because its JSON serializes the raw
+  # row payload, which carries the submitted intent channel. The owner holds
+  # the sqlite DB with locking_mode=EXCLUSIVE, so the intent row itself is
+  # unreadable from this process while the owner lives.
+  ACTIONS_JSON="$(invoker_e2e_run_headless query worker-actions --workflow "$WF_ID" --output json 2>/dev/null || true)"
+  if python3 - "$WF_ID" "$MERGE_ID" "$ACTIONS_JSON" <<'PY'
 import json
 import sys
 
-workflow_id, task_id, decisions_json = sys.argv[1:4]
+workflow_id, task_id, actions_json = sys.argv[1:4]
 try:
-    decisions = json.loads(decisions_json)
+    actions = json.loads(actions_json)
 except json.JSONDecodeError:
     raise SystemExit(1)
 
-if not isinstance(decisions, list):
+if not isinstance(actions, list):
     raise SystemExit(1)
 
-for action in decisions:
+for action in actions:
     if not isinstance(action, dict):
         continue
-    if action.get("decision") != "act":
+    # Raw rows carry no decision field; skipped status is the 'skip' decision
+    # class, everything else is 'act'.
+    if action.get("status") == "skipped":
         continue
     if action.get("workflowId") != workflow_id:
         continue
@@ -233,7 +239,15 @@ for action in decisions:
         continue
     if action.get("actionType") != "fix-ci-failure":
         continue
-    if action.get("intentId"):
+    if not action.get("intentId"):
+        continue
+    payload = action.get("payload")
+    if not isinstance(payload, dict):
+        continue
+    # Require the invoker:fix-with-agent repair channel recorded with the
+    # submitted intent, so a no-op or unrelated decision cannot satisfy the
+    # scenario.
+    if payload.get("channel") == "invoker:fix-with-agent":
         raise SystemExit(0)
 
 raise SystemExit(1)
@@ -244,8 +258,8 @@ PY
   fi
   sleep 3
 done
-[ "$CI_DECIDED" -eq 1 ] || fail "no ci-failure worker decision after CI failure"
-echo "==> pr-babysit: ci-failure worker recorded a repair decision"
+[ "$CI_DECIDED" -eq 1 ] || fail "no ci-failure invoker:fix-with-agent repair decision after CI failure"
+echo "==> pr-babysit: ci-failure worker recorded an invoker:fix-with-agent repair decision"
 
 # The repair intent is deliberately in flight; let the PR read green again so
 # the fix path can finish, then wait for open intents to drain before the
