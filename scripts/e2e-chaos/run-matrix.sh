@@ -58,6 +58,7 @@ owner-no-autofix-trigger|gui-owner|single|task_failed|no_autofix_enqueue|off|non
 owner-approve-delegated|gui-owner|single|awaiting_approval|approve|off|delegated|gui-owner-delegation|bash __ROOT__/scripts/e2e-chaos/cases/case-owner-approve-delegated.sh
 owner-reject-delegated|gui-owner|single|awaiting_approval|reject|off|delegated|gui-owner-delegation|bash __ROOT__/scripts/e2e-chaos/cases/case-owner-reject-delegated.sh
 stale-late-completion-both|gui-owner|sequential|stale_worker_response|recreate_and_retry_task|off|late_completion|late-completion-delta-flow|bash __ROOT__/scripts/repro/repro-stale-late-completion-after-reset.sh --mode=both --expect-fixed
+pr-babysit-conflict|gui-owner|single|merge_conflict+ci_failed|rebase_recreate+fix_intent|default|none|none|bash __ROOT__/scripts/e2e-chaos/cases/case-pr-babysit-conflict.sh
 EOF
 }
 
