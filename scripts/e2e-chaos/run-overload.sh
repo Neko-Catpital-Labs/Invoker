@@ -456,15 +456,48 @@ ov_submit_workflow() {
 ov_wait_queries_healthy() {
   local max_secs="${1:-60}"
   local i=0
+  local workflows_rc tasks_rc
+  local workflows_err tasks_err
+  # After owner teardown, force standalone queries so they do not keep retrying a
+  # dead IPC socket / WAL-bound owner. Preserve the caller's prior setting.
+  local prev_standalone="${INVOKER_HEADLESS_STANDALONE-__unset__}"
+  export INVOKER_HEADLESS_STANDALONE=1
+  workflows_err="$(mktemp "${TMPDIR:-/tmp}/invoker-ov-workflows.XXXXXX")"
+  tasks_err="$(mktemp "${TMPDIR:-/tmp}/invoker-ov-tasks.XXXXXX")"
   while [ "$i" -lt "$max_secs" ]; do
-    if invoker_e2e_run_headless query workflows --output label >/dev/null 2>&1 && \
-       invoker_e2e_run_headless query tasks --output jsonl >/dev/null 2>&1; then
+    workflows_rc=0
+    tasks_rc=0
+    if ! invoker_e2e_run_headless query workflows --output label >/dev/null 2>"$workflows_err"; then
+      workflows_rc=$?
+    fi
+    if [ "$workflows_rc" -eq 0 ]; then
+      if ! invoker_e2e_run_headless query tasks --output jsonl >/dev/null 2>"$tasks_err"; then
+        tasks_rc=$?
+      fi
+    fi
+    if [ "$workflows_rc" -eq 0 ] && [ "$tasks_rc" -eq 0 ]; then
+      rm -f "$workflows_err" "$tasks_err"
+      if [ "$prev_standalone" = "__unset__" ]; then
+        unset INVOKER_HEADLESS_STANDALONE
+      else
+        export INVOKER_HEADLESS_STANDALONE="$prev_standalone"
+      fi
       return 0
     fi
     i=$((i + 1))
     sleep 1
   done
   echo "FAIL: query commands did not recover within ${max_secs}s" >&2
+  echo "==> last query workflows stderr (rc=${workflows_rc:-?}):" >&2
+  cat "$workflows_err" >&2 || true
+  echo "==> last query tasks stderr (rc=${tasks_rc:-?}):" >&2
+  cat "$tasks_err" >&2 || true
+  rm -f "$workflows_err" "$tasks_err"
+  if [ "$prev_standalone" = "__unset__" ]; then
+    unset INVOKER_HEADLESS_STANDALONE
+  else
+    export INVOKER_HEADLESS_STANDALONE="$prev_standalone"
+  fi
   return 1
 }
 
@@ -1818,7 +1851,9 @@ run_same_workflow_tracked_fix_vs_recreate() {
   ov_cancel_all_workflows
   sleep 2
   ov_stop_owner
-  ov_wait_queries_healthy 45
+  # Hang-tier same-workflow recreate storms can leave WAL/IPC settling longer than
+  # the generic 45s query recover budget used by lighter overload scenarios.
+  ov_wait_queries_healthy 120
   invoker_e2e_assert_no_stuck_mutation_intents 120
   invoker_e2e_assert_no_owned_headless_processes 1
 }
