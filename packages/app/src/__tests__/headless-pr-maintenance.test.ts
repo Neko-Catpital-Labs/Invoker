@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
   PR_CI_FAILURE_SCAN_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
 } from '@invoker/execution-engine';
 import { runHeadless } from '../headless.js';
@@ -100,6 +101,15 @@ describe('headless worker PR-maintenance', () => {
     expect(stdout).toContain(`${PR_CI_FAILURE_SCAN_WORKER_KIND} worker scan completed.`);
   });
 
+  it('runs the pr-admin-bypass-land worker one-shot with the threaded config', async () => {
+    writeCronScript(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh', 'land.marker');
+
+    await runHeadless(['worker', PR_ADMIN_BYPASS_LAND_WORKER_KIND], makeWorkerDeps(repoRoot, 'land-token') as never);
+
+    expect(readFileSync(join(repoRoot, 'land.marker'), 'utf8')).toBe('land-token');
+    expect(stdout).toContain(`${PR_ADMIN_BYPASS_LAND_WORKER_KIND} worker scan completed.`);
+  });
+
 
   it('lists all PR-maintenance worker kinds from the manual entrypoint', async () => {
     await runHeadless(['worker', 'list'], { invokerConfig: {} } as never);
@@ -108,5 +118,6 @@ describe('headless worker PR-maintenance', () => {
     expect(stdout).toContain(CODERABBIT_ADDRESS_WORKER_KIND);
     expect(stdout).toContain(PR_CONFLICT_REBASE_WORKER_KIND);
     expect(stdout).toContain(PR_CI_FAILURE_SCAN_WORKER_KIND);
+    expect(stdout).toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
   });
 });
