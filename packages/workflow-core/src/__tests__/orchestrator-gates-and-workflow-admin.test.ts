@@ -2806,6 +2806,41 @@ describe('Orchestrator', () => {
       expect(persistence.getTaskEntry(leafId)!.task.config.externalDependencies).toBeUndefined();
     });
 
+    it('accepts and persists ci_failed gate policy on workflow metadata', () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq-ci-failed-persist',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'gate-downstream-ci-failed-persist',
+        tasks: [
+          {
+            id: 'leaf',
+            description: 'leaf waits on upstream completion gate',
+            externalDependencies: [{ workflowId: prereqWfId, gatePolicy: 'completed' }],
+          },
+        ],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+      const leafWfId = leafId.split('/')[0]!;
+
+      orchestrator.setTaskExternalGatePolicies(leafId, [
+        { workflowId: prereqWfId, gatePolicy: 'ci_failed' },
+      ]);
+
+      const inMemoryDeps = persistence.loadWorkflow(leafWfId)!.externalDependencies!;
+      expect(inMemoryDeps).toEqual([
+        { workflowId: prereqWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'ci_failed' },
+      ]);
+      expect(JSON.parse(JSON.stringify(inMemoryDeps))).toEqual([
+        { workflowId: prereqWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'ci_failed' },
+      ]);
+      expect(persistence.getTaskEntry(leafId)!.task.config.externalDependencies).toBeUndefined();
+    });
+
     it('transitions a previously gate-blocked task to runnable via the scheduling pass', () => {
       orchestrator.loadPlan({
         name: 'gate-prereq-unblock',
@@ -2862,6 +2897,70 @@ describe('Orchestrator', () => {
       persistence.updateTask(prereqMergeId, {
         status: 'review_ready',
         execution: { reviewUrl: 'https://example.invalid/pull/1', reviewStatus: 'Awaiting review' },
+      });
+      persistence.updateTask(leafId, {
+        status: 'blocked',
+        execution: { blockedBy: `waiting on ${prereqMergeId} (running)` },
+      });
+      orchestrator.syncAllFromDb();
+
+      const started = orchestrator.autoStartExternallyUnblockedReadyTasks();
+
+      expect(started.map((t) => t.id)).toContain(leafId);
+      expect(orchestrator.getTask(leafId)!.status).toBe('running');
+      expect(orchestrator.getTask(leafId)!.execution.blockedBy).toBeUndefined();
+    });
+
+    it('keeps a ci_failed dependent pending while the upstream workflow is still running', () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq-ci-running',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+
+      orchestrator.loadPlan({
+        name: 'gate-downstream-ci-running',
+        externalDependencies: [
+          { workflowId: prereqWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'ci_failed' },
+        ],
+        tasks: [{ id: 'leaf', description: 'leaf waits for upstream repair trigger' }],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      const started = orchestrator.startExecution();
+
+      expect(started.map((t) => t.id)).toContain(prereqTaskId);
+      expect(started.map((t) => t.id)).not.toContain(leafId);
+      expect(orchestrator.getTask(prereqTaskId)!.status).toBe('running');
+      expect(orchestrator.getTask(leafId)!.status).toBe('pending');
+      const readiness = orchestrator.getTaskLaunchReadiness(leafId);
+      expect(readiness.ready).toBe(false);
+      expect(readiness.reason).toContain('waiting on');
+    });
+
+    it('transitions an already-blocked ci_failed dependent to runnable when the upstream gate is review_ready', () => {
+      orchestrator.loadPlan({
+        name: 'gate-prereq-ci-review-ready',
+        tasks: [{ id: 'verify', description: 'Prereq task' }],
+      });
+      const prereqTaskId = sid(orchestrator, 0, 'verify');
+      const prereqWfId = prereqTaskId.split('/')[0]!;
+      const prereqMergeId = `__merge__${prereqWfId}`;
+
+      orchestrator.loadPlan({
+        name: 'gate-downstream-blocked-ci-failed',
+        externalDependencies: [
+          { workflowId: prereqWfId, taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'ci_failed' },
+        ],
+        tasks: [{ id: 'leaf', description: 'leaf waits on upstream failed CI repair gate' }],
+      });
+      const leafId = sid(orchestrator, 1, 'leaf');
+
+      persistence.updateTask(prereqTaskId, { status: 'completed', execution: { completedAt: new Date() } });
+      persistence.updateTask(prereqMergeId, {
+        status: 'review_ready',
+        execution: { reviewUrl: 'https://example.invalid/pull/1', reviewStatus: 'CI failed' },
       });
       persistence.updateTask(leafId, {
         status: 'blocked',

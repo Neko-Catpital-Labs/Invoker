@@ -233,6 +233,39 @@ workflows:
     ]);
   });
 
+  it('parses ci_failed externalDependencies on stack and workflow levels', () => {
+    const yaml = `
+name: CI Repair Stack
+repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-stack
+    taskId: __merge__
+    gatePolicy: ci_failed
+workflows:
+  - name: Inherited Repair
+    tasks:
+      - id: inherited
+        description: Inherits stack dependency
+  - name: Workflow Repair
+    externalDependencies:
+      - workflowId: wf-workflow
+        taskId: __merge__
+        gatePolicy: ci_failed
+    tasks:
+      - id: workflow
+        description: Adds workflow dependency
+`;
+    const bundle = parsePlanSubmissionBundle(yaml);
+
+    expect(bundle.plans[0].externalDependencies).toEqual([
+      { workflowId: 'wf-stack', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'ci_failed' },
+    ]);
+    expect(bundle.plans[1].externalDependencies).toEqual([
+      { workflowId: 'wf-stack', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'ci_failed' },
+      { workflowId: 'wf-workflow', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'ci_failed' },
+    ]);
+  });
+
   it('rejects invalid stacked workflow bundles', () => {
     expect(() => parsePlanSubmissionBundle(`
 name: Empty Stack
@@ -369,6 +402,25 @@ tasks:
     ]);
   });
 
+  it('parses externalDependencies.gatePolicy ci_failed', () => {
+    const yaml = `
+name: External Dependency CI Failed
+repoUrl: git@github.com:test/repo.git
+externalDependencies:
+  - workflowId: wf-123
+    taskId: __merge__
+    gatePolicy: ci_failed
+tasks:
+  - id: gated
+    description: Start repair after upstream PR gate is parked
+    command: echo "go"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.externalDependencies).toEqual([
+      { workflowId: 'wf-123', taskId: '__merge__', requiredStatus: 'completed', gatePolicy: 'ci_failed' },
+    ]);
+  });
+
   it('parses top-level externalDependencies onto the workflow only', () => {
     const yaml = `
 name: Workflow Chain Step
@@ -430,7 +482,7 @@ tasks:
     command: echo "go"
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
-    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "completed" or "review_ready"');
+    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "completed", "review_ready", or "ci_failed"');
   });
 
   it('rejects invalid externalDependencies.requiredStatus', () => {
@@ -464,7 +516,7 @@ tasks:
     command: echo "go"
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
-    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "completed" or "review_ready"');
+    expect(() => parsePlan(yaml)).toThrow('"gatePolicy" must be "completed", "review_ready", or "ci_failed"');
   });
 
   it('rejects deprecated "approved" gatePolicy value', () => {

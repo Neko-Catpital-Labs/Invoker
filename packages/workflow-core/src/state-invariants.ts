@@ -15,6 +15,7 @@ export interface WorkflowPatchLike {
 const VALID_GATE_POLICIES: Record<string, true> = {
   completed: true,
   review_ready: true,
+  ci_failed: true,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -51,7 +52,7 @@ function assertDependencyConsistent(dep: unknown, path: string): asserts dep is 
     throw new Error(`${path}.requiredStatus must be completed`);
   }
   if (hasOwn(dep, 'gatePolicy') && dep.gatePolicy !== undefined && VALID_GATE_POLICIES[String(dep.gatePolicy)] !== true) {
-    throw new Error(`${path}.gatePolicy must be completed or review_ready`);
+    throw new Error(`${path}.gatePolicy must be completed, review_ready, or ci_failed`);
   }
 }
 

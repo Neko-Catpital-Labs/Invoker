@@ -83,7 +83,7 @@ type ParsedExternalDependency = {
   workflowId: string;
   taskId: string;
   requiredStatus: 'completed';
-  gatePolicy: 'completed' | 'review_ready';
+  gatePolicy: 'completed' | 'review_ready' | 'ci_failed';
 };
 
 function parseExternalDependencies(
@@ -101,18 +101,23 @@ function parseExternalDependencies(
     if (dep.requiredStatus !== undefined && dep.requiredStatus !== 'completed') {
       throw new PlanParseError(`${ownerLabel} externalDependencies[${depIndex}] "requiredStatus" must be "completed"`);
     }
-    if (dep.gatePolicy !== undefined && dep.gatePolicy !== 'completed' && dep.gatePolicy !== 'review_ready') {
+    if (
+      dep.gatePolicy !== undefined
+      && dep.gatePolicy !== 'completed'
+      && dep.gatePolicy !== 'review_ready'
+      && dep.gatePolicy !== 'ci_failed'
+    ) {
       if (dep.gatePolicy === 'approved') {
         throw new PlanParseError("gatePolicy value 'approved' is no longer supported. Use 'completed' instead.");
       }
-      throw new PlanParseError(`${ownerLabel} externalDependencies[${depIndex}] "gatePolicy" must be "completed" or "review_ready"`);
+      throw new PlanParseError(`${ownerLabel} externalDependencies[${depIndex}] "gatePolicy" must be "completed", "review_ready", or "ci_failed"`);
     }
     const taskId = dep.taskId?.trim() || '__merge__';
     return {
       workflowId: dep.workflowId,
       taskId,
       requiredStatus: 'completed',
-      gatePolicy: (dep.gatePolicy ?? (taskId === '__merge__' ? 'completed' : 'review_ready')) as 'completed' | 'review_ready',
+      gatePolicy: (dep.gatePolicy ?? (taskId === '__merge__' ? 'completed' : 'review_ready')) as 'completed' | 'review_ready' | 'ci_failed',
     };
   });
 }

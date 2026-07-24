@@ -1311,7 +1311,7 @@ function startHeadlessMode(): void {
           }
           case 'invoker:set-task-external-gate-policies': {
             const taskId = String(payload.args[0]);
-            const updates = payload.args[1] as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' }>;
+            const updates = payload.args[1] as Array<{ workflowId: string; taskId?: string; gatePolicy: 'completed' | 'review_ready' | 'ci_failed' }>;
             const envelope = makeEnvelope('set-gate-policies', 'ui', 'task', { taskId, updates });
             const result = await commandService.setTaskExternalGatePolicies(envelope);
             if (!result.ok) throw new Error(result.error.message);
