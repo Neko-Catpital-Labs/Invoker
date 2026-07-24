@@ -935,6 +935,45 @@ describe('lobby verb routing', () => {
     expect(say2).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('Invoker is back') }));
   });
 
+  it('refuses lobby controls from non-lobby channels while still accepting planning mentions', async () => {
+    const onRestartInvoker = vi.fn().mockResolvedValue(undefined);
+    const surface = lobbySurface(true, { onRestartInvoker });
+    await surface.start(async () => {});
+    const handlePlanningMention = vi.spyOn(surface as any, 'handlePlanningMention');
+
+    const sayRestart = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> restart', ts: 't-restart', user: 'U1', channel: 'COTHER' },
+      say: sayRestart,
+    });
+    expect(onRestartInvoker).not.toHaveBeenCalled();
+    expect(sayRestart).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('restart/submit/workflow controls only work in the lobby channel or DMs'),
+    }));
+
+    const sayOp = vi.fn().mockResolvedValue({ ts: 'b' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> recreate all', ts: 't-op', user: 'U1', channel: 'COTHER' },
+      say: sayOp,
+    });
+    expect(runWorkflowOp).not.toHaveBeenCalled();
+    expect(sayOp).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('restart/submit/workflow controls only work in the lobby channel or DMs'),
+    }));
+
+    handlePlanningMention.mockClear();
+    const sayPlan = vi.fn().mockResolvedValue({ ts: 'c' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> draft a plan for a health endpoint', ts: 't-plan', user: 'U1', channel: 'COTHER' },
+      say: sayPlan,
+    });
+    expect(handlePlanningMention).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'COTHER', ts: 't-plan' }),
+      sayPlan,
+      'COTHER',
+    );
+  });
+
   it('reports a restart failure when the relaunch throws', async () => {
     const onRestartInvoker = vi.fn().mockRejectedValue(new Error('no display'));
     const surface = lobbySurface(true, { onRestartInvoker });

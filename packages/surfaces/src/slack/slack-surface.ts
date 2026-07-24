@@ -981,17 +981,7 @@ export class SlackSurface implements Surface {
         return;
       }
 
-      const isLobbyOrDm = !channel || channel === this.lobbyChannelId || channel.startsWith('D');
-      if (!isLobbyOrDm) {
-        this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=non-lobby channel=${channel}`);
-        await say({
-          text: 'I only plan in the lobby channel (or DMs), and only run workflow controls in a mapped workflow channel. Mention me there instead.',
-          thread_ts: event.thread_ts ?? event.ts,
-        });
-        return;
-      }
-
-      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=lobby`);
+      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=planning`);
       await this.handlePlanningMention(event, say, channel ?? this.lobbyChannelId);
     });
   }
@@ -1045,7 +1035,7 @@ export class SlackSurface implements Surface {
     const routeRepoUrl = explicitRepoResolution.url ?? detectedRepoResolution.url ?? this.resolveRepoUrl().url;
 
     const threadTs = event.thread_ts ?? event.ts;
-    const requiresPlanningRepo = channel === this.lobbyChannelId && !!this.planningCommandBuilder;
+    const requiresPlanningRepo = !!this.planningCommandBuilder;
     const messageRepoUrl = requiresPlanningRepo && !parsed.repo
       ? extractRepoUrlFromMessage(event.text ?? '')
       : undefined;
@@ -1060,27 +1050,39 @@ export class SlackSurface implements Surface {
 
     // Deterministic verb commands respond instantly and take priority over agent sessions.
     const ctrl = parseLobbyControl(parsed.text);
-    if (ctrl?.kind === 'op') {
-      await this.handleLobbyOp(ctrl, threadTs, channel, say);
-      return;
-    }
-    if (ctrl?.kind === 'submit') {
-      await this.handleLobbySubmit(channel, threadTs, event.user ?? 'unknown', say);
-      return;
-    }
-    if (ctrl?.kind === 'restart') {
+    if (ctrl?.kind === 'op' || ctrl?.kind === 'submit' || ctrl?.kind === 'restart') {
+      if (!this.allowsLobbyControls(channel)) {
+        await this.rejectNonLobbyControl(threadTs, say);
+        return;
+      }
+      if (ctrl.kind === 'op') {
+        await this.handleLobbyOp(ctrl, threadTs, channel, say);
+        return;
+      }
+      if (ctrl.kind === 'submit') {
+        await this.handleLobbySubmit(channel, threadTs, event.user ?? 'unknown', say);
+        return;
+      }
       await this.handleLobbyRestart(threadTs, channel, say);
       return;
     }
 
     const localRequest = parseLocalRequest(parsed.text);
     if (localRequest?.kind === 'command') {
+      if (!this.allowsLobbyControls(channel)) {
+        await this.rejectNonLobbyControl(threadTs, say);
+        return;
+      }
       await this.handleLocalRequest(localRequest, preset, threadTs, say, channel, { userId: event.user, repoUrl: routeRepoUrl });
       return;
     }
 
     const workflowStatusQuery = parseWorkflowStatusQuery(localRequest?.kind === 'agent' ? localRequest.text : parsed.text);
     if (workflowStatusQuery?.intent === 'command') {
+      if (!this.allowsLobbyControls(channel)) {
+        await this.rejectNonLobbyControl(threadTs, say);
+        return;
+      }
       await this.handleLobbyOp({ kind: 'op', operation: workflowStatusQuery.operation, target: workflowStatusQuery.target }, threadTs, channel, say);
       return;
     }
@@ -1114,6 +1116,10 @@ export class SlackSurface implements Surface {
         this.log('slack', 'info', `[CLASSIFY] thread_ts=${threadTs} intent=${cls.intent}`);
         if (cls.intent === 'command') {
           await this.clearImmediateAck(channel, threadTs);
+          if (!this.allowsLobbyControls(channel)) {
+            await this.rejectNonLobbyControl(threadTs, say);
+            return;
+          }
           await this.proposeLobbyOp(cls, threadTs, channel, say);
           return;
         }
@@ -1441,10 +1447,30 @@ export class SlackSurface implements Surface {
   }
 
 
+  /** Lobby controls stay in the lobby channel or DMs; planning may run elsewhere. */
+  private allowsLobbyControls(channel: string | undefined): boolean {
+    if (!channel) return true;
+    return channel === this.lobbyChannelId || channel.startsWith('D');
+  }
+
+  private async rejectNonLobbyControl(threadTs: string, say: SayFn): Promise<void> {
+    await say({
+      text: 'I can plan here, but restart/submit/workflow controls only work in the lobby channel or DMs.',
+      thread_ts: threadTs,
+    });
+  }
+
   /** Resolve a staged action from a plain-text reply. Returns true if the reply was consumed. */
   private async resolveConfirm(threadTs: string, text: string, say: SayFn, channel?: string): Promise<boolean> {
     const pending = this.getPendingConfirm(threadTs);
     if (!pending) return false;
+    if (
+      (pending.kind === 'op' || pending.kind === 'restart' || pending.kind === 'submit')
+      && !this.allowsLobbyControls(channel)
+    ) {
+      await this.rejectNonLobbyControl(threadTs, say);
+      return true;
+    }
     if (isConfirmation(text)) {
       this.pendingConfirms.delete(threadTs);
       this.slackSessionRepo?.deletePendingConfirmation(threadTs);
@@ -2299,6 +2325,10 @@ ${text}`;
       const text = (msg.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
       if (text && (await this.resolveConfirm(msg.thread_ts, text, say, channel))) return;
       if (parseLobbyControl(text)?.kind === 'submit') {
+        if (!this.allowsLobbyControls(channel)) {
+          await this.rejectNonLobbyControl(msg.thread_ts, say);
+          return;
+        }
         await this.handleLobbySubmit(channel, msg.thread_ts, msg.user ?? 'unknown', say);
         return;
       }

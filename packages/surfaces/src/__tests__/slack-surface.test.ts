@@ -134,7 +134,7 @@ describe('SlackSurface', () => {
       });
 
       expect(log).toHaveBeenCalledWith('slack', 'info', expect.stringContaining('[MENTION_RECEIVED] instance=do1-proof event_ts=event-1'));
-      expect(log).toHaveBeenCalledWith('slack', 'info', expect.stringContaining('[MENTION_ROUTE] instance=do1-proof event_ts=event-1 route=non-lobby'));
+      expect(log).toHaveBeenCalledWith('slack', 'info', expect.stringContaining('[MENTION_ROUTE] instance=do1-proof event_ts=event-1 route=planning'));
     });
   });
 
