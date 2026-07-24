@@ -51,7 +51,7 @@ describe('DO1 Slack UX e2e — non-workflow mention routing', () => {
     if (surface) await surface.stop();
   });
 
-  it.fails('routes @mentions outside workflow channels to planning', async () => {
+  it('routes @mentions outside workflow channels to planning', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     const repo = new WorkflowChannelRepository(adapter);
     repo.save({
