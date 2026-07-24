@@ -28,7 +28,7 @@ import { createTaskDeltaStreamSequence } from '../task-delta-stream-sequence.js'
 import { WorkflowRollupProjection } from '../workflow-rollup-projection.js';
 import { buildWebInvokerDispatch } from './web-invoker-dispatch.js';
 import { registerExternalWorkersFromConfig } from '../external-worker-loader.js';
-import { AUTO_STARTED_OWNER_WORKER_KINDS, createLocalWorkerStatusSnapshot } from '../worker-control.js';
+import { autoStartedOwnerWorkerKindsForConfig, createLocalWorkerStatusSnapshot } from '../worker-control.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web-bridge-server.js';
 
 const DEFAULT_WEB_HOST = '127.0.0.1';
@@ -127,7 +127,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
         registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
       ),
       persistence: deps.persistence,
-      autoStartKinds: AUTO_STARTED_OWNER_WORKER_KINDS,
+      autoStartKinds: autoStartedOwnerWorkerKindsForConfig(deps.config),
     }),
     logger: deps.logger,
   });
