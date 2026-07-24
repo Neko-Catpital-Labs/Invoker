@@ -116,9 +116,9 @@ class PlanStackActions(unittest.TestCase):
     def test_pending_check_means_wait_do_nothing(self):
         self.assertEqual(self._plan(pr(checks={"build": check("pending")})), ())
 
-    def test_conflict_triggers_rebase_recreate(self):
+    def test_conflict_triggers_claude_repair(self):
         actions = self._plan(pr(merge_state_status="DIRTY"))
-        self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_recreate", 1))
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("repair_conflict", 1))
 
     def test_failed_check_triggers_repair(self):
         actions = self._plan(pr(checks={"build": check("failure")}))
@@ -137,6 +137,11 @@ class PlanStackActions(unittest.TestCase):
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued"))
         actions = self._plan(snapshot)
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-after-dequeue"))
+
+    def test_clean_bottom_queues_without_prior_dequeue(self):
+        snapshot = pr(labels=frozenset({"admin-bypass"}))
+        actions = self._plan(snapshot)
+        self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
 
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
