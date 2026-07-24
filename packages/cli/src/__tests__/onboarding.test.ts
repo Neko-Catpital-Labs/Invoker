@@ -18,8 +18,10 @@ import {
   runSetup,
   setExperimentalPlannerFlag,
   upsertEnvLines,
+  validateGitHubAuth,
   validateSlackCredentials,
   type CliConfigState,
+  type RunSetupOptions,
 } from '../onboarding.js';
 
 describe('generateSlackManifest', () => {
@@ -126,6 +128,52 @@ describe('buildDoctorChecks', () => {
     expect(checks.find((c) => c.id === 'default-preset')?.status).toBe('ok');
   });
 });
+
+describe('validateGitHubAuth', () => {
+  it('passes when gh auth status succeeds', async () => {
+    const check = await validateGitHubAuth(async (command, args) => {
+      expect(command).toBe('gh');
+      expect(args).toEqual(['auth', 'status']);
+      return { status: 0, stdout: 'github.com\n  Logged in\n', stderr: '' };
+    });
+
+    expect(check).toMatchObject({ id: 'gh-auth', name: 'GitHub auth', status: 'ok' });
+    expect(check.detail).toContain('github.com');
+  });
+
+  it('fails with login remediation when gh auth status fails', async () => {
+    const check = await validateGitHubAuth(async () => ({
+      status: 1,
+      stdout: '',
+      stderr: 'You are not logged into any GitHub hosts\n',
+    }));
+
+    expect(check.status).toBe('error');
+    expect(check.detail).toContain('not logged');
+    expect(check.remediation).toContain('gh auth login');
+  });
+
+  it('warns when gh is missing instead of crashing', async () => {
+    const check = await validateGitHubAuth(async () => ({
+      status: 127,
+      stdout: '',
+      stderr: 'gh: command not found\n',
+    }));
+
+    expect(check.status).toBe('warn');
+    expect(check.detail).toContain('Skipped');
+    expect(check.remediation).toContain('Install GitHub CLI');
+  });
+});
+
+function passingSetupOptions(overrides: RunSetupOptions = {}): RunSetupOptions {
+  return {
+    isInstalled: () => true,
+    commandRunner: async () => ({ status: 0, stdout: 'github.com\n', stderr: '' }),
+    ...overrides,
+  };
+}
+
 describe('runSetup', () => {
   it('installs the public planner MCP by default without enabling planner behavior', async () => {
     const home = mkdtempSync(join(tmpdir(), 'invoker-setup-home-'));
@@ -141,7 +189,7 @@ describe('runSetup', () => {
       const code = await runSetup([], {
         print: (line) => lines.push(line),
         prompt: async () => 'n',
-      });
+      }, passingSetupOptions());
 
       const mcpPath = join(home, '.invoker', 'mcp.json');
       const invokerConfigPath = join(home, '.invoker', 'config.json');
@@ -149,13 +197,14 @@ describe('runSetup', () => {
       expect(lines.join('\n')).toContain(`Experimental planner MCP installed into ${mcpPath}`);
       expect(lines.join('\n')).toContain('experimentalPlanner flag: off');
       expect(lines.join('\n')).toContain('Run `invoker-cli setup slack` later');
+      expect(lines.at(-1)).toBe("You're ready.");
       expect(JSON.parse(readFileSync(mcpPath, 'utf8')).mcpServers['experimental-planner']).toEqual({
         type: 'stdio',
         command: 'uvx',
         args: ['--from', DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES.drafterMcp.commandName],
       });
       expect(existsSync(invokerConfigPath)).toBe(false);
-      expect(typeof code).toBe('number');
+      expect(code).toBe(0);
     } finally {
       restoreEnv('HOME', saved.HOME);
       restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.target);
@@ -191,7 +240,7 @@ describe('runSetup', () => {
           prompts.push(question);
           return '';
         },
-      });
+      }, passingSetupOptions());
 
       expect(code).toBe(0);
       expect(prompts).toEqual([]);
@@ -202,6 +251,68 @@ describe('runSetup', () => {
       restoreEnv('SLACK_APP_TOKEN', saved.app);
       restoreEnv('SLACK_SIGNING_SECRET', saved.sign);
       restoreEnv('SLACK_CHANNEL_ID', saved.chan);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('summarizes the first failing setup check', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-summary-'));
+    const saved = {
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const lines: string[] = [];
+    try {
+      process.env.INVOKER_REPO_CONFIG_PATH = join(home, 'config.json');
+      process.env.INVOKER_MCP_CONFIG_PATH = join(home, 'mcp.json');
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, passingSetupOptions({
+        isInstalled: (command) => command !== 'git',
+        commandRunner: async () => ({
+          status: 1,
+          stdout: '',
+          stderr: 'You are not logged into any GitHub hosts\n',
+        }),
+      }));
+
+      expect(code).toBe(1);
+      expect(lines.at(-1)).toBe('Fix this first: Git: brew install git (or apt-get install git)');
+    } finally {
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('returns exit code 1 when the smoke plan validation fails', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-smoke-failure-'));
+    const saved = {
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const lines: string[] = [];
+    try {
+      process.env.INVOKER_REPO_CONFIG_PATH = join(home, 'config.json');
+      process.env.INVOKER_MCP_CONFIG_PATH = join(home, 'mcp.json');
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, passingSetupOptions({
+        smokePlanValidator: async () => {
+          throw new Error('parser unavailable');
+        },
+      }));
+
+      expect(code).toBe(1);
+      expect(lines.join('\n')).toContain('smoke: plan validation');
+      expect(lines.at(-1)).toContain('Fix this first: smoke: plan validation');
+    } finally {
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
       rmSync(home, { recursive: true, force: true });
     }
   });
@@ -472,7 +583,7 @@ describe('runSetup in a non-interactive shell', () => {
       prompt: async () => { throw new Error('should not prompt under --yes'); },
     });
 
-    const code = await runSetup(['--yes'], io);
+    const code = await runSetup(['--yes'], io, passingSetupOptions());
 
     expect(code).not.toBe(1);
     expect(lines.join('\n')).toContain('Enable the experimental planner now?');
@@ -483,7 +594,7 @@ describe('runSetup in a non-interactive shell', () => {
       prompt: async () => { throw new Error('should not prompt under --yes'); },
     });
 
-    await runSetup(['--yes'], io);
+    await runSetup(['--yes'], io, passingSetupOptions());
 
     const output = lines.join('\n');
     expect(output).not.toContain('Bot User OAuth Token');
@@ -495,7 +606,7 @@ describe('runSetup in a non-interactive shell', () => {
       prompt: async () => { throw new Error('should not prompt under --yes'); },
     });
 
-    await runSetup(['--yes'], io);
+    await runSetup(['--yes'], io, passingSetupOptions());
 
     expect(existsSync(join(home, 'mcp.json'))).toBe(true);
   });

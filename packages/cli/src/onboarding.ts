@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { parsePlanFile, type PlanDefinition } from '@invoker/workflow-core';
 import {
   assembleReadinessChecks,
   buildReport,
@@ -60,6 +61,25 @@ function resolveExperimentalPlannerMcpPath(targetPath: string | undefined, confi
 
 export function commandExists(command: string): boolean {
   return spawnSync('sh', ['-c', `command -v ${command} >/dev/null 2>&1`], { stdio: 'ignore' }).status === 0;
+}
+
+export interface SetupCommandResult {
+  status: number | null;
+  stdout?: string | Buffer;
+  stderr?: string | Buffer;
+  error?: unknown;
+}
+
+export type SetupCommandRunner = (command: string, args: string[]) => SetupCommandResult | Promise<SetupCommandResult>;
+
+export function runSetupCommand(command: string, args: string[]): SetupCommandResult {
+  const result = spawnSync(command, args, { encoding: 'utf8' });
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error,
+  };
 }
 
 const INSTALL_SPECS: Record<string, { brew?: string[]; apt?: string[]; npm?: string[] }> = {
@@ -240,6 +260,123 @@ export function buildDoctorChecks(cfg: CliConfigState, isInstalled: IsInstalled 
   });
 }
 
+function outputText(value: string | Buffer | undefined): string {
+  return typeof value === 'string' ? value : value?.toString('utf8') ?? '';
+}
+
+function firstOutputLine(...values: Array<string | Buffer | undefined>): string | undefined {
+  for (const value of values) {
+    const line = outputText(value).split('\n').map((part) => part.trim()).find(Boolean);
+    if (line) return line;
+  }
+  return undefined;
+}
+
+function isCommandMissing(value: unknown): boolean {
+  return typeof value === 'object'
+    && value !== null
+    && 'code' in value
+    && (value as { code?: unknown }).code === 'ENOENT';
+}
+
+const GITHUB_AUTH_REMEDIATION = 'Run `gh auth login` and select a GitHub account with repo access.';
+const GITHUB_CLI_INSTALL_REMEDIATION = 'Install GitHub CLI (`brew install gh` or `apt-get install gh`), then run `gh auth login`.';
+
+/** Validate GitHub CLI auth status. `runner` is injectable for tests. */
+export async function validateGitHubAuth(
+  runner: SetupCommandRunner = runSetupCommand,
+): Promise<PrerequisiteCheck> {
+  let result: SetupCommandResult;
+  try {
+    result = await runner('gh', ['auth', 'status']);
+  } catch (err) {
+    if (isCommandMissing(err)) {
+      return {
+        id: 'gh-auth',
+        name: 'GitHub auth',
+        status: 'warn',
+        detail: 'Skipped because gh is not installed',
+        remediation: GITHUB_CLI_INSTALL_REMEDIATION,
+      };
+    }
+    return {
+      id: 'gh-auth',
+      name: 'GitHub auth',
+      status: 'error',
+      detail: `gh auth status failed: ${formatCaughtException(err)}`,
+      remediation: GITHUB_AUTH_REMEDIATION,
+    };
+  }
+
+  if (result.status === 0) {
+    return {
+      id: 'gh-auth',
+      name: 'GitHub auth',
+      status: 'ok',
+      detail: firstOutputLine(result.stdout, result.stderr) ?? 'gh auth status passed',
+    };
+  }
+
+  if (result.status === 127 || isCommandMissing(result.error)) {
+    return {
+      id: 'gh-auth',
+      name: 'GitHub auth',
+      status: 'warn',
+      detail: 'Skipped because gh is not installed',
+      remediation: GITHUB_CLI_INSTALL_REMEDIATION,
+    };
+  }
+
+  return {
+    id: 'gh-auth',
+    name: 'GitHub auth',
+    status: 'error',
+    detail: firstOutputLine(result.stderr, result.stdout) ?? `gh auth status exited with ${result.status ?? 'unknown status'}`,
+    remediation: GITHUB_AUTH_REMEDIATION,
+  };
+}
+
+export type SmokePlanValidator = (planPath: string) => Promise<PlanDefinition>;
+
+const SMOKE_PLAN_YAML = [
+  'name: setup smoke',
+  'repoUrl: file:///tmp/invoker-setup-smoke.git',
+  'baseBranch: main',
+  'tasks:',
+  '  - id: smoke',
+  '    description: Validate the CLI plan parser',
+  '',
+].join('\n');
+
+/** Exercise the CLI plan parser without submitting work or touching the network. */
+export async function validateSmokePlan(
+  validator: SmokePlanValidator = parsePlanFile,
+): Promise<PrerequisiteCheck> {
+  let dir: string | undefined;
+  try {
+    dir = mkdtempSync(join(tmpdir(), 'invoker-setup-smoke-'));
+    const planPath = join(dir, 'plan.yaml');
+    writeFileSync(planPath, SMOKE_PLAN_YAML, 'utf8');
+    const plan = await validator(planPath);
+    return {
+      id: 'smoke-plan-validation',
+      name: 'smoke: plan validation',
+      status: 'ok',
+      detail: `Parsed "${plan.name}" (${plan.tasks.length} task)`,
+    };
+  } catch (err) {
+    return {
+      id: 'smoke-plan-validation',
+      name: 'smoke: plan validation',
+      status: 'error',
+      detail: `Plan validation failed: ${formatCaughtException(err)}`,
+      remediation: 'Fix the CLI plan parser or its YAML dependencies, then re-run `invoker-cli setup`.',
+    };
+  } finally {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ── doctor command ───────────────────────────────────────────
 
 export function runDoctor(argv: string[]): number {
@@ -331,7 +468,7 @@ export interface SlackCredentials {
   channelId?: string;
 }
 
-type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<{
+export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<{
   json: () => Promise<any>;
   headers: { get: (name: string) => string | null };
 }>;
@@ -442,6 +579,13 @@ export interface SetupIO {
   interactive?: boolean;
 }
 
+export interface RunSetupOptions {
+  isInstalled?: IsInstalled;
+  commandRunner?: SetupCommandRunner;
+  fetchImpl?: FetchLike;
+  smokePlanValidator?: SmokePlanValidator;
+}
+
 export class NonInteractiveSetupError extends Error {
   constructor(question: string) {
     super(
@@ -490,6 +634,33 @@ export function slackCredsFromEnv(): SlackCredentials {
     appToken: process.env.SLACK_APP_TOKEN,
     signingSecret: process.env.SLACK_SIGNING_SECRET,
     channelId: process.env.SLACK_CHANNEL_ID,
+  };
+}
+
+type CompleteSlackCredentials = Required<Pick<SlackCredentials, 'botToken' | 'appToken' | 'signingSecret' | 'channelId'>>;
+
+function missingSlackEnvKeys(creds: SlackCredentials): string[] {
+  const missing: string[] = [];
+  if (!creds.botToken) missing.push('SLACK_BOT_TOKEN');
+  if (!creds.appToken) missing.push('SLACK_APP_TOKEN');
+  if (!creds.signingSecret) missing.push('SLACK_SIGNING_SECRET');
+  if (!creds.channelId) missing.push('SLACK_CHANNEL_ID');
+  return missing;
+}
+
+function hasCompleteSlackEnv(creds: SlackCredentials): creds is CompleteSlackCredentials {
+  return missingSlackEnvKeys(creds).length === 0;
+}
+
+function slackEnvCompletenessCheck(creds: SlackCredentials): PrerequisiteCheck | undefined {
+  const missing = missingSlackEnvKeys(creds);
+  if (missing.length === 0) return undefined;
+  return {
+    id: 'slack-env-complete',
+    name: 'Slack env',
+    status: 'error',
+    detail: `Missing required values: ${missing.join(', ')}`,
+    remediation: 'Set the missing SLACK_* values, then re-run `invoker-cli setup slack --from-env`.',
   };
 }
 
@@ -622,7 +793,46 @@ async function promptYes(io: SetupIO, question: string, assumeYes = false): Prom
   return answer === 'y' || answer === 'yes';
 }
 
-export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promise<number> {
+function plannerSetupCheck(state: ExperimentalPlannerSetupState): PrerequisiteCheck {
+  return {
+    id: 'experimental-planner-mcp',
+    name: 'Experimental planner MCP',
+    status: state.installed ? 'ok' : 'error',
+    detail: state.installed
+      ? `Installed in ${state.targetPath}; experimentalPlanner flag ${state.experimentalPlanner ? 'on' : 'off'}`
+      : `Missing from ${state.targetPath}`,
+    remediation: state.installed ? undefined : 'Run `invoker-cli setup planner` to install the planner MCP entry.',
+  };
+}
+
+function plannerSetupErrorCheck(error: unknown): PrerequisiteCheck {
+  return {
+    id: 'experimental-planner-mcp',
+    name: 'Experimental planner MCP',
+    status: 'error',
+    detail: `Planner setup failed: ${formatCaughtException(error)}`,
+    remediation: 'Fix the planner MCP config, then re-run `invoker-cli setup planner`.',
+  };
+}
+
+export function formatSetupSummary(report: { checks: PrerequisiteCheck[]; ok: boolean }): string {
+  const failing = report.checks.find((check) => check.status === 'error');
+  if (!failing) return "You're ready.";
+  return `Fix this first: ${failing.name}: ${failing.remediation ?? failing.detail}`;
+}
+
+function printSetupReport(checks: PrerequisiteCheck[], io: SetupIO, json: boolean): number {
+  const report = buildReport(checks);
+  io.print(formatReport(report, { json }));
+  if (!json) io.print(formatSetupSummary(report));
+  return report.ok ? 0 : 1;
+}
+
+export async function runSetup(
+  argv: string[],
+  io: SetupIO = defaultIO(),
+  options: RunSetupOptions = {},
+): Promise<number> {
   const parsed = parseSetupArgs(argv);
   const wantSlack = parsed.subcommand === 'slack';
   const fromEnv = parsed.fromEnv;
@@ -634,84 +844,135 @@ export async function runSetup(argv: string[], io: SetupIO = defaultIO()): Promi
 
     if (parsed.checkOnly) {
       loadInvokerEnv();
-      const checks = await validateSlackCredentials(slackCredsFromEnv());
-      const report = buildReport(checks);
-      io.print(formatReport(report, { json: parsed.json }));
-      return report.ok ? 0 : 1;
+      if (wantSlack) {
+        const creds = slackCredsFromEnv();
+        const checks = await validateSlackCredentials(creds, options.fetchImpl);
+        const completeness = slackEnvCompletenessCheck(creds);
+        if (completeness) checks.push(completeness);
+        const report = buildReport(checks);
+        io.print(formatReport(report, { json: parsed.json }));
+        return report.ok ? 0 : 1;
+      }
+
+      const checks = buildDoctorChecks(loadCliConfig(), options.isInstalled ?? commandExists);
+      try {
+        checks.push(plannerSetupCheck(readExperimentalPlannerSetup({ targetPath: parsed.targetPath })));
+      } catch (err) {
+        checks.push(plannerSetupErrorCheck(err));
+      }
+      if (fromEnv) {
+        const creds = slackCredsFromEnv();
+        checks.push(...await validateSlackCredentials(creds, options.fetchImpl));
+        const completeness = slackEnvCompletenessCheck(creds);
+        if (completeness) checks.push(completeness);
+      }
+      checks.push(await validateGitHubAuth(options.commandRunner));
+      checks.push(await validateSmokePlan(options.smokePlanValidator));
+      return printSetupReport(checks, io, parsed.json);
     }
 
     io.print('Invoker setup\n');
-    const core = buildReport(buildDoctorChecks(loadCliConfig()));
-    io.print(formatReport(core));
-    io.print('');
+    const checks = buildDoctorChecks(loadCliConfig(), options.isInstalled ?? commandExists);
 
-    const plannerState = ensureExperimentalPlannerMcp({
-      targetPath: parsed.targetPath,
-      plannerPackage: parsed.plannerPackage ?? process.env.INVOKER_PLANNER_PACKAGE,
-    });
-    io.print(`Experimental planner MCP installed into ${plannerState.targetPath}.`);
-    io.print(`experimentalPlanner flag: ${plannerState.experimentalPlanner ? 'on' : 'off'}`);
-    io.print('');
-
-    if (!wantSlack && !fromEnv && await promptYes(io, 'Enable the experimental planner now? [y/N] ', parsed.assumeYes)) {
-      await maybeInstallPlanner(parsed, io);
+    let plannerCheck: PrerequisiteCheck;
+    let plannerReadyForEnable = false;
+    try {
+      const plannerState = ensureExperimentalPlannerMcp({
+        targetPath: parsed.targetPath,
+        plannerPackage: parsed.plannerPackage ?? process.env.INVOKER_PLANNER_PACKAGE,
+      });
+      plannerReadyForEnable = true;
+      plannerCheck = plannerSetupCheck(plannerState);
+      io.print(`Experimental planner MCP installed into ${plannerState.targetPath}.`);
+      io.print(`experimentalPlanner flag: ${plannerState.experimentalPlanner ? 'on' : 'off'}`);
+      io.print('');
+    } catch (err) {
+      plannerCheck = plannerSetupErrorCheck(err);
+      io.print(`Experimental planner MCP setup failed: ${formatCaughtException(err)}`);
       io.print('');
     }
+
+    if (plannerReadyForEnable
+      && !wantSlack
+      && !fromEnv
+      && await promptYes(io, 'Enable the experimental planner now? [y/N] ', parsed.assumeYes)) {
+      try {
+        const enabledPlannerState = installExperimentalPlannerMcp({
+          targetPath: parsed.targetPath,
+          plannerUrl: parsed.plannerUrl,
+          accessToken: parsed.accessToken ?? process.env.PLANNER_ACCESS_TOKEN,
+          plannerPackage: parsed.plannerPackage ?? process.env.INVOKER_PLANNER_PACKAGE,
+        });
+        plannerCheck = plannerSetupCheck(enabledPlannerState);
+        if (parsed.json) {
+          io.print(JSON.stringify(enabledPlannerState));
+        } else {
+          io.print(`Installed experimental planner MCP into ${enabledPlannerState.targetPath}.`);
+          io.print(`Enabled experimentalPlanner in ${enabledPlannerState.configPath}.`);
+          io.print('Restart any running planning agent sessions so they reload MCP tools.');
+        }
+        io.print('');
+      } catch (err) {
+        plannerCheck = plannerSetupErrorCheck(err);
+        io.print(`Experimental planner MCP setup failed: ${formatCaughtException(err)}`);
+        io.print('');
+      }
+    }
+    checks.push(plannerCheck);
 
     let doSlack = wantSlack || fromEnv;
     if (!wantSlack && !fromEnv) {
       doSlack = parsed.assumeYes ? false : await promptYes(io, 'Set up the Slack integration now? [y/N] ');
     }
     if (!doSlack) {
-      io.print('\nYou are good to go for CLI and UI workflows. Run `invoker-cli setup planner` later to enable the experimental planner. Run `invoker-cli setup slack` later to add Slack.');
-      return core.ok ? 0 : 1;
-    }
-
-    if (fromEnv) {
+      io.print('\nSlack setup skipped. Run `invoker-cli setup slack` later to add Slack.');
+    } else if (fromEnv) {
       loadInvokerEnv();
       const creds = slackCredsFromEnv();
-      const checks = await validateSlackCredentials(creds);
-      const report = buildReport(checks);
-      io.print(`\n${formatReport(report, { json: parsed.json })}`);
-      if (!creds.botToken || !creds.appToken || !creds.signingSecret || !creds.channelId || !report.ok) {
-        io.print('Nothing written. Fix the items above and re-run setup.');
-        return 1;
+      const slackChecks = await validateSlackCredentials(creds, options.fetchImpl);
+      const completeness = slackEnvCompletenessCheck(creds);
+      if (completeness) slackChecks.push(completeness);
+      checks.push(...slackChecks);
+      const slackReport = buildReport(slackChecks);
+      if (!hasCompleteSlackEnv(creds) || !slackReport.ok) {
+        io.print('\nSlack credentials were not written.');
+      } else {
+        const envPath = writeSlackEnv(creds);
+        io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
       }
-      const envPath = writeSlackEnv({
-        botToken: creds.botToken,
-        appToken: creds.appToken,
-        signingSecret: creds.signingSecret,
-        channelId: creds.channelId,
-      });
-      io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
-      return 0;
+    } else {
+      const manifestPath = manifestFilePath();
+      mkdirSync(invokerHomeDir(), { recursive: true });
+      writeFileSync(manifestPath, `${JSON.stringify(generateSlackManifest(), null, 2)}\n`);
+      io.print(`\n${manifestSteps(manifestPath)}\n`);
+
+      const botToken = await askLine(io, 'Bot User OAuth Token (xoxb-...): ');
+      const appToken = await askLine(io, 'App-Level Token (xapp-...): ');
+      const signingSecret = await askLine(io, 'Signing Secret: ');
+      const channelId = await askLine(io, 'Lobby channel ID (C...): ');
+
+      const slackChecks = await validateSlackCredentials({ botToken, appToken, signingSecret, channelId }, options.fetchImpl);
+      checks.push(...slackChecks);
+      const slackReport = buildReport(slackChecks);
+
+      if (!slackReport.ok) {
+        const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ', parsed.assumeYes);
+        if (!proceed) {
+          io.print('Slack credentials were not written.');
+        } else {
+          const envPath = writeSlackEnv({ botToken, appToken, signingSecret, channelId });
+          io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
+        }
+      } else {
+        const envPath = writeSlackEnv({ botToken, appToken, signingSecret, channelId });
+        io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
+      }
     }
 
-    const manifestPath = manifestFilePath();
-    mkdirSync(invokerHomeDir(), { recursive: true });
-    writeFileSync(manifestPath, `${JSON.stringify(generateSlackManifest(), null, 2)}\n`);
-    io.print(`\n${manifestSteps(manifestPath)}\n`);
-
-    const botToken = await askLine(io, 'Bot User OAuth Token (xoxb-...): ');
-    const appToken = await askLine(io, 'App-Level Token (xapp-...): ');
-    const signingSecret = await askLine(io, 'Signing Secret: ');
-    const channelId = await askLine(io, 'Lobby channel ID (C...): ');
-
-    const checks = await validateSlackCredentials({ botToken, appToken, signingSecret, channelId });
-    const report = buildReport(checks);
-    io.print(`\n${formatReport(report)}`);
-
-    if (!report.ok) {
-      const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ', parsed.assumeYes);
-      if (!proceed) {
-        io.print('Nothing written. Fix the items above and re-run `invoker-cli setup slack`.');
-        return 1;
-      }
-    }
-
-    const envPath = writeSlackEnv({ botToken, appToken, signingSecret, channelId });
-    io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
-    return report.ok ? 0 : 1;
+    checks.push(await validateGitHubAuth(options.commandRunner));
+    checks.push(await validateSmokePlan(options.smokePlanValidator));
+    io.print('');
+    return printSetupReport(checks, io, parsed.json);
   } catch (error) {
     if (!(error instanceof NonInteractiveSetupError)) throw error;
     io.print(error.message);
