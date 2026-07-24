@@ -225,7 +225,7 @@ Failing checks
                 subprocess.CalledProcessError(1, ["./run.sh"], stderr="missing workflow")
             )
             with self.assertRaisesRegex(RuntimeError, "missing workflow"):
-                requeue._resolve_workflow(2647)
+                requeue.resolve_workflow(2647)
         finally:
             requeue.subprocess.run = original_run
 
@@ -243,16 +243,16 @@ Failing checks
         action = Action("rebase_recreate", 2647, "conflict:2647", "GitHub reports merge conflict")
         fake = FakeGh()
         repairs = []
-        original_resolve = requeue._resolve_workflow
-        original_repair = requeue._repair_conflict
+        original_resolve = requeue.exec_impl.resolve_workflow
+        original_repair = requeue.exec_impl.repair_conflict
         try:
-            requeue._resolve_workflow = lambda pr_number: (_ for _ in ()).throw(RuntimeError(f"no local workflow for PR #{pr_number}"))
-            requeue._repair_conflict = lambda repo, pr, reason: repairs.append((repo, pr.number, reason))
+            requeue.exec_impl.resolve_workflow = lambda pr_number: (_ for _ in ()).throw(RuntimeError(f"no local workflow for PR #{pr_number}"))
+            requeue.exec_impl.repair_conflict = lambda repo, pr, reason: repairs.append((repo, pr.number, reason))
             for epoch in range(3):
-                requeue._execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, epoch)
+                requeue.execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, epoch)
         finally:
-            requeue._resolve_workflow = original_resolve
-            requeue._repair_conflict = original_repair
+            requeue.exec_impl.resolve_workflow = original_resolve
+            requeue.exec_impl.repair_conflict = original_repair
         self.assertEqual(ledger.count("conflict-repair", 2647, HEAD, "conflict:2647"), 3)
         self.assertEqual([repair[1] for repair in repairs], [2647, 2647, 2647])
         self.assertEqual(fake.comments, [])
@@ -271,8 +271,8 @@ Failing checks
         item = pr(2647, merge_state="DIRTY", latest=mergify())
         action = Action("comment_blocked", 2647, "capped", "GitHub reports merge conflict. The retry cap was reached for current head " + HEAD + ".")
         fake = FakeGh()
-        requeue._execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 1)
-        requeue._execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 2)
+        requeue.execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 1)
+        requeue.execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 2)
         self.assertEqual(len(fake.comments), 1)
 
     def test_missing_admin_bypass_nudge_comments_once_without_label_edit(self):
@@ -288,7 +288,7 @@ Failing checks
                 self.label_edits.append((repo, pr_number, add, remove))
 
         action = Action("comment_admin_bypass_nudge", 2647, "admin-bypass", "missing admin-bypass label")
-        for execute in (requeue._execute_action, requeue.exec_impl.execute_action):
+        for execute in (requeue.execute_action,):
             ledger = self.ledger()
             item = pr(2647, labels={"dequeued"}, latest=mergify())
             fake = FakeGh()
