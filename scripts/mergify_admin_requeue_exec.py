@@ -208,7 +208,15 @@ def run_once(args: argparse.Namespace) -> int:
     now = int(time.time())
     pr_by_number = {pr.number: pr for pr in snapshots}
     for stack in stacks:
-        for action in plan_stack_actions(stack, required_checks, ledger, now):
+        for action in plan_stack_actions(
+            stack,
+            required_checks,
+            ledger,
+            now,
+            trunk=trunk,
+            max_repair_attempts=args.max_repair_attempts,
+            max_requeue_attempts=args.max_requeue_attempts,
+        ):
             pr = pr_by_number.get(action.pr_number)
             print_action(action, pr, args.dry_run, args.json)
             if not args.dry_run:
