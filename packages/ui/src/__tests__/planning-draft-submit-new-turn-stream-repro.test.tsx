@@ -76,7 +76,7 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' });
     });
-    expect(await screen.findByText('Plan "Mock Plan" submitted to Invoker. Review it, then use Start ready work.')).toBeInTheDocument();
+    expect(await screen.findByText('Plan "Mock Plan" submitted to Invoker. No ready work to start.')).toBeInTheDocument();
     expect(screen.getByTestId('invoker-terminal-input')).toBeDisabled();
     expect(screen.getByTestId('invoker-terminal-harness')).toBeDisabled();
 

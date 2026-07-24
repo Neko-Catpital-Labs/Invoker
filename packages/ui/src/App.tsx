@@ -2574,10 +2574,16 @@ export function App() {
         }));
         await refreshTaskGraph();
         workflowGraphViewportRef.current = null;
+        const startResult = await handleStartReadyAction();
+        const startMessage = startResult
+          ? startResult.started.length > 0
+            ? ` Started ${startResult.started.length} ready task${startResult.started.length === 1 ? '' : 's'}.`
+            : ' No ready work to start.'
+          : ' Ready work could not be started.';
         appendTerminalLine(
           result.workflowCount && result.workflowCount > 1
-            ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows. Review them, then use Start ready work.`
-            : `Plan "${result.planName}" submitted to Invoker. Review it, then use Start ready work.`,
+            ? `Plan "${result.planName}" submitted as ${result.workflowCount} stacked workflows.${startMessage}`
+            : `Plan "${result.planName}" submitted to Invoker.${startMessage}`,
           'system',
           'success',
         );
@@ -2592,7 +2598,7 @@ export function App() {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
-  }, [activePlanningReadOnly, appendTerminalLine, invoker, issueCameraCommand, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  }, [activePlanningReadOnly, appendTerminalLine, handleStartReadyAction, invoker, issueCameraCommand, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
