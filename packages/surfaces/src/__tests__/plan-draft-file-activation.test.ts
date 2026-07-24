@@ -90,18 +90,30 @@ describe('plan draft file - activation side', () => {
     expect(prompt).toContain('output the plan inside a ```yaml code block');
   });
 
-  it('clears a stale plan file before the turn so getDraftedPlan cannot return it', async () => {
+  it('keeps the last valid plan after a later turn clears its draft file', async () => {
     const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
     const path = conversation.planDraftFilePath();
     if (!path) throw new Error('expected a plan draft path');
-    mkdirSync(join(workingDir, '.invoker', 'plan-drafts'), { recursive: true });
-    writeFileSync(path, 'name: Stale plan\ntasks: []', 'utf8');
 
-    // The planner replies with only a summary and does NOT write a new file.
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(
+      'Drafted the plan.\n\nReply `submit` to submit it.',
+      () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
+    ));
+    await conversation.sendMessage('Draft it');
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
+    await conversation.sendMessage('What does it do?');
+
+    expect(existsSync(path)).toBe(false);
+    expect(conversation.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
+  });
+
+  it('does not expose a plan when a summary-only turn has no prior draft', async () => {
+    const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
+
     mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
     await conversation.sendMessage('Draft it');
 
-    expect(existsSync(path)).toBe(false);
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 

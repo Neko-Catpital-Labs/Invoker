@@ -24,6 +24,7 @@ import {
   looksLikeCompletionClaim,
   repoStateUnchanged,
 } from './agent-turn-verification.js';
+import { summarizePlanText } from './plan-summary.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -435,6 +436,7 @@ export class PlanConversation {
   private plannerRetryBaseDelayMs: number;
   private _initialized = false;
   private _lastTurnReasoning: string[] = [];
+  private lastKnownGoodPlanText: string | null = null;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -540,6 +542,12 @@ export class PlanConversation {
     if (looksLikeCompletionClaim(message) && repoStateUnchanged(repoStateBefore, repoStateAfter)) {
       message = `${message}\n\n${buildUnverifiedNotice()}`;
     }
+    const fileDraft = this.readPlanDraftFile();
+    const inlineDraft = extractYamlPlan(message);
+    const nextDraft = fileDraft && summarizePlanText(fileDraft)
+      ? fileDraft
+      : inlineDraft;
+    if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     this._lastTurnReasoning = formatted.reasoning;
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
@@ -572,7 +580,7 @@ export class PlanConversation {
 
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
-    return this.readPlanDraftFile() ?? this.extractLastPlanFromMessages();
+    return this.readPlanDraftFile() ?? this.extractLastPlanFromMessages() ?? this.lastKnownGoodPlanText;
   }
 
   // The planner writes the full YAML plan here so its chat reply can stay a
@@ -622,6 +630,7 @@ export class PlanConversation {
     this.messages = [];
     this._submittedPlanText = null;
     this._planSubmitted = false;
+    this.lastKnownGoodPlanText = null;
     if (this.conversationRepo && this.threadTs) {
       this.conversationRepo.deleteConversation(this.threadTs);
     }
