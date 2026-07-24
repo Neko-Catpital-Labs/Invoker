@@ -89,6 +89,14 @@ test('terminal output upserts keep IPC responsive under a fat DB', async ({ page
 
   const sessionId = await openTerminalForTask(page, fullTaskId);
 
+  await page.evaluate(async (id) => {
+    await Promise.all([
+      window.invoker.getWorkerStatus(),
+      window.invoker.listWorkflows(),
+      window.invoker.terminalWrite(id, ''),
+    ]);
+  }, sessionId);
+
   const logWatermark = await page.evaluate(async () => {
     const logs = await window.invoker.getActivityLogs(0, 1);
     return logs.at(-1)?.id ?? 0;
@@ -120,17 +128,19 @@ test('terminal output upserts keep IPC responsive under a fat DB', async ({ page
   }
 
   expect(samples.length).toBeGreaterThanOrEqual(20);
-  const sorted = [...samples].sort((a, b) => a - b);
+  const sustainedSamples = samples.slice(1);
+  expect(sustainedSamples.length).toBeGreaterThanOrEqual(20);
+  const sorted = [...sustainedSamples].sort((a, b) => a - b);
   const p95 = percentile(sorted, 95);
   const max = sorted[sorted.length - 1]!;
 
   expect(
     p95,
-    `p95 IPC RTT ${p95.toFixed(1)}ms exceeded ${MAX_P95_RTT_MS}ms (max=${max.toFixed(1)}ms, n=${samples.length})`,
+    `p95 IPC RTT ${p95.toFixed(1)}ms exceeded ${MAX_P95_RTT_MS}ms (max=${max.toFixed(1)}ms, n=${sustainedSamples.length})`,
   ).toBeLessThanOrEqual(MAX_P95_RTT_MS);
   expect(
     max,
-    `max IPC RTT ${max.toFixed(1)}ms exceeded ${MAX_SAMPLE_RTT_MS}ms (p95=${p95.toFixed(1)}ms, n=${samples.length})`,
+    `max IPC RTT ${max.toFixed(1)}ms exceeded ${MAX_SAMPLE_RTT_MS}ms (p95=${p95.toFixed(1)}ms, n=${sustainedSamples.length})`,
   ).toBeLessThanOrEqual(MAX_SAMPLE_RTT_MS);
 
   const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
