@@ -549,7 +549,8 @@ export async function sendPlanningChatMessage(
           ? []
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
-        const candidatePlanText = getConversationDraftedPlan(activeSession.conversation) ?? extractYamlPlan(reply);
+        const candidatePlanText = getConversationDraftedPlan(activeSession.conversation)
+          ?? extractYamlPlan(reply);
         if (!candidatePlanText || !draftingAuthorized) {
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'
