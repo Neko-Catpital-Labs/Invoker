@@ -4,6 +4,8 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
+- Stop stale pid locks from blocking launch after a hard kill. If Invoker died without releasing `~/.invoker/gui-window.lock` or `invoker.db.lock` (e.g. SIGKILL from `kill-all-electron.sh`) and the OS later reused the recorded pid for an unrelated process (a Chrome renderer, in the reported case), launch failed with the "only one instance of the Invoker GUI" dialog or a `[db-writer-lock] already held by PID …` error with no Invoker running. Both locks' staleness checks now also compare the holder's process start time (`ps -o etime=`, shared `process-start-time.ts`) against the lock file's mtime: a process that started after the lock was written cannot be its owner, so the lock is reclaimed. Unknown start time (Windows, `ps` failure) stays conservative and keeps the lock.
+
 ## 0.0.8
 
 - Improve Slack thread planning: promote same-thread plan requests, infer plans from conversation, share a transport-neutral planning lifecycle, pin repository/harness context across manager restarts, and approve compact plan drafts inline.
