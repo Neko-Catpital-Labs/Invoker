@@ -3739,6 +3739,24 @@ export function App() {
   );
 
   const renderWorkersDetail = (): JSX.Element => {
+    if (viewMode === 'queue') {
+      return (
+        <QueueView
+          tasks={tasks}
+          workflows={workflows}
+          queueStatus={queueStatus}
+          workerStatus={workerStatus}
+          readOnly={runtimeStatus?.readOnly === true}
+          onStartWorker={handleStartWorker}
+          onStopWorker={handleStopWorker}
+          onTaskClick={handleTaskClick}
+          selectedTaskId={selectedTaskId}
+          selectedWorkerKind={selectedWorkerKind}
+          onSelectWorker={setSelectedWorkerKind}
+        />
+      );
+    }
+
     if (!selectedWorker) {
       return renderBrowserEmptyState('No workers found', 'Invoker has not returned any worker registry rows yet.');
     }
