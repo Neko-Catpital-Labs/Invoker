@@ -17,6 +17,7 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -107,9 +108,37 @@ export class SqliteTaskAttemptRepository {
     return ` LEFT JOIN task_crash_preservation cp ON cp.task_id = ${alias}.id`;
   }
 
+  private appendTaskUpsert(taskId: string): void {
+    const row = this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    if (!row) return;
+    appendJournalEntry(this.exec, {
+      entityType: 'task',
+      entityId: taskId,
+      op: 'upsert',
+      payload: row,
+    });
+  }
+
+  private appendAttemptUpsert(attemptId: string): void {
+    const row = this.exec.queryOne('SELECT * FROM attempts WHERE id = ?', [attemptId]);
+    if (!row) return;
+    appendJournalEntry(this.exec, {
+      entityType: 'attempt',
+      entityId: attemptId,
+      op: 'upsert',
+      payload: row,
+    });
+  }
+
   // ── Task CRUD ────────────────────────────────────────────
 
   saveTask(workflowId: string, task: TaskState): void {
+    this.exec.runTransaction(() => {
+      this.saveTaskInTransaction(workflowId, task);
+    });
+  }
+
+  private saveTaskInTransaction(workflowId: string, task: TaskState): void {
     assertTaskConsistent(task);
     const cfg = task.config;
     const exec = task.execution;
@@ -224,9 +253,16 @@ export class SqliteTaskAttemptRepository {
       task.taskStateVersion ?? 1,
     ]);
     this.syncCrashPreservationState(task.id, undefined, task.execution);
+    this.appendTaskUpsert(task.id);
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
+    this.exec.runTransaction(() => {
+      this.updateTaskInTransaction(taskId, changes);
+    });
+  }
+
+  private updateTaskInTransaction(taskId: string, changes: TaskStateChanges): void {
     const beforeTask = this.loadTask(taskId);
     if (!beforeTask) return;
 
@@ -418,6 +454,9 @@ export class SqliteTaskAttemptRepository {
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }
     this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    if (changes.status !== undefined) {
+      this.appendTaskUpsert(taskId);
+    }
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -594,6 +633,12 @@ export class SqliteTaskAttemptRepository {
   // ── Attempt CRUD ─────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
+    this.exec.runTransaction(() => {
+      this.saveAttemptInTransaction(attempt);
+    });
+  }
+
+  private saveAttemptInTransaction(attempt: Attempt): void {
     this.exec.execRun(`
       INSERT OR REPLACE INTO attempts (
         id, node_id, attempt_number, queue_priority, status,
@@ -628,6 +673,7 @@ export class SqliteTaskAttemptRepository {
       attempt.createdAt.toISOString(),
       attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
     ]);
+    this.appendAttemptUpsert(attempt.id);
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -711,7 +757,12 @@ export class SqliteTaskAttemptRepository {
 
     if (setClauses.length === 0) return;
     values.push(attemptId);
-    this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      if (changes.status !== undefined || changes.completedAt !== undefined) {
+        this.appendAttemptUpsert(attemptId);
+      }
+    });
   }
 
   claimAttemptForLaunch(
@@ -731,27 +782,29 @@ export class SqliteTaskAttemptRepository {
 
     if (setClauses.length === 0) return false;
     values.push(attemptId, now.toISOString());
-    if (this.exec.readOnly) {
-      throw new Error('SQLiteAdapter is read-only in this process');
-    }
-    this.exec.run(
-      `UPDATE attempts SET ${setClauses.join(', ')}
-       WHERE id = ?
-         AND (
-           status = 'pending'
-           OR (
-             status IN ('claimed', 'running')
-             AND lease_expires_at IS NOT NULL
-             AND lease_expires_at <= ?
-           )
-         )`,
-      values,
-    );
-    const claimed = this.exec.getRowsModified() > 0;
-    if (claimed) {
-      this.exec.markDirty();
-    }
-    return claimed;
+    return this.exec.runTransaction(() => {
+      this.exec.run(
+        `UPDATE attempts SET ${setClauses.join(', ')}
+         WHERE id = ?
+           AND (
+             status = 'pending'
+             OR (
+               status IN ('claimed', 'running')
+               AND lease_expires_at IS NOT NULL
+               AND lease_expires_at <= ?
+             )
+           )`,
+        values,
+      );
+      const claimed = this.exec.getRowsModified() > 0;
+      if (claimed) {
+        this.exec.markDirty();
+        if (changes.status !== undefined) {
+          this.appendAttemptUpsert(attemptId);
+        }
+      }
+      return claimed;
+    });
   }
 
   // ── Task ↔ attempt reconciliation ────────────────────────
