@@ -4,9 +4,14 @@ import { join } from 'node:path';
 
 export const DEFAULT_MAX_INLINE_AGENT_PROMPT_BYTES = 64 * 1024;
 
+export interface LocalPromptCleanupResult {
+  directory: string;
+  error: Error;
+}
+
 export interface LocalPromptTransport {
   effectivePrompt: string;
-  cleanup: () => void;
+  cleanup: () => LocalPromptCleanupResult | undefined;
 }
 
 export function maxInlineAgentPromptBytes(): number {
@@ -28,29 +33,36 @@ export function buildAgentPromptFileBootstrap(promptPath: string): string {
   ].join('\n');
 }
 
+
+function removePromptDirectory(directory: string): LocalPromptCleanupResult | undefined {
+  try {
+    rmSync(directory, { recursive: true, force: true });
+    return undefined;
+  } catch (error) {
+    return {
+      directory,
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
+  }
+}
+
 export function materializeLocalAgentPrompt(
   prompt: string,
   directoryPrefix: string = 'invoker-agent-prompt-',
 ): LocalPromptTransport {
   if (shouldInlineAgentPrompt(prompt)) {
-    return { effectivePrompt: prompt, cleanup: () => {} };
+    return { effectivePrompt: prompt, cleanup: () => undefined };
   }
   const directory = mkdtempSync(join(tmpdir(), directoryPrefix));
   const promptPath = join(directory, 'prompt.md');
   try {
     writeFileSync(promptPath, prompt, 'utf8');
   } catch (error) {
-    try {
-      rmSync(directory, { recursive: true, force: true });
-    } catch {}
+    removePromptDirectory(directory);
     throw error;
   }
   return {
     effectivePrompt: buildAgentPromptFileBootstrap(promptPath),
-    cleanup: () => {
-      try {
-        rmSync(directory, { recursive: true, force: true });
-      } catch {}
-    },
+    cleanup: () => removePromptDirectory(directory),
   };
 }

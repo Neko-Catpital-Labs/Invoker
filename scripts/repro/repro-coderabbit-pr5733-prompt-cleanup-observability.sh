@@ -4,8 +4,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 TARGET="$ROOT/packages/execution-engine/src/agent-prompt-transport.ts"
 
-echo "[repro] problem: oversized prompt materialization must remove its temp dir when writing prompt.md fails"
-echo "[repro] check: materializeLocalAgentPrompt cleans up the created directory before rethrowing the write error"
+echo "[repro] problem: spilled workflow prompt cleanup failures must be observable"
+echo "[repro] check: materializeLocalAgentPrompt cleanup returns the directory and original rmSync error"
 
 node - "$TARGET" <<'NODE'
 const fs = require('node:fs');
@@ -28,19 +28,18 @@ source = source
   .replace("export function materializeLocalAgentPrompt(\n  prompt: string,\n  directoryPrefix: string = 'invoker-agent-prompt-',\n): LocalPromptTransport {", "function materializeLocalAgentPrompt(\n  prompt,\n  directoryPrefix = 'invoker-agent-prompt-',\n) {");
 source += '\nmodule.exports = { materializeLocalAgentPrompt };\n';
 
-const createdDirectory = '/tmp/invoker-agent-prompt-repro-1234';
-const rmCalls = [];
-const writeError = new Error('simulated prompt write failure');
+const cleanupError = new Error('simulated rmSync cleanup failure');
+const createdDirectory = '/tmp/invoker-agent-prompt-repro-5678';
 
 const sandbox = {
   require(specifier) {
     if (specifier === 'node:fs') {
       return {
         mkdtempSync: () => createdDirectory,
-        rmSync: (target, options) => rmCalls.push({ target, options }),
-        writeFileSync: () => {
-          throw writeError;
+        rmSync: () => {
+          throw cleanupError;
         },
+        writeFileSync: () => {},
       };
     }
     if (specifier === 'node:os') {
@@ -62,29 +61,21 @@ sandbox.globalThis = sandbox;
 vm.runInNewContext(source, sandbox, { filename: targetPath });
 
 const { materializeLocalAgentPrompt } = sandbox.module.exports;
-let thrown;
-try {
-  materializeLocalAgentPrompt('running task details\n'.repeat(10_000));
-} catch (error) {
-  thrown = error;
-}
+const transport = materializeLocalAgentPrompt('running task details\n'.repeat(10_000));
+const result = transport.cleanup();
 
-if (thrown !== writeError) {
-  console.error('[repro] FAIL: materializeLocalAgentPrompt did not rethrow the original write failure');
+if (!result) {
+  console.error('[repro] FAIL: cleanup swallowed the rmSync failure and returned no result');
   process.exit(1);
 }
-if (rmCalls.length !== 1) {
-  console.error(`[repro] FAIL: expected one cleanup call after the write failure, saw ${rmCalls.length}`);
+if (result.directory !== createdDirectory) {
+  console.error(`[repro] FAIL: cleanup reported directory ${result.directory} instead of ${createdDirectory}`);
   process.exit(1);
 }
-if (rmCalls[0].target !== createdDirectory) {
-  console.error(`[repro] FAIL: cleanup targeted ${rmCalls[0].target} instead of ${createdDirectory}`);
-  process.exit(1);
-}
-if (!rmCalls[0].options?.recursive || !rmCalls[0].options?.force) {
-  console.error('[repro] FAIL: cleanup did not remove the temp directory recursively with force=true');
+if (!result.error || typeof result.error.message !== 'string' || !result.error.message.includes(cleanupError.message)) {
+  console.error('[repro] FAIL: cleanup did not report the rmSync failure message');
   process.exit(1);
 }
 
-console.log('[repro] PASS: write failures clean up the prompt temp directory before rethrowing');
+console.log('[repro] PASS: cleanup failures surface the original rmSync error and directory');
 NODE

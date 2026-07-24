@@ -2119,7 +2119,14 @@ ${text}`;
       }
       throw buildEmptyPlannerOutputError(plannerLabel, lastStderrTail, { attemptCount: totalAttempts });
     } finally {
-      promptTransport.cleanup();
+      const cleanupResult = promptTransport.cleanup();
+      if (cleanupResult) {
+        this.log?.(
+          'slack-surface',
+          'warn',
+          `[PROMPT_CLEANUP] failed to remove materialized planner prompt at ${cleanupResult.directory}: ${cleanupResult.error.message}`,
+        );
+      }
     }
   }
 

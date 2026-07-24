@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SlackSurface, extractRepoUrlFromMessage, parsePlanningRequest, parseLobbyClassification, parseLocalRequest, parseThreadRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, SlackSessionRepository, WorkflowChannelRepository } from '@invoker/data-store';
+import * as executionEngine from '@invoker/execution-engine';
 import type { SurfaceCommand } from '../surface.js';
 import type { WorkflowContext } from '../slack/workflow-assistant.js';
 
@@ -633,6 +634,40 @@ describe('in-channel workflow assistant', () => {
     expect(promptFile).toContain('invoker-slack-prompt-');
     expect(existsSync(promptFile)).toBe(false);
     expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('wf-1-2/api') }));
+  });
+
+  it('logs prompt cleanup failures after workflow assistant planning', async () => {
+    const cleanupError = new Error('device busy');
+    const logSpy = vi.fn();
+    const materializeSpy = vi.spyOn(executionEngine, 'materializeLocalAgentPrompt').mockReturnValue({
+      effectivePrompt: 'materialized prompt',
+      cleanup: () => ({ directory: '/tmp/invoker-slack-prompt-test-1234', error: cleanupError }),
+    });
+    mockSpawn.mockImplementationOnce(() => mockProcess('The running task is wf-1-2/api.'));
+    const surface = new SlackSurface({
+      ...baseConfig(),
+      log: logSpy,
+      conversationRepo: convoRepo,
+      workflowChannelRepo: repo,
+      planningCommandBuilder: () => ({ command: 'cursor', args: ['--print', 'materialized prompt'] }),
+    });
+    const runOneShotPlanner = Reflect.get(surface, 'runOneShotPlanner') as (
+      harness: { tool: string; model: string },
+      prompt: string,
+    ) => Promise<string>;
+
+    try {
+      await expect(runOneShotPlanner.call(surface, { tool: 'omp', model: 'claude-sonnet-4-5' }, 'ignored prompt')).resolves.toBe(
+        'The running task is wf-1-2/api.',
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        'slack-surface',
+        'warn',
+        '[PROMPT_CLEANUP] failed to remove materialized planner prompt at /tmp/invoker-slack-prompt-test-1234: device busy',
+      );
+    } finally {
+      materializeSpy.mockRestore();
+    }
   });
 });
 
