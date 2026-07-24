@@ -42,6 +42,23 @@ export interface WorkflowOp {
   target: { all: true } | { workflow: string };
 }
 
+export type WorkflowGatePolicy = 'completed' | 'review_ready';
+
+export interface WorkflowGatePolicyUpdate {
+  /** Upstream workflow whose gate policy should be changed. */
+  workflowId: string;
+  /** Upstream task gate; omitted means the workflow merge gate. */
+  taskId?: string;
+  gatePolicy: WorkflowGatePolicy;
+}
+
+export interface WorkflowGatePolicyOp {
+  operation: 'gate-policy';
+  /** Downstream workflow whose external dependency gate policy is edited. */
+  target: { workflow: string };
+  updates: WorkflowGatePolicyUpdate[];
+}
+
 export interface WorkflowOpResult {
   ok: boolean;
   summary: string;
