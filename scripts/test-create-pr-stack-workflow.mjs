@@ -899,6 +899,37 @@ function testDiffAtomicityBlocksMixedDiff() {
   }
 }
 
+function testCreatePrDryRunMatchesCiBodyValidation() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    createTrackedBranch(work, 'feature/ci-parity');
+    commitFile(work, 'packages/app/src/refresh-route.ts', 'export const refreshRoute = true;\n', 'route refresh');
+    writeFileSync(join(work, 'pr-body.md'), ROUTING_BODY);
+
+    const validResult = runCreatePr(work, harness, [...baseArgs(), '--dry-run']);
+    assert(
+      validResult.status === 0,
+      `CI-compliant PR body should pass create-pr dry run\nstdout:\n${validResult.stdout}\nstderr:\n${validResult.stderr}`,
+    );
+    assert(validResult.stderr.includes('[dry-run] Would create PR'), 'valid body should reach the PR-create dry-run path');
+    expectNoPush(harness, 'CI-compliant create-pr dry run');
+    expectNoGhCalls(harness, 'CI-compliant create-pr dry run');
+
+    writeFileSync(join(work, 'pr-body.md'), ROUTING_BODY.replace('- behavior', '- refactor'));
+    const rejectedResult = runCreatePr(work, harness, [...baseArgs(), '--dry-run']);
+    assert(rejectedResult.status === 1, 'CI-rejected refactor body should block create-pr before dry-run publication');
+    assert(
+      rejectedResult.stderr.includes('Review lane refactor must state in ## Non-goals that behavior stays unchanged'),
+      `create-pr should return the same refactor error as CI\nstderr:\n${rejectedResult.stderr}`,
+    );
+    expectNoPush(harness, 'CI-rejected create-pr dry run');
+    expectNoGhCalls(harness, 'CI-rejected create-pr dry run');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testDiffComputationFailureBlocksPrCreation() {
   const harness = createHarness();
   try {
@@ -948,6 +979,7 @@ const tests = [
   testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,
   testDiffAtomicityBlocksMixedDiff,
+  testCreatePrDryRunMatchesCiBodyValidation,
   testDiffComputationFailureBlocksPrCreation,
   testHelpMentionsStackUpdateFlow,
 ];
