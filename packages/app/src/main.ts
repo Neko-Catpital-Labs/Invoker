@@ -1086,6 +1086,7 @@ function startHeadlessMode(): void {
         workingDir: repoRoot,
         sessions: planningChatSessions,
         planningCommandBuilder,
+        executionAgentRegistry: agentRegistry,
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
@@ -1129,6 +1130,7 @@ function startHeadlessMode(): void {
               workingDir: repoRoot,
               sessions: planningChatSessions,
               planningCommandBuilder,
+              executionAgentRegistry: agentRegistry,
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
@@ -1143,6 +1145,7 @@ function startHeadlessMode(): void {
               workingDir: repoRoot,
               sessions: planningChatSessions,
               planningCommandBuilder,
+              executionAgentRegistry: agentRegistry,
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
@@ -1514,17 +1517,49 @@ function startHeadlessMode(): void {
 
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
-        ): Promise<{ workflowId: string; tasks: TaskState[] }> => {
-          const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
-          const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
-          backupPlan(plan, undefined, logger);
-          const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
-          orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-          const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
+        ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> => {
+          const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('./plan-parser.js');
+          const submission = await parsePlanSubmissionBundleFile(payload.planPath);
+          const existingWorkflowIds = new Set(orchestrator.getWorkflowIds());
+          const workflowIds: string[] = [];
+          let upstream: { workflowId: string; featureBranch: string } | undefined;
+
+          for (const parsedPlan of submission.plans) {
+            let plan = applyConfiguredPlanDefaults(parsedPlan);
+            if (upstream) {
+              plan = {
+                ...plan,
+                baseBranch: upstream.featureBranch,
+                externalDependencies: [
+                  ...(plan.externalDependencies ?? []),
+                  {
+                    workflowId: upstream.workflowId,
+                    taskId: '__merge__',
+                    requiredStatus: 'completed',
+                    gatePolicy: 'review_ready',
+                  } as const,
+                ],
+              };
+            }
+            backupPlan(plan, undefined, logger);
+            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+            const workflowId = orchestrator.getWorkflowIds().find((id) => !existingWorkflowIds.has(id))!;
+            existingWorkflowIds.add(workflowId);
+            workflowIds.push(workflowId);
+            upstream = { workflowId, featureBranch: plan.featureBranch ?? plan.baseBranch ?? 'main' };
+          }
+
+          const workflowId = workflowIds[workflowIds.length - 1];
+          if (!workflowId) {
+            throw new Error('Loaded plan did not create a workflow.');
+          }
           const started = orchestrator.startExecution();
-          logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+          logger.info(
+            `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+            { module: 'ipc-delegate' },
+          );
           const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-          return { workflowId, tasks };
+          return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
         };
 
 

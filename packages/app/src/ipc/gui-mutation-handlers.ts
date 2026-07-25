@@ -246,7 +246,9 @@ export interface GuiMutationTaskActions {
     source?: 'ipc' | 'auto-fix',
     reviewGateContext?: ReviewGateCiContext,
   ) => Promise<TaskState[]>;
-  executeHeadlessRun: (payload: HeadlessRunMutationPayload) => Promise<{ workflowId: string; tasks: TaskState[] }>;
+  executeHeadlessRun: (
+    payload: HeadlessRunMutationPayload,
+  ) => Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }>;
   executeHeadlessResume: (payload: HeadlessResumeMutationPayload) => Promise<{ workflowId: string; tasks: TaskState[] }>;
   executeHeadlessExec: (payload: HeadlessExecMutationPayload) => Promise<unknown>;
   classifyHeadlessExecMutation: (payload: HeadlessExecMutationPayload) => { workflowId?: string; priority: WorkflowMutationPriority };
@@ -608,18 +610,55 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     }
   }
 
-  async function executeHeadlessRun(payload: HeadlessRunMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
-    const { applyConfiguredPlanDefaults, parsePlanFile } = await import('../plan-parser.js');
-    const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
+  async function executeHeadlessRun(
+    payload: HeadlessRunMutationPayload,
+  ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
+    const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
+    const submission = await parsePlanSubmissionBundleFile(payload.planPath);
     taskHandles.clear();
-    backupPlan(plan, undefined, logger);
-    const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
-    orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-    const workflowId = orchestrator.getWorkflowIds().find(id => !wfIdsBefore.has(id))!;
+    const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
+    const workflowIds: string[] = [];
+    let upstream: { workflowId: string; featureBranch: string } | undefined;
+
+    for (const parsedPlan of submission.plans) {
+      let plan = applyConfiguredPlanDefaults(parsedPlan);
+      if (upstream) {
+        plan = {
+          ...plan,
+          baseBranch: upstream.featureBranch,
+          externalDependencies: [
+            ...(plan.externalDependencies ?? []),
+            {
+              workflowId: upstream.workflowId,
+              taskId: '__merge__',
+              requiredStatus: 'completed',
+              gatePolicy: 'review_ready',
+            } as const,
+          ],
+        };
+      }
+      backupPlan(plan, undefined, logger);
+      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
+      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+      if (!workflow) {
+        throw new Error('Loaded plan did not create a workflow.');
+      }
+      existingWorkflowIds.add(workflow.id);
+      workflowIds.push(workflow.id);
+      upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+    }
+
+    const workflowId = workflowIds[workflowIds.length - 1];
+    if (!workflowId) {
+      throw new Error('Loaded plan did not create a workflow.');
+    }
     const started = orchestrator.startExecution();
-    logger.info(`started ${started.length} tasks for workflow "${workflowId}"`, { module: 'ipc-delegate' });
+    logger.info(
+      `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+      { module: 'ipc-delegate' },
+    );
     const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-    return { workflowId, tasks };
+    return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
   }
 
   async function executeHeadlessResume(payload: HeadlessResumeMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
@@ -1162,6 +1201,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     workingDir: repoRoot,
     sessions: planningChatSessions,
     planningCommandBuilder,
+    executionAgentRegistry: agentRegistry,
     loadGeneratedPlan: loadGeneratedPlanPreview,
     conversationRepo: planningConversationRepo,
     planningSessionStore: ownerMode ? persistence : undefined,
@@ -1197,6 +1237,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       workingDir: repoRoot,
       sessions: planningChatSessions,
       planningCommandBuilder,
+      executionAgentRegistry: agentRegistry,
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
@@ -1221,6 +1262,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       workingDir: repoRoot,
       sessions: planningChatSessions,
       planningCommandBuilder,
+      executionAgentRegistry: agentRegistry,
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
