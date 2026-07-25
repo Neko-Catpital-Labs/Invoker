@@ -67,13 +67,15 @@ export function resolveReviewGatePrRepairIdentity(
 
 export function hasActivePrRepairLease(
   context: PrRepairLeaseContext | undefined,
-  store: Pick<PrRepairLeaseStore, 'getPrRepairLeaseById'>,
+  store: Pick<PrRepairLeaseStore, 'getPrRepairLease' | 'getPrRepairLeaseById'>,
   now: Date = new Date(),
 ): boolean {
   if (!context) return false;
   const lease = store.getPrRepairLeaseById(context.leaseId);
+  const headLease = store.getPrRepairLease(context.repo, context.prNumber, context.headSha);
   return Boolean(
     lease
+    && headLease?.leaseId === context.leaseId
     && lease.repo === context.repo
     && lease.prNumber === context.prNumber
     && lease.headSha === context.headSha

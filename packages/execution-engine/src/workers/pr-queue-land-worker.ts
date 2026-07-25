@@ -21,7 +21,7 @@ export interface PrQueueLandWorkerStore extends PrRepairLeaseStore {
 
 export interface PrQueueLandWorkerPolicyOptions {
   store: PrQueueLandWorkerStore;
-  submitter: {
+  submitter?: {
     submit(
       workflowId: string,
       priority: WorkflowMutationPriority,
@@ -72,7 +72,8 @@ function handlePrQueueLandEvent(
   event: PrQueueDequeuedLifecycleEvent,
 ): void {
   const externalKey = prQueueLandActionKey(event);
-  if (options.store.getWorkerAction?.(PR_QUEUE_LAND_WORKER_KIND, externalKey)) return;
+  const existing = options.store.getWorkerAction?.(PR_QUEUE_LAND_WORKER_KIND, externalKey);
+  if (existing && existing.status !== 'skipped' && existing.status !== 'failed') return;
 
   const lease = tryAcquirePrRepairLease({
     repo: event.repo,
@@ -95,6 +96,27 @@ function handlePrQueueLandEvent(
       reason: 'lease-held',
       payload: { headSha: event.headSha, holderKind: lease.holderKind, failedChecks: event.failedChecks },
     });
+    return;
+  }
+
+  if (!options.submitter) {
+    recordWorkerDecisionRow(options.store, {
+      workerKind: PR_QUEUE_LAND_WORKER_KIND,
+      actionType: PR_QUEUE_LAND_ACTION_TYPE,
+      externalKey,
+      subjectType: 'pull_request',
+      subjectId: `${event.repo}#${event.prNumber}`,
+      workflowId: event.workflowId,
+      status: 'skipped',
+      summary: 'Skipped dequeued PR repair because the command is not ready',
+      reason: 'command-not-ready',
+      payload: {
+        headSha: event.headSha,
+        failedChecks: event.failedChecks,
+        prRepairLeaseId: lease.leaseId,
+      },
+    });
+    releasePrRepairLease(lease.leaseId, options.store);
     return;
   }
 

@@ -14,6 +14,7 @@ export type TerminalWorkerActionReconcileStore = {
     statuses?: WorkflowMutationIntentStatus[],
   ): WorkflowMutationIntent[];
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
+  deletePrRepairLeaseById?(leaseId: string): boolean;
 };
 
 const OPEN_STATUSES: WorkerActionStatus[] = ['queued', 'pending', 'running'];
@@ -93,6 +94,10 @@ export function reconcileTerminalWorkerActionsOnStartup(
       updatedAt: nowIso,
       completedAt: nowIso,
     });
+    const leaseId = payload.prRepairLeaseId;
+    if (typeof leaseId === 'string') {
+      store.deletePrRepairLeaseById?.(leaseId);
+    }
     reconciled += 1;
   }
 

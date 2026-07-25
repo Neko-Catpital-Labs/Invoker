@@ -13,7 +13,7 @@ describe('assertActiveBabysitPrRepairLease', () => {
   it('rejects a missing lease before a babysit mutation executes', () => {
     expect(() => assertActiveBabysitPrRepairLease(
       undefined,
-      { getPrRepairLeaseById: () => undefined },
+      { getPrRepairLease: () => undefined, getPrRepairLeaseById: () => undefined },
       'repair',
     )).toThrow('Rejected babysit repair command');
   });
@@ -22,6 +22,7 @@ describe('assertActiveBabysitPrRepairLease', () => {
     expect(() => assertActiveBabysitPrRepairLease(
       lease,
       {
+        getPrRepairLease: () => undefined,
         getPrRepairLeaseById: () => ({
           ...lease,
           holderKind: 'ci_failed' as const,
@@ -37,6 +38,12 @@ describe('assertActiveBabysitPrRepairLease', () => {
     expect(() => assertActiveBabysitPrRepairLease(
       lease,
       {
+        getPrRepairLease: () => ({
+          ...lease,
+          holderKind: 'ci_failed' as const,
+          acquiredAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        }),
         getPrRepairLeaseById: () => ({
           ...lease,
           holderKind: 'ci_failed' as const,
@@ -46,5 +53,27 @@ describe('assertActiveBabysitPrRepairLease', () => {
       },
       'repair',
     )).not.toThrow();
+  });
+
+  it('rejects a superseded lease id that no longer owns its PR head', () => {
+    expect(() => assertActiveBabysitPrRepairLease(
+      lease,
+      {
+        getPrRepairLease: () => ({
+          ...lease,
+          leaseId: 'lease-2',
+          holderKind: 'merge_conflict' as const,
+          acquiredAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        }),
+        getPrRepairLeaseById: () => ({
+          ...lease,
+          holderKind: 'ci_failed' as const,
+          acquiredAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        }),
+      },
+      'repair',
+    )).toThrow('Rejected babysit repair command');
   });
 });

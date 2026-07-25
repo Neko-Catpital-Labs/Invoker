@@ -6,7 +6,7 @@ import {
 
 export function assertActiveBabysitPrRepairLease(
   lease: PrRepairLeaseContext | undefined,
-  persistence: Pick<SQLiteAdapter, 'getPrRepairLeaseById'>,
+  persistence: Pick<SQLiteAdapter, 'getPrRepairLease' | 'getPrRepairLeaseById'>,
   command: string,
 ): void {
   if (!hasActivePrRepairLease(lease, persistence)) {

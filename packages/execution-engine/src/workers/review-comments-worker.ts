@@ -21,7 +21,7 @@ export interface ReviewCommentsWorkerStore extends PrRepairLeaseStore {
 
 export interface ReviewCommentsWorkerPolicyOptions {
   store: ReviewCommentsWorkerStore;
-  submitter: {
+  submitter?: {
     submit(
       workflowId: string,
       priority: WorkflowMutationPriority,
@@ -72,7 +72,8 @@ function handleReviewCommentsEvent(
   event: PrReviewCommentsLifecycleEvent,
 ): void {
   const externalKey = reviewCommentsActionKey(event);
-  if (options.store.getWorkerAction?.(REVIEW_COMMENTS_WORKER_KIND, externalKey)) return;
+  const existing = options.store.getWorkerAction?.(REVIEW_COMMENTS_WORKER_KIND, externalKey);
+  if (existing && existing.status !== 'skipped' && existing.status !== 'failed') return;
 
   const lease = tryAcquirePrRepairLease({
     repo: event.repo,
@@ -109,6 +110,23 @@ function handleReviewCommentsEvent(
       summary: 'Skipped review-comment repair because the PR has no mapped workflow',
       reason: 'workflow-unmapped',
       payload: { headSha: event.headSha, prRepairLeaseId: lease.leaseId },
+    });
+    releasePrRepairLease(lease.leaseId, options.store);
+    return;
+  }
+
+  if (!options.submitter) {
+    recordWorkerDecisionRow(options.store, {
+      workerKind: REVIEW_COMMENTS_WORKER_KIND,
+      actionType: REVIEW_COMMENTS_ACTION_TYPE,
+      externalKey,
+      subjectType: 'pull_request',
+      subjectId: `${event.repo}#${event.prNumber}`,
+      workflowId: event.workflowId,
+      status: 'skipped',
+      summary: 'Skipped review-comment repair because the command is not ready',
+      reason: 'command-not-ready',
+      payload: { headSha: event.headSha, commentUrls: event.commentUrls, prRepairLeaseId: lease.leaseId },
     });
     releasePrRepairLease(lease.leaseId, options.store);
     return;

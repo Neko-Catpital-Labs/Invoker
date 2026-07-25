@@ -123,4 +123,37 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
     expect(reconcileTerminalWorkerActionsOnStartup(store)).toBe(1);
     expect(actions.get('a')?.status).toBe('completed');
   });
+
+  it('releases a PR repair lease when it reconciles a terminal action', () => {
+    const action = toRecord({
+      id: 'a',
+      workerKind: 'review-comments',
+      actionType: 'address-review-comments',
+      workflowId: 'wf-1',
+      subjectType: 'pull_request',
+      subjectId: 'owner/repo#1',
+      externalKey: 'a',
+      status: 'queued',
+      intentId: '9',
+      payload: { prRepairLeaseId: 'lease-1' },
+    });
+    const deletePrRepairLeaseById = vi.fn(() => true);
+    const store = {
+      listWorkerActions: () => [action],
+      listWorkflowMutationIntents: () => [{
+        id: 9,
+        workflowId: 'wf-1',
+        channel: 'invoker:repair-review-comments',
+        args: [],
+        priority: 'normal' as const,
+        status: 'completed' as const,
+        createdAt: '2026-01-01T00:00:00.000Z',
+      }],
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => toRecord(write)),
+      deletePrRepairLeaseById,
+    };
+
+    expect(reconcileTerminalWorkerActionsOnStartup(store)).toBe(1);
+    expect(deletePrRepairLeaseById).toHaveBeenCalledWith('lease-1');
+  });
 });
