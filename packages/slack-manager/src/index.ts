@@ -10,13 +10,13 @@
 
 import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import dotenv from 'dotenv';
 
 import { SlackSurface, type SlackSurfaceConfig } from '@invoker/surfaces';
-import { ConversationRepository, SlackSessionRepository, SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
+import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
 
 import { IpcInvokerClient } from './invoker-client.js';
 import { createInvokerLauncher } from './invoker-launcher.js';
@@ -43,7 +43,8 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 Usage: invoker-slack [--version] [--help]
 
 Standalone Slack manager daemon. Loads credentials from
-~/.invoker/.slack-owner.env (or INVOKER_SLACK_OWNER_ENV) and drives Invoker
+~/.invoker/.slack-owner.env, or ~/.invoker/.env when the legacy file is absent
+(or INVOKER_SLACK_OWNER_ENV), and drives Invoker
 over IPC. Install via: npm i -g @neko-catpital-labs/invoker-slack
 `);
   process.exit(0);
@@ -72,7 +73,10 @@ async function main(): Promise<void> {
   const instanceId = randomUUID();
   const { log, logFn } = makeLog(instanceId);
 
-  const ownerEnvPath = process.env.INVOKER_SLACK_OWNER_ENV ?? path.join(homedir(), '.invoker', '.slack-owner.env');
+  const legacyOwnerEnvPath = path.join(homedir(), '.invoker', '.slack-owner.env');
+  const canonicalEnvPath = path.join(homedir(), '.invoker', '.env');
+  const ownerEnvPath = process.env.INVOKER_SLACK_OWNER_ENV
+    ?? (existsSync(legacyOwnerEnvPath) ? legacyOwnerEnvPath : canonicalEnvPath);
   dotenv.config({ path: ownerEnvPath });
 
   const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
@@ -91,6 +95,7 @@ async function main(): Promise<void> {
   const adapter = await SQLiteAdapter.create(path.join(managerHome, 'slack-manager.db'), { ownerCapability: true });
   const conversationRepo = new ConversationRepository(adapter);
   const slackSessionRepo = new SlackSessionRepository(adapter);
+  const slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
   const workflowChannelRepo = new WorkflowChannelRepository(adapter);
 
   const repoRoot = process.env.INVOKER_REPO_ROOT ?? process.cwd();
@@ -121,6 +126,7 @@ async function main(): Promise<void> {
     workingDir: repoRoot,
     conversationRepo,
     slackSessionRepo,
+    slackPlanDraftRepo,
     workflowChannelRepo,
     planningCommandBuilder: createPlanningCommandBuilder(),
     prepareRepoCheckout: createPrepareRepoCheckout(path.join(managerHome, 'planning-clones')),

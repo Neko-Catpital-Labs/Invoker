@@ -28,9 +28,10 @@ export class SlackCommandError extends Error {
 }
 
 export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
+  const startedPlans = new Map<string, string>();
   return async (command: SurfaceCommand): Promise<void> => {
     try {
-      await deps.client.withRecovery(() => dispatch(deps, command));
+      await deps.client.withRecovery(() => dispatch(deps, command, startedPlans));
     } catch (err) {
       const message = err instanceof InvokerDownError
         ? DOWN_MESSAGE
@@ -41,7 +42,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   };
 }
 
-async function dispatch(deps: CommandHandlerDeps, command: SurfaceCommand): Promise<void> {
+async function dispatch(deps: CommandHandlerDeps, command: SurfaceCommand, startedPlans: Map<string, string>): Promise<void> {
   const { client, slack, plansDir, log } = deps;
   switch (command.type) {
     case 'approve':
@@ -66,9 +67,11 @@ async function dispatch(deps: CommandHandlerDeps, command: SurfaceCommand): Prom
     }
     case 'start_plan': {
       mkdirSync(plansDir, { recursive: true });
-      const planPath = path.join(plansDir, `manager-${Date.now()}.yaml`);
-      writeFileSync(planPath, command.planText, 'utf8');
-      const workflowId = await client.run(planPath);
+      const existingWorkflowId = command.executionKey ? startedPlans.get(command.executionKey) : undefined;
+      const planPath = path.join(plansDir, `manager-${command.executionKey ?? Date.now()}.yaml`);
+      if (!existingWorkflowId) writeFileSync(planPath, command.planText, 'utf8');
+      const workflowId = existingWorkflowId ?? await client.run(planPath);
+      if (command.executionKey) startedPlans.set(command.executionKey, workflowId);
       log('info', `submitted plan → workflow ${workflowId}`);
       await slack.handleEvent({
         type: 'workflow_created',

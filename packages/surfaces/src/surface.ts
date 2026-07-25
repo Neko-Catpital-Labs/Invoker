@@ -25,6 +25,7 @@ export type SurfaceCommand =
       requestedBy?: string;
       lobbyChannel?: string;
       lobbyThreadTs?: string;
+      executionKey?: string;
     };
 
 // ── Workflow operations (Surface → Orchestrator, lobby command routing) ──
