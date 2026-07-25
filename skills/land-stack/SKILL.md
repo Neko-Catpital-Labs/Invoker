@@ -3,7 +3,7 @@ name: land-stack
 description: >
   Land (queue/merge) a Mergify-managed PR stack safely. Trigger when asked to
   land, merge, ship, or queue a PR or PR stack with Mergify. Enforces that you
-  act only on confirmed, SHA-verified PR numbers — never a PR found by branch name.
+  act only on SHA-verified PR numbers — never a PR found by branch name.
 ---
 
 # land-stack
@@ -14,7 +14,7 @@ Use this skill whenever the user asks to **land / merge / ship / queue** a PR or
 
 **Never identify the PR to land by branch name.** Two different PRs can share a
 branch name (an auto-generated workflow branch PR and the intended `stack/...`
-PR). You must land by **confirmed PR number**, and every PR must pass the guard
+PR). You must land by **SHA-verified PR number**, and every PR must pass the guard
 before any write (label, thread-resolve, queue, merge).
 
 ## Steps
@@ -30,8 +30,14 @@ before any write (label, thread-resolve, queue, merge).
      is actually available for review.
    - Order the stack by base/head links: the bottom PR targets the trunk; each
      later PR targets the previous PR's head branch.
-   - Run the guard on the suggested sequence. If it passes, present the exact
-     bottom-up PR numbers and ask the user to confirm them before landing.
+   - Detect whether two or more open candidates share the same `headRefName`.
+     If they do, present the exact bottom-up PR numbers and ask the user to
+     confirm them before landing. This is the only discovery case that requires
+     confirmation.
+   - If every candidate `headRefName` is unique, run the guard on the suggested
+     sequence and, when it passes, land it without an additional confirmation.
+     The requested landing action plus a SHA-verified, guarded PR sequence is
+     sufficient authorization.
 
    Never discover by branch name. Do not run `gh pr list --head <branch>` to
    decide what to land; that is the unsafe path this skill exists to prevent.
@@ -46,7 +52,7 @@ before any write (label, thread-resolve, queue, merge).
    code you reviewed), head branch is a real `stack/` branch (rejects raw
    workflow branches), the PRs form a proper stack (each base is the previous
    head; the bottom's base is the trunk), and all are OPEN. If any check FAILs,
-   stop and reconfirm the PR numbers with the user — do not work around it.
+   stop and resolve the mismatch with a fresh discovery pass — do not work around it.
 
 3. **Land bottom-up:**
 
