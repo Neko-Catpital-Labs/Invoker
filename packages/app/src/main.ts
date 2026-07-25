@@ -277,6 +277,7 @@ import {
 } from './window/window-lifecycle.js';
 import { createRendererTaskFeed } from './window/renderer-task-feed.js';
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
+import { currentBuildIdentity } from './build-identity.js';
 import { logProcessError } from './process-error-handling.js';
 
 
@@ -349,9 +350,6 @@ function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependenc
   const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
   return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
 }
-
-declare const __BUILD_SHA__: string | undefined;
-declare const __BUILD_VERSION__: string | undefined;
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -450,8 +448,7 @@ const appProcessStartedAt = Date.now();
 
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
 let guiInstanceLock: GuiInstanceLock | null = null;
-const buildSha = typeof __BUILD_SHA__ !== 'undefined' ? __BUILD_SHA__ : 'dev';
-const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev';
+const { version: buildVersion, sha: buildSha } = currentBuildIdentity();
 logger.info(`Invoker ${buildVersion} (${buildSha})`, { module: 'startup' });
 
 const headlessExecMutationContext: HeadlessExecMutationContext = {
@@ -497,6 +494,9 @@ async function discoverStandaloneOwnerForGui(waitMs: number): Promise<boolean> {
       if (isStandaloneCapable(owner)) {
         logger.info(`daemon owner ready ownerId=${owner.ownerId}`, { module: 'init' });
         return true;
+      }
+      if (owner?.buildMismatchReason) {
+        logger.warn(`daemon owner ${owner.ownerId} incompatible: ${owner.buildMismatchReason}`, { module: 'init' });
       }
       ownerBus.disconnect();
       ownerBus = new IpcBus(undefined, { allowServe: false });
@@ -1593,6 +1593,8 @@ function startHeadlessMode(): void {
             ok: true,
             ownerId: workflowMutationOwnerId,
             mode: 'standalone',
+            buildVersion,
+            buildSha,
           };
         });
         messageBus.onRequest('headless.query', async (req: unknown) =>
@@ -2401,7 +2403,11 @@ function createEmbeddedTerminalBackendFromConfig(
         const owner = await discoverOwner(messageBus, 1500);
         if (!isStandaloneCapable(owner)) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
-          process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
+          if (owner?.buildMismatchReason) {
+            process.stderr.write(`${RED}Detached viewer fallback refused: ${owner.buildMismatchReason}\n${RESET}`);
+          } else {
+            process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
+          }
           app.quit();
           return;
         }
@@ -2591,6 +2597,8 @@ function createEmbeddedTerminalBackendFromConfig(
         ok: true,
         ownerId: workflowMutationOwnerId,
         mode: 'gui',
+        buildVersion,
+        buildSha,
       }));
       messageBus.onRequest('headless.query', async (req: unknown) =>
         answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
