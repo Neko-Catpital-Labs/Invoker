@@ -124,8 +124,8 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
     expect(actions.get('a')?.status).toBe('completed');
   });
 
-  it('releases a PR repair lease when it reconciles a terminal action', () => {
-    const action = toRecord({
+  it('releases PR repair leases for reconciled review-comment and queue-dequeue actions', () => {
+    const reviewAction = toRecord({
       id: 'a',
       workerKind: 'review-comments',
       actionType: 'address-review-comments',
@@ -137,23 +137,63 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
       intentId: '9',
       payload: { prRepairLeaseId: 'lease-1' },
     });
+    const queueAction = toRecord({
+      id: 'b',
+      workerKind: 'pr-queue-land',
+      actionType: 'land-dequeued-pr',
+      workflowId: 'wf-2',
+      subjectType: 'pull_request',
+      subjectId: 'owner/repo#2',
+      externalKey: 'b',
+      status: 'running',
+      intentId: '10',
+      payload: { prRepairLeaseId: 'lease-2' },
+    });
+    const actions = new Map<string, WorkerActionRecord>([
+      ['a', reviewAction],
+      ['b', queueAction],
+    ]);
     const deletePrRepairLeaseById = vi.fn(() => true);
     const store = {
-      listWorkerActions: () => [action],
-      listWorkflowMutationIntents: () => [{
-        id: 9,
-        workflowId: 'wf-1',
-        channel: 'invoker:repair-review-comments',
-        args: [],
-        priority: 'normal' as const,
-        status: 'completed' as const,
-        createdAt: '2026-01-01T00:00:00.000Z',
-      }],
-      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => toRecord(write)),
+      listWorkerActions: () => Array.from(actions.values()),
+      listWorkflowMutationIntents: (workflowId?: string) => {
+        if (workflowId === 'wf-1') {
+          return [{
+            id: 9,
+            workflowId: 'wf-1',
+            channel: 'invoker:repair-review-comments',
+            args: [],
+            priority: 'normal' as const,
+            status: 'completed' as const,
+            createdAt: '2026-01-01T00:00:00.000Z',
+          }];
+        }
+        if (workflowId === 'wf-2') {
+          return [{
+            id: 10,
+            workflowId: 'wf-2',
+            channel: 'invoker:repair-queue-dequeue',
+            args: [],
+            priority: 'high' as const,
+            status: 'failed' as const,
+            error: 'queue still blocked',
+            createdAt: '2026-01-01T00:00:00.000Z',
+          }];
+        }
+        return [];
+      },
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+        const saved = toRecord(write);
+        actions.set(saved.id, saved);
+        return saved;
+      }),
       deletePrRepairLeaseById,
     };
 
-    expect(reconcileTerminalWorkerActionsOnStartup(store)).toBe(1);
+    expect(reconcileTerminalWorkerActionsOnStartup(store)).toBe(2);
     expect(deletePrRepairLeaseById).toHaveBeenCalledWith('lease-1');
+    expect(deletePrRepairLeaseById).toHaveBeenCalledWith('lease-2');
+    expect(actions.get('a')).toMatchObject({ status: 'completed', payload: expect.objectContaining({ reconciledIntentStatus: 'completed' }) });
+    expect(actions.get('b')).toMatchObject({ status: 'failed', payload: expect.objectContaining({ reconciledIntentStatus: 'failed', intentError: 'queue still blocked' }) });
   });
 });

@@ -147,8 +147,8 @@ import {
 } from './headless.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import {
-  PR_QUEUE_DEQUEUED_REPAIR_CHANNEL,
-  PR_REVIEW_COMMENT_REPAIR_CHANNEL,
+  PR_QUEUE_DEQUEUE_REPAIR_CHANNEL,
+  REVIEW_COMMENTS_REPAIR_CHANNEL,
   prepareQueueDequeueRepair,
   prepareReviewCommentRepair,
 } from './pr-lifecycle-repair-command.js';
@@ -307,6 +307,14 @@ function submitRegisteredOwnerWorkerMutation(
   }
   return workflowMutationCoordinator.submit(workflowId, priority, channel, mutationArgs, options);
 }
+
+function invalidateRegisteredOwnerWorkerMutation(workflowId: string, intentId: string, reason: string): void {
+  if (!workflowMutationCoordinator) {
+    throw new Error('Workflow mutation coordinator is unavailable');
+  }
+  workflowMutationCoordinator.invalidateIntent(workflowId, intentId, reason);
+}
+
 const autoFixAttemptLedger = createAutoFixAttemptLedger();
 
 
@@ -329,6 +337,7 @@ function buildRegisteredOwnerWorkerDeps(
     store,
     submitter: {
       submit: submitRegisteredOwnerWorkerMutation,
+      invalidateIntent: invalidateRegisteredOwnerWorkerMutation,
     },
     logger,
     messageBus,
@@ -999,8 +1008,10 @@ function startHeadlessMode(): void {
         }),
         resetUiPerfStats: () => {},
         waitForApproval,
-        noTrack,
-        executionAgentRegistry: agentRegistry,
+        submitter: {
+          submit: submitRegisteredOwnerWorkerMutation,
+          invalidateIntent: invalidateRegisteredOwnerWorkerMutation,
+        },
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
         repairReviewGateCi: (prArg: string) => repairReviewGateCiByPr(prArg, {
@@ -1501,8 +1512,8 @@ function startHeadlessMode(): void {
             return { ok: true };
           });
         }
-        if (!workflowMutationDispatcher.has(PR_REVIEW_COMMENT_REPAIR_CHANNEL)) {
-          workflowMutationDispatcher.set(PR_REVIEW_COMMENT_REPAIR_CHANNEL, async (intent: unknown) => {
+        if (!workflowMutationDispatcher.has(REVIEW_COMMENTS_REPAIR_CHANNEL)) {
+          workflowMutationDispatcher.set(REVIEW_COMMENTS_REPAIR_CHANNEL, async (intent: unknown) => {
             const repair = prepareReviewCommentRepair(intent, { persistence });
             await runHeadless(repair.headlessArgs, {
               ...headlessDeps,
@@ -1514,8 +1525,8 @@ function startHeadlessMode(): void {
             return { ok: true };
           });
         }
-        if (!workflowMutationDispatcher.has(PR_QUEUE_DEQUEUED_REPAIR_CHANNEL)) {
-          workflowMutationDispatcher.set(PR_QUEUE_DEQUEUED_REPAIR_CHANNEL, async (intent: unknown) => {
+        if (!workflowMutationDispatcher.has(PR_QUEUE_DEQUEUE_REPAIR_CHANNEL)) {
+          workflowMutationDispatcher.set(PR_QUEUE_DEQUEUE_REPAIR_CHANNEL, async (intent: unknown) => {
             const repair = prepareQueueDequeueRepair(intent, { persistence });
             await runHeadless(repair.headlessArgs, {
               ...headlessDeps,

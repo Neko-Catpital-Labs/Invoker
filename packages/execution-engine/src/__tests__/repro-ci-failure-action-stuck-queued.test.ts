@@ -140,6 +140,8 @@ function makeHarness(opts: { intents: WorkflowMutationIntent[]; existingActionSt
   const event = makeEvent();
   const externalKey = ciFailureActionKey(event);
   const actions = new Map<string, WorkerActionRecord>();
+  const leases = new Map<string, { repo: string; prNumber: number; headSha: string; leaseId: string; commandId?: string }>();
+
   actions.set(`${CI_FAILURE_WORKER_KIND}:${externalKey}`, toRecord({
     id: `${CI_FAILURE_WORKER_KIND}:${externalKey}`,
     workerKind: CI_FAILURE_WORKER_KIND,
@@ -168,11 +170,23 @@ function makeHarness(opts: { intents: WorkflowMutationIntent[]; existingActionSt
       actions.set(`${write.workerKind}:${write.externalKey}`, saved);
       return saved;
     }),
+    getPrRepairLease: vi.fn((repo: string, prNumber: number, headSha: string) => leases.get(`${repo}:${prNumber}:${headSha}`)),
+    upsertPrRepairLease: vi.fn((lease: { repo: string; prNumber: number; headSha: string; leaseId: string; commandId?: string }) => {
+      leases.set(`${lease.repo}:${lease.prNumber}:${lease.headSha}`, lease);
+      return lease;
+    }),
+    getPrRepairLeaseById: vi.fn((leaseId: string) => Array.from(leases.values()).find((lease) => lease.leaseId === leaseId)),
+    deletePrRepairLeaseById: vi.fn((leaseId: string) => {
+      const entry = Array.from(leases.entries()).find(([, lease]) => lease.leaseId === leaseId);
+      if (!entry) return false;
+      leases.delete(entry[0]);
+      return true;
+    }),
     logEvent: vi.fn(),
   };
   const tick = createCiFailureTick({
     store,
-    submitter: { submit },
+    submitter: { submit, invalidateIntent: vi.fn() },
     logger,
     attemptLedger: createAutoFixAttemptLedger(),
     defaultAutoFixRetries: 10,

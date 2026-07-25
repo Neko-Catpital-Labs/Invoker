@@ -26,6 +26,7 @@ import { DEFAULT_EXECUTION_AGENT, type TaskRunner, type ReviewGateCiFailureTrigg
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import {
   isReviewGateCiContextStale,
+  type PrRepairLeaseContext,
   type ReviewGateCiContext,
   type ReviewGateLineageFields,
 } from './auto-fix-intents.js';
@@ -33,6 +34,7 @@ import { createDeleteAllSnapshot } from './delete-all-snapshot.js';
 import type { WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import { isDispatchableLaunch } from './global-topup.js';
 import { loadConfig, resolveConflictResolutionSettings, resolveDefaultExecutionAgent } from './config.js';
+import { assertActiveBabysitPrRepairLease } from './pr-repair-lease-command-guard.js';
 
 type LoadedWorkflow = NonNullable<ReturnType<SQLiteAdapter['loadWorkflow']>>;
 type FreshBaseState = { branch: string; commit: string };
@@ -881,6 +883,7 @@ export async function fixWithAgentAction(
     recreateOutputLabel?: string;
     failureOutputLabel?: string;
     reviewGateContext?: ReviewGateCiContext;
+    prRepairLease?: PrRepairLeaseContext;
     signal?: AbortSignal;
   } = {},
 ): Promise<FixWithAgentActionResult> {
@@ -894,6 +897,9 @@ export async function fixWithAgentAction(
   // those entry states and records them, so `revertFixSession` returns the
   // gate to the review-polling loop instead of flipping an open gate to
   // `failed`.
+  if (options.prRepairLease) {
+    assertActiveBabysitPrRepairLease(options.prRepairLease, persistence, 'repair');
+  }
   if (options.reviewGateContext) {
     assertReviewGateCiContextCurrent(taskId, options.reviewGateContext, task);
   }

@@ -24,6 +24,7 @@ export interface WorkerMutationSubmitter {
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
+  invalidateIntent(workflowId: string, intentId: string, reason: string): void;
 }
 
 export interface WorkerGitHubPullRequest {

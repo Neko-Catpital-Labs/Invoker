@@ -84,6 +84,40 @@ export function decodeReviewGateCiContext(encoded: unknown): ReviewGateCiContext
     fixContext: typeof candidate.fixContext === 'string' ? candidate.fixContext : undefined,
   };
 }
+function encodePrRepairLeaseContext(context: PrRepairLeaseContext): string {
+  return JSON.stringify(context);
+}
+
+function decodePrRepairLeaseContext(encoded: unknown): PrRepairLeaseContext | undefined {
+  if (typeof encoded !== 'string' || encoded.length === 0) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(encoded);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return undefined;
+  }
+  const candidate = parsed as Record<string, unknown>;
+  if (
+    typeof candidate.repo !== 'string'
+    || typeof candidate.prNumber !== 'number'
+    || typeof candidate.headSha !== 'string'
+    || typeof candidate.leaseId !== 'string'
+  ) {
+    return undefined;
+  }
+  return {
+    repo: candidate.repo,
+    prNumber: candidate.prNumber,
+    headSha: candidate.headSha,
+    leaseId: candidate.leaseId,
+  };
+}
+
 
 export function isReviewGateCiContextStale(
   context: ReviewGateCiContext,
@@ -100,6 +134,7 @@ export function isReviewGateCiContextStale(
 
 const AUTO_FIX_FLAG = '--auto-fix';
 const REVIEW_GATE_CI_FLAG = '--review-gate-ci';
+const PR_REPAIR_LEASE_FLAG = '--pr-repair-lease';
 
 export interface AutoFixCommandContext {
   autoFix: boolean;
@@ -136,6 +171,14 @@ export function parseHeadlessFixArgs(args: readonly string[]): ParsedHeadlessFix
       i += 1;
       continue;
     }
+    if (token === PR_REPAIR_LEASE_FLAG) {
+      const decoded = decodePrRepairLeaseContext(rest[i + 1]);
+      if (decoded) {
+        prRepairLease = decoded;
+      }
+      i += 1;
+      continue;
+    }
     if (taskId === undefined) {
       taskId = token;
       continue;
@@ -145,7 +188,7 @@ export function parseHeadlessFixArgs(args: readonly string[]): ParsedHeadlessFix
     }
   }
 
-  return { taskId, agentName, autoFix, reviewGateContext };
+  return { taskId, agentName, autoFix, reviewGateContext, prRepairLease };
 }
 
 export function buildHeadlessFixArgs(
@@ -162,6 +205,9 @@ export function buildHeadlessFixArgs(
   }
   if (context.reviewGateContext) {
     args.push(REVIEW_GATE_CI_FLAG, encodeReviewGateCiContext(context.reviewGateContext));
+  }
+  if (context.prRepairLease) {
+    args.push(PR_REPAIR_LEASE_FLAG, encodePrRepairLeaseContext(context.prRepairLease));
   }
   return args;
 }

@@ -76,6 +76,16 @@ const queueEvent: PrQueueDequeuedLifecycleEvent = {
   failedChecks: ['CI'],
   createdAt: '2026-01-01T00:00:00.000Z',
 };
+const unmappedReviewEvent: PrReviewCommentsLifecycleEvent = {
+  ...reviewEvent,
+  workflowId: undefined,
+};
+
+const unmappedQueueEvent: PrQueueDequeuedLifecycleEvent = {
+  ...queueEvent,
+  workflowId: undefined,
+};
+
 
 describe('submit-only PR lifecycle workers', () => {
   it('deduplicates review comments, records command-not-ready, and releases its lease', async () => {
@@ -93,19 +103,88 @@ describe('submit-only PR lifecycle workers', () => {
     expect(harness.leases).toEqual(new Map());
   });
 
-  it('records a command-not-ready queue action without a workflow or command submission', async () => {
+  it('records workflow-unmapped for review comments and releases the lease', async () => {
     const harness = createStore();
-    const tick = createPrQueueLandTick({ store: harness.store, logger, drainEvents: () => [queueEvent] });
+    const tick = createReviewCommentsTick({ store: harness.store, logger, drainEvents: () => [unmappedReviewEvent] });
+
+    await tick({ identity: { kind: REVIEW_COMMENTS_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.actions.get(`${REVIEW_COMMENTS_WORKER_KIND}:${reviewCommentsActionKey(unmappedReviewEvent)}`)).toMatchObject({
+      status: 'skipped',
+      payload: expect.objectContaining({ reason: 'workflow-unmapped', commentUrls: reviewEvent.commentUrls }),
+    });
+    expect(harness.leases).toEqual(new Map());
+  });
+
+  it('records workflow-unmapped queue action without falling back to command-not-ready', async () => {
+    const harness = createStore();
+    const tick = createPrQueueLandTick({ store: harness.store, logger, drainEvents: () => [unmappedQueueEvent] });
 
     await tick({ identity: { kind: PR_QUEUE_LAND_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
 
     expect(harness.store.upsertPrRepairLease).toHaveBeenCalledWith(expect.objectContaining({ holderKind: 'queue_dequeued' }));
-    const action = harness.actions.get(`${PR_QUEUE_LAND_WORKER_KIND}:${prQueueLandActionKey(queueEvent)}`);
+    const action = harness.actions.get(`${PR_QUEUE_LAND_WORKER_KIND}:${prQueueLandActionKey(unmappedQueueEvent)}`);
     expect(action).toMatchObject({
       status: 'skipped',
-      payload: expect.objectContaining({ reason: 'command-not-ready', failedChecks: ['CI'] }),
+      payload: expect.objectContaining({ reason: 'workflow-unmapped', failedChecks: ['CI'] }),
     });
     expect(action?.workflowId).toBeUndefined();
     expect(harness.leases).toEqual(new Map());
   });
+
+  it('records command-not-ready for mapped dequeue repairs', async () => {
+    const harness = createStore();
+    const tick = createPrQueueLandTick({
+      store: harness.store,
+      logger,
+      drainEvents: () => [{ ...queueEvent, workflowId: 'wf-1' }],
+    });
+
+    await tick({ identity: { kind: PR_QUEUE_LAND_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    const action = harness.actions.get(`${PR_QUEUE_LAND_WORKER_KIND}:${prQueueLandActionKey({ ...queueEvent, workflowId: 'wf-1' })}`);
+    expect(action).toMatchObject({
+      status: 'skipped',
+      workflowId: 'wf-1',
+      payload: expect.objectContaining({ reason: 'command-not-ready', failedChecks: ['CI'] }),
+    });
+    expect(harness.leases).toEqual(new Map());
+  });
+  it('records cooldown-active instead of resubmitting the same dequeue fingerprint', async () => {
+    const harness = createStore();
+    const externalKey = prQueueLandActionKey({ ...queueEvent, workflowId: 'wf-1' });
+    const now = new Date().toISOString();
+    harness.actions.set(`${PR_QUEUE_LAND_WORKER_KIND}:${externalKey}`, {
+      workerKind: PR_QUEUE_LAND_WORKER_KIND,
+      actionType: 'land-dequeued-pr',
+      externalKey,
+      subjectType: 'pull_request',
+      subjectId: `${queueEvent.repo}#${queueEvent.prNumber}`,
+      workflowId: 'wf-1',
+      status: 'failed',
+      summary: 'Older dequeue repair failed',
+      payload: { headSha: queueEvent.headSha, failedChecks: queueEvent.failedChecks },
+      attemptCount: 1,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: now,
+    });
+    const tick = createPrQueueLandTick({
+      store: harness.store,
+      logger,
+      drainEvents: () => [{ ...queueEvent, workflowId: 'wf-1' }],
+    });
+
+    await tick({ identity: { kind: PR_QUEUE_LAND_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    const action = harness.actions.get(`${PR_QUEUE_LAND_WORKER_KIND}:${externalKey}`);
+    expect(action).toMatchObject({
+      status: 'skipped',
+      workflowId: 'wf-1',
+      payload: expect.objectContaining({ reason: 'cooldown-active', failedChecks: ['CI'] }),
+    });
+    expect((action?.payload as Record<string, unknown>).cooldownUntil).toEqual(expect.any(String));
+    expect(harness.leases).toEqual(new Map());
+  });
+
 });

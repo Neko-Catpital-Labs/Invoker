@@ -1,5 +1,5 @@
 import type { Logger } from '@invoker/contracts';
-import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationPriority } from '@invoker/data-store';
+import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationIntent, WorkflowMutationPriority } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
 
 import type { PrReviewCommentsLifecycleEvent, WorkflowLifecycleEvent } from '../lifecycle-events.js';
@@ -17,6 +17,7 @@ export const REVIEW_COMMENTS_REPAIR_CHANNEL = 'invoker:repair-review-comments';
 export interface ReviewCommentsWorkerStore extends PrRepairLeaseStore {
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
+  listWorkflowMutationIntents?(workflowId?: string, statuses?: Array<'completed' | 'failed'>): WorkflowMutationIntent[];
 }
 
 export interface ReviewCommentsWorkerPolicyOptions {
@@ -28,6 +29,8 @@ export interface ReviewCommentsWorkerPolicyOptions {
       channel: typeof REVIEW_COMMENTS_REPAIR_CHANNEL,
       args: unknown[],
     ): number;
+    invalidateIntent(workflowId: string, intentId: string, reason: string): void;
+
   };
   logger: Logger;
   drainEvents?: () => PrReviewCommentsLifecycleEvent[];
@@ -49,6 +52,44 @@ export function reviewCommentsActionKey(event: Pick<
   'repo' | 'prNumber' | 'headSha' | 'commentMarker'
 >): string {
   return [REVIEW_COMMENTS_WORKER_KIND, event.repo, event.prNumber, event.headSha, event.commentMarker].join(':');
+}
+function firstLine(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.split('\n', 1)[0];
+}
+function repairPreemptionReason(intentId?: number): string {
+  return intentId === undefined
+    ? 'Superseded by repair preemption'
+    : `Superseded by repair preemption intent #${intentId}`;
+}
+
+
+function reconcileFinishedIntentAction(
+  options: ReviewCommentsWorkerPolicyOptions,
+  event: PrReviewCommentsLifecycleEvent,
+): void {
+  const existing = options.store.getWorkerAction?.(REVIEW_COMMENTS_WORKER_KIND, reviewCommentsActionKey(event));
+  if (!existing?.intentId || !existing.workflowId || !['queued', 'pending', 'running'].includes(existing.status)) return;
+  const intents = options.store.listWorkflowMutationIntents?.(existing.workflowId, ['completed', 'failed']) ?? [];
+  const intent = intents.find((candidate) => String(candidate.id) === existing.intentId);
+  if (!intent) return;
+  const payload = existing.payload && typeof existing.payload === 'object'
+    ? { ...(existing.payload as Record<string, unknown>) }
+    : {};
+  const now = new Date().toISOString();
+  const status = intent.status === 'completed' ? 'completed' : 'failed';
+  options.store.upsertWorkerAction?.({
+    ...existing,
+    status,
+    summary: status === 'completed'
+      ? 'Review-comment repair intent completed'
+      : `Review-comment repair intent failed: ${firstLine(intent.error) ?? 'unknown error'}`,
+    payload: { ...payload, reconciledIntentStatus: intent.status, intentError: intent.error ?? null },
+    updatedAt: now,
+    completedAt: now,
+  });
+  if (typeof payload.prRepairLeaseId === 'string') releasePrRepairLease(payload.prRepairLeaseId, options.store);
 }
 
 export function registerReviewCommentsWorker(
@@ -72,6 +113,7 @@ function handleReviewCommentsEvent(
   event: PrReviewCommentsLifecycleEvent,
 ): void {
   const externalKey = reviewCommentsActionKey(event);
+  reconcileFinishedIntentAction(options, event);
   const existing = options.store.getWorkerAction?.(REVIEW_COMMENTS_WORKER_KIND, externalKey);
   if (existing && existing.status !== 'skipped' && existing.status !== 'failed') return;
 
@@ -98,6 +140,10 @@ function handleReviewCommentsEvent(
     });
     return;
   }
+  if (lease.preempted && lease.previousCommandId) {
+    options.submitter?.invalidateIntent(event.workflowId ?? '', lease.previousCommandId, repairPreemptionReason());
+  }
+
 
   if (!event.workflowId) {
     recordWorkerDecisionRow(options.store, {
@@ -109,7 +155,12 @@ function handleReviewCommentsEvent(
       status: 'skipped',
       summary: 'Skipped review-comment repair because the PR has no mapped workflow',
       reason: 'workflow-unmapped',
-      payload: { headSha: event.headSha, prRepairLeaseId: lease.leaseId },
+      payload: {
+        headSha: event.headSha,
+        commentMarker: event.commentMarker,
+        commentUrls: event.commentUrls,
+        prRepairLeaseId: lease.leaseId,
+      },
     });
     releasePrRepairLease(lease.leaseId, options.store);
     return;
@@ -126,7 +177,12 @@ function handleReviewCommentsEvent(
       status: 'skipped',
       summary: 'Skipped review-comment repair because the command is not ready',
       reason: 'command-not-ready',
-      payload: { headSha: event.headSha, commentUrls: event.commentUrls, prRepairLeaseId: lease.leaseId },
+      payload: {
+        headSha: event.headSha,
+        commentMarker: event.commentMarker,
+        commentUrls: event.commentUrls,
+        prRepairLeaseId: lease.leaseId,
+      },
     });
     releasePrRepairLease(lease.leaseId, options.store);
     return;
@@ -143,6 +199,13 @@ function handleReviewCommentsEvent(
       eventKey: event.eventKey,
       commentUrl: event.commentUrls[0],
     }]);
+    const activeLease = options.store.getPrRepairLeaseById(lease.leaseId);
+    if (activeLease) {
+      options.store.upsertPrRepairLease({ ...activeLease, commandId: String(intentId) });
+    }
+    if (lease.preempted && lease.previousCommandId) {
+      options.submitter.invalidateIntent(event.workflowId, lease.previousCommandId, repairPreemptionReason(intentId));
+    }
     recordWorkerDecisionRow(options.store, {
       workerKind: REVIEW_COMMENTS_WORKER_KIND,
       actionType: REVIEW_COMMENTS_ACTION_TYPE,
@@ -153,7 +216,12 @@ function handleReviewCommentsEvent(
       status: 'queued',
       summary: 'Queued review-comment repair',
       intentId: String(intentId),
-      payload: { headSha: event.headSha, commentUrls: event.commentUrls, prRepairLeaseId: lease.leaseId },
+      payload: {
+        headSha: event.headSha,
+        commentMarker: event.commentMarker,
+        commentUrls: event.commentUrls,
+        prRepairLeaseId: lease.leaseId,
+      },
     });
   } catch (error) {
     releasePrRepairLease(lease.leaseId, options.store);

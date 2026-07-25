@@ -103,6 +103,8 @@ describe('createCiFailureTick resilience', () => {
     const events = [makeEvent('task-1'), makeEvent('task-2'), makeEvent('task-3')];
     const tasks = new Map<string, TaskState>(events.map((event) => [event.taskId, makeTask(event.taskId)]));
     const actions = new Map<string, WorkerActionRecord>();
+    const leases = new Map<string, { repo: string; prNumber: number; headSha: string; leaseId: string; commandId?: string }>();
+
     const submit = vi.fn<[string, WorkflowMutationPriority, string, unknown[]], number>(() => 42);
     const store = {
       loadTasks: vi.fn((workflowId: string) => workflowId === 'wf-1' ? Array.from(tasks.values()) : []),
@@ -120,12 +122,24 @@ describe('createCiFailureTick resilience', () => {
         actions.set(`${write.workerKind}:${write.externalKey}`, saved);
         return saved;
       }),
+      getPrRepairLease: vi.fn((repo: string, prNumber: number, headSha: string) => leases.get(`${repo}:${prNumber}:${headSha}`)),
+      upsertPrRepairLease: vi.fn((lease: { repo: string; prNumber: number; headSha: string; leaseId: string; commandId?: string }) => {
+        leases.set(`${lease.repo}:${lease.prNumber}:${lease.headSha}`, lease);
+        return lease;
+      }),
+      getPrRepairLeaseById: vi.fn((leaseId: string) => Array.from(leases.values()).find((lease) => lease.leaseId === leaseId)),
+      deletePrRepairLeaseById: vi.fn((leaseId: string) => {
+        const entry = Array.from(leases.entries()).find(([, lease]) => lease.leaseId === leaseId);
+        if (!entry) return false;
+        leases.delete(entry[0]);
+        return true;
+      }),
       logEvent: vi.fn(),
     };
 
     const tick = createCiFailureTick({
       store,
-      submitter: { submit },
+      submitter: { submit, invalidateIntent: vi.fn() },
       logger,
       attemptLedger: createAutoFixAttemptLedger(),
       defaultAutoFixRetries: 2,
@@ -141,8 +155,10 @@ describe('createCiFailureTick resilience', () => {
 
     const submittedTaskIds = submit.mock.calls.map((call) => (call[3] as [string, ...unknown[]])[0]);
     expect(submittedTaskIds).toContain('task-1');
-    expect(submittedTaskIds).toContain('task-3');
-    expect(submit).toHaveBeenCalledTimes(2);
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(Array.from(actions.values())).toEqual(expect.arrayContaining([
+      expect.objectContaining({ payload: expect.objectContaining({ reason: 'lease-held' }) }),
+    ]));
     expect(logger.error).toHaveBeenCalled();
   });
 });

@@ -1,12 +1,12 @@
 import type { SQLiteAdapter } from '@invoker/data-store';
 import {
   buildHeadlessFixArgs,
-  PR_QUEUE_DEQUEUED_REPAIR_CHANNEL,
-  PR_REVIEW_COMMENT_REPAIR_CHANNEL,
+  PR_QUEUE_DEQUEUE_REPAIR_CHANNEL,
+  REVIEW_COMMENTS_REPAIR_CHANNEL,
   type ReviewGateCiContext,
 } from '@invoker/execution-engine';
 
-export { PR_QUEUE_DEQUEUED_REPAIR_CHANNEL, PR_REVIEW_COMMENT_REPAIR_CHANNEL };
+export { PR_QUEUE_DEQUEUE_REPAIR_CHANNEL, REVIEW_COMMENTS_REPAIR_CHANNEL };
 
 type PrLifecycleRepairKind = 'review_comments' | 'queue_dequeued';
 
@@ -120,6 +120,7 @@ export function prepareReviewCommentRepair(
     headlessArgs: buildHeadlessFixArgs(task.id, undefined, {
       autoFix: true,
       reviewGateContext: context,
+      prRepairLease: { repo: intent.repo, prNumber: intent.prNumber, headSha: intent.headSha, leaseId: intent.leaseId },
     }),
   };
 }
@@ -156,6 +157,7 @@ export function prepareQueueDequeueRepair(
     headlessArgs: buildHeadlessFixArgs(task.id, undefined, {
       autoFix: true,
       reviewGateContext: context,
+      prRepairLease: { repo: intent.repo, prNumber: intent.prNumber, headSha: intent.headSha, leaseId: intent.leaseId },
     }),
   };
 }

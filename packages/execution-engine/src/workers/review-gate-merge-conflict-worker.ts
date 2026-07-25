@@ -63,6 +63,8 @@ export interface ReviewGateMergeConflictWorkerSubmitter {
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
+  invalidateIntent(workflowId: string, intentId: string, reason: string): void;
+
 }
 
 export interface ReviewGateMergeConflictWorkerPolicyOptions {
@@ -335,6 +337,12 @@ function firstLine(text: string | undefined): string | undefined {
   return trimmed.split('\n', 1)[0];
 }
 
+function repairPreemptionReason(intentId?: number): string {
+  return intentId === undefined
+    ? 'Superseded by repair preemption'
+    : `Superseded by repair preemption intent #${intentId}`;
+}
+
 function reconcileFinishedIntentAction(
   options: ReviewGateMergeConflictWorkerPolicyOptions,
   event: ReviewGateMergeConflictLifecycleEvent,
@@ -444,6 +452,10 @@ async function handleReviewGateMergeConflictEvent(
     });
     return;
   }
+  if (lease.preempted && lease.previousCommandId) {
+    options.submitter.invalidateIntent(event.workflowId, lease.previousCommandId, repairPreemptionReason());
+  }
+
 
   let intentId: number;
   try {
@@ -457,6 +469,13 @@ async function handleReviewGateMergeConflictEvent(
         },
       },
     ]);
+    const activeLease = options.store.getPrRepairLeaseById(lease.leaseId);
+    if (activeLease) {
+      options.store.upsertPrRepairLease({ ...activeLease, commandId: String(intentId) });
+    }
+    if (lease.preempted && lease.previousCommandId) {
+      options.submitter.invalidateIntent(event.workflowId, lease.previousCommandId, repairPreemptionReason(intentId));
+    }
   } catch (error) {
     releasePrRepairLease(lease.leaseId, options.store);
     throw error;

@@ -200,6 +200,19 @@ export class PersistedWorkflowMutationCoordinator {
     }
     return intentId;
   }
+  invalidateIntent(workflowId: string, intentId: string, reason: string): void {
+    const numericIntentId = Number(intentId);
+    if (!Number.isInteger(numericIntentId) || numericIntentId < 1) {
+      return;
+    }
+    this.invalidateIntentRecord(
+      workflowId,
+      numericIntentId,
+      reason,
+      'PersistedWorkflowMutationCoordinator.invalidateIntent',
+    );
+  }
+
 
   private findOpenCoalescibleRetryIntent(
     workflowId: string,
@@ -499,25 +512,45 @@ export class PersistedWorkflowMutationCoordinator {
       return;
     }
     for (const activeIntentId of activeIntentIds) {
-      const activeIntent = this.persistence.loadWorkflowMutationIntent(activeIntentId);
-      if (!activeIntent || activeIntent.status !== 'running') {
-        continue;
-      }
       const reason = `Superseded by ${fenceKind} intent #${newIntentId}`;
-      this.persistence.failWorkflowMutationIntent(activeIntentId, reason);
-      this.notifyIntentFailed(activeIntent, reason);
-      this.createTiming(workflowId, activeIntent.channel, activeIntent.id, activeIntent.args)
-        .mark('PersistedWorkflowMutationCoordinator.invalidateSupersededRunningIntent', 'invalidated', {
-          newIntentId,
-          channel,
-          reason,
-        });
-      const invalidation = this.runningIntentInvalidations.get(activeIntentId);
-      invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
-      invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
+      this.invalidateIntentRecord(
+        workflowId,
+        activeIntentId,
+        reason,
+        'PersistedWorkflowMutationCoordinator.invalidateSupersededRunningIntent',
+        { newIntentId, channel, reason },
+      );
       process.stderr.write(
         `[workflow-mutation-coordinator] invalidated running intent ${activeIntentId} for ${workflowId} via ${fenceKind}#${newIntentId}\n`,
       );
+    }
+  }
+
+  private invalidateIntentRecord(
+    workflowId: string,
+    intentId: number,
+    reason: string,
+    timingLabel: string,
+    timingData?: Record<string, unknown>,
+  ): void {
+    const intent = this.persistence.loadWorkflowMutationIntent(intentId);
+    if (!intent || intent.workflowId !== workflowId || (intent.status !== 'queued' && intent.status !== 'running')) {
+      return;
+    }
+    this.persistence.failWorkflowMutationIntent(intentId, reason);
+    this.notifyIntentFailed(intent, reason);
+    this.createTiming(workflowId, intent.channel, intent.id, intent.args)
+      .mark(timingLabel, 'invalidated', timingData ?? { reason });
+    if (intent.status === 'running') {
+      const invalidation = this.runningIntentInvalidations.get(intentId);
+      invalidation?.abortController.abort(new WorkflowMutationInvalidatedError(reason));
+      invalidation?.reject(new WorkflowMutationInvalidatedError(reason));
+      return;
+    }
+    const deferred = this.inFlightPromises.get(intentId);
+    if (deferred) {
+      deferred.reject(new Error(`Workflow mutation intent ${intentId} was invalidated: ${reason}`));
+      this.inFlightPromises.delete(intentId);
     }
   }
 

@@ -105,17 +105,25 @@ describe('headless fix auto-fix context', () => {
     );
   });
 
-  it('passes a decoded review-gate CI context through to the fix action', async () => {
+  it('passes decoded review-gate CI and PR repair lease context through to the fix action', async () => {
     const { runHeadless } = await import('../headless.js');
     const reviewGateContext = { reviewId: 'review-1', generation: 0, fixContext: 'fix checks' };
+    const prRepairLease = { repo: 'owner/repo', prNumber: 42, headSha: 'sha-1', leaseId: 'lease-1' };
     const { deps } = makeDeps();
 
     await runHeadless(
-      ['fix', 'wf-1/task-1', '--review-gate-ci', encodeReviewGateCiContext(reviewGateContext)],
+      [
+        'fix',
+        'wf-1/task-1',
+        '--review-gate-ci',
+        encodeReviewGateCiContext(reviewGateContext),
+        '--pr-repair-lease',
+        JSON.stringify(prRepairLease),
+      ],
       deps,
     );
 
     expect(fixWithAgentActionMock).toHaveBeenCalledTimes(1);
-    expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ reviewGateContext });
+    expect(fixWithAgentActionMock.mock.calls[0][2]).toMatchObject({ reviewGateContext, prRepairLease });
   });
 });

@@ -123,10 +123,25 @@ describe('PR lifecycle repair commands', () => {
     expect(command.headlessArgs.slice(0, 2)).toEqual(['fix', 'wf-1/merge']);
     expect(command.headlessArgs).toContain('--review-gate-ci');
   });
+  it('rejects malformed review-comment repair payloads before dispatch', () => {
+    expect(() => prepareReviewCommentRepair({
+      ...intent,
+      holderKind: 'review_comments',
+      leaseId: '',
+    }, makeDeps() as never)).toThrow(/Invalid review_comments PR repair intent metadata/);
+  });
 
-  it('rejects stale or replaced repair leases before dispatch', () => {
-    const deps = makeDeps();
-    deps.persistence.getPrRepairLease = () => ({
+  it('rejects a queue repair with the wrong holder kind before dispatch', () => {
+    expect(() => prepareQueueDequeueRepair({
+      ...intent,
+      holderKind: 'review_comments',
+    }, makeDeps() as never)).toThrow(/Invalid queue_dequeued PR repair intent metadata/);
+  });
+
+
+  it('rejects stale or replaced repair leases before dispatch for both repair channels', () => {
+    const reviewDeps = makeDeps();
+    reviewDeps.persistence.getPrRepairLease = () => ({
       repo: intent.repo,
       prNumber: intent.prNumber,
       headSha: intent.headSha,
@@ -135,10 +150,64 @@ describe('PR lifecycle repair commands', () => {
       workflowId,
       acquiredAt: '2026-01-01T00:00:00.000Z',
     });
-
     expect(() => prepareReviewCommentRepair({
       ...intent,
       holderKind: 'review_comments',
-    }, deps as never)).toThrow(/lease is no longer held/);
+    }, reviewDeps as never)).toThrow(/lease is no longer held/);
+
+    const queueDeps = makeDeps();
+    queueDeps.persistence.getPrRepairLease = () => ({
+      repo: intent.repo,
+      prNumber: intent.prNumber,
+      headSha: intent.headSha,
+      leaseId: 'replacement-lease',
+      holderKind: 'queue_dequeued',
+      workflowId,
+      acquiredAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(() => prepareQueueDequeueRepair({
+      ...intent,
+      holderKind: 'queue_dequeued',
+      failedChecks: ['quality / TypeScript Types'],
+    }, queueDeps as never)).toThrow(/lease is no longer held/);
+  });
+
+  it('rejects stale mirror heads before dispatch for both repair channels', () => {
+    const reviewDeps = makeDeps();
+    reviewDeps.persistence.getPrMirror = () => ({
+      repo: intent.repo,
+      prNumber: intent.prNumber,
+      headSha: 'different-head',
+      workflowId,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(() => prepareReviewCommentRepair({
+      ...intent,
+      holderKind: 'review_comments',
+    }, reviewDeps as never)).toThrow(/intent is stale/);
+
+    const queueDeps = makeDeps();
+    queueDeps.persistence.getPrMirror = () => ({
+      repo: intent.repo,
+      prNumber: intent.prNumber,
+      headSha: 'different-head',
+      workflowId,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    queueDeps.persistence.getPrRepairLease = () => ({
+      repo: intent.repo,
+      prNumber: intent.prNumber,
+      headSha: intent.headSha,
+      leaseId: intent.leaseId,
+      holderKind: 'queue_dequeued',
+      workflowId,
+      acquiredAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-01-02T00:00:00.000Z',
+    });
+    expect(() => prepareQueueDequeueRepair({
+      ...intent,
+      holderKind: 'queue_dequeued',
+      failedChecks: ['quality / TypeScript Types'],
+    }, queueDeps as never)).toThrow(/intent is stale/);
   });
 });

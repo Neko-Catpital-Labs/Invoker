@@ -1843,4 +1843,35 @@ describe('PersistedWorkflowMutationCoordinator', () => {
     await coordinator.enqueue<string>('wf-1', 'normal', 'invoker:approve', ['wf-1/task-alpha']);
     expect(failureEvents).toEqual([]);
   });
+
+  it('invalidates a running repair intent by explicit intent id', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    adapters.push(adapter);
+    adapter.saveWorkflow({
+      id: 'wf-1',
+      name: 'wf-1',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    const gate = deferred();
+    const coordinator = new PersistedWorkflowMutationCoordinator(
+      adapter,
+      'owner-1',
+      async () => {
+        await gate.promise;
+      },
+    );
+
+    const running = coordinator.enqueue<void>('wf-1', 'normal', 'invoker:fix-with-agent', ['wf-1/blocker-task']);
+    await waitFor(() => adapter.listWorkflowMutationIntents('wf-1', ['running']).length === 1);
+
+    coordinator.invalidateIntent('wf-1', '1', 'Superseded by repair preemption intent #2');
+    await expect(running).rejects.toThrow(/Superseded by repair preemption intent #2/);
+
+    const intent = adapter.listWorkflowMutationIntents('wf-1').find((candidate) => candidate.id === 1);
+    expect(intent?.status).toBe('failed');
+    expect(intent?.error).toContain('Superseded by repair preemption intent #2');
+    gate.resolve();
+  });
 });

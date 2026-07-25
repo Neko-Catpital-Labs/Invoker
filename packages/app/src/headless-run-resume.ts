@@ -441,6 +441,7 @@ export async function headlessFix(rawArgs: string[], deps: HeadlessDeps): Promis
       recreateOutputLabel: 'Fix with AI',
       failureOutputLabel: 'Fix with AI',
       reviewGateContext: parsed.reviewGateContext,
+      prRepairLease: parsed.prRepairLease,
       signal: deps.signal,
     });
     await finalizeMutationWithGlobalTopup({

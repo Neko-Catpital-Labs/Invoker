@@ -55,7 +55,7 @@ describe('tryAcquirePrRepairLease', () => {
   const headSha = 'abc123';
   const now = new Date('2026-07-25T17:00:00.000Z');
 
-  function acquire(store: PrRepairLeaseStore, kind: RepairKind, leaseId: string) {
+  function acquire(store: PrRepairLeaseStore, kind: RepairKind, leaseId: string, commandId?: string) {
     return tryAcquirePrRepairLease({
       repo,
       prNumber,
@@ -63,20 +63,21 @@ describe('tryAcquirePrRepairLease', () => {
       kind,
       store,
       now,
+      commandId,
       createLeaseId: () => leaseId,
     });
   }
 
   it('grants when empty', () => {
     const store = createMemoryStore();
-    const result = acquire(store, 'ci_failed', 'lease-ci-1');
+    const result = acquire(store, 'ci_failed', 'lease-ci-1', 'intent-1');
     expect(result).toEqual({ ok: true, leaseId: 'lease-ci-1', preempted: false });
-    expect(getPrRepairLease(repo, prNumber, headSha, store)?.holderKind).toBe('ci_failed');
+    expect(getPrRepairLease(repo, prNumber, headSha, store)).toMatchObject({ holderKind: 'ci_failed', commandId: 'intent-1' });
   });
 
   it('lets conflict beat ci', () => {
     const store = createMemoryStore();
-    expect(acquire(store, 'ci_failed', 'lease-ci').ok).toBe(true);
+    expect(acquire(store, 'ci_failed', 'lease-ci', 'intent-ci').ok).toBe(true);
 
     const conflict = acquire(store, 'merge_conflict', 'lease-conflict');
     expect(conflict).toEqual({
@@ -84,6 +85,8 @@ describe('tryAcquirePrRepairLease', () => {
       leaseId: 'lease-conflict',
       preempted: true,
       previousHolderKind: 'ci_failed',
+      previousLeaseId: 'lease-ci',
+      previousCommandId: 'intent-ci',
     });
     expect(getPrRepairLease(repo, prNumber, headSha, store)?.leaseId).toBe('lease-conflict');
   });
@@ -115,7 +118,7 @@ describe('tryAcquirePrRepairLease', () => {
 
   it('preempts from review to conflict', () => {
     const store = createMemoryStore();
-    expect(acquire(store, 'review_comments', 'lease-review').ok).toBe(true);
+    expect(acquire(store, 'review_comments', 'lease-review', 'intent-review').ok).toBe(true);
 
     const conflict = acquire(store, 'merge_conflict', 'lease-conflict');
     expect(conflict).toEqual({
@@ -123,6 +126,8 @@ describe('tryAcquirePrRepairLease', () => {
       leaseId: 'lease-conflict',
       preempted: true,
       previousHolderKind: 'review_comments',
+      previousLeaseId: 'lease-review',
+      previousCommandId: 'intent-review',
     });
   });
 

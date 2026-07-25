@@ -96,6 +96,7 @@ describe('parseHeadlessFixArgs', () => {
       agentName: 'codex',
       autoFix: false,
       reviewGateContext: undefined,
+      prRepairLease: undefined,
     });
   });
 
@@ -105,6 +106,7 @@ describe('parseHeadlessFixArgs', () => {
       agentName: 'claude',
       autoFix: true,
       reviewGateContext: undefined,
+      prRepairLease: undefined,
     });
   });
 
@@ -115,17 +117,22 @@ describe('parseHeadlessFixArgs', () => {
       selectedAttemptId: 'attempt-7',
       branch: 'experiment/foo',
     };
+    const prRepairLease = { repo: 'owner/repo', prNumber: 42, headSha: 'sha-1', leaseId: 'lease-1' };
     const parsed = parseHeadlessFixArgs([
-      'fix', 'wf-1/task-1', '--review-gate-ci', encodeReviewGateCiContext(ctx),
+      'fix', 'wf-1/task-1',
+      '--review-gate-ci', encodeReviewGateCiContext(ctx),
+      '--pr-repair-lease', JSON.stringify(prRepairLease),
     ]);
     expect(parsed.taskId).toBe('wf-1/task-1');
     expect(parsed.autoFix).toBe(true);
     expect(parsed.reviewGateContext).toEqual(ctx);
+    expect(parsed.prRepairLease).toEqual(prRepairLease);
   });
 
   it('ignores a malformed review-gate context payload', () => {
     const parsed = parseHeadlessFixArgs(['fix', 'wf-1/task-1', '--review-gate-ci', 'not-json']);
     expect(parsed.reviewGateContext).toBeUndefined();
+    expect(parsed.prRepairLease).toBeUndefined();
     expect(parsed.autoFix).toBe(false);
   });
 });
@@ -138,7 +145,12 @@ describe('buildHeadlessFixArgs', () => {
 
   it('appends --auto-fix and review-gate context that round-trips through parsing', () => {
     const ctx: ReviewGateCiContext = { reviewId: 'r1', generation: 3, selectedAttemptId: 'a1' };
-    const args = buildHeadlessFixArgs('wf-1/task-1', 'codex', { autoFix: true, reviewGateContext: ctx });
+    const prRepairLease = { repo: 'owner/repo', prNumber: 42, headSha: 'sha-1', leaseId: 'lease-1' };
+    const args = buildHeadlessFixArgs('wf-1/task-1', 'codex', {
+      autoFix: true,
+      reviewGateContext: ctx,
+      prRepairLease,
+    });
     expect(args.slice(0, 4)).toEqual(['fix', 'wf-1/task-1', 'codex', '--auto-fix']);
     const parsed = parseHeadlessFixArgs(args);
     expect(parsed).toEqual({
@@ -146,6 +158,7 @@ describe('buildHeadlessFixArgs', () => {
       agentName: 'codex',
       autoFix: true,
       reviewGateContext: ctx,
+      prRepairLease,
     });
   });
 });
@@ -161,7 +174,7 @@ describe('fix-with-agent mutation options', () => {
     expect(parseFixWithAgentMutationArgs(args)).toEqual({
       taskId: 'wf-1/task-1',
       agentName: 'codex',
-      context: { autoFix: true, reviewGateContext: ctx },
+      context: { autoFix: true, reviewGateContext: ctx, executionModel: undefined, prRepairLease: undefined },
     });
   });
 
@@ -169,12 +182,12 @@ describe('fix-with-agent mutation options', () => {
     expect(parseFixWithAgentMutationArgs(['wf-1/task-1', 'claude'])).toEqual({
       taskId: 'wf-1/task-1',
       agentName: 'claude',
-      context: { autoFix: false, reviewGateContext: undefined },
+      context: { autoFix: false, reviewGateContext: undefined, executionModel: undefined, prRepairLease: undefined },
     });
     expect(parseFixWithAgentMutationArgs(['wf-1/task-1'])).toEqual({
       taskId: 'wf-1/task-1',
       agentName: undefined,
-      context: { autoFix: false, reviewGateContext: undefined },
+      context: { autoFix: false, reviewGateContext: undefined, executionModel: undefined, prRepairLease: undefined },
     });
   });
 });

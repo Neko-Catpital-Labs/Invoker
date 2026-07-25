@@ -24,12 +24,12 @@ export function registerBuiltinWorkers(
   registerWorkflowResumeWorker(registry);
   registerPrStatusWorker(registry);
   registerPrSummaryRefreshWorker(registry);
+  registerPrReviewCommentsPublisherWorker(registry);
+  registerReviewCommentsWorker(registry);
+  registerPrQueueDequeuePublisherWorker(registry);
+  registerPrQueueLandWorker(registry);
   registerCiFailureWorker(registry);
   registerReviewGateMergeConflictWorker(registry);
-  registerPrReviewCommentsPublisherWorker(registry);
-  registerPrQueueDequeuePublisherWorker(registry);
-  registerReviewCommentsWorker(registry);
-  registerPrQueueLandWorker(registry);
   registerDiskHeadroomWorker(registry);
   registerAutoApproveWorker(registry);
   registerE2eAutoFixWorker(registry);

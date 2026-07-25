@@ -30,7 +30,14 @@ export interface PrRepairLeaseContext {
 
 export type TryAcquirePrRepairLeaseResult =
   | { ok: true; leaseId: string; preempted: false }
-  | { ok: true; leaseId: string; preempted: true; previousHolderKind: RepairKind }
+  | {
+    ok: true;
+    leaseId: string;
+    preempted: true;
+    previousHolderKind: RepairKind;
+    previousLeaseId: string;
+    previousCommandId?: string;
+  }
   | { ok: false; holderKind: RepairKind; reason: 'held_by_higher_or_equal_priority' };
 
 export interface TryAcquirePrRepairLeaseInput {
@@ -122,6 +129,8 @@ export function tryAcquirePrRepairLease(
       leaseId,
       preempted: true,
       previousHolderKind: existing.holderKind,
+      previousLeaseId: existing.leaseId,
+      previousCommandId: existing.commandId,
     };
   }
 

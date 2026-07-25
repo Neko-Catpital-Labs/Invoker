@@ -21,6 +21,8 @@ export const PR_QUEUE_LAND_WORKER_KIND = 'pr-queue-land';
 export const DEFAULT_PR_QUEUE_LAND_WORKER_INTERVAL_MS = 60_000;
 const PR_QUEUE_LAND_ACTION_TYPE = 'land-dequeued-pr';
 export const PR_QUEUE_DEQUEUE_REPAIR_CHANNEL = 'invoker:repair-queue-dequeue';
+const PR_QUEUE_LAND_COOLDOWN_MS = 30 * 60 * 1000;
+
 
 export interface PrQueueLandWorkerStore extends PrRepairLeaseStore {
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
@@ -37,6 +39,7 @@ export interface PrQueueLandWorkerPolicyOptions {
       channel: typeof PR_QUEUE_DEQUEUE_REPAIR_CHANNEL,
       args: unknown[],
     ): number;
+    invalidateIntent(workflowId: string, intentId: string, reason: string): void;
   };
   logger: Logger;
   drainEvents?: () => PrQueueDequeuedLifecycleEvent[];
@@ -88,6 +91,24 @@ export function registerPrQueueLandWorker(
   });
   return registry;
 }
+function firstLine(text: string | undefined): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.split('\n', 1)[0];
+}
+function repairPreemptionReason(intentId?: number): string {
+  return intentId === undefined
+    ? 'Superseded by repair preemption'
+    : `Superseded by repair preemption intent #${intentId}`;
+}
+
+function cooldownUntilIso(updatedAt: string): string | undefined {
+  const updatedAtMs = Date.parse(updatedAt);
+  if (Number.isNaN(updatedAtMs)) return undefined;
+  return new Date(updatedAtMs + PR_QUEUE_LAND_COOLDOWN_MS).toISOString();
+}
+
+
 
 function reconcileFinishedIntentAction(
   options: PrQueueLandWorkerPolicyOptions,
@@ -106,7 +127,9 @@ function reconcileFinishedIntentAction(
   options.store.upsertWorkerAction?.({
     ...existing,
     status,
-    summary: status === 'completed' ? 'Dequeued PR repair completed' : 'Dequeued PR repair failed',
+    summary: status === 'completed'
+      ? 'Dequeued PR repair completed'
+      : `Dequeued PR repair failed: ${firstLine(intent.error) ?? 'unknown error'}`,
     payload: { ...payload, reconciledIntentStatus: intent.status, intentError: intent.error ?? null },
     updatedAt: now,
     completedAt: now,
@@ -122,6 +145,32 @@ function handlePrQueueLandEvent(
   reconcileFinishedIntentAction(options, event);
   const existing = options.store.getWorkerAction?.(PR_QUEUE_LAND_WORKER_KIND, externalKey);
   if (existing && existing.status !== 'skipped' && existing.status !== 'failed') return;
+  if (existing && (existing.status === 'skipped' || existing.status === 'failed')) {
+    const cooldownUntil = cooldownUntilIso(existing.updatedAt);
+    if (cooldownUntil && cooldownUntil > new Date().toISOString()) {
+      recordWorkerDecisionRow(options.store, {
+        workerKind: PR_QUEUE_LAND_WORKER_KIND,
+        actionType: PR_QUEUE_LAND_ACTION_TYPE,
+        externalKey,
+        subjectType: 'pull_request',
+        subjectId: `${event.repo}#${event.prNumber}`,
+        workflowId: event.workflowId ?? existing.workflowId,
+        status: 'skipped',
+        summary: 'Skipped dequeued PR repair because cooldown is active',
+        reason: 'cooldown-active',
+        payload: {
+          headSha: event.headSha,
+          dequeueCommentId: event.dequeueCommentId,
+          failedChecks: event.failedChecks,
+          failedChecksHash: queueDequeueChecksHash(event.failedChecks),
+          stackId: event.stackId,
+          stackOrder: event.stackOrder,
+          cooldownUntil,
+        },
+      });
+      return;
+    }
+  }
 
   const lease = tryAcquirePrRepairLease({
     repo: event.repo,
@@ -151,6 +200,33 @@ function handlePrQueueLandEvent(
     });
     return;
   }
+  if (lease.preempted && lease.previousCommandId) {
+    options.submitter?.invalidateIntent(event.workflowId ?? '', lease.previousCommandId, repairPreemptionReason());
+  }
+
+  if (!event.workflowId) {
+    recordWorkerDecisionRow(options.store, {
+      workerKind: PR_QUEUE_LAND_WORKER_KIND,
+      actionType: PR_QUEUE_LAND_ACTION_TYPE,
+      externalKey,
+      subjectType: 'pull_request',
+      subjectId: `${event.repo}#${event.prNumber}`,
+      status: 'skipped',
+      summary: 'Skipped dequeued PR repair because the PR has no mapped workflow',
+      reason: 'workflow-unmapped',
+      payload: {
+        headSha: event.headSha,
+        dequeueCommentId: event.dequeueCommentId,
+        failedChecks: event.failedChecks,
+        failedChecksHash: queueDequeueChecksHash(event.failedChecks),
+        stackId: event.stackId,
+        stackOrder: event.stackOrder,
+        prRepairLeaseId: lease.leaseId,
+      },
+    });
+    releasePrRepairLease(lease.leaseId, options.store);
+    return;
+  }
 
   if (!options.submitter) {
     recordWorkerDecisionRow(options.store, {
@@ -165,26 +241,13 @@ function handlePrQueueLandEvent(
       reason: 'command-not-ready',
       payload: {
         headSha: event.headSha,
+        dequeueCommentId: event.dequeueCommentId,
         failedChecks: event.failedChecks,
         failedChecksHash: queueDequeueChecksHash(event.failedChecks),
+        stackId: event.stackId,
+        stackOrder: event.stackOrder,
         prRepairLeaseId: lease.leaseId,
       },
-    });
-    releasePrRepairLease(lease.leaseId, options.store);
-    return;
-  }
-
-  if (!event.workflowId) {
-    recordWorkerDecisionRow(options.store, {
-      workerKind: PR_QUEUE_LAND_WORKER_KIND,
-      actionType: PR_QUEUE_LAND_ACTION_TYPE,
-      externalKey,
-      subjectType: 'pull_request',
-      subjectId: `${event.repo}#${event.prNumber}`,
-      status: 'skipped',
-      summary: 'Skipped dequeued PR repair because the PR has no mapped workflow',
-      reason: 'workflow-unmapped',
-      payload: { headSha: event.headSha, prRepairLeaseId: lease.leaseId },
     });
     releasePrRepairLease(lease.leaseId, options.store);
     return;
@@ -202,6 +265,13 @@ function handlePrQueueLandEvent(
       reason: event.dequeueCommentId,
       failedChecks: event.failedChecks,
     }]);
+    const activeLease = options.store.getPrRepairLeaseById(lease.leaseId);
+    if (activeLease) {
+      options.store.upsertPrRepairLease({ ...activeLease, commandId: String(intentId) });
+    }
+    if (lease.preempted && lease.previousCommandId) {
+      options.submitter.invalidateIntent(event.workflowId, lease.previousCommandId, repairPreemptionReason(intentId));
+    }
     recordWorkerDecisionRow(options.store, {
       workerKind: PR_QUEUE_LAND_WORKER_KIND,
       actionType: PR_QUEUE_LAND_ACTION_TYPE,

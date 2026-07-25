@@ -29,10 +29,6 @@ import type {
   ReviewGateFailedCheck,
 } from './lifecycle-events.js';
 import {
-  classifyFailedChecks,
-  type FailedCheckLogFetcher,
-} from './ci-failure-infra-classifier.js';
-import {
   releasePrRepairLease,
   resolveReviewGatePrRepairIdentity,
   tryAcquirePrRepairLease,
@@ -67,6 +63,8 @@ export interface ReviewGateCiRepairSubmitter {
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
+  invalidateIntent(workflowId: string, intentId: string, reason: string): void;
+
 }
 
 export interface ReviewGateCiRepairPolicyOptions {
@@ -332,6 +330,12 @@ function firstLine(text: string | undefined): string | undefined {
   if (!trimmed) return undefined;
   return trimmed.split('\n', 1)[0];
 }
+function repairPreemptionReason(intentId?: number): string {
+  return intentId === undefined
+    ? 'Superseded by repair preemption'
+    : `Superseded by repair preemption intent #${intentId}`;
+}
+
 
 function reconcileFinishedIntentAction(
   options: ReviewGateCiRepairPolicyOptions,
@@ -457,6 +461,10 @@ export async function queueReviewGateCiRepair(
     });
     return { decision: 'skipped', reason: 'lease-held' };
   }
+  if (lease.preempted && lease.previousCommandId) {
+    options.submitter.invalidateIntent(event.workflowId, lease.previousCommandId, repairPreemptionReason());
+  }
+
 
   const attemptDecision = options.attemptLedger.consume(
     autoFixAttemptLedgerKeyFromLifecycleEvent(event),
@@ -514,6 +522,13 @@ export async function queueReviewGateCiRepair(
   let intentId: number;
   try {
     intentId = options.submitter.submit(event.workflowId, 'normal', FIX_WITH_AGENT_CHANNEL, args);
+    const activeLease = options.store.getPrRepairLeaseById(lease.leaseId);
+    if (activeLease) {
+      options.store.upsertPrRepairLease({ ...activeLease, commandId: String(intentId) });
+    }
+    if (lease.preempted && lease.previousCommandId) {
+      options.submitter.invalidateIntent(event.workflowId, lease.previousCommandId, repairPreemptionReason(intentId));
+    }
   } catch (error) {
     releasePrRepairLease(lease.leaseId, options.store);
     throw error;
