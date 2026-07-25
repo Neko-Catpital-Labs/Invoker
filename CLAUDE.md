@@ -9,6 +9,7 @@
 - **Repo rule:** See `.cursor/rules/skill-command-precedence.mdc` for the always-on summary.
 - **Benchmark direct output:** If a `/plan-to-invoker` request says `For this benchmark`, `Required output path:`, `Write the final YAML plan to`, or `Do not submit the plan`, write a complete command-only YAML plan directly to the literal required path. The first top-level keys must be `name:`, `onFinish:`, `mergeMode:`, `repoUrl:`, and `tasks:`. Do not write `version:` or `metadata:` wrappers. Do not run `git remote`, `env`, `printenv`, `set`, schema scans, validation loops, submit commands, prompt tasks, nested `steps:`, or anything that can trigger an agent/autofix. If no repo URL is provided, use `https://github.com/Neko-Catpital-Labs/Invoker.git`.
 
+- Implementation plans must include a user-confirmed `Safety invariant:` for every slice; follow `skills/review-compression/SKILL.md` and ask before finalizing.
 - Every step in a plan MUST be testable. Each implementation step must have a corresponding verification with a concrete, executable command that produces a clear pass/fail exit code (e.g. `pnpm test`, `git diff --name-only`). Do not use AI prompts for test tasks — use commands only.
 - Bug fix plans MUST follow a three-phase approach before any implementation:
   1. **Reproduce** -- Find or write a concrete reproduction case (a failing test or a command that demonstrates the bug). Report back the exact repro steps and observed vs. expected behavior. Do not proceed until the bug is reliably reproducible.
