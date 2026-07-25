@@ -11,8 +11,10 @@
  */
 
 import { registerBuiltinAgents, RepoPool } from '@invoker/execution-engine';
+import type { HarnessSessionDriver } from '@invoker/execution-engine';
 import type { ConversationRepository, WorkflowChannelRepository } from '@invoker/data-store';
-import type { PlanningCommandBuilder, WorkflowContext } from '@invoker/surfaces';
+import { selectHarnessSessionDriver } from '@invoker/surfaces';
+import type { HarnessPreset, PlanningCommandBuilder, WorkflowContext } from '@invoker/surfaces';
 import type { InvokerClient } from './invoker-client.js';
 import { errMessage } from './util.js';
 
@@ -20,6 +22,14 @@ import { errMessage } from './util.js';
 export function createPlanningCommandBuilder(): PlanningCommandBuilder {
   const registry = registerBuiltinAgents();
   return (opts) => registry.getPlanningOrThrow(opts.tool).buildPlanningCommand(opts.prompt, { model: opts.model });
+}
+
+/** Resolve a per-preset harness session driver: real session resume for claude/codex/omp, prompt replay otherwise. */
+export function createHarnessSessionDriverFactory(
+  planningCommandBuilder: PlanningCommandBuilder,
+): (preset: HarnessPreset) => HarnessSessionDriver | undefined {
+  const executionAgentRegistry = registerBuiltinAgents();
+  return (preset) => selectHarnessSessionDriver(preset, { executionAgentRegistry, planningCommandBuilder });
 }
 
 /** Check out a repo for the planning agent through the shared repo queue; returns the working dir. */

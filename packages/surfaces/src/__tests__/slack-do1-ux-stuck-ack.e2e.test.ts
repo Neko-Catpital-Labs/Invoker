@@ -122,7 +122,7 @@ describe('DO1 e2e: clear leftover Processing ack on empty plan:', () => {
     if (surface) await surface.stop();
   });
 
-  it('posts Processing then deletes that ack for empty plan: mention', async () => {
+  it('treats a bare `plan:` mention as literal agent text and clears the Processing ack', async () => {
     surface = new SlackSurface({
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
@@ -130,6 +130,7 @@ describe('DO1 e2e: clear leftover Processing ack on empty plan:', () => {
       channelId: 'C-test',
       anthropicApiKey: 'test-anthropic-key',
     });
+    mockSendMessage.mockResolvedValue('What would you like me to plan?');
     await surface.start(async () => {});
 
     const app = surface.getApp() as any;
@@ -149,7 +150,9 @@ describe('DO1 e2e: clear leftover Processing ack on empty plan:', () => {
       method: 'postMessage',
       text: 'Processing your request...',
     }));
-    expect(apiCalls.some((c) => c.method === 'delete' && c.ts === apiCalls[0].ts)).toBe(true);
-    expect(mockSendMessage).not.toHaveBeenCalled();
+    // `plan:` is no longer a special no-op prefix — it is routed as normal agent
+    // text, and the real reply replaces the Processing ack in place.
+    expect(mockSendMessage).toHaveBeenCalledWith('plan:');
+    expect(apiCalls.some((c) => c.method === 'update' && c.ts === apiCalls[0].ts && c.text === 'What would you like me to plan?')).toBe(true);
   });
 });
