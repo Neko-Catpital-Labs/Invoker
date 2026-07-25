@@ -23,7 +23,7 @@ DRIVER="${INVOKER_PREBUILT_ROUTING_DRIVER:-}"
 if [ -z "$DRIVER" ]; then
   ESBUILD="$ROOT/node_modules/.bin/esbuild"
   if [ ! -x "$ESBUILD" ]; then
-    ESBUILD="$(ls -d "$ROOT"/node_modules/.pnpm/esbuild@*/node_modules/esbuild/bin/esbuild 2>/dev/null | sort -V | tail -1)"
+    ESBUILD="$(find "$ROOT/node_modules/.pnpm" -type f -path '*/node_modules/esbuild/bin/esbuild' -print 2>/dev/null | sort -V | tail -n 1 || true)"
   fi
   [ -n "$ESBUILD" ] && [ -x "$ESBUILD" ] || { echo "esbuild not found; set INVOKER_PREBUILT_ROUTING_DRIVER"; exit 1; }
   DRIVER="$TMP/driver.mjs"

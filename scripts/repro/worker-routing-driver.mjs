@@ -112,12 +112,13 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
     { mode: 0o755 },
   );
   console.log('\n=== leg 1: conflicted PR (pr-dirty.json) -> pr-conflict-rebase ===');
-  await tickWorker(leg, createPrConflictRebaseWorker, {
+  const err = await tickWorker(leg, createPrConflictRebaseWorker, {
     INVOKER_PR_CONFLICT_STATE_FILE: join(leg.legDir, 'ledger.tsv'),
     INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
     INVOKER_PR_REBASE_MAX_ATTEMPTS: '3',
     INVOKER_PR_REBASE_CONFIRM_TIMEOUT: '0',
   }, 'pr-dirty.json');
+  assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
   assert(leg, has(leg, '[worker:pr-conflict-rebase] spawning scripts/cron-pr-conflict-rebase.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, nodeLogText(leg).includes('rebase-recreate wf-routing-1'),
