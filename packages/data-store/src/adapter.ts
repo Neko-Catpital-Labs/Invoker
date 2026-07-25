@@ -403,8 +403,8 @@ export interface PersistenceAdapter {
   supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string): void;
   saveSlackPendingConfirmation(confirmation: SlackPendingConfirmation): void;
   loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined;
+  loadLatestSlackPendingConfirmationByThread(threadTs: string): SlackPendingConfirmation | undefined;
   deleteSlackPendingConfirmation(confirmKey: string): void;
-  purgeExpiredSlackPendingConfirmations(nowIso: string): number;
 
   // Workflow channels (Slack workflow↔channel mapping)
   saveWorkflowChannel(rec: WorkflowChannel): void;
