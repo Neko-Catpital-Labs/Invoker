@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationPriority } from '@invoker/data-store';
+import type {
+  PrRepairLeaseRow,
+  WorkerActionRecord,
+  WorkerActionWrite,
+  WorkflowMutationPriority,
+} from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
 import { parseFixWithAgentMutationArgs } from '../auto-fix-intents.js';
@@ -113,6 +118,7 @@ function toRecord(write: WorkerActionWrite): WorkerActionRecord {
 function makeHarness(task = makeTask()) {
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const actions = new Map<string, WorkerActionRecord>();
+  const leases = new Map<string, PrRepairLeaseRow>();
   const submit = vi.fn((workflowId: string, priority: WorkflowMutationPriority, channel: string, args: unknown[]) => {
     expect(workflowId).toBe('wf-1');
     expect(priority).toBe('normal');
@@ -131,10 +137,24 @@ function makeHarness(task = makeTask()) {
       actions.set(`${write.workerKind}:${write.externalKey}`, saved);
       return saved;
     }),
+    getPrRepairLease: vi.fn((repo: string, prNumber: number, headSha: string) =>
+      leases.get(`${repo}:${prNumber}:${headSha}`)),
+    upsertPrRepairLease: vi.fn((lease: PrRepairLeaseRow) => {
+      leases.set(`${lease.repo}:${lease.prNumber}:${lease.headSha}`, lease);
+      return lease;
+    }),
+    getPrRepairLeaseById: vi.fn((leaseId: string) =>
+      Array.from(leases.values()).find((lease) => lease.leaseId === leaseId)),
+    deletePrRepairLeaseById: vi.fn((leaseId: string) => {
+      const entry = Array.from(leases.entries()).find(([, lease]) => lease.leaseId === leaseId);
+      if (!entry) return false;
+      leases.delete(entry[0]);
+      return true;
+    }),
     logEvent: vi.fn(),
   };
   const attemptLedger = createAutoFixAttemptLedger();
-  return { actions, store, submit, attemptLedger };
+  return { actions, leases, store, submit, attemptLedger };
 }
 
 describe('PR status and CI failure workers', () => {
@@ -200,6 +220,11 @@ describe('PR status and CI failure workers', () => {
           selectedAttemptId: 'attempt-1',
           headSha: 'sha-1',
         },
+        prRepairLease: expect.objectContaining({
+          repo: 'owner/repo',
+          prNumber: 123,
+          headSha: 'sha-1',
+        }),
       },
     });
     expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
@@ -208,6 +233,35 @@ describe('PR status and CI failure workers', () => {
       status: 'queued',
       intentId: '42',
       externalKey: ciFailureActionKey(event),
+    });
+  });
+
+  it('skips CI repair when a merge-conflict repair owns the same PR head lease', async () => {
+    const event = makeEvent();
+    const harness = makeHarness();
+    harness.leases.set('owner/repo:123:sha-1', {
+      repo: 'owner/repo',
+      prNumber: 123,
+      headSha: 'sha-1',
+      holderKind: 'merge_conflict',
+      leaseId: 'lease-conflict',
+      acquiredAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2099-01-01T01:00:00.000Z',
+    });
+
+    await createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [event],
+    })({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+      status: 'skipped',
+      payload: expect.objectContaining({ reason: 'lease-held', holderKind: 'merge_conflict' }),
     });
   });
 

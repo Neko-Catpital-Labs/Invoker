@@ -28,6 +28,16 @@ import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
 } from './lifecycle-events.js';
+import {
+  classifyFailedChecks,
+  type FailedCheckLogFetcher,
+} from './ci-failure-infra-classifier.js';
+import {
+  releasePrRepairLease,
+  resolveReviewGatePrRepairIdentity,
+  tryAcquirePrRepairLease,
+  type PrRepairLeaseStore,
+} from './pr-repair-lease.js';
 import { recordWorkerDecisionRow } from './worker-decision-ledger.js';
 
 const CI_FAILURE_WORKER_KIND = 'ci-failure';
@@ -37,7 +47,7 @@ const NO_HEAD_SHA = 'no-head';
 
 type CiFailureActionStatus = WorkerActionStatus;
 
-export interface ReviewGateCiRepairStore {
+export interface ReviewGateCiRepairStore extends PrRepairLeaseStore {
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   listWorkflowMutationIntents?(
@@ -356,6 +366,10 @@ function reconcileFinishedIntentAction(
     updatedAt: now,
     completedAt: now,
   });
+  const leaseId = payload.prRepairLeaseId;
+  if (typeof leaseId === 'string') {
+    releasePrRepairLease(leaseId, options.store);
+  }
   logCiFailureWorkerEvent(options, event, 'worker-ci-failure-intent-reconciled', {
     intentId: existing.intentId,
     intentStatus: intent.status,
@@ -415,11 +429,41 @@ export async function queueReviewGateCiRepair(
     return { decision: 'skipped', reason: 'worker-retry-budget-exhausted' };
   }
 
+  const identity = resolveReviewGatePrRepairIdentity(event.reviewUrl, event.reviewId);
+  if (!identity || !event.headSha) {
+    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because PR lease identity is unavailable', {
+      reason: 'lease-identity-missing',
+    });
+    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+      reason: 'lease-identity-missing',
+    });
+    return { decision: 'skipped', reason: 'lease-identity-missing' };
+  }
+  const lease = tryAcquirePrRepairLease({
+    ...identity,
+    headSha: event.headSha,
+    kind: 'ci_failed',
+    store: options.store,
+    workflowId: event.workflowId,
+  });
+  if (!lease.ok) {
+    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because a higher-priority repair holds the lease', {
+      reason: 'lease-held',
+      holderKind: lease.holderKind,
+    });
+    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+      reason: 'lease-held',
+      holderKind: lease.holderKind,
+    });
+    return { decision: 'skipped', reason: 'lease-held' };
+  }
+
   const attemptDecision = options.attemptLedger.consume(
     autoFixAttemptLedgerKeyFromLifecycleEvent(event),
     workerRetryBudget,
   );
   if (!attemptDecision.allowed) {
+    releasePrRepairLease(lease.leaseId, options.store);
     const summary = attemptDecision.reason === 'worker-retry-budget-disabled'
       ? 'Skipped CI repair because retry budget is disabled'
       : 'Skipped CI repair because retry budget is exhausted';
@@ -461,8 +505,19 @@ export async function queueReviewGateCiRepair(
       fixContext: buildCiFailureFixContext(event),
     },
     executionModel,
+    prRepairLease: {
+      ...identity,
+      headSha: event.headSha,
+      leaseId: lease.leaseId,
+    },
   });
-  const intentId = options.submitter.submit(event.workflowId, 'normal', FIX_WITH_AGENT_CHANNEL, args);
+  let intentId: number;
+  try {
+    intentId = options.submitter.submit(event.workflowId, 'normal', FIX_WITH_AGENT_CHANNEL, args);
+  } catch (error) {
+    releasePrRepairLease(lease.leaseId, options.store);
+    throw error;
+  }
   recordCiFailureAction(
     options,
     event,
@@ -471,6 +526,7 @@ export async function queueReviewGateCiRepair(
     {
       channel: FIX_WITH_AGENT_CHANNEL,
       workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+      prRepairLeaseId: lease.leaseId,
     },
     intentId,
     selectedAgent,

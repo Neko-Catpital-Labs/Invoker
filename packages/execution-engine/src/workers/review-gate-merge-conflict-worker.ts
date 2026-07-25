@@ -19,6 +19,12 @@ import type {
   ReviewGateMergeConflictLifecycleEvent,
   WorkflowLifecycleEvent,
 } from '../lifecycle-events.js';
+import {
+  releasePrRepairLease,
+  resolveReviewGatePrRepairIdentity,
+  tryAcquirePrRepairLease,
+  type PrRepairLeaseStore,
+} from '../pr-repair-lease.js';
 import { recordWorkerDecisionRow } from '../worker-decision-ledger.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
@@ -37,7 +43,7 @@ type HeadlessExecPayload = {
   args?: unknown[];
 };
 
-export interface ReviewGateMergeConflictWorkerStore {
+export interface ReviewGateMergeConflictWorkerStore extends PrRepairLeaseStore {
   loadTasks(workflowId: string): TaskState[];
   loadTask?(taskId: string): TaskState | undefined;
   listWorkflowMutationIntents?(
@@ -362,6 +368,10 @@ function reconcileFinishedIntentAction(
     updatedAt: now,
     completedAt: now,
   });
+  const leaseId = payload.prRepairLeaseId;
+  if (typeof leaseId === 'string') {
+    releasePrRepairLease(leaseId, options.store);
+  }
   logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-intent-reconciled', {
     intentId: existing.intentId,
     intentStatus: intent.status,
@@ -406,13 +416,57 @@ async function handleReviewGateMergeConflictEvent(
     return;
   }
 
-  const intentId = options.submitter.submit(event.workflowId, 'high', REBASE_RECREATE_CHANNEL, [event.workflowId]);
+  const identity = resolveReviewGatePrRepairIdentity(event.reviewUrl, event.reviewId);
+  if (!identity || !event.headSha) {
+    recordReviewGateMergeConflictAction(options, event, 'skipped', 'Skipped merge-conflict repair because PR lease identity is unavailable', {
+      reason: 'lease-identity-missing',
+    });
+    logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-skip', {
+      reason: 'lease-identity-missing',
+    });
+    return;
+  }
+  const lease = tryAcquirePrRepairLease({
+    ...identity,
+    headSha: event.headSha,
+    kind: 'merge_conflict',
+    store: options.store,
+    workflowId: event.workflowId,
+  });
+  if (!lease.ok) {
+    recordReviewGateMergeConflictAction(options, event, 'skipped', 'Skipped merge-conflict repair because a higher-priority repair holds the lease', {
+      reason: 'lease-held',
+      holderKind: lease.holderKind,
+    });
+    logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-skip', {
+      reason: 'lease-held',
+      holderKind: lease.holderKind,
+    });
+    return;
+  }
+
+  let intentId: number;
+  try {
+    intentId = options.submitter.submit(event.workflowId, 'high', REBASE_RECREATE_CHANNEL, [
+      event.workflowId,
+      {
+        prRepairLease: {
+          ...identity,
+          headSha: event.headSha,
+          leaseId: lease.leaseId,
+        },
+      },
+    ]);
+  } catch (error) {
+    releasePrRepairLease(lease.leaseId, options.store);
+    throw error;
+  }
   recordReviewGateMergeConflictAction(
     options,
     event,
     'queued',
     'Queued workflow rebase-recreate for review-gate merge conflict',
-    { channel: REBASE_RECREATE_CHANNEL },
+    { channel: REBASE_RECREATE_CHANNEL, prRepairLeaseId: lease.leaseId },
     intentId,
   );
   logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-submitted', {

@@ -1,4 +1,5 @@
 import type { WorkflowMutationIntent } from '@invoker/data-store';
+import type { PrRepairLeaseContext } from './pr-repair-lease.js';
 
 
 type HeadlessExecPayload = {
@@ -104,6 +105,7 @@ export interface AutoFixCommandContext {
   autoFix: boolean;
   reviewGateContext?: ReviewGateCiContext;
   executionModel?: string;
+  prRepairLease?: PrRepairLeaseContext;
 }
 
 export interface ParsedHeadlessFixArgs extends AutoFixCommandContext {
@@ -117,6 +119,7 @@ export function parseHeadlessFixArgs(args: readonly string[]): ParsedHeadlessFix
   let agentName: string | undefined;
   let autoFix = false;
   let reviewGateContext: ReviewGateCiContext | undefined;
+  let prRepairLease: PrRepairLeaseContext | undefined;
 
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i];
@@ -168,6 +171,7 @@ export interface FixWithAgentMutationOptions {
   autoFix?: boolean;
   reviewGateContext?: ReviewGateCiContext;
   executionModel?: string;
+  prRepairLease?: PrRepairLeaseContext;
 }
 
 export interface ParsedFixWithAgentMutationArgs {
@@ -182,11 +186,12 @@ export function buildFixWithAgentMutationArgs(
   options?: FixWithAgentMutationOptions,
 ): unknown[] {
   const args: unknown[] = [taskId, agentName];
-  if (options && (options.autoFix || options.reviewGateContext || options.executionModel)) {
+  if (options && (options.autoFix || options.reviewGateContext || options.executionModel || options.prRepairLease)) {
     args.push({
       autoFix: Boolean(options.autoFix || options.reviewGateContext),
       ...(options.reviewGateContext ? { reviewGateContext: options.reviewGateContext } : {}),
       ...(options.executionModel ? { executionModel: options.executionModel } : {}),
+      ...(options.prRepairLease ? { prRepairLease: options.prRepairLease } : {}),
     });
   }
   return args;
@@ -199,6 +204,7 @@ export function parseFixWithAgentMutationArgs(args: unknown[]): ParsedFixWithAge
   let autoFix = false;
   let reviewGateContext: ReviewGateCiContext | undefined;
   let executionModel: string | undefined;
+  let prRepairLease: PrRepairLeaseContext | undefined;
 
   if (optionsArg && typeof optionsArg === 'object') {
     const candidate = optionsArg as Record<string, unknown>;
@@ -215,7 +221,18 @@ export function parseFixWithAgentMutationArgs(args: unknown[]): ParsedFixWithAge
     if (typeof candidate.executionModel === 'string' && candidate.executionModel.length > 0) {
       executionModel = candidate.executionModel;
     }
+    const lease = candidate.prRepairLease;
+    if (
+      lease
+      && typeof lease === 'object'
+      && typeof (lease as Record<string, unknown>).repo === 'string'
+      && typeof (lease as Record<string, unknown>).prNumber === 'number'
+      && typeof (lease as Record<string, unknown>).headSha === 'string'
+      && typeof (lease as Record<string, unknown>).leaseId === 'string'
+    ) {
+      prRepairLease = lease as PrRepairLeaseContext;
+    }
   }
 
-  return { taskId, agentName, context: { autoFix, reviewGateContext, executionModel } };
+  return { taskId, agentName, context: { autoFix, reviewGateContext, executionModel, prRepairLease } };
 }

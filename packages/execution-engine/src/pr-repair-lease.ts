@@ -20,6 +20,13 @@ export interface PrRepairLeaseStore {
   deletePrRepairLeaseById(leaseId: string): boolean;
 }
 
+export interface PrRepairLeaseContext {
+  repo: string;
+  prNumber: number;
+  headSha: string;
+  leaseId: string;
+}
+
 export type TryAcquirePrRepairLeaseResult =
   | { ok: true; leaseId: string; preempted: false }
   | { ok: true; leaseId: string; preempted: true; previousHolderKind: RepairKind }
@@ -41,6 +48,37 @@ export interface TryAcquirePrRepairLeaseInput {
 function isLeaseActive(lease: PrRepairLeaseRow, nowIso: string): boolean {
   if (lease.expiresAt == null) return true;
   return lease.expiresAt > nowIso;
+}
+
+export function resolveReviewGatePrRepairIdentity(
+  reviewUrl: string,
+  reviewId: string,
+): Omit<PrRepairLeaseContext, 'headSha' | 'leaseId'> | undefined {
+  const fromUrl = reviewUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/i);
+  if (fromUrl?.[1] && fromUrl[2]) {
+    return { repo: fromUrl[1], prNumber: Number(fromUrl[2]) };
+  }
+  const fromId = reviewId.match(/^([^/#]+\/[^/#]+)#(\d+)$/);
+  if (fromId?.[1] && fromId[2]) {
+    return { repo: fromId[1], prNumber: Number(fromId[2]) };
+  }
+  return undefined;
+}
+
+export function hasActivePrRepairLease(
+  context: PrRepairLeaseContext | undefined,
+  store: Pick<PrRepairLeaseStore, 'getPrRepairLeaseById'>,
+  now: Date = new Date(),
+): boolean {
+  if (!context) return false;
+  const lease = store.getPrRepairLeaseById(context.leaseId);
+  return Boolean(
+    lease
+    && lease.repo === context.repo
+    && lease.prNumber === context.prNumber
+    && lease.headSha === context.headSha
+    && isLeaseActive(lease, now.toISOString()),
+  );
 }
 
 export function tryAcquirePrRepairLease(
