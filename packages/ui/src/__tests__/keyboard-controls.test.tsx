@@ -117,6 +117,79 @@ describe('Side rail controls (component)', () => {
     });
   });
 
+  it('moves matching loaded non-merge tasks between pools from the graph menu and reports partial failures', async () => {
+    const poolWorkflows: WorkflowMeta[] = [
+      { id: 'wf-1', name: 'Pool Workflow', status: 'running' },
+    ];
+    const poolTasks = [
+      makeUITask({
+        id: 'task-alpha',
+        description: 'Alpha pooled task',
+        workflowId: 'wf-1',
+        command: 'echo alpha',
+        config: { workflowId: 'wf-1', command: 'echo alpha', poolId: 'mixed-local-ssh' },
+      }),
+      makeUITask({
+        id: 'task-beta',
+        description: 'Beta pooled task',
+        workflowId: 'wf-1',
+        command: 'echo beta',
+        config: { workflowId: 'wf-1', command: 'echo beta', poolId: 'mixed-local-ssh' },
+      }),
+      makeUITask({
+        id: 'task-gamma',
+        description: 'Already moved task',
+        workflowId: 'wf-1',
+        command: 'echo gamma',
+        config: { workflowId: 'wf-1', command: 'echo gamma', poolId: 'pnpm-ssh' },
+      }),
+      makeUITask({
+        id: '__merge__wf-1',
+        description: 'Merge gate',
+        workflowId: 'wf-1',
+        isMergeNode: true,
+        config: { workflowId: 'wf-1', isMergeNode: true, poolId: 'mixed-local-ssh' },
+      }),
+    ];
+    mock.setTasks(poolTasks, poolWorkflows);
+    mock.api.editTaskPool.mockImplementation(async (taskId: string) => {
+      if (taskId === 'task-beta') throw new Error('pool offline');
+      return {
+        ok: true,
+        accepted: true,
+        intentId: 2,
+        workflowId: 'wf-1',
+        channel: 'invoker:edit-task-pool',
+      };
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-1');
+
+    fireEvent.click(screen.getByTestId('graph-more-button'));
+    fireEvent.click(await screen.findByTestId('rail-move-tasks-between-pools'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('bulk-pool-source-select')).toHaveValue('mixed-local-ssh');
+      expect(screen.getByTestId('bulk-pool-destination-select')).toHaveValue('pnpm-ssh');
+    });
+    expect(screen.getByTestId('bulk-pool-scope')).toHaveTextContent('Matching source tasks');
+    expect(screen.getByTestId('bulk-pool-scope')).toHaveTextContent('2');
+
+    fireEvent.click(screen.getByTestId('bulk-pool-confirm'));
+
+    await waitFor(() => expect(mock.api.editTaskPool).toHaveBeenCalledTimes(2));
+    expect(mock.api.editTaskPool.mock.calls.map(([taskId]) => taskId)).toEqual(['task-alpha', 'task-beta']);
+    expect(mock.api.editTaskPool).toHaveBeenNthCalledWith(1, 'task-alpha', 'pnpm-ssh');
+    expect(mock.api.editTaskPool).toHaveBeenNthCalledWith(2, 'task-beta', 'pnpm-ssh');
+
+    const summary = await screen.findByTestId('bulk-pool-summary');
+    expect(summary).toHaveTextContent('Moved 1 of 2 matching tasks');
+    expect(summary).toHaveTextContent('2 skipped, 1 failed');
+    expect(summary).toHaveTextContent('Failed tasks: task-beta');
+  });
+
   it('cycles major keyboard regions with Tab', async () => {
     await renderKeyboardFixture(mock);
 
