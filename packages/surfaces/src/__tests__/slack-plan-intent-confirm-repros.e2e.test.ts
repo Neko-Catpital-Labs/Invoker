@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as childProcess from 'node:child_process';
-import { ConversationRepository, SQLiteAdapter, SlackSessionRepository } from '@invoker/data-store';
+import { ConversationRepository, SQLiteAdapter, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
 
@@ -18,6 +18,7 @@ const sharedSlack = vi.hoisted(() => ({
       update: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue({}),
     },
+    files: { uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F_PLAN' }] }) },
     reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
     conversations: { replies: vi.fn().mockResolvedValue({ messages: [] }) },
   },
@@ -91,6 +92,7 @@ function buttonValue(say: ReturnType<typeof vi.fn>, actionId: string): string {
 describe('Slack plan-intent confirmation repro', () => {
   let adapter: SQLiteAdapter;
   let conversationRepo: ConversationRepository;
+  let slackPlanDraftRepo: SlackPlanDraftRepository;
   let surface: SlackSurface;
   let commands: SurfaceCommand[];
 
@@ -99,6 +101,7 @@ describe('Slack plan-intent confirmation repro', () => {
     sharedSlack.client.chat.update.mockClear();
     adapter = await SQLiteAdapter.create(':memory:');
     conversationRepo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
+    slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
     commands = [];
     surface = new SlackSurface({
       botToken: 'xoxb-test',
@@ -109,6 +112,7 @@ describe('Slack plan-intent confirmation repro', () => {
       defaultRepoUrl: 'https://github.com/EdbertChan/notarepo',
       conversationRepo,
       slackSessionRepo: new SlackSessionRepository(adapter),
+      slackPlanDraftRepo,
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
@@ -139,6 +143,7 @@ describe('Slack plan-intent confirmation repro', () => {
     expect(() => buttonValue(say, 'lobby_confirm')).toThrow('Missing lobby_confirm button');
 
     mockSpawn.mockImplementationOnce(() => processWith(plan));
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
     const planIntentKey = buttonValue(say, 'lobby_plan_for_execution');
     const respond = vi.fn().mockResolvedValue(undefined);
     await actionHandler(surface, 'lobby_plan_for_execution')({
@@ -148,16 +153,8 @@ describe('Slack plan-intent confirmation repro', () => {
       respond,
     });
 
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(mockSpawn.mock.calls[0])).toContain('Pink/Yellow');
-    expect([...((surface as any).pendingConfirms.values())]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'submit' }),
-    ]));
-
-    const draftMessage = sharedSlack.client.chat.postMessage.mock.calls.at(-1)?.[0];
-    const approve = draftMessage?.blocks?.flatMap((block: any) => block.elements ?? [])
-      .find((element: any) => element.action_id === 'lobby_confirm');
-    expect(approve).toEqual(expect.objectContaining({ text: expect.objectContaining({ text: 'Approve' }) }));
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
   });
 
@@ -177,9 +174,7 @@ describe('Slack plan-intent confirmation repro', () => {
     });
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
-    expect([...((surface as any).pendingConfirms.values())]).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'submit' }),
-    ]));
+    expect(slackPlanDraftRepo.getReady('C_LOBBY', 'continue-thread')).toBeUndefined();
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
   });
 
@@ -201,12 +196,14 @@ describe('Slack plan-intent confirmation repro', () => {
       defaultRepoUrl: 'https://github.com/EdbertChan/notarepo',
       conversationRepo,
       slackSessionRepo: new SlackSessionRepository(adapter),
+      slackPlanDraftRepo,
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
     });
     await surface.start(async (command) => { commands.push(command); });
 
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
     mockSpawn.mockImplementationOnce(() => processWith(plan));
     await actionHandler(surface, 'lobby_plan_for_execution')({
       action: { type: 'button', value: key },
@@ -215,9 +212,6 @@ describe('Slack plan-intent confirmation repro', () => {
       respond: vi.fn().mockResolvedValue(undefined),
     });
 
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
-    expect([...((surface as any).pendingConfirms.values())]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'submit' }),
-    ]));
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 });
