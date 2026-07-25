@@ -47,7 +47,9 @@ describe('pr_mirrors and pr_repair_leases', () => {
       updatedAt: '2026-07-25T18:00:00.000Z',
     });
     expect(updated.headSha).toBe('cafebabe');
-    expect(updated.workflowId).toBeUndefined();
+    expect(updated.workflowId).toBe('wf-1');
+    expect(updated.baseRef).toBe('main');
+    expect(updated.stackId).toBe('stack-1');
     expect(adapter.getPrMirror('owner/repo', 12)?.headSha).toBe('cafebabe');
   });
 

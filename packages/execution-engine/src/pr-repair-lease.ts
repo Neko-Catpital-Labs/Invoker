@@ -18,6 +18,7 @@ export interface PrRepairLeaseStore {
   upsertPrRepairLease(lease: PrRepairLeaseRow): PrRepairLeaseRow;
   getPrRepairLeaseById(leaseId: string): PrRepairLeaseRow | undefined;
   deletePrRepairLeaseById(leaseId: string): boolean;
+  runInTransaction?<T>(work: () => T): T;
 }
 
 export interface PrRepairLeaseContext {
@@ -86,6 +87,7 @@ export function hasActivePrRepairLease(
 export function tryAcquirePrRepairLease(
   input: TryAcquirePrRepairLeaseInput,
 ): TryAcquirePrRepairLeaseResult {
+  const acquire = (): TryAcquirePrRepairLeaseResult => {
   const now = input.now ?? new Date();
   const nowIso = now.toISOString();
   const leaseMs = input.leaseMs ?? PR_REPAIR_LEASE_DEFAULT_MS;
@@ -135,7 +137,9 @@ export function tryAcquirePrRepairLease(
     acquiredAt: nowIso,
     expiresAt,
   });
-  return { ok: true, leaseId, preempted: false };
+    return { ok: true, leaseId, preempted: false };
+  };
+  return input.store.runInTransaction ? input.store.runInTransaction(acquire) : acquire();
 }
 
 export function releasePrRepairLease(leaseId: string, store: PrRepairLeaseStore): boolean {

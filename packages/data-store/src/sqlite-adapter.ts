@@ -3744,14 +3744,14 @@ export class SQLiteAdapter implements PersistenceAdapter {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(repo, pr_number) DO UPDATE SET
         head_sha = excluded.head_sha,
-        base_ref = excluded.base_ref,
-        merge_state = excluded.merge_state,
-        labels_json = excluded.labels_json,
-        stack_id = excluded.stack_id,
-        stack_order = excluded.stack_order,
-        workflow_id = excluded.workflow_id,
-        repair_workflows_json = excluded.repair_workflows_json,
-        blockers_json = excluded.blockers_json,
+        base_ref = COALESCE(excluded.base_ref, pr_mirrors.base_ref),
+        merge_state = COALESCE(excluded.merge_state, pr_mirrors.merge_state),
+        labels_json = COALESCE(excluded.labels_json, pr_mirrors.labels_json),
+        stack_id = COALESCE(excluded.stack_id, pr_mirrors.stack_id),
+        stack_order = COALESCE(excluded.stack_order, pr_mirrors.stack_order),
+        workflow_id = COALESCE(excluded.workflow_id, pr_mirrors.workflow_id),
+        repair_workflows_json = COALESCE(excluded.repair_workflows_json, pr_mirrors.repair_workflows_json),
+        blockers_json = COALESCE(excluded.blockers_json, pr_mirrors.blockers_json),
         updated_at = excluded.updated_at`,
       [
         mirror.repo,
