@@ -1,5 +1,13 @@
+import { createHash } from 'node:crypto';
+
 import type { Logger } from '@invoker/contracts';
-import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationPriority } from '@invoker/data-store';
+import type {
+  WorkerActionRecord,
+  WorkerActionStatus,
+  WorkerActionWrite,
+  WorkflowMutationIntent,
+  WorkflowMutationPriority,
+} from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
 
 import type { PrQueueDequeuedLifecycleEvent, WorkflowLifecycleEvent } from '../lifecycle-events.js';
@@ -17,6 +25,7 @@ export const PR_QUEUE_DEQUEUE_REPAIR_CHANNEL = 'invoker:repair-queue-dequeue';
 export interface PrQueueLandWorkerStore extends PrRepairLeaseStore {
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
+  listWorkflowMutationIntents?(workflowId?: string, statuses?: Array<'completed' | 'failed'>): WorkflowMutationIntent[];
 }
 
 export interface PrQueueLandWorkerPolicyOptions {
@@ -46,9 +55,22 @@ export interface PrQueueLandWorkerOptions {
 
 export function prQueueLandActionKey(event: Pick<
   PrQueueDequeuedLifecycleEvent,
-  'repo' | 'prNumber' | 'headSha' | 'dequeueCommentId'
+  'repo' | 'prNumber' | 'headSha' | 'dequeueCommentId' | 'failedChecks'
 >): string {
-  return [PR_QUEUE_LAND_WORKER_KIND, event.repo, event.prNumber, event.headSha, event.dequeueCommentId].join(':');
+  return [
+    PR_QUEUE_LAND_WORKER_KIND,
+    event.repo,
+    event.prNumber,
+    event.headSha,
+    event.dequeueCommentId,
+    queueDequeueChecksHash(event.failedChecks),
+  ].join(':');
+}
+
+export function queueDequeueChecksHash(failedChecks: readonly string[]): string {
+  return createHash('sha256')
+    .update(JSON.stringify([...failedChecks].map((check) => check.trim()).filter(Boolean).sort()))
+    .digest('hex');
 }
 
 export function registerPrQueueLandWorker(
@@ -67,11 +89,37 @@ export function registerPrQueueLandWorker(
   return registry;
 }
 
+function reconcileFinishedIntentAction(
+  options: PrQueueLandWorkerPolicyOptions,
+  event: PrQueueDequeuedLifecycleEvent,
+): void {
+  const existing = options.store.getWorkerAction?.(PR_QUEUE_LAND_WORKER_KIND, prQueueLandActionKey(event));
+  if (!existing?.intentId || !existing.workflowId || !['queued', 'pending', 'running'].includes(existing.status)) return;
+  const intents = options.store.listWorkflowMutationIntents?.(existing.workflowId, ['completed', 'failed']) ?? [];
+  const intent = intents.find((candidate) => String(candidate.id) === existing.intentId);
+  if (!intent) return;
+  const payload = existing.payload && typeof existing.payload === 'object'
+    ? { ...(existing.payload as Record<string, unknown>) }
+    : {};
+  const now = new Date().toISOString();
+  const status: WorkerActionStatus = intent.status === 'completed' ? 'completed' : 'failed';
+  options.store.upsertWorkerAction?.({
+    ...existing,
+    status,
+    summary: status === 'completed' ? 'Dequeued PR repair completed' : 'Dequeued PR repair failed',
+    payload: { ...payload, reconciledIntentStatus: intent.status, intentError: intent.error ?? null },
+    updatedAt: now,
+    completedAt: now,
+  });
+  if (typeof payload.prRepairLeaseId === 'string') releasePrRepairLease(payload.prRepairLeaseId, options.store);
+}
+
 function handlePrQueueLandEvent(
   options: PrQueueLandWorkerPolicyOptions,
   event: PrQueueDequeuedLifecycleEvent,
 ): void {
   const externalKey = prQueueLandActionKey(event);
+  reconcileFinishedIntentAction(options, event);
   const existing = options.store.getWorkerAction?.(PR_QUEUE_LAND_WORKER_KIND, externalKey);
   if (existing && existing.status !== 'skipped' && existing.status !== 'failed') return;
 
@@ -94,7 +142,12 @@ function handlePrQueueLandEvent(
       status: 'skipped',
       summary: 'Skipped dequeued PR landing because a PR repair lease is held',
       reason: 'lease-held',
-      payload: { headSha: event.headSha, holderKind: lease.holderKind, failedChecks: event.failedChecks },
+      payload: {
+        headSha: event.headSha,
+        holderKind: lease.holderKind,
+        failedChecks: event.failedChecks,
+        failedChecksHash: queueDequeueChecksHash(event.failedChecks),
+      },
     });
     return;
   }
@@ -113,6 +166,7 @@ function handlePrQueueLandEvent(
       payload: {
         headSha: event.headSha,
         failedChecks: event.failedChecks,
+        failedChecksHash: queueDequeueChecksHash(event.failedChecks),
         prRepairLeaseId: lease.leaseId,
       },
     });
@@ -161,6 +215,7 @@ function handlePrQueueLandEvent(
       payload: {
         headSha: event.headSha,
         failedChecks: event.failedChecks,
+        failedChecksHash: queueDequeueChecksHash(event.failedChecks),
         stackId: event.stackId,
         stackOrder: event.stackOrder,
         prRepairLeaseId: lease.leaseId,
