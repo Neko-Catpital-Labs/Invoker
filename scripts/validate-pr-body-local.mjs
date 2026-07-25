@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, parse } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
 
 const DEFAULT_BASE_BRANCH = 'master';
 const DEFAULT_BASE_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'origin';
@@ -58,6 +58,97 @@ function gitText(args) {
   }
 }
 
+function parseValidatorMessages(output, heading) {
+  const lines = String(output).split(/\r?\n/);
+  const start = lines.findIndex((line) => line.trim() === heading);
+  if (start === -1) return [];
+  return lines
+    .slice(start + 1)
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.slice(2));
+}
+
+function findNodeModules(repoRoot) {
+  let current = repoRoot;
+  while (true) {
+    const nodeModules = join(current, 'node_modules');
+    if (existsSync(nodeModules)) return nodeModules;
+    const parent = dirname(current);
+    if (parent === current || parent === parse(current).root) return '';
+    current = parent;
+  }
+}
+
+function runTrustedBaseValidator({ repoRoot, baseRef, body, changedFiles, diffText }) {
+  const tempRoot = join(repoRoot, '.tmp');
+  mkdirSync(tempRoot, { recursive: true });
+  const validatorWorktree = mkdtempSync(join(tempRoot, 'pr-body-validator-base-'));
+  const inputsDir = mkdtempSync(join(tempRoot, 'pr-body-validator-inputs-'));
+  const bodyPath = join(inputsDir, 'pr-body.md');
+  const changedFilesPath = join(inputsDir, 'changed-files.txt');
+  const diffPath = join(inputsDir, 'pr.diff');
+  let worktreeAdded = false;
+
+  try {
+    execFileSync('git', ['worktree', 'add', '--detach', validatorWorktree, baseRef], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    worktreeAdded = true;
+    const nodeModules = findNodeModules(repoRoot);
+    const validatorNodeModules = join(validatorWorktree, 'node_modules');
+    if (nodeModules && !existsSync(validatorNodeModules)) {
+      symlinkSync(nodeModules, validatorNodeModules, 'dir');
+    }
+    writeFileSync(bodyPath, body);
+    writeFileSync(changedFilesPath, `${changedFiles.join('\n')}\n`);
+    writeFileSync(diffPath, diffText);
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(validatorWorktree, 'scripts', 'validate-pr-body.mjs'),
+        '--body-file',
+        bodyPath,
+        '--changed-files-file',
+        changedFilesPath,
+        '--diff-file',
+        diffPath,
+      ],
+      { cwd: validatorWorktree, encoding: 'utf8' },
+    );
+    if (result.error) throw result.error;
+
+    const stdout = String(result.stdout ?? '');
+    const stderr = String(result.stderr ?? '');
+    if (result.status === 0) {
+      return {
+        errors: [],
+        warnings: parseValidatorMessages(stdout, 'PR body validation warnings:'),
+      };
+    }
+
+    const errors = parseValidatorMessages(stderr, 'PR body validation failed:');
+    if (errors.length > 0) return { errors, warnings: [] };
+
+    throw new Error(`Trusted-base PR body validator failed: ${stderr || stdout}`);
+  } finally {
+    try {
+      if (worktreeAdded) {
+        execFileSync('git', ['worktree', 'remove', '--force', validatorWorktree], {
+          cwd: repoRoot,
+          encoding: 'utf8',
+          stdio: 'pipe',
+        });
+      }
+    } finally {
+      rmSync(validatorWorktree, { recursive: true, force: true });
+      rmSync(inputsDir, { recursive: true, force: true });
+    }
+  }
+}
+
 export function isUiImpactingPath(filePath) {
   const path = filePath.replace(/\\/g, '/');
   return path.startsWith('packages/ui/')
@@ -69,6 +160,7 @@ export function isUiImpactingPath(filePath) {
 
 export async function validateLocalPrBody({ body, baseBranch = DEFAULT_BASE_BRANCH, baseRemote = DEFAULT_BASE_REMOTE }) {
   const baseRef = `${baseRemote}/${baseBranch}`;
+  const repoRoot = process.cwd();
   gitText(['fetch', '--quiet', baseRemote, baseBranch]);
   const changedFiles = gitText(['diff', '--name-only', `${baseRef}...HEAD`])
     .split('\n')
@@ -82,11 +174,15 @@ export async function validateLocalPrBody({ body, baseBranch = DEFAULT_BASE_BRAN
     `${baseRef}...HEAD`,
     '--',
   ]);
-  const requiresVisualProof = changedFiles.some(isUiImpactingPath);
-  const errors = await validatePrBody(body, { changedFiles, diffText, requiresVisualProof });
-  const warnings = getPrBodyWarnings(body, { changedFiles, diffText });
+  const { errors, warnings } = runTrustedBaseValidator({
+    repoRoot,
+    baseRef,
+    body,
+    changedFiles,
+    diffText,
+  });
 
-  return { changedFiles, diffText, errors, warnings, requiresVisualProof };
+  return { changedFiles, diffText, errors, warnings, requiresVisualProof: false };
 }
 
 async function main() {
