@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1027,6 +1027,64 @@ try {
   assert(cleanDiffCli.stdout.includes('PR body validation passed.'), 'CLI validator should report success for an atomic diff file');
 } finally {
   rmSync(diffTmp, { recursive: true, force: true });
+}
+
+const localWrapperTmp = mkdtempSync(join(tmpdir(), 'pr-body-validator-local-'));
+try {
+  const runGit = (args) => {
+    const result = spawnSync('git', args, { cwd: localWrapperTmp, encoding: 'utf8' });
+    assert(result.status === 0, `git ${args.join(' ')} should succeed: ${result.stderr}`);
+  };
+  const sourceFile = join(localWrapperTmp, 'packages', 'app', 'src', 'refresh-route.ts');
+  const bodyPath = join(localWrapperTmp, 'body.md');
+
+  runGit(['init', '--initial-branch=master']);
+  runGit(['config', 'user.email', 'pr-body-test@example.test']);
+  runGit(['config', 'user.name', 'PR Body Test']);
+  mkdirSync(dirname(sourceFile), { recursive: true });
+  writeFileSync(sourceFile, 'export const refreshRoute = 1;\n');
+  runGit(['add', '.']);
+  runGit(['commit', '-m', 'baseline']);
+  runGit(['remote', 'add', 'origin', '.']);
+  runGit(['update-ref', 'refs/remotes/origin/master', 'HEAD']);
+  runGit(['switch', '-c', 'feature']);
+  writeFileSync(sourceFile, 'export const refreshRoute = 2;\n');
+  runGit(['add', '.']);
+  runGit(['commit', '-m', 'routing change']);
+
+  writeFileSync(bodyPath, validMinimal);
+  const validLocalWrapper = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts', 'validate-pr-body-local.mjs'), '--body-file', bodyPath, '--base', 'master'],
+    { cwd: localWrapperTmp, encoding: 'utf8' },
+  );
+  assert(validLocalWrapper.status === 0, `local wrapper should pass a matching body: ${validLocalWrapper.stderr}`);
+
+  writeFileSync(bodyPath, validMinimal.replace('- behavior', '- refactor'));
+  const refactorNonGoalLocalWrapper = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts', 'validate-pr-body-local.mjs'), '--body-file', bodyPath, '--base', 'master'],
+    { cwd: localWrapperTmp, encoding: 'utf8' },
+  );
+  assert(refactorNonGoalLocalWrapper.status === 1, 'local wrapper should reject a refactor body without an unchanged-behavior non-goal');
+  assert(
+    refactorNonGoalLocalWrapper.stderr.includes('Review lane refactor must state in ## Non-goals that behavior stays unchanged'),
+    'local wrapper should report the CI refactor non-goal error',
+  );
+
+  writeFileSync(bodyPath, validMinimal.replace('- routing', '- contract'));
+  const reviewUnitLocalWrapper = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts', 'validate-pr-body-local.mjs'), '--body-file', bodyPath, '--base', 'master'],
+    { cwd: localWrapperTmp, encoding: 'utf8' },
+  );
+  assert(reviewUnitLocalWrapper.status === 1, 'local wrapper should reject a review unit that does not match changed files');
+  assert(
+    reviewUnitLocalWrapper.stderr.includes('Review Unit "contract" cannot ship with routing files'),
+    'local wrapper should report the CI review-unit file mismatch',
+  );
+} finally {
+  rmSync(localWrapperTmp, { recursive: true, force: true });
 }
 
 console.log('OK: PR body validator checks passed');
