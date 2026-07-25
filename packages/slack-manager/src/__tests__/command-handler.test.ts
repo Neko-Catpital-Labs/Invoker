@@ -16,7 +16,7 @@ function makeClient(overrides: Partial<InvokerClient> = {}): InvokerClient {
     getWorkflowStatus: vi.fn(async () => ({ total: 0, completed: 0, failed: 0, closed: 0, running: 0, pending: 0 })),
     getTaskOutput: vi.fn(async () => ''),
     exec: vi.fn(async () => {}),
-    run: vi.fn(async () => 'wf-x'),
+    run: vi.fn(async () => ({ workflowId: 'wf-x', workflowIds: ['wf-x'] })),
     launch: vi.fn(async () => true),
     withRecovery: vi.fn(async (fn: () => Promise<unknown>) => fn()) as InvokerClient['withRecovery'],
     subscribe: vi.fn(() => () => {}),
@@ -70,8 +70,8 @@ describe('createCommandHandler', () => {
   });
 
   it('start_plan → writes plan file, runs it, emits workflow_created', async () => {
-    const client = makeClient({ run: vi.fn(async () => 'wf-new') });
-    await createCommandHandler({ client, slack, plansDir, log: noop })({
+    const client = makeClient({ run: vi.fn(async () => ({ workflowId: 'wf-new', workflowIds: ['wf-new'] })) });
+    const result = await createCommandHandler({ client, slack, plansDir, log: noop })({
       type: 'start_plan',
       planText: 'name: Demo\n',
       requestedBy: 'U1',
@@ -96,6 +96,50 @@ describe('createCommandHandler', () => {
       repoUrl: 'git@example:repo.git',
       planFile: planPath,
     });
+    expect(result).toEqual({ workflowIds: ['wf-new'] });
+  });
+
+  it('start_plan → a stacked plan starts every workflow and emits workflow_created for each', async () => {
+    const client = makeClient({
+      run: vi.fn(async () => ({ workflowId: 'wf-stack-2', workflowIds: ['wf-stack-1', 'wf-stack-2'] })),
+    });
+    const result = await createCommandHandler({ client, slack, plansDir, log: noop })({
+      type: 'start_plan',
+      planText: 'name: Stack\nworkflows:\n  - name: A\n  - name: B\n',
+      requestedBy: 'U1',
+      lobbyChannel: 'C1',
+      lobbyThreadTs: '123.45',
+    });
+
+    const files = readdirSync(plansDir);
+    const planPath = path.join(plansDir, files[0]);
+    expect(slack.handleEvent).toHaveBeenCalledTimes(2);
+    expect(slack.handleEvent).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      type: 'workflow_created', workflowId: 'wf-stack-1', planFile: planPath,
+    }));
+    expect(slack.handleEvent).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      type: 'workflow_created', workflowId: 'wf-stack-2', planFile: planPath,
+    }));
+    expect(result).toEqual({ workflowIds: ['wf-stack-1', 'wf-stack-2'] });
+  });
+
+  it('start_plan → reuses cached workflowIds for a retried executionKey without re-running', async () => {
+    const client = makeClient({
+      run: vi.fn(async () => ({ workflowId: 'wf-stack-2', workflowIds: ['wf-stack-1', 'wf-stack-2'] })),
+    });
+    const handler = createCommandHandler({ client, slack, plansDir, log: noop });
+    const command = {
+      type: 'start_plan' as const,
+      planText: 'name: Stack\nworkflows:\n  - name: A\n  - name: B\n',
+      executionKey: 'key-1',
+    };
+    const first = await handler(command);
+    const second = await handler(command);
+
+    expect(client.run).toHaveBeenCalledTimes(1);
+    expect(first).toEqual({ workflowIds: ['wf-stack-1', 'wf-stack-2'] });
+    expect(second).toEqual({ workflowIds: ['wf-stack-1', 'wf-stack-2'] });
+    expect(slack.handleEvent).toHaveBeenCalledTimes(4);
   });
 
   it('rethrows a SlackCommandError when Invoker stays down so the surface can reply in-thread', async () => {
