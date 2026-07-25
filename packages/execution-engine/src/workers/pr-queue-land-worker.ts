@@ -41,6 +41,7 @@ export interface PrQueueLandWorkerPolicyOptions {
     ): number;
     invalidateIntent(workflowId: string, intentId: string, reason: string): void;
   };
+  ensureMappedWorkflow?(event: PrQueueDequeuedLifecycleEvent): Promise<{ workflowId: string } | undefined>;
   logger: Logger;
   drainEvents?: () => PrQueueDequeuedLifecycleEvent[];
 }
@@ -86,7 +87,11 @@ export function registerPrQueueLandWorker(
     factory: (deps) => createPrQueueLandWorker({
       logger: deps.logger,
       messageBus: deps.messageBus,
-      prQueueLand: { store: deps.store, submitter: deps.submitter },
+      prQueueLand: {
+        store: deps.store,
+        submitter: deps.submitter,
+        ensureMappedWorkflow: deps.prQueueLand?.ensureMappedWorkflow,
+      },
     }),
   });
   return registry;
@@ -137,10 +142,10 @@ function reconcileFinishedIntentAction(
   if (typeof payload.prRepairLeaseId === 'string') releasePrRepairLease(payload.prRepairLeaseId, options.store);
 }
 
-function handlePrQueueLandEvent(
+async function handlePrQueueLandEvent(
   options: PrQueueLandWorkerPolicyOptions,
   event: PrQueueDequeuedLifecycleEvent,
-): void {
+): Promise<void> {
   const externalKey = prQueueLandActionKey(event);
   reconcileFinishedIntentAction(options, event);
   const existing = options.store.getWorkerAction?.(PR_QUEUE_LAND_WORKER_KIND, externalKey);
@@ -204,7 +209,43 @@ function handlePrQueueLandEvent(
     options.submitter?.invalidateIntent(event.workflowId ?? '', lease.previousCommandId, repairPreemptionReason());
   }
 
-  if (!event.workflowId) {
+  let workflowId = event.workflowId;
+  if (!workflowId && options.ensureMappedWorkflow) {
+    try {
+      workflowId = (await options.ensureMappedWorkflow(event))?.workflowId;
+      if (workflowId) {
+        const activeLease = options.store.getPrRepairLeaseById(lease.leaseId);
+        if (activeLease) {
+          options.store.upsertPrRepairLease({ ...activeLease, workflowId });
+        }
+      }
+    } catch (error) {
+      recordWorkerDecisionRow(options.store, {
+        workerKind: PR_QUEUE_LAND_WORKER_KIND,
+        actionType: PR_QUEUE_LAND_ACTION_TYPE,
+        externalKey,
+        subjectType: 'pull_request',
+        subjectId: `${event.repo}#${event.prNumber}`,
+        status: 'failed',
+        summary: 'Failed to bootstrap dequeued PR repair workflow',
+        reason: 'workflow-bootstrap-failed',
+        payload: {
+          headSha: event.headSha,
+          dequeueCommentId: event.dequeueCommentId,
+          failedChecks: event.failedChecks,
+          failedChecksHash: queueDequeueChecksHash(event.failedChecks),
+          stackId: event.stackId,
+          stackOrder: event.stackOrder,
+          error: firstLine(error instanceof Error ? error.message : String(error)),
+          prRepairLeaseId: lease.leaseId,
+        },
+      });
+      releasePrRepairLease(lease.leaseId, options.store);
+      return;
+    }
+  }
+
+  if (!workflowId) {
     recordWorkerDecisionRow(options.store, {
       workerKind: PR_QUEUE_LAND_WORKER_KIND,
       actionType: PR_QUEUE_LAND_ACTION_TYPE,
@@ -235,7 +276,7 @@ function handlePrQueueLandEvent(
       externalKey,
       subjectType: 'pull_request',
       subjectId: `${event.repo}#${event.prNumber}`,
-      workflowId: event.workflowId,
+      workflowId,
       status: 'skipped',
       summary: 'Skipped dequeued PR repair because the command is not ready',
       reason: 'command-not-ready',
@@ -254,23 +295,23 @@ function handlePrQueueLandEvent(
   }
 
   try {
-    const intentId = options.submitter.submit(event.workflowId, 'high', PR_QUEUE_DEQUEUE_REPAIR_CHANNEL, [{
+    const intentId = options.submitter.submit(workflowId, 'high', PR_QUEUE_DEQUEUE_REPAIR_CHANNEL, [{
       repo: event.repo,
       prNumber: event.prNumber,
       headSha: event.headSha,
       leaseId: lease.leaseId,
       holderKind: 'queue_dequeued',
-      workflowId: event.workflowId,
+      workflowId,
       eventKey: event.eventKey,
       reason: event.dequeueCommentId,
       failedChecks: event.failedChecks,
     }]);
     const activeLease = options.store.getPrRepairLeaseById(lease.leaseId);
     if (activeLease) {
-      options.store.upsertPrRepairLease({ ...activeLease, commandId: String(intentId) });
+      options.store.upsertPrRepairLease({ ...activeLease, commandId: String(intentId), workflowId });
     }
     if (lease.preempted && lease.previousCommandId) {
-      options.submitter.invalidateIntent(event.workflowId, lease.previousCommandId, repairPreemptionReason(intentId));
+      options.submitter.invalidateIntent(workflowId, lease.previousCommandId, repairPreemptionReason(intentId));
     }
     recordWorkerDecisionRow(options.store, {
       workerKind: PR_QUEUE_LAND_WORKER_KIND,
@@ -278,7 +319,7 @@ function handlePrQueueLandEvent(
       externalKey,
       subjectType: 'pull_request',
       subjectId: `${event.repo}#${event.prNumber}`,
-      workflowId: event.workflowId,
+      workflowId,
       status: 'queued',
       summary: 'Queued dequeued PR repair',
       intentId: String(intentId),
@@ -304,7 +345,7 @@ export function createPrQueueLandTick(options: PrQueueLandWorkerPolicyOptions): 
       const externalKey = prQueueLandActionKey(event);
       if (seen.has(externalKey)) continue;
       seen.add(externalKey);
-      handlePrQueueLandEvent(options, event);
+      await handlePrQueueLandEvent(options, event);
     }
   };
 }

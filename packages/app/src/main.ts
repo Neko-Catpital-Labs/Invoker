@@ -131,6 +131,8 @@ import {
   resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
 import { backupPlan } from './plan-backup.js';
+import { loadPlanSubmissionDefinitions } from './plan-submission-loader.js';
+import { ensureDequeuedPrRepairWorkflow } from './pr-repair-workflow-bootstrap.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
@@ -321,6 +323,7 @@ const autoFixAttemptLedger = createAutoFixAttemptLedger();
 function buildRegisteredOwnerWorkerDeps(
   store: WorkerRuntimeDependencies['store'],
   checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
+  getTaskExecutor: () => TaskRunner,
 ): WorkerRuntimeDependencies {
   const remoteTargets = Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
     name,
@@ -354,6 +357,22 @@ function buildRegisteredOwnerWorkerDeps(
           prMirrorStore: store,
         });
       },
+    },
+    prQueueLand: {
+      ensureMappedWorkflow: async (event) => ensureDequeuedPrRepairWorkflow({
+        repo: event.repo,
+        prNumber: event.prNumber,
+        headSha: event.headSha,
+        dequeueCommentId: event.dequeueCommentId,
+        failedChecks: event.failedChecks,
+      }, {
+        persistence,
+        orchestrator,
+        taskExecutor: getTaskExecutor(),
+        logger,
+        allowGraphMutation: invokerConfig.allowGraphMutation,
+        repoRoot,
+      }),
     },
     reviewGate: {
       checkMergeGateStatuses,
@@ -1066,50 +1085,20 @@ function startHeadlessMode(): void {
       const loadGeneratedPlan = async (
         planText: string,
       ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => {
-        const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+        const { parsePlanSubmissionBundle } = await import('./plan-parser.js');
         const submission = parsePlanSubmissionBundle(planText);
-        const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-        const loadedWorkflowIds: string[] = [];
-        let upstream: { workflowId: string; featureBranch: string } | undefined;
-
-        for (const parsedPlan of submission.plans) {
-          let plan = applyConfiguredPlanDefaults(parsedPlan);
-          if (upstream) {
-            plan = {
-              ...plan,
-              baseBranch: upstream.featureBranch,
-              externalDependencies: [
-                ...(plan.externalDependencies ?? []),
-                {
-                  workflowId: upstream.workflowId,
-                  taskId: '__merge__',
-                  requiredStatus: 'completed',
-                  gatePolicy: 'review_ready',
-                } as const,
-              ],
-            };
-          }
-          backupPlan(plan, undefined, logger);
-          orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-          const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-          if (!workflow) {
-            throw new Error('Loaded plan did not create a workflow.');
-          }
-          existingWorkflowIds.add(workflow.id);
-          loadedWorkflowIds.push(workflow.id);
-          upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-        }
-
-        const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
-        if (!workflowId) {
-          throw new Error('Loaded plan did not create a workflow.');
-        }
+        const { primaryWorkflowId, workflowIds } = loadPlanSubmissionDefinitions(submission.plans, {
+          orchestrator,
+          persistence,
+          logger,
+          allowGraphMutation: invokerConfig.allowGraphMutation,
+        });
 
         return {
           planName: submission.name,
-          workflowId,
-          workflowIds: loadedWorkflowIds,
-          workflowCount: loadedWorkflowIds.length,
+          workflowId: primaryWorkflowId,
+          workflowIds,
+          workflowCount: workflowIds.length,
         };
       };
 
@@ -1584,48 +1573,27 @@ function startHeadlessMode(): void {
         const executeStandaloneHeadlessRun = async (
           payload: HeadlessRunMutationPayload,
         ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> => {
-          const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('./plan-parser.js');
+          const { parsePlanSubmissionBundleFile } = await import('./plan-parser.js');
           const submission = await parsePlanSubmissionBundleFile(payload.planPath);
-          const existingWorkflowIds = new Set(orchestrator.getWorkflowIds());
-          const workflowIds: string[] = [];
-          let upstream: { workflowId: string; featureBranch: string } | undefined;
-
-          for (const parsedPlan of submission.plans) {
-            let plan = applyConfiguredPlanDefaults(parsedPlan);
-            if (upstream) {
-              plan = {
-                ...plan,
-                baseBranch: upstream.featureBranch,
-                externalDependencies: [
-                  ...(plan.externalDependencies ?? []),
-                  {
-                    workflowId: upstream.workflowId,
-                    taskId: '__merge__',
-                    requiredStatus: 'completed',
-                    gatePolicy: 'review_ready',
-                  } as const,
-                ],
-              };
-            }
-            backupPlan(plan, undefined, logger);
-            orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-            const workflowId = orchestrator.getWorkflowIds().find((id) => !existingWorkflowIds.has(id))!;
-            existingWorkflowIds.add(workflowId);
-            workflowIds.push(workflowId);
-            upstream = { workflowId, featureBranch: plan.featureBranch ?? plan.baseBranch ?? 'main' };
-          }
-
-          const workflowId = workflowIds[workflowIds.length - 1];
-          if (!workflowId) {
-            throw new Error('Loaded plan did not create a workflow.');
-          }
+          const { primaryWorkflowId, workflowIds } = loadPlanSubmissionDefinitions(submission.plans, {
+            orchestrator,
+            persistence,
+            logger,
+            allowGraphMutation: invokerConfig.allowGraphMutation,
+          });
           const started = orchestrator.startExecution();
           logger.info(
-            `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+            `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${primaryWorkflowId}"`,
             { module: 'ipc-delegate' },
           );
-          const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-          return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
+          const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === primaryWorkflowId);
+          return {
+            workflowId: primaryWorkflowId,
+            tasks,
+            workflowIds,
+            workflowCount: workflowIds.length,
+            planName: submission.name,
+          };
         };
 
 
@@ -1759,6 +1727,7 @@ function startHeadlessMode(): void {
             async () => {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
+            createStandaloneTaskExecutor,
           ),
           autoStartKinds: invokerConfig.e2eAutoFixEnabled
             ? [...autoStartedOwnerWorkerKindsForConfig(invokerConfig), E2E_AUTOFIX_WORKER_KIND]
@@ -2798,6 +2767,7 @@ function createEmbeddedTerminalBackendFromConfig(
           async () => {
             await requireTaskExecutor().checkMergeGateStatuses();
           },
+          requireTaskExecutor,
         ),
         autoStartKinds: invokerConfig.e2eAutoFixEnabled
           ? [...autoStartedOwnerWorkerKindsForConfig(invokerConfig), E2E_AUTOFIX_WORKER_KIND]

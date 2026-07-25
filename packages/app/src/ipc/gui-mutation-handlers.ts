@@ -40,7 +40,7 @@ import {
   type InvokerConfig,
 } from '../config.js';
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
-import { backupPlan } from '../plan-backup.js';
+import { loadPlanSubmissionDefinitions } from '../plan-submission-loader.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
 import { resolveRefreshTaskGraphSnapshot } from '../refresh-task-graph.js';
@@ -619,52 +619,28 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
   async function executeHeadlessRun(
     payload: HeadlessRunMutationPayload,
   ): Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }> {
-    const { applyConfiguredPlanDefaults, parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
+    const { parsePlanSubmissionBundleFile } = await import('../plan-parser.js');
     const submission = await parsePlanSubmissionBundleFile(payload.planPath);
     taskHandles.clear();
-    const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-    const workflowIds: string[] = [];
-    let upstream: { workflowId: string; featureBranch: string } | undefined;
-
-    for (const parsedPlan of submission.plans) {
-      let plan = applyConfiguredPlanDefaults(parsedPlan);
-      if (upstream) {
-        plan = {
-          ...plan,
-          baseBranch: upstream.featureBranch,
-          externalDependencies: [
-            ...(plan.externalDependencies ?? []),
-            {
-              workflowId: upstream.workflowId,
-              taskId: '__merge__',
-              requiredStatus: 'completed',
-              gatePolicy: 'review_ready',
-            } as const,
-          ],
-        };
-      }
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-      if (!workflow) {
-        throw new Error('Loaded plan did not create a workflow.');
-      }
-      existingWorkflowIds.add(workflow.id);
-      workflowIds.push(workflow.id);
-      upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-    }
-
-    const workflowId = workflowIds[workflowIds.length - 1];
-    if (!workflowId) {
-      throw new Error('Loaded plan did not create a workflow.');
-    }
+    const { primaryWorkflowId, workflowIds } = loadPlanSubmissionDefinitions(submission.plans, {
+      orchestrator,
+      persistence,
+      logger,
+      allowGraphMutation: invokerConfig.allowGraphMutation,
+    });
     const started = orchestrator.startExecution();
     logger.info(
-      `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${workflowId}"`,
+      `started ${started.length} task(s) across ${workflowIds.length} workflow(s), primary "${primaryWorkflowId}"`,
       { module: 'ipc-delegate' },
     );
-    const tasks = orchestrator.getAllTasks().filter(t => t.config.workflowId === workflowId);
-    return { workflowId, tasks, workflowIds, workflowCount: workflowIds.length, planName: submission.name };
+    const tasks = orchestrator.getAllTasks().filter((task) => task.config.workflowId === primaryWorkflowId);
+    return {
+      workflowId: primaryWorkflowId,
+      tasks,
+      workflowIds,
+      workflowCount: workflowIds.length,
+      planName: submission.name,
+    };
   }
 
   async function executeHeadlessResume(payload: HeadlessResumeMutationPayload): Promise<{ workflowId: string; tasks: TaskState[] }> {
@@ -1144,11 +1120,8 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     planText: string,
     options?: { preserveTaskHandles?: boolean; logLabel?: string },
   ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
-    const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('../plan-parser.js');
+    const { parsePlanSubmissionBundle } = await import('../plan-parser.js');
     const submission = parsePlanSubmissionBundle(planText);
-    const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-    const loadedWorkflowIds: string[] = [];
-    let upstream: { workflowId: string; featureBranch: string } | undefined;
     logger.info(
       `${options?.logLabel ?? 'plan-from-goal'}: loading "${submission.name}" (${submission.plans.length} workflow${submission.plans.length === 1 ? '' : 's'})`,
       { module: 'ipc' },
@@ -1156,44 +1129,17 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     if (!options?.preserveTaskHandles) {
       taskHandles.clear();
     }
-
-    for (const parsedPlan of submission.plans) {
-      let plan = applyConfiguredPlanDefaults(parsedPlan);
-      if (upstream) {
-        plan = {
-          ...plan,
-          baseBranch: upstream.featureBranch,
-          externalDependencies: [
-            ...(plan.externalDependencies ?? []),
-            {
-              workflowId: upstream.workflowId,
-              taskId: '__merge__',
-              requiredStatus: 'completed',
-              gatePolicy: 'review_ready',
-            } as const,
-          ],
-        };
-      }
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-      if (!workflow) {
-        throw new Error('Loaded plan did not create a workflow.');
-      }
-      existingWorkflowIds.add(workflow.id);
-      loadedWorkflowIds.push(workflow.id);
-      upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-    }
-
-    const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
-    if (!workflowId) {
-      throw new Error('Loaded plan did not create a workflow.');
-    }
+    const { primaryWorkflowId, workflowIds } = loadPlanSubmissionDefinitions(submission.plans, {
+      orchestrator,
+      persistence,
+      logger,
+      allowGraphMutation: invokerConfig.allowGraphMutation,
+    });
     return {
       planName: submission.name,
-      workflowId,
-      workflowIds: loadedWorkflowIds,
-      workflowCount: loadedWorkflowIds.length,
+      workflowId: primaryWorkflowId,
+      workflowIds,
+      workflowCount: workflowIds.length,
     };
   }
 

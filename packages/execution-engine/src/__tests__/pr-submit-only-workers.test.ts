@@ -131,6 +131,40 @@ describe('submit-only PR lifecycle workers', () => {
     expect(action?.workflowId).toBeUndefined();
     expect(harness.leases).toEqual(new Map());
   });
+  it('bootstraps an unmapped dequeue event and submits the repair intent', async () => {
+    const harness = createStore();
+    const ensureMappedWorkflow = vi.fn(async () => ({ workflowId: 'wf-bootstrap' }));
+    const submit = vi.fn(() => 77);
+    const invalidateIntent = vi.fn();
+    const tick = createPrQueueLandTick({
+      store: harness.store,
+      logger,
+      ensureMappedWorkflow,
+      submitter: { submit, invalidateIntent },
+      drainEvents: () => [unmappedQueueEvent],
+    });
+
+    await tick({ identity: { kind: PR_QUEUE_LAND_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(ensureMappedWorkflow).toHaveBeenCalledWith(unmappedQueueEvent);
+    expect(submit).toHaveBeenCalledWith('wf-bootstrap', 'high', 'invoker:repair-queue-dequeue', [
+      expect.objectContaining({
+        repo: 'owner/repo',
+        prNumber: 12,
+        workflowId: 'wf-bootstrap',
+        failedChecks: ['CI'],
+      }),
+    ]);
+    const action = harness.actions.get(`${PR_QUEUE_LAND_WORKER_KIND}:${prQueueLandActionKey(unmappedQueueEvent)}`);
+    expect(action).toMatchObject({
+      status: 'queued',
+      workflowId: 'wf-bootstrap',
+      intentId: '77',
+    });
+    const lease = Array.from(harness.leases.values())[0];
+    expect(lease?.workflowId).toBe('wf-bootstrap');
+    expect(lease?.commandId).toBe('77');
+  });
 
   it('records command-not-ready for mapped dequeue repairs', async () => {
     const harness = createStore();

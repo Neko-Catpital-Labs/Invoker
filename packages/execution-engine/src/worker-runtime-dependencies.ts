@@ -64,6 +64,9 @@ export interface WorkerRuntimeDependencies {
     publishReviewComments(input: PrReviewCommentsPublisherInput): void;
     publishQueueDequeued(input: PrQueueDequeuedPublisherInput): void;
   };
+  prQueueLand?: {
+    ensureMappedWorkflow?: PrQueueLandWorkerPolicyOptions['ensureMappedWorkflow'];
+  };
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
   /** Provider IO surface for workers that need to update published reviews. */
