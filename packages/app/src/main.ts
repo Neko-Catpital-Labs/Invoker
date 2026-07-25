@@ -146,6 +146,12 @@ import {
   type HeadlessDeps,
 } from './headless.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
+import {
+  PR_QUEUE_DEQUEUED_REPAIR_CHANNEL,
+  PR_REVIEW_COMMENT_REPAIR_CHANNEL,
+  prepareQueueDequeueRepair,
+  prepareReviewCommentRepair,
+} from './pr-lifecycle-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
@@ -1467,6 +1473,32 @@ function startHeadlessMode(): void {
             }
             const args = buildHeadlessFixArgs(taskId, agentName, context);
             await runHeadless(args, {
+              ...headlessDeps,
+              waitForApproval: false,
+              noTrack: true,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has(PR_REVIEW_COMMENT_REPAIR_CHANNEL)) {
+          workflowMutationDispatcher.set(PR_REVIEW_COMMENT_REPAIR_CHANNEL, async (intent: unknown) => {
+            const repair = prepareReviewCommentRepair(intent, { persistence });
+            await runHeadless(repair.headlessArgs, {
+              ...headlessDeps,
+              waitForApproval: false,
+              noTrack: true,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has(PR_QUEUE_DEQUEUED_REPAIR_CHANNEL)) {
+          workflowMutationDispatcher.set(PR_QUEUE_DEQUEUED_REPAIR_CHANNEL, async (intent: unknown) => {
+            const repair = prepareQueueDequeueRepair(intent, { persistence });
+            await runHeadless(repair.headlessArgs, {
               ...headlessDeps,
               waitForApproval: false,
               noTrack: true,
