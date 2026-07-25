@@ -81,21 +81,35 @@ The built-in set includes `autofix` as the default recovery worker for failed-ta
 
 ## Auto-Started Workers
 
-On owner boot `startAutoStartedWorkers()` starts two tiers of built-in workers
+On owner boot `startAutoStartedWorkers()` starts the built-in workers
 (`autoStartedOwnerWorkerKinds` in `packages/app/src/worker-control.ts`):
 
 - **Always started:** `pr-status`, `pr-summary-refresh`, `ci-failure`,
   `review-gate-merge-conflict` (queues `invoker:rebase-recreate` when a
-  review-gate PR reports a merge conflict), `disk-headroom`, `requeue`, and
-  `auto-approve`.
-- **Gated on `prMaintenance.enabled`:** the cron-scan PR-maintenance kinds
-  `coderabbit-address`, `pr-conflict-rebase`, `pr-ci-failure-scan`, and
-  `pr-admin-bypass-land` (the mergify admin-bypass landing scan). With the
-  config flag absent or false these do not auto-start; they remain registered
-  and startable on demand.
+  review-gate PR reports a merge conflict), `pr-review-comments-publisher`,
+  `review-comments`, `pr-queue-dequeue-publisher`, `pr-queue-land`,
+  `disk-headroom`, `requeue`, and `auto-approve`.
 
 Saved per-worker desired state (Workers tab / `worker start|stop`) overrides
 the auto-start default in both directions.
+
+## PR Repair Lifecycle
+
+PR repair uses the same persist-then-publish contract as task recovery. The
+owner writes a `pr_mirrors` row before publishing `pr.review_comments` or
+`pr.queue_dequeued`; event consumers reload that row and never treat the event
+payload as authority.
+
+Each mutating repair acquires one `pr_repair_leases` row for `(repo, prNumber,
+headSha)`. The precedence order is merge conflict, CI failure, review comments,
+then queue dequeue. A worker records a durable skip when a higher or equal
+priority holder exists. Lease-bearing commands revalidate the exact lease and
+head before they start a managed task.
+
+The publisher workers only read GitHub and emit lifecycle wakeups. Repair
+workers only acquire leases, record `worker_actions`, and submit normal Invoker
+mutation intents. Executors alone create worktrees and push branches. Legacy
+cron/omp PR-maintenance workers are not registered or auto-started.
 
 ## Worker Wakeups
 
