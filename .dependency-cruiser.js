@@ -200,6 +200,21 @@ module.exports = {
         ],
       },
     },
+    {
+      name: 'pr-lifecycle-workers-no-executors',
+      severity: 'error',
+      comment:
+        'PR lifecycle workers may decide and submit mutations, but executor and shell ownership stays outside the worker layer.',
+      from: {
+        path: '^packages/execution-engine/src/workers/(review-comments-worker|pr-queue-land-worker)\\.ts$',
+      },
+      to: {
+        path: [
+          '^packages/execution-engine/src/(worktree-executor|docker-executor|ssh-executor|base-executor|merge-runner|task-runner)\\.ts$',
+          '^node:(child_process|fs|fs/promises)$',
+        ],
+      },
+    },
   ],
   options: {
     doNotFollow: {
