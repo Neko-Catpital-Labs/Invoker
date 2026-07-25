@@ -41,6 +41,14 @@ the before/after architecture and why the split is acceptable. Each slice must
 still contain one conceptual unit; validators infer mixed units from the claim,
 rationale, implementation details, and change-type entries.
 
+## Safety Invariant Confirmation
+
+Before finalizing an implementation plan, Invoker YAML, or PR stack, propose
+the `Safety invariant:` for every slice and ask the user to confirm or correct
+it. Keep the existing heading and definition: it explains why the slice is safe
+to review locally. Mechanical slices may use terse invariants, but they still
+require user confirmation.
+
 ## Ordering Rules
 
 - Evidence before change: add repros, benchmarks, or instrumentation before the
