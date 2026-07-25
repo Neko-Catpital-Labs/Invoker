@@ -1,5 +1,6 @@
 import type { SQLiteAdapter } from '@invoker/data-store';
 import {
+  createFailedCheckLogFetcher,
   GitHubMergeGateProvider,
   queueReviewGateCiRepair,
   type MergeGateApprovalStatus,
@@ -87,7 +88,12 @@ export async function repairReviewGateCiByPr(
   const createdAt = deps.now?.() ?? new Date().toISOString();
   const generation = mergeTask.execution.generation ?? lookup.workflowGeneration ?? 0;
   const attemptId = mergeTask.execution.selectedAttemptId ?? lookup.selectedAttemptId;
-  const result = await queueReviewGateCiRepair(deps.policy, {
+  const policy: ReviewGateCiRepairPolicyOptions = {
+    ...deps.policy,
+    fetchFailedCheckLogs: deps.policy.fetchFailedCheckLogs
+      ?? createFailedCheckLogFetcher({ cwd: deps.repoRoot }),
+  };
+  const result = await queueReviewGateCiRepair(policy, {
     eventKey: `review_gate.ci_failed|workflow:${lookup.workflowId}|task:${mergeTask.id}|scan:${prNumber}`,
     kind: 'review_gate.ci_failed',
     workflowId: lookup.workflowId,

@@ -5,6 +5,7 @@ import {
   createAutoFixAttemptLedger,
   type AutoFixAttemptLedger,
 } from '../auto-fix-attempt-ledger.js';
+import { createFailedCheckLogFetcher } from '../ci-failure-infra-classifier.js';
 import type {
   ReviewGateCiFailedLifecycleEvent,
   WorkflowLifecycleEvent,
@@ -62,6 +63,9 @@ export function registerCiFailureWorker(
           getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
           attemptLedger: deps.autoFix?.attemptLedger,
           getAutoFixExecutionModel: deps.autoFix?.getAutoFixExecutionModel,
+          fetchFailedCheckLogs: createFailedCheckLogFetcher({
+            cwd: deps.prMaintenance?.repoRoot,
+          }),
         },
       }),
   });

@@ -28,6 +28,10 @@ import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
 } from './lifecycle-events.js';
+import {
+  classifyFailedChecks,
+  type FailedCheckLogFetcher,
+} from './ci-failure-infra-classifier.js';
 import { recordWorkerDecisionRow } from './worker-decision-ledger.js';
 
 const CI_FAILURE_WORKER_KIND = 'ci-failure';
@@ -68,6 +72,8 @@ export interface ReviewGateCiRepairPolicyOptions {
   getAutoFixExecutionModel?: () => string | undefined;
   attemptLedger: AutoFixAttemptLedger;
   getRetryBudget?: (task: TaskState) => number;
+  /** Optional failed-check log fetcher used to skip non-fixable infra failures. */
+  fetchFailedCheckLogs?: FailedCheckLogFetcher;
 }
 
 export function ciFailureChecksHash(failedChecks: readonly ReviewGateFailedCheck[]): string {
@@ -399,6 +405,37 @@ export async function queueReviewGateCiRepair(
   if (stale.stale) {
     logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', { reason: stale.reason, ...stale.details });
     return { decision: 'skipped', reason: stale.reason };
+  }
+
+  if (options.fetchFailedCheckLogs) {
+    let logsByDetailsUrl = new Map<string, string>();
+    try {
+      logsByDetailsUrl = await options.fetchFailedCheckLogs(event.failedChecks);
+    } catch (error) {
+      logCiFailureWorkerEvent(options, event, 'worker-ci-failure-infra-classify-error', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const classified = classifyFailedChecks(event.failedChecks, logsByDetailsUrl);
+    if (classified.classification === 'infra') {
+      recordCiFailureAction(
+        options,
+        event,
+        'skipped',
+        'Skipped CI repair because failure looks like runner/infra',
+        {
+          reason: 'infra-failure',
+          matchedSignals: [...classified.matchedSignals],
+          classifiedCheckCount: classified.classifiedCheckCount,
+        },
+      );
+      logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+        reason: 'infra-failure',
+        matchedSignals: [...classified.matchedSignals],
+        classifiedCheckCount: classified.classifiedCheckCount,
+      });
+      return { decision: 'skipped', reason: 'infra-failure' };
+    }
   }
 
   const workerRetryBudget = retryBudgetForTask(task, options);

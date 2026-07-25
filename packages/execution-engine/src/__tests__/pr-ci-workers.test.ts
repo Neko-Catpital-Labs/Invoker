@@ -19,6 +19,12 @@ import {
   DEFAULT_PR_STATUS_WORKER_INTERVAL_MS,
   createPrStatusWorker,
 } from '../workers/pr-status-worker.js';
+import { PR_5188_INFRA_LOG } from './fixtures/pr-5188-infra-ci-log.js';
+
+const CODE_FAILURE_LOG = `
+FAIL src/example.test.ts > does the thing
+AssertionError: expected 1 to be 2
+`;
 
 
 const logger = {
@@ -313,5 +319,102 @@ describe('PR status and CI failure workers', () => {
     }, '123');
 
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('skips fix-with-agent for PR #5188-shaped infra checkout failures', async () => {
+    const event = makeEvent({
+      failedChecks: [
+        {
+          name: 'PR Body',
+          conclusion: 'FAILURE',
+          detailsUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/29723090425/job/88290047072',
+        },
+        {
+          name: 'quality / Dependency Cruise',
+          conclusion: 'FAILURE',
+          detailsUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/29723090393/job/88290047107',
+        },
+        {
+          name: 'quality / Release Version Sync',
+          conclusion: 'FAILURE',
+          detailsUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/29723090393/job/88290047118',
+        },
+      ],
+      reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/5188',
+    });
+    const harness = makeHarness();
+    const ledgerKey = autoFixAttemptLedgerKeyFromLifecycleEvent(event);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [event],
+      fetchFailedCheckLogs: async (checks) => {
+        const logs = new Map<string, string>();
+        for (const check of checks) {
+          if (check.detailsUrl) logs.set(check.detailsUrl, PR_5188_INFRA_LOG);
+        }
+        return logs;
+      },
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.attemptLedger.get(ledgerKey)).toBe(0);
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+      status: 'skipped',
+      payload: expect.objectContaining({
+        reason: 'infra-failure',
+      }),
+    });
+  });
+
+  it('still queues fix-with-agent when fetched logs look like code failures', async () => {
+    const event = makeEvent({
+      failedChecks: [
+        {
+          name: 'unit',
+          conclusion: 'FAILURE',
+          detailsUrl: 'https://github.com/owner/repo/actions/runs/1/job/2',
+        },
+      ],
+    });
+    const harness = makeHarness();
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [event],
+      fetchFailedCheckLogs: async () => new Map([
+        ['https://github.com/owner/repo/actions/runs/1/job/2', CODE_FAILURE_LOG],
+      ]),
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails open and queues repair when log fetch returns nothing', async () => {
+    const event = makeEvent();
+    const harness = makeHarness();
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [event],
+      fetchFailedCheckLogs: async () => new Map(),
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
   });
 });
