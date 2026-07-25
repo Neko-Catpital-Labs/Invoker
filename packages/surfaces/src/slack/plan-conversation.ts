@@ -24,8 +24,6 @@ import {
   captureRepoState,
   looksLikeCompletionClaim,
   repoStateUnchanged,
-  restoreTrackedChanges,
-  trackedFilesChanged,
 } from './agent-turn-verification.js';
 
 // ── Types ───────────────────────────────────────────────────
@@ -544,10 +542,6 @@ export class PlanConversation {
     const repoStateAfter = this.mode === 'agent'
       ? await captureRepoState(this.workingDir)
       : null;
-    if (this.mode === 'agent' && trackedFilesChanged(repoStateBefore, repoStateAfter)) {
-      restoreTrackedChanges(this.workingDir);
-      throw new Error('Pre-approval exploration may create repro artifacts but cannot modify tracked files.');
-    }
     if (looksLikeCompletionClaim(message) && repoStateUnchanged(repoStateBefore, repoStateAfter)) {
       message = `${message}\n\n${buildUnverifiedNotice()}`;
     }
