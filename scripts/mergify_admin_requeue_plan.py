@@ -8,6 +8,9 @@ except ImportError:
     from mergify_admin_requeue_model import Action, BOT_OR_SELF_AUTHORS, Blocker, Ledger, MergifyQueueEvent, PrSnapshot, StackGroup
 
 
+TRUNK = "master"
+
+
 def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
     if pr.state != "OPEN":
@@ -72,12 +75,12 @@ def effective_blockers(pr: PrSnapshot, required_checks: Collection[str], trunk: 
     )
 
 
-def mergify_failed_check_actions(pr: PrSnapshot, ledger: Ledger, max_repair_attempts: int = 3) -> tuple[Action, ...]:
+def mergify_failed_check_actions(pr: PrSnapshot, ledger: Ledger) -> tuple[Action, ...]:
     latest = pr.latest_mergify
     if not latest or latest.state != "dequeued" or latest.head_sha != pr.head_ref_oid:
         return ()
     for name in latest.failing_checks:
-        if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= max_repair_attempts:
+        if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= 3:
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"), f"Mergify queue check failed: {name}"),)
         return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
     return ()
@@ -88,16 +91,15 @@ def plan_stack_actions(
     required_checks: Collection[str],
     ledger: Ledger,
     now_epoch: int,
-    trunk: str = "master",
-    max_repair_attempts: int = 3,
     max_requeue_attempts: int = 2,
+    max_repair_attempts: int = 3,
 ) -> tuple[Action, ...]:
     del now_epoch
-    blockers_by_pr = {pr.number: effective_blockers(pr, required_checks, trunk) for pr in stack.prs}
+    blockers_by_pr = {pr.number: effective_blockers(pr, required_checks, TRUNK) for pr in stack.prs}
     all_blockers = [b for blockers in blockers_by_pr.values() for b in blockers]
 
     for pr in stack.prs:
-        actions = mergify_failed_check_actions(pr, ledger, max_repair_attempts)
+        actions = mergify_failed_check_actions(pr, ledger)
         if actions:
             return actions
 
@@ -107,7 +109,7 @@ def plan_stack_actions(
                 key = f"conflict:{pr.number}"
                 if ledger.count("conflict-repair", pr.number, pr.head_ref_oid, key) >= max_repair_attempts:
                     return (cap_action(pr, blocker, blocker.detail),)
-                return (Action("rebase_recreate", pr.number, key, blocker.detail),)
+                return (Action("repair_conflict", pr.number, key, blocker.detail),)
             if blocker.kind == "failed_check":
                 if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
                     return (cap_action(pr, blocker, blocker.detail),)
@@ -129,10 +131,10 @@ def plan_stack_actions(
             if blocker.kind in {"draft", "human_review_thread", "missing_check", "closed"}:
                 return (Action("comment_blocked", pr.number, blocker.key, public_blocker_kind(blocker.kind)),)
 
-    current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == trunk]
+    current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == TRUNK]
     if not current_bottoms:
         first = stack.prs[0]
-        return (Action("comment_blocked", first.number, "no-current-bottom", f"no current bottom on {trunk}"),)
+        return (Action("comment_blocked", first.number, "no-current-bottom", "no current bottom on master"),)
     bottom = current_bottoms[0]
 
     non_hold_blockers = [b for b in all_blockers if b.kind != "merge_hold"]
@@ -150,15 +152,16 @@ def plan_stack_actions(
         return (Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label"),)
 
     latest = bottom.latest_mergify
-    requeue_reason = ""
-    requeue_key = "manual"
+    if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:
+        return ()
+    requeue_reason = "eligible-when-ready"
+    requeue_key = "ready"
     if latest and latest.state == "dequeued":
         requeue_reason = "eligible-after-dequeue"
         requeue_key = latest.comment_id or "manual"
     elif "dequeued" in bottom.labels:
         requeue_reason = "eligible-after-dequeued-label"
-    if not requeue_reason:
-        return ()
-    if ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key) >= max_requeue_attempts:
+    attempts = ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key)
+    if attempts >= max_requeue_attempts:
         return (cap_action(bottom, Blocker(requeue_key, "capped", bottom.number, "requeue"), "requeue"),)
     return (Action("requeue", bottom.number, requeue_key, requeue_reason),)

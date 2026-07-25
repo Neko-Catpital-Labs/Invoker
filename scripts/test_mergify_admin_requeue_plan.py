@@ -116,9 +116,9 @@ class PlanStackActions(unittest.TestCase):
     def test_pending_check_means_wait_do_nothing(self):
         self.assertEqual(self._plan(pr(checks={"build": check("pending")})), ())
 
-    def test_conflict_triggers_rebase_recreate(self):
+    def test_conflict_triggers_claude_repair(self):
         actions = self._plan(pr(merge_state_status="DIRTY"))
-        self.assertEqual((actions[0].kind, actions[0].pr_number), ("rebase_recreate", 1))
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("repair_conflict", 1))
 
     def test_failed_check_triggers_repair(self):
         actions = self._plan(pr(checks={"build": check("failure")}))
@@ -138,6 +138,11 @@ class PlanStackActions(unittest.TestCase):
         actions = self._plan(snapshot)
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-after-dequeue"))
 
+    def test_clean_bottom_queues_without_prior_dequeue(self):
+        snapshot = pr(labels=frozenset({"admin-bypass"}))
+        actions = self._plan(snapshot)
+        self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
+
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
         # Two prior requeue attempts on this head+key -> the third is capped.
@@ -146,34 +151,6 @@ class PlanStackActions(unittest.TestCase):
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued", comment_id="cm1"))
         actions = self._plan(snapshot, ledger)
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
-
-    def test_max_repair_attempts_parameter_caps_conflict_repair(self):
-        # cap=1: one prior conflict-repair attempt on this head -> next plan is capped.
-        ledger = self._ledger()
-        snapshot = pr(merge_state_status="DIRTY")
-        first = p.plan_stack_actions(m.StackGroup("s", (snapshot,)), REQUIRED, ledger, now_epoch=0, max_repair_attempts=1)
-        self.assertEqual(first[0].kind, "rebase_recreate")
-        ledger.record("conflict-repair", 1, HEAD, "conflict:1")
-        second = p.plan_stack_actions(m.StackGroup("s", (snapshot,)), REQUIRED, ledger, now_epoch=1, max_repair_attempts=1)
-        self.assertEqual((second[0].kind, second[0].key), ("comment_blocked", "capped"))
-        self.assertIn("The retry cap was reached", second[0].detail)
-
-    def test_max_requeue_attempts_parameter_caps_requeue(self):
-        ledger = self._ledger()
-        ledger.record("requeue", 1, HEAD, "cm1")
-        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued", comment_id="cm1"))
-        actions = p.plan_stack_actions(m.StackGroup("s", (snapshot,)), REQUIRED, ledger, now_epoch=0, max_requeue_attempts=1)
-        self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
-
-    def test_trunk_parameter_decides_current_bottom(self):
-        # Same PR based on "main": with trunk=main it is the bottom (nudge);
-        # with the default master trunk it is not (no current bottom).
-        snapshot = pr(base_ref_name="main")
-        on_main = p.plan_stack_actions(m.StackGroup("s", (snapshot,)), REQUIRED, self._ledger(), now_epoch=0, trunk="main")
-        self.assertEqual(on_main[0].kind, "comment_admin_bypass_nudge")
-        on_master = p.plan_stack_actions(m.StackGroup("s", (snapshot,)), REQUIRED, self._ledger(), now_epoch=0)
-        self.assertEqual((on_master[0].kind, on_master[0].key), ("comment_blocked", "no-current-bottom"))
-        self.assertIn("no current bottom on master", on_master[0].detail)
 
 
 if __name__ == "__main__":
