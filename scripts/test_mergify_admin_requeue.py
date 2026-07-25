@@ -155,6 +155,28 @@ Failing checks
         thread_stack = StackGroup("s", (pr(2604, head="stack/a", latest=mergify()), pr(2605, base="stack/a", threads=(ReviewThread("t1", False, ("alice",)),))))
         actions = plan_stack_actions(thread_stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2605, "human-review-thread")])
+    def test_unaccepted_upper_failed_check_repairs_upper_before_bottom(self):
+        failed = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stack = StackGroup(
+            "s",
+            (
+                pr(2604, head="stack/a", latest=mergify()),
+                pr(2605, base="stack/a", labels={"dequeued"}, checks=failed),
+            ),
+        )
+        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2605, "PR Body")])
+
+    def test_unaccepted_upper_without_blockers_waits_instead_of_requeueing_bottom(self):
+        stack = StackGroup(
+            "s",
+            (
+                pr(2604, head="stack/a", latest=mergify()),
+                pr(2605, base="stack/a", labels={"dequeued"}),
+            ),
+        )
+        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
+        self.assertEqual(actions, ())
 
     def test_missing_admin_bypass_label_on_current_bottom_nudges_human_first(self):
         stack = StackGroup("s", (pr(2604, labels={"dequeued"}, latest=mergify()),))

@@ -1,0 +1,53 @@
+{
+  "prs": [
+    {
+      "number": 801,
+      "title": "Accepted stack bottom",
+      "url": "https://github.com/fake/repo/pull/801",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/801",
+      "headRefOid": "ffffffffffffffffffffffffffffffffffffffff",
+      "mergeStateStatus": "CLEAN",
+      "mergeable": "MERGEABLE",
+      "labels": ["admin-bypass", "dequeued"],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS"}
+    },
+    {
+      "number": 802,
+      "title": "Unaccepted stack top with failed check",
+      "url": "https://github.com/fake/repo/pull/802",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "stack/801",
+      "headRefName": "stack/802",
+      "headRefOid": "9999999999999999999999999999999999999999",
+      "mergeStateStatus": "BLOCKED",
+      "mergeable": "MERGEABLE",
+      "labels": ["dequeued"],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS", "PR Body": "FAILURE"}
+    }
+  ],
+  "issue_comments": {
+    "801": [
+      {
+        "id": "stack801",
+        "user": {"login": "mergify[bot]"},
+        "updated_at": "2026-07-20T00:00:01Z",
+        "html_url": "https://github.com/fake/repo/pull/801#stack801",
+        "body": "<!-- mergify-stack-data: {\"stack_id\":\"s801\",\"pull_numbers_bottom_to_top\":[801,802]} -->"
+      },
+      {
+        "id": "m801",
+        "user": {"login": "mergify[bot]"},
+        "updated_at": "2026-07-20T00:00:00Z",
+        "html_url": "https://github.com/fake/repo/pull/801#m801",
+        "body": "Left the queue `admin-bypass` at `ffffffffffffffffffffffffffffffffffffffff`.\n-*- Mergify Payload -*-\n{\"state\":\"dequeued\",\"queue_rule_name\":\"admin-bypass\"}\n"
+      }
+    ],
+    "802": []
+  }
+}

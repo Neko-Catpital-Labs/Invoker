@@ -95,10 +95,18 @@ def plan_stack_actions(
     max_repair_attempts: int = 3,
 ) -> tuple[Action, ...]:
     del now_epoch
+    current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == TRUNK]
+    bottom = current_bottoms[0] if current_bottoms else None
+    upper_stack_needs_acceptance = bool(bottom) and any(
+        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
+        for pr in stack.prs
+    )
     blockers_by_pr = {pr.number: effective_blockers(pr, required_checks, TRUNK) for pr in stack.prs}
     all_blockers = [b for blockers in blockers_by_pr.values() for b in blockers]
 
     for pr in stack.prs:
+        if upper_stack_needs_acceptance and bottom and pr.number == bottom.number:
+            continue
         actions = mergify_failed_check_actions(pr, ledger)
         if actions:
             return actions
@@ -131,12 +139,10 @@ def plan_stack_actions(
             if blocker.kind in {"draft", "human_review_thread", "missing_check", "closed"}:
                 return (Action("comment_blocked", pr.number, blocker.key, public_blocker_kind(blocker.kind)),)
 
-    current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == TRUNK]
     if not current_bottoms:
         first = stack.prs[0]
         return (Action("comment_blocked", first.number, "no-current-bottom", "no current bottom on master"),)
     bottom = current_bottoms[0]
-
     non_hold_blockers = [b for b in all_blockers if b.kind != "merge_hold"]
     hold_blockers = [b for b in all_blockers if b.kind == "merge_hold"]
     if hold_blockers and not non_hold_blockers:
@@ -150,6 +156,8 @@ def plan_stack_actions(
 
     if "admin-bypass" not in bottom.labels:
         return (Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label"),)
+    if upper_stack_needs_acceptance:
+        return ()
 
     latest = bottom.latest_mergify
     if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Battle-test: the mergify admin-bypass landing brain plans the right action
 # per scenario against a fake GitHub, in dry-run (no mutations):
-#   pr-dirty.json       -> rebase_recreate (merge conflict)
-#   pr-ci-failed.json   -> repair_check (failed required check after dequeue)
-#   stack-landable.json -> requeue (clean dequeued bottom PR)
+#   pr-dirty.json                    -> rebase_recreate (merge conflict)
+#   pr-ci-failed.json                -> repair_check (failed required check after dequeue)
+#   stack-landable.json              -> requeue (clean dequeued bottom PR)
+#   stack-upper-needs-acceptance.json -> repair_check (repairable upper PR while stack acceptance is incomplete)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -39,8 +40,8 @@ run_land() {
 }
 
 out="$(run_land pr-dirty.json)"
-echo "$out" | grep -q "DRY-RUN rebase-recreate PR #501" \
-  || fail "pr-dirty: expected rebase_recreate plan" "$out"
+echo "$out" | grep -q "DRY-RUN repair-conflict PR #501 GitHub reports merge conflict" \
+  || fail "pr-dirty: expected repair_conflict plan" "$out"
 
 out="$(run_land pr-ci-failed.json)"
 echo "$out" | grep -q 'DRY-RUN repair-check PR #601 check="PR Body"' \
@@ -50,6 +51,12 @@ out="$(run_land stack-landable.json)"
 echo "$out" | grep -q "DRY-RUN requeue PR #701 head=dddddddddddddddddddddddddddddddddddddddd reason=eligible-after-dequeue" \
   || fail "stack-landable: expected requeue plan for the bottom PR" "$out"
 echo "$out" | grep -q "PR #702" && fail "stack top must not be actioned before the bottom lands" "$out"
+
+out="$(run_land stack-upper-needs-acceptance.json)"
+echo "$out" | grep -q 'DRY-RUN repair-check PR #802 check="PR Body"' \
+  || fail "stack-upper-needs-acceptance: expected upper PR repair_check plan" "$out"
+echo "$out" | grep -Eq 'DRY-RUN .* PR #801' \
+  && fail "stack-upper-needs-acceptance: bottom PR must not be actioned while upper acceptance is incomplete" "$out"
 
 # Dry-run must not mutate the fake GitHub: no comments, no label edits.
 if grep -Eq "^gh (pr comment|api --method)" "$FAKE_GH_STATE_DIR/calls.log"; then
