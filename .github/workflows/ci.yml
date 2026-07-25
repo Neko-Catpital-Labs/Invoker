@@ -55,8 +55,9 @@ jobs:
       - name: Build UI and app
         run: |
           pnpm --filter @invoker/ui build
+          pnpm --filter @invoker/surfaces build
           pnpm --filter @invoker/app build
-          tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist
+          tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist packages/surfaces/dist
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -317,6 +318,7 @@ jobs:
               bash scripts/test-suites/required/05-delete-all-prod-db-guard.sh
               bash scripts/test-suites/required/06-large-file-guardrail.sh
               bash scripts/test-suites/required/07-invalid-config-json.sh
+              bash scripts/test-suites/required/08-build-artifact-surfaces-guard.sh
               bash scripts/test-suites/required/15-owner-boundary-policy.sh
               bash scripts/test-suites/required/50-verify-executor-routing.sh
           - name: Vitest Workspace
