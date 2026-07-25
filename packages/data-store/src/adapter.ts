@@ -184,6 +184,39 @@ export interface ExecutionResourceLeaseReleaseRow {
   taskId?: string;
 }
 
+export type PrRepairHolderKind =
+  | 'merge_conflict'
+  | 'ci_failed'
+  | 'review_comments'
+  | 'queue_dequeued';
+
+export interface PrMirrorRow {
+  repo: string;
+  prNumber: number;
+  headSha: string;
+  baseRef?: string;
+  mergeState?: string;
+  labelsJson?: string;
+  stackId?: string;
+  stackOrder?: number;
+  workflowId?: string;
+  repairWorkflowsJson?: string;
+  blockersJson?: string;
+  updatedAt: string;
+}
+
+export interface PrRepairLeaseRow {
+  repo: string;
+  prNumber: number;
+  headSha: string;
+  holderKind: PrRepairHolderKind;
+  leaseId: string;
+  commandId?: string;
+  workflowId?: string;
+  acquiredAt: string;
+  expiresAt?: string;
+}
+
 export type WorkerActionStatus =
   | 'queued'
   | 'pending'
