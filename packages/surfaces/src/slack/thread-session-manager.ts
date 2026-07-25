@@ -101,6 +101,22 @@ export class SessionHandle {
     return this.conversation.sendMessage(message);
   }
 
+  async runPlanConversion(): Promise<string> {
+    if (this.disposed) {
+      throw new Error(`Session ${this.id} has been disposed`);
+    }
+    this.metadata.lastAccessedAt = new Date();
+    return this.conversation.runPlanConversion();
+  }
+
+  get history() {
+    return this.conversation.history;
+  }
+
+  get lastTurnDraftPlanText(): string | null {
+    return this.conversation.lastTurnDraftPlanText;
+  }
+
   /**
    * Get the raw plan text submitted via confirmation.
    */

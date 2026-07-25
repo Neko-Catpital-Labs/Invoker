@@ -32,6 +32,24 @@ export function repoStateUnchanged(before: RepoState | null, after: RepoState | 
     && before.statusPorcelain === after.statusPorcelain;
 }
 
+export function trackedFilesChanged(before: RepoState | null, after: RepoState | null): boolean {
+  if (!before || !after) return false;
+  const beforeEntries = new Set(before.statusPorcelain.split('\n').filter(Boolean));
+  return after.statusPorcelain
+    .split('\n')
+    .filter(Boolean)
+    .some((entry) => !beforeEntries.has(entry) && !entry.startsWith('??'));
+}
+
+export function restoreTrackedChanges(workingDir?: string): void {
+  if (!workingDir) return;
+  try {
+    execFileSync('git', ['restore', '--staged', '--worktree', '.'], { cwd: workingDir, stdio: 'ignore' });
+  } catch {
+    return;
+  }
+}
+
 export function looksLikeCompletionClaim(replyText: string): boolean {
   return /\b(?:fixed|implemented|completed)\b|^\s*changed\s*:|\bverified\s*:|\btests?\s+passed\b|\bbuild\s+passed\b/mui.test(replyText);
 }

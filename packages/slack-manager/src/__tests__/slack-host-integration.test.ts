@@ -123,7 +123,7 @@ describe('Slack manager host integration', () => {
     adapter.close();
   });
 
-  it('submits an explicit plan and routes IPC updates to its private workflow channel', async () => {
+  it('does not submit a plan from deprecated plain-text commands', async () => {
     const conversations = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
     const workflowChannels = new WorkflowChannelRepository(adapter);
     const { client, subscribers } = fakeClient();
@@ -157,39 +157,8 @@ describe('Slack manager host integration', () => {
     await mention({ event: { text: '<@UBOT> submit', ts: '100.2', thread_ts: '100.1', user: 'U_REQUESTER', channel: 'C_LOBBY' }, say });
     await reply({ event: { text: 'yes', ts: '100.3', thread_ts: '100.1', user: 'U_REQUESTER', channel: 'C_LOBBY' }, say });
 
-    expect(client.run).toHaveBeenCalledOnce();
-    expect(bolt.client.conversations.create).toHaveBeenCalledWith({ name: 'workflow-host-proof', is_private: true });
-    expect(bolt.client.conversations.invite).toHaveBeenCalledWith({ channel: 'C_WORKFLOW', users: 'U_REQUESTER' });
-    expect(workflowChannels.getByWorkflowId('wf-host-proof')).toEqual(expect.objectContaining({
-      channelId: 'C_WORKFLOW',
-      lobbyChannelId: 'C_LOBBY',
-      lobbyThreadTs: '100.1',
-    }));
-
-    subscribers.get(Channels.SURFACE_EVENT)!({
-      type: 'workflow_progress',
-      progress: {
-        workflowId: 'wf-host-proof',
-        name: 'Host integration',
-        counts: { total: 1, completed: 0, failed: 0, closed: 0, running: 1, pending: 0 },
-        percentComplete: 0,
-        tasks: [],
-      },
-    });
-    subscribers.get(Channels.TASK_DELTA)!({
-      type: 'updated',
-      taskId: 'wf-host-proof/proof',
-      changes: { status: 'awaiting_approval' },
-    });
-    await settle();
-
-    expect(bolt.client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({
-      channel: 'C_WORKFLOW',
-      text: expect.stringContaining('Host integration'),
-    }));
-    expect(bolt.client.chat.postMessage).toHaveBeenCalledWith(expect.objectContaining({
-      channel: 'C_WORKFLOW',
-      text: 'Task wf-host-proof/proof: Awaiting Approval',
-    }));
+    expect(client.run).not.toHaveBeenCalled();
+    expect(bolt.client.conversations.create).not.toHaveBeenCalled();
+    expect(workflowChannels.getByWorkflowId('wf-host-proof')).toBeNull();
   });
 });

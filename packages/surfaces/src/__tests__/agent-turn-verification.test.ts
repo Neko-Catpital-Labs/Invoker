@@ -8,6 +8,8 @@ import {
   captureRepoState,
   looksLikeCompletionClaim,
   repoStateUnchanged,
+  restoreTrackedChanges,
+  trackedFilesChanged,
 } from '../slack/agent-turn-verification.js';
 
 describe('agent turn verification', () => {
@@ -32,5 +34,26 @@ describe('agent turn verification', () => {
     expect(looksLikeCompletionClaim('Fixed.\nChanged: routing.\nVerified: tests passed.')).toBe(true);
     expect(looksLikeCompletionClaim('I inspected the routing code.')).toBe(false);
     expect(buildUnverifiedNotice()).toContain('could not be verified');
+  });
+
+  it('detects and restores tracked-file changes while preserving new repro artifacts', async () => {
+    const workingDir = mkdtempSync(join(tmpdir(), 'invoker-agent-guard-'));
+    execFileSync('git', ['init'], { cwd: workingDir });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: workingDir });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: workingDir });
+    writeFileSync(join(workingDir, 'tracked.txt'), 'before\n');
+    execFileSync('git', ['add', '.'], { cwd: workingDir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: workingDir });
+    try {
+      const before = await captureRepoState(workingDir);
+      writeFileSync(join(workingDir, 'tracked.txt'), 'after\n');
+      writeFileSync(join(workingDir, 'repro.txt'), 'repro\n');
+      const after = await captureRepoState(workingDir);
+      expect(trackedFilesChanged(before, after)).toBe(true);
+      restoreTrackedChanges(workingDir);
+      expect(await captureRepoState(workingDir)).toMatchObject({ statusPorcelain: '?? repro.txt' });
+    } finally {
+      rmSync(workingDir, { recursive: true, force: true });
+    }
   });
 });

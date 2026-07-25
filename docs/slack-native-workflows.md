@@ -1,12 +1,12 @@
 # Slack-native coding workflows
 
-Drive Invoker from Slack: mention `@Invoker` in any channel where the bot is present to start a normal agent thread in a checked-out repo. If you want an Invoker workflow, say `plan:` first, then submit the drafted plan. When a workflow starts, Invoker creates a **private `workflow-<id>` channel**, invites you, and posts the workflow there. Mentioning `@Invoker` inside that mapped channel answers using **only that workflow's context** (its planning conversation plus every task transcript) and runs control actions on it.
+Drive Invoker from Slack: mention `@Invoker` in any channel where the bot is present to start a normal agent thread in a checked-out repo. When the scope is ready, use `@Invoker /plan` in that same thread. Invoker posts a durable review message with the exact YAML attachment and Approve/Cancel buttons. When a workflow starts, Invoker creates a **private `workflow-<id>` channel**, invites you, and posts the workflow there. Mentioning `@Invoker` inside that mapped channel answers using **only that workflow's context** (its planning conversation plus every task transcript) and runs control actions on it.
 
 ## Flow
 
 1. **Start a normal agent thread.** In any channel where Invoker is present: `@Invoker [omp+codex] [repo:web] fix the Slack routing bug` or `@Invoker fix this in https://github.com/acme/web`. Invoker checks out the selected repo and runs a normal OMP/Codex-style conversation in the thread.
-2. **Opt into Invoker planning.** Use `@Invoker plan: add a /health endpoint` when you want YAML for an Invoker workflow instead of direct local agent work. In an existing agent thread, reply `plan: add a /health endpoint`, `plan add a /health endpoint`, or `add a /health endpoint via Invoker`; Invoker promotes that same thread to planning and retains its selected repo and harness preset.
-3. **Submit only when ready.** Run `@Invoker submit` in that plan thread, then approve the short summary. That starts the generated YAML plan as a workflow.
+2. **Create a plan explicitly.** Use `@Invoker /plan` in the established thread. It uses the same thread history, pinned repo, and harness preset to convert the agreed scope to Invoker YAML.
+3. **Review and approve.** The review message contains newline-delimited steps, the exact YAML attachment, and Approve/Cancel buttons. It is durable: it does not expire. Approve starts that exact YAML plan as a workflow.
 4. **Workflow channel appears.** Invoker creates private `workflow-<id>`, invites you, posts the workflow summary there, and links it from the originating plan thread.
 5. **Operate in the channel.** `@Invoker status`, `@Invoker approve <task>`, `@Invoker reject <task>`, `@Invoker retry <task>`, `@Invoker input <task>: <text>`, or ask a free-form question (answered only from this workflow's planning + task transcripts).
 
@@ -23,15 +23,14 @@ The repository and harness are pinned when the thread starts. Start a new thread
 
 ## Local and plan modes
 
-Normal mentions outside mapped workflow channels are local agent sessions. They can answer, edit, and run focused checks in their repo worktree.
+Normal mentions outside mapped workflow channels are exploration sessions. They can answer and create repro artifacts, but tracked files are restored and the turn fails if the agent modifies them before plan approval.
 
 - `@Invoker fix the typo in the Slack docs` — starts or continues a normal agent thread.
 - `@Invoker local: fix the typo in the Slack docs` — kept as an alias for the same normal agent thread.
 - `@Invoker run local: report back how many workflows are running` — answers through Invoker status directly. Other local queries use the normal agent thread.
 - `@Invoker exec local: pnpm --filter @invoker/surfaces test -- slack-surface-workflows.test.ts` — runs that exact shell command and reports the exit code and output. It does **not** edit files.
-- `@Invoker plan: fix the typo in the Slack docs` — drafts Invoker YAML. Use `@Invoker submit` (or bare `submit`) in that thread to start the approval flow.
-- `plan: turn the discussion above into a migration plan` — promotes the current agent thread to plan mode, keeping its repo and harness selection. This works after a Slack service restart as well.
-- `turn the discussion above into a plan` — promotes the current agent thread without requiring a second thread.
+- `@Invoker /plan` — converts the current thread into a YAML review message without changing its pinned repository or preset.
+- Plain text such as `plan`, `submit`, or YAML fences does not create or execute a workflow.
 
 ## Harness presets
 
