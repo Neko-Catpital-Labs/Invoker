@@ -508,6 +508,44 @@ export const SCHEMA_DDL = `
       CREATE INDEX IF NOT EXISTS idx_terminal_sessions_status_updated
         ON terminal_sessions(status, updated_at);
 
+      CREATE TABLE IF NOT EXISTS pr_mirrors (
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        head_sha TEXT NOT NULL,
+        base_ref TEXT,
+        merge_state TEXT,
+        labels_json TEXT CHECK (labels_json IS NULL OR json_valid(labels_json)),
+        stack_id TEXT,
+        stack_order INTEGER,
+        workflow_id TEXT,
+        repair_workflows_json TEXT CHECK (repair_workflows_json IS NULL OR json_valid(repair_workflows_json)),
+        blockers_json TEXT CHECK (blockers_json IS NULL OR json_valid(blockers_json)),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (repo, pr_number)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_pr_mirrors_workflow_id
+        ON pr_mirrors(workflow_id);
+
+      CREATE TABLE IF NOT EXISTS pr_repair_leases (
+        repo TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        head_sha TEXT NOT NULL,
+        holder_kind TEXT NOT NULL,
+        lease_id TEXT NOT NULL UNIQUE,
+        command_id TEXT,
+        workflow_id TEXT,
+        acquired_at TEXT NOT NULL,
+        expires_at TEXT,
+        PRIMARY KEY (repo, pr_number, head_sha)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_pr_repair_leases_lease_id
+        ON pr_repair_leases(lease_id);
+
+      CREATE INDEX IF NOT EXISTS idx_pr_repair_leases_expires_at
+        ON pr_repair_leases(expires_at);
+
     `;
 
 /** Idempotent `ALTER TABLE ... ADD COLUMN` migrations for older databases. */
@@ -622,6 +660,36 @@ export const POST_MIGRATION_STATEMENTS = [
   `UPDATE worker_actions SET status = 'cancelled' WHERE status = 'canceled'`,
   'CREATE TABLE IF NOT EXISTS task_crash_preservation (task_id TEXT PRIMARY KEY, preserved_at TEXT NOT NULL, owner_pid INTEGER, diagnostic_report_path TEXT, diagnostic_summary TEXT, FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE)',
   'CREATE INDEX IF NOT EXISTS idx_task_crash_preservation_preserved_at ON task_crash_preservation(preserved_at)',
+  `CREATE TABLE IF NOT EXISTS pr_mirrors (
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    base_ref TEXT,
+    merge_state TEXT,
+    labels_json TEXT CHECK (labels_json IS NULL OR json_valid(labels_json)),
+    stack_id TEXT,
+    stack_order INTEGER,
+    workflow_id TEXT,
+    repair_workflows_json TEXT CHECK (repair_workflows_json IS NULL OR json_valid(repair_workflows_json)),
+    blockers_json TEXT CHECK (blockers_json IS NULL OR json_valid(blockers_json)),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (repo, pr_number)
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_pr_mirrors_workflow_id ON pr_mirrors(workflow_id)',
+  `CREATE TABLE IF NOT EXISTS pr_repair_leases (
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    holder_kind TEXT NOT NULL,
+    lease_id TEXT NOT NULL UNIQUE,
+    command_id TEXT,
+    workflow_id TEXT,
+    acquired_at TEXT NOT NULL,
+    expires_at TEXT,
+    PRIMARY KEY (repo, pr_number, head_sha)
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_pr_repair_leases_lease_id ON pr_repair_leases(lease_id)',
+  'CREATE INDEX IF NOT EXISTS idx_pr_repair_leases_expires_at ON pr_repair_leases(expires_at)',
 ];
 
 /** Rebuilt `workflows` table used to drop a legacy `status` column. */

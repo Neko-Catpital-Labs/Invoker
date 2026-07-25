@@ -57,6 +57,9 @@ import type {
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
+  PrMirrorRow,
+  PrRepairLeaseRow,
+  PrRepairHolderKind,
 } from './adapter.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { SCHEMA_DDL } from './sqlite-schema.js';
@@ -3731,6 +3734,154 @@ export class SQLiteAdapter implements PersistenceAdapter {
        WHERE id = ?`,
       [new Date().toISOString(), error, id],
     );
+  }
+
+  upsertPrMirror(mirror: PrMirrorRow): PrMirrorRow {
+    this.execRun(
+      `INSERT INTO pr_mirrors (
+        repo, pr_number, head_sha, base_ref, merge_state, labels_json,
+        stack_id, stack_order, workflow_id, repair_workflows_json, blockers_json, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(repo, pr_number) DO UPDATE SET
+        head_sha = excluded.head_sha,
+        base_ref = excluded.base_ref,
+        merge_state = excluded.merge_state,
+        labels_json = excluded.labels_json,
+        stack_id = excluded.stack_id,
+        stack_order = excluded.stack_order,
+        workflow_id = excluded.workflow_id,
+        repair_workflows_json = excluded.repair_workflows_json,
+        blockers_json = excluded.blockers_json,
+        updated_at = excluded.updated_at`,
+      [
+        mirror.repo,
+        mirror.prNumber,
+        mirror.headSha,
+        mirror.baseRef ?? null,
+        mirror.mergeState ?? null,
+        mirror.labelsJson ?? null,
+        mirror.stackId ?? null,
+        mirror.stackOrder ?? null,
+        mirror.workflowId ?? null,
+        mirror.repairWorkflowsJson ?? null,
+        mirror.blockersJson ?? null,
+        mirror.updatedAt,
+      ],
+    );
+    const saved = this.getPrMirror(mirror.repo, mirror.prNumber);
+    if (!saved) {
+      throw new Error(`Failed to persist pr_mirror ${mirror.repo}#${mirror.prNumber}`);
+    }
+    return saved;
+  }
+
+  getPrMirror(repo: string, prNumber: number): PrMirrorRow | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM pr_mirrors WHERE repo = ? AND pr_number = ?',
+      [repo, prNumber],
+    );
+    return row ? this.rowToPrMirror(row) : undefined;
+  }
+
+  deletePrMirror(repo: string, prNumber: number): void {
+    this.execRun(
+      'DELETE FROM pr_mirrors WHERE repo = ? AND pr_number = ?',
+      [repo, prNumber],
+    );
+  }
+
+  upsertPrRepairLease(lease: PrRepairLeaseRow): PrRepairLeaseRow {
+    this.execRun(
+      `INSERT INTO pr_repair_leases (
+        repo, pr_number, head_sha, holder_kind, lease_id,
+        command_id, workflow_id, acquired_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(repo, pr_number, head_sha) DO UPDATE SET
+        holder_kind = excluded.holder_kind,
+        lease_id = excluded.lease_id,
+        command_id = excluded.command_id,
+        workflow_id = excluded.workflow_id,
+        acquired_at = excluded.acquired_at,
+        expires_at = excluded.expires_at`,
+      [
+        lease.repo,
+        lease.prNumber,
+        lease.headSha,
+        lease.holderKind,
+        lease.leaseId,
+        lease.commandId ?? null,
+        lease.workflowId ?? null,
+        lease.acquiredAt,
+        lease.expiresAt ?? null,
+      ],
+    );
+    const saved = this.getPrRepairLease(lease.repo, lease.prNumber, lease.headSha);
+    if (!saved) {
+      throw new Error(
+        `Failed to persist pr_repair_lease ${lease.repo}#${lease.prNumber}@${lease.headSha}`,
+      );
+    }
+    return saved;
+  }
+
+  getPrRepairLease(repo: string, prNumber: number, headSha: string): PrRepairLeaseRow | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM pr_repair_leases WHERE repo = ? AND pr_number = ? AND head_sha = ?',
+      [repo, prNumber, headSha],
+    );
+    return row ? this.rowToPrRepairLease(row) : undefined;
+  }
+
+  getPrRepairLeaseById(leaseId: string): PrRepairLeaseRow | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM pr_repair_leases WHERE lease_id = ?',
+      [leaseId],
+    );
+    return row ? this.rowToPrRepairLease(row) : undefined;
+  }
+
+  deletePrRepairLease(repo: string, prNumber: number, headSha: string): void {
+    this.execRun(
+      'DELETE FROM pr_repair_leases WHERE repo = ? AND pr_number = ? AND head_sha = ?',
+      [repo, prNumber, headSha],
+    );
+  }
+
+  deletePrRepairLeaseById(leaseId: string): boolean {
+    this.execRun('DELETE FROM pr_repair_leases WHERE lease_id = ?', [leaseId]);
+    return ((this.db.getRowsModified?.() ?? 0) as number) > 0;
+  }
+
+  private rowToPrMirror(row: Record<string, unknown>): PrMirrorRow {
+    return {
+      repo: String(row.repo),
+      prNumber: Number(row.pr_number),
+      headSha: String(row.head_sha),
+      baseRef: row.base_ref != null ? String(row.base_ref) : undefined,
+      mergeState: row.merge_state != null ? String(row.merge_state) : undefined,
+      labelsJson: row.labels_json != null ? String(row.labels_json) : undefined,
+      stackId: row.stack_id != null ? String(row.stack_id) : undefined,
+      stackOrder: row.stack_order != null ? Number(row.stack_order) : undefined,
+      workflowId: row.workflow_id != null ? String(row.workflow_id) : undefined,
+      repairWorkflowsJson:
+        row.repair_workflows_json != null ? String(row.repair_workflows_json) : undefined,
+      blockersJson: row.blockers_json != null ? String(row.blockers_json) : undefined,
+      updatedAt: String(row.updated_at),
+    };
+  }
+
+  private rowToPrRepairLease(row: Record<string, unknown>): PrRepairLeaseRow {
+    return {
+      repo: String(row.repo),
+      prNumber: Number(row.pr_number),
+      headSha: String(row.head_sha),
+      holderKind: String(row.holder_kind) as PrRepairHolderKind,
+      leaseId: String(row.lease_id),
+      commandId: row.command_id != null ? String(row.command_id) : undefined,
+      workflowId: row.workflow_id != null ? String(row.workflow_id) : undefined,
+      acquiredAt: String(row.acquired_at),
+      expiresAt: row.expires_at != null ? String(row.expires_at) : undefined,
+    };
   }
 
   private rowToWorkflowMutationIntent(row: Record<string, unknown>): WorkflowMutationIntent {
