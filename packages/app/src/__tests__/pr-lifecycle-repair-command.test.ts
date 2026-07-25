@@ -100,7 +100,7 @@ describe('PR lifecycle repair commands', () => {
     expect(command.headlessArgs).toContain('--review-gate-ci');
   });
 
-  it('routes a queue dequeue to fresh-base recreation, not CI repair', () => {
+  it('routes a queue dequeue to the managed merge-task fix flow', () => {
     const deps = makeDeps();
     deps.persistence.getPrRepairLease = () => ({
       repo: intent.repo,
@@ -116,12 +116,12 @@ describe('PR lifecycle repair commands', () => {
     const command = prepareQueueDequeueRepair({
       ...intent,
       holderKind: 'queue_dequeued',
+      failedChecks: ['quality / TypeScript Types'],
     }, deps as never);
 
-    expect(command).toEqual({
-      workflowId,
-      headlessArgs: ['rebase-recreate', workflowId],
-    });
+    expect(command.workflowId).toBe(workflowId);
+    expect(command.headlessArgs.slice(0, 2)).toEqual(['fix', 'wf-1/merge']);
+    expect(command.headlessArgs).toContain('--review-gate-ci');
   });
 
   it('rejects stale or replaced repair leases before dispatch', () => {

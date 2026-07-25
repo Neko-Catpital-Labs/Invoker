@@ -146,6 +146,7 @@ function handlePrQueueLandEvent(
       workflowId: event.workflowId,
       eventKey: event.eventKey,
       reason: event.dequeueCommentId,
+      failedChecks: event.failedChecks,
     }]);
     recordWorkerDecisionRow(options.store, {
       workerKind: PR_QUEUE_LAND_WORKER_KIND,

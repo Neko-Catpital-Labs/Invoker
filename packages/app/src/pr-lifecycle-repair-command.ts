@@ -23,6 +23,7 @@ export interface PrLifecycleRepairIntent {
   author?: string;
   queueRule?: string;
   reason?: string;
+  failedChecks?: string[];
 }
 
 export interface PrLifecycleRepairCommand {
@@ -128,11 +129,33 @@ export function prepareQueueDequeueRepair(
   deps: PrLifecycleRepairCommandDeps,
 ): PrLifecycleRepairCommand {
   const intent = validateRepairLease(value, 'queue_dequeued', deps);
-  if (!deps.persistence.loadWorkflow(intent.workflowId)) {
-    throw new Error(`Invoker workflow ${intent.workflowId} no longer exists.`);
+  const lookup = deps.persistence.findReviewGateByPr(String(intent.prNumber));
+  if (!lookup || lookup.workflowId !== intent.workflowId) {
+    throw new Error(`No matching Invoker review-gate workflow for PR ${intent.prNumber}.`);
   }
+  const task = deps.persistence.loadTask(lookup.mergeTaskId);
+  const reviewId = lookup.reviewId?.trim() || task?.execution.reviewId?.trim();
+  if (!task || !reviewId) {
+    throw new Error(`PR ${intent.prNumber} is missing its active Invoker merge task.`);
+  }
+  const failedChecks = intent.failedChecks?.filter((check) => check.trim().length > 0) ?? [];
+  const context: ReviewGateCiContext = {
+    reviewId,
+    generation: task.execution.generation ?? lookup.workflowGeneration ?? 0,
+    selectedAttemptId: task.execution.selectedAttemptId ?? lookup.selectedAttemptId,
+    branch: task.execution.branch ?? lookup.branch,
+    headSha: intent.headSha,
+    fixContext: [
+      `Repair Mergify queue-dequeue blockers for ${intent.repo}#${intent.prNumber}.`,
+      `Lifecycle event: ${intent.eventKey}.`,
+      ...(failedChecks.length > 0 ? ['Failed queue checks:', ...failedChecks.map((check) => `- ${check}`)] : []),
+    ].join('\n'),
+  };
   return {
     workflowId: intent.workflowId,
-    headlessArgs: ['rebase-recreate', intent.workflowId],
+    headlessArgs: buildHeadlessFixArgs(task.id, undefined, {
+      autoFix: true,
+      reviewGateContext: context,
+    }),
   };
 }
