@@ -592,7 +592,7 @@ describe('PlanConversation', () => {
 
     const reply = await conversational.sendMessage('yes');
 
-    expect(reply).toBe(`${VALID_YAML_PLAN}\n\nReply \`submit\` to submit it.`);
+    expect(reply).toBe(VALID_YAML_PLAN);
     expect(conversational.planSubmitted).toBe(false);
     expect(conversational.submittedPlanText).toBeNull();
     expect(mockSpawn).toHaveBeenCalledTimes(1);
@@ -646,7 +646,7 @@ describe('PlanConversation', () => {
     expect(conversation.planSubmitted).toBe(false);
   });
 
-  it('getDraftedPlan does not pick up illustrative YAML from earlier assistant messages', async () => {
+  it('getDraftedPlan falls back to the last known-good plan when the latest turn has none', async () => {
     const illustrativeYaml = '```yaml\nname: "Example Plan"\ntasks:\n  - id: example\n    description: "illustrative example"\n    dependencies: []\n```';
     mockCursorResponse(`Here is an example of the format:\n\n${illustrativeYaml}\n\nWant me to generate a real plan?`);
     await conversation.sendMessage('How do plans work?');
@@ -654,8 +654,11 @@ describe('PlanConversation', () => {
     mockCursorResponse('Sure, what feature would you like to build?');
     await conversation.sendMessage('Tell me more');
 
-    // The latest assistant message has no plan, so nothing complete is drafted.
-    expect(conversation.getDraftedPlan()).toBeNull();
+    // The latest assistant message has no plan, so getDraftedPlan falls back to
+    // the last plan-shaped YAML seen in the conversation instead of returning null.
+    const drafted = conversation.getDraftedPlan();
+    expect(typeof drafted).toBe('string');
+    expect(parsePlanText(drafted!).name).toBe('Example Plan');
     expect(conversation.planSubmitted).toBe(false);
   });
 
@@ -1009,6 +1012,108 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).not.toContain('start a new plan thread');
     expect(prompt).toContain('only the final user-facing message');
     expect(prompt).not.toContain('unless the user explicitly asks');
+  });
+});
+
+describe('PlanConversation harness session driver', () => {
+  beforeEach(() => {
+    mockSpawn.mockReset();
+  });
+
+  function createMockDriver(opts: { supportsSessionContinuity: boolean }) {
+    let nextSessionId = 0;
+    const start = vi.fn((_prompt: string, _options?: { model?: string }) => ({
+      command: 'harness',
+      args: ['start'],
+      sessionId: `session-${++nextSessionId}`,
+    }));
+    // Mirrors ReplayHarnessSessionDriver.append: when the driver has no real
+    // continuity, append mints a fresh session rather than resuming the old one.
+    const append = vi.fn((sessionId: string, _prompt: string, _options?: { model?: string }) => ({
+      command: 'harness',
+      args: ['append', sessionId],
+      sessionId: opts.supportsSessionContinuity ? sessionId : `session-${++nextSessionId}`,
+    }));
+    return {
+      harness: 'mock-harness',
+      supportsSessionContinuity: opts.supportsSessionContinuity,
+      start,
+      append,
+    };
+  }
+
+  it('starts a session on the first turn and appends only the latest message on later turns', async () => {
+    const driver = createMockDriver({ supportsSessionContinuity: true });
+    const conv = new PlanConversation({ harnessSessionDriver: driver });
+
+    mockCursorResponse('Turn one reply');
+    await conv.sendMessage('First message');
+    expect(driver.start).toHaveBeenCalledTimes(1);
+    expect(driver.start.mock.calls[0][0]).toContain('First message');
+    expect(driver.append).not.toHaveBeenCalled();
+    expect(conv.harnessSessionId).toBe('session-1');
+
+    mockCursorResponse('Turn two reply');
+    await conv.sendMessage('Second message');
+    expect(driver.append).toHaveBeenCalledTimes(1);
+    expect(driver.append.mock.calls[0][0]).toBe('session-1');
+    expect(driver.append.mock.calls[0][1]).toBe('Second message');
+    expect(driver.start).toHaveBeenCalledTimes(1);
+
+    const secondSpawnArgs = mockSpawn.mock.calls[1][1] as string[];
+    expect(secondSpawnArgs).toEqual(['append', 'session-1']);
+  });
+
+  it('fires onHarnessSessionId once when a new session id is established', async () => {
+    const driver = createMockDriver({ supportsSessionContinuity: true });
+    const onHarnessSessionId = vi.fn();
+    const conv = new PlanConversation({ harnessSessionDriver: driver, onHarnessSessionId });
+
+    mockCursorResponse('Turn one reply');
+    await conv.sendMessage('First message');
+    expect(onHarnessSessionId).toHaveBeenCalledTimes(1);
+    expect(onHarnessSessionId).toHaveBeenCalledWith('session-1');
+
+    mockCursorResponse('Turn two reply');
+    await conv.sendMessage('Second message');
+    expect(onHarnessSessionId).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes from a restored harnessSessionId instead of starting fresh', async () => {
+    const driver = createMockDriver({ supportsSessionContinuity: true });
+    const conv = new PlanConversation({ harnessSessionDriver: driver, harnessSessionId: 'restored-session' });
+
+    mockCursorResponse('Reply after restart');
+    await conv.sendMessage('Continue where we left off');
+    expect(driver.start).not.toHaveBeenCalled();
+    expect(driver.append).toHaveBeenCalledTimes(1);
+    expect(driver.append.mock.calls[0][0]).toBe('restored-session');
+    expect(conv.harnessSessionId).toBe('restored-session');
+  });
+
+  it('keeps sending full conversation history to a driver without session continuity', async () => {
+    const driver = createMockDriver({ supportsSessionContinuity: false });
+    const conv = new PlanConversation({ harnessSessionDriver: driver });
+
+    mockCursorResponse('Turn one reply');
+    await conv.sendMessage('First message');
+    mockCursorResponse('Turn two reply');
+    await conv.sendMessage('Second message');
+
+    expect(driver.start).toHaveBeenCalledTimes(1);
+    expect(driver.append).toHaveBeenCalledTimes(1);
+    expect(driver.append.mock.calls[0][1]).toContain('Conversation History');
+    expect(driver.append.mock.calls[0][1]).toContain('First message');
+    expect(driver.append.mock.calls[0][1]).toContain('Second message');
+    expect(conv.harnessSessionId).toBe('session-2');
+  });
+
+  it('falls back to the legacy planningCommandBuilder path when no driver is configured', async () => {
+    mockCursorResponse('Legacy reply');
+    const conv = new PlanConversation({});
+    const reply = await conv.sendMessage('Hello');
+    expect(reply).toBe('Legacy reply');
+    expect(conv.harnessSessionId).toBeUndefined();
   });
 });
 

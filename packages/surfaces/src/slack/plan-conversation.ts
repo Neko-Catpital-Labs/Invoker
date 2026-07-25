@@ -16,6 +16,7 @@ import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
+import type { HarnessSessionDriver } from '@invoker/execution-engine';
 import { isDraftingAuthorized, summarizePlanText } from '@invoker/planning-core';
 import type { LogFn } from '../surface.js';
 import {
@@ -121,6 +122,12 @@ export interface PlanConversationConfig {
   preferStackedWorkflows?: boolean;
   /** Optional callback for raw stdout chunks emitted by the planner subprocess. */
   onRawPlannerOutput?: RawPlannerOutputHandler;
+  /** When set, turns call `driver.start`/`driver.append` instead of spawning a fresh CLI with the full history baked into the prompt. */
+  harnessSessionDriver?: HarnessSessionDriver;
+  /** Restores an existing harness session id (e.g. after a Slack restart) instead of starting fresh. */
+  harnessSessionId?: string;
+  /** Fired whenever a new harness session id is established, so callers can persist it. */
+  onHarnessSessionId?: (sessionId: string) => void;
   /** Opt in to a scoping-first planning conversation before YAML drafting. Default: false. */
   conversationalPlanning?: boolean;
   /** Logging callback. Defaults to console.log/console.error. */
@@ -439,6 +446,9 @@ export class PlanConversation {
   private _lastTurnReasoning: string[] = [];
   private _lastTurnDraftPlanText: string | null = null;
   private lastKnownGoodPlanText: string | null = null;
+  private harnessSessionDriver?: HarnessSessionDriver;
+  private _harnessSessionId?: string;
+  private onHarnessSessionId?: (sessionId: string) => void;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -461,6 +471,9 @@ export class PlanConversation {
     this.log = config.log ?? ((src, lvl, msg) => {
       (lvl === 'error' ? console.error : console.log)(`[${src}] ${msg}`);
     });
+    this.harnessSessionDriver = config.harnessSessionDriver;
+    this._harnessSessionId = config.harnessSessionId;
+    this.onHarnessSessionId = config.onHarnessSessionId;
   }
 
   /**
@@ -517,7 +530,7 @@ export class PlanConversation {
     this.resetPlanDraftFile();
     this.messages.push({ role: 'user', content: userMessage });
 
-    const prompt = this.buildCursorPrompt();
+    const prompt = this.buildTurnPrompt();
     const tPrompt = Date.now();
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: promptLen=${prompt.length}, historyMsgs=${this.messages.length - 1}, promptPreview="${prompt.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
@@ -596,6 +609,11 @@ export class PlanConversation {
     return this.mode;
   }
 
+  /** Current harness session id, if a session driver has established one. */
+  get harnessSessionId(): string | undefined {
+    return this._harnessSessionId;
+  }
+
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
     return this.readPlanDraftFile() ?? this.extractLastPlanFromMessages() ?? this.lastKnownGoodPlanText;
@@ -657,6 +675,14 @@ export class PlanConversation {
 
   // ── Prompt Construction ────────────────────────────────
 
+  /** Latest message only when resuming a continuity-supporting session; otherwise the full history prompt. */
+  private buildTurnPrompt(): string {
+    if (this.harnessSessionDriver?.supportsSessionContinuity && this._harnessSessionId) {
+      return this.messages[this.messages.length - 1]?.content ?? '';
+    }
+    return this.buildCursorPrompt();
+  }
+
   /**
    * Build the full prompt for Cursor, including system instructions
    * and the complete conversation history.
@@ -705,6 +731,10 @@ export class PlanConversation {
   // ── Planner CLI Subprocess ─────────────────────────────
 
   async spawnPlanner(prompt: string): Promise<string> {
+    if (this.harnessSessionDriver) {
+      return this.spawnPlannerWithDriver(prompt, this.harnessSessionDriver);
+    }
+
     const requiresRegisteredBuilder = this.tool === 'omp' || this.tool === 'codex';
     if (requiresRegisteredBuilder && !this.planningCommandBuilder) {
       throw new Error(`Planner command builder is required for selected tool "${this.tool}"`);
@@ -716,6 +746,31 @@ export class PlanConversation {
       throw new Error(`Planner command mismatch: selected tool "${this.tool}" resolved to "${command}"`);
     }
     const plannerLabel = this.tool ?? command;
+    return this.runSpawnWithRetry(prompt, command, args, plannerLabel);
+  }
+
+  private async spawnPlannerWithDriver(prompt: string, driver: HarnessSessionDriver): Promise<string> {
+    const priorSessionId = this._harnessSessionId;
+    const built = priorSessionId
+      ? driver.append(priorSessionId, prompt, { model: this.model })
+      : driver.start(prompt, { model: this.model });
+    const reply = await this.runSpawnWithRetry(prompt, built.command, built.args, driver.harness);
+    this.setHarnessSessionId(built.sessionId);
+    return reply;
+  }
+
+  private setHarnessSessionId(sessionId: string): void {
+    if (!sessionId || this._harnessSessionId === sessionId) return;
+    this._harnessSessionId = sessionId;
+    this.onHarnessSessionId?.(sessionId);
+  }
+
+  private async runSpawnWithRetry(
+    prompt: string,
+    command: string,
+    args: string[],
+    plannerLabel: string,
+  ): Promise<string> {
     const totalAttempts = this.plannerRetryLimit + 1;
     let lastStderrTail = '';
 
