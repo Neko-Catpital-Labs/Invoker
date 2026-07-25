@@ -29,6 +29,8 @@ import type {
   WorkflowResumeWorkerSubmitter,
 } from './workers/workflow-resume-worker.js';
 import type { PrSummaryRefreshWorkerStore } from './workers/pr-summary-refresh-worker.js';
+import type { ReviewCommentsWorkerStore, ReviewCommentsWorkerPolicyOptions } from './workers/review-comments-worker.js';
+import type { PrQueueLandWorkerStore, PrQueueLandWorkerPolicyOptions } from './workers/pr-queue-land-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -39,7 +41,9 @@ export interface WorkerRuntimeDependencies {
     & AutoApproveWorkerStore
     & ReviewGateMergeConflictWorkerStore
     & WorkflowResumeWorkerStore
-    & PrSummaryRefreshWorkerStore;
+    & PrSummaryRefreshWorkerStore
+    & ReviewCommentsWorkerStore
+    & PrQueueLandWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & CiFailureWorkerSubmitter
@@ -47,7 +51,9 @@ export interface WorkerRuntimeDependencies {
     & RequeueWorkerSubmitter
     & AutoApproveWorkerSubmitter
     & ReviewGateMergeConflictWorkerSubmitter
-    & WorkflowResumeWorkerSubmitter;
+    & WorkflowResumeWorkerSubmitter
+    & ReviewCommentsWorkerPolicyOptions['submitter']
+    & PrQueueLandWorkerPolicyOptions['submitter'];
   /** Operator logger. */
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */

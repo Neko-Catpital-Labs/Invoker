@@ -1,5 +1,5 @@
 import type { Logger } from '@invoker/contracts';
-import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
+import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationPriority } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
 
 import type { PrReviewCommentsLifecycleEvent, WorkflowLifecycleEvent } from '../lifecycle-events.js';
@@ -12,6 +12,7 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 export const REVIEW_COMMENTS_WORKER_KIND = 'review-comments';
 export const DEFAULT_REVIEW_COMMENTS_WORKER_INTERVAL_MS = 60_000;
 const REVIEW_COMMENTS_ACTION_TYPE = 'address-review-comments';
+export const REVIEW_COMMENTS_REPAIR_CHANNEL = 'invoker:repair-review-comments';
 
 export interface ReviewCommentsWorkerStore extends PrRepairLeaseStore {
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
@@ -20,6 +21,14 @@ export interface ReviewCommentsWorkerStore extends PrRepairLeaseStore {
 
 export interface ReviewCommentsWorkerPolicyOptions {
   store: ReviewCommentsWorkerStore;
+  submitter: {
+    submit(
+      workflowId: string,
+      priority: WorkflowMutationPriority,
+      channel: typeof REVIEW_COMMENTS_REPAIR_CHANNEL,
+      args: unknown[],
+    ): number;
+  };
   logger: Logger;
   drainEvents?: () => PrReviewCommentsLifecycleEvent[];
 }
@@ -47,12 +56,12 @@ export function registerReviewCommentsWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: REVIEW_COMMENTS_WORKER_KIND,
-    note: 'Records review-comment repair events until a command handler is available.',
+    note: 'Submits mapped review-comment repair commands.',
     source: 'built-in',
     factory: (deps) => createReviewCommentsWorker({
       logger: deps.logger,
       messageBus: deps.messageBus,
-      reviewComments: { store: deps.store },
+      reviewComments: { store: deps.store, submitter: deps.submitter },
     }),
   });
   return registry;
@@ -89,7 +98,33 @@ function handleReviewCommentsEvent(
     return;
   }
 
+  if (!event.workflowId) {
+    recordWorkerDecisionRow(options.store, {
+      workerKind: REVIEW_COMMENTS_WORKER_KIND,
+      actionType: REVIEW_COMMENTS_ACTION_TYPE,
+      externalKey,
+      subjectType: 'pull_request',
+      subjectId: `${event.repo}#${event.prNumber}`,
+      status: 'skipped',
+      summary: 'Skipped review-comment repair because the PR has no mapped workflow',
+      reason: 'workflow-unmapped',
+      payload: { headSha: event.headSha, prRepairLeaseId: lease.leaseId },
+    });
+    releasePrRepairLease(lease.leaseId, options.store);
+    return;
+  }
+
   try {
+    const intentId = options.submitter.submit(event.workflowId, 'normal', REVIEW_COMMENTS_REPAIR_CHANNEL, [{
+      repo: event.repo,
+      prNumber: event.prNumber,
+      headSha: event.headSha,
+      leaseId: lease.leaseId,
+      holderKind: 'review_comments',
+      workflowId: event.workflowId,
+      eventKey: event.eventKey,
+      commentUrl: event.commentUrls[0],
+    }]);
     recordWorkerDecisionRow(options.store, {
       workerKind: REVIEW_COMMENTS_WORKER_KIND,
       actionType: REVIEW_COMMENTS_ACTION_TYPE,
@@ -97,13 +132,14 @@ function handleReviewCommentsEvent(
       subjectType: 'pull_request',
       subjectId: `${event.repo}#${event.prNumber}`,
       workflowId: event.workflowId,
-      status: 'skipped',
-      summary: 'Skipped review-comment repair because its command is not ready',
-      reason: 'command-not-ready',
+      status: 'queued',
+      summary: 'Queued review-comment repair',
+      intentId: String(intentId),
       payload: { headSha: event.headSha, commentUrls: event.commentUrls, prRepairLeaseId: lease.leaseId },
     });
-  } finally {
+  } catch (error) {
     releasePrRepairLease(lease.leaseId, options.store);
+    throw error;
   }
 }
 

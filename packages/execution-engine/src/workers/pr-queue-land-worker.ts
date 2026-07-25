@@ -1,5 +1,5 @@
 import type { Logger } from '@invoker/contracts';
-import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
+import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationPriority } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
 
 import type { PrQueueDequeuedLifecycleEvent, WorkflowLifecycleEvent } from '../lifecycle-events.js';
@@ -12,6 +12,7 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 export const PR_QUEUE_LAND_WORKER_KIND = 'pr-queue-land';
 export const DEFAULT_PR_QUEUE_LAND_WORKER_INTERVAL_MS = 60_000;
 const PR_QUEUE_LAND_ACTION_TYPE = 'land-dequeued-pr';
+export const PR_QUEUE_DEQUEUE_REPAIR_CHANNEL = 'invoker:repair-queue-dequeue';
 
 export interface PrQueueLandWorkerStore extends PrRepairLeaseStore {
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
@@ -20,6 +21,14 @@ export interface PrQueueLandWorkerStore extends PrRepairLeaseStore {
 
 export interface PrQueueLandWorkerPolicyOptions {
   store: PrQueueLandWorkerStore;
+  submitter: {
+    submit(
+      workflowId: string,
+      priority: WorkflowMutationPriority,
+      channel: typeof PR_QUEUE_DEQUEUE_REPAIR_CHANNEL,
+      args: unknown[],
+    ): number;
+  };
   logger: Logger;
   drainEvents?: () => PrQueueDequeuedLifecycleEvent[];
 }
@@ -47,12 +56,12 @@ export function registerPrQueueLandWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: PR_QUEUE_LAND_WORKER_KIND,
-    note: 'Records dequeued PR land events until a command handler is available.',
+    note: 'Submits mapped dequeued PR repair commands.',
     source: 'built-in',
     factory: (deps) => createPrQueueLandWorker({
       logger: deps.logger,
       messageBus: deps.messageBus,
-      prQueueLand: { store: deps.store },
+      prQueueLand: { store: deps.store, submitter: deps.submitter },
     }),
   });
   return registry;
@@ -89,7 +98,33 @@ function handlePrQueueLandEvent(
     return;
   }
 
+  if (!event.workflowId) {
+    recordWorkerDecisionRow(options.store, {
+      workerKind: PR_QUEUE_LAND_WORKER_KIND,
+      actionType: PR_QUEUE_LAND_ACTION_TYPE,
+      externalKey,
+      subjectType: 'pull_request',
+      subjectId: `${event.repo}#${event.prNumber}`,
+      status: 'skipped',
+      summary: 'Skipped dequeued PR repair because the PR has no mapped workflow',
+      reason: 'workflow-unmapped',
+      payload: { headSha: event.headSha, prRepairLeaseId: lease.leaseId },
+    });
+    releasePrRepairLease(lease.leaseId, options.store);
+    return;
+  }
+
   try {
+    const intentId = options.submitter.submit(event.workflowId, 'high', PR_QUEUE_DEQUEUE_REPAIR_CHANNEL, [{
+      repo: event.repo,
+      prNumber: event.prNumber,
+      headSha: event.headSha,
+      leaseId: lease.leaseId,
+      holderKind: 'queue_dequeued',
+      workflowId: event.workflowId,
+      eventKey: event.eventKey,
+      reason: event.dequeueCommentId,
+    }]);
     recordWorkerDecisionRow(options.store, {
       workerKind: PR_QUEUE_LAND_WORKER_KIND,
       actionType: PR_QUEUE_LAND_ACTION_TYPE,
@@ -97,9 +132,9 @@ function handlePrQueueLandEvent(
       subjectType: 'pull_request',
       subjectId: `${event.repo}#${event.prNumber}`,
       workflowId: event.workflowId,
-      status: 'skipped',
-      summary: 'Skipped dequeued PR landing because its command is not ready',
-      reason: 'command-not-ready',
+      status: 'queued',
+      summary: 'Queued dequeued PR repair',
+      intentId: String(intentId),
       payload: {
         headSha: event.headSha,
         failedChecks: event.failedChecks,
@@ -108,8 +143,9 @@ function handlePrQueueLandEvent(
         prRepairLeaseId: lease.leaseId,
       },
     });
-  } finally {
+  } catch (error) {
     releasePrRepairLease(lease.leaseId, options.store);
+    throw error;
   }
 }
 
