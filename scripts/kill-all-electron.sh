@@ -11,7 +11,7 @@ list_electron_processes() {
       *kill-all-electron.sh*)
         continue
         ;;
-      *Electron.app/Contents/MacOS/Electron*|*"node "*scripts/electron.cjs*)
+      *Electron.app/Contents/MacOS/Electron*|*"node "*scripts/electron.cjs*|*Invoker.app/Contents/MacOS/Invoker*|*packages/app/dist/main.js*)
         printf '%s %s\n' "$pid" "$command"
         ;;
     esac
