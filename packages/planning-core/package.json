@@ -17,8 +17,6 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@invoker/data-store": "workspace:*",
-    "@invoker/execution-engine": "workspace:*",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

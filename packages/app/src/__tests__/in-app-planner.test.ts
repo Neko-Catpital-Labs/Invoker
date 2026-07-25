@@ -20,8 +20,6 @@ import {
 } from '../in-app-planner.js';
 import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
 
-const PLAN_SUBMIT_HINT = '\n\nReply `submit` to submit it.';
-
 const VALID_PLAN = `Here is the plan.
 
 \`\`\`yaml
@@ -36,8 +34,6 @@ tasks:
     dependencies: [first]
     command: echo second
 \`\`\``;
-
-const VALID_PLAN_REPLY = `${VALID_PLAN}${PLAN_SUBMIT_HINT}`;
 
 const VALID_PLAN_TEXT = `name: Mock Plan
 onFinish: none
@@ -315,17 +311,17 @@ describe('planning chat', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      reply: VALID_PLAN_REPLY,
+      reply: VALID_PLAN,
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
       draftPlanText: expect.stringContaining('name: Mock Plan'),
     });
     expect(result.ok && result.reply).toContain('```yaml');
     expect(result.ok && result.reply).toContain('name: Mock Plan');
-    expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN_REPLY);
+    expect(result.ok && sessions.get(result.sessionId)?.messages.at(-1)?.text).toBe(VALID_PLAN);
   });
 
-  it('keeps unauthorized YAML from becoming draft-ready until explicit submit promotes it', async () => {
+  it('keeps unauthorized YAML from becoming draft-ready and refuses submit', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
     const loadGeneratedPlan = vi.fn().mockResolvedValue({
@@ -345,7 +341,7 @@ describe('planning chat', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      reply: VALID_PLAN_REPLY,
+      reply: VALID_PLAN,
       draftPlanAvailable: false,
     });
     if (!result.ok) throw new Error(result.error);
@@ -357,11 +353,11 @@ describe('planning chat', () => {
     }, {
       sessions,
       loadGeneratedPlan,
-    })).resolves.toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
-    expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+    })).resolves.toMatchObject({ ok: false });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
-  it('promotes a plan written before an intervening summary-only turn when the user submits it', async () => {
+  it('does not search an earlier draft when submitting after a summary-only turn', async () => {
     const workingDir = mkdtempSync(join(tmpdir(), 'in-app-draft-'));
     try {
       const sessions = createInAppPlanningChatSessions();
@@ -383,7 +379,7 @@ describe('planning chat', () => {
       vi.spyOn(PlanConversation.prototype, 'spawnPlanner')
         .mockImplementationOnce(async () => {
           writeFileSync(draftPath, VALID_PLAN_TEXT, 'utf8');
-          return `Plan written.${PLAN_SUBMIT_HINT}`;
+          return 'Plan written.';
         })
         .mockResolvedValueOnce('Plan summary.');
 
@@ -420,9 +416,9 @@ describe('planning chat', () => {
       await expect(submitPlanningChatDraft({ sessionId: session.id }, {
         sessions,
         loadGeneratedPlan,
-      })).resolves.toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
-      expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
-      expect(sessions.get(session.id)?.draftPlanText).toContain('name: Mock Plan');
+    })).resolves.toMatchObject({ ok: false });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+    expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }
@@ -825,7 +821,7 @@ tasks:
     }
   });
 
-  it('promotes hidden planner context when the user explicitly submits it', async () => {
+  it('does not submit hidden planner context without a persisted draft snapshot', async () => {
     const sessions = createInAppPlanningChatSessions();
     const conversation = new PlanConversation({}) as PlanConversation & { getDraftedPlan: () => string };
     conversation.getDraftedPlan = () => VALID_PLAN_TEXT;
@@ -850,8 +846,8 @@ tasks:
       loadGeneratedPlan,
     });
 
-    expect(result).toMatchObject({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
-    expect(loadGeneratedPlan).toHaveBeenCalledWith(VALID_PLAN_TEXT);
+    expect(result).toMatchObject({ ok: false });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
   it('restores draft-ready sessions and submits from persisted approved draft text', async () => {
@@ -991,7 +987,7 @@ tasks:
     }
   });
 
-  it('rebuilds missing draft summaries from hidden planner state on restore', async () => {
+  it('does not reconstruct missing draft snapshots from hidden planner state on restore', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {
       const conversationRepo = new ConversationRepository(adapter);
@@ -1022,16 +1018,9 @@ tasks:
         planningSessionStore: adapter,
       });
 
-      expect(sessions.get('planning-summary-restore')?.draftPlanSummary).toMatchObject({
-        name: 'Mock Plan',
-        taskCount: 2,
-      });
-      expect(sessions.get('planning-summary-restore')?.draftPlanText).toContain('name: Mock Plan');
-      expect(adapter.loadInAppPlanningSession('planning-summary-restore')?.draftPlanSummary).toMatchObject({
-        name: 'Mock Plan',
-        taskCount: 2,
-      });
-      expect(adapter.loadInAppPlanningSession('planning-summary-restore')?.draftPlanText).toContain('name: Mock Plan');
+      expect(sessions.get('planning-summary-restore')?.status).toBe('still_discussing');
+      expect(sessions.get('planning-summary-restore')?.draftPlanSummary).toBeUndefined();
+      expect(sessions.get('planning-summary-restore')?.draftPlanText).toBeUndefined();
     } finally {
       adapter.close();
     }

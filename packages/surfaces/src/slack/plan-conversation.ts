@@ -16,15 +16,16 @@ import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
-import { isDraftingAuthorized } from '@invoker/planning-core';
+import { isDraftingAuthorized, summarizePlanText } from '@invoker/planning-core';
 import type { LogFn } from '../surface.js';
 import {
   buildUnverifiedNotice,
   captureRepoState,
   looksLikeCompletionClaim,
   repoStateUnchanged,
+  restoreTrackedChanges,
+  trackedFilesChanged,
 } from './agent-turn-verification.js';
-import { summarizePlanText } from './plan-summary.js';
 
 // ── Types ───────────────────────────────────────────────────
 
@@ -436,6 +437,7 @@ export class PlanConversation {
   private plannerRetryBaseDelayMs: number;
   private _initialized = false;
   private _lastTurnReasoning: string[] = [];
+  private _lastTurnDraftPlanText: string | null = null;
   private lastKnownGoodPlanText: string | null = null;
 
   constructor(config: PlanConversationConfig) {
@@ -526,19 +528,13 @@ export class PlanConversation {
     const tCursor = Date.now();
     const formatted = formatCodexPlannerStdout(response);
     let message = formatted.message;
-    if (this.mode === 'plan' && extractYamlPlan(message) && !message.includes('Reply `submit` to submit it.')) {
-      const fenceStart = message.lastIndexOf('```yaml\n');
-      if (fenceStart !== -1) {
-        const afterFence = message.slice(fenceStart + '```yaml\n'.length);
-        if (!/^```\s*$/m.test(afterFence)) {
-          message = `${message.trimEnd()}\n\`\`\``;
-        }
-      }
-      message = `${message.trimEnd()}\n\nReply \`submit\` to submit it.`;
-    }
     const repoStateAfter = this.mode === 'agent'
       ? await captureRepoState(this.workingDir)
       : null;
+    if (this.mode === 'agent' && trackedFilesChanged(repoStateBefore, repoStateAfter)) {
+      restoreTrackedChanges(this.workingDir);
+      throw new Error('Pre-approval exploration may create repro artifacts but cannot modify tracked files.');
+    }
     if (looksLikeCompletionClaim(message) && repoStateUnchanged(repoStateBefore, repoStateAfter)) {
       message = `${message}\n\n${buildUnverifiedNotice()}`;
     }
@@ -547,6 +543,7 @@ export class PlanConversation {
     const nextDraft = fileDraft && summarizePlanText(fileDraft)
       ? fileDraft
       : inlineDraft;
+    this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     this._lastTurnReasoning = formatted.reasoning;
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
@@ -559,9 +556,30 @@ export class PlanConversation {
     return message;
   }
 
+  async runPlanConversion(): Promise<string> {
+    const previousMode = this.mode;
+    const previousConversationalPlanning = this.conversationalPlanning;
+    this.mode = 'plan';
+    this.conversationalPlanning = false;
+    try {
+      return await this.sendMessage(
+        'Convert the established conversation scope into an Invoker YAML plan now. '
+        + 'If the scope is still incomplete, ask the specific clarification instead of emitting YAML.',
+      );
+    } finally {
+      this.mode = previousMode;
+      this.conversationalPlanning = previousConversationalPlanning;
+      this.saveState();
+    }
+  }
+
   /** Reasoning summaries from the most recent planner turn (Codex JSONL), if any. */
   get lastTurnReasoning(): string[] {
     return this._lastTurnReasoning;
+  }
+
+  get lastTurnDraftPlanText(): string | null {
+    return this._lastTurnDraftPlanText;
   }
 
   /** Returns the raw plan text that was submitted via confirmation, or null. */
@@ -630,6 +648,7 @@ export class PlanConversation {
     this.messages = [];
     this._submittedPlanText = null;
     this._planSubmitted = false;
+    this._lastTurnDraftPlanText = null;
     this.lastKnownGoodPlanText = null;
     if (this.conversationRepo && this.threadTs) {
       this.conversationRepo.deleteConversation(this.threadTs);

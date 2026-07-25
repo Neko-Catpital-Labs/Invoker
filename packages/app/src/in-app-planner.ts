@@ -32,8 +32,10 @@ import type {
 } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import {
+  evaluatePlanningTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
+  summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
@@ -109,7 +111,6 @@ interface PlannerSurfacesModule {
   DEFAULT_HARNESS_PRESET: string;
   PlanConversation: PlanConversationConstructor;
   extractYamlPlan: (output: string) => string | null;
-  summarizePlanText: (planText: string) => InAppPlanningPlanSummary | null;
 }
 
 async function loadPlannerSurfaces(): Promise<PlannerSurfacesModule> {
@@ -323,10 +324,6 @@ function formatConversationalPlanningMessage(message: string): string {
   ].join('\n');
 }
 
-function getConversationDraftedPlan(conversation: Pick<PlanConversation, 'getDraftedPlan'>): string | null {
-  return conversation.getDraftedPlan() ?? null;
-}
-
 export function hasExplicitDraftIntent(message: string): boolean {
   return hasCoreExplicitDraftIntent(message);
 }
@@ -529,7 +526,10 @@ export async function sendPlanningChatMessage(
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
       clearStarterPromptIfUnused(activeSession);
-      const draftingAuthorized = isDraftingAuthorizedByTurn(message, activeSession.messages);
+      const messagesBeforeTurn: PlanningMessage[] = activeSession.messages.map((entry) => ({
+        role: entry.role,
+        content: entry.text,
+      }));
       appendSessionMessage(activeSession, 'user', message);
       if (activeSession.title === 'Untitled plan') {
         activeSession.title = titleFromMessage(message);
@@ -537,7 +537,7 @@ export async function sendPlanningChatMessage(
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
 
       try {
-        const { extractYamlPlan, summarizePlanText } = await loadPlannerSurfaces();
+        const { extractYamlPlan } = await loadPlannerSurfaces();
         const formattedMessage = formatConversationalPlanningMessage(message);
         const reply = deps.plannerReplyOverride
           ? await deps.plannerReplyOverride(formattedMessage)
@@ -549,14 +549,18 @@ export async function sendPlanningChatMessage(
           ? []
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
-        const candidatePlanText = getConversationDraftedPlan(activeSession.conversation)
-          ?? extractYamlPlan(reply);
-        if (!candidatePlanText || !draftingAuthorized) {
+        const result = evaluatePlanningTurn({
+          userMessage: message,
+          messagesBeforeTurn,
+          assistantReply: reply,
+          immediateDraftPlanText: deps.plannerReplyOverride
+            ? extractYamlPlan(reply)
+            : activeSession.conversation.lastTurnDraftPlanText,
+        });
+        if (result.kind === 'message') {
           activeSession.status = hasDraftPlan(activeSession)
             ? 'draft_ready'
-            : reply.includes('?')
-              ? 'waiting_for_answer'
-              : 'still_discussing';
+            : result.status;
           appendSessionMessage(activeSession, 'assistant', reply);
           persistPlanningSession(activeSession, deps.planningSessionStore, false);
           return {
@@ -570,23 +574,8 @@ export async function sendPlanningChatMessage(
           } as InAppPlanningChatResponse;
         }
 
-        const summary = summarizePlanText(candidatePlanText);
-        if (!summary) {
-          const fallbackReply = 'I drafted a plan, but I could not turn it into simple steps. Ask me to regenerate it before submitting.';
-          activeSession.status = hasDraftPlan(activeSession) ? 'draft_ready' : 'still_discussing';
-          appendSessionMessage(activeSession, 'assistant', fallbackReply);
-          persistPlanningSession(activeSession, deps.planningSessionStore, false);
-          return {
-            ok: true,
-            sessionId: activeSession.id,
-            reply: fallbackReply,
-            draftPlanAvailable: hasDraftPlan(activeSession),
-            draftPlanSummary: activeSession.draftPlanSummary,
-            draftPlanText: activeSession.draftPlanText,
-          };
-        }
-        activeSession.draftPlanSummary = summary;
-        activeSession.draftPlanText = candidatePlanText;
+        activeSession.draftPlanSummary = result.summary;
+        activeSession.draftPlanText = result.planText;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
@@ -596,8 +585,8 @@ export async function sendPlanningChatMessage(
           reply,
           reasoning,
           draftPlanAvailable: true,
-          draftPlanSummary: summary,
-          draftPlanText: candidatePlanText,
+          draftPlanSummary: result.summary,
+          draftPlanText: result.planText,
         } as InAppPlanningChatResponse;
       } catch (error) {
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
@@ -642,8 +631,7 @@ export async function submitPlanningChatDraft(
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
     try {
-      const { summarizePlanText } = await loadPlannerSurfaces();
-      const planText = session.draftPlanText ?? getConversationDraftedPlan(session.conversation);
+      const planText = session.draftPlanText;
       if (!planText) {
         return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
       }
@@ -651,13 +639,6 @@ export async function submitPlanningChatDraft(
       if (!summary) {
         return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
       }
-      if (!session.draftPlanText) {
-        session.draftPlanText = planText;
-        session.draftPlanSummary = summary;
-        session.status = 'draft_ready';
-        persistPlanningSession(session, deps.planningSessionStore, false);
-      }
-
       const loaded = await deps.loadGeneratedPlan(planText);
       session.status = 'submitted';
       session.submittedPlanName = loaded.planName;
@@ -783,7 +764,7 @@ export async function restorePlanningChatSessions(
   // boots without surfaces/dist, so an eager load here would crash startup with no sessions.
   if (records.length === 0) return;
   const presets = await resolveHarnessPresets(deps.config);
-  const { PlanConversation, summarizePlanText } = await loadPlannerSurfaces();
+  const { PlanConversation } = await loadPlannerSurfaces();
 
   for (const record of records) {
     const preset = presets[record.presetKey];
@@ -829,11 +810,9 @@ export async function restorePlanningChatSessions(
     }
 
     if (session.status === 'draft_ready') {
-      const restoredDraftText = session.draftPlanText ?? getConversationDraftedPlan(conversation);
-      if (!restoredDraftText) {
+      if (!session.draftPlanText) {
         session.status = 'still_discussing';
         session.draftPlanSummary = undefined;
-        session.draftPlanText = undefined;
         appendSessionMessage(
           session,
           'system',
@@ -841,26 +820,22 @@ export async function restorePlanningChatSessions(
           'error',
         );
         shouldPersist = true;
-      } else {
-        session.draftPlanText = restoredDraftText;
-        if (!session.draftPlanSummary) {
-          const restoredSummary = summarizePlanText(restoredDraftText);
-          if (!restoredSummary) {
-            session.status = 'still_discussing';
-            session.draftPlanSummary = undefined;
-            session.draftPlanText = undefined;
-            appendSessionMessage(
-              session,
-              'system',
-              'The saved draft could not be restored. Ask the planner to draft it again.',
-              'error',
-            );
-            shouldPersist = true;
-          } else {
-            session.draftPlanSummary = restoredSummary;
-            shouldPersist = true;
-          }
+      } else if (!session.draftPlanSummary) {
+        const restoredSummary = summarizePlanText(session.draftPlanText);
+        if (!restoredSummary) {
+          session.status = 'still_discussing';
+          session.draftPlanSummary = undefined;
+          session.draftPlanText = undefined;
+          appendSessionMessage(
+            session,
+            'system',
+            'The saved draft could not be restored. Ask the planner to draft it again.',
+            'error',
+          );
+        } else {
+          session.draftPlanSummary = restoredSummary;
         }
+        shouldPersist = true;
       }
     }
 
