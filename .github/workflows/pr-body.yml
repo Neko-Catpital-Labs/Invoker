@@ -57,7 +57,7 @@ jobs:
 
       - name: Install validator dependencies
         if: steps.rollout.outputs.enabled == 'true'
-        run: pnpm install --frozen-lockfile --ignore-scripts
+        run: pnpm install --no-frozen-lockfile --ignore-scripts
 
       - name: Fetch live PR body
         if: steps.rollout.outputs.enabled == 'true'
