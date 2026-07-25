@@ -63,8 +63,8 @@ export interface InvokerClient {
   getTaskOutput(taskId: string): Promise<string>;
   /** Run a delegated headless mutation (`approve`, `recreate`, `cancel-workflow`, …). Fire-and-forget. */
   exec(args: string[]): Promise<void>;
-  /** Submit a plan file; resolves to the created workflow id. */
-  run(planPath: string): Promise<string>;
+  /** Submit a plan file; resolves to the created workflow id(s). `workflowIds` covers stacked plans in submission order. */
+  run(planPath: string): Promise<{ workflowId: string; workflowIds: string[] }>;
   /** (Re)launch Invoker. Resolves true once healthy over IPC, false on timeout/throttle. */
   launch(opts?: { force?: boolean }): Promise<boolean>;
   /** Runs `fn`; on `InvokerDownError`, launches Invoker and retries once. Rethrows if still down. */
@@ -233,14 +233,17 @@ export class IpcInvokerClient implements InvokerClient {
     await this.ownerRequest('headless.exec', { args, noTrack: true, traceId: this.traceId('exec') }, EXEC_TIMEOUT_MS);
   }
 
-  async run(planPath: string): Promise<string> {
-    const res = await this.ownerRequest<{ workflowId?: string }>(
+  async run(planPath: string): Promise<{ workflowId: string; workflowIds: string[] }> {
+    const res = await this.ownerRequest<{ workflowId?: string; workflowIds?: string[] }>(
       'headless.run',
       { planPath, traceId: this.traceId('run') },
       EXEC_TIMEOUT_MS,
     );
     if (!res.workflowId) throw new Error('headless.run did not return a workflowId');
-    return res.workflowId;
+    const workflowIds = Array.isArray(res.workflowIds) && res.workflowIds.length > 0
+      ? res.workflowIds
+      : [res.workflowId];
+    return { workflowId: res.workflowId, workflowIds };
   }
 
   async withRecovery<T>(fn: () => Promise<T>): Promise<T> {

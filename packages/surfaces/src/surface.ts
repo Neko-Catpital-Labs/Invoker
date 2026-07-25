@@ -113,7 +113,7 @@ export type LogFn = (source: string, level: string, message: string) => void;
 
 // ── Interface ──────────────────────────────────────────────
 
-export type CommandHandler = (command: SurfaceCommand) => void | Promise<void>;
+export type CommandHandler = (command: SurfaceCommand) => void | Promise<void | { workflowIds?: string[] }>;
 
 export interface Surface {
   /** Unique identifier for this surface type (e.g. 'slack', 'discord'). */

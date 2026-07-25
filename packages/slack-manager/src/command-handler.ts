@@ -28,10 +28,10 @@ export class SlackCommandError extends Error {
 }
 
 export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
-  const startedPlans = new Map<string, string>();
-  return async (command: SurfaceCommand): Promise<void> => {
+  const startedPlans = new Map<string, string[]>();
+  return async (command: SurfaceCommand) => {
     try {
-      await deps.client.withRecovery(() => dispatch(deps, command, startedPlans));
+      return await deps.client.withRecovery(() => dispatch(deps, command, startedPlans));
     } catch (err) {
       const message = err instanceof InvokerDownError
         ? DOWN_MESSAGE
@@ -42,7 +42,11 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
   };
 }
 
-async function dispatch(deps: CommandHandlerDeps, command: SurfaceCommand, startedPlans: Map<string, string>): Promise<void> {
+async function dispatch(
+  deps: CommandHandlerDeps,
+  command: SurfaceCommand,
+  startedPlans: Map<string, string[]>,
+): Promise<{ workflowIds?: string[] } | void> {
   const { client, slack, plansDir, log } = deps;
   switch (command.type) {
     case 'approve':
@@ -67,23 +71,25 @@ async function dispatch(deps: CommandHandlerDeps, command: SurfaceCommand, start
     }
     case 'start_plan': {
       mkdirSync(plansDir, { recursive: true });
-      const existingWorkflowId = command.executionKey ? startedPlans.get(command.executionKey) : undefined;
+      const cachedWorkflowIds = command.executionKey ? startedPlans.get(command.executionKey) : undefined;
       const planPath = path.join(plansDir, `manager-${command.executionKey ?? Date.now()}.yaml`);
-      if (!existingWorkflowId) writeFileSync(planPath, command.planText, 'utf8');
-      const workflowId = existingWorkflowId ?? await client.run(planPath);
-      if (command.executionKey) startedPlans.set(command.executionKey, workflowId);
-      log('info', `submitted plan → workflow ${workflowId}`);
-      await slack.handleEvent({
-        type: 'workflow_created',
-        workflowId,
-        requestedBy: command.requestedBy,
-        lobbyChannel: command.lobbyChannel,
-        lobbyThreadTs: command.lobbyThreadTs,
-        harnessPreset: command.harnessPreset,
-        repoUrl: command.repoUrl,
-        planFile: planPath,
-      });
-      return;
+      if (!cachedWorkflowIds) writeFileSync(planPath, command.planText, 'utf8');
+      const workflowIds = cachedWorkflowIds ?? (await client.run(planPath)).workflowIds;
+      if (command.executionKey) startedPlans.set(command.executionKey, workflowIds);
+      log('info', `submitted plan → workflow(s) ${workflowIds.join(', ')}`);
+      for (const workflowId of workflowIds) {
+        await slack.handleEvent({
+          type: 'workflow_created',
+          workflowId,
+          requestedBy: command.requestedBy,
+          lobbyChannel: command.lobbyChannel,
+          lobbyThreadTs: command.lobbyThreadTs,
+          harnessPreset: command.harnessPreset,
+          repoUrl: command.repoUrl,
+          planFile: planPath,
+        });
+      }
+      return { workflowIds };
     }
   }
 }
