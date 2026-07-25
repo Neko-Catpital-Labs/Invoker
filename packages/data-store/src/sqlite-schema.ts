@@ -190,8 +190,35 @@ export const SCHEMA_DDL = `
         harness_preset TEXT NOT NULL,
         working_dir TEXT NOT NULL,
         requested_by TEXT NOT NULL,
-        lobby_channel_id TEXT NOT NULL
+        lobby_channel_id TEXT NOT NULL,
+        harness_session_id TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS slack_plan_drafts (
+        draft_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        channel_id TEXT NOT NULL,
+        thread_ts TEXT NOT NULL,
+        message_ts TEXT,
+        slack_file_id TEXT,
+        plan_text TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        summary_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('preparing', 'ready', 'submitting', 'submitted', 'failed', 'rejected', 'superseded')),
+        repo_url TEXT NOT NULL,
+        harness_preset TEXT NOT NULL,
+        working_dir TEXT NOT NULL,
+        requested_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT,
+        execution_key TEXT,
+        workflow_ids_json TEXT,
+        PRIMARY KEY (draft_id, version)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_slack_plan_drafts_thread_ready
+        ON slack_plan_drafts(channel_id, thread_ts, status);
 
       CREATE TABLE IF NOT EXISTS slack_pending_confirmations (
         confirm_key TEXT PRIMARY KEY,
@@ -487,6 +514,10 @@ export const SCHEMA_DDL = `
 export const COLUMN_MIGRATIONS = [
   'ALTER TABLE workflow_channels ADD COLUMN progress_card_ts TEXT',
   "ALTER TABLE conversations ADD COLUMN mode TEXT DEFAULT 'plan'",
+  'ALTER TABLE slack_launch_contexts ADD COLUMN harness_session_id TEXT',
+  'ALTER TABLE slack_plan_drafts ADD COLUMN slack_file_id TEXT',
+  'ALTER TABLE slack_plan_drafts ADD COLUMN execution_key TEXT',
+  'ALTER TABLE slack_plan_drafts ADD COLUMN workflow_ids_json TEXT',
   'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
   'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
   'ALTER TABLE tasks ADD COLUMN container_id TEXT',

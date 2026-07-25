@@ -40,6 +40,38 @@ export interface SlackLaunchContext {
   workingDir: string;
   requestedBy: string;
   lobbyChannelId: string;
+  harnessSessionId?: string;
+}
+
+export type SlackPlanDraftStatus =
+  | 'preparing'
+  | 'ready'
+  | 'submitting'
+  | 'submitted'
+  | 'failed'
+  | 'rejected'
+  | 'superseded';
+
+export interface SlackPlanDraft {
+  draftId: string;
+  version: number;
+  channelId: string;
+  threadTs: string;
+  messageTs?: string;
+  slackFileId?: string;
+  planText: string;
+  contentHash: string;
+  summaryJson: string;
+  status: SlackPlanDraftStatus;
+  repoUrl: string;
+  harnessPreset: string;
+  workingDir: string;
+  requestedBy: string;
+  createdAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+  executionKey?: string;
+  workflowIdsJson?: string;
 }
 
 export interface SlackPendingConfirmation {
@@ -363,6 +395,12 @@ export interface PersistenceAdapter {
   saveSlackLaunchContext(context: SlackLaunchContext): void;
   loadSlackLaunchContext(threadTs: string): SlackLaunchContext | undefined;
   deleteSlackLaunchContext(threadTs: string): void;
+  saveSlackPlanDraft(draft: SlackPlanDraft): void;
+  loadSlackPlanDraft(draftId: string, version: number): SlackPlanDraft | undefined;
+  loadReadySlackPlanDraft(channelId: string, threadTs: string): SlackPlanDraft | undefined;
+  updateSlackPlanDraft(draftId: string, version: number, changes: Partial<Pick<SlackPlanDraft, 'messageTs' | 'slackFileId' | 'status' | 'decidedAt' | 'decidedBy' | 'executionKey' | 'workflowIdsJson'>>): void;
+  claimSlackPlanDraft(draftId: string, version: number, executionKey: string): boolean;
+  supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string): void;
   saveSlackPendingConfirmation(confirmation: SlackPendingConfirmation): void;
   loadSlackPendingConfirmation(confirmKey: string): SlackPendingConfirmation | undefined;
   deleteSlackPendingConfirmation(confirmKey: string): void;

@@ -46,6 +46,7 @@ import type {
   Conversation,
   ConversationMessage,
   SlackLaunchContext,
+  SlackPlanDraft,
   SlackPendingConfirmation,
   WorkflowChannel,
   WorkerActionListFilters,
@@ -2147,8 +2148,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   saveSlackLaunchContext(context: SlackLaunchContext): void {
     this.execRun(`
       INSERT OR REPLACE INTO slack_launch_contexts
-        (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id)
-      VALUES (?, ?, ?, ?, ?, ?)
+        (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id, harness_session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `, [
       context.threadTs,
       context.repoUrl,
@@ -2156,6 +2157,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       context.workingDir,
       context.requestedBy,
       context.lobbyChannelId,
+      context.harnessSessionId ?? null,
     ]);
   }
 
@@ -2172,11 +2174,148 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workingDir: row.working_dir as string,
       requestedBy: row.requested_by as string,
       lobbyChannelId: row.lobby_channel_id as string,
+      harnessSessionId: typeof row.harness_session_id === 'string' ? row.harness_session_id : undefined,
     };
   }
 
   deleteSlackLaunchContext(threadTs: string): void {
     this.execRun('DELETE FROM slack_launch_contexts WHERE thread_ts = ?', [threadTs]);
+  }
+
+  saveSlackPlanDraft(draft: SlackPlanDraft): void {
+    this.execRun(`
+      INSERT OR REPLACE INTO slack_plan_drafts
+        (draft_id, version, channel_id, thread_ts, message_ts, slack_file_id, plan_text, content_hash, summary_json,
+         status, repo_url, harness_preset, working_dir, requested_by, created_at, decided_at, decided_by, execution_key, workflow_ids_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      draft.draftId,
+      draft.version,
+      draft.channelId,
+      draft.threadTs,
+      draft.messageTs ?? null,
+      draft.slackFileId ?? null,
+      draft.planText,
+      draft.contentHash,
+      draft.summaryJson,
+      draft.status,
+      draft.repoUrl,
+      draft.harnessPreset,
+      draft.workingDir,
+      draft.requestedBy,
+      draft.createdAt,
+      draft.decidedAt ?? null,
+      draft.decidedBy ?? null,
+      draft.executionKey ?? null,
+      draft.workflowIdsJson ?? null,
+    ]);
+  }
+
+  loadSlackPlanDraft(draftId: string, version: number): SlackPlanDraft | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM slack_plan_drafts WHERE draft_id = ? AND version = ?',
+      [draftId, version],
+    ) as Record<string, unknown> | undefined;
+    return row ? this.toSlackPlanDraft(row) : undefined;
+  }
+
+  loadReadySlackPlanDraft(channelId: string, threadTs: string): SlackPlanDraft | undefined {
+    const row = this.queryOne(`
+      SELECT * FROM slack_plan_drafts
+      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'
+      ORDER BY version DESC
+      LIMIT 1
+    `, [channelId, threadTs]) as Record<string, unknown> | undefined;
+    return row ? this.toSlackPlanDraft(row) : undefined;
+  }
+
+  updateSlackPlanDraft(
+    draftId: string,
+    version: number,
+    changes: Partial<Pick<SlackPlanDraft, 'messageTs' | 'slackFileId' | 'status' | 'decidedAt' | 'decidedBy' | 'executionKey' | 'workflowIdsJson'>>,
+  ): void {
+    const clauses: string[] = [];
+    const values: unknown[] = [];
+    if ('messageTs' in changes) {
+      clauses.push('message_ts = ?');
+      values.push(changes.messageTs ?? null);
+    }
+    if ('slackFileId' in changes) {
+      clauses.push('slack_file_id = ?');
+      values.push(changes.slackFileId ?? null);
+    }
+    if ('status' in changes) {
+      clauses.push('status = ?');
+      values.push(changes.status);
+    }
+    if ('decidedAt' in changes) {
+      clauses.push('decided_at = ?');
+      values.push(changes.decidedAt ?? null);
+    }
+    if ('decidedBy' in changes) {
+      clauses.push('decided_by = ?');
+      values.push(changes.decidedBy ?? null);
+    }
+    if ('executionKey' in changes) {
+      clauses.push('execution_key = ?');
+      values.push(changes.executionKey ?? null);
+    }
+    if ('workflowIdsJson' in changes) {
+      clauses.push('workflow_ids_json = ?');
+      values.push(changes.workflowIdsJson ?? null);
+    }
+    if (clauses.length === 0) return;
+    values.push(draftId, version);
+    this.execRun(
+      `UPDATE slack_plan_drafts SET ${clauses.join(', ')} WHERE draft_id = ? AND version = ?`,
+      values,
+    );
+  }
+
+  claimSlackPlanDraft(draftId: string, version: number, executionKey: string): boolean {
+    return this.runTransaction(() => {
+      const draft = this.loadSlackPlanDraft(draftId, version);
+      if (!draft || draft.status !== 'ready') return false;
+      this.execRun(
+        `UPDATE slack_plan_drafts
+         SET status = 'submitting', execution_key = ?
+         WHERE draft_id = ? AND version = ? AND status = 'ready'`,
+        [executionKey, draftId, version],
+      );
+      return this.loadSlackPlanDraft(draftId, version)?.status === 'submitting';
+    });
+  }
+
+  supersedeReadySlackPlanDrafts(channelId: string, threadTs: string, decidedAt: string): void {
+    this.execRun(`
+      UPDATE slack_plan_drafts
+      SET status = 'superseded', decided_at = ?
+      WHERE channel_id = ? AND thread_ts = ? AND status = 'ready'
+    `, [decidedAt, channelId, threadTs]);
+  }
+
+  private toSlackPlanDraft(row: Record<string, unknown>): SlackPlanDraft {
+    return {
+      draftId: row.draft_id as string,
+      version: Number(row.version),
+      channelId: row.channel_id as string,
+      threadTs: row.thread_ts as string,
+      messageTs: typeof row.message_ts === 'string' ? row.message_ts : undefined,
+      slackFileId: typeof row.slack_file_id === 'string' ? row.slack_file_id : undefined,
+      planText: row.plan_text as string,
+      contentHash: row.content_hash as string,
+      summaryJson: row.summary_json as string,
+      status: row.status as SlackPlanDraft['status'],
+      repoUrl: row.repo_url as string,
+      harnessPreset: row.harness_preset as string,
+      workingDir: row.working_dir as string,
+      requestedBy: row.requested_by as string,
+      createdAt: row.created_at as string,
+      decidedAt: typeof row.decided_at === 'string' ? row.decided_at : undefined,
+      decidedBy: typeof row.decided_by === 'string' ? row.decided_by : undefined,
+      executionKey: typeof row.execution_key === 'string' ? row.execution_key : undefined,
+      workflowIdsJson: typeof row.workflow_ids_json === 'string' ? row.workflow_ids_json : undefined,
+    };
   }
 
   saveSlackPendingConfirmation(confirmation: SlackPendingConfirmation): void {
