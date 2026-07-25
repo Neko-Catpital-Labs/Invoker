@@ -31,6 +31,7 @@ import { ContextMenu } from './components/ContextMenu.js';
 import { QueueView } from './components/QueueView.js';
 import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
 import { SystemSetupModal } from './components/SystemSetupModal.js';
+import { BulkPoolReassignmentModal, type BulkPoolReassignmentResult } from './components/BulkPoolReassignmentModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
@@ -77,7 +78,8 @@ type ModalState =
   | { type: 'input'; task: TaskState }
   | { type: 'approval'; task: TaskState; action: 'approve' | 'reject' }
   | { type: 'experiment'; task: TaskState }
-  | { type: 'replace'; task: TaskState };
+  | { type: 'replace'; task: TaskState }
+  | { type: 'bulkPoolReassignment' };
 
 type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar' | 'planning';
 type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'>;
@@ -3176,6 +3178,86 @@ export function App() {
     [invoker, trackAcceptedMutation],
   );
 
+  const countBulkPoolReassignmentTasks = useCallback(
+    (sourcePool: string, destinationPool: string): BulkPoolReassignmentResult => {
+      let matched = 0;
+      let skippedMerge = 0;
+      let skippedAlreadyTargeted = 0;
+
+      for (const task of tasks.values()) {
+        if (task.config.isMergeNode) {
+          if (task.config.poolId === sourcePool) {
+            skippedMerge += 1;
+          }
+          continue;
+        }
+        if (task.config.poolId === destinationPool) {
+          skippedAlreadyTargeted += 1;
+          continue;
+        }
+        if (task.config.poolId === sourcePool) {
+          matched += 1;
+        }
+      }
+
+      return {
+        moved: 0,
+        failed: 0,
+        skipped: skippedMerge + skippedAlreadyTargeted,
+        skippedMerge,
+        skippedAlreadyTargeted,
+        matched,
+        failureTaskIds: [],
+      };
+    },
+    [tasks],
+  );
+
+  const handleBulkPoolReassignment = useCallback(
+    async (sourcePool: string, destinationPool: string): Promise<BulkPoolReassignmentResult> => {
+      const result: BulkPoolReassignmentResult = {
+        ...countBulkPoolReassignmentTasks(sourcePool, destinationPool),
+        moved: 0,
+        failed: 0,
+        failureTaskIds: [],
+      };
+
+      if (!invoker) {
+        result.failed = result.matched;
+        return result;
+      }
+
+      for (const task of tasks.values()) {
+        if (task.config.isMergeNode) continue;
+        if (task.config.poolId !== sourcePool) continue;
+        if (task.config.poolId === destinationPool) continue;
+
+        try {
+          const mutationResult = await invoker.editTaskPool(task.id, destinationPool);
+          trackAcceptedMutation(mutationResult);
+          result.moved += 1;
+        } catch (err) {
+          console.error('Failed to edit task pool during bulk reassignment', task.id, err);
+          result.failed += 1;
+          result.failureTaskIds.push(task.id);
+        }
+      }
+
+      if (result.failed > 0) {
+        toast.error('Pool reassignment completed with failures', {
+          description: `Moved ${result.moved}; failed ${result.failed}`,
+        });
+      } else if (result.moved > 0) {
+        toast.success(`Moved ${formatCount(result.moved, 'task')}`, {
+          description: `${sourcePool} to ${destinationPool}`,
+        });
+      }
+
+      return result;
+    },
+    [countBulkPoolReassignmentTasks, invoker, tasks, trackAcceptedMutation],
+  );
+
   // ── Edit task execution agent ────────────────────────────
   const handleEditAgent = useCallback(
     async (taskId: string, agentName: string) => {
@@ -3459,6 +3541,17 @@ export function App() {
                 className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Queue
+              </button>
+              <button
+                type="button"
+                data-testid="rail-move-tasks-between-pools"
+                onClick={() => {
+                  setGraphActionsMenuOpen(false);
+                  setModal({ type: 'bulkPoolReassignment' });
+                }}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
+              >
+                Move Tasks Between Pools
               </button>
               <div className="my-1 border-t border-border" />
               <button
@@ -4444,6 +4537,7 @@ export function App() {
                   onEditModel={handleEditModel}
                   onEditPrompt={handleEditPrompt}
                   onEditCommand={handleEditCommand}
+                  onEditPool={handleEditPool}
                   onApprove={openApprovalModal}
                   onReject={openRejectModal}
                   onRestartTask={handleRestartTask}
@@ -4712,6 +4806,17 @@ export function App() {
         <ReplaceTaskModal
           task={modal.task}
           onSubmit={handleReplaceSubmit}
+          onClose={closeModal}
+        />
+      )}
+
+      {modal.type === 'bulkPoolReassignment' && (
+        <BulkPoolReassignmentModal
+          pools={executionPools}
+          totalLoadedTasks={tasks.size}
+          nonMergeTaskCount={[...tasks.values()].filter((task) => !task.config.isMergeNode).length}
+          countMatchingTasks={countBulkPoolReassignmentTasks}
+          onConfirm={handleBulkPoolReassignment}
           onClose={closeModal}
         />
       )}

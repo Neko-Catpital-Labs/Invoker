@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, type Mock } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
-import type { WorkflowMeta } from '../types.js';
+import type { TaskState, WorkflowMeta } from '../types.js';
 import * as ReactFlowModule from '@xyflow/react';
 
 vi.mock('@xyflow/react', async () => {
@@ -50,12 +50,66 @@ const tasks = [
   }),
 ];
 
+const poolWorkflow: WorkflowMeta[] = [
+  { id: 'wf-pool', name: 'Pool Workflow', status: 'running' },
+];
+
+function pooledTask(task: TaskState, poolId: string): TaskState {
+  return {
+    ...task,
+    config: {
+      ...task.config,
+      poolId,
+    },
+  };
+}
+
+const pooledTasks = [
+  pooledTask(makeUITask({
+    id: 'task-source-a',
+    description: 'Source pool task A',
+    workflowId: 'wf-pool',
+    command: 'echo source-a',
+  }), 'mixed-local-ssh'),
+  pooledTask(makeUITask({
+    id: 'task-source-b',
+    description: 'Source pool task B',
+    workflowId: 'wf-pool',
+    command: 'echo source-b',
+  }), 'mixed-local-ssh'),
+  pooledTask(makeUITask({
+    id: 'task-destination',
+    description: 'Already destination task',
+    workflowId: 'wf-pool',
+    command: 'echo destination',
+  }), 'pnpm-ssh'),
+  pooledTask(makeUITask({
+    id: '__merge__wf-pool',
+    description: 'Merge task',
+    workflowId: 'wf-pool',
+    isMergeNode: true,
+  }), 'mixed-local-ssh'),
+];
+
 async function renderKeyboardFixture(mock: MockInvoker) {
   mock.setTasks(tasks, workflows);
   render(<App />);
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
   await screen.findByTestId('workflow-node-wf-a');
   await screen.findByTestId('selected-workflow-mini-dag');
+}
+
+async function openBulkPoolReassignment(mock: MockInvoker) {
+  mock.setTasks(pooledTasks, poolWorkflow);
+  render(<App />);
+  fireEvent.click(await screen.findByTestId('sidebar-planning'));
+  await screen.findByTestId('workflow-node-wf-pool');
+  fireEvent.click(screen.getByTestId('graph-more-button'));
+  fireEvent.click(await screen.findByTestId('rail-move-tasks-between-pools'));
+  await screen.findByTestId('bulk-pool-reassignment-dialog');
+  await waitFor(() => {
+    expect(screen.getByTestId('bulk-pool-source-select')).toHaveValue('mixed-local-ssh');
+  });
 }
 
 function key(keyName: string, init: Partial<KeyboardEvent> = {}) {
@@ -115,6 +169,61 @@ describe('Side rail controls (component)', () => {
     await waitFor(() => {
       expect(mock.api.clear).toHaveBeenCalled();
     });
+  });
+
+  it('opens bulk pool reassignment from the graph More menu', async () => {
+    await openBulkPoolReassignment(mock);
+
+    const destination = screen.getByTestId('bulk-pool-destination-select') as HTMLSelectElement;
+    expect(screen.getByTestId('bulk-pool-task-count')).toHaveTextContent('3 / 4');
+    expect([...destination.options].map((option) => option.value)).toEqual(['pnpm-ssh']);
+  });
+
+  it('bulk pool reassignment edits matching non-merge tasks only', async () => {
+    await openBulkPoolReassignment(mock);
+
+    fireEvent.click(screen.getByTestId('bulk-pool-confirm'));
+
+    await waitFor(() => {
+      expect(mock.api.editTaskPool).toHaveBeenCalledTimes(2);
+    });
+    expect(mock.api.editTaskPool).toHaveBeenCalledWith('task-source-a', 'pnpm-ssh');
+    expect(mock.api.editTaskPool).toHaveBeenCalledWith('task-source-b', 'pnpm-ssh');
+    expect(mock.api.editTaskPool).not.toHaveBeenCalledWith('__merge__wf-pool', 'pnpm-ssh');
+    expect(await screen.findByTestId('bulk-pool-result')).toHaveTextContent('Moved 2 tasks.');
+    expect(screen.getByTestId('bulk-pool-result')).toHaveTextContent('Failed 0; skipped 2.');
+  });
+
+  it('bulk pool reassignment continues after one task fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(mock.api.editTaskPool).mockImplementation(async (taskId) => {
+      if (taskId === 'task-source-b') {
+        throw new Error('edit failed');
+      }
+      return {
+        ok: true,
+        accepted: true,
+        intentId: 1,
+        workflowId: 'wf-pool',
+        channel: 'invoker:edit-task-pool',
+      } as Awaited<ReturnType<typeof mock.api.editTaskPool>>;
+    });
+
+    await openBulkPoolReassignment(mock);
+    fireEvent.click(screen.getByTestId('bulk-pool-confirm'));
+
+    await waitFor(() => {
+      expect(mock.api.editTaskPool).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByTestId('bulk-pool-result')).toHaveTextContent('Moved 1 task.');
+    expect(screen.getByTestId('bulk-pool-result')).toHaveTextContent('Failed 1; skipped 2.');
+    expect(screen.getByTestId('bulk-pool-result')).toHaveTextContent('task-source-b');
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to edit task pool during bulk reassignment',
+      'task-source-b',
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
   });
 
   it('cycles major keyboard regions with Tab', async () => {
