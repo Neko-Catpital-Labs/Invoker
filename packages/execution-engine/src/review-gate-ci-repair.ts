@@ -506,6 +506,7 @@ export async function queueReviewGateCiRepair(
   if (leaseResult.available && !leaseResult.lease) {
     return { decision: 'skipped', reason: 'pr-repair-lease-denied' };
   }
+  const prRepairLease = leaseResult.available ? leaseResult.lease : undefined;
 
   const attemptDecision = options.attemptLedger.consume(
     autoFixAttemptLedgerKeyFromLifecycleEvent(event),
@@ -553,11 +554,11 @@ export async function queueReviewGateCiRepair(
       fixContext: buildCiFailureFixContext(event),
     },
     executionModel,
-    ...(leaseResult.lease ? {
+    ...(prRepairLease ? {
       prRepairLease: {
-        leaseId: leaseResult.lease.leaseId,
-        repo: leaseResult.lease.repo,
-        prNumber: leaseResult.lease.prNumber,
+        leaseId: prRepairLease.leaseId,
+        repo: prRepairLease.repo,
+        prNumber: prRepairLease.prNumber,
         headSha: event.headSha,
         holderKind: 'ci_failed',
       },
@@ -572,7 +573,7 @@ export async function queueReviewGateCiRepair(
     {
       channel: FIX_WITH_AGENT_CHANNEL,
       workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
-      ...(leaseResult.lease ? { prRepairLease: leaseResult.lease } : {}),
+      ...(prRepairLease ? { prRepairLease } : {}),
     },
     intentId,
     selectedAgent,

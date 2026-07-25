@@ -464,14 +464,15 @@ async function handleReviewGateMergeConflictEvent(
 
   const leaseResult = acquireMergeConflictLease(options, event);
   if (leaseResult.available && !leaseResult.lease) return;
+  const prRepairLease = leaseResult.available ? leaseResult.lease : undefined;
 
   const intentArgs: unknown[] = [event.workflowId];
-  if (leaseResult.lease) {
+  if (prRepairLease) {
     intentArgs.push({
       prRepairLease: {
-        leaseId: leaseResult.lease.leaseId,
-        repo: leaseResult.lease.repo,
-        prNumber: leaseResult.lease.prNumber,
+        leaseId: prRepairLease.leaseId,
+        repo: prRepairLease.repo,
+        prNumber: prRepairLease.prNumber,
         headSha: event.headSha,
         holderKind: 'merge_conflict',
       },
@@ -485,7 +486,7 @@ async function handleReviewGateMergeConflictEvent(
     'Queued workflow rebase-recreate for review-gate merge conflict',
     {
       channel: REBASE_RECREATE_CHANNEL,
-      ...(leaseResult.lease ? { prRepairLease: leaseResult.lease } : {}),
+      ...(prRepairLease ? { prRepairLease } : {}),
     },
     intentId,
   );
