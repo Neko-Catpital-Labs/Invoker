@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 import type { ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
@@ -251,6 +251,46 @@ export function validateReviewStackPrBody(body: string): string[] {
   }
 
   return errors;
+}
+
+export function validateReviewStackPrBodyAgainstLocalDiff(args: {
+  body: string;
+  cwd: string;
+  baseBranch: string;
+}): string[] {
+  const structuralErrors = validateReviewStackPrBody(args.body);
+  const validatorPath = join(args.cwd, 'scripts', 'validate-pr-body-local.mjs');
+  if (!existsSync(validatorPath)) {
+    return [
+      ...structuralErrors,
+      `CI-parity PR body validator is missing: ${validatorPath}`,
+    ];
+  }
+
+  const tempDir = mkdtempSync(join(tmpdir(), 'invoker-pr-body-'));
+  const bodyFile = join(tempDir, 'body.md');
+  try {
+    writeFileSync(bodyFile, args.body, 'utf8');
+    const result = spawnSync(
+      process.execPath,
+      [validatorPath, '--body-file', bodyFile, '--base', args.baseBranch],
+      { cwd: args.cwd, encoding: 'utf8' },
+    );
+    if (result.status === 0) return structuralErrors;
+
+    const output = `${String(result.stdout ?? '')}\n${String(result.stderr ?? '')}`.trim();
+    return [
+      ...structuralErrors,
+      `CI-parity PR body validation failed: ${output || 'validator exited without output'}`,
+    ];
+  } catch (error) {
+    return [
+      ...structuralErrors,
+      `CI-parity PR body validation could not run: ${error instanceof Error ? error.message : String(error)}`,
+    ];
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function extractAssistantBody(driver: SessionDriver | undefined, sessionId: string, fallback: string): string {
@@ -615,15 +655,17 @@ export function buildMakePrPrompt(args: {
 
   if (args.strictReviewStack) {
     lines.push(
-      '- This PR targets the Invoker repo: CI validates the published body with `scripts/validate-pr-body.mjs`.',
+      '- This PR targets the Invoker repo: CI validates the published body, changed files, and full diff with `scripts/validate-pr-body.mjs`.',
       '- Required sections: ## Summary, ## Review Claim, ## Review Lane, ## Review Unit, ## Safety Invariant, ## Slice Rationale, ## Non-goals, ## Test Plan, ## Revert Plan.',
       '- Review Claim, Review Lane, Review Unit, Safety Invariant, and Slice Rationale must be visible top-level ## sections; never hide them inside a <details> block.',
+      '- For Review Lane `refactor`, ## Non-goals must say `no behavior change`, `behavior unchanged`, `unchanged behavior`, or `pass unchanged`.',
+      '- Review Unit must be exactly one of contract, ownership-refactor, read-path, validation-policy, write-path, routing, activation-surface, tooling-policy, proof, docs, or cleanup, and must match the changed files.',
     );
   }
 
   lines.push(
     '',
-    'You may inspect the working tree, git diff, `scripts/pr-body-template.md`, and `scripts/validate-pr-body.mjs` before writing.',
+    'You may inspect the working tree, git diff, `scripts/pr-body-template.md`, `scripts/validate-pr-body.mjs`, and `scripts/validate-pr-body-local.mjs` before writing.',
     '',
     'Merge workflow context:',
     '```md',
