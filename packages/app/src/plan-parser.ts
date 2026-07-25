@@ -546,3 +546,13 @@ export async function parsePlanFile(filePath: string): Promise<PlanDefinition> {
   assertRepoUrlCloneable(plan.repoUrl!);
   return plan;
 }
+
+export async function parsePlanSubmissionBundleFile(filePath: string): Promise<PlanSubmissionBundle> {
+  const { readFile } = await import('node:fs/promises');
+  const content = await readFile(filePath, 'utf-8');
+  const submission = parsePlanSubmissionBundle(content);
+  for (const plan of submission.plans) {
+    assertRepoUrlCloneable(plan.repoUrl!);
+  }
+  return submission;
+}
