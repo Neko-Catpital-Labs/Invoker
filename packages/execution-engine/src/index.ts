@@ -47,6 +47,7 @@ export * from './plan-execution-agents.js';
 export * from './codex-session.js';
 export * from './remote-agent-error-format.js';
 export * from './session-driver.js';
+export * from './harness-session-driver.js';
 export * from './codex-session-driver.js';
 export * from './claude-session-driver.js';
 export * from './omp-session-driver.js';
