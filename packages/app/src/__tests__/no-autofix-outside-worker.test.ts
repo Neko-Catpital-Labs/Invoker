@@ -90,6 +90,7 @@ const ALLOWLIST: ReadonlySet<string> = new Set([
   'packages/app/src/workers/auto-fix-recovery.ts',
   'packages/app/src/workflow-actions.ts',
   'packages/app/src/headless.ts',
+  'packages/app/src/pr-lifecycle-repair-command.ts',
 ]);
 
 /** Locate the monorepo root by walking up to the `pnpm-workspace.yaml` marker. */
