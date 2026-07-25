@@ -21,6 +21,8 @@ Leading `[...]` tags select how planning runs. Order does not matter; everything
 
 The repository and harness are pinned when the thread starts. Start a new thread to use another repository or preset.
 
+When the harness preset supports it, Invoker resumes the same underlying agent session across turns and across a Slack manager restart (append-based continuity) instead of replaying the full prompt history each time.
+
 ## Local and plan modes
 
 Normal mentions outside mapped workflow channels are exploration sessions. They can answer and create repro artifacts, but tracked files are restored and the turn fails if the agent modifies them before plan approval.
