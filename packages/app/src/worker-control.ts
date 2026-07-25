@@ -16,13 +16,9 @@ import {
   AUTO_FIX_WORKER_KIND,
   AUTO_APPROVE_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
-  CODERABBIT_ADDRESS_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
-  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
-  PR_CI_FAILURE_SCAN_WORKER_KIND,
-  PR_CONFLICT_REBASE_WORKER_KIND,
   PR_QUEUE_DEQUEUE_PUBLISHER_WORKER_KIND,
   PR_QUEUE_LAND_WORKER_KIND,
   PR_REVIEW_COMMENTS_PUBLISHER_WORKER_KIND,
@@ -52,31 +48,17 @@ export const ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS = [
   AUTO_APPROVE_WORKER_KIND,
 ] as const;
 
-/** Cron-scan PR-maintenance worker kinds, auto-started only when `prMaintenance.enabled` is true. */
-export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
-  CODERABBIT_ADDRESS_WORKER_KIND,
-  PR_CONFLICT_REBASE_WORKER_KIND,
-  PR_CI_FAILURE_SCAN_WORKER_KIND,
-  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
-] as const;
+export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS: readonly string[] = [];
 
-/**
- * Compute the owner worker kinds that auto-start on boot. The PR-maintenance
- * cron kinds are gated on `prMaintenance.enabled` (matching the config
- * docstring); everything else always auto-starts. Saved per-worker desired
- * state still overrides in both directions.
- */
-export function autoStartedOwnerWorkerKinds(options: { prMaintenanceEnabled: boolean }): readonly string[] {
-  return options.prMaintenanceEnabled
-    ? [...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, ...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS]
-    : ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS;
+export function autoStartedOwnerWorkerKinds(_options?: { prMaintenanceEnabled: boolean }): readonly string[] {
+  return ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS;
 }
 
 /** Convenience wrapper: derive the auto-start list straight from Invoker config. */
 export function autoStartedOwnerWorkerKindsForConfig(
-  config?: { prMaintenance?: { enabled?: boolean } },
+  _config?: { prMaintenance?: { enabled?: boolean } },
 ): readonly string[] {
-  return autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled) });
+  return autoStartedOwnerWorkerKinds();
 }
 
 export interface WorkerRuntimeController {
