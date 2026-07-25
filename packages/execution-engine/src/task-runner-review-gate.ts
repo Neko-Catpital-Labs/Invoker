@@ -49,6 +49,7 @@ export interface ReviewGateCiFailureTrigger {
   headSha?: string;
   headRef?: string;
   branch?: string;
+  mergeState?: MergeGateApprovalStatus['mergeState'];
   selectedAttemptId?: string;
   generation: number;
   failedChecks: NonNullable<MergeGateApprovalStatus['checks']>['failed'];
@@ -68,6 +69,7 @@ export interface ReviewGateMergeConflictTrigger {
   headSha?: string;
   headRef?: string;
   branch?: string;
+  mergeState?: MergeGateApprovalStatus['mergeState'];
   selectedAttemptId?: string;
   generation: number;
   statusText: string;
@@ -343,6 +345,7 @@ export async function maybePublishReviewGateCiFailure(
       headSha: status.headSha,
       headRef: status.headRef,
       branch: task.execution.branch,
+      mergeState: status.mergeState,
       selectedAttemptId: task.execution.selectedAttemptId,
       generation: task.execution.generation ?? 0,
       failedChecks: status.checks.failed,
@@ -383,6 +386,7 @@ export async function maybePublishReviewGateMergeConflict(
       headSha: status.headSha,
       headRef: status.headRef,
       branch: task.execution.branch,
+      mergeState: status.mergeState,
       selectedAttemptId: task.execution.selectedAttemptId,
       generation: task.execution.generation ?? 0,
       statusText: status.statusText,
