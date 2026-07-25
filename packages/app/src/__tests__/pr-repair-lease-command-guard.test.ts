@@ -1,0 +1,50 @@
+import { describe, expect, it } from 'vitest';
+
+import { assertActiveBabysitPrRepairLease } from '../pr-repair-lease-command-guard.js';
+
+const lease = {
+  repo: 'owner/repo',
+  prNumber: 123,
+  headSha: 'sha-1',
+  leaseId: 'lease-1',
+};
+
+describe('assertActiveBabysitPrRepairLease', () => {
+  it('rejects a missing lease before a babysit mutation executes', () => {
+    expect(() => assertActiveBabysitPrRepairLease(
+      undefined,
+      { getPrRepairLeaseById: () => undefined },
+      'repair',
+    )).toThrow('Rejected babysit repair command');
+  });
+
+  it('rejects an expired or mismatched lease', () => {
+    expect(() => assertActiveBabysitPrRepairLease(
+      lease,
+      {
+        getPrRepairLeaseById: () => ({
+          ...lease,
+          holderKind: 'ci_failed' as const,
+          acquiredAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2026-01-01T00:00:01.000Z',
+        }),
+      },
+      'repair',
+    )).toThrow('Rejected babysit repair command');
+  });
+
+  it('accepts an active lease for the exact PR head', () => {
+    expect(() => assertActiveBabysitPrRepairLease(
+      lease,
+      {
+        getPrRepairLeaseById: () => ({
+          ...lease,
+          holderKind: 'ci_failed' as const,
+          acquiredAt: '2026-01-01T00:00:00.000Z',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        }),
+      },
+      'repair',
+    )).not.toThrow();
+  });
+});

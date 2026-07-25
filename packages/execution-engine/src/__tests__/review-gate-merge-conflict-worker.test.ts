@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  PrRepairLeaseRow,
   WorkerActionRecord,
   WorkerActionWrite,
   WorkflowMutationIntent,
@@ -92,6 +93,7 @@ function toRecord(write: WorkerActionWrite): WorkerActionRecord {
 
 interface Harness {
   actions: Map<string, WorkerActionRecord>;
+  leases: Map<string, PrRepairLeaseRow>;
   intents: WorkflowMutationIntent[];
   store: {
     loadTasks: ReturnType<typeof vi.fn>;
@@ -99,6 +101,10 @@ interface Harness {
     listWorkflowMutationIntents: ReturnType<typeof vi.fn>;
     getWorkerAction: ReturnType<typeof vi.fn>;
     upsertWorkerAction: ReturnType<typeof vi.fn>;
+    getPrRepairLease: ReturnType<typeof vi.fn>;
+    upsertPrRepairLease: ReturnType<typeof vi.fn>;
+    getPrRepairLeaseById: ReturnType<typeof vi.fn>;
+    deletePrRepairLeaseById: ReturnType<typeof vi.fn>;
     logEvent: ReturnType<typeof vi.fn>;
   };
   submit: ReturnType<typeof vi.fn>;
@@ -107,6 +113,7 @@ interface Harness {
 function makeHarness(task = makeTask(), intents: WorkflowMutationIntent[] = []): Harness {
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const actions = new Map<string, WorkerActionRecord>();
+  const leases = new Map<string, PrRepairLeaseRow>();
   const submit = vi.fn((
     workflowId: string,
     priority: WorkflowMutationPriority,
@@ -116,7 +123,16 @@ function makeHarness(task = makeTask(), intents: WorkflowMutationIntent[] = []):
     expect(workflowId).toBe('wf-1');
     expect(priority).toBe('high');
     expect(channel).toBe('invoker:rebase-recreate');
-    expect(args).toEqual(['wf-1']);
+    expect(args).toEqual([
+      'wf-1',
+      {
+        prRepairLease: expect.objectContaining({
+          repo: 'owner/repo',
+          prNumber: 123,
+          headSha: 'sha-1',
+        }),
+      },
+    ]);
     return 42;
   });
   const store = {
@@ -131,9 +147,23 @@ function makeHarness(task = makeTask(), intents: WorkflowMutationIntent[] = []):
       actions.set(`${write.workerKind}:${write.externalKey}`, saved);
       return saved;
     }),
+    getPrRepairLease: vi.fn((repo: string, prNumber: number, headSha: string) =>
+      leases.get(`${repo}:${prNumber}:${headSha}`)),
+    upsertPrRepairLease: vi.fn((lease: PrRepairLeaseRow) => {
+      leases.set(`${lease.repo}:${lease.prNumber}:${lease.headSha}`, lease);
+      return lease;
+    }),
+    getPrRepairLeaseById: vi.fn((leaseId: string) =>
+      Array.from(leases.values()).find((lease) => lease.leaseId === leaseId)),
+    deletePrRepairLeaseById: vi.fn((leaseId: string) => {
+      const entry = Array.from(leases.entries()).find(([, lease]) => lease.leaseId === leaseId);
+      if (!entry) return false;
+      leases.delete(entry[0]);
+      return true;
+    }),
     logEvent: vi.fn(),
   };
-  return { actions, intents, store, submit };
+  return { actions, intents, leases, store, submit };
 }
 
 function actionFor(harness: Harness, event: ReviewGateMergeConflictLifecycleEvent): WorkerActionRecord | undefined {

@@ -27,7 +27,12 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
 } from '@invoker/execution-engine';
-import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
+import type {
+  AgentRegistry,
+  PrRepairLeaseContext,
+  WorkerRegistry,
+  WorkerRuntimeDependencies,
+} from '@invoker/execution-engine';
 import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
@@ -68,6 +73,7 @@ import {
   parseFixWithAgentMutationArgs,
   type ReviewGateCiContext,
 } from '../auto-fix-intents.js';
+import { assertActiveBabysitPrRepairLease } from '../pr-repair-lease-command-guard.js';
 import { persistShutdownDiagnostic } from '../shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
 import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
@@ -2049,43 +2055,49 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     'invoker:rebase-recreate',
     (targetArg: unknown) => workflowIdForTargetArg(targetArg),
     'high',
-    async (targetArg: unknown) => {
-    const target = String(targetArg);
-    const workflowId = workflowIdForTargetArg(targetArg);
-    if (!workflowId) {
-      throw new Error(`Could not resolve workflow for rebase-recreate target "${target}"`);
-    }
-    cancelDeferredWorkflowLaunch(workflowId, 'ipc.rebase-recreate');
-    logger.info(`rebase-recreate: "${target}"`, { module: 'ipc' });
-    try {
-      await preemptWorkflowBeforeMutation(workflowId, {
-        preemptWorkflowExecution,
-        logger,
-        context: 'ipc.rebase-recreate',
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
-      const started = await rebaseRecreate(target, {
-        logger,
-        orchestrator,
-        persistence,
-        commandService,
-        repoRoot,
-        taskExecutor: requireTaskExecutor(),
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
-      await dispatchStartedTasksWithGlobalTopup({
-        orchestrator,
-        taskExecutor: requireTaskExecutor(),
-        logger,
-        context: 'ipc.rebase-recreate',
-        started,
-        scopedWorkflowId: workflowId,
-        mutationTiming: activeMutationContext?.mutationTiming,
-      });
-    } catch (err) {
-      logger.error(`rebase-recreate failed: ${err}`, { module: 'ipc' });
-      throw err;
-    }
+    async (targetArg: unknown, optionsArg?: unknown) => {
+      const prRepairLease = optionsArg && typeof optionsArg === 'object'
+        ? (optionsArg as { prRepairLease?: PrRepairLeaseContext }).prRepairLease
+        : undefined;
+      if (optionsArg !== undefined) {
+        assertActiveBabysitPrRepairLease(prRepairLease, persistence, 'rebase-recreate');
+      }
+      const target = String(targetArg);
+      const workflowId = workflowIdForTargetArg(targetArg);
+      if (!workflowId) {
+        throw new Error(`Could not resolve workflow for rebase-recreate target "${target}"`);
+      }
+      cancelDeferredWorkflowLaunch(workflowId, 'ipc.rebase-recreate');
+      logger.info(`rebase-recreate: "${target}"`, { module: 'ipc' });
+      try {
+        await preemptWorkflowBeforeMutation(workflowId, {
+          preemptWorkflowExecution,
+          logger,
+          context: 'ipc.rebase-recreate',
+          mutationTiming: activeMutationContext?.mutationTiming,
+        });
+        const started = await rebaseRecreate(target, {
+          logger,
+          orchestrator,
+          persistence,
+          commandService,
+          repoRoot,
+          taskExecutor: requireTaskExecutor(),
+          mutationTiming: activeMutationContext?.mutationTiming,
+        });
+        await dispatchStartedTasksWithGlobalTopup({
+          orchestrator,
+          taskExecutor: requireTaskExecutor(),
+          logger,
+          context: 'ipc.rebase-recreate',
+          started,
+          scopedWorkflowId: workflowId,
+          mutationTiming: activeMutationContext?.mutationTiming,
+        });
+      } catch (err) {
+        logger.error(`rebase-recreate failed: ${err}`, { module: 'ipc' });
+        throw err;
+      }
     },
   );
 

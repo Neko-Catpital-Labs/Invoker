@@ -195,6 +195,7 @@ import {
   buildHeadlessFixArgs,
   parseFixWithAgentMutationArgs,
 } from './auto-fix-intents.js';
+import { assertActiveBabysitPrRepairLease } from './pr-repair-lease-command-guard.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
@@ -1461,6 +1462,9 @@ function startHeadlessMode(): void {
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
           workflowMutationDispatcher.set('invoker:fix-with-agent', async (...fixArgs: unknown[]) => {
             const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
+            if (context.reviewGateContext) {
+              assertActiveBabysitPrRepairLease(context.prRepairLease, persistence, 'repair');
+            }
             const args = buildHeadlessFixArgs(taskId, agentName, context);
             await runHeadless(args, {
               ...headlessDeps,
