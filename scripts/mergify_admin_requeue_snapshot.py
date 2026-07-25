@@ -226,7 +226,10 @@ def parse_stack_metadata(comments: Sequence[Mapping[str, object]]) -> tuple[str,
         numbers = payload.get("pull_numbers_bottom_to_top") or payload.get("pullNumbersBottomToTop") or payload.get("prs") or payload.get("pulls")
         if stack_id and isinstance(numbers, Sequence) and not isinstance(numbers, (str, bytes)):
             try:
-                return stack_id, tuple(int(n) for n in numbers)
+                return stack_id, tuple(
+                    int(n.get("number") if isinstance(n, Mapping) else n)
+                    for n in numbers
+                )
             except (TypeError, ValueError):
                 continue
     return None

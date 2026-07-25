@@ -90,6 +90,12 @@ class ParseStackMetadata(unittest.TestCase):
                "body": '<!-- mergify-stack-data: {"stack_id":"new","pull_numbers_bottom_to_top":[10,11,12]} -->'}
         self.assertEqual(s.parse_stack_metadata([old, new]), ("new", (10, 11, 12)))
 
+    def test_accepts_modern_pull_object_marker(self):
+        comment = {
+            "body": '<!-- mergify-stack-data: {"stack_id":"stack-1","pulls":[{"number":10},{"number":11}]} -->',
+        }
+        self.assertEqual(s.parse_stack_metadata([comment]), ("stack-1", (10, 11)))
+
     def test_no_marker_returns_none(self):
         self.assertIsNone(s.parse_stack_metadata([{"body": "nothing here"}]))
 

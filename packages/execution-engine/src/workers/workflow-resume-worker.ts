@@ -196,6 +196,7 @@ export function createWorkflowResumeWorker(options: WorkflowResumeWorkerOptions)
       lifecycleUnsubscribe = options.messageBus?.subscribe<WorkflowLifecycleEvent>(
         Channels.WORKFLOW_LIFECYCLE,
         (event) => {
+          if (!('recoveryWakeup' in event)) return;
           pendingWakeups.push(event.recoveryWakeup);
           runtime.wake('wake');
         },

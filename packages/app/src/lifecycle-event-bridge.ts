@@ -4,6 +4,8 @@ import type { TaskDelta, TaskState, TaskStatus } from '@invoker/workflow-core';
 import {
   buildReviewGateCiFailedLifecycleEvent,
   buildReviewGateMergeConflictLifecycleEvent,
+  buildPrQueueDequeuedLifecycleEvent,
+  buildPrReviewCommentsLifecycleEvent,
   buildTaskCreatedLifecycleEvent,
   buildTaskRemovedLifecycleEvent,
   buildTaskUpdatedLifecycleEvent,
@@ -73,6 +75,30 @@ export interface ReviewGateMergeConflictWakeupInput {
   readonly selectedAttemptId?: string;
   readonly generation: number;
   readonly statusText: string;
+}
+
+export interface PrReviewCommentsWakeupInput {
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly commentMarker: string;
+  readonly commentUrls: readonly string[];
+  readonly workflowId?: string;
+  readonly baseRef?: string;
+  readonly labelsJson?: string;
+}
+
+export interface PrQueueDequeuedWakeupInput {
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly dequeueCommentId: string;
+  readonly failedChecks: readonly string[];
+  readonly workflowId?: string;
+  readonly stackId?: string;
+  readonly stackOrder?: number;
+  readonly baseRef?: string;
+  readonly labelsJson?: string;
 }
 
 export function startLifecycleEventBridge(options: LifecycleEventBridgeOptions): LifecycleEventBridge {
@@ -170,6 +196,46 @@ export function publishReviewGateMergeConflictLifecycleEvent(
   return event;
 }
 
+export function publishPrReviewCommentsLifecycleEvent(
+  input: PrReviewCommentsWakeupInput,
+  options: Pick<LifecycleEventBridgeOptions, 'messageBus' | 'prMirrorStore' | 'now'>,
+): WorkflowLifecycleEvent {
+  const event = buildPrReviewCommentsLifecycleEvent({
+    ...input,
+    createdAt: options.now?.(),
+  });
+  upsertPrMirrorBeforePublish(input, {
+    blockersJson: JSON.stringify({
+      kind: 'review_comments',
+      commentMarker: input.commentMarker,
+      commentUrls: input.commentUrls,
+    }),
+    options,
+  });
+  options.messageBus.publish(Channels.WORKFLOW_LIFECYCLE, event);
+  return event;
+}
+
+export function publishPrQueueDequeuedLifecycleEvent(
+  input: PrQueueDequeuedWakeupInput,
+  options: Pick<LifecycleEventBridgeOptions, 'messageBus' | 'prMirrorStore' | 'now'>,
+): WorkflowLifecycleEvent {
+  const event = buildPrQueueDequeuedLifecycleEvent({
+    ...input,
+    createdAt: options.now?.(),
+  });
+  upsertPrMirrorBeforePublish(input, {
+    blockersJson: JSON.stringify({
+      kind: 'queue_dequeued',
+      dequeueCommentId: input.dequeueCommentId,
+      failedChecks: input.failedChecks,
+    }),
+    options,
+  });
+  options.messageBus.publish(Channels.WORKFLOW_LIFECYCLE, event);
+  return event;
+}
+
 export function resolveReviewGatePrIdentity(
   reviewUrl: string,
   reviewId: string,
@@ -223,6 +289,29 @@ function upsertReviewGatePrMirrorBeforePublish(args: {
     updatedAt,
   };
   store.upsertPrMirror(mirror);
+}
+
+function upsertPrMirrorBeforePublish(
+  input: PrReviewCommentsWakeupInput | PrQueueDequeuedWakeupInput,
+  args: {
+    readonly blockersJson: string;
+    readonly options: Pick<LifecycleEventBridgeOptions, 'prMirrorStore' | 'now'>;
+  },
+): void {
+  const store = args.options.prMirrorStore;
+  if (!store) return;
+  store.upsertPrMirror({
+    repo: input.repo,
+    prNumber: input.prNumber,
+    headSha: input.headSha,
+    ...(input.baseRef ? { baseRef: input.baseRef } : {}),
+    ...(input.labelsJson ? { labelsJson: input.labelsJson } : {}),
+    ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+    ...('stackId' in input && input.stackId ? { stackId: input.stackId } : {}),
+    ...('stackOrder' in input && input.stackOrder !== undefined ? { stackOrder: input.stackOrder } : {}),
+    blockersJson: args.blockersJson,
+    updatedAt: (args.options.now?.() ?? new Date()).toISOString(),
+  });
 }
 
 function buildEventForTaskDelta(

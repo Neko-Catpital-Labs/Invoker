@@ -485,6 +485,7 @@ export function createAutoApproveWorker(options: AutoApproveWorkerOptions): Work
         Channels.WORKFLOW_LIFECYCLE,
         (event) => {
           if (!isAwaitingApprovalEvent(event)) return;
+          if (!('recoveryWakeup' in event)) return;
           pendingWakeups.push(event.recoveryWakeup);
           runtime.wake('wake');
         },

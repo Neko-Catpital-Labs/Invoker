@@ -13,6 +13,8 @@ import {
   type ReviewGateFailedCheck,
   type ReviewGateCiFailedLifecycleEvent,
   type ReviewGateMergeConflictLifecycleEvent,
+  type PrQueueDequeuedLifecycleEvent,
+  type PrReviewCommentsLifecycleEvent,
   type WorkflowWakeupLifecycleEvent,
   type RecoveryWorkerWakeupHint,
   type RecoveryWorkerWakeupReason,
@@ -32,6 +34,8 @@ export {
   type ReviewGateFailedCheck,
   type ReviewGateCiFailedLifecycleEvent,
   type ReviewGateMergeConflictLifecycleEvent,
+  type PrQueueDequeuedLifecycleEvent,
+  type PrReviewCommentsLifecycleEvent,
   type WorkflowWakeupLifecycleEvent,
   type RecoveryWorkerWakeupHint,
   type RecoveryWorkerWakeupReason,
@@ -84,6 +88,28 @@ export interface ReviewGateMergeConflictLifecycleEventInput extends LifecycleBui
   readonly headRef?: string;
   readonly branch?: string;
   readonly statusText: string;
+}
+
+export interface PrReviewCommentsLifecycleEventInput {
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly commentMarker: string;
+  readonly commentUrls: readonly string[];
+  readonly workflowId?: string;
+  readonly createdAt?: Date;
+}
+
+export interface PrQueueDequeuedLifecycleEventInput {
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha: string;
+  readonly dequeueCommentId: string;
+  readonly failedChecks: readonly string[];
+  readonly stackId?: string;
+  readonly stackOrder?: number;
+  readonly workflowId?: string;
+  readonly createdAt?: Date;
 }
 
 export interface WorkflowWakeupLifecycleEventInput {
@@ -288,6 +314,40 @@ export function buildReviewGateMergeConflictLifecycleEvent(
   };
 }
 
+export function buildPrReviewCommentsLifecycleEvent(
+  input: PrReviewCommentsLifecycleEventInput,
+): PrReviewCommentsLifecycleEvent {
+  return {
+    eventKey: `pr.review_comments|repo:${input.repo}|pr:${input.prNumber}|head:${input.headSha}|marker:${input.commentMarker}`,
+    kind: 'pr.review_comments',
+    repo: input.repo,
+    prNumber: input.prNumber,
+    headSha: input.headSha,
+    commentMarker: input.commentMarker,
+    commentUrls: [...input.commentUrls],
+    ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+    createdAt: lifecycleCreatedAt(input.createdAt),
+  };
+}
+
+export function buildPrQueueDequeuedLifecycleEvent(
+  input: PrQueueDequeuedLifecycleEventInput,
+): PrQueueDequeuedLifecycleEvent {
+  return {
+    eventKey: `pr.queue_dequeued|repo:${input.repo}|pr:${input.prNumber}|head:${input.headSha}|comment:${input.dequeueCommentId}`,
+    kind: 'pr.queue_dequeued',
+    repo: input.repo,
+    prNumber: input.prNumber,
+    headSha: input.headSha,
+    dequeueCommentId: input.dequeueCommentId,
+    failedChecks: [...input.failedChecks],
+    ...(input.stackId ? { stackId: input.stackId } : {}),
+    ...(input.stackOrder !== undefined ? { stackOrder: input.stackOrder } : {}),
+    ...(input.workflowId ? { workflowId: input.workflowId } : {}),
+    createdAt: lifecycleCreatedAt(input.createdAt),
+  };
+}
+
 export function buildWorkflowWakeupLifecycleEvent(
   input: WorkflowWakeupLifecycleEventInput,
 ): WorkflowWakeupLifecycleEvent {
@@ -360,6 +420,24 @@ export function isWorkflowLifecycleEvent(value: unknown): value is WorkflowLifec
   if (!isRecord(value)) return false;
   if (typeof value.eventKey !== 'string') return false;
   if (!isWorkflowLifecycleEventKind(value.kind)) return false;
+  if (value.kind === 'pr.review_comments') {
+    return typeof value.repo === 'string'
+      && typeof value.prNumber === 'number'
+      && typeof value.headSha === 'string'
+      && typeof value.commentMarker === 'string'
+      && Array.isArray(value.commentUrls)
+      && typeof value.createdAt === 'string'
+      && isCanonicalUtcIsoTimestamp(value.createdAt);
+  }
+  if (value.kind === 'pr.queue_dequeued') {
+    return typeof value.repo === 'string'
+      && typeof value.prNumber === 'number'
+      && typeof value.headSha === 'string'
+      && typeof value.dequeueCommentId === 'string'
+      && Array.isArray(value.failedChecks)
+      && typeof value.createdAt === 'string'
+      && isCanonicalUtcIsoTimestamp(value.createdAt);
+  }
   if (typeof value.workflowId !== 'string') return false;
   if (typeof value.createdAt !== 'string') return false;
   if (!isCanonicalUtcIsoTimestamp(value.createdAt)) return false;
