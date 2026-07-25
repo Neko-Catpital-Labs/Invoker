@@ -6,21 +6,49 @@ import { join } from 'node:path';
 import { DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES } from '@invoker/contracts';
 
 import {
+  checkGithubAuth,
   defaultExperimentalPlannerMcpPath,
   ensureExperimentalPlannerMcp,
   buildDoctorChecks,
+  firstSetupFailure,
+  formatSetupEnding,
   generateSlackManifest,
   installExperimentalPlannerMcp,
   loadInvokerEnv,
   readExperimentalPlannerSetup,
   REQUIRED_BOT_SCOPES,
+  runPlanValidationSmoke,
   slackCredsFromEnv,
+  skippedGithubAuthCheck,
   runSetup,
   setExperimentalPlannerFlag,
   upsertEnvLines,
   validateSlackCredentials,
   type CliConfigState,
+  type SetupDeps,
 } from '../onboarding.js';
+
+import type { PrerequisiteCheck } from '@invoker/contracts';
+
+type Check = PrerequisiteCheck;
+
+function okCheck(id: string, name: string, detail = 'ok'): Check {
+  return { id, name, status: 'ok', detail };
+}
+
+function errorCheck(id: string, name: string, detail: string, remediation?: string): Check {
+  return { id, name, status: 'error', detail, remediation };
+}
+
+/** Keep setup oneshot tests offline and independent of the host PATH / gh login. */
+function readySetupDeps(overrides: SetupDeps = {}): SetupDeps {
+  return {
+    isInstalled: () => true,
+    githubAuthCheck: async () => okCheck('github-auth', 'GitHub auth', 'gh is authenticated'),
+    smokePlanValidation: async () => okCheck('smoke-plan', 'Smoke plan validation', 'Parsed 1 task(s)'),
+    ...overrides,
+  };
+}
 
 describe('generateSlackManifest', () => {
   it('requests the required bot scopes, socket mode, and app_mention events', () => {
@@ -141,21 +169,22 @@ describe('runSetup', () => {
       const code = await runSetup([], {
         print: (line) => lines.push(line),
         prompt: async () => 'n',
-      });
+      }, readySetupDeps());
 
       const mcpPath = join(home, '.invoker', 'mcp.json');
       const invokerConfigPath = join(home, '.invoker', 'config.json');
-      expect(lines.join('\n')).toContain('Invoker setup');
-      expect(lines.join('\n')).toContain(`Experimental planner MCP installed into ${mcpPath}`);
-      expect(lines.join('\n')).toContain('experimentalPlanner flag: off');
-      expect(lines.join('\n')).toContain('Run `invoker-cli setup slack` later');
+      const output = lines.join('\n');
+      expect(output).toContain('Invoker setup');
+      expect(output).toContain(`Experimental planner MCP installed into ${mcpPath}`);
+      expect(output).toContain('experimentalPlanner flag: off');
+      expect(output).toContain("You're ready.");
       expect(JSON.parse(readFileSync(mcpPath, 'utf8')).mcpServers['experimental-planner']).toEqual({
         type: 'stdio',
         command: 'uvx',
         args: ['--from', DEFAULT_DRAFTER_MCP_PACKAGE_SPEC, EXTERNAL_DEPENDENCIES.drafterMcp.commandName],
       });
       expect(existsSync(invokerConfigPath)).toBe(false);
-      expect(typeof code).toBe('number');
+      expect(code).toBe(0);
     } finally {
       restoreEnv('HOME', saved.HOME);
       restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.target);
@@ -191,7 +220,7 @@ describe('runSetup', () => {
           prompts.push(question);
           return '';
         },
-      });
+      }, readySetupDeps());
 
       expect(code).toBe(0);
       expect(prompts).toEqual([]);
@@ -472,10 +501,11 @@ describe('runSetup in a non-interactive shell', () => {
       prompt: async () => { throw new Error('should not prompt under --yes'); },
     });
 
-    const code = await runSetup(['--yes'], io);
+    const code = await runSetup(['--yes'], io, readySetupDeps());
 
-    expect(code).not.toBe(1);
+    expect(code).toBe(0);
     expect(lines.join('\n')).toContain('Enable the experimental planner now?');
+    expect(lines.join('\n')).toContain("You're ready.");
   });
 
   it('skips Slack under --yes rather than starting a flow it cannot finish', async () => {
@@ -483,11 +513,11 @@ describe('runSetup in a non-interactive shell', () => {
       prompt: async () => { throw new Error('should not prompt under --yes'); },
     });
 
-    await runSetup(['--yes'], io);
+    await runSetup(['--yes'], io, readySetupDeps());
 
     const output = lines.join('\n');
     expect(output).not.toContain('Bot User OAuth Token');
-    expect(output).toContain('invoker-cli setup slack');
+    expect(output).toContain("You're ready.");
   });
 
   it('writes only inside the configured Invoker home', async () => {
@@ -495,8 +525,100 @@ describe('runSetup in a non-interactive shell', () => {
       prompt: async () => { throw new Error('should not prompt under --yes'); },
     });
 
-    await runSetup(['--yes'], io);
+    await runSetup(['--yes'], io, readySetupDeps());
 
     expect(existsSync(join(home, 'mcp.json'))).toBe(true);
+  });
+});
+
+describe('GitHub auth check', () => {
+  it('passes when gh auth status exits 0', () => {
+    const check = checkGithubAuth(() => ({ status: 0, stdout: 'Logged in', stderr: '' }));
+    expect(check).toMatchObject({ id: 'github-auth', status: 'ok' });
+  });
+
+  it('fails when gh auth status exits non-zero', () => {
+    const check = checkGithubAuth(() => ({ status: 1, stdout: '', stderr: 'not logged in to any GitHub hosts' }));
+    expect(check.status).toBe('error');
+    expect(check.detail).toContain('not logged in');
+    expect(check.remediation).toContain('gh auth login');
+  });
+
+  it('warns and skips when gh is missing', () => {
+    expect(skippedGithubAuthCheck()).toMatchObject({ id: 'github-auth', status: 'warn' });
+  });
+});
+
+describe('setup oneshot ending', () => {
+  it('selects the first error for Fix this first', () => {
+    const checks: Check[] = [
+      okCheck('a', 'A'),
+      errorCheck('github-auth', 'GitHub auth', 'not logged in', 'Run `gh auth login`'),
+      errorCheck('smoke-plan', 'Smoke plan validation', 'boom'),
+    ];
+    expect(firstSetupFailure(checks)?.id).toBe('github-auth');
+    expect(formatSetupEnding(checks)).toContain('Fix this first: GitHub auth: not logged in.');
+    expect(formatSetupEnding(checks)).toContain('gh auth login');
+    expect(formatSetupEnding([okCheck('a', 'A')])).toBe("You're ready.");
+  });
+
+  it('returns exit code 1 when smoke validation fails', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-smoke-fail-'));
+    const lines: string[] = [];
+    const savedHome = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        smokePlanValidation: async () => errorCheck(
+          'smoke-plan',
+          'Smoke plan validation',
+          'parse failed',
+          'Reinstall invoker-cli',
+        ),
+      }));
+
+      expect(code).toBe(1);
+      expect(lines.join('\n')).toContain('Fix this first: Smoke plan validation: parse failed.');
+      expect(lines.join('\n')).not.toContain("You're ready.");
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('skips GitHub auth with a warning when gh is not installed', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-no-gh-'));
+    const lines: string[] = [];
+    const savedHome = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        isInstalled: (command) => command !== 'gh',
+        githubAuthCheck: async () => {
+          throw new Error('should not probe gh auth when gh is missing');
+        },
+      }));
+
+      expect(code).toBe(0);
+      expect(lines.join('\n')).toContain('gh not installed; skipped auth check');
+      expect(lines.join('\n')).toContain("You're ready.");
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the real offline smoke parser successfully', async () => {
+    const check = await runPlanValidationSmoke();
+    expect(check.status).toBe('ok');
+    expect(check.detail).toMatch(/Parsed 1 task/);
   });
 });
