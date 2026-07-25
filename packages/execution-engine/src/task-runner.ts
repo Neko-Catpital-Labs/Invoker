@@ -57,6 +57,7 @@ import {
   spawnAgentPrAuthorViaRegistry,
   validateCanonicalPrBody,
   validateReviewStackPrBody,
+  validateReviewStackPrBodyAgainstLocalDiff,
   type PrAuthoringContext,
 } from './pr-authoring.js';
 import { ensureRemoteUrl } from './git-config-mutation.js';
@@ -1442,7 +1443,11 @@ export class TaskRunner {
         );
         const result = await spawnAgentPrAuthorViaRegistry(prompt, args.cwd, agent, driver);
         const validationErrors = strictReviewStack
-          ? validateReviewStackPrBody(result.body)
+          ? validateReviewStackPrBodyAgainstLocalDiff({
+            body: result.body,
+            cwd: args.cwd,
+            baseBranch: args.baseBranch,
+          })
           : validateCanonicalPrBody(result.body);
         if (validationErrors.length > 0) {
           this.logger.warn(

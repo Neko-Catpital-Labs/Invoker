@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -11,7 +11,7 @@ import { SshExecutor } from '../ssh-executor.js';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkResponse, Logger } from '@invoker/contracts';
 import { EventEmitter } from 'events';
-import { buildCanonicalPrBody, validateCanonicalPrBody } from '../pr-authoring.js';
+import { buildCanonicalPrBody, validateCanonicalPrBody, validateReviewStackPrBodyAgainstLocalDiff } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
 
 /**
@@ -1673,7 +1673,7 @@ describe('TaskRunner', () => {
       '',
       '## Review Unit',
       '',
-      'write-path',
+      'routing',
       '',
       '## Safety Invariant',
       '',
@@ -1689,11 +1689,24 @@ describe('TaskRunner', () => {
       '',
       '## Test Plan',
       '',
+      '<details>',
+      '<summary>Test Plan</summary>',
+      '',
       '- [x] `pnpm test`',
+      '',
+      '</details>',
       '',
       '## Revert Plan',
       '',
+      '<details>',
+      '<summary>Revert Plan</summary>',
+      '',
       '- Safe to revert? Yes',
+      '- Revert command: `git revert <sha>`',
+      '- Post-revert steps: None',
+      '- Data migration? No',
+      '',
+      '</details>',
     ].join('\n');
 
     const CANONICAL_ONLY_BODY = '## Summary\n\nAuthored\n\n## Test Plan\n\n- [x] `pnpm test`\n\n## Revert Plan\n\n- Safe to revert? Yes';
@@ -1714,7 +1727,7 @@ describe('TaskRunner', () => {
       };
     }
 
-    function makeStrictGateExecutor(agent: any) {
+    function makeStrictGateExecutor(agent: any, cwd = '/tmp') {
       return new TaskRunner({
         orchestrator: {
           getTask: () => null,
@@ -1728,9 +1741,28 @@ describe('TaskRunner', () => {
           getSessionDriver: vi.fn().mockReturnValue(undefined),
           listWithCapability: vi.fn().mockReturnValue([agent]),
         } as any,
-        cwd: '/tmp',
+        cwd,
         logger: createMockLogger(),
       });
+    }
+
+    function createCiParityPrWorkspace() {
+      const cwd = createTempWorkspace();
+      const sourceFile = join(cwd, 'packages', 'app', 'src', 'refresh-route.ts');
+      symlinkSync(join(process.cwd(), '..', '..', 'scripts'), join(cwd, 'scripts'), 'dir');
+      mkdirSync(join(cwd, 'packages', 'app', 'src'), { recursive: true });
+      writeFileSync(sourceFile, 'export const refreshRoute = 1;\n');
+      execSync('git init --initial-branch=master', { cwd, stdio: 'pipe' });
+      execSync('git config user.email pr-body-test@example.test', { cwd, stdio: 'pipe' });
+      execSync('git config user.name "PR Body Test"', { cwd, stdio: 'pipe' });
+      execSync('git add packages && git commit -m baseline', { cwd, stdio: 'pipe' });
+      execSync('git remote add origin .', { cwd, stdio: 'pipe' });
+      execSync('git update-ref refs/remotes/origin/master HEAD', { cwd, stdio: 'pipe' });
+      execSync('git switch -c feature', { cwd, stdio: 'pipe' });
+      writeFileSync(sourceFile, 'export const refreshRoute = 2;\n');
+      execSync('git add packages && git commit -m routing-change', { cwd, stdio: 'pipe' });
+      expect(execSync('git diff --name-only origin/master...HEAD', { cwd, encoding: 'utf8' })).toContain('packages/app/src/refresh-route.ts');
+      return cwd;
     }
 
     it('authorPrBodyWithSkill rejects a canonical-only body and refuses fallback for Invoker repoUrl', async () => {
@@ -1760,13 +1792,14 @@ describe('TaskRunner', () => {
 
     it('authorPrBodyWithSkill accepts a review-stack-compliant body for Invoker repoUrl', async () => {
       const tempHome = createTempWorkspace();
+      const cwd = createCiParityPrWorkspace();
       const originalHome = process.env.HOME;
       process.env.HOME = tempHome;
       mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
       writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
 
       try {
-        const executor = makeStrictGateExecutor(makeBodyEmittingAgent(tempHome, STRICT_COMPLIANT_REVIEW_STACK_BODY));
+        const executor = makeStrictGateExecutor(makeBodyEmittingAgent(tempHome, STRICT_COMPLIANT_REVIEW_STACK_BODY), cwd);
 
         const result = await (executor as any).authorPrBodyWithSkill({
           workflowId: 'wf-1',
@@ -1774,13 +1807,49 @@ describe('TaskRunner', () => {
           baseBranch: 'master',
           featureBranch: 'plan/feature',
           workflowSummary: '## Summary\nSource summary',
-          cwd: '/tmp',
+          cwd,
           repoUrl: 'git@github.com:EdbertChan/Invoker.git',
         });
 
         expect(result.agentName).toBe('codex');
         expect(result.body).toContain('## Non-goals');
         expect(result.body).toContain('## Review Claim');
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+    });
+
+    it('authorPrBodyWithSkill rejects an Invoker refactor body that CI would reject', async () => {
+      const tempHome = createTempWorkspace();
+      const cwd = createCiParityPrWorkspace();
+      const originalHome = process.env.HOME;
+      process.env.HOME = tempHome;
+      mkdirSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr'), { recursive: true });
+      writeFileSync(join(tempHome, '.codex', 'skills', 'invoker-make-pr', 'SKILL.md'), '# make-pr\n');
+
+      try {
+        const bodyWithoutUnchangedBehaviorClaim = STRICT_COMPLIANT_REVIEW_STACK_BODY
+          .replace('\nbehavior\n', '\nrefactor\n');
+        expect(validateReviewStackPrBodyAgainstLocalDiff({
+          body: bodyWithoutUnchangedBehaviorClaim,
+          cwd,
+          baseBranch: 'master',
+        }).join('\n')).toContain('Review lane refactor must state in ## Non-goals that behavior stays unchanged');
+        const executor = makeStrictGateExecutor(
+          makeBodyEmittingAgent(tempHome, bodyWithoutUnchangedBehaviorClaim),
+          cwd,
+        );
+
+        await expect((executor as any).authorPrBodyWithSkill({
+          workflowId: 'wf-1',
+          title: 'Test Workflow',
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          workflowSummary: '## Summary\nSource summary',
+          cwd,
+          repoUrl: 'git@github.com:EdbertChan/Invoker.git',
+        })).rejects.toThrow(/Review lane refactor must state in ## Non-goals that behavior stays unchanged/);
       } finally {
         if (originalHome === undefined) delete process.env.HOME;
         else process.env.HOME = originalHome;
