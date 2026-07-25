@@ -30,6 +30,11 @@ import { ExperimentModal } from './components/ExperimentModal.js';
 import { ContextMenu } from './components/ContextMenu.js';
 import { QueueView } from './components/QueueView.js';
 import { ReplaceTaskModal } from './components/ReplaceTaskModal.js';
+import {
+  BulkPoolReassignmentModal,
+  planBulkPoolReassignment,
+  type BulkPoolReassignmentResult,
+} from './components/BulkPoolReassignmentModal.js';
 import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
@@ -118,6 +123,10 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
   const title = rawTitle.replace(/[:\s]+$/, '');
   const description = err instanceof Error ? err.message : typeof err === 'string' ? err : undefined;
   toast.error(title, description ? { description } : undefined);
+}
+
+function mutationErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : typeof err === 'string' ? err : 'Unknown error';
 }
 
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
@@ -884,6 +893,9 @@ export function App() {
   const [executionPools, setExecutionPools] = useState<string[]>([]);
   const [executionHarnesses, setExecutionHarnesses] = useState<ExecutionHarnessOption[]>([]);
   const [executionDefaults, setExecutionDefaults] = useState<ExecutionDefaults | null>(null);
+  const [bulkPoolReassignmentOpen, setBulkPoolReassignmentOpen] = useState(false);
+  const [bulkPoolReassignmentPending, setBulkPoolReassignmentPending] = useState(false);
+  const [bulkPoolReassignmentResult, setBulkPoolReassignmentResult] = useState<BulkPoolReassignmentResult | null>(null);
   const [statusFilters, setStatusFilters] = useState<Set<WorkflowStatus>>(new Set());
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(
     () => (typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__?.runtimeStatus ?? null : null),
@@ -1735,6 +1747,15 @@ export function App() {
         return;
       }
 
+      if (bulkPoolReassignmentOpen) {
+        if (event.key === 'Escape' && !bulkPoolReassignmentPending) {
+          event.preventDefault();
+          setBulkPoolReassignmentOpen(false);
+          setBulkPoolReassignmentResult(null);
+        }
+        return;
+      }
+
       if (event.key === 'Shift' && !isEditableKeyboardTarget(event.target)) {
         const now = Date.now();
         if (now - lastShiftAtRef.current <= 450) {
@@ -1898,6 +1919,8 @@ export function App() {
   }, [
     activateSearchResult,
     bottomStatusIndex,
+    bulkPoolReassignmentOpen,
+    bulkPoolReassignmentPending,
     contextMenu,
     focusKeyboardRegion,
     graphMaximized,
@@ -2897,6 +2920,8 @@ export function App() {
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
+      setBulkPoolReassignmentOpen(false);
+      setBulkPoolReassignmentResult(null);
       setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
       notifyMutationError('Failed to clear:', err);
@@ -2921,6 +2946,8 @@ export function App() {
       setSelectedTaskId(null);
       setSelectedWorkflowId(null);
       setModal({ type: 'none' });
+      setBulkPoolReassignmentOpen(false);
+      setBulkPoolReassignmentResult(null);
       setStatusFilters(new Set<WorkflowStatus>());
     } catch (err) {
       notifyMutationError('Failed to delete workflows:', err);
@@ -3171,6 +3198,69 @@ export function App() {
         trackAcceptedMutation(result);
       } catch (err) {
         notifyMutationError('Failed to edit task pool:', err);
+      }
+    },
+    [invoker, trackAcceptedMutation],
+  );
+
+  const openBulkPoolReassignmentModal = useCallback(() => {
+    setGraphActionsMenuOpen(false);
+    setBulkPoolReassignmentResult(null);
+    setBulkPoolReassignmentOpen(true);
+  }, []);
+
+  const closeBulkPoolReassignmentModal = useCallback(() => {
+    if (bulkPoolReassignmentPending) return;
+    setBulkPoolReassignmentOpen(false);
+    setBulkPoolReassignmentResult(null);
+  }, [bulkPoolReassignmentPending]);
+
+  const handleBulkPoolReassignmentConfirm = useCallback(
+    async (sourcePool: string, destinationPool: string) => {
+      if (!invoker || !sourcePool || !destinationPool || sourcePool === destinationPool) return;
+      const plan = planBulkPoolReassignment(tasksRef.current.values(), sourcePool, destinationPool);
+      if (plan.candidateTaskIds.length === 0) {
+        setBulkPoolReassignmentResult({
+          ...plan,
+          successCount: 0,
+          failedCount: 0,
+          failures: [],
+        });
+        return;
+      }
+
+      setBulkPoolReassignmentPending(true);
+      const failures: BulkPoolReassignmentResult['failures'] = [];
+      let successCount = 0;
+
+      try {
+        for (const taskId of plan.candidateTaskIds) {
+          try {
+            const result = await invoker.editTaskPool(taskId, destinationPool);
+            trackAcceptedMutation(result);
+            successCount += 1;
+          } catch (err) {
+            const message = mutationErrorMessage(err);
+            console.error(`Failed to move task "${taskId}" to pool "${destinationPool}"`, err);
+            failures.push({ taskId, message });
+          }
+        }
+
+        const result: BulkPoolReassignmentResult = {
+          ...plan,
+          successCount,
+          failedCount: failures.length,
+          failures,
+        };
+        setBulkPoolReassignmentResult(result);
+        const description = `Skipped ${formatCount(result.skippedCount, 'task')}; failed ${formatCount(result.failedCount, 'task')}.`;
+        if (result.failedCount > 0) {
+          toast.error(`Moved ${formatCount(result.successCount, 'task')} with failures`, { description });
+        } else {
+          toast.success(`Moved ${formatCount(result.successCount, 'task')} between pools`, { description });
+        }
+      } finally {
+        setBulkPoolReassignmentPending(false);
       }
     },
     [invoker, trackAcceptedMutation],
@@ -3459,6 +3549,14 @@ export function App() {
                 className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Queue
+              </button>
+              <button
+                type="button"
+                data-testid="rail-move-tasks-between-pools"
+                onClick={openBulkPoolReassignmentModal}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
+              >
+                Move Tasks Between Pools
               </button>
               <div className="my-1 border-t border-border" />
               <button
@@ -4442,6 +4540,7 @@ export function App() {
                   executionDefaults={executionDefaults}
                   onEditAgent={handleEditAgent}
                   onEditModel={handleEditModel}
+                  onEditPool={handleEditPool}
                   onEditPrompt={handleEditPrompt}
                   onEditCommand={handleEditCommand}
                   onApprove={openApprovalModal}
@@ -4678,6 +4777,17 @@ export function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {bulkPoolReassignmentOpen && (
+        <BulkPoolReassignmentModal
+          tasks={tasks}
+          executionPools={executionPools}
+          pending={bulkPoolReassignmentPending}
+          result={bulkPoolReassignmentResult}
+          onConfirm={(sourcePool, destinationPool) => void handleBulkPoolReassignmentConfirm(sourcePool, destinationPool)}
+          onClose={closeBulkPoolReassignmentModal}
+        />
       )}
 
       {/* Modals */}

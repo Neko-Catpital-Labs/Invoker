@@ -58,6 +58,22 @@ async function renderKeyboardFixture(mock: MockInvoker) {
   await screen.findByTestId('selected-workflow-mini-dag');
 }
 
+async function openBulkPoolReassignmentDialog(mock: MockInvoker, bulkTasks: ReturnType<typeof makeUITask>[]) {
+  const bulkWorkflow: WorkflowMeta[] = [
+    { id: 'wf-bulk', name: 'Bulk Pool Workflow', status: 'running' },
+  ];
+  mock.setTasks(bulkTasks, bulkWorkflow);
+  render(<App />);
+  fireEvent.click(await screen.findByTestId('sidebar-planning'));
+  await screen.findByTestId('workflow-node-wf-bulk');
+  fireEvent.click(screen.getByTestId('graph-more-button'));
+  fireEvent.click(await screen.findByTestId('rail-move-tasks-between-pools'));
+  await waitFor(() => {
+    expect(screen.getByTestId('bulk-pool-source-select')).toHaveValue('mixed-local-ssh');
+    expect(screen.getByTestId('bulk-pool-destination-select')).toHaveValue('pnpm-ssh');
+  });
+}
+
 function key(keyName: string, init: Partial<KeyboardEvent> = {}) {
   fireEvent.keyDown(document, { key: keyName, ...init });
 }
@@ -115,6 +131,62 @@ describe('Side rail controls (component)', () => {
     await waitFor(() => {
       expect(mock.api.clear).toHaveBeenCalled();
     });
+  });
+
+  it('bulk pool reassignment moves loaded non-merge source tasks and reports skips', async () => {
+    await openBulkPoolReassignmentDialog(mock, [
+      makeUITask({ id: 'bulk-alpha', description: 'Alpha', workflowId: 'wf-bulk', config: { poolId: 'mixed-local-ssh' } }),
+      makeUITask({ id: 'bulk-beta', description: 'Beta', workflowId: 'wf-bulk', config: { poolId: 'mixed-local-ssh' } }),
+      makeUITask({ id: 'bulk-merge', description: 'Merge', workflowId: 'wf-bulk', isMergeNode: true, config: { poolId: 'mixed-local-ssh' } }),
+      makeUITask({ id: 'bulk-target', description: 'Already target', workflowId: 'wf-bulk', config: { poolId: 'pnpm-ssh' } }),
+      makeUITask({ id: 'bulk-unpooled', description: 'Unpooled', workflowId: 'wf-bulk' }),
+    ]);
+
+    expect(screen.getByTestId('bulk-pool-scope-select')).toHaveValue('loaded-non-merge');
+    expect(screen.getByTestId('bulk-pool-preview')).toHaveTextContent('Will move 2 tasks');
+    expect(screen.getByTestId('bulk-pool-preview')).toHaveTextContent('Skips: 1 merge node, 1 task already in destination, 1 task outside source pool.');
+
+    fireEvent.click(screen.getByTestId('bulk-pool-confirm'));
+
+    await waitFor(() => {
+      expect(mock.api.editTaskPool).toHaveBeenCalledTimes(2);
+    });
+    expect(mock.api.editTaskPool).toHaveBeenCalledWith('bulk-alpha', 'pnpm-ssh');
+    expect(mock.api.editTaskPool).toHaveBeenCalledWith('bulk-beta', 'pnpm-ssh');
+    expect(mock.api.editTaskPool).not.toHaveBeenCalledWith('bulk-merge', 'pnpm-ssh');
+    await waitFor(() => {
+      expect(screen.getByTestId('bulk-pool-result')).toHaveTextContent('Moved 2 tasks. Skipped 3 tasks. Failed 0 tasks.');
+    });
+  });
+
+  it('bulk pool reassignment continues after a task pool edit fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const editTaskPoolMock = mock.api.editTaskPool as Mock;
+    editTaskPoolMock.mockImplementation(async (taskId: string) => {
+      if (taskId === 'bulk-beta') {
+        throw new Error('pool is locked');
+      }
+      return {
+        ok: true,
+        accepted: true,
+        intentId: 1,
+        workflowId: 'wf-bulk',
+        channel: 'invoker:edit-task-pool',
+      };
+    });
+
+    await openBulkPoolReassignmentDialog(mock, [
+      makeUITask({ id: 'bulk-alpha', description: 'Alpha', workflowId: 'wf-bulk', config: { poolId: 'mixed-local-ssh' } }),
+      makeUITask({ id: 'bulk-beta', description: 'Beta', workflowId: 'wf-bulk', config: { poolId: 'mixed-local-ssh' } }),
+    ]);
+
+    fireEvent.click(screen.getByTestId('bulk-pool-confirm'));
+
+    await waitFor(() => {
+      expect(editTaskPoolMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId('bulk-pool-result')).toHaveTextContent('Moved 1 task. Skipped 0 tasks. Failed 1 task.');
+    });
+    expect(screen.getByTestId('bulk-pool-result')).toHaveTextContent('bulk-beta: pool is locked');
   });
 
   it('cycles major keyboard regions with Tab', async () => {
