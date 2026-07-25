@@ -16,6 +16,7 @@
 import { PlanConversation } from './plan-conversation.js';
 import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
 import type { ConversationRepository } from '@invoker/data-store';
+import type { HarnessSessionDriver } from '@invoker/execution-engine';
 import type { LogFn } from '../surface.js';
 
 // ── Types ───────────────────────────────────────────────────────
@@ -135,6 +136,12 @@ export class SessionHandle {
   get conversationMode(): ConversationMode {
     return this.conversation.conversationMode;
   }
+
+  /** Current harness session id, if a session driver has established one. */
+  get harnessSessionId(): string | undefined {
+    return this.conversation.harnessSessionId;
+  }
+
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
     return this.conversation.getDraftedPlan();
@@ -197,6 +204,8 @@ export interface SessionManagerConfig {
   plannerRetryBaseDelayMs?: number;
   /** Opt in to scoping-first conversational planning before YAML drafting. Default: false. */
   conversationalPlanning?: boolean;
+  /** Fired whenever a session establishes or updates its harness session id, so callers can persist it. */
+  onHarnessSessionId?: (id: SessionIdentifier, sessionId: string) => void;
 }
 
 export interface SessionMetrics {
@@ -206,7 +215,15 @@ export interface SessionMetrics {
   active: number;
 }
 
-type SessionOptions = { tool?: string; model?: string; workingDir?: string; mode?: ConversationMode; repoUrl?: string };
+type SessionOptions = {
+  tool?: string;
+  model?: string;
+  workingDir?: string;
+  mode?: ConversationMode;
+  repoUrl?: string;
+  harnessSessionDriver?: HarnessSessionDriver;
+  harnessSessionId?: string;
+};
 
 const defaultLog: LogFn = (component, level, message) => {
   const prefix = `[${component}]`;
@@ -240,6 +257,7 @@ export class SessionManager {
   private readonly plannerRetryLimit?: number;
   private readonly plannerRetryBaseDelayMs?: number;
   private readonly conversationalPlanning: boolean;
+  private readonly onHarnessSessionId?: (id: SessionIdentifier, sessionId: string) => void;
 
   constructor(config: SessionManagerConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -258,6 +276,7 @@ export class SessionManager {
     this.plannerRetryLimit = config.plannerRetryLimit;
     this.plannerRetryBaseDelayMs = config.plannerRetryBaseDelayMs;
     this.conversationalPlanning = config.conversationalPlanning ?? false;
+    this.onHarnessSessionId = config.onHarnessSessionId;
   }
 
   /**
@@ -350,6 +369,9 @@ export class SessionManager {
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
         conversationalPlanning: this.conversationalPlanning,
+        harnessSessionDriver: opts?.harnessSessionDriver,
+        harnessSessionId: opts?.harnessSessionId,
+        onHarnessSessionId: this.onHarnessSessionId ? (sessionId) => this.onHarnessSessionId!(id, sessionId) : undefined,
       });
       await conversation.init(); // Load state from database
       this.log('session-manager', 'info', `[TRACE] Recovery init() done (threadTs=${id.threadTs})`);
@@ -384,6 +406,9 @@ export class SessionManager {
         plannerRetryLimit: this.plannerRetryLimit,
         plannerRetryBaseDelayMs: this.plannerRetryBaseDelayMs,
         conversationalPlanning: this.conversationalPlanning,
+        harnessSessionDriver: opts?.harnessSessionDriver,
+        harnessSessionId: opts?.harnessSessionId,
+        onHarnessSessionId: this.onHarnessSessionId ? (sessionId) => this.onHarnessSessionId!(id, sessionId) : undefined,
       });
       // Don't call init() for new sessions — nothing to load
 
