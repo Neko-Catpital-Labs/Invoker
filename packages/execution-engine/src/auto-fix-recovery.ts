@@ -625,6 +625,7 @@ export function createRecoveryWorker(options: RecoveryWorkerOptions): WorkerRunt
       lifecycleUnsubscribe = options.messageBus?.subscribe<WorkflowLifecycleEvent>(
         Channels.WORKFLOW_LIFECYCLE,
         (event) => {
+          if (!('recoveryWakeup' in event)) return;
           pendingWakeups.push(event.recoveryWakeup);
           runtime.wake('wake');
         },
