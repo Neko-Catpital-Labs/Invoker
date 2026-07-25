@@ -63,6 +63,11 @@ must_contain "$SKILL_MD" "caption each visual proof item with the concrete thing
 
 must_contain "$SKILL_MD" "Use visible markdown sections for review metadata" "make-pr skill must require visible review metadata sections"
 must_contain "$SKILL_MD" "Do not hide" "make-pr skill must forbid details-wrapped review metadata"
+must_contain "$SKILL_MD" "validate-pr-body-local.mjs" "make-pr skill must validate the body against local changed files and diff before publication"
+must_contain "$SKILL_MD" "For a \`refactor\` lane, include one of these exact claims" "make-pr skill must state the refactor unchanged-behavior non-goal requirement"
+must_contain "$SKILL_MD" "CI validates the declared Review Lane and Review Unit against the actual changed files" "make-pr skill must explain CI's diff-aware lane and unit validation"
+must_contain "$SKILL_MD" "### Before" "make-pr skill Architecture guidance must include the required Before subsection"
+must_contain "$SKILL_MD" "### After" "make-pr skill Architecture guidance must include the required After subsection"
 must_contain "$SKILL_MD" "Before/after visual proof images must use distinct local filenames" "make-pr visual proof must prevent before/after basename upload collisions"
 must_contain "$SKILL_MD" 'The uploader keys media by basename inside one upload prefix' "make-pr visual proof must explain why duplicate basenames are unsafe"
 must_contain "$SKILL_MD" "cursor, pointer, hover-only affordance" "make-pr visual proof must call out states static screenshots cannot show"
@@ -90,6 +95,7 @@ must_contain "$SKILL_MD" "Read each live PR (\`gh pr view\` or \`pr://\`) for ti
 must_contain "$SKILL_MD" "aligned stack title prefix" "make-pr skill must require aligned stack titles after publication"
 must_contain "$SKILL_MD" "remote-only head branch name" "make-pr skill must document the Mergify branch-name mismatch case"
 must_contain "$SKILL_MD" "gh pr edit --title ... --body-file ..." "make-pr skill must allow immediate metadata repair when create-pr cannot map the published branch"
+must_contain "$SKILL_MD" "first run \`node scripts/validate-pr-body-local.mjs" "make-pr skill must validate before the gh pr edit escape hatch"
 
 # Broad stack repair must re-audit the full rebuilt stack and fold no-claim fixups.
 must_contain "$SKILL_MD" "diff atomicity blockers are hard failures" "make-pr skill must make stacked diff-atomicity blockers fatal"
