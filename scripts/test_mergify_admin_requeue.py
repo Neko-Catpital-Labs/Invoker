@@ -1,6 +1,8 @@
+import io
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 import scripts.mergify_admin_requeue as requeue
@@ -307,6 +309,55 @@ Failing checks
         stacks = exec_impl.load_candidate_stacks(FakeGh(), "owner/repo", None, [], REQUIRED, "master")
         self.assertEqual(len(stacks), 1)
         self.assertEqual([item.number for item in stacks[0].prs], [1, 2])
+
+    def test_run_cycle_logs_selected_bottom_repair_context(self):
+        args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        stack = StackGroup("s", (pr(2606, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}, latest=mergify()),))
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(exec_impl, "load_candidate_stacks", return_value=(stack,)):
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        should_poll = exec_impl.run_cycle(args)
+        self.assertFalse(should_poll)
+        log = stderr.getvalue()
+        self.assertIn('"event": "admin-bypass-stack"', log)
+        self.assertIn('"event": "admin-bypass-stack-actions"', log)
+        self.assertIn('"kind": "repair_check"', log)
+        self.assertIn('"failed_check"', log)
+        self.assertIn('"pr_number": 2606', log)
+
+    def test_run_cycle_logs_wait_reason_for_unaccepted_upper_stack(self):
+        args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        stack = StackGroup("s", (pr(2604, head="stack/a", latest=mergify()), pr(2605, base="stack/a", labels={"dequeued"})))
+        stderr = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(exec_impl, "load_candidate_stacks", return_value=(stack,)):
+                    with redirect_stderr(stderr):
+                        should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        log = stderr.getvalue()
+        self.assertIn('"event": "admin-bypass-stack-wait"', log)
+        self.assertIn('"reason": "upper-stack-needs-acceptance"', log)
+        self.assertIn('"upper_stack_needs_acceptance": true', log)
+
+    def test_repair_check_logs_work_context(self):
+        stderr = io.StringIO()
+        item = pr(2647, latest=mergify())
+        with mock.patch.object(exec_impl, "github_job_log", return_value="/tmp/pr-body.log"):
+            with mock.patch.object(exec_impl, "checkout_pr_head") as checkout:
+                with mock.patch.object(exec_impl, "run_claude_repair") as repair:
+                    with redirect_stderr(stderr):
+                        exec_impl.repair_check("owner/repo", item, "PR Body")
+        checkout.assert_called_once()
+        repair.assert_called_once()
+        log = stderr.getvalue()
+        self.assertIn('"event": "admin-bypass-repair-check-start"', log)
+        self.assertIn('"check_name": "PR Body"', log)
+        self.assertIn('"log_path": "/tmp/pr-body.log"', log)
+        self.assertIn('"pr_number": 2647', log)
 
     def test_loop_rescans_after_action_then_stops(self):
         args = requeue.parse_args(["--loop", "--poll-seconds", "0"])

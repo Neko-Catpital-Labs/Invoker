@@ -229,6 +229,14 @@ export function createWorkerRuntimeController(options: {
     const saved = options.persistence.getWorkerDesiredState?.(kind);
     return saved?.desiredEnabled ?? options.autoStartKinds.includes(kind);
   };
+  const logWorkerControl = (
+    level: 'info' | 'warn' | 'error' | 'debug',
+    message: string,
+    meta: Record<string, unknown> = {},
+  ): void => {
+    options.deps.logger[level](message, { module: 'worker-control', ...meta });
+  };
+
 
   const rowForKind = (kind: string): WorkerStatusEntry => {
     const definition = options.registry.get(kind);
@@ -268,7 +276,18 @@ export function createWorkerRuntimeController(options: {
   return {
     startAutoStartedWorkers(): void {
       for (const definition of options.registry.list()) {
-        if (!desiredEnabledForKind(definition.kind)) continue;
+        const desiredEnabled = desiredEnabledForKind(definition.kind);
+        if (!desiredEnabled) {
+          logWorkerControl('info', `[worker-control] auto-start skipped for ${definition.kind}`, {
+            worker: definition.kind,
+            desiredEnabled,
+          });
+          continue;
+        }
+        logWorkerControl('info', `[worker-control] auto-starting ${definition.kind}`, {
+          worker: definition.kind,
+          desiredEnabled,
+        });
         this.start(definition.kind, { persistDesiredState: false });
       }
     },

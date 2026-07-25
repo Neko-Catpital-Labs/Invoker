@@ -9,14 +9,14 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Mapping, Sequence
+from typing import Collection, Mapping, Sequence
 try:
     from .mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, MergifyQueueEvent, PrSnapshot, StackGroup, load_mergify_rules
-    from .mergify_admin_requeue_plan import plan_stack_actions
+    from .mergify_admin_requeue_plan import TRUNK, effective_blockers, plan_stack_actions
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, group_stack_prs, parse_stack_metadata, snapshot_from_detail
 except ImportError:
     from mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, MergifyQueueEvent, PrSnapshot, StackGroup, load_mergify_rules
-    from mergify_admin_requeue_plan import plan_stack_actions
+    from mergify_admin_requeue_plan import TRUNK, effective_blockers, plan_stack_actions
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, group_stack_prs, parse_stack_metadata, snapshot_from_detail
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +29,95 @@ def admin_bypass_nudge_body() -> str:
         "but it is missing the `admin-bypass` label. Please tag this PR with `admin-bypass` "
         "before babysitting can continue."
     )
+def log_trace(event: str, **fields: object) -> None:
+    payload = {"event": event, **fields}
+    print(f"TRACE {json.dumps(payload, sort_keys=True)}", file=sys.stderr)
+
+
+def summarize_stack(stack: StackGroup, required_checks: Collection[str], trunk: str) -> dict[str, object]:
+    blockers_by_pr = {
+        pr.number: [
+            {"kind": blocker.kind, "key": blocker.key, "detail": blocker.detail}
+            for blocker in effective_blockers(pr, required_checks, trunk)
+        ]
+        for pr in stack.prs
+    }
+    current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == trunk]
+    bottom = current_bottoms[0] if current_bottoms else None
+    upper_stack_needs_acceptance = bool(bottom) and any(
+        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
+        for pr in stack.prs
+    )
+    return {
+        "stack_id": stack.stack_id,
+        "bottom_pr": bottom.number if bottom else None,
+        "upper_stack_needs_acceptance": upper_stack_needs_acceptance,
+        "prs": [
+            {
+                "number": pr.number,
+                "state": pr.state,
+                "base": pr.base_ref_name,
+                "head": pr.head_ref_name,
+                "head_sha": pr.head_ref_oid,
+                "labels": sorted(pr.labels),
+                "merge_state_status": pr.merge_state_status,
+                "mergeable": pr.mergeable,
+                "draft": pr.is_draft,
+                "latest_mergify": None if not pr.latest_mergify else {
+                    "state": pr.latest_mergify.state,
+                    "head_sha": pr.latest_mergify.head_sha,
+                    "comment_id": pr.latest_mergify.comment_id,
+                    "failing_checks": list(pr.latest_mergify.failing_checks),
+                    "waiting_for": list(pr.latest_mergify.waiting_for),
+                },
+                "blockers": blockers_by_pr[pr.number],
+            }
+            for pr in stack.prs
+        ],
+    }
+
+
+def wait_reason_for_stack(summary: Mapping[str, object]) -> str:
+    if summary.get("upper_stack_needs_acceptance"):
+        return "upper-stack-needs-acceptance"
+    bottom_pr = summary.get("bottom_pr")
+    prs = summary.get("prs")
+    if not isinstance(prs, list):
+        return "no-action"
+    for pr in prs:
+        if not isinstance(pr, Mapping):
+            continue
+        latest = pr.get("latest_mergify")
+        if pr.get("number") == bottom_pr and isinstance(latest, Mapping) and latest.get("state") in {"queued", "merging"}:
+            return "bottom-already-queued"
+        blockers = pr.get("blockers")
+        if not isinstance(blockers, list):
+            continue
+        blocker_kinds = {str(blocker.get("kind")) for blocker in blockers if isinstance(blocker, Mapping)}
+        if "pending_check" in blocker_kinds:
+            return "pending-check"
+        if "merge_hold" in blocker_kinds and len(blocker_kinds) == 1:
+            return "merge-hold-only"
+        if {"draft", "human_review_thread", "missing_check", "closed"} & blocker_kinds:
+            return "blocked-needs-human"
+    return "no-action"
+
+
+def action_payload(action: Action) -> dict[str, object]:
+    return {
+        "kind": action.kind,
+        "pr_number": action.pr_number,
+        "key": action.key,
+        "detail": action.detail,
+    }
+
+
+def stack_action_payload(actions: Sequence[Action]) -> list[dict[str, object]]:
+    return [action_payload(action) for action in actions]
+
+
+def log_stack_summary(event: str, stack: StackGroup, required_checks: Collection[str], trunk: str, **fields: object) -> None:
+    log_trace(event, **fields, summary=summarize_stack(stack, required_checks, trunk))
 
 
 def github_job_log(repo: str, details_url: str, pr_number: int, check_name: str) -> str:
@@ -75,6 +164,16 @@ def repair_check(repo: str, pr: PrSnapshot, check_name: str) -> None:
         f"PR: #{pr.number}\nFailed check: {check_name}\nDetails URL: {details_url}\nJob log path: {log_path}\n"
         f"Latest Mergify event: {json.dumps(latest.__dict__ if latest else None, sort_keys=True)}\n"
     )
+    log_trace(
+        "admin-bypass-repair-check-start",
+        repo=repo,
+        pr_number=pr.number,
+        check_name=check_name,
+        details_url=details_url,
+        log_path=log_path,
+        work_root=str(work_root),
+        head_sha=pr.head_ref_oid,
+    )
     run_claude_repair(work_root, prompt)
 
 
@@ -89,6 +188,16 @@ def repair_conflict(repo: str, pr: PrSnapshot, reason: str) -> None:
         f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
         f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
         f"Head SHA: {pr.head_ref_oid}\nReason: {reason}\n"
+    )
+    log_trace(
+        "admin-bypass-repair-conflict-start",
+        repo=repo,
+        pr_number=pr.number,
+        reason=reason,
+        work_root=str(work_root),
+        base_ref=pr.base_ref_name,
+        head_ref=pr.head_ref_name,
+        head_sha=pr.head_ref_oid,
     )
     run_claude_repair(work_root, prompt)
 
@@ -118,6 +227,7 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
 
 def execute_action(action: Action, repo: str, gh: GhClient, ledger: Ledger, pr_by_number: Mapping[int, PrSnapshot], now: int) -> None:
     pr = pr_by_number[action.pr_number]
+    log_trace("admin-bypass-action-execute", action=action_payload(action))
     if action.kind == "requeue":
         gh.comment(repo, action.pr_number, "@mergifyio queue")
         ledger.record("requeue", action.pr_number, pr.head_ref_oid, action.key, now)
@@ -224,17 +334,35 @@ def run_cycle(args: argparse.Namespace) -> bool:
         print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
         raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
 
+    log_trace(
+        "admin-bypass-scan-start",
+        repo=args.repo,
+        author=args.author,
+        pr_numbers=list(args.pr),
+        dry_run=args.dry_run,
+        json_output=args.json,
+    )
     gh = GhClient()
     stacks = load_candidate_stacks(gh, args.repo, args.author, args.pr, required_checks, trunk)
     ledger = Ledger(Path(args.state_file).expanduser())
     now = int(time.time())
     pr_by_number = {pr.number: pr for stack in stacks for pr in stack.prs}
+    log_trace(
+        "admin-bypass-scan-loaded",
+        stack_count=len(stacks),
+        stack_ids=[stack.stack_id for stack in stacks],
+        candidate_pr_numbers=sorted(pr_by_number),
+    )
     should_poll = False
     for stack in stacks:
+        log_stack_summary("admin-bypass-stack", stack, required_checks, trunk)
         actions = plan_stack_actions(stack, required_checks, ledger, now, args.max_requeue_attempts, args.max_repair_attempts)
         if not actions:
             should_poll = True
+            summary = summarize_stack(stack, required_checks, trunk)
+            log_trace("admin-bypass-stack-wait", reason=wait_reason_for_stack(summary), summary=summary)
             continue
+        log_trace("admin-bypass-stack-actions", stack_id=stack.stack_id, actions=stack_action_payload(actions))
         for action in actions:
             pr = pr_by_number.get(action.pr_number)
             print_action(action, pr, args.dry_run, args.json)
@@ -243,6 +371,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
             execute_action(action, args.repo, gh, ledger, pr_by_number, now)
             if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
                 return True
+    if not stacks:
+        log_trace("admin-bypass-scan-empty")
     return should_poll
 
 

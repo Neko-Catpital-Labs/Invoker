@@ -129,12 +129,14 @@ function controller(
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
 
+  const workerDeps = deps();
   return {
     runtimes,
     persistence: store,
+    deps: workerDeps,
     controller: createWorkerRuntimeController({
       registry,
-      deps: deps(),
+      deps: workerDeps,
       autoStartKinds,
       persistence: store as never,
       canControl: () => true,
@@ -173,6 +175,14 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_LAND_WORKER_KIND)?.lifecycle).toBe('stopped');
+    expect(setup.deps.logger.info).toHaveBeenCalledWith(
+      `[worker-control] auto-start skipped for ${PR_ADMIN_BYPASS_LAND_WORKER_KIND}`,
+      expect.objectContaining({
+        module: 'worker-control',
+        worker: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+        desiredEnabled: false,
+      }),
+    );
   });
 
   it('restores saved desired worker states over built-in launch defaults', () => {
