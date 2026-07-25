@@ -610,7 +610,12 @@ export class PlanConversation {
 
   /** Returns the last complete YAML plan drafted in this conversation, or null. */
   getDraftedPlan(): string | null {
-    return this.readPlanDraftFile() ?? this.extractLastPlanFromMessages() ?? this.lastKnownGoodPlanText;
+    // Gate the file draft the same way sendMessage does: a truncated or
+    // incomplete draft file (parses but cannot be summarized) must not shadow
+    // a valid inline plan — that would post a draft with no Approve button.
+    const fileDraft = this.readPlanDraftFile();
+    if (fileDraft && summarizePlanText(fileDraft)) return fileDraft;
+    return this.extractLastPlanFromMessages() ?? this.lastKnownGoodPlanText;
   }
 
   // The planner writes the full YAML plan here so its chat reply can stay a
