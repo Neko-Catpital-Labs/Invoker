@@ -90,7 +90,9 @@ Each implementation task must include these description headings:
 - `Review claim:` the one sentence a reviewer is being asked to approve.
 - `Review lane:` exactly one of `behavior`, `refactor`, `proof`, `cleanup`,
   `policy`, or `docs`.
-- `Safety invariant:` why this slice is safe to review locally.
+- `Safety invariant:` why this slice is safe to review locally. State the
+  behavior or boundary that remains protected by this slice, then propose it to
+  the user for confirmation or correction before submitting the plan.
 - `Slice rationale:` why this slice is separate from neighboring work.
 - `Architectural effect:` what changes in control flow, data flow, ownership,
   dependency direction, or public surface.
