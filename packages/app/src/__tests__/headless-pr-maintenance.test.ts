@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
@@ -93,21 +93,30 @@ describe('headless worker PR-maintenance', () => {
       .rejects.toThrow('Unknown worker kind');
   });
 
-  it('rejects the retired pr-admin-bypass-land worker', async () => {
+  it('runs the pr-admin-bypass-land worker when PR maintenance is enabled', async () => {
     writeCronScript(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh', 'land.marker');
 
     await expect(runHeadless(['worker', PR_ADMIN_BYPASS_LAND_WORKER_KIND], makeWorkerDeps(repoRoot, 'land-token') as never))
-      .rejects.toThrow('Unknown worker kind');
+      .resolves.toBeUndefined();
+  });
+  
+  it('threads repoRoot and env into the pr-admin-bypass worker shell tick', async () => {
+    writeCronScript(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh', 'land.marker');
+
+    await runHeadless(['worker', PR_ADMIN_BYPASS_LAND_WORKER_KIND], makeWorkerDeps(repoRoot, 'land-token') as never);
+
+    expect(stdout).toContain(`${PR_ADMIN_BYPASS_LAND_WORKER_KIND} worker scan completed.`);
+    expect(readFileSync(join(repoRoot, 'land.marker'), 'utf8')).toBe('land-token');
   });
 
 
-  it('does not list retired PR-maintenance worker kinds', async () => {
+  it('lists the active admin-bypass worker but not the other retired PR-maintenance kinds', async () => {
     await runHeadless(['worker', 'list'], { invokerConfig: {} } as never);
 
     expect(stdout).toContain('Worker kinds');
     expect(stdout).not.toContain(CODERABBIT_ADDRESS_WORKER_KIND);
     expect(stdout).not.toContain(PR_CONFLICT_REBASE_WORKER_KIND);
     expect(stdout).not.toContain(PR_CI_FAILURE_SCAN_WORKER_KIND);
-    expect(stdout).not.toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
+    expect(stdout).toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
   });
 });

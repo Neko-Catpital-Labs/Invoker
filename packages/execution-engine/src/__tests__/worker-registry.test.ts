@@ -16,6 +16,7 @@ import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 import { PR_SUMMARY_REFRESH_WORKER_KIND } from '../workers/pr-summary-refresh-worker.js';
 import { PR_QUEUE_DEQUEUE_PUBLISHER_WORKER_KIND } from '../workers/pr-queue-dequeue-publisher-worker.js';
 import { PR_QUEUE_LAND_WORKER_KIND } from '../workers/pr-queue-land-worker.js';
+import { PR_ADMIN_BYPASS_LAND_WORKER_KIND } from '../workers/pr-maintenance-workers.js';
 import { PR_REVIEW_COMMENTS_PUBLISHER_WORKER_KIND } from '../workers/pr-review-comments-publisher-worker.js';
 import { DISK_HEADROOM_WORKER_KIND } from '../workers/disk-headroom-worker.js';
 import { REQUEUE_WORKER_KIND } from '../workers/requeue-worker.js';
@@ -78,6 +79,7 @@ describe('worker registry', () => {
       REVIEW_COMMENTS_WORKER_KIND,
       PR_QUEUE_DEQUEUE_PUBLISHER_WORKER_KIND,
       PR_QUEUE_LAND_WORKER_KIND,
+      PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       CI_FAILURE_WORKER_KIND,
       REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
       DISK_HEADROOM_WORKER_KIND,
@@ -95,6 +97,7 @@ describe('worker registry', () => {
     expect(registry.get(PR_QUEUE_DEQUEUE_PUBLISHER_WORKER_KIND)).toBeDefined();
     expect(registry.get(REVIEW_COMMENTS_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_QUEUE_LAND_WORKER_KIND)).toBeDefined();
+    expect(registry.get(PR_ADMIN_BYPASS_LAND_WORKER_KIND)).toBeDefined();
     expect(registry.get(DISK_HEADROOM_WORKER_KIND)).toBeDefined();
     expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
     expect(registry.get(E2E_AUTOFIX_WORKER_KIND)).toBeDefined();

@@ -18,6 +18,7 @@ import {
   CI_FAILURE_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
   PR_QUEUE_DEQUEUE_PUBLISHER_WORKER_KIND,
   PR_QUEUE_LAND_WORKER_KIND,
@@ -48,17 +49,21 @@ export const ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS = [
   AUTO_APPROVE_WORKER_KIND,
 ] as const;
 
-export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS: readonly string[] = [];
+export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+] as const;
 
-export function autoStartedOwnerWorkerKinds(_options?: { prMaintenanceEnabled: boolean }): readonly string[] {
-  return ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS;
+export function autoStartedOwnerWorkerKinds(options?: { prMaintenanceEnabled: boolean }): readonly string[] {
+  return options?.prMaintenanceEnabled
+    ? [...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, ...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS]
+    : ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS;
 }
 
 /** Convenience wrapper: derive the auto-start list straight from Invoker config. */
 export function autoStartedOwnerWorkerKindsForConfig(
-  _config?: { prMaintenance?: { enabled?: boolean } },
+  config?: { prMaintenance?: { enabled?: boolean } },
 ): readonly string[] {
-  return autoStartedOwnerWorkerKinds();
+  return autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled) });
 }
 
 export interface WorkerRuntimeController {

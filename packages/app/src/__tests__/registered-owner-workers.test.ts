@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
   createWorkerRegistry,
@@ -97,7 +98,7 @@ describe('retired PR-maintenance worker configuration', () => {
     expect(deps.prMaintenance).toEqual({ intervalMs: 90000, shell: '/bin/bash' });
   });
 
-  it('does not register any PR-maintenance worker when the legacy config is enabled', () => {
+  it('registers only the still-supported admin-bypass PR-maintenance worker', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
     const deps = buildOwnerWorkerDeps({
       prMaintenance: { enabled: true, intervalMs: 90000 },
@@ -107,5 +108,6 @@ describe('retired PR-maintenance worker configuration', () => {
     expect(registry.get(CODERABBIT_ADDRESS_WORKER_KIND)).toBeUndefined();
     expect(registry.get(PR_CONFLICT_REBASE_WORKER_KIND)).toBeUndefined();
     expect(registry.get(PR_CI_FAILURE_SCAN_WORKER_KIND)).toBeUndefined();
+    expect(registry.get(PR_ADMIN_BYPASS_LAND_WORKER_KIND)).toBeDefined();
   });
 });

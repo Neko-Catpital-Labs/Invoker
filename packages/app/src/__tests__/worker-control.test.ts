@@ -3,6 +3,7 @@ import {
   AUTO_FIX_WORKER_KIND,
   CI_FAILURE_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   createWorkerRegistry,
   PR_QUEUE_DEQUEUE_PUBLISHER_WORKER_KIND,
   PR_QUEUE_LAND_WORKER_KIND,
@@ -122,6 +123,7 @@ function controller(
   register(REVIEW_COMMENTS_WORKER_KIND, 'Repairs review comments.');
   register(PR_QUEUE_DEQUEUE_PUBLISHER_WORKER_KIND, 'Publishes Mergify dequeue events.');
   register(PR_QUEUE_LAND_WORKER_KIND, 'Repairs dequeued PRs.');
+  register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Babysits admin-bypass landing stacks.');
   register(REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND, 'Orders rebase-recreate on merge conflicts.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
@@ -155,13 +157,14 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === REVIEW_COMMENTS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_QUEUE_DEQUEUE_PUBLISHER_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_QUEUE_LAND_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_LAND_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.startable).toBe(true);
     expect(snapshot.workers.find((worker) => worker.kind === AUTO_FIX_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
 
-  it('does not auto-start retired PR-maintenance worker kinds', () => {
+  it('does not auto-start the admin-bypass worker when PR maintenance is disabled', () => {
     const setup = controller(autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: false }));
 
     setup.controller.startAutoStartedWorkers();
@@ -169,6 +172,7 @@ describe('createWorkerRuntimeController', () => {
 
     expect(snapshot.workers.find((worker) => worker.kind === REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_LAND_WORKER_KIND)?.lifecycle).toBe('stopped');
   });
 
   it('restores saved desired worker states over built-in launch defaults', () => {

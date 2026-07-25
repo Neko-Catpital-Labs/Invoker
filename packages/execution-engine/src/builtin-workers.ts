@@ -5,6 +5,7 @@ import type { WorkerRegistry } from './worker-registry.js';
 import { registerCiFailureWorker } from './workers/ci-failure-worker.js';
 import { registerE2eAutoFixWorker } from './workers/e2e-autofix-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
+import { registerPrAdminBypassLandWorker } from './workers/pr-maintenance-workers.js';
 import { registerPrSummaryRefreshWorker } from './workers/pr-summary-refresh-worker.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 import { registerPrQueueLandWorker } from './workers/pr-queue-land-worker.js';
@@ -28,6 +29,7 @@ export function registerBuiltinWorkers(
   registerReviewCommentsWorker(registry);
   registerPrQueueDequeuePublisherWorker(registry);
   registerPrQueueLandWorker(registry);
+  registerPrAdminBypassLandWorker(registry);
   registerCiFailureWorker(registry);
   registerReviewGateMergeConflictWorker(registry);
   registerDiskHeadroomWorker(registry);
