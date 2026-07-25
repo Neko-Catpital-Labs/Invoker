@@ -103,6 +103,8 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
         publishReviewGateCiFailedLifecycleEvent(trigger, {
           messageBus: deps.messageBus,
           getTask: (taskId) => deps.orchestrator.getTask(taskId),
+          prMirrorStore: deps.persistence,
+          logger: deps.logger,
         });
       },
     },
@@ -111,6 +113,8 @@ export function rebuildTaskRunner(deps: TaskRunnerWiringDeps): TaskRunner {
         publishReviewGateMergeConflictLifecycleEvent(trigger, {
           messageBus: deps.messageBus,
           getTask: (taskId) => deps.orchestrator.getTask(taskId),
+          prMirrorStore: deps.persistence,
+          logger: deps.logger,
         });
       },
     },

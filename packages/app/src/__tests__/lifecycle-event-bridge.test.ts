@@ -265,6 +265,63 @@ describe('lifecycle event bridge', () => {
     expect(isWorkflowLifecycleEvent(events[0])).toBe(true);
   });
 
+  it('upserts pr_mirrors before publishing review-gate CI failure wakeups', () => {
+    const bus = new LocalBus();
+    const order: string[] = [];
+    bus.subscribe(Channels.WORKFLOW_LIFECYCLE, () => {
+      order.push('publish');
+    });
+    const upsertPrMirror = vi.fn((mirror) => {
+      order.push('upsert');
+      return mirror;
+    });
+    const task = makeTask({
+      id: 'wf-1/merge',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        generation: 7,
+        selectedAttemptId: 'attempt-merge',
+        reviewId: '123',
+        branch: 'feature/ci-red',
+      },
+      taskStateVersion: 12,
+    });
+
+    publishReviewGateCiFailedLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      reviewId: '123',
+      reviewUrl: 'https://github.com/owner/repo/pull/123',
+      headSha: 'abc123',
+      headRef: 'feature/ci-red',
+      branch: 'feature/ci-red',
+      mergeState: 'clean',
+      selectedAttemptId: 'attempt-merge',
+      generation: 7,
+      failedChecks: [
+        { name: 'test-all', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/runs/1' },
+      ],
+      statusText: 'CI failed',
+    }, {
+      messageBus: bus,
+      getTask: () => task,
+      prMirrorStore: { upsertPrMirror },
+      now: () => CREATED_AT_DATE,
+    });
+
+    expect(order).toEqual(['upsert', 'publish']);
+    expect(upsertPrMirror).toHaveBeenCalledWith({
+      repo: 'owner/repo',
+      prNumber: 123,
+      headSha: 'abc123',
+      mergeState: 'clean',
+      workflowId: 'wf-1',
+      blockersJson: JSON.stringify({ kind: 'ci_failed', failedChecks: ['test-all'] }),
+      updatedAt: CREATED_AT,
+    });
+  });
+
   it('fills review-gate CI failure attempt context from persisted task state', () => {
     const bus = new LocalBus();
     const events = collectLifecycleEvents(bus);
@@ -360,6 +417,64 @@ describe('lifecycle event bridge', () => {
     });
     expectRecoveryWakeup(events[0], { reason: 'review_gate_failure' });
     expect(isWorkflowLifecycleEvent(events[0])).toBe(true);
+  });
+
+  it('upserts pr_mirrors before publishing review-gate merge conflict wakeups', () => {
+    const bus = new LocalBus();
+    const order: string[] = [];
+    bus.subscribe(Channels.WORKFLOW_LIFECYCLE, () => {
+      order.push('publish');
+    });
+    const upsertPrMirror = vi.fn((mirror) => {
+      order.push('upsert');
+      return mirror;
+    });
+    const task = makeTask({
+      id: 'wf-1/merge',
+      status: 'review_ready',
+      config: { workflowId: 'wf-1', isMergeNode: true },
+      execution: {
+        generation: 7,
+        selectedAttemptId: 'attempt-merge',
+        reviewId: 'owner/repo#123',
+        branch: 'feature/merge-conflict',
+      },
+      taskStateVersion: 12,
+    });
+
+    publishReviewGateMergeConflictLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/merge',
+      reviewId: 'owner/repo#123',
+      reviewUrl: 'https://github.com/owner/repo/pull/123',
+      headSha: 'abc123',
+      headRef: 'feature/merge-conflict',
+      branch: 'feature/merge-conflict',
+      mergeState: 'dirty',
+      baseRef: 'main',
+      labelsJson: '["admin-bypass"]',
+      selectedAttemptId: 'attempt-merge',
+      generation: 7,
+      statusText: 'Awaiting review',
+    }, {
+      messageBus: bus,
+      getTask: () => task,
+      prMirrorStore: { upsertPrMirror },
+      now: () => CREATED_AT_DATE,
+    });
+
+    expect(order).toEqual(['upsert', 'publish']);
+    expect(upsertPrMirror).toHaveBeenCalledWith({
+      repo: 'owner/repo',
+      prNumber: 123,
+      headSha: 'abc123',
+      baseRef: 'main',
+      mergeState: 'dirty',
+      labelsJson: '["admin-bypass"]',
+      workflowId: 'wf-1',
+      blockersJson: JSON.stringify({ kind: 'merge_conflict' }),
+      updatedAt: CREATED_AT,
+    });
   });
 
   it('unsubscribes cleanly', () => {

@@ -220,12 +220,20 @@ describe('task-runner-wiring', () => {
     await config.reviewGateCiFailurePublisher.publish({ taskId: 'merge-task' });
     expect(publishReviewGateCiFailedLifecycleEvent).toHaveBeenCalledWith(
       { taskId: 'merge-task' },
-      expect.objectContaining({ messageBus: expect.any(Object), getTask: expect.any(Function) }),
+      expect.objectContaining({
+        messageBus: expect.any(Object),
+        getTask: expect.any(Function),
+        prMirrorStore: persistence,
+      }),
     );
     await config.reviewGateMergeConflictPublisher.publish({ taskId: 'merge-task' });
     expect(publishReviewGateMergeConflictLifecycleEvent).toHaveBeenCalledWith(
       { taskId: 'merge-task' },
-      expect.objectContaining({ messageBus: expect.any(Object), getTask: expect.any(Function) }),
+      expect.objectContaining({
+        messageBus: expect.any(Object),
+        getTask: expect.any(Function),
+        prMirrorStore: persistence,
+      }),
     );
 
     const approveHook = orchestrator.setBeforeApproveHook.mock.calls[0]?.[0];

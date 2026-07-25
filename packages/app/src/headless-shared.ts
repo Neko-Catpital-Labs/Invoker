@@ -166,6 +166,8 @@ export function createHeadlessExecutor(
         publishReviewGateCiFailedLifecycleEvent(trigger, {
           messageBus: deps.messageBus,
           getTask: (taskId) => deps.orchestrator.getTask(taskId),
+          prMirrorStore: deps.persistence,
+          logger: deps.logger,
         });
       },
     },
@@ -174,6 +176,8 @@ export function createHeadlessExecutor(
         publishReviewGateMergeConflictLifecycleEvent(trigger, {
           messageBus: deps.messageBus,
           getTask: (taskId) => deps.orchestrator.getTask(taskId),
+          prMirrorStore: deps.persistence,
+          logger: deps.logger,
         });
       },
     },

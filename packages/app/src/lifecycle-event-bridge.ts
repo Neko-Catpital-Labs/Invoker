@@ -1,3 +1,4 @@
+import type { PrMirrorRow } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
 import type { TaskDelta, TaskState, TaskStatus } from '@invoker/workflow-core';
 import {
@@ -18,10 +19,15 @@ interface LifecycleTaskMetadata {
   readonly attemptId?: string;
 }
 
+export interface PrMirrorUpsertStore {
+  upsertPrMirror(mirror: PrMirrorRow): PrMirrorRow;
+}
+
 export interface LifecycleEventBridgeOptions {
   readonly messageBus: MessageBus;
   readonly getInitialTasks?: () => readonly TaskState[];
   readonly getTask?: (taskId: string) => TaskState | undefined;
+  readonly prMirrorStore?: PrMirrorUpsertStore;
   readonly now?: () => Date;
   readonly logger?: {
     warn(message: string, details?: Record<string, unknown>): void;
@@ -42,6 +48,9 @@ export interface ReviewGateCiFailedWakeupInput {
   readonly headSha?: string;
   readonly headRef?: string;
   readonly branch?: string;
+  readonly baseRef?: string;
+  readonly mergeState?: string;
+  readonly labelsJson?: string;
   readonly selectedAttemptId?: string;
   readonly generation: number;
   readonly failedChecks: readonly ReviewGateFailedCheck[];
@@ -58,6 +67,9 @@ export interface ReviewGateMergeConflictWakeupInput {
   readonly headSha?: string;
   readonly headRef?: string;
   readonly branch?: string;
+  readonly baseRef?: string;
+  readonly mergeState?: string;
+  readonly labelsJson?: string;
   readonly selectedAttemptId?: string;
   readonly generation: number;
   readonly statusText: string;
@@ -91,7 +103,7 @@ export function startLifecycleEventBridge(options: LifecycleEventBridgeOptions):
 
 export function publishReviewGateCiFailedLifecycleEvent(
   input: ReviewGateCiFailedWakeupInput,
-  options: Pick<LifecycleEventBridgeOptions, 'messageBus' | 'getTask' | 'now'>,
+  options: Pick<LifecycleEventBridgeOptions, 'messageBus' | 'getTask' | 'prMirrorStore' | 'now' | 'logger'>,
 ): WorkflowLifecycleEvent | undefined {
   const currentTask = options.getTask?.(input.taskId);
   const status = input.status ?? currentTask?.status;
@@ -115,13 +127,18 @@ export function publishReviewGateCiFailedLifecycleEvent(
     attemptId,
     createdAt: options.now?.(),
   });
+  upsertReviewGatePrMirrorBeforePublish({
+    kind: 'ci_failed',
+    input,
+    options,
+  });
   options.messageBus.publish(Channels.WORKFLOW_LIFECYCLE, event);
   return event;
 }
 
 export function publishReviewGateMergeConflictLifecycleEvent(
   input: ReviewGateMergeConflictWakeupInput,
-  options: Pick<LifecycleEventBridgeOptions, 'messageBus' | 'getTask' | 'now'>,
+  options: Pick<LifecycleEventBridgeOptions, 'messageBus' | 'getTask' | 'prMirrorStore' | 'now' | 'logger'>,
 ): WorkflowLifecycleEvent | undefined {
   const currentTask = options.getTask?.(input.taskId);
   const status = input.status ?? currentTask?.status;
@@ -144,8 +161,68 @@ export function publishReviewGateMergeConflictLifecycleEvent(
     attemptId,
     createdAt: options.now?.(),
   });
+  upsertReviewGatePrMirrorBeforePublish({
+    kind: 'merge_conflict',
+    input,
+    options,
+  });
   options.messageBus.publish(Channels.WORKFLOW_LIFECYCLE, event);
   return event;
+}
+
+export function resolveReviewGatePrIdentity(
+  reviewUrl: string,
+  reviewId: string,
+): { repo: string; prNumber: number } | undefined {
+  const fromUrl = reviewUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/i);
+  if (fromUrl?.[1] && fromUrl[2]) {
+    return { repo: fromUrl[1], prNumber: Number(fromUrl[2]) };
+  }
+  const fromId = reviewId.match(/^([^/#]+\/[^/#]+)#(\d+)$/);
+  if (fromId?.[1] && fromId[2]) {
+    return { repo: fromId[1], prNumber: Number(fromId[2]) };
+  }
+  return undefined;
+}
+
+function upsertReviewGatePrMirrorBeforePublish(args: {
+  readonly kind: 'ci_failed' | 'merge_conflict';
+  readonly input: ReviewGateCiFailedWakeupInput | ReviewGateMergeConflictWakeupInput;
+  readonly options: Pick<LifecycleEventBridgeOptions, 'prMirrorStore' | 'now' | 'logger'>;
+}): void {
+  const store = args.options.prMirrorStore;
+  if (!store) return;
+
+  const identity = resolveReviewGatePrIdentity(args.input.reviewUrl, args.input.reviewId);
+  if (!identity || !args.input.headSha) {
+    args.options.logger?.warn('skipping pr_mirrors upsert before review-gate lifecycle publish', {
+      module: 'lifecycle-event-bridge',
+      kind: args.kind,
+      reviewId: args.input.reviewId,
+      reviewUrl: args.input.reviewUrl,
+      headSha: args.input.headSha,
+    });
+    return;
+  }
+
+  const updatedAt = (args.options.now?.() ?? new Date()).toISOString();
+  const blockers: Record<string, unknown> = { kind: args.kind };
+  if (args.kind === 'ci_failed' && 'failedChecks' in args.input) {
+    blockers.failedChecks = args.input.failedChecks.map((check) => check.name);
+  }
+
+  const mirror: PrMirrorRow = {
+    repo: identity.repo,
+    prNumber: identity.prNumber,
+    headSha: args.input.headSha,
+    ...(args.input.baseRef ? { baseRef: args.input.baseRef } : {}),
+    ...(args.input.mergeState ? { mergeState: args.input.mergeState } : {}),
+    ...(args.input.labelsJson ? { labelsJson: args.input.labelsJson } : {}),
+    workflowId: args.input.workflowId,
+    blockersJson: JSON.stringify(blockers),
+    updatedAt,
+  };
+  store.upsertPrMirror(mirror);
 }
 
 function buildEventForTaskDelta(
