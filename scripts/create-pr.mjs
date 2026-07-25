@@ -237,7 +237,7 @@ async function assertValidPrBody(body, options = {}) {
         : '',
       '',
       'Start from scripts/pr-body-template.md and validate with:',
-      '  node scripts/validate-pr-body.mjs --body-file <file>',
+      '  node scripts/validate-pr-body-local.mjs --body-file <file> --base <base-branch>',
     ].join('\n'),
   );
 }

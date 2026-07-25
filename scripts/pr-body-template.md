@@ -29,6 +29,8 @@ Explain why this work is split here instead of bundled elsewhere.
 
 List what this slice explicitly does not change.
 
+For a `refactor` Review Lane, include: `No behavior change.` (or an equivalent accepted unchanged-behavior claim).
+
 ## Architecture
 
 Only keep this section if the change affects component interactions, control flow, or data flow.
