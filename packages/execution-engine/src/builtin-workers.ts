@@ -8,6 +8,7 @@ import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
 import { registerPrSummaryRefreshWorker } from './workers/pr-summary-refresh-worker.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 import { registerPrQueueLandWorker } from './workers/pr-queue-land-worker.js';
+import { registerPrReviewCommentsPublisherWorker } from './workers/pr-review-comments-publisher-worker.js';
 import { registerRequeueWorker } from './workers/requeue-worker.js';
 import { registerReviewCommentsWorker } from './workers/review-comments-worker.js';
 import { registerReviewGateMergeConflictWorker } from './workers/review-gate-merge-conflict-worker.js';
@@ -24,6 +25,7 @@ export function registerBuiltinWorkers(
   registerPrSummaryRefreshWorker(registry);
   registerCiFailureWorker(registry);
   registerReviewGateMergeConflictWorker(registry);
+  registerPrReviewCommentsPublisherWorker(registry);
   registerReviewCommentsWorker(registry);
   registerPrQueueLandWorker(registry);
   registerDiskHeadroomWorker(registry);

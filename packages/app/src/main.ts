@@ -245,7 +245,11 @@ import {
   registerTerminalSessionPersistence,
   type TerminalSessionPersistenceHandle,
 } from './terminal-session-ipc.js';
-import { startLifecycleEventBridge, type LifecycleEventBridge } from './lifecycle-event-bridge.js';
+import {
+  publishPrReviewCommentsLifecycleEvent,
+  startLifecycleEventBridge,
+  type LifecycleEventBridge,
+} from './lifecycle-event-bridge.js';
 import { seedMainProcessHitchFixture } from './main-process-hitch-fixture.js';
 import { seedStressFixture, type StressFixtureOptions } from './stress-fixture.js';
 import {
@@ -327,6 +331,14 @@ function buildRegisteredOwnerWorkerDeps(
     },
     logger,
     messageBus,
+    prLifecyclePublisher: {
+      publishReviewComments: (input) => {
+        publishPrReviewCommentsLifecycleEvent(input, {
+          messageBus,
+          prMirrorStore: store,
+        });
+      },
+    },
     reviewGate: {
       checkMergeGateStatuses,
     },

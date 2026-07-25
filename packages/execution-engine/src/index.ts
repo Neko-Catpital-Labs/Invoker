@@ -71,6 +71,7 @@ export * from './workers/pr-maintenance-workers.js';
 export * from './workers/review-gate-merge-conflict-worker.js';
 export * from './workers/review-comments-worker.js';
 export * from './workers/pr-queue-land-worker.js';
+export * from './workers/pr-review-comments-publisher-worker.js';
 export * from './workers/e2e-autofix-worker.js';
 export * from './workers/requeue-worker.js';
 export * from './workers/workflow-resume-worker.js';

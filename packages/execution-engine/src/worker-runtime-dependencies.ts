@@ -31,6 +31,7 @@ import type {
 import type { PrSummaryRefreshWorkerStore } from './workers/pr-summary-refresh-worker.js';
 import type { ReviewCommentsWorkerStore, ReviewCommentsWorkerPolicyOptions } from './workers/review-comments-worker.js';
 import type { PrQueueLandWorkerStore, PrQueueLandWorkerPolicyOptions } from './workers/pr-queue-land-worker.js';
+import type { PrReviewCommentsPublisherInput } from './workers/pr-review-comments-publisher-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -58,6 +59,9 @@ export interface WorkerRuntimeDependencies {
   logger: Logger;
   /** Optional bus that turns lifecycle events into immediate wakeups. */
   messageBus?: MessageBus;
+  prLifecyclePublisher?: {
+    publishReviewComments(input: PrReviewCommentsPublisherInput): void;
+  };
   /** Review-gate polling surface owned by the task runner. */
   reviewGate?: PrStatusReviewGate;
   /** Provider IO surface for workers that need to update published reviews. */
