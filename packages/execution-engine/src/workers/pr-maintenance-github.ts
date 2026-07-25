@@ -10,6 +10,12 @@ export interface CoderabbitComment {
   htmlUrl: string | null;
 }
 
+export interface PullRequestIssueComment {
+  id: string;
+  body: string;
+  updatedAt: string;
+}
+
 /** Options for {@link createPrMaintenanceGitHub}. */
 export interface PrMaintenanceGitHubOptions {
   /** Runs `gh` (and only `gh`) subcommands. */
@@ -35,6 +41,7 @@ export interface PrMaintenanceGitHub {
   viewPullRequest(num: number, fields: string[]): Promise<Record<string, unknown>>;
   /** CodeRabbit inline + summary comments authored by `login`. Tolerant of endpoint failure. */
   fetchCoderabbitComments(num: number, login: string): Promise<CoderabbitComment[]>;
+  fetchIssueComments(num: number): Promise<PullRequestIssueComment[]>;
   /** `gh pr comment`; `true` only when the comment actually posted. */
   postPullRequestComment(num: number, body: string): Promise<boolean>;
 }
@@ -121,6 +128,15 @@ export function createPrMaintenanceGitHub(options: PrMaintenanceGitHubOptions): 
         });
       }
       return comments;
+    },
+
+    async fetchIssueComments(num): Promise<PullRequestIssueComment[]> {
+      const comments = await fetchEndpoint(`repos/${repo}/issues/${num}/comments`);
+      return comments.map((raw) => ({
+        id: String(raw.id ?? ''),
+        body: asString(raw.body),
+        updatedAt: asString(raw.updated_at),
+      })).filter((comment) => comment.id.length > 0);
     },
 
     async postPullRequestComment(num, body): Promise<boolean> {

@@ -246,6 +246,7 @@ import {
   type TerminalSessionPersistenceHandle,
 } from './terminal-session-ipc.js';
 import {
+  publishPrQueueDequeuedLifecycleEvent,
   publishPrReviewCommentsLifecycleEvent,
   startLifecycleEventBridge,
   type LifecycleEventBridge,
@@ -334,6 +335,12 @@ function buildRegisteredOwnerWorkerDeps(
     prLifecyclePublisher: {
       publishReviewComments: (input) => {
         publishPrReviewCommentsLifecycleEvent(input, {
+          messageBus,
+          prMirrorStore: store,
+        });
+      },
+      publishQueueDequeued: (input) => {
+        publishPrQueueDequeuedLifecycleEvent(input, {
           messageBus,
           prMirrorStore: store,
         });
