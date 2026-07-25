@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, validatePrBody, validatePrScope } from './validate-pr-body.mjs';
 
@@ -15,6 +16,8 @@ function assert(condition, message) {
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..');
+const require = createRequire(import.meta.url);
+const runtimeNodeModules = require.resolve('jsdom/package.json').split('/node_modules/')[0] + '/node_modules';
 
 function runValidatorCli(bodyFile) {
   return spawnSync(process.execPath, ['scripts/validate-pr-body.mjs', '--body-file', bodyFile], {
@@ -1037,10 +1040,13 @@ try {
   };
   const sourceFile = join(localWrapperTmp, 'packages', 'app', 'src', 'refresh-route.ts');
   const bodyPath = join(localWrapperTmp, 'body.md');
+  const reviewUnitRulesPath = join(localWrapperTmp, 'scripts', 'review-unit-rules.mjs');
 
   runGit(['init', '--initial-branch=master']);
   runGit(['config', 'user.email', 'pr-body-test@example.test']);
   runGit(['config', 'user.name', 'PR Body Test']);
+  cpSync(join(repoRoot, 'scripts'), join(localWrapperTmp, 'scripts'), { recursive: true });
+  symlinkSync(runtimeNodeModules, join(localWrapperTmp, 'node_modules'), 'dir');
   mkdirSync(dirname(sourceFile), { recursive: true });
   writeFileSync(sourceFile, 'export const refreshRoute = 1;\n');
   runGit(['add', '.']);
@@ -1082,6 +1088,31 @@ try {
   assert(
     reviewUnitLocalWrapper.stderr.includes('Review Unit "contract" cannot ship with routing files'),
     'local wrapper should report the CI review-unit file mismatch',
+  );
+
+  runGit(['switch', '-c', 'trusted-base-classifier', 'master']);
+  const sentinelPath = join(localWrapperTmp, 'scripts', 'sentinel.mjs');
+  writeFileSync(bodyPath, validMinimal.replace('- behavior', '- policy').replace('- routing', '- tooling-policy'));
+  writeFileSync(sentinelPath, 'export const sentinel = true;\n');
+  const headReviewRules = readFileSync(reviewUnitRulesPath, 'utf8').replace(
+    "if (path.startsWith('scripts/')) return ['tooling-policy'];",
+    "if (path === 'scripts/sentinel.mjs') return ['docs'];\n  if (path.startsWith('scripts/')) return ['tooling-policy'];",
+  );
+  assert(headReviewRules.includes("if (path === 'scripts/sentinel.mjs') return ['docs'];"), 'test must change the head-only classifier');
+  writeFileSync(
+    reviewUnitRulesPath,
+    headReviewRules,
+  );
+  runGit(['add', 'scripts/review-unit-rules.mjs', 'scripts/sentinel.mjs']);
+  runGit(['commit', '-m', 'change head-only review classification']);
+  const trustedBaseLocalWrapper = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts', 'validate-pr-body-local.mjs'), '--body-file', bodyPath, '--base', 'master'],
+    { cwd: localWrapperTmp, encoding: 'utf8' },
+  );
+  assert(
+    trustedBaseLocalWrapper.status === 0,
+    `local wrapper should use the trusted base classifier, not the head classifier: ${trustedBaseLocalWrapper.stderr}`,
   );
 } finally {
   rmSync(localWrapperTmp, { recursive: true, force: true });
