@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
+import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import * as childProcess from 'node:child_process';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return { ...actual, execSync: vi.fn(actual.execSync) };
 });
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 
 const isolatedConfigPath = join(tmpdir(), `invoker-plan-parser-config-${process.pid}.json`);
 
@@ -91,13 +91,14 @@ tasks:
     description: Say hello
     command: echo "Hello"
 `);
-    vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+    const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
       throw new Error('unreachable');
     });
 
     await expect(parsePlanFile(planPath)).rejects.toThrow(
       'repoUrl "https://example.invalid/repo.git" is not a readable git repository',
     );
+    execFileSyncSpy.mockRestore();
   });
 
   it('rejects plan without repoUrl', () => {
@@ -1106,6 +1107,71 @@ tasks:
     ].join('\n');
     const result = parsePlan(yaml);
     expect(result.visualProof).toBeUndefined();
+  });
+});
+
+describe('parsePlanSubmissionBundleFile', () => {
+  it('parses a stacked workflow bundle from disk and validates every workflow repoUrl', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'invoker-plan-bundle-repo-'));
+    execFileSync('git', ['init', '-q', repoDir]);
+    const planPath = join(tmpdir(), `invoker-plan-bundle-${process.pid}.yaml`);
+    writeFileSync(planPath, `
+name: Stack
+repoUrl: ${repoDir}
+workflows:
+  - name: First
+    tasks:
+      - id: a
+        description: A
+        command: echo hi
+  - name: Second
+    tasks:
+      - id: b
+        description: B
+        command: echo hi
+`);
+
+    const bundle = await parsePlanSubmissionBundleFile(planPath);
+
+    expect(bundle.isStack).toBe(true);
+    expect(bundle.plans.map((plan) => plan.name)).toEqual(['First', 'Second']);
+  });
+
+  it('parses a single-plan file the same as parsePlanFile', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'invoker-plan-bundle-single-repo-'));
+    execFileSync('git', ['init', '-q', repoDir]);
+    const planPath = join(tmpdir(), `invoker-plan-bundle-single-${process.pid}.yaml`);
+    writeFileSync(planPath, `
+name: Single
+repoUrl: ${repoDir}
+tasks:
+  - id: a
+    description: A
+    command: echo hi
+`);
+
+    const bundle = await parsePlanSubmissionBundleFile(planPath);
+
+    expect(bundle.isStack).toBe(false);
+    expect(bundle.plans).toHaveLength(1);
+    expect(bundle.plans[0].name).toBe('Single');
+  });
+
+  it('rejects a stacked bundle when a workflow repoUrl is not cloneable', async () => {
+    const planPath = join(tmpdir(), `invoker-plan-bundle-bad-${process.pid}.yaml`);
+    writeFileSync(planPath, `
+name: Stack
+repoUrl: invoker
+workflows:
+  - name: First
+    tasks:
+      - id: a
+        description: A
+`);
+
+    await expect(parsePlanSubmissionBundleFile(planPath)).rejects.toThrow(
+      'repoUrl "invoker" is not a valid git repository',
+    );
   });
 });
 
