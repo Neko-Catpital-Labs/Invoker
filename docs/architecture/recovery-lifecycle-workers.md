@@ -79,6 +79,24 @@ Registered worker kinds are the operator-facing control surface:
 
 The built-in set includes `autofix` as the default recovery worker for failed-task fixes. Operator-declared `externalWorkers` append additional kinds by config, so external automation is selected through the same registry and lifecycle controls as built-ins.
 
+## Auto-Started Workers
+
+On owner boot `startAutoStartedWorkers()` starts two tiers of built-in workers
+(`autoStartedOwnerWorkerKinds` in `packages/app/src/worker-control.ts`):
+
+- **Always started:** `pr-status`, `pr-summary-refresh`, `ci-failure`,
+  `review-gate-merge-conflict` (queues `invoker:rebase-recreate` when a
+  review-gate PR reports a merge conflict), `disk-headroom`, `requeue`, and
+  `auto-approve`.
+- **Gated on `prMaintenance.enabled`:** the cron-scan PR-maintenance kinds
+  `coderabbit-address`, `pr-conflict-rebase`, `pr-ci-failure-scan`, and
+  `pr-admin-bypass-land` (the mergify admin-bypass landing scan). With the
+  config flag absent or false these do not auto-start; they remain registered
+  and startable on demand.
+
+Saved per-worker desired state (Workers tab / `worker start|stop`) overrides
+the auto-start default in both directions.
+
 ## Worker Wakeups
 
 A lifecycle event should carry enough context to make wakeups efficient, such as workflow ID, task ID, transition type, and generation where available. That context is an optimization, not authority.
