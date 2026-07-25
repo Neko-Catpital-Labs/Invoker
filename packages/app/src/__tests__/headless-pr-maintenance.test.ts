@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
@@ -73,51 +73,41 @@ describe('headless worker PR-maintenance', () => {
     rmSync(homeRoot, { recursive: true, force: true });
   });
 
-  it('runs the coderabbit-address worker one-shot with the threaded config', async () => {
+  it('rejects the retired coderabbit-address worker', async () => {
     writeCronScript(repoRoot, 'scripts/cron-coderabbit-address.sh', 'coderabbit.marker');
 
-    await runHeadless(['worker', CODERABBIT_ADDRESS_WORKER_KIND], makeWorkerDeps(repoRoot, 'cr-token') as never);
-
-    // Marker written under the threaded repoRoot, carrying the threaded env
-    // override — proves the launch config reached the shell entrypoint.
-    expect(readFileSync(join(repoRoot, 'coderabbit.marker'), 'utf8')).toBe('cr-token');
-    expect(stdout).toContain(`${CODERABBIT_ADDRESS_WORKER_KIND} worker scan completed.`);
+    await expect(runHeadless(['worker', CODERABBIT_ADDRESS_WORKER_KIND], makeWorkerDeps(repoRoot, 'cr-token') as never))
+      .rejects.toThrow('Unknown worker kind');
   });
 
-  it('runs the pr-conflict-rebase worker one-shot with the threaded config', async () => {
+  it('rejects the retired pr-conflict-rebase worker', async () => {
     writeCronScript(repoRoot, 'scripts/cron-pr-conflict-rebase.sh', 'rebase.marker');
 
-    await runHeadless(['worker', PR_CONFLICT_REBASE_WORKER_KIND], makeWorkerDeps(repoRoot, 'rebase-token') as never);
-
-    expect(readFileSync(join(repoRoot, 'rebase.marker'), 'utf8')).toBe('rebase-token');
-    expect(stdout).toContain(`${PR_CONFLICT_REBASE_WORKER_KIND} worker scan completed.`);
+    await expect(runHeadless(['worker', PR_CONFLICT_REBASE_WORKER_KIND], makeWorkerDeps(repoRoot, 'rebase-token') as never))
+      .rejects.toThrow('Unknown worker kind');
   });
-  it('runs the pr-ci-failure-scan worker one-shot with the threaded config', async () => {
+  it('rejects the retired pr-ci-failure-scan worker', async () => {
     writeCronScript(repoRoot, 'packages/execution-engine/scripts/cron-pr-ci-failure.sh', 'pr-ci.marker');
 
-    await runHeadless(['worker', PR_CI_FAILURE_SCAN_WORKER_KIND], makeWorkerDeps(repoRoot, 'scan-token') as never);
-
-    expect(readFileSync(join(repoRoot, 'pr-ci.marker'), 'utf8')).toBe('scan-token');
-    expect(stdout).toContain(`${PR_CI_FAILURE_SCAN_WORKER_KIND} worker scan completed.`);
+    await expect(runHeadless(['worker', PR_CI_FAILURE_SCAN_WORKER_KIND], makeWorkerDeps(repoRoot, 'scan-token') as never))
+      .rejects.toThrow('Unknown worker kind');
   });
 
-  it('runs the pr-admin-bypass-land worker one-shot with the threaded config', async () => {
+  it('rejects the retired pr-admin-bypass-land worker', async () => {
     writeCronScript(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh', 'land.marker');
 
-    await runHeadless(['worker', PR_ADMIN_BYPASS_LAND_WORKER_KIND], makeWorkerDeps(repoRoot, 'land-token') as never);
-
-    expect(readFileSync(join(repoRoot, 'land.marker'), 'utf8')).toBe('land-token');
-    expect(stdout).toContain(`${PR_ADMIN_BYPASS_LAND_WORKER_KIND} worker scan completed.`);
+    await expect(runHeadless(['worker', PR_ADMIN_BYPASS_LAND_WORKER_KIND], makeWorkerDeps(repoRoot, 'land-token') as never))
+      .rejects.toThrow('Unknown worker kind');
   });
 
 
-  it('lists all PR-maintenance worker kinds from the manual entrypoint', async () => {
+  it('does not list retired PR-maintenance worker kinds', async () => {
     await runHeadless(['worker', 'list'], { invokerConfig: {} } as never);
 
     expect(stdout).toContain('Worker kinds');
-    expect(stdout).toContain(CODERABBIT_ADDRESS_WORKER_KIND);
-    expect(stdout).toContain(PR_CONFLICT_REBASE_WORKER_KIND);
-    expect(stdout).toContain(PR_CI_FAILURE_SCAN_WORKER_KIND);
-    expect(stdout).toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
+    expect(stdout).not.toContain(CODERABBIT_ADDRESS_WORKER_KIND);
+    expect(stdout).not.toContain(PR_CONFLICT_REBASE_WORKER_KIND);
+    expect(stdout).not.toContain(PR_CI_FAILURE_SCAN_WORKER_KIND);
+    expect(stdout).not.toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
   });
 });

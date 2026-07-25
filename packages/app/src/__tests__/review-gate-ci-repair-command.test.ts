@@ -106,6 +106,16 @@ describe('repairReviewGateCiByPr', () => {
   it('queues a CI repair when the mapped PR is red', async () => {
     const submit = vi.fn(() => 42);
     const checkApproval = vi.fn(async () => makeCheckStatus());
+    let lease: {
+      repo: string;
+      prNumber: number;
+      headSha: string;
+      leaseId: string;
+      holderKind: 'ci_failed';
+      acquiredAt: string;
+      expiresAt: string;
+      workflowId?: string;
+    } | undefined;
     const result = await repairReviewGateCiByPr('123', {
       persistence: {
         findReviewGateByPr: () => makeLookup(),
@@ -118,6 +128,16 @@ describe('repairReviewGateCiByPr', () => {
           loadTask: () => makeTask(),
           listWorkflowMutationIntents: () => [],
           getWorkerAction: () => undefined,
+          getPrRepairLease: () => lease,
+          getPrRepairLeaseById: (leaseId: string) => lease?.leaseId === leaseId ? lease : undefined,
+          upsertPrRepairLease: (next) => {
+            lease = next;
+            return next;
+          },
+          deletePrRepairLeaseById: () => {
+            lease = undefined;
+            return true;
+          },
         },
         submitter: { submit },
         logger,
