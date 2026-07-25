@@ -5,8 +5,6 @@ import type {
   SlackPendingConfirmation,
 } from './adapter.js';
 
-export const SLACK_PENDING_CONFIRMATION_TTL_MS = 24 * 60 * 60 * 1000;
-
 export interface CreateSlackPendingConfirmation {
   confirmKey: string;
   threadTs: string;
@@ -43,7 +41,10 @@ export class SlackSessionRepository {
     const pending: PendingSlackConfirmation = {
       ...confirmation,
       createdAt: createdAtIso,
-      expiresAt: new Date(createdAt.getTime() + SLACK_PENDING_CONFIRMATION_TTL_MS).toISOString(),
+      // Confirmations never expire: a staged plan stays submittable until it
+      // is explicitly consumed or cancelled. The column is kept populated only
+      // for schema compatibility and has no read semantics.
+      expiresAt: createdAtIso,
     };
     this.adapter.saveSlackPendingConfirmation({
       ...pending,
@@ -52,30 +53,31 @@ export class SlackSessionRepository {
     return pending;
   }
 
-  getPendingConfirmation(
-    confirmKey: string,
-    now = new Date(),
-  ): PendingSlackConfirmation | null {
+  getPendingConfirmation(confirmKey: string): PendingSlackConfirmation | null {
     const confirmation = this.adapter.loadSlackPendingConfirmation(confirmKey);
-    if (!confirmation) return null;
-    if (new Date(confirmation.expiresAt) <= now) return null;
-    const { payloadJson, ...pending } = confirmation;
-    return {
-      ...pending,
-      payload: this.parsePayload(payloadJson),
-    };
+    return confirmation ? this.toPending(confirmation) : null;
+  }
+
+  /** The most recently staged confirmation for a thread, regardless of key. */
+  getLatestPendingConfirmationForThread(threadTs: string): PendingSlackConfirmation | null {
+    const confirmation = this.adapter.loadLatestSlackPendingConfirmationByThread(threadTs);
+    return confirmation ? this.toPending(confirmation) : null;
   }
 
   deletePendingConfirmation(confirmKey: string): void {
     this.adapter.deleteSlackPendingConfirmation(confirmKey);
   }
 
-  purgeExpiredPendingConfirmations(now = new Date()): number {
-    return this.adapter.purgeExpiredSlackPendingConfirmations(now.toISOString());
-  }
-
   listActivePlanThreads(channelId: string, userId: string): Conversation[] {
     return this.adapter.listActivePlanConversations(channelId, userId);
+  }
+
+  private toPending(confirmation: SlackPendingConfirmation): PendingSlackConfirmation {
+    const { payloadJson, ...pending } = confirmation;
+    return {
+      ...pending,
+      payload: this.parsePayload(payloadJson),
+    };
   }
 
   private parsePayload(payloadJson: string): unknown {

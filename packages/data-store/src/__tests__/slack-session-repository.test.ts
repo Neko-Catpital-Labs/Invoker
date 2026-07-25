@@ -4,10 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Conversation } from '../adapter.js';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
-import {
-  SLACK_PENDING_CONFIRMATION_TTL_MS,
-  SlackSessionRepository,
-} from '../slack-session-repository.js';
+import { SlackSessionRepository } from '../slack-session-repository.js';
 
 describe('SlackSessionRepository', () => {
   let adapter: SQLiteAdapter;
@@ -63,7 +60,7 @@ describe('SlackSessionRepository', () => {
     }
   });
 
-  it('persists confirmations with a 24-hour expiration and JSON payload', () => {
+  it('persists confirmations with a JSON payload and no expiration', () => {
     const createdAt = new Date('2026-07-19T12:00:00.000Z');
     const confirmation = repo.createPendingConfirmation({
       confirmKey: 'confirm-1',
@@ -75,19 +72,19 @@ describe('SlackSessionRepository', () => {
     }, createdAt);
 
     expect(confirmation.createdAt).toBe(createdAt.toISOString());
-    expect(confirmation.expiresAt).toBe(
-      new Date(createdAt.getTime() + SLACK_PENDING_CONFIRMATION_TTL_MS).toISOString(),
-    );
-    expect(repo.getPendingConfirmation('confirm-1', createdAt)).toEqual(confirmation);
+    // The expires_at column is kept populated for schema compatibility but
+    // has no read semantics.
+    expect(confirmation.expiresAt).toBe(createdAt.toISOString());
+    expect(repo.getPendingConfirmation('confirm-1')).toEqual(confirmation);
 
     repo.deletePendingConfirmation('confirm-1');
-    expect(repo.getPendingConfirmation('confirm-1', createdAt)).toBeNull();
+    expect(repo.getPendingConfirmation('confirm-1')).toBeNull();
   });
 
-  it('ignores expired confirmations until they are manually purged', () => {
-    const createdAt = new Date('2026-07-19T12:00:00.000Z');
-    repo.createPendingConfirmation({
-      confirmKey: 'expired-confirmation',
+  it('returns confirmations staged more than 24 hours ago', () => {
+    const createdAt = new Date(Date.now() - 30 * 60 * 60 * 1000);
+    const confirmation = repo.createPendingConfirmation({
+      confirmKey: 'old-confirmation',
       threadTs: 'thread-1',
       channelId: 'C1',
       userId: 'U1',
@@ -95,12 +92,33 @@ describe('SlackSessionRepository', () => {
       payload: { workflowId: 'wf-1' },
     }, createdAt);
 
-    const afterExpiry = new Date(createdAt.getTime() + SLACK_PENDING_CONFIRMATION_TTL_MS);
-    expect(repo.getPendingConfirmation('expired-confirmation', afterExpiry)).toBeNull();
-    expect(repo.purgeExpiredPendingConfirmations(afterExpiry)).toBe(1);
+    expect(repo.getPendingConfirmation('old-confirmation')).toEqual(confirmation);
   });
 
-  it('loads pending confirmations from a read-only adapter without purging', async () => {
+  it('returns the newest confirmation for a thread', () => {
+    const base = new Date('2026-07-19T12:00:00.000Z');
+    repo.createPendingConfirmation({
+      confirmKey: 'thread-2:older',
+      threadTs: 'thread-2',
+      channelId: 'C1',
+      userId: 'U1',
+      kind: 'submit',
+      payload: { plan: 'older' },
+    }, base);
+    const newest = repo.createPendingConfirmation({
+      confirmKey: 'thread-2:newer',
+      threadTs: 'thread-2',
+      channelId: 'C1',
+      userId: 'U1',
+      kind: 'submit',
+      payload: { plan: 'newer' },
+    }, new Date(base.getTime() + 60_000));
+
+    expect(repo.getLatestPendingConfirmationForThread('thread-2')).toEqual(newest);
+    expect(repo.getLatestPendingConfirmationForThread('missing-thread')).toBeNull();
+  });
+
+  it('loads pending confirmations from a read-only adapter', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'slack-session-repository-'));
     const databasePath = join(directory, 'invoker.db');
     const createdAt = new Date('2026-07-19T12:00:00.000Z');
@@ -118,10 +136,7 @@ describe('SlackSessionRepository', () => {
 
       const reader = await SQLiteAdapter.create(databasePath, { readOnly: true });
       expect(
-        new SlackSessionRepository(reader).getPendingConfirmation(
-          'read-only-confirmation',
-          createdAt,
-        ),
+        new SlackSessionRepository(reader).getPendingConfirmation('read-only-confirmation'),
       ).toEqual(confirmation);
       reader.close();
     } finally {

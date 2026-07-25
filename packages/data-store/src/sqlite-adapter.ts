@@ -2340,7 +2340,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
       'SELECT * FROM slack_pending_confirmations WHERE confirm_key = ?',
       [confirmKey],
     ) as Record<string, unknown> | undefined;
-    if (!row) return undefined;
+    return row ? this.mapSlackPendingConfirmation(row) : undefined;
+  }
+
+  loadLatestSlackPendingConfirmationByThread(threadTs: string): SlackPendingConfirmation | undefined {
+    const row = this.queryOne(
+      'SELECT * FROM slack_pending_confirmations WHERE thread_ts = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
+      [threadTs],
+    ) as Record<string, unknown> | undefined;
+    return row ? this.mapSlackPendingConfirmation(row) : undefined;
+  }
+
+  private mapSlackPendingConfirmation(row: Record<string, unknown>): SlackPendingConfirmation {
     return {
       confirmKey: row.confirm_key as string,
       threadTs: row.thread_ts as string,
@@ -2355,17 +2366,6 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteSlackPendingConfirmation(confirmKey: string): void {
     this.execRun('DELETE FROM slack_pending_confirmations WHERE confirm_key = ?', [confirmKey]);
-  }
-
-  purgeExpiredSlackPendingConfirmations(nowIso: string): number {
-    this.ensureWritable();
-    this.db.run(
-      'DELETE FROM slack_pending_confirmations WHERE expires_at <= ?',
-      [nowIso],
-    );
-    const changes = this.db.getRowsModified();
-    this.dirty = true;
-    return changes;
   }
 
   // ── Workflow Channels (Slack workflow↔channel mapping) ──
