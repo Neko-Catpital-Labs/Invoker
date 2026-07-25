@@ -5,7 +5,8 @@
  * Uses the `yaml` npm package for parsing.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
@@ -157,6 +158,37 @@ export function detectDefaultBranchRemote(repoUrl: string): string {
     // Network error or timeout
   }
   return 'main';
+}
+
+export function assertRepoUrlCloneable(repoUrl: string): void {
+  const trimmed = repoUrl.trim();
+  const isLocalPath = trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../');
+  const isRemoteUrl = /^(?:git@|https?:\/\/|ssh:\/\/|file:\/\/)/.test(trimmed);
+
+  if (!isLocalPath && !isRemoteUrl) {
+    throw new PlanParseError(
+      `repoUrl "${repoUrl}" is not a valid git repository. Use a full clone URL or a configured Slack alias.`,
+    );
+  }
+
+  try {
+    if (isLocalPath) {
+      if (!existsSync(trimmed)) throw new Error('Path does not exist');
+      execFileSync('git', ['-C', trimmed, 'rev-parse', '--git-dir'], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+        timeout: 10_000,
+      });
+      return;
+    }
+    execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+      timeout: 10_000,
+    });
+  } catch {
+    throw new PlanParseError(
+      `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials.`,
+    );
+  }
 }
 
 export class PlanParseError extends Error {
@@ -505,5 +537,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
 export async function parsePlanFile(filePath: string): Promise<PlanDefinition> {
   const { readFile } = await import('node:fs/promises');
   const content = await readFile(filePath, 'utf-8');
-  return parsePlan(content);
+  const plan = parsePlan(content);
+  assertRepoUrlCloneable(plan.repoUrl!);
+  return plan;
 }

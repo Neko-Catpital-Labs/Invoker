@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, parsePlanSubmissionBundle, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
+import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFileSync } from 'node:fs';
+import * as childProcess from 'node:child_process';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -64,6 +65,41 @@ describe('applyPlanDefinitionDefaults', () => {
 });
 
 describe('parsePlan', () => {
+  it('rejects a bare repo name before the workflow is created', async () => {
+    const planPath = join(tmpdir(), `invoker-invalid-repo-${process.pid}.yaml`);
+    writeFileSync(planPath, `
+name: Bare Repo
+repoUrl: invoker
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`);
+
+    await expect(parsePlanFile(planPath)).rejects.toThrow(
+      'repoUrl "invoker" is not a valid git repository',
+    );
+  });
+
+  it('rejects an unreachable remote during plan file validation', async () => {
+    const planPath = join(tmpdir(), `invoker-unreachable-repo-${process.pid}.yaml`);
+    writeFileSync(planPath, `
+name: Unreachable Repo
+repoUrl: https://example.invalid/repo.git
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`);
+    vi.spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+      throw new Error('unreachable');
+    });
+
+    await expect(parsePlanFile(planPath)).rejects.toThrow(
+      'repoUrl "https://example.invalid/repo.git" is not a readable git repository',
+    );
+  });
+
   it('rejects plan without repoUrl', () => {
     const yaml = `
 name: No Repo Plan
