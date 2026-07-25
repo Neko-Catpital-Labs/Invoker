@@ -9,6 +9,7 @@ import { App, type RespondFn } from '@slack/bolt';
 import { spawn } from 'node:child_process';
 import { readFileSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { Surface, CommandHandler, SurfaceCommand, SurfaceEvent, LogFn, WorkflowOp, WorkflowOpResult, WorkflowOpProgress, WorkflowOpName } from '../surface.js';
 import { parseSlackCommand } from './slack-commands.js';
 import type { ConversationCommand } from './slack-commands.js';
@@ -243,6 +244,10 @@ type RepoParts = {
 
 function stripGitSuffix(path: string): string {
   return path.replace(/\/+$/g, '').replace(/\.git$/i, '');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function parseRepoParts(repoUrl: string): RepoParts | undefined {
@@ -1032,7 +1037,14 @@ export class SlackSurface implements Surface {
       await say({ text: detectedRepoResolution.error, thread_ts: event.ts });
       return;
     }
-    const routeRepoUrl = explicitRepoResolution.url ?? detectedRepoResolution.url ?? this.resolveRepoUrl().url;
+    const mentionedRepoAlias = !parsed.repo && repositoryUrls.length === 0
+      ? this.findMentionedRepoAlias(parsed.text)
+      : undefined;
+    const mentionedRepoResolution = mentionedRepoAlias ? this.resolveRepoUrl(mentionedRepoAlias) : {};
+    const routeRepoUrl = explicitRepoResolution.url
+      ?? detectedRepoResolution.url
+      ?? mentionedRepoResolution.url
+      ?? this.resolveRepoUrl().url;
 
     const threadTs = event.thread_ts ?? event.ts;
     const requiresPlanningRepo = !!this.planningCommandBuilder;
@@ -1041,7 +1053,7 @@ export class SlackSurface implements Surface {
       : undefined;
     let planningRepoResolution: PlanningRepoResolution | undefined;
     const resolvePlanningRepo = (): PlanningRepoResolution => {
-      planningRepoResolution ??= this.resolvePlanningRepoUrl(parsed.repo, messageRepoUrl);
+      planningRepoResolution ??= this.resolvePlanningRepoUrl(parsed.repo ?? mentionedRepoAlias, messageRepoUrl);
       return planningRepoResolution;
     };
 
@@ -1390,13 +1402,14 @@ export class SlackSurface implements Surface {
       await say({ text: "I don't see a complete plan drafted yet. Ask me to draft it in this thread, then submit again.", thread_ts: threadTs });
       return;
     }
-    const summary = summarizePlanText(planText);
+    const normalizedPlanText = this.normalizeDraftedPlanRepoUrl(planText, this.loadPlanningContext(threadTs)?.repoUrl);
+    const summary = summarizePlanText(normalizedPlanText);
     if (!summary) {
       await say({ text: "I found a draft plan but couldn't read it. Ask me to regenerate the plan, then submit again.", thread_ts: threadTs });
       return;
     }
     const ctx = this.loadPlanningContext(threadTs);
-    await this.stageConfirm(threadTs, channel, { kind: 'submit', planText, ctx, channel, lobbyThreadTs: threadTs }, this.renderPlanSummary(summary), say);
+    await this.stageConfirm(threadTs, channel, { kind: 'submit', planText: normalizedPlanText, ctx, channel, lobbyThreadTs: threadTs }, this.renderPlanSummary(summary), say);
   }
 
   private renderPlanSummary(summary: PlanSummary): string {
@@ -1961,6 +1974,36 @@ ${text}`;
     const known = Object.keys(this.repoAliases);
     const list = known.length ? known.join(', ') : '(none configured)';
     return { error: `Unknown repo "${repo}". Known aliases: ${list}. Or pass a full git URL.` };
+  }
+
+  private findMentionedRepoAlias(text: string): string | undefined {
+    return Object.keys(this.repoAliases).find((alias) => (
+      new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'i').test(text)
+    ));
+  }
+
+  private normalizeDraftedPlanRepoUrl(planText: string, contextRepoUrl: string | undefined): string {
+    let raw: unknown;
+    try {
+      raw = parseYaml(planText);
+    } catch {
+      return planText;
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return planText;
+
+    const plan = raw as Record<string, unknown>;
+    if (typeof plan.repoUrl !== 'string') return planText;
+    const repoUrl = plan.repoUrl.trim();
+    const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repoUrl.toLowerCase());
+    if (aliasKey) {
+      plan.repoUrl = this.normalizeRepositoryUrl(this.repoAliases[aliasKey]);
+      return stringifyYaml(plan);
+    }
+    if (!/^(?:git@|https?:\/\/|ssh:\/\/|file:\/\/|\/|\.{1,2}\/)/.test(repoUrl) && contextRepoUrl) {
+      plan.repoUrl = contextRepoUrl;
+      return stringifyYaml(plan);
+    }
+    return planText;
   }
 
   private normalizeRepositoryUrl(repoUrl: string): string {
