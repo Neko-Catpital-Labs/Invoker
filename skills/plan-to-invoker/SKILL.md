@@ -69,7 +69,8 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 
 ## Intended flow (do not skip steps)
 
-1. Discuss scope/risk with the user.
+1. Discuss scope/risk with the user; before authoring YAML, propose each
+   `Safety invariant:` and ask the user to confirm or correct it.
 2. Phase 1a static analysis.
 3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts — prefer rendering a matching formula (`skills/plan-to-invoker/formulas/`) and specializing its slots over authoring the shape from scratch.
@@ -80,7 +81,7 @@ Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b 
 
 **Deterministic validation gate:** Use `skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` as the primary deterministic proof surface, backed by `bash scripts/test-plan-to-invoker-skill.sh` for regression coverage. Schema-only validation or ad hoc individual script checks are not sufficient as the review gate, because they can miss strict atomicity, zero-context prompt, policy coverage, and final-gate failures. Individual validator scripts remain fallback diagnostics only; they are not submission proof unless `skill-doctor.sh` has already passed or a waiver is explicitly recorded.
 
-**Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one review lane, one conceptual unit, one safety invariant, one slice rationale, and one architectural effect per implementation task. This applies to Invoker and non-Invoker target repos.
+**Review compression (required for implementation plans):** Before authoring any plan with `onFinish != none`, apply `skills/review-compression/SKILL.md`. Split by reviewer cognition, not file count: one local review claim, one review lane, one conceptual unit, one safety invariant, one slice rationale, and one architectural effect per implementation task. Follow its Safety Invariant Confirmation protocol before finalizing the plan. This applies to Invoker and non-Invoker target repos.
 
 **Stack-first authoring (default for implementation plans):** For any plan with `onFinish != none`, default to an authored Invoker workflow stack, not one YAML with many implementation tasks. In Invoker, one YAML file is one workflow; `tasks:` are only tasks inside that workflow. If the implementation has more than one review slice, review lane, conceptual unit, layer, implementation prompt task, package boundary, UI+non-UI boundary, or PR-worthy commit, write multiple `step-N` YAML files and submit them with `scripts/submit-workflow-chain.sh`. Later workflow templates must depend on the previous workflow's merge gate with `externalDependencies` using `workflowId: "__UPSTREAM_WORKFLOW_ID__"`, `taskId: "__merge__"`, `requiredStatus: completed`, and `gatePolicy: review_ready` unless the user explicitly asked for another gate policy.
 
