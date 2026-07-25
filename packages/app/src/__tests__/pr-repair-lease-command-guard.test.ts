@@ -76,4 +76,19 @@ describe('assertActiveBabysitPrRepairLease', () => {
       'repair',
     )).toThrow('Rejected babysit repair command');
   });
+
+  it('rejects a queue lease on the CI repair route', () => {
+    const queueLease = {
+      ...lease,
+      holderKind: 'queue_dequeued' as const,
+      acquiredAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    };
+    expect(() => assertActiveBabysitPrRepairLease(
+      lease,
+      { getPrRepairLease: () => queueLease, getPrRepairLeaseById: () => queueLease },
+      'repair',
+      'ci_failed',
+    )).toThrow('not ci_failed');
+  });
 });

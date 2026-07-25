@@ -1488,7 +1488,7 @@ function startHeadlessMode(): void {
           workflowMutationDispatcher.set('invoker:fix-with-agent', async (...fixArgs: unknown[]) => {
             const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
             if (context.reviewGateContext) {
-              assertActiveBabysitPrRepairLease(context.prRepairLease, persistence, 'repair');
+              assertActiveBabysitPrRepairLease(context.prRepairLease, persistence, 'repair', 'ci_failed');
             }
             const args = buildHeadlessFixArgs(taskId, agentName, context);
             await runHeadless(args, {
