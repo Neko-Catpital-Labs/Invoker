@@ -16,6 +16,7 @@ const PR_MAINTENANCE_ENTRYPOINTS = [
   { kind: 'pr-conflict-rebase', scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh' },
   { kind: 'pr-ci-failure-scan', scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh' },
   { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
+  { kind: 'pr-orphan-repair', scriptRelativePath: 'scripts/cron-pr-orphan-repair.sh' },
 ] as const;
 
 describe('PR maintenance entrypoints bootstrap', () => {

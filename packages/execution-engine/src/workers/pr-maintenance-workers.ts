@@ -16,13 +16,15 @@ export const CODERABBIT_ADDRESS_WORKER_KIND = 'coderabbit-address';
 export const PR_CONFLICT_REBASE_WORKER_KIND = 'pr-conflict-rebase';
 export const PR_CI_FAILURE_SCAN_WORKER_KIND = 'pr-ci-failure-scan';
 export const PR_ADMIN_BYPASS_LAND_WORKER_KIND = 'pr-admin-bypass-land';
+export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
 
 export type PrMaintenanceWorkerKind =
   | typeof CODERABBIT_ADDRESS_WORKER_KIND
   | typeof PR_CONFLICT_REBASE_WORKER_KIND
   | typeof PR_CI_FAILURE_SCAN_WORKER_KIND
-  | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND;
+  | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
+  | typeof PR_ORPHAN_REPAIR_WORKER_KIND;
 
 type EnvOverrides = Record<string, string | undefined>;
 
@@ -52,6 +54,11 @@ const PR_ADMIN_BYPASS_LAND_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh',
   note: 'Runs the admin-bypass land babysitting cron entrypoint under worker scheduling.',
+};
+const PR_ORPHAN_REPAIR_ENTRYPOINT: PrMaintenanceEntrypoint = {
+  kind: PR_ORPHAN_REPAIR_WORKER_KIND,
+  scriptRelativePath: 'scripts/cron-pr-orphan-repair.sh',
+  note: 'Classifies unmapped broken PRs and submits one combined Invoker repair task per PR.',
 };
 
 export interface PrMaintenanceWorkerConfig {
@@ -108,6 +115,7 @@ export function registerPrMaintenanceWorkers(
   registerPrConflictRebaseWorker(registry);
   registerPrCiFailureScanWorker(registry);
   registerPrAdminBypassLandWorker(registry);
+  registerPrOrphanRepairWorker(registry);
   return registry;
 }
 
@@ -174,6 +182,22 @@ export function registerPrAdminBypassLandWorker(
   return registry;
 }
 
+export function registerPrOrphanRepairWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: PR_ORPHAN_REPAIR_WORKER_KIND,
+    note: PR_ORPHAN_REPAIR_ENTRYPOINT.note,
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createPrOrphanRepairWorker({
+        logger: deps.logger,
+        ...deps.prMaintenance,
+        store: deps.store,
+      }),
+  });
+  return registry;
+}
+
 
 export function createCoderabbitAddressWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
   return createPrMaintenanceWorker(CODERABBIT_ADDRESS_ENTRYPOINT, options);
@@ -188,6 +212,10 @@ export function createPrCiFailureScanWorker(options: PrMaintenanceWorkerOptions)
 
 export function createPrAdminBypassLandWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
   return createPrMaintenanceWorker(PR_ADMIN_BYPASS_LAND_ENTRYPOINT, options);
+}
+
+export function createPrOrphanRepairWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
+  return createPrMaintenanceWorker(PR_ORPHAN_REPAIR_ENTRYPOINT, options);
 }
 
 

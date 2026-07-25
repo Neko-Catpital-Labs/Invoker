@@ -158,6 +158,25 @@ launch_omp() {
   exit 1
 }
 
+# Unmapped PRs that are also conflicted or failing CI belong to the
+# orphan-repair worker, which folds review feedback into its combined repair
+# task. Skipping here avoids two agents pushing to the same branch. Returns 0
+# (skip) only on a confirmed broken state plus a clean no-workflow miss; the
+# cheap gh view runs first so healthy PRs never pay the workflow lookup.
+orphan_repair_owns_pr() {
+  local num="$1" rec wf view
+  view="$(gh_json pr view "$num" --repo "$TARGET_REPO" \
+    --json mergeable,mergeStateStatus,statusCheckRollup)" || return 1
+  jq -e '
+    (.mergeable == "CONFLICTING") or (.mergeStateStatus == "DIRTY")
+    or ([.statusCheckRollup[]? | select((.conclusion // "") as $c
+        | $c == "FAILURE" or $c == "ERROR" or $c == "TIMED_OUT" or $c == "CANCELLED")] | length > 0)
+  ' <<<"$view" >/dev/null 2>&1 || return 1
+  rec="$(resolve_workflow_for_pr "$num")" || return 1
+  wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
+  [ -z "$wf" ]
+}
+
 prs_json="$(gh_json pr list --repo "$TARGET_REPO" --author "$PR_AUTHOR" --state open \
   --json number,url,headRefName,baseRefName,title --limit 100)" || {
   log_line "could not list PRs; exiting"
@@ -189,6 +208,11 @@ while IFS= read -r pr; do
   # genuinely new CodeRabbit comments still get a fresh budget.
   if [ "$(ledger_count coderabbit-attempt "$num" "$LATEST_MARKER")" -ge "$MAX_CODERABBIT_ATTEMPTS" ]; then
     log_line "PR #$num: CodeRabbit address hit cap of $MAX_CODERABBIT_ATTEMPTS; skip"
+    continue
+  fi
+
+  if orphan_repair_owns_pr "$num"; then
+    log_line "PR #$num: unmapped and broken; orphan-repair owns it this tick"
     continue
   fi
 

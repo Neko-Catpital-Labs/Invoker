@@ -23,12 +23,20 @@ printf 'node %s\n' "\$*" >> "$NODE_LOG"
 exit 0
 EOF
 chmod +x "$TMP/bin/node"
+# The scanned PRs model MAPPED workflows (unmapped PRs belong to the
+# orphan-repair worker and are skipped), so stub the review-gate as a hit.
+cat > "$TMP/review-gate.sh" <<'RG'
+#!/usr/bin/env bash
+printf '{"workflowId":"wf-ci-mapped","workflowGeneration":0,"baseBranch":"master"}\n'
+RG
+chmod +x "$TMP/review-gate.sh"
 
 out="$(
   PATH="$TMP/bin:$PATH" \
   HOME="$TMP/home" \
   INVOKER_GITHUB_TARGET_REPO="fake/repo" \
   INVOKER_PR_CRON_LOCK="$TMP/crons.lock" \
+  INVOKER_PR_CRON_REVIEW_GATE_CMD="$TMP/review-gate.sh" \
   bash "$ROOT/packages/execution-engine/scripts/cron-pr-ci-failure.sh" 2>&1
 )" || fail "CI scan exited non-zero" "$out"
 
