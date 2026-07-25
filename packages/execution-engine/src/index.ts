@@ -69,6 +69,7 @@ export * from './workers/disk-headroom-monitor.js';
 export * from './workers/disk-headroom-reclaim.js';
 export * from './workers/disk-headroom.js';
 export * from './workers/pr-maintenance-workers.js';
+export * from './workers/pr-lifecycle-signal-workers.js';
 export * from './workers/review-gate-merge-conflict-worker.js';
 export * from './workers/e2e-autofix-worker.js';
 export * from './workers/requeue-worker.js';

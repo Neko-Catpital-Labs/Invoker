@@ -13,6 +13,7 @@ Run:  python3 scripts/test_mergify_admin_requeue_snapshot.py
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from unittest import mock
@@ -92,6 +93,11 @@ class ParseStackMetadata(unittest.TestCase):
 
     def test_no_marker_returns_none(self):
         self.assertIsNone(s.parse_stack_metadata([{"body": "nothing here"}]))
+
+    def test_parses_mergify_pulls_marker_objects_in_order(self):
+        fixture = Path(__file__).resolve().parent / "repro/fixtures/mergify-stack-pulls.json"
+        comment = json.loads(fixture.read_text())
+        self.assertEqual(s.parse_stack_metadata([comment]), ("mergify-stack", (10, 11, 12)))
 
 
 class LabelsFromNodes(unittest.TestCase):

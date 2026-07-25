@@ -13,6 +13,8 @@ import {
   type ReviewGateFailedCheck,
   type ReviewGateCiFailedLifecycleEvent,
   type ReviewGateMergeConflictLifecycleEvent,
+  type PrQueueDequeuedLifecycleEvent,
+  type PrReviewCommentLifecycleEvent,
   type WorkflowWakeupLifecycleEvent,
   type RecoveryWorkerWakeupHint,
   type RecoveryWorkerWakeupReason,
@@ -32,6 +34,8 @@ export {
   type ReviewGateFailedCheck,
   type ReviewGateCiFailedLifecycleEvent,
   type ReviewGateMergeConflictLifecycleEvent,
+  type PrQueueDequeuedLifecycleEvent,
+  type PrReviewCommentLifecycleEvent,
   type WorkflowWakeupLifecycleEvent,
   type RecoveryWorkerWakeupHint,
   type RecoveryWorkerWakeupReason,
@@ -394,6 +398,13 @@ export function isWorkflowLifecycleEvent(value: unknown): value is WorkflowLifec
         && typeof value.reviewId === 'string'
         && typeof value.reviewUrl === 'string'
         && typeof value.statusText === 'string';
+    case 'pr.review_comment':
+      return typeof value.repo === 'string'
+        && typeof value.prNumber === 'number'
+        && typeof value.commentId === 'string';
+    case 'pr.queue_dequeued':
+      return typeof value.repo === 'string'
+        && typeof value.prNumber === 'number';
     case 'workflow.wakeup':
       return value.reason === 'startup_reconcile'
         || value.reason === 'stalled_workflow_recovery'

@@ -20,6 +20,8 @@ export const WORKFLOW_LIFECYCLE_EVENT_KINDS = [
   'task.removed',
   'review_gate.ci_failed',
   'review_gate.merge_conflict',
+  'pr.review_comment',
+  'pr.queue_dequeued',
   'workflow.wakeup',
 ] as const;
 
@@ -104,6 +106,25 @@ export interface ReviewGateMergeConflictLifecycleEvent extends WorkflowLifecycle
   readonly statusText: string;
 }
 
+export interface PrReviewCommentLifecycleEvent extends WorkflowLifecycleEventBase {
+  readonly kind: 'pr.review_comment';
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha?: string;
+  readonly commentId: string;
+  readonly commentUrl?: string;
+  readonly author?: string;
+}
+
+export interface PrQueueDequeuedLifecycleEvent extends WorkflowLifecycleEventBase {
+  readonly kind: 'pr.queue_dequeued';
+  readonly repo: string;
+  readonly prNumber: number;
+  readonly headSha?: string;
+  readonly queueRule?: string;
+  readonly reason?: string;
+}
+
 export interface WorkflowWakeupLifecycleEvent extends WorkflowLifecycleEventBase {
   readonly kind: 'workflow.wakeup';
   readonly reason: WorkflowWakeupReason;
@@ -114,6 +135,8 @@ export type WorkflowLifecycleEvent =
   | TaskLifecycleEvent
   | ReviewGateCiFailedLifecycleEvent
   | ReviewGateMergeConflictLifecycleEvent
+  | PrReviewCommentLifecycleEvent
+  | PrQueueDequeuedLifecycleEvent
   | WorkflowWakeupLifecycleEvent;
 
 export type WorkflowWakeupReason =

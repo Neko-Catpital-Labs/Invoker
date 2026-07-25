@@ -29,6 +29,10 @@ import type {
   WorkflowResumeWorkerSubmitter,
 } from './workers/workflow-resume-worker.js';
 import type { PrSummaryRefreshWorkerStore } from './workers/pr-summary-refresh-worker.js';
+import type {
+  PrLifecycleSignalWorkerStore,
+  PrLifecycleSignalWorkerSubmitter,
+} from './workers/pr-lifecycle-signal-workers.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -38,6 +42,7 @@ export interface WorkerRuntimeDependencies {
     & ReviewGateCiRepairStore
     & AutoApproveWorkerStore
     & ReviewGateMergeConflictWorkerStore
+    & PrLifecycleSignalWorkerStore
     & WorkflowResumeWorkerStore
     & PrSummaryRefreshWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
@@ -47,6 +52,7 @@ export interface WorkerRuntimeDependencies {
     & RequeueWorkerSubmitter
     & AutoApproveWorkerSubmitter
     & ReviewGateMergeConflictWorkerSubmitter
+    & PrLifecycleSignalWorkerSubmitter
     & WorkflowResumeWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;
