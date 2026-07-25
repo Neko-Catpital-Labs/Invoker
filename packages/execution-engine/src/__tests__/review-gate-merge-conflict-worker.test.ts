@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  PrRepairLeaseRow,
   WorkerActionRecord,
   WorkerActionWrite,
   WorkflowMutationIntent,
@@ -9,6 +10,8 @@ import type {
 import type { TaskState } from '@invoker/workflow-core';
 
 import type { ReviewGateMergeConflictLifecycleEvent } from '../lifecycle-events.js';
+import { createAutoFixAttemptLedger } from '../auto-fix-attempt-ledger.js';
+import { createCiFailureTick } from '../workers/ci-failure-worker.js';
 import {
   REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
   createReviewGateMergeConflictTick,
@@ -102,11 +105,14 @@ interface Harness {
     logEvent: ReturnType<typeof vi.fn>;
   };
   submit: ReturnType<typeof vi.fn>;
+  leases: Map<string, PrRepairLeaseRow>;
 }
 
 function makeHarness(task = makeTask(), intents: WorkflowMutationIntent[] = []): Harness {
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const actions = new Map<string, WorkerActionRecord>();
+  const leases = new Map<string, PrRepairLeaseRow>();
+  const leaseKey = (repo: string, prNumber: number, headSha: string) => `${repo}:${prNumber}:${headSha}`;
   const submit = vi.fn((
     workflowId: string,
     priority: WorkflowMutationPriority,
@@ -116,7 +122,14 @@ function makeHarness(task = makeTask(), intents: WorkflowMutationIntent[] = []):
     expect(workflowId).toBe('wf-1');
     expect(priority).toBe('high');
     expect(channel).toBe('invoker:rebase-recreate');
-    expect(args).toEqual(['wf-1']);
+    expect(args).toMatchObject(['wf-1', {
+      prRepairLease: {
+        repo: 'owner/repo',
+        prNumber: 123,
+        headSha: 'sha-1',
+        holderKind: 'merge_conflict',
+      },
+    }]);
     return 42;
   });
   const store = {
@@ -132,8 +145,22 @@ function makeHarness(task = makeTask(), intents: WorkflowMutationIntent[] = []):
       return saved;
     }),
     logEvent: vi.fn(),
+    getPrRepairLease: vi.fn((repo: string, prNumber: number, headSha: string) =>
+      leases.get(leaseKey(repo, prNumber, headSha))),
+    upsertPrRepairLease: vi.fn((lease: PrRepairLeaseRow) => {
+      leases.set(leaseKey(lease.repo, lease.prNumber, lease.headSha), lease);
+      return lease;
+    }),
+    deletePrRepairLeaseById: vi.fn((leaseId: string) => {
+      for (const [key, lease] of leases) {
+        if (lease.leaseId !== leaseId) continue;
+        leases.delete(key);
+        return true;
+      }
+      return false;
+    }),
   };
-  return { actions, intents, store, submit };
+  return { actions, intents, store, submit, leases };
 }
 
 function actionFor(harness: Harness, event: ReviewGateMergeConflictLifecycleEvent): WorkerActionRecord | undefined {
@@ -185,6 +212,47 @@ describe('review-gate merge-conflict worker tick', () => {
     // A later tick draining the same event again is stopped by the durable row.
     await createReviewGateMergeConflictTick({ ...options, drainEvents: () => [makeEvent()] })();
     expect(harness.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('submits only the conflict repair when conflict and CI target the same PR', async () => {
+    const harness = makeHarness();
+    const conflictEvent = makeEvent();
+    await createReviewGateMergeConflictTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      drainEvents: () => [conflictEvent],
+    })();
+
+    const ciSubmit = vi.fn(() => 43);
+    const ciEvent = {
+      ...conflictEvent,
+      kind: 'review_gate.ci_failed',
+      eventKey: 'review_gate.ci_failed|workflow:wf-1|task:wf-1/merge',
+      failedChecks: [{ name: 'unit', conclusion: 'FAILURE' }],
+      recoveryWakeup: {
+        eventKey: 'review_gate.ci_failed|workflow:wf-1|task:wf-1/merge',
+        eventKind: 'review_gate.ci_failed',
+        workflowId: 'wf-1',
+        taskId: 'wf-1/merge',
+        generation: 2,
+        attemptId: 'attempt-1',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        reason: 'review_gate_failure',
+        authoritative: false,
+      },
+    } as any;
+    await createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: ciSubmit },
+      logger,
+      attemptLedger: createAutoFixAttemptLedger(),
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [ciEvent],
+    })();
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(ciSubmit).not.toHaveBeenCalled();
   });
 
   it('skips a stale event whose head SHA no longer matches the persisted task, without a durable row', async () => {

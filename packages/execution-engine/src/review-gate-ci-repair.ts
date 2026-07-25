@@ -32,6 +32,11 @@ import {
   classifyFailedChecks,
   type FailedCheckLogFetcher,
 } from './ci-failure-infra-classifier.js';
+import {
+  tryAcquirePrRepairLease,
+  type PrRepairLeaseStore,
+} from './pr-repair-lease.js';
+import { resolvePrRepairIdentity } from './pr-repair-identity.js';
 import { recordWorkerDecisionRow } from './worker-decision-ledger.js';
 
 const CI_FAILURE_WORKER_KIND = 'ci-failure';
@@ -51,6 +56,9 @@ export interface ReviewGateCiRepairStore {
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
+  getPrRepairLease?: PrRepairLeaseStore['getPrRepairLease'];
+  upsertPrRepairLease?: PrRepairLeaseStore['upsertPrRepairLease'];
+  deletePrRepairLeaseById?: PrRepairLeaseStore['deletePrRepairLeaseById'];
 }
 
 export interface ReviewGateCiRepairSubmitter {
@@ -287,6 +295,42 @@ function logCiFailureWorkerEvent(
   });
 }
 
+function acquireCiFailureLease(
+  options: ReviewGateCiRepairPolicyOptions,
+  event: ReviewGateCiFailedLifecycleEvent,
+): { available: false } | { available: true; lease?: { leaseId: string; repo: string; prNumber: number } } {
+  if (!event.headSha || !options.store.getPrRepairLease || !options.store.upsertPrRepairLease) {
+    return { available: false };
+  }
+  const identity = resolvePrRepairIdentity(event.reviewUrl, event.reviewId);
+  if (!identity) return { available: false };
+  const lease = tryAcquirePrRepairLease({
+    ...identity,
+    headSha: event.headSha,
+    kind: 'ci_failed',
+    workflowId: event.workflowId,
+    store: {
+      getPrRepairLease: options.store.getPrRepairLease,
+      upsertPrRepairLease: options.store.upsertPrRepairLease,
+      getPrRepairLeaseById: () => undefined,
+      deletePrRepairLeaseById: () => false,
+    },
+  });
+  if (!lease.ok) {
+    recordCiFailureAction(options, event, 'skipped', 'Skipped CI repair because PR repair lease is held', {
+      reason: 'pr-repair-lease-denied',
+      holderKind: lease.holderKind,
+      lease: { repo: identity.repo, prNumber: identity.prNumber, headSha: event.headSha },
+    });
+    logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+      reason: 'pr-repair-lease-denied',
+      holderKind: lease.holderKind,
+    });
+    return { available: true };
+  }
+  return { available: true, lease: { leaseId: lease.leaseId, ...identity } };
+}
+
 
 function buildCiFailureFixContext(event: ReviewGateCiFailedLifecycleEvent): string {
   const checks = event.failedChecks
@@ -362,6 +406,12 @@ function reconcileFinishedIntentAction(
     updatedAt: now,
     completedAt: now,
   });
+  const leaseId = payload.prRepairLease && typeof payload.prRepairLease === 'object'
+    ? (payload.prRepairLease as Record<string, unknown>).leaseId
+    : undefined;
+  if (typeof leaseId === 'string') {
+    options.store.deletePrRepairLeaseById?.(leaseId);
+  }
   logCiFailureWorkerEvent(options, event, 'worker-ci-failure-intent-reconciled', {
     intentId: existing.intentId,
     intentStatus: intent.status,
@@ -452,6 +502,11 @@ export async function queueReviewGateCiRepair(
     return { decision: 'skipped', reason: 'worker-retry-budget-exhausted' };
   }
 
+  const leaseResult = acquireCiFailureLease(options, event);
+  if (leaseResult.available && !leaseResult.lease) {
+    return { decision: 'skipped', reason: 'pr-repair-lease-denied' };
+  }
+
   const attemptDecision = options.attemptLedger.consume(
     autoFixAttemptLedgerKeyFromLifecycleEvent(event),
     workerRetryBudget,
@@ -498,6 +553,15 @@ export async function queueReviewGateCiRepair(
       fixContext: buildCiFailureFixContext(event),
     },
     executionModel,
+    ...(leaseResult.lease ? {
+      prRepairLease: {
+        leaseId: leaseResult.lease.leaseId,
+        repo: leaseResult.lease.repo,
+        prNumber: leaseResult.lease.prNumber,
+        headSha: event.headSha,
+        holderKind: 'ci_failed',
+      },
+    } : {}),
   });
   const intentId = options.submitter.submit(event.workflowId, 'normal', FIX_WITH_AGENT_CHANNEL, args);
   recordCiFailureAction(
@@ -508,6 +572,7 @@ export async function queueReviewGateCiRepair(
     {
       channel: FIX_WITH_AGENT_CHANNEL,
       workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+      ...(leaseResult.lease ? { prRepairLease: leaseResult.lease } : {}),
     },
     intentId,
     selectedAgent,

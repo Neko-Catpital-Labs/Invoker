@@ -104,6 +104,15 @@ export interface AutoFixCommandContext {
   autoFix: boolean;
   reviewGateContext?: ReviewGateCiContext;
   executionModel?: string;
+  prRepairLease?: PrRepairLeaseIntentMetadata;
+}
+
+export interface PrRepairLeaseIntentMetadata {
+  leaseId: string;
+  repo: string;
+  prNumber: number;
+  headSha?: string;
+  holderKind: string;
 }
 
 export interface ParsedHeadlessFixArgs extends AutoFixCommandContext {
@@ -168,6 +177,7 @@ export interface FixWithAgentMutationOptions {
   autoFix?: boolean;
   reviewGateContext?: ReviewGateCiContext;
   executionModel?: string;
+  prRepairLease?: PrRepairLeaseIntentMetadata;
 }
 
 export interface ParsedFixWithAgentMutationArgs {
@@ -182,11 +192,12 @@ export function buildFixWithAgentMutationArgs(
   options?: FixWithAgentMutationOptions,
 ): unknown[] {
   const args: unknown[] = [taskId, agentName];
-  if (options && (options.autoFix || options.reviewGateContext || options.executionModel)) {
+  if (options && (options.autoFix || options.reviewGateContext || options.executionModel || options.prRepairLease)) {
     args.push({
       autoFix: Boolean(options.autoFix || options.reviewGateContext),
       ...(options.reviewGateContext ? { reviewGateContext: options.reviewGateContext } : {}),
       ...(options.executionModel ? { executionModel: options.executionModel } : {}),
+      ...(options.prRepairLease ? { prRepairLease: options.prRepairLease } : {}),
     });
   }
   return args;
@@ -199,6 +210,7 @@ export function parseFixWithAgentMutationArgs(args: unknown[]): ParsedFixWithAge
   let autoFix = false;
   let reviewGateContext: ReviewGateCiContext | undefined;
   let executionModel: string | undefined;
+  let prRepairLease: PrRepairLeaseIntentMetadata | undefined;
 
   if (optionsArg && typeof optionsArg === 'object') {
     const candidate = optionsArg as Record<string, unknown>;
@@ -215,7 +227,24 @@ export function parseFixWithAgentMutationArgs(args: unknown[]): ParsedFixWithAge
     if (typeof candidate.executionModel === 'string' && candidate.executionModel.length > 0) {
       executionModel = candidate.executionModel;
     }
+    if (candidate.prRepairLease && typeof candidate.prRepairLease === 'object') {
+      const lease = candidate.prRepairLease as Record<string, unknown>;
+      if (
+        typeof lease.leaseId === 'string'
+        && typeof lease.repo === 'string'
+        && typeof lease.prNumber === 'number'
+        && typeof lease.holderKind === 'string'
+      ) {
+        prRepairLease = {
+          leaseId: lease.leaseId,
+          repo: lease.repo,
+          prNumber: lease.prNumber,
+          ...(typeof lease.headSha === 'string' ? { headSha: lease.headSha } : {}),
+          holderKind: lease.holderKind,
+        };
+      }
+    }
   }
 
-  return { taskId, agentName, context: { autoFix, reviewGateContext, executionModel } };
+  return { taskId, agentName, context: { autoFix, reviewGateContext, executionModel, prRepairLease } };
 }

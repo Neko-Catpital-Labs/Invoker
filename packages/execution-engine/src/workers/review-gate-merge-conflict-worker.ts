@@ -20,6 +20,11 @@ import type {
   WorkflowLifecycleEvent,
 } from '../lifecycle-events.js';
 import { recordWorkerDecisionRow } from '../worker-decision-ledger.js';
+import {
+  tryAcquirePrRepairLease,
+  type PrRepairLeaseStore,
+} from '../pr-repair-lease.js';
+import { resolvePrRepairIdentity } from '../pr-repair-identity.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
@@ -47,6 +52,9 @@ export interface ReviewGateMergeConflictWorkerStore {
   getWorkerAction?(workerKind: string, externalKey: string): WorkerActionRecord | undefined;
   upsertWorkerAction?(action: WorkerActionWrite): WorkerActionRecord;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
+  getPrRepairLease?: PrRepairLeaseStore['getPrRepairLease'];
+  upsertPrRepairLease?: PrRepairLeaseStore['upsertPrRepairLease'];
+  deletePrRepairLeaseById?: PrRepairLeaseStore['deletePrRepairLeaseById'];
 }
 
 export interface ReviewGateMergeConflictWorkerSubmitter {
@@ -297,6 +305,48 @@ function logReviewGateMergeConflictEvent(
   });
 }
 
+function acquireMergeConflictLease(
+  options: ReviewGateMergeConflictWorkerPolicyOptions,
+  event: ReviewGateMergeConflictLifecycleEvent,
+): { available: false } | { available: true; lease?: { leaseId: string; repo: string; prNumber: number } } {
+  if (!event.headSha || !options.store.getPrRepairLease || !options.store.upsertPrRepairLease) {
+    return { available: false };
+  }
+  const identity = resolvePrRepairIdentity(event.reviewUrl, event.reviewId);
+  if (!identity) return { available: false };
+  const lease = tryAcquirePrRepairLease({
+    ...identity,
+    headSha: event.headSha,
+    kind: 'merge_conflict',
+    workflowId: event.workflowId,
+    store: {
+      getPrRepairLease: options.store.getPrRepairLease,
+      upsertPrRepairLease: options.store.upsertPrRepairLease,
+      getPrRepairLeaseById: () => undefined,
+      deletePrRepairLeaseById: () => false,
+    },
+  });
+  if (!lease.ok) {
+    recordReviewGateMergeConflictAction(
+      options,
+      event,
+      'skipped',
+      'Skipped workflow rebase-recreate because PR repair lease is held',
+      {
+        reason: 'pr-repair-lease-denied',
+        holderKind: lease.holderKind,
+        lease: { repo: identity.repo, prNumber: identity.prNumber, headSha: event.headSha },
+      },
+    );
+    logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-skip', {
+      reason: 'pr-repair-lease-denied',
+      holderKind: lease.holderKind,
+    });
+    return { available: true };
+  }
+  return { available: true, lease: { leaseId: lease.leaseId, ...identity } };
+}
+
 function listOpenRecreateIntentsForEvent(
   options: ReviewGateMergeConflictWorkerPolicyOptions,
   event: ReviewGateMergeConflictLifecycleEvent,
@@ -362,6 +412,12 @@ function reconcileFinishedIntentAction(
     updatedAt: now,
     completedAt: now,
   });
+  const leaseId = payload.prRepairLease && typeof payload.prRepairLease === 'object'
+    ? (payload.prRepairLease as Record<string, unknown>).leaseId
+    : undefined;
+  if (typeof leaseId === 'string') {
+    options.store.deletePrRepairLeaseById?.(leaseId);
+  }
   logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-intent-reconciled', {
     intentId: existing.intentId,
     intentStatus: intent.status,
@@ -406,13 +462,31 @@ async function handleReviewGateMergeConflictEvent(
     return;
   }
 
-  const intentId = options.submitter.submit(event.workflowId, 'high', REBASE_RECREATE_CHANNEL, [event.workflowId]);
+  const leaseResult = acquireMergeConflictLease(options, event);
+  if (leaseResult.available && !leaseResult.lease) return;
+
+  const intentArgs: unknown[] = [event.workflowId];
+  if (leaseResult.lease) {
+    intentArgs.push({
+      prRepairLease: {
+        leaseId: leaseResult.lease.leaseId,
+        repo: leaseResult.lease.repo,
+        prNumber: leaseResult.lease.prNumber,
+        headSha: event.headSha,
+        holderKind: 'merge_conflict',
+      },
+    });
+  }
+  const intentId = options.submitter.submit(event.workflowId, 'high', REBASE_RECREATE_CHANNEL, intentArgs);
   recordReviewGateMergeConflictAction(
     options,
     event,
     'queued',
     'Queued workflow rebase-recreate for review-gate merge conflict',
-    { channel: REBASE_RECREATE_CHANNEL },
+    {
+      channel: REBASE_RECREATE_CHANNEL,
+      ...(leaseResult.lease ? { prRepairLease: leaseResult.lease } : {}),
+    },
     intentId,
   );
   logReviewGateMergeConflictEvent(options, event, 'review-gate-merge-conflict-submitted', {
