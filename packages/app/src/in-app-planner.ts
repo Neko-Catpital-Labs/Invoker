@@ -32,12 +32,14 @@ import type {
 } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import {
+  approvePlanningDraft,
   evaluatePlanningTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
+import { selectHarnessSessionDriver } from '@invoker/surfaces';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
@@ -59,6 +61,7 @@ export interface InAppPlannerDeps {
   loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
   workingDir?: string;
   planningCommandBuilder?: PlanningCommandBuilder;
+  executionAgentRegistry?: Pick<AgentRegistry, 'get'>;
   conversationRepo?: ConversationRepository;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
@@ -338,7 +341,7 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'conversationRepo' | 'onRawPlannerOutput'>,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'onRawPlannerOutput'>,
   threadTs: string,
   options: { conversationalPlanning?: boolean } = {},
 ): PlanConversationConfig {
@@ -355,6 +358,10 @@ function planConversationConfig(
     conversationalPlanning: options.conversationalPlanning ?? false,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
+    harnessSessionDriver: selectHarnessSessionDriver(preset, {
+      executionAgentRegistry: deps.executionAgentRegistry,
+      planningCommandBuilder: deps.planningCommandBuilder,
+    }),
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
     onRawPlannerOutput: deps.onRawPlannerOutput
@@ -631,34 +638,32 @@ export async function submitPlanningChatDraft(
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
     try {
-      const planText = session.draftPlanText;
-      if (!planText) {
-        return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
+      const approved = await approvePlanningDraft({
+        planText: session.draftPlanText,
+        loadPlan: deps.loadGeneratedPlan,
+      });
+      if (!approved.ok) {
+        return approved;
       }
-      const summary = summarizePlanText(planText);
-      if (!summary) {
-        return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
-      }
-      const loaded = await deps.loadGeneratedPlan(planText);
       session.status = 'submitted';
-      session.submittedPlanName = loaded.planName;
-      session.submittedWorkflowId = loaded.workflowId;
+      session.submittedPlanName = approved.planName;
+      session.submittedWorkflowId = approved.workflowId;
       session.updatedAt = new Date().toISOString();
       appendSessionMessage(
         session,
         'system',
-        loaded.workflowCount && loaded.workflowCount > 1
-          ? `Plan "${loaded.planName}" submitted as ${loaded.workflowCount} stacked workflows.`
-          : `Plan "${loaded.planName}" submitted to Invoker.`,
+        approved.workflowCount && approved.workflowCount > 1
+          ? `Plan "${approved.planName}" submitted as ${approved.workflowCount} stacked workflows.`
+          : `Plan "${approved.planName}" submitted to Invoker.`,
         'success',
       );
       persistPlanningSession(session, deps.planningSessionStore, false);
       return {
         ok: true,
-        planName: loaded.planName,
-        workflowId: loaded.workflowId,
-        workflowIds: loaded.workflowIds,
-        workflowCount: loaded.workflowCount,
+        planName: approved.planName,
+        workflowId: approved.workflowId,
+        workflowIds: approved.workflowIds,
+        workflowCount: approved.workflowCount,
       };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
