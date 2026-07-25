@@ -34,6 +34,18 @@ assert.deepEqual(evaluateRollout({ author: 'EdbertChan', enforceAll: 'false', en
   enforcedAuthors: ['edbertchan'],
 });
 
+const prBodyWorkflow = readFileSync(new URL('../.github/workflows/pr-body.yml', import.meta.url), 'utf8');
+assert.match(
+  prBodyWorkflow,
+  /run: pnpm install --no-frozen-lockfile --ignore-scripts/,
+  'PR Body must resolve trusted-base validator dependencies when its lockfile is stale',
+);
+assert.doesNotMatch(
+  prBodyWorkflow,
+  /run: pnpm install --frozen-lockfile --ignore-scripts/,
+  'PR Body must not fail before validation on a stale trusted-base lockfile',
+);
+
 const outputDir = mkdtempSync(join(tmpdir(), 'pr-body-rollout-'));
 const outputFile = join(outputDir, 'github-output');
 try {
