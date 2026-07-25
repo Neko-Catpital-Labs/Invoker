@@ -1636,6 +1636,43 @@ tasks:
     expect(startPlan!.planText).toContain('Health API');
   });
 
+  it('resolves a conversational repo alias and rewrites the drafted plan repoUrl before submit', async () => {
+    const surface = lobbySurface(true, {
+      defaultRepoUrl: 'git@github.com:default/repo.git',
+      repoAliases: { invoker: 'git@github.com:Neko-Catpital-Labs/Invoker.git' },
+    });
+    await surface.start(async (cmd) => { received.push(cmd); });
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> plan a validation fix in invoker', ts: 't1', user: 'U1' },
+      say,
+    });
+    expect(planConversationConfigs.at(-1)).toEqual(expect.objectContaining({
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+    }));
+
+    draftedPlanForMock = `
+name: Repo alias plan
+repoUrl: invoker
+tasks:
+  - id: validate
+    description: Validate the repository
+    command: pnpm test
+    dependencies: []
+`;
+    await mentionHandler(surface)({
+      event: { text: '<@BOT> submit', thread_ts: 't1', ts: 't2', user: 'U1' },
+      say: vi.fn().mockResolvedValue({ ts: 'b' }),
+    });
+    await messageHandler(surface)({
+      event: { thread_ts: 't1', ts: 't3', user: 'U1', text: 'yes' },
+      say: vi.fn().mockResolvedValue({ ts: 'c' }),
+    });
+
+    const startPlan = received.find((command) => command.type === 'start_plan') as Extract<SurfaceCommand, { type: 'start_plan' }>;
+    expect(startPlan.planText).toContain('repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git');
+  });
+
   it('reports when workflow operations are not wired in this deployment', async () => {
     const surface = lobbySurface(false);
     await surface.start(async () => {});
