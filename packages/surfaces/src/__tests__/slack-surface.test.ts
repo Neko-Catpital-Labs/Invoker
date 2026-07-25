@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceEvent, SurfaceCommand } from '../surface.js';
+import { SQLiteAdapter, SlackSessionRepository, SlackPlanDraftRepository } from '@invoker/data-store';
 
 // ── Mock @slack/bolt ────────────────────────────────────────
 
@@ -40,6 +41,9 @@ vi.mock('@slack/bolt', () => {
         add: vi.fn().mockResolvedValue({}),
         remove: vi.fn().mockResolvedValue({}),
       },
+      files: {
+        uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F_TEST' }] }),
+      },
     };
   }
 
@@ -51,6 +55,8 @@ let mockDraftedPlan: string | null = null;
 const mockPlanConversation = {
   sendMessage: mockSendMessage,
   getDraftedPlan: () => mockDraftedPlan,
+  runPlanConversion: vi.fn().mockResolvedValue(''),
+  lastTurnDraftPlanText: null as string | null,
   submittedPlanText: null as any,
   planSubmitted: false,
   conversationMode: 'plan' as const,
@@ -94,8 +100,9 @@ describe('SlackSurface', () => {
     it('registers action handlers for approve, reject, select, input', async () => {
       await surface.start(async () => {});
       const app = surface.getApp() as any;
-      // 6 action registrations: approve:, reject:, select:, input:, lobby_confirm, lobby_cancel
-      expect(app.action).toHaveBeenCalledTimes(6);
+      // 8 action registrations: approve:, reject:, select:, input:, plan_draft_approve,
+      // plan_draft_cancel, lobby_confirm (op/restart only), lobby_cancel
+      expect(app.action).toHaveBeenCalledTimes(8);
     });
 
     it('registers app_mention and message event handlers', async () => {
@@ -554,12 +561,21 @@ describe('SlackSurface', () => {
 
   describe('plan submission via mention', () => {
     let surfaceWithApi: SlackSurface;
+    let adapter: SQLiteAdapter;
+    let slackSessionRepo: SlackSessionRepository;
+    let slackPlanDraftRepo: SlackPlanDraftRepository;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       mockSendMessage.mockReset();
       mockPlanConversation.submittedPlanText = null;
       mockPlanConversation.planSubmitted = false;
+      mockPlanConversation.lastTurnDraftPlanText = null;
+      mockPlanConversation.runPlanConversion = vi.fn().mockResolvedValue('');
       mockDraftedPlan = null;
+
+      adapter = await SQLiteAdapter.create(':memory:');
+      slackSessionRepo = new SlackSessionRepository(adapter);
+      slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
 
       surfaceWithApi = new SlackSurface({
         defaultRepoUrl: 'https://github.com/example/repo.git',
@@ -568,13 +584,20 @@ describe('SlackSurface', () => {
         signingSecret: 'test-secret',
         channelId: 'C-test',
         cursorCommand: 'cursor',
+        workingDir: '/tmp/repo',
+        slackSessionRepo,
+        slackPlanDraftRepo,
       });
     });
 
+    afterEach(() => {
+      adapter.close();
+    });
+
     it('submits the drafted plan from its inline approval button', async () => {
-      const planText = 'name: "Test Plan"\ntasks:\n  - id: t1\n    description: "Do something useful"\n    dependencies: []\n';
-      mockSendMessage.mockResolvedValue('Here is your plan.');
-      mockDraftedPlan = planText;
+      const planText = 'name: "Test Plan"\ntasks:\n  - id: t1\n    description: "Do something useful"\n    dependencies: []';
+      mockSendMessage.mockResolvedValue('Sure, tell me more about the REST API.');
+      mockPlanConversation.lastTurnDraftPlanText = planText;
 
       await surfaceWithApi.start(async (cmd) => {
         receivedCommands.push(cmd);
@@ -582,19 +605,28 @@ describe('SlackSurface', () => {
 
       const app = surfaceWithApi.getApp() as any;
       const mentionHandler = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
-      const confirmHandler = app._actionHandlers.find((h: MockHandler) => h.pattern === 'lobby_confirm')?.handler;
+      const approveHandler = app._actionHandlers.find((h: MockHandler) => h.pattern === 'plan_draft_approve')?.handler;
 
-      // Explicit plan request → a planning conversation with inline approval; nothing submitted.
+      // A normal mention first pins the thread to a repo/working dir.
       const say1 = vi.fn().mockResolvedValue({ ts: '1111.001' });
-      await mentionHandler({ event: { text: '<@U_BOT> plan: build me a REST API', ts: '1111', thread_ts: undefined }, say: say1 });
+      await mentionHandler({ event: { text: '<@U_BOT> build me a REST API', ts: '1111', thread_ts: undefined }, say: say1 });
+
+      // Explicit /plan request drafts and posts a plan review with an inline approval button; nothing submitted yet.
+      const say2 = vi.fn().mockResolvedValue({ ts: '2222.001' });
+      await mentionHandler({ event: { text: '<@U_BOT> /plan', ts: '2222', thread_ts: '1111' }, say: say2 });
       expect(receivedCommands).toHaveLength(0);
       expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
-        text: expect.stringContaining('Approve to execute'),
-        blocks: expect.arrayContaining([expect.objectContaining({ type: 'actions' })]),
+        blocks: expect.arrayContaining([expect.objectContaining({
+          type: 'actions',
+          elements: expect.arrayContaining([expect.objectContaining({ action_id: 'plan_draft_approve' })]),
+        })]),
       }));
 
-      await confirmHandler({
-        action: { type: 'button', value: '1111' },
+      const draft = slackPlanDraftRepo.getReady('C-test', '1111');
+      expect(draft).toBeDefined();
+
+      await approveHandler({
+        action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
         body: { channel: { id: 'C-test' }, message: { thread_ts: '1111' } },
         ack: vi.fn().mockResolvedValue(undefined),
         respond: vi.fn().mockResolvedValue(undefined),

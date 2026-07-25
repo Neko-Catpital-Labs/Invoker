@@ -4,7 +4,7 @@ import * as child_process from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SlackSurface, extractRepoUrlFromMessage, parsePlanningRequest, parseLobbyClassification, parseLocalRequest, parseThreadRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS, buildLobbyQuestionPrompt } from '../slack/slack-surface.js';
+import { SlackSurface, extractRepoUrlFromMessage, parsePlanningRequest, parseLocalRequest, parseWorkflowStatusQuery, BUILTIN_HARNESS_PRESETS } from '../slack/slack-surface.js';
 import { SQLiteAdapter, ConversationRepository, SlackSessionRepository, WorkflowChannelRepository } from '@invoker/data-store';
 import * as executionEngine from '@invoker/execution-engine';
 import type { SurfaceCommand } from '../surface.js';
@@ -242,47 +242,6 @@ describe('parseWorkflowStatusQuery', () => {
     expect(parseWorkflowStatusQuery('report back how many workflows we are running')).toEqual({ intent: 'command', operation: 'status', target: { all: true } });
     expect(parseWorkflowStatusQuery('what is the status of workflows')).toEqual({ intent: 'command', operation: 'status', target: { all: true } });
     expect(parseWorkflowStatusQuery('fix the Slack workflow docs')).toBeNull();
-  });
-});
-describe('parseThreadRequest', () => {
-  it('defaults to a normal agent thread unless the request clearly asks for an Invoker plan', () => {
-    expect(parseThreadRequest('fix the Slack routing bug')).toEqual({ mode: 'agent', text: 'fix the Slack routing bug' });
-    expect(parseThreadRequest('local: fix the Slack routing bug')).toEqual({ mode: 'agent', text: 'fix the Slack routing bug' });
-    expect(parseThreadRequest('run local: report back how many workflows are running')).toEqual({ mode: 'agent', text: 'report back how many workflows are running' });
-    expect(parseThreadRequest('plan: fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
-    expect(parseThreadRequest('draft an Invoker plan: fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
-    expect(parseThreadRequest('plan fix the Slack routing bug')).toEqual({ mode: 'plan', text: 'fix the Slack routing bug' });
-    expect(parseThreadRequest('make that fix via Invoker')).toEqual({ mode: 'plan', text: 'make that fix' });
-    expect(parseThreadRequest('draft an Invoker plan for the Slack routing bug')).toEqual({ mode: 'plan', text: 'the Slack routing bug' });
-    expect(parseThreadRequest('please draft a plan for this')).toEqual({
-      mode: 'plan',
-      text: 'please draft a plan for this',
-    });
-    expect(parseThreadRequest('turn the discussion above into a plan')).toEqual({
-      mode: 'plan',
-      text: 'turn the discussion above into a plan',
-    });
-    expect(parseThreadRequest('Can you create a plan for this to submit to Invoker for all these features?')).toEqual({
-      mode: 'plan',
-      text: 'Can you create a plan for this to submit to Invoker for all these features?',
-    });
-    expect(parseThreadRequest('why are you dumping the chain of thought')).toEqual({
-      mode: 'agent',
-      text: 'why are you dumping the chain of thought',
-    });
-  });
-
-  it('treats a sole fenced plan: block as plan mode', () => {
-    const fenced = '```text\nplan: Prove and fix the adverse UI test issues\n```';
-    expect(parseThreadRequest(fenced)).toEqual({
-      mode: 'plan',
-      text: 'Prove and fix the adverse UI test issues',
-    });
-  });
-
-  it('does not treat a fence nested after prose as a plan opt-in', () => {
-    const mixed = 'please help\n\n```text\nplan: do not treat this as plan mode\n```';
-    expect(parseThreadRequest(mixed)).toEqual({ mode: 'agent', text: mixed });
   });
 });
 
@@ -680,52 +639,6 @@ function messageHandler(surface: SlackSurface): Function {
   return app._eventHandlers.find((h: MockHandler) => h.pattern === 'message')!.handler;
 }
 
-describe('parseLobbyClassification', () => {
-  it('maps a bulk rebase-recreate command', () => {
-    expect(parseLobbyClassification('{"intent":"command","operation":"rebase-recreate","target":"all"}'))
-      .toEqual({ intent: 'command', operation: 'rebase-recreate', target: { all: true } });
-  });
-
-  it('maps a single-workflow retry command', () => {
-    expect(parseLobbyClassification('{"intent":"command","operation":"retry","target":"wf-123"}'))
-      .toEqual({ intent: 'command', operation: 'retry', target: { workflow: 'wf-123' } });
-  });
-
-  it('defaults a targetless status command to all workflows', () => {
-    expect(parseLobbyClassification('{"intent":"command","operation":"status","target":"none"}'))
-      .toEqual({ intent: 'command', operation: 'status', target: { all: true } });
-  });
-
-  it('classifies questions and plans', () => {
-    expect(parseLobbyClassification('{"intent":"question","operation":"none","target":"none"}'))
-      .toEqual({ intent: 'question' });
-    expect(parseLobbyClassification('{"intent":"plan","operation":"none","target":"none"}'))
-      .toEqual({ intent: 'plan' });
-  });
-
-  it('extracts JSON embedded in surrounding prose', () => {
-    expect(parseLobbyClassification('Sure: {"intent":"command","operation":"cancel","target":"wf-9"} ok'))
-      .toEqual({ intent: 'command', operation: 'cancel', target: { workflow: 'wf-9' } });
-  });
-
-  it('falls back to plan on malformed output', () => {
-    expect(parseLobbyClassification('not json at all')).toEqual({ intent: 'plan' });
-    expect(parseLobbyClassification('{bad json}')).toEqual({ intent: 'plan' });
-  });
-
-  it('rejects an unmappable operation as invalid-command', () => {
-    expect(parseLobbyClassification('{"intent":"command","operation":"none","target":"all"}'))
-      .toEqual({ intent: 'invalid-command' });
-    expect(parseLobbyClassification('{"intent":"command","operation":"frobnicate","target":"all"}'))
-      .toEqual({ intent: 'invalid-command' });
-  });
-
-  it('rejects a non-status mutation with no target as invalid-command', () => {
-    expect(parseLobbyClassification('{"intent":"command","operation":"retry","target":"none"}'))
-      .toEqual({ intent: 'invalid-command' });
-  });
-});
-
 // ── Lobby intent routing (command / question / plan) ─────────
 
 describe('lobby verb routing', () => {
@@ -758,25 +671,6 @@ describe('lobby verb routing', () => {
     return { adapter, conversationRepo, slackSessionRepo, surface };
   }
 
-  it('asks lobby question answers to be short ELI5 Slack prose except for clearly technical questions', () => {
-    const prompt = buildLobbyQuestionPrompt('how many workflows are running?');
-    expect(prompt).toContain('ELI5 Slack prose');
-    expect(prompt).toContain('40 words or fewer');
-    expect(prompt).toContain('clearly technical');
-    expect(prompt).toContain('Do NOT generate a YAML plan');
-  });
-
-  it('lets a lobby question repro locally but hands off anything that mutates shared state', () => {
-    const prompt = buildLobbyQuestionPrompt('can you land the top of the stack for me?');
-    expect(prompt).toContain('Reproducing a bug locally is always allowed');
-    expect(prompt).toContain('mergify stack push');
-    expect(prompt).toContain('scripts/land-stack.mjs --execute');
-    expect(prompt).toContain('draft a plan in this same thread');
-    expect(prompt).toContain('same thread');
-    expect(prompt).toContain('only the final user-facing answer');
-    expect(prompt).not.toContain('start a plan thread');
-  });
-
   it('returns only the final Codex message from one-shot Slack replies', async () => {
     const raw = [
       JSON.stringify({ type: 'thread.started', thread_id: 'thread-1' }),
@@ -802,19 +696,13 @@ describe('lobby verb routing', () => {
   });
 
   // Repro: the Slack thread that prompted this asked the bot to investigate a
-  // landing failure. It routed as `question` — the one lobby path whose prompt
-  // never told it to keep its hands off shared state.
-  it('carries the execution boundary into the planner command a lobby question actually spawns', async () => {
-    const prompts: string[] = [];
-    mockSpawn
-      .mockImplementationOnce(() => mockProcess('{"intent":"question","operation":"none","target":"none"}'))
-      .mockImplementationOnce(() => mockProcess('Here is what went wrong.'));
-    const surface = lobbySurface(true, {
-      planningCommandBuilder: ({ prompt }: { prompt: string }) => {
-        prompts.push(prompt);
-        return { command: 'cursor', args: ['--print', prompt] };
-      },
-    });
+  // landing failure. There is no classifier anymore — every non-deterministic
+  // mention routes straight into a normal agent-mode conversation, which is
+  // where the execution boundary (SLACK_LOCAL_REPRO_POLICY) lives; see
+  // "agent mode refuses Invoker YAML and redirects" in plan-conversation.test.ts
+  // for coverage of that boundary text itself.
+  it('routes a lobby question into a normal agent thread instead of running an operation', async () => {
+    const surface = lobbySurface();
     await surface.start(async (cmd) => { received.push(cmd); });
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
 
@@ -826,12 +714,9 @@ describe('lobby verb routing', () => {
       say,
     });
 
-    expect(prompts).toHaveLength(2);
-    const answerPrompt = prompts[1];
-    expect(answerPrompt).toContain('Never run anything that changes state outside your worktree');
-    expect(answerPrompt).toContain('mergify stack push');
-    expect(answerPrompt).toContain('scripts/land-stack.mjs --execute');
-    expect(answerPrompt).toContain('Reproducing a bug locally is always allowed');
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
+    expect(runWorkflowOp).not.toHaveBeenCalled();
     expect(received).toHaveLength(0);
   });
 
@@ -1082,32 +967,28 @@ describe('lobby verb routing', () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
-  it('uses the classifier only for fuzzy operational text, and always confirms before running', async () => {
-    mockSpawn.mockImplementationOnce(() => mockProcess('{"intent":"command","operation":"recreate","target":"all"}'));
-    runWorkflowOp.mockResolvedValue({ ok: true, summary: 'recreate: 2 ok' });
+  it('treats fuzzy operational text as a normal agent question, not a workflow op', async () => {
     const surface = lobbySurface();
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> can you recreate everything please', ts: 't1', user: 'U1' }, say });
 
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    // Only the deterministic verb grammar (`recreate all`, etc.) triggers a workflow
+    // op; fuzzy prose with no classifier just becomes a normal agent-mode turn.
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
     expect(runWorkflowOp).not.toHaveBeenCalled();
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('recreate') }));
-
-    const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
-    await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'yes' }, say: say2 });
-    expect(runWorkflowOp.mock.calls[0][0]).toEqual({ operation: 'recreate', target: { all: true } });
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('planner reply') }));
   });
 
-  it('acknowledges a fuzzy operational mention immediately, before the classifier returns', async () => {
-    mockSpawn.mockImplementationOnce(() => mockProcess('{"intent":"command","operation":"recreate","target":"all"}'));
+  it('acknowledges a fuzzy operational mention immediately, before the agent responds', async () => {
     const surface = lobbySurface(true, { enableImmediateAck: true });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'ack-1' });
     await mentionHandler(surface)({ event: { text: '<@BOT> can you recreate everything please', ts: 't1', user: 'U1' }, say });
-    // Immediate "processing" receipt posts up front (then is cleared once the confirm is ready).
+    // Immediate "processing" receipt posts up front (then is replaced by the agent's reply).
     expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Processing your request...', thread_ts: 't1' }));
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(planConversationConfigs).toHaveLength(1);
   });
 
   it('does not post a processing ack for an instant verb', async () => {
@@ -1132,24 +1013,23 @@ describe('lobby verb routing', () => {
     expect(received).toHaveLength(0);
   });
 
-  it('routes a build request to an inferred Invoker plan thread', async () => {
+  it('starts a normal agent thread for a build request (no classifier, no plan-mode inference)', async () => {
     const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> add a /health endpoint', ts: 't1', user: 'U1' }, say });
     expect(planConversationConfigs).toHaveLength(1);
-    expect(planConversationConfigs[0].mode).toBe('plan');
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
     expect(runWorkflowOp).not.toHaveBeenCalled();
   });
 
-  it('routes an explicit plan request to an Invoker plan thread', async () => {
+  it('treats a `plan:`-prefixed message as literal agent text, not a mode switch', async () => {
     const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
     await mentionHandler(surface)({ event: { text: '<@BOT> plan: add a /health endpoint', ts: 't1', user: 'U1' }, say });
     expect(planConversationConfigs).toHaveLength(1);
-    expect(planConversationConfigs[0].mode).toBe('plan');
+    expect(planConversationConfigs[0].mode).toBe('agent');
     expect(runWorkflowOp).not.toHaveBeenCalled();
   });
 
@@ -1178,8 +1058,7 @@ describe('lobby verb routing', () => {
     }));
   });
 
-  it('uses a repo-root URL in the first plan message instead of defaultRepoUrl and announces it', async () => {
-    mockSpawn.mockImplementationOnce(() => mockProcess('{"intent":"plan","operation":"none","target":"none"}'));
+  it('uses a repo-root URL in the first agent message instead of defaultRepoUrl', async () => {
     const surface = lobbySurface(true, {
       defaultRepoUrl: 'git@github.com:default/repo.git',
       enableImmediateAck: true,
@@ -1197,13 +1076,12 @@ describe('lobby verb routing', () => {
       say,
     });
 
+    // No classifier and no plan-mode fork anymore: the "I picked repo ... from the
+    // URL in your message" announcement was only ever emitted for the plan-mode
+    // branch, which no longer exists. Every mention is a normal agent-mode turn.
     expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
     expect(planConversationConfigs[0].repoUrl).toBe('https://github.com/openai/invoker');
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
-    expect(say).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      text: expect.stringContaining('I picked repo `https://github.com/openai/invoker`'),
-      thread_ts: 't1',
-    }));
   });
 
   it('rejects multiple repository selectors before creating a session', async () => {
@@ -1247,7 +1125,7 @@ describe('lobby verb routing', () => {
     expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
   });
 
-  it('ignores a deep link in the first plan message and falls through to defaultRepoUrl', async () => {
+  it('picks up any repo-shaped URL (including a deep link) as the first-message repo', async () => {
     const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
@@ -1262,8 +1140,12 @@ describe('lobby verb routing', () => {
       say,
     });
 
+    // `plan:` is literal agent text now (no plan-mode fork), so this uses the same
+    // repo-URL detection as every other agent message: any repo-shaped URL found in
+    // the message wins over defaultRepoUrl, deep link or not.
     expect(planConversationConfigs).toHaveLength(1);
-    expect(planConversationConfigs[0].repoUrl).toBe('git@github.com:default/repo.git');
+    expect(planConversationConfigs[0].mode).toBe('agent');
+    expect(planConversationConfigs[0].repoUrl).toBe('https://github.com/openai/invoker/pull/123');
     expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
   });
 
@@ -1523,7 +1405,7 @@ describe('lobby verb routing', () => {
     }
   });
 
-  it('asks for a repo instead of planning when a plan mention has no tag, repo URL, or default', async () => {
+  it('starts an agent conversation with no repo pinned when a mention has no tag, repo URL, or default', async () => {
     const surface = lobbySurface();
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
@@ -1533,13 +1415,12 @@ describe('lobby verb routing', () => {
       say,
     });
 
-    expect(planConversationConfigs).toHaveLength(0);
+    // Agent-mode chat doesn't require a repo up front anymore — only the explicit
+    // `/plan` action does, via handleExplicitPlanAction's own pinned-repo check.
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
+    expect(planConversationConfigs[0].repoUrl).toBeUndefined();
     expect(mockSpawn).not.toHaveBeenCalled();
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining('[repo:<alias>]'),
-      thread_ts: 't1',
-    }));
-    expect(say.mock.calls[0][0].text).toContain('git URL');
   });
 
 
@@ -1587,91 +1468,13 @@ describe('lobby verb routing', () => {
     expect(runWorkflowOp).not.toHaveBeenCalled();
     expect(received).toHaveLength(0);
   });
-  it('submit with no drafted plan asks the user to describe one', async () => {
-    const surface = lobbySurface();
-    await surface.start(async () => {});
-    const say = vi.fn().mockResolvedValue({ ts: 'a' });
-    await mentionHandler(surface)({ event: { text: '<@BOT> submit', ts: 't1', user: 'U1' }, say });
-    expect(received).toHaveLength(0);
-    expect(say).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining('No complete Invoker draft') }));
-    expect(say.mock.calls[0][0].text).not.toContain('plan:');
-  });
-
-  it('submit shows every task in the plan summary and emits start_plan on confirmation', async () => {
-    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
-    await surface.start(async (cmd) => { received.push(cmd); });
-    const say = vi.fn().mockResolvedValue({ ts: 'a' });
-    // Open a planning conversation in the thread, then arm its drafted plan.
-    await mentionHandler(surface)({ event: { text: '<@BOT> plan: add a /health endpoint', ts: 't1', user: 'U1' }, say });
-    draftedPlanForMock = `
-name: "Health API rollout with several detailed implementation tasks"
-tasks:
-  - id: second
-    description: "Wire the new /health route through the HTTP server without changing unrelated endpoints or middleware"
-    dependencies: [first]
-  - id: first
-    description: "Add a simple /health endpoint for uptime checks"
-    dependencies: []
-  - id: third
-    description: "Add regression coverage for healthy and unhealthy responses"
-    dependencies: [second]
-  - id: fourth
-    description: "Run the focused surface test suite and record the result"
-    dependencies: [third]
-`;
-
-    const say2 = vi.fn().mockResolvedValue({ ts: 'b' });
-    await mentionHandler(surface)({ event: { text: '<@BOT> submit', thread_ts: 't1', ts: 't2', user: 'U1' }, say: say2 });
-    const confirmationText = say2.mock.calls[0][0].text as string;
-    expect(confirmationText).toContain('Drafted *Health API rollout with several detailed implementation tasks* (4 tasks).');
-    expect(confirmationText).toContain('1) Add a simple /health endpoint for uptime');
-    expect(confirmationText).toContain('2) Wire the new /health route through the');
-    expect(confirmationText.split(/\s+/).length).toBeLessThan(100);
-    expect(received.some((c) => c.type === 'start_plan')).toBe(false);
-
-    const say3 = vi.fn().mockResolvedValue({ ts: 'c' });
-    await messageHandler(surface)({ event: { thread_ts: 't1', ts: 't3', user: 'U1', text: 'yes' }, say: say3 });
-    const startPlan = received.find((c) => c.type === 'start_plan') as Extract<SurfaceCommand, { type: 'start_plan' }> | undefined;
-    expect(startPlan).toBeDefined();
-    expect(startPlan!.planText).toContain('Health API');
-  });
-
-  it('resolves a conversational repo alias and rewrites the drafted plan repoUrl before submit', async () => {
-    const surface = lobbySurface(true, {
-      defaultRepoUrl: 'git@github.com:default/repo.git',
-      repoAliases: { invoker: 'git@github.com:Neko-Catpital-Labs/Invoker.git' },
-    });
-    await surface.start(async (cmd) => { received.push(cmd); });
-    const say = vi.fn().mockResolvedValue({ ts: 'a' });
-    await mentionHandler(surface)({
-      event: { text: '<@BOT> plan a validation fix in invoker', ts: 't1', user: 'U1' },
-      say,
-    });
-    expect(planConversationConfigs.at(-1)).toEqual(expect.objectContaining({
-      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
-    }));
-
-    draftedPlanForMock = `
-name: Repo alias plan
-repoUrl: invoker
-tasks:
-  - id: validate
-    description: Validate the repository
-    command: pnpm test
-    dependencies: []
-`;
-    await mentionHandler(surface)({
-      event: { text: '<@BOT> submit', thread_ts: 't1', ts: 't2', user: 'U1' },
-      say: vi.fn().mockResolvedValue({ ts: 'b' }),
-    });
-    await messageHandler(surface)({
-      event: { thread_ts: 't1', ts: 't3', user: 'U1', text: 'yes' },
-      say: vi.fn().mockResolvedValue({ ts: 'c' }),
-    });
-
-    const startPlan = received.find((command) => command.type === 'start_plan') as Extract<SurfaceCommand, { type: 'start_plan' }>;
-    expect(startPlan.planText).toContain('repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git');
-  });
+  // The old thread-keyed `submit`/PendingConfirm inline plan submission is gone.
+  // Plan drafting + confirmation is now the explicit `/plan` -> PlanDraft card ->
+  // plan_draft_approve flow. See:
+  //  - slack-surface-immediate-response.integration.test.ts, "handles the explicit
+  //    /plan draft-and-approve flow correctly" for the end-to-end flow.
+  //  - slack-plan-draft-approve.test.ts for start_plan / workflowIds on approve.
+  //  - plan-summary.test.ts for per-task plan summary rendering.
 
   it('reports when workflow operations are not wired in this deployment', async () => {
     const surface = lobbySurface(false);

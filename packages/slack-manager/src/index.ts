@@ -24,7 +24,7 @@ import { readSlackRuntimeConfig, resolveDefaultHarnessPreset } from './runtime-c
 import { createRunWorkflowOp } from './workflow-ops.js';
 import { createCommandHandler } from './command-handler.js';
 import { startEventSubscription } from './event-subscription.js';
-import { createPlanningCommandBuilder, createPrepareRepoCheckout, createGatherWorkflowContext } from './host-seams.js';
+import { createHarnessSessionDriverFactory, createPlanningCommandBuilder, createPrepareRepoCheckout, createGatherWorkflowContext } from './host-seams.js';
 import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
@@ -112,6 +112,7 @@ async function main(): Promise<void> {
 
   const runWorkflowOp = createRunWorkflowOp(client, log);
   const gatherWorkflowContext = createGatherWorkflowContext({ client, conversationRepo, workflowChannelRepo, log });
+  const planningCommandBuilder = createPlanningCommandBuilder();
 
   const config: SlackSurfaceConfig = {
     botToken: process.env.SLACK_BOT_TOKEN!,
@@ -128,7 +129,8 @@ async function main(): Promise<void> {
     slackSessionRepo,
     slackPlanDraftRepo,
     workflowChannelRepo,
-    planningCommandBuilder: createPlanningCommandBuilder(),
+    planningCommandBuilder,
+    harnessSessionDriverFactory: createHarnessSessionDriverFactory(planningCommandBuilder),
     prepareRepoCheckout: createPrepareRepoCheckout(path.join(managerHome, 'planning-clones')),
     defaultBranch: process.env.INVOKER_DEFAULT_BRANCH ?? 'master',
     repoUrl,

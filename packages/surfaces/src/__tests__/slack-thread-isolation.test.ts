@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SlackSurface } from '../slack/slack-surface.js';
-import { SQLiteAdapter, ConversationRepository } from '@invoker/data-store';
+import { SQLiteAdapter, ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import type { SurfaceCommand } from '../surface.js';
 
 // ── Mock @slack/bolt ────────────────────────────────────────
@@ -34,6 +34,9 @@ vi.mock('@slack/bolt', () => {
       auth: {
         test: vi.fn().mockResolvedValue({ user_id: 'U_BOT' }),
       },
+      files: {
+        uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F1' }] }),
+      },
     };
   }
 
@@ -57,6 +60,8 @@ vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
       getDraftedPlan: () => instance.submittedPlanText,
       planSubmitted: false,
       conversationMode: config?.mode ?? 'plan',
+      lastTurnDraftPlanText: null as string | null,
+      runPlanConversion: vi.fn().mockImplementation(async () => instance.lastTurnDraftPlanText ?? ''),
       init: vi.fn().mockResolvedValue(undefined),
       sendMessage: vi.fn().mockImplementation(async (text: string) => {
         instance._messages.push({ role: 'user', content: text });
@@ -320,11 +325,24 @@ describe('Slack thread isolation', () => {
   });
 
   describe('plan submission removes conversation from thread map', () => {
-    it('submits via an explicit submit verb + confirmation, then emits start_plan', async () => {
-      await surface.start(async (cmd) => { receivedCommands.push(cmd); });
-      const mentionHandler = getMentionHandler(surface);
-      const messageHandler = getMessageHandler(surface);
-      const say = vi.fn();
+    it('submits via /plan draft approval, then emits start_plan', async () => {
+      const adapter = await SQLiteAdapter.create(':memory:');
+      const slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
+      const slackSessionRepo = new SlackSessionRepository(adapter);
+      const localSurface = new SlackSurface({
+        defaultRepoUrl: 'https://github.com/example/repo.git',
+        workingDir: '/tmp/repo',
+        botToken: 'xoxb-test',
+        appToken: 'xapp-test',
+        signingSecret: 'test-secret',
+        channelId: 'C-test',
+        cursorCommand: 'cursor',
+        slackPlanDraftRepo,
+        slackSessionRepo,
+      });
+      await localSurface.start(async (cmd) => { receivedCommands.push(cmd); });
+      const mentionHandler = getMentionHandler(localSurface);
+      const say = vi.fn().mockResolvedValue({ ts: 'mock-ts' });
 
       await mentionHandler({
         event: { text: '<@U_BOT> plan: build something', ts: 'thread-submit', thread_ts: undefined, user: 'U1' },
@@ -332,24 +350,33 @@ describe('Slack thread isolation', () => {
       });
 
       const conv = conversationInstances.get('thread-submit');
-      // The conversation has drafted a plan (exposed via getDraftedPlan).
-      conv.submittedPlanText = 'name: "Submit Test"\ntasks:\n  - id: t1\n    description: "Run the test"\n    dependencies: []\n';
+      // The conversation has drafted a plan, exposed via lastTurnDraftPlanText.
+      const draftPlanText = 'name: "Submit Test"\ntasks:\n  - id: t1\n    description: "Run the test"\n    dependencies: []\n';
+      conv.runPlanConversion.mockResolvedValue('Here is the plan.');
+      conv.lastTurnDraftPlanText = draftPlanText;
 
-      // Explicit submit verb → confirmation only, no start_plan yet.
+      // `@Invoker /plan` converts the pinned thread scope into a PlanDraft review card — no start_plan yet.
       await mentionHandler({
-        event: { text: '<@UBOT> submit', ts: '500.400', thread_ts: 'thread-submit', user: 'U1' },
+        event: { text: '<@UBOT> /plan', ts: '500.400', thread_ts: 'thread-submit', user: 'U1' },
         say,
       });
       expect(receivedCommands.some((c) => c.type === 'start_plan')).toBe(false);
+      const draft = slackPlanDraftRepo.getReady('C-test', 'thread-submit');
+      expect(draft).toBeTruthy();
 
-      // Confirm → start_plan emitted.
-      await messageHandler({
-        event: { text: 'yes', ts: '500.500', thread_ts: 'thread-submit', user: 'U1' },
-        say,
+      // Approving the PlanDraft card emits start_plan with the drafted plan text.
+      const approveHandler = getActionHandler(localSurface, 'plan_draft_approve');
+      await approveHandler({
+        action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
+        body: { channel: { id: 'C-test' }, message: { thread_ts: 'thread-submit' }, user: { id: 'U1' } },
+        ack: vi.fn().mockResolvedValue(undefined),
+        respond: vi.fn().mockResolvedValue(undefined),
       });
       expect(receivedCommands).toContainEqual(
         expect.objectContaining({ type: 'start_plan' }),
       );
+
+      adapter.close();
     });
 
     it('routes tagged replies through sendMessage when no confirmation is pending', async () => {
@@ -585,81 +612,72 @@ describe('Slack conversation recovery with persistence', () => {
 describe('E2E: Full Slack flow without real APIs', () => {
   let surface: SlackSurface;
   let receivedCommands: SurfaceCommand[];
+  let adapter: SQLiteAdapter;
+  let slackPlanDraftRepo: SlackPlanDraftRepository;
 
-  const YAML_PLAN = `Here's your plan:
-
-\`\`\`yaml
-name: "Add REST API"
-onFinish: merge
-baseBranch: main
-tasks:
-  - id: implement
-    description: "Implement the REST API endpoints"
-    prompt: "Add GET/POST endpoints for /users"
-    dependencies: []
-  - id: test
-    description: "Test the endpoints"
-    command: "pnpm test"
-    dependencies:
-      - implement
-\`\`\`
-
-Want me to execute this?`;
-
-  beforeEach(() => {
+  beforeEach(async () => {
     receivedCommands = [];
     conversationInstances.clear();
     mockPlanConversationCtor.mockClear();
+    adapter = await SQLiteAdapter.create(':memory:');
+    slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
+    const slackSessionRepo = new SlackSessionRepository(adapter);
 
     surface = new SlackSurface({
       defaultRepoUrl: 'https://github.com/example/repo.git',
+      workingDir: '/tmp/repo',
       botToken: 'xoxb-test',
       appToken: 'xapp-test',
       signingSecret: 'test-secret',
       channelId: 'C-test',
       cursorCommand: 'cursor',
+      slackPlanDraftRepo,
+      slackSessionRepo,
     });
   });
 
-  it('mention → plan draft with approval button → start_plan', async () => {
+  afterEach(() => {
+    adapter.close();
+  });
+
+  it('mention → /plan draft with approval button → start_plan', async () => {
     await surface.start(async (cmd) => { receivedCommands.push(cmd); });
     const mentionHandler = getMentionHandler(surface);
-    const say = vi.fn();
+    const say = vi.fn().mockResolvedValue({ ts: 'mock-ts' });
 
-    // Step 1: User explicitly asks for an Invoker plan.
+    // Step 1: User chats in-thread to establish the plan's scope.
     await mentionHandler({
-      event: { text: '<@U_BOT> plan: build a REST API', ts: 'thread-e2e', thread_ts: undefined, user: 'U1' },
+      event: { text: '<@U_BOT> build a REST API', ts: 'thread-e2e', thread_ts: undefined, user: 'U1' },
       say,
     });
     const conv = conversationInstances.get('thread-e2e');
     expect(conv).toBeDefined();
     expect(conv.sendMessage).toHaveBeenCalledTimes(1);
 
-    // Step 2: Bot drafts a YAML plan and stages its approval in the same response.
-    say.mockClear();
-    conv.sendMessage.mockResolvedValueOnce(YAML_PLAN);
+    // Step 2: `@Invoker /plan` converts the established scope into a PlanDraft review card.
     const expectedPlanText = 'name: "Add REST API"\ntasks:\n  - id: implement\n    description: "Implement the REST API endpoints"\n    dependencies: []\n';
-    conv.submittedPlanText = expectedPlanText;
+    conv.runPlanConversion.mockResolvedValue('Here is the plan.');
+    conv.lastTurnDraftPlanText = expectedPlanText;
+    say.mockClear();
     await mentionHandler({
-      event: { text: '<@U_BOT> I want GET and POST for /users', ts: '100.100', thread_ts: 'thread-e2e', user: 'U1' },
+      event: { text: '<@UBOT> /plan', ts: '100.100', thread_ts: 'thread-e2e', user: 'U1' },
       say,
     });
-    expect(say).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining('Approve to execute'), thread_ts: 'thread-e2e' }),
-    );
+    const draft = slackPlanDraftRepo.getReady('C-test', 'thread-e2e');
+    expect(draft).toBeTruthy();
     expect(receivedCommands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
 
-    // Step 3: Approve the original draft → start_plan with the raw plan text.
+    // Step 3: Approve the PlanDraft card → start_plan with the raw plan text.
     say.mockClear();
-    await getActionHandler(surface, 'lobby_confirm')({
-      action: { type: 'button', value: 'thread-e2e' },
-      body: { channel: { id: 'C-test' }, message: { thread_ts: 'thread-e2e' } },
+    await getActionHandler(surface, 'plan_draft_approve')({
+      action: { type: 'button', value: `${draft!.draftId}:${draft!.version}` },
+      body: { channel: { id: 'C-test' }, message: { thread_ts: 'thread-e2e' }, user: { id: 'U1' } },
       ack: vi.fn().mockResolvedValue(undefined),
       respond: vi.fn().mockResolvedValue(undefined),
     });
     expect(receivedCommands).toHaveLength(1);
     expect(receivedCommands[0]).toEqual(
-      expect.objectContaining({ type: 'start_plan', planText: expectedPlanText }),
+      expect.objectContaining({ type: 'start_plan', planText: expectedPlanText.trim() }),
     );
   });
 });
