@@ -15,6 +15,7 @@
 import type { MessageBus } from '@invoker/transport';
 
 import { tryPingHeadlessOwner } from './headless-delegation.js';
+import { currentBuildIdentity, describeBuildMismatch, type BuildIdentity } from './build-identity.js';
 
 // ── Contract types ──────────────────────────────────────────
 
@@ -25,13 +26,23 @@ export interface OwnerEndpointInfo {
   /**
    * Whether this owner can accept bootstrapped standalone mutations.
    * True when the owner has registered the shared mutation delegation
-   * handlers. Both interactive GUI owners and detached standalone owners
-   * are single-writer owners and can serve these delegated mutations.
+   * handlers, AND the owner is running code compatible with this process
+   * (see `buildMismatchReason`). Both interactive GUI owners and detached
+   * standalone owners are single-writer owners and can serve these
+   * delegated mutations.
    *
    * The client uses this to decide whether post-bootstrap delegation
    * should target this owner or whether a fresh bootstrap is needed.
    */
   canAcceptStandaloneMutations: boolean;
+  /**
+   * Set when the owner is reachable but running code incompatible with this
+   * process (different build). Delegating to a mismatched owner produces a
+   * confusing "Unsupported X" error per command instead of one clear
+   * failure, so `canAcceptStandaloneMutations` is forced false whenever
+   * this is set. `null`/absent means no mismatch was detected.
+   */
+  buildMismatchReason?: string | null;
 }
 
 /** Discovery failed — no owner is reachable within the timeout. */
@@ -52,12 +63,21 @@ export type OwnerDiscoveryResult = OwnerEndpointInfo | OwnerNotReachable;
 export async function discoverOwner(
   messageBus: MessageBus,
   timeoutMs?: number,
+  localBuild: BuildIdentity = currentBuildIdentity(),
 ): Promise<OwnerDiscoveryResult> {
-  const raw = await tryPingHeadlessOwner(messageBus, timeoutMs);
+  const raw = await tryPingHeadlessOwner(messageBus, timeoutMs) as
+    | { ownerId?: string; mode?: string; buildVersion?: string; buildSha?: string }
+    | null;
   if (!raw) return null;
+  const isKnownSurface = raw.mode === 'standalone' || raw.mode === 'gui';
+  const buildMismatchReason = describeBuildMismatch(localBuild, {
+    version: raw.buildVersion ?? '',
+    sha: raw.buildSha ?? '',
+  });
   return {
     ownerId: raw.ownerId ?? '',
-    canAcceptStandaloneMutations: raw.mode === 'standalone' || raw.mode === 'gui',
+    canAcceptStandaloneMutations: isKnownSurface && !buildMismatchReason,
+    ...(buildMismatchReason ? { buildMismatchReason } : {}),
   };
 }
 
