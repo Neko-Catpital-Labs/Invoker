@@ -544,7 +544,14 @@ describe('GitHub auth check', () => {
     expect(check.remediation).toContain('gh auth login');
   });
 
-  it('warns and skips when gh is missing', () => {
+  it('warns and skips when the injected runner cannot find gh', () => {
+    const missingGh = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
+    const check = checkGithubAuth(() => {
+      throw missingGh;
+    });
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
+    expect(check.detail).toContain('gh not installed');
+    expect(check.remediation).toContain('gh auth login');
     expect(skippedGithubAuthCheck()).toMatchObject({ id: 'github-auth', status: 'warn' });
   });
 });
@@ -560,6 +567,31 @@ describe('setup oneshot ending', () => {
     expect(formatSetupEnding(checks)).toContain('Fix this first: GitHub auth: not logged in.');
     expect(formatSetupEnding(checks)).toContain('gh auth login');
     expect(formatSetupEnding([okCheck('a', 'A')])).toBe("You're ready.");
+  });
+
+  it('prints the first failing setup check even when a later smoke check fails', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-first-failure-'));
+    const lines: string[] = [];
+    const savedHome = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        isInstalled: (command) => command !== 'git',
+        smokePlanValidation: async () => errorCheck('smoke-plan', 'Smoke plan validation', 'parse failed'),
+      }));
+
+      const output = lines.join('\n');
+      expect(code).toBe(1);
+      expect(output).toContain('Fix this first: Git: git not found');
+      expect(output).not.toContain('Fix this first: Smoke plan validation');
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('returns exit code 1 when smoke validation fails', async () => {

@@ -274,6 +274,7 @@ export interface CommandRunnerResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  error?: unknown;
 }
 
 export type CommandRunner = (command: string, args: readonly string[]) => CommandRunnerResult;
@@ -284,22 +285,45 @@ export function defaultCommandRunner(command: string, args: readonly string[]): 
     status: result.status,
     stdout: typeof result.stdout === 'string' ? result.stdout : '',
     stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    error: result.error,
   };
 }
 
-export function skippedGithubAuthCheck(): PrerequisiteCheck {
+function isCommandMissingError(error: unknown): boolean {
+  if (typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT') {
+    return true;
+  }
+  return error instanceof Error && /\bENOENT\b/.test(error.message);
+}
+
+export function skippedGithubAuthCheck(detail = 'gh not installed; skipped auth check'): PrerequisiteCheck {
   return {
     id: 'github-auth',
     name: 'GitHub auth',
     status: 'warn',
-    detail: 'gh not installed; skipped auth check',
+    detail,
     remediation: 'Install GitHub CLI (`brew install gh` or `apt-get install gh`), then run `gh auth login`',
   };
 }
 
 /** Probe `gh auth status`. Injectable `runner` keeps tests offline. */
 export function checkGithubAuth(runner: CommandRunner = defaultCommandRunner): PrerequisiteCheck {
-  const result = runner('gh', ['auth', 'status']);
+  let result: CommandRunnerResult;
+  try {
+    result = runner('gh', ['auth', 'status']);
+  } catch (error) {
+    if (isCommandMissingError(error)) return skippedGithubAuthCheck();
+    return {
+      id: 'github-auth',
+      name: 'GitHub auth',
+      status: 'error',
+      detail: formatCaughtException(error),
+      remediation: 'Run `gh auth login` and re-run `invoker-cli setup`',
+    };
+  }
   if (result.status === 0) {
     return {
       id: 'github-auth',
@@ -307,6 +331,13 @@ export function checkGithubAuth(runner: CommandRunner = defaultCommandRunner): P
       status: 'ok',
       detail: 'gh is authenticated',
     };
+  }
+  if (result.status === null) {
+    return skippedGithubAuthCheck(
+      isCommandMissingError(result.error)
+        ? 'gh not installed; skipped auth check'
+        : 'gh auth status could not be started; skipped auth check',
+    );
   }
   const detail = (result.stderr || result.stdout || 'gh auth status failed').trim().split('\n')[0]
     || 'gh auth status failed';
@@ -762,6 +793,17 @@ async function collectGithubAndSmokeChecks(options: SetupDeps): Promise<Prerequi
   return checks;
 }
 
+async function collectAndPrintGithubAndSmokeChecks(
+  io: SetupIO,
+  options: SetupDeps,
+  json: boolean,
+): Promise<PrerequisiteCheck[]> {
+  const extras = await collectGithubAndSmokeChecks(options);
+  io.print('');
+  io.print(formatReport(buildReport(extras), { json }));
+  return extras;
+}
+
 function printSetupEnding(io: SetupIO, checks: readonly PrerequisiteCheck[]): number {
   const report = buildReport([...checks]);
   io.print('');
@@ -827,7 +869,7 @@ export async function runSetup(
       io.print(`\n${formatReport(report, { json: parsed.json })}`);
       if (!creds.botToken || !creds.appToken || !creds.signingSecret || !creds.channelId || !report.ok) {
         io.print('Nothing written.');
-        checks.push(...await collectGithubAndSmokeChecks(options));
+        checks.push(...await collectAndPrintGithubAndSmokeChecks(io, options, parsed.json));
         return printSetupEnding(io, checks);
       }
       const envPath = writeSlackEnv({
@@ -857,7 +899,7 @@ export async function runSetup(
         const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ', parsed.assumeYes);
         if (!proceed) {
           io.print('Nothing written.');
-          checks.push(...await collectGithubAndSmokeChecks(options));
+          checks.push(...await collectAndPrintGithubAndSmokeChecks(io, options, parsed.json));
           return printSetupEnding(io, checks);
         }
       }
@@ -866,10 +908,8 @@ export async function runSetup(
       io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
     }
 
-    const extras = await collectGithubAndSmokeChecks(options);
+    const extras = await collectAndPrintGithubAndSmokeChecks(io, options, parsed.json);
     checks.push(...extras);
-    io.print('');
-    io.print(formatReport(buildReport(extras)));
 
     return printSetupEnding(io, checks);
   } catch (error) {
