@@ -268,6 +268,29 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
     return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
 
 
+def latest_mergify_repair_invalid_blockers(
+    pr: PrSnapshot,
+    ledger: Ledger,
+    suppressed_failed_checks: Collection[str],
+) -> tuple[Blocker, ...]:
+    latest = pr.latest_mergify
+    if not latest or latest.state != "dequeued" or latest.head_sha != pr.head_ref_oid:
+        return ()
+    suppressed = set(suppressed_failed_checks)
+    blockers: list[Blocker] = []
+    for name in latest.failing_checks:
+        if name in suppressed:
+            continue
+        blocker = latest_repair_invalid_blocker(
+            pr,
+            Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"),
+            ledger,
+        )
+        if blocker is not None:
+            blockers.append(blocker)
+    return tuple(blockers)
+
+
 def _assert_stack_facts_invariants(facts: StackFacts) -> None:
     assert facts.stack.prs, "stack must contain at least one PR"
     pr_numbers = tuple(pr.number for pr in facts.stack.prs)
@@ -316,10 +339,20 @@ def build_stack_facts(
     blockers_by_pr: dict[int, tuple[Blocker, ...]] = {}
     for pr in stack.prs:
         effective = effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
-        blockers_by_pr[pr.number] = tuple(
+        blockers = [
             latest_repair_invalid_blocker(pr, blocker, ledger) or blocker
             for blocker in effective
+        ]
+        existing_keys = {blocker.key for blocker in blockers}
+        blockers.extend(
+            blocker for blocker in latest_mergify_repair_invalid_blockers(
+                pr,
+                ledger,
+                suppressed_failed_checks_by_pr.get(pr.number, ()),
+            )
+            if blocker.key not in existing_keys
         )
+        blockers_by_pr[pr.number] = tuple(blockers)
     facts = StackFacts(
         stack=stack,
         required_checks=required,
@@ -398,6 +431,8 @@ def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
+        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+            continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
         actions = mergify_failed_check_actions(pr, ledger, facts.suppressed_failed_checks_by_pr.get(pr.number, ()))

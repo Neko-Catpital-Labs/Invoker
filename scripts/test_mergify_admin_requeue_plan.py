@@ -451,6 +451,39 @@ class PlanStackExecution(PlannerTestCase):
             [("repair_check", QUEUE_ONLY_CHECK)],
         )
 
+    def test_repair_invalid_queue_failure_stops_retrying(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            5873,
+            HEAD,
+            "UI Vitest",
+            1,
+            meta={
+                "errors": [
+                    "merge-queue run failed outside the PR head: fix queue CI runner/tooling outside this PR and requeue."
+                ],
+            },
+        )
+        snapshot = pr(
+            number=5873,
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={"build": check("success"), "UI Vitest": check("success", "UI Vitest")},
+            latest_mergify=event(failing=("UI Vitest",)),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"build"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={5873},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "human_decision")
+        self.assertIn("outside the PR head", blockers[0]["detail"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
