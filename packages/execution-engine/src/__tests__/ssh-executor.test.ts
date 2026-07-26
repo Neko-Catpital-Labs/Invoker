@@ -276,6 +276,7 @@ describe('SshExecutor managed workspace mode', () => {
       const binDir = join(fakeHome, 'bin');
       mkdirSync(workspacePath, { recursive: true });
       mkdirSync(binDir, { recursive: true });
+      writeFileSync(join(fakeHome, '.profile'), `export PATH="${binDir}:$PATH"\n`);
       writeFileSync(join(workspacePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
       const pnpmPath = join(binDir, 'pnpm');
       writeFileSync(
@@ -287,7 +288,7 @@ describe('SshExecutor managed workspace mode', () => {
       const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
       const result = childProcessModule.spawnSync('/bin/bash', ['-c', bootstrapScript], {
         encoding: 'utf8',
-        env: { ...process.env, HOME: fakeHome, PATH: `${binDir}:${process.env.PATH ?? ''}` },
+        env: { ...process.env, HOME: fakeHome, PATH: '/usr/bin:/bin' },
       });
 
       expect(result.status).toBe(0);
@@ -929,7 +930,7 @@ describe('SshExecutor entry lifecycle', () => {
     vi.spyOn(ssh as any, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
   });
 
-  it('uses a login shell for task payloads so remote profile PATH applies', async () => {
+  it('uses a non-login SSH task shell and imports remote login PATH', async () => {
     const request = makeRequest({
       inputs: {
         command: 'echo hello',
@@ -941,9 +942,16 @@ describe('SshExecutor entry lifecycle', () => {
     const childProcessMod = await import('node:child_process');
     const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
     const spawnArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
-    expect(spawnArgs.slice(-3)).toEqual(['bash', '-l', '-s']);
+    expect(spawnArgs.slice(-2)).toEqual(['bash', '-s']);
 
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    const writeMock = (sshProcess.stdin as any).write as ReturnType<typeof vi.fn>;
+    const bootstrapScript = writeMock.mock.calls[0]![0] as string;
+    expect(bootstrapScript).toContain('load_remote_login_path');
+    expect(bootstrapScript).toContain('"$bash_bin" -l -c');
+    expect(bootstrapScript.indexOf('load_remote_login_path')).toBeLessThan(
+      bootstrapScript.indexOf('ensure_managed_pnpm_workspace'),
+    );
     sshProcess.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
   });

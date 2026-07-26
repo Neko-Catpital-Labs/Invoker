@@ -167,7 +167,7 @@ invoker_e2e_ssh_init() {
 
 # --------------------------------------------------------------------------- #
 # Ensure host pnpm/node are on the remote login-shell PATH.
-# SshExecutor uses `bash -l` and does not forward the host PATH.
+# SshExecutor imports PATH from `bash -l` and does not forward the host PATH.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_install_login_path() {
   local pnpm_bin node_bin pnpm_dir node_dir

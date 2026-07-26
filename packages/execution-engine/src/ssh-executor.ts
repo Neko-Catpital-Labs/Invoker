@@ -217,6 +217,24 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
 `;
   }
 
+  private remoteLoginPathFunction(): string {
+    return `load_remote_login_path() {
+  local bash_bin login_env_output login_env_path login_env_line
+  bash_bin="\${BASH:-bash}"
+  login_env_output="$("$bash_bin" -l -c 'printf "%s%s\\n" "__INVOKER_LOGIN_PATH__=" "$PATH"' 2>/dev/null || true)"
+  login_env_path=""
+  while IFS= read -r login_env_line; do
+    case "$login_env_line" in
+      __INVOKER_LOGIN_PATH__=*) login_env_path="\${login_env_line#__INVOKER_LOGIN_PATH__=}" ;;
+    esac
+  done <<< "$login_env_output"
+  if [ -n "$login_env_path" ]; then
+    export PATH="$login_env_path"
+  fi
+}
+`;
+  }
+
   private buildRuntimeBootstrapScript(options: {
     executionId: string;
     actionId: string;
@@ -253,6 +271,8 @@ ensure_managed_pnpm_workspace
 
     return `set -euo pipefail
 ${this.remotePathNormalizeFunction()}
+${this.remoteLoginPathFunction()}
+load_remote_login_path
 INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
@@ -311,12 +331,12 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Remote shell for task payloads. Use a login shell so the remote user's
-   * ~/.profile PATH (flutter, android-sdk, etc.) is applied. Never forward the
-   * local host PATH — that clobbers Linux remotes with macOS Homebrew paths.
+   * Remote shell for task payloads. Keep the long-running wrapper non-login so
+   * remote profile functions and traps cannot change the final task status. The
+   * wrapper imports the remote login PATH explicitly before provisioning/running.
    */
   private buildPayloadRemoteCommand(): string[] {
-    return ['bash', '-l', '-s'];
+    return ['bash', '-s'];
   }
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
