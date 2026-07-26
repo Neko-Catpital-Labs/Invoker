@@ -50,6 +50,7 @@ class StackFacts:
     upper_stack_needs_acceptance: bool
     prereq_status: RepairPrereqStatus | None
     queue_only_noop_check: str | None
+    queue_noop_check: str | None
     suppressed_failed_checks_by_pr: Mapping[int, tuple[str, ...]]
     blockers_by_pr: Mapping[int, tuple[Blocker, ...]]
     all_blockers: tuple[Blocker, ...]
@@ -265,6 +266,43 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
     return check_name
 
 
+def latest_queue_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) -> str | None:
+    bottom = current_bottom_pr(stack, trunk)
+    if not bottom:
+        return None
+    latest = bottom.latest_mergify
+    if (
+        not latest
+        or latest.state != "dequeued"
+        or latest.queue_rule_name != "admin-bypass"
+        or latest.head_sha != bottom.head_ref_oid
+    ):
+        return None
+    latest_row: dict[str, object] | None = None
+    latest_epoch = float("-inf")
+    for row in ledger.rows:
+        if row.get("kind") != "queue-noop":
+            continue
+        if int(row.get("pr", -1)) != bottom.number:
+            continue
+        if row.get("headSha") != bottom.head_ref_oid:
+            continue
+        epoch = int(row.get("epoch", 0) or 0)
+        if latest_row is None or epoch >= latest_epoch:
+            latest_row = row
+            latest_epoch = epoch
+    if latest_row is None:
+        return None
+    check_name = str(latest_row.get("key") or "")
+    if (
+        not check_name
+        or check_name not in latest.failing_checks
+        or ledger.latest("queue-requeue", bottom.number, bottom.head_ref_oid, check_name) is not None
+    ):
+        return None
+    return check_name
+
+
 def repair_invalid_blocker_for_check(pr: PrSnapshot, check_name: str, detail: str, ledger: Ledger) -> Blocker | None:
     latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, check_name)
     if latest is None:
@@ -327,6 +365,14 @@ def _assert_stack_facts_invariants(facts: StackFacts) -> None:
         assert latest.queue_rule_name == "admin-bypass", "queue-only noop requires the admin-bypass queue"
         assert latest.head_sha == facts.bottom.head_ref_oid, "queue-only noop requires a same-head Mergify event"
         assert facts.queue_only_noop_check in latest.failing_checks, "queue-only noop check must still be failing in Mergify"
+    if facts.queue_noop_check is not None:
+        assert facts.bottom is not None, "queue noop requires a current bottom PR"
+        latest = facts.bottom.latest_mergify
+        assert latest is not None, "queue noop requires a Mergify event"
+        assert latest.state == "dequeued", "queue noop requires a dequeued Mergify event"
+        assert latest.queue_rule_name == "admin-bypass", "queue noop requires the admin-bypass queue"
+        assert latest.head_sha == facts.bottom.head_ref_oid, "queue noop requires a same-head Mergify event"
+        assert facts.queue_noop_check in latest.failing_checks, "queue noop check must still be failing in Mergify"
 
 
 def build_stack_facts(
@@ -341,12 +387,15 @@ def build_stack_facts(
     upper_stack_needs_acceptance = stack_has_unaccepted_upper_pr(stack, bottom)
     prereq_status = latest_repair_prereq_status(stack, ledger, open_pr_numbers, trunk)
     queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, trunk)
+    queue_noop_check = latest_queue_noop_check(stack, ledger, trunk)
 
     suppressed_failed_checks_by_pr: dict[int, tuple[str, ...]] = {}
     if prereq_status and prereq_status.needs_followup_requeue and bottom:
         suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (prereq_status.check_name,)
     if queue_only_noop_check and bottom:
         suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (queue_only_noop_check,)
+    if queue_noop_check and bottom:
+        suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (queue_noop_check,)
 
     blockers_by_pr: dict[int, tuple[Blocker, ...]] = {}
     for pr in stack.prs:
@@ -370,6 +419,7 @@ def build_stack_facts(
         upper_stack_needs_acceptance=upper_stack_needs_acceptance,
         prereq_status=prereq_status,
         queue_only_noop_check=queue_only_noop_check,
+        queue_noop_check=queue_noop_check,
         suppressed_failed_checks_by_pr=suppressed_failed_checks_by_pr,
         blockers_by_pr=blockers_by_pr,
         all_blockers=tuple(
@@ -515,8 +565,9 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
     bottom = facts.bottom
     latest = bottom.latest_mergify
     if "admin-bypass" not in bottom.labels:
+        queue_repair_noop_check = facts.queue_only_noop_check or facts.queue_noop_check
         if (
-            facts.queue_only_noop_check
+            queue_repair_noop_check
             and latest
             and latest.queue_rule_name == "admin-bypass"
             and latest.state == "dequeued"
@@ -524,8 +575,8 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
             return Action(
                 "restore_admin_bypass_label",
                 bottom.number,
-                facts.queue_only_noop_check,
-                "restore admin-bypass label after queue-only noop",
+                queue_repair_noop_check,
+                "restore admin-bypass label after queue repair noop",
             )
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
@@ -609,6 +660,7 @@ def plan_stack_execution(
             wait_reason="repair-prereq-open",
             prereq_status=facts.prereq_status,
             queue_only_noop_check=facts.queue_only_noop_check,
+            queue_noop_check=facts.queue_noop_check,
         )
     actions = plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts)
     if actions:
@@ -617,6 +669,7 @@ def plan_stack_execution(
             actions=actions,
             prereq_status=facts.prereq_status,
             queue_only_noop_check=facts.queue_only_noop_check,
+            queue_noop_check=facts.queue_noop_check,
         )
     return StackExecutionPlan(
         summary=summary,
@@ -624,4 +677,5 @@ def plan_stack_execution(
         wait_reason=wait_reason_for_facts(facts),
         prereq_status=facts.prereq_status,
         queue_only_noop_check=facts.queue_only_noop_check,
+        queue_noop_check=facts.queue_noop_check,
     )

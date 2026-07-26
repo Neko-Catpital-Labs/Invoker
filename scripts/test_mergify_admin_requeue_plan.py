@@ -215,6 +215,33 @@ class BuildStackFacts(PlannerTestCase):
         self.assertEqual(facts.suppressed_failed_checks_by_pr, {10: (QUEUE_ONLY_CHECK,)})
         self.assertEqual(facts.blockers_by_pr[10], ())
 
+    def test_queue_noop_suppresses_one_followup_requeue(self):
+        ledger = self._ledger()
+        ledger.record("queue-noop", 10, HEAD, "UI Vitest", 1)
+        facts, _ = self._facts(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=10,
+                        labels=frozenset({"admin-bypass", "dequeued"}),
+                        checks={"UI Vitest": check("success", "UI Vitest")},
+                        latest_mergify=event(
+                            state="dequeued",
+                            comment_id="cm10",
+                            failing=("UI Vitest",),
+                        ),
+                    ),
+                ),
+            ),
+            required_checks={"UI Vitest"},
+            ledger=ledger,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(facts.queue_noop_check, "UI Vitest")
+        self.assertEqual(facts.suppressed_failed_checks_by_pr, {10: ("UI Vitest",)})
+        self.assertEqual(facts.blockers_by_pr[10], ())
+
     def test_detects_bottom_and_unaccepted_upper(self):
         facts, _ledger = self._facts(
             m.StackGroup(
@@ -495,6 +522,45 @@ class PlanStackExecution(PlannerTestCase):
         self.assertEqual(
             [(action.kind, action.key) for action in retry.actions],
             [("repair_check", QUEUE_ONLY_CHECK)],
+        )
+
+    def test_queue_noop_requeues_then_retries_normally(self):
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            checks={"UI Vitest": check("success", "UI Vitest")},
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            latest_mergify=event(
+                state="dequeued",
+                comment_id="cm10",
+                failing=("UI Vitest",),
+            ),
+        )
+        ledger.record("queue-noop", 10, HEAD, "UI Vitest", 1)
+        requeue = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            {"UI Vitest"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in requeue.actions],
+            [("requeue", "cm10")],
+        )
+        self.assertEqual(requeue.queue_noop_check, "UI Vitest")
+
+        ledger.record("queue-requeue", 10, HEAD, "UI Vitest", 2)
+        retry = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            {"UI Vitest"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in retry.actions],
+            [("repair_check", "UI Vitest")],
         )
 
 

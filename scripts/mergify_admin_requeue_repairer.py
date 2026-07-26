@@ -8,13 +8,13 @@ import tempfile
 from typing import Mapping, Sequence
 
 try:
-    from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
+    from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor, JobLogUnavailable
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
 except ImportError:
-    from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
+    from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor, JobLogUnavailable
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
@@ -41,6 +41,16 @@ def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tupl
         if name == check_name:
             return urls
     return ()
+
+
+def is_mergify_queue_failure(pr: PrSnapshot, check_name: str) -> bool:
+    latest = pr.latest_mergify
+    return bool(
+        latest
+        and latest.state == "dequeued"
+        and latest.head_sha == pr.head_ref_oid
+        and check_name in latest.failing_checks
+    )
 
 
 class AdminBypassRepairer:
@@ -342,8 +352,14 @@ class AdminBypassRepairer:
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
         queue_only = ctx is None and is_queue_only_required_check(check_name)
+        queue_failure = is_mergify_queue_failure(pr, check_name)
+        queue_noop = queue_failure and not queue_only and (ctx is None or ctx.state == "success")
         mergify_urls = mergify_check_urls(latest, check_name)
-        details_url = (ctx.details_url if ctx and ctx.details_url else "") or (mergify_urls[0] if mergify_urls else "")
+        details_url = (
+            (mergify_urls[0] if queue_failure and mergify_urls else "")
+            or (ctx.details_url if ctx and ctx.details_url else "")
+            or (mergify_urls[0] if mergify_urls else "")
+        )
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
@@ -356,7 +372,25 @@ class AdminBypassRepairer:
                 start_head,
                 errors=(f"queue-only check {check_name} is missing a Mergify job URL",),
             )
-        log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
+        try:
+            log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
+        except JobLogUnavailable as exc:
+            self.logger.trace(
+                "admin-bypass-repair-log-unavailable",
+                repo=self.repo,
+                pr_number=pr.number,
+                check_name=check_name,
+                details_url=details_url,
+                head_sha=pr.head_ref_oid,
+                error=str(exc),
+            )
+            return self.blocked_outcome(
+                "log_unavailable",
+                check_name,
+                start_head,
+                start_head,
+                errors=(str(exc),),
+            )
         queue_pr_number = latest.queue_pr_number if latest else 0
         prompt = (
             f"Fix only the failing check. Add or update a repro if the failure is reproducible. "
@@ -364,7 +398,7 @@ class AdminBypassRepairer:
             f"PR: #{pr.number}\nFailed check: {check_name}\nDetails URL: {details_url}\nJob log path: {log_path}\n"
             f"Latest Mergify event: {json.dumps(latest.__dict__ if latest else None, sort_keys=True)}\n"
         )
-        if queue_only:
+        if queue_failure:
             prompt += f"Queue draft PR: #{queue_pr_number}\nRepair the real PR head, using only evidence from the queue draft failure.\n"
         self.logger.trace(
             "admin-bypass-repair-check-start",
@@ -380,12 +414,12 @@ class AdminBypassRepairer:
         end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
         status_lines = self.git_lines(work_root, "status", "--porcelain")
         if end_head == start_head and not status_lines:
-            if not queue_only:
+            if not queue_only and not queue_noop:
                 validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
                 if not validation.get("valid"):
                     return self.invalid_repair_outcome(pr, check_name, start_head, end_head, validation)
             return self.blocked_outcome(
-                "queue_only_noop" if queue_only else "noop",
+                "queue_only_noop" if queue_only else "queue_noop" if queue_noop else "noop",
                 check_name,
                 start_head,
                 end_head,

@@ -69,6 +69,15 @@ def record_repair_outcome(
             check_name=outcome.check_name,
             queue_pr_number=pr.latest_mergify.queue_pr_number if pr.latest_mergify else 0,
         )
+    if outcome.status == "queue_noop":
+        ledger.record("queue-noop", pr.number, pr.head_ref_oid, outcome.check_name, now)
+        logger.trace(
+            "admin-bypass-queue-noop",
+            repo=repo,
+            pr_number=pr.number,
+            check_name=outcome.check_name,
+            queue_pr_number=pr.latest_mergify.queue_pr_number if pr.latest_mergify else 0,
+        )
 
 
 def handle_repair_outcome(
@@ -80,6 +89,25 @@ def handle_repair_outcome(
     outcome: RepairOutcome,
     now: int,
 ) -> None:
+
+    if outcome.status == "log_unavailable":
+        ledger.record(
+            "repair-log-unavailable",
+            pr.number,
+            pr.head_ref_oid,
+            outcome.check_name,
+            now,
+            meta={"errors": list(outcome.errors)},
+        )
+        logger.trace(
+            "admin-bypass-repair-deferred",
+            repo=repo,
+            pr_number=pr.number,
+            check_name=outcome.check_name,
+            reason="log-unavailable",
+            errors=list(outcome.errors),
+        )
+        return
 
     ledger.record("repair-evaluated", pr.number, pr.head_ref_oid, outcome.check_name, now)
     if outcome.status == "blocked_dirty":
@@ -154,6 +182,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
             trunk,
         )
         queue_only_noop_check = plan.queue_only_noop_check
+        queue_noop_check = plan.queue_noop_check
         logger.stack("admin-bypass-stack", plan.summary)
         if not plan.actions:
             should_poll = True
@@ -178,8 +207,9 @@ def run_cycle(args: argparse.Namespace) -> bool:
             if action.kind == "repair_check":
                 check_name = action.key.split(":", 1)[-1]
                 kind = "repair-bot-thread" if action.key.startswith("bot_review_thread:") else "repair-check"
-                ledger.record(kind, action.pr_number, pr.head_ref_oid, check_name, now)
                 outcome = repairer.repair_check(pr, check_name, now)
+                if outcome.status != "log_unavailable":
+                    ledger.record(kind, action.pr_number, pr.head_ref_oid, check_name, now)
                 handle_repair_outcome(executor, ledger, logger, args.repo, pr, outcome, now)
             elif action.kind == "repair_conflict":
                 ledger.record("conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now)
@@ -199,13 +229,15 @@ def run_cycle(args: argparse.Namespace) -> bool:
                             pr_number=pr.number,
                             check_name=plan.prereq_status.check_name,
                         )
-                    if queue_only_noop_check and action.pr_number == plan.summary.get("bottom_pr"):
-                        ledger.record("queue-only-requeue", pr.number, pr.head_ref_oid, queue_only_noop_check, now)
+                    queue_repair_noop_check = queue_only_noop_check or queue_noop_check
+                    if queue_repair_noop_check and action.pr_number == plan.summary.get("bottom_pr"):
+                        queue_requeue_kind = "queue-only-requeue" if queue_only_noop_check else "queue-requeue"
+                        ledger.record(queue_requeue_kind, pr.number, pr.head_ref_oid, queue_repair_noop_check, now)
                         logger.trace(
-                            "admin-bypass-queue-only-requeue",
+                            "admin-bypass-queue-only-requeue" if queue_only_noop_check else "admin-bypass-queue-requeue",
                             repo=args.repo,
                             pr_number=pr.number,
-                            check_name=queue_only_noop_check,
+                            check_name=queue_repair_noop_check,
                         )
             if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
                 return True

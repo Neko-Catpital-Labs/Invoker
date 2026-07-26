@@ -181,7 +181,16 @@ def main() -> None:
     if ARGS[:2] == ["run", "view"]:
         job_id = flag_value("--job") or ""
         if job_id and "--log" in ARGS:
-            print(str(state.get("job_logs", {}).get(job_id, "")))
+            entry = state.get("job_logs", {}).get(job_id, "")
+            if isinstance(entry, dict):
+                stdout = str(entry.get("stdout") or "")
+                stderr = str(entry.get("stderr") or "")
+                if stdout:
+                    print(stdout, end="")
+                if stderr:
+                    print(stderr, end="", file=sys.stderr)
+                sys.exit(int(entry.get("exit_code") or 0))
+            print(str(entry))
             return
         print("")
         return

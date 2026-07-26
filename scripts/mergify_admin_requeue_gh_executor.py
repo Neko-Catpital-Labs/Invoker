@@ -19,6 +19,10 @@ ADMIN_BYPASS_NUDGE_LEDGER_KIND = "comment-admin-bypass-nudge"
 RESTORE_ADMIN_BYPASS_LABEL_LEDGER_KIND = "restore-admin-bypass-label"
 
 
+class JobLogUnavailable(RuntimeError):
+    """GitHub has not published an Actions job log yet."""
+
+
 def admin_bypass_nudge_body() -> str:
     return (
         "Invoker Mergify babysitting is paused: this is the current bottom PR in the stack, "
@@ -40,12 +44,20 @@ class AdminBypassGhExecutor:
             return ""
         tmp = Path(tempfile.mkdtemp(prefix=f"mergify-admin-requeue-{pr_number}-"))
         path = tmp / (re.sub(r"[^A-Za-z0-9_.-]+", "-", check_name).strip("-") + ".log")
-        out = subprocess.run(
-            ["gh", "run", "view", "--repo", repo, "--job", match.group(1), "--log"],
-            check=True,
-            text=True,
-            capture_output=True,
-        ).stdout
+        try:
+            completed = subprocess.run(
+                ["gh", "run", "view", "--repo", repo, "--job", match.group(1), "--log"],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            output = "\n".join(part for part in (exc.stdout, exc.stderr) if part).strip()
+            lowered = output.lower()
+            if "logs will be available when it is complete" in lowered or "still in progress" in lowered:
+                raise JobLogUnavailable(output or f"job log for {check_name} is not available yet") from exc
+            raise
+        out = completed.stdout
         path.write_text(out, encoding="utf-8")
         return str(path)
 

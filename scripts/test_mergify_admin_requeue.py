@@ -26,7 +26,7 @@ from scripts.mergify_admin_requeue import (
     parse_stack_metadata,
     plan_stack_actions,
 )
-from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
+from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor, JobLogUnavailable
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
 from scripts.mergify_admin_requeue_repairer import (
@@ -481,6 +481,67 @@ Failing checks
         self.assertEqual(result.status, "queue_only_noop")
         self.assertIn("Queue draft PR: #5854", repair.call_args.args[1])
         self.assertIn("Job log path: /tmp/guardrails.log", repair.call_args.args[1])
+
+    def test_mergify_queue_failure_prefers_queue_job_log_over_green_head_check(self):
+        latest = MergifyQueueEvent(
+            "m5885",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-26T20:51:00Z",
+            HEAD,
+            ("UI Vitest",),
+            ("UI Vitest",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5885#issuecomment-1",
+            5956,
+            (("UI Vitest", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/queue/job/2",)),),
+        )
+        item = pr(
+            5885,
+            labels={"admin-bypass", "dequeued"},
+            checks={"UI Vitest": CheckContext("UI Vitest", "success", "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/head/job/3", HEAD, "2026-07-26T20:50:00Z")},
+            latest=latest,
+        )
+        repairer = self.repairer(object(), self.ledger())
+        git_rev_parse = iter([HEAD, HEAD])
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/ui-vitest.log") as download:
+                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                        with mock.patch.object(repairer, "run_claude_repair") as repair:
+                            result = repairer.repair_check(item, "UI Vitest")
+        download.assert_called_once_with("owner/repo", "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/queue/job/2", 5885, "UI Vitest")
+        self.assertEqual(result.status, "queue_noop")
+        self.assertIn("Queue draft PR: #5956", repair.call_args.args[1])
+        self.assertIn("Job log path: /tmp/ui-vitest.log", repair.call_args.args[1])
+
+    def test_mergify_queue_repair_defers_when_job_log_is_unavailable(self):
+        latest = MergifyQueueEvent(
+            "m5885",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-26T20:51:00Z",
+            HEAD,
+            ("UI Vitest",),
+            ("UI Vitest",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5885#issuecomment-1",
+            5956,
+            (("UI Vitest", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/queue/job/2",)),),
+        )
+        item = pr(
+            5885,
+            labels={"admin-bypass", "dequeued"},
+            checks={"UI Vitest": CheckContext("UI Vitest", "success", "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/head/job/3", HEAD, "2026-07-26T20:50:00Z")},
+            latest=latest,
+        )
+        repairer = self.repairer(object(), self.ledger())
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", side_effect=JobLogUnavailable("run 30219860322 is still in progress; logs will be available when it is complete")):
+                with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                    with mock.patch.object(repairer, "run_claude_repair") as repair:
+                        result = repairer.repair_check(item, "UI Vitest")
+        repair.assert_not_called()
+        self.assertEqual(result.status, "log_unavailable")
+        self.assertIn("logs will be available", result.errors[0])
     def test_run_cycle_logs_selected_bottom_repair_context(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
         stack = StackGroup("s", (pr(2606, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}, latest=mergify()),))
@@ -498,6 +559,34 @@ Failing checks
         self.assertIn('"kind": "repair_check"', log)
         self.assertIn('"failed_check"', log)
         self.assertIn('"pr_number": 2606', log)
+
+    def test_run_cycle_log_unavailable_does_not_consume_repair_attempt(self):
+        ledger = self.ledger()
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)])
+        stack = StackGroup("s", (pr(5885, checks={"UI Vitest": check("UI Vitest", "failure")}, latest=mergify()),))
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        repairer = mock.Mock()
+        repairer.repair_check.return_value = exec_impl.RepairOutcome(
+            "log_unavailable",
+            "UI Vitest",
+            HEAD,
+            HEAD,
+            errors=("run 30219860322 is still in progress; logs will be available when it is complete",),
+        )
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), {"UI Vitest"})):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
+                    with mock.patch.object(exec_impl, "AdminBypassRepairer", return_value=repairer):
+                        with redirect_stdout(stdout), redirect_stderr(stderr):
+                            should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        refreshed = Ledger(ledger.path)
+        self.assertEqual(refreshed.count("repair-check", 5885, HEAD, "UI Vitest"), 0)
+        self.assertEqual(refreshed.count("repair-evaluated", 5885, HEAD, "UI Vitest"), 0)
+        self.assertEqual(refreshed.count("repair-log-unavailable", 5885, HEAD, "UI Vitest"), 1)
+        self.assertIn('repair-check PR #5885 check="UI Vitest"', stdout.getvalue())
+        self.assertIn('"reason": "log-unavailable"', stderr.getvalue())
 
     def test_run_cycle_logs_wait_reason_for_unaccepted_upper_stack(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
