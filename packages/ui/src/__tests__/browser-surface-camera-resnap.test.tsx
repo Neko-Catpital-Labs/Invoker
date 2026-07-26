@@ -223,6 +223,7 @@ describe('Browser-surface camera (component)', () => {
 
     // Simulate the user having panned/zoomed the graph before leaving it.
     getViewportMock.mockReturnValue(savedViewport);
+    fireEvent.wheel(screen.getByTestId('rf__pane'), { deltaY: -240 });
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
     await screen.findByTestId('planning-session-rail');
@@ -269,6 +270,7 @@ describe('Browser-surface camera (component)', () => {
     await settleCamera();
 
     getViewportMock.mockReturnValue(savedViewport);
+    fireEvent.wheel(screen.getByTestId('rf__pane'), { deltaY: -240 });
     fireEvent.click(screen.getByTestId('sidebar-home'));
     await screen.findByTestId('planning-session-rail');
     const openGraph = await screen.findByTestId('invoker-terminal-open-graph');
