@@ -303,7 +303,21 @@ ensure_managed_pnpm_workspace
     const runPayloadSection = `echo "[SshExecutor] Running task payload..."
 `;
 
-    return `set -euo pipefail
+    return `load_remote_profile_path() {
+  local profile
+  for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+    if [ -f "$profile" ]; then
+      set +eu
+      set +o pipefail 2>/dev/null || true
+      . "$profile" || true
+      set +eu
+      set +o pipefail 2>/dev/null || true
+      break
+    fi
+  done
+}
+load_remote_profile_path
+set -euo pipefail
 ${this.remotePathNormalizeFunction()}
 ${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_HOME')}
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
@@ -365,9 +379,9 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Remote shell for task payloads. Keep this non-login so remote dotfiles cannot
-   * trigger login-shell bash bugs or mutate execution semantics. PATH comes from
-   * ~/.invoker/env.sh, sourced explicitly inside the bootstrap script.
+   * Remote shell for task payloads. The bootstrap script sources ~/.invoker/env.sh
+   * and profile PATH fragments explicitly so PATH customizations apply without
+   * running login-shell hooks. Never forward the local host PATH.
    */
   private buildPayloadRemoteCommand(): string[] {
     return ['bash', '-s'];

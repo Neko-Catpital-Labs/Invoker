@@ -276,7 +276,7 @@ function shellQuote(s: string): string {
 /**
  * Remote shell for agent fix/resolve commands. Keep this non-login so remote
  * dotfiles cannot trigger login-shell bash bugs or mutate execution semantics.
- * PATH comes from ~/.invoker/env.sh, sourced explicitly inside each script.
+ * Remote scripts source ~/.invoker/env.sh explicitly before running agents.
  */
 export function remoteAgentShellInvocation(): string[] {
   return ['bash', '-s'];

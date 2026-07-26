@@ -1101,7 +1101,7 @@ describe('SshExecutor entry lifecycle', () => {
     vi.spyOn(ssh as any, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
   });
 
-  it('uses a non-login shell for task payloads and sources ~/.invoker/env.sh explicitly', async () => {
+  it('uses a non-login shell for task payloads and sources remote environment explicitly', async () => {
     const request = makeRequest({
       inputs: {
         command: 'echo hello',
@@ -1121,6 +1121,9 @@ describe('SshExecutor entry lifecycle', () => {
     expect(script).toContain('export INVOKER_HOME');
     expect(script).toContain('export INVOKER_ENV_FILE');
     expect(script).toContain('. "$INVOKER_ENV_FILE"');
+    expect(script).toContain('load_remote_profile_path');
+    expect(script).toContain('"$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"');
+    expect(script.indexOf('load_remote_profile_path')).toBeLessThan(script.indexOf('set -euo pipefail'));
 
     sshProcess.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
