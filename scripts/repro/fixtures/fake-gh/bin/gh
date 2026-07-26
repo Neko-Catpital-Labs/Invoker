@@ -199,6 +199,17 @@ def main() -> None:
             print(json.dumps({"data": {"repository": {"pullRequest": graphql_detail(pr)}}}))
             return
         if any("resolveReviewThread" in arg for arg in ARGS):
+            thread_id = ""
+            for arg in ARGS:
+                if arg.startswith("threadId="):
+                    thread_id = arg.split("=", 1)[1]
+                    break
+            if thread_id:
+                for pr in state.get("prs", []):
+                    for thread in pr.get("reviewThreads", []):
+                        if thread.get("id") == thread_id:
+                            thread["isResolved"] = True
+                            save_state(state)
             print(json.dumps({"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}))
             return
         unhandled()
