@@ -763,6 +763,8 @@ export function selectExecutor(
         port: target.port,
         agentRegistry: host.executionAgentRegistry,
         managedWorkspaces: target.managedWorkspaces,
+        remoteInvokerHome: target.remoteInvokerHome,
+        provisionCommand: target.provisionCommand,
         useApiKey: target.use_api_key,
         secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
         remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,

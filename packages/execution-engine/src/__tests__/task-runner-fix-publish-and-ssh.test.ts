@@ -2641,6 +2641,35 @@ describe('TaskRunner', () => {
 
       expect(provider).toHaveBeenCalledTimes(2);
     });
+
+    it('passes SSH target provisioning settings into the selected executor', () => {
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        remoteTargetsProvider: () => ({
+          'do-droplet': {
+            host: '1.2.3.4',
+            user: 'root',
+            sshKeyPath: '/key',
+            managedWorkspaces: true,
+            remoteInvokerHome: '~/.custom-invoker',
+            provisionCommand: 'pnpm install --frozen-lockfile',
+          },
+        }),
+      });
+
+      const selected = executor.selectExecutor(makeTask({
+        id: 'ssh-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'do-droplet' },
+      }));
+
+      expect(selected.executor.type).toBe('ssh');
+      expect(Reflect.get(selected.executor, 'remoteInvokerHome')).toBe('~/.custom-invoker');
+      expect(Reflect.get(selected.executor, 'provisionCommand')).toBe('pnpm install --frozen-lockfile');
+    });
+
     it('reads worktree provision commands lazily from the pool provider on each selectExecutor call', () => {
       const provider = vi.fn()
         .mockReturnValueOnce({
