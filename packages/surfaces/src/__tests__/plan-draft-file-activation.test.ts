@@ -18,6 +18,14 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 const mockSpawn = vi.mocked(child_process.spawn);
 
+function fakeConversationRepo() {
+  return {
+    loadConversation: vi.fn(() => null),
+    saveConversation: vi.fn(),
+    deleteConversation: vi.fn(),
+  };
+}
+
 function fakePlannerChild(stdout: string, beforeClose?: () => void): any {
   const proc = new EventEmitter() as any;
   proc.stdout = new EventEmitter();
@@ -115,6 +123,45 @@ describe('plan draft file - activation side', () => {
     await conversation.sendMessage('Draft it');
 
     expect(conversation.getDraftedPlan()).toBeNull();
+  });
+
+  it('strips the standalone submit instruction from a turn with no current draft', async () => {
+    const submitLine = 'Reply `submit` to submit it.';
+    const conversationRepo = fakeConversationRepo();
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'abc-123',
+      conversationRepo: conversationRepo as any,
+      plannerRetryLimit: 0,
+    });
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${submitLine}`));
+    const reply = await conversation.sendMessage('Draft it');
+
+    expect(reply.split('\n')).not.toContain(submitLine);
+    expect(conversation.lastTurnDraftPlanText).toBeNull();
+
+    const assistantMessage = conversation.history.find((message) => message.role === 'assistant');
+    expect(assistantMessage?.content.split('\n')).not.toContain(submitLine);
+
+    const savedMessages = conversationRepo.saveConversation.mock.calls[0][1] as Array<{ content: string; role: string }>;
+    expect(savedMessages[1].content.split('\n')).not.toContain(submitLine);
+  });
+
+  it('keeps the standalone submit instruction when the turn writes a real draft', async () => {
+    const submitLine = 'Reply `submit` to submit it.';
+    const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
+    const path = conversation.planDraftFilePath();
+    if (!path) throw new Error('expected a plan draft path');
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(
+      `Drafted the plan.\n\n${submitLine}`,
+      () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
+    ));
+    const reply = await conversation.sendMessage('Draft it');
+
+    expect(reply.split('\n')).toContain(submitLine);
+    expect(conversation.lastTurnDraftPlanText).toBe(VALID_PLAN_YAML.trim());
   });
 
   it('requires the exact submit line as a standalone post-plan instruction', () => {

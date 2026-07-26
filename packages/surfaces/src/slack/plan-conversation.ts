@@ -53,6 +53,7 @@ export function defaultPlanningCommand(
 }
 
 const EMPTY_PLANNER_STDERR_TAIL_LIMIT = 500;
+const SUBMIT_CONFIRMATION_INSTRUCTION = 'Reply `submit` to submit it.';
 
 export const DEFAULT_PLANNER_RETRY_LIMIT = 2;
 export const DEFAULT_PLANNER_RETRY_BASE_DELAY_MS = 500;
@@ -88,6 +89,16 @@ class RetryableEmptyPlannerOutputError extends Error {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function removeStandaloneSubmitInstruction(text: string): string {
+  const lines = text.split('\n');
+  if (!lines.some((line) => line.trim() === SUBMIT_CONFIRMATION_INSTRUCTION)) return text;
+  return lines
+    .filter((line) => line.trim() !== SUBMIT_CONFIRMATION_INSTRUCTION)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
 }
 
 export interface PlanConversationConfig {
@@ -328,7 +339,7 @@ Rules:
 8. ${outputInstruction}
 9. Always include \`dependencies\` (even if empty array).
 10. After generating a plan, include a short post-plan summary that tells the user they can confirm execution. The confirmation instruction MUST be exactly this standalone line:
-Reply \`submit\` to submit it.
+${SUBMIT_CONFIRMATION_INSTRUCTION}
 Do NOT place that line inline in a sentence.
 11. NEVER submit, validate, or execute this plan yourself. Do NOT invoke \`invoker-cli\` (with any flags), \`invoker_submit_plan\`, \`invoker_validate_plan\`, \`submit-plan.sh\`, or the \`plan-to-invoker\` skill's Harness handoff mode. This rule overrides that skill's handoff instructions in this Slack thread. The Slack orchestrator validates and executes the plan after the user replies \`submit\` and approves it. If the user instead says \`execute\`, \`run it\`, \`yes\`, or \`go\` before submitting, remind them to reply with \`submit\`; never run it yourself.
 12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
@@ -552,6 +563,7 @@ export class PlanConversation {
       : inlineDraft;
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
+    if (!nextDraft) message = removeStandaloneSubmitInstruction(message);
     this._lastTurnReasoning = formatted.reasoning;
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
