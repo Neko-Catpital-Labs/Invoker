@@ -26,6 +26,15 @@ from scripts.mergify_admin_requeue import (
     parse_stack_metadata,
     plan_stack_actions,
 )
+from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
+from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
+from scripts.mergify_admin_requeue_logger import AdminBypassLogger
+from scripts.mergify_admin_requeue_repairer import (
+    NON_TRUNK_PREREQ_ERROR,
+    PROOF_POLICY_LANE_ERROR,
+    PROOF_TOOLING_POLICY_UNIT_ERROR,
+    AdminBypassRepairer,
+)
 
 REQUIRED = {"PR Body", "quality / TypeScript Types"}
 HEAD = "c2532d229dbed2fd57419698c48d973001c78e9e"
@@ -113,6 +122,14 @@ class MergifyAdminRequeueTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         return Ledger(Path(tmp.name) / "ledger.jsonl")
+
+    def executor(self, gh, ledger, repo="owner/repo"):
+        return AdminBypassGhExecutor(gh, ledger, AdminBypassLogger(), repo)
+
+    def repairer(self, gh, ledger, repo="owner/repo"):
+        logger = AdminBypassLogger()
+        executor = AdminBypassGhExecutor(gh, ledger, logger, repo)
+        return AdminBypassRepairer(gh, executor, logger, ledger, repo)
 
     def test_loads_admin_bypass_rule_from_mergify_yml(self):
         trunk, labels, required = load_mergify_rules(Path(".mergify.yml"))
@@ -302,21 +319,22 @@ Failing checks
 
         ledger = self.ledger()
         item = pr(2647, merge_state="DIRTY", latest=mergify())
-        action = Action("repair_conflict", 2647, "conflict:2647", "GitHub reports merge conflict")
-        fake = FakeGh()
         repairs = []
-        with mock.patch.object(exec_impl, "repair_conflict", side_effect=lambda repo, pr, reason: repairs.append((repo, pr.number, reason))):
-            for epoch in range(3):
-                requeue._execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, epoch)
+        repairer = self.repairer(FakeGh(), ledger, "Neko-Catpital-Labs/Invoker")
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, _prompt: repairs.append(item.number)):
+                for epoch in range(3):
+                    ledger.record("conflict-repair", item.number, item.head_ref_oid, "conflict:2647", epoch)
+                    repairer.repair_conflict(item, "GitHub reports merge conflict")
         self.assertEqual(ledger.count("conflict-repair", 2647, HEAD, "conflict:2647"), 3)
-        self.assertEqual([repair[1] for repair in repairs], [2647, 2647, 2647])
-        self.assertEqual(fake.comments, [])
+        self.assertEqual(repairs, [2647, 2647, 2647])
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
     def test_claude_repair_uses_claude_cli(self):
-        with mock.patch.object(exec_impl.subprocess, "run") as run:
-            exec_impl.run_claude_repair(Path("/tmp/work"), "repair this")
+        repairer = self.repairer(object(), self.ledger())
+        with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run") as run:
+            repairer.run_claude_repair(Path("/tmp/work"), "repair this")
         run.assert_called_once_with(
             ["claude", "-p", "repair this", "--dangerously-skip-permissions"],
             cwd="/tmp/work",
@@ -356,30 +374,61 @@ Failing checks
             def issue_comments(self, repo, number):
                 return []
 
-        stacks = exec_impl.load_candidate_stacks(FakeGh(), "owner/repo", None, [], REQUIRED, "master")
+        stacks = AdminBypassStackLoader(FakeGh()).load("owner/repo", None, [], REQUIRED, "master")
         self.assertEqual(len(stacks), 1)
         self.assertEqual([item.number for item in stacks[0].prs], [1, 2])
 
     def test_repair_check_logs_work_context(self):
         stderr = io.StringIO()
         item = pr(2647, latest=mergify())
+        repairer = self.repairer(object(), self.ledger())
         git_rev_parse = iter([HEAD, HEAD])
-        with mock.patch.object(exec_impl, "github_job_log", return_value="/tmp/pr-body.log"):
-            with mock.patch.object(exec_impl, "checkout_pr_head") as checkout:
-                with mock.patch.object(exec_impl, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                    with mock.patch.object(exec_impl, "git_lines", return_value=()):
-                        with mock.patch.object(exec_impl, "run_claude_repair") as repair:
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                        with mock.patch.object(repairer, "run_claude_repair") as repair:
                             with redirect_stderr(stderr):
-                                result = exec_impl.repair_check("owner/repo", item, "PR Body")
+                                result = repairer.repair_check(item, "PR Body")
         checkout.assert_called_once()
         repair.assert_called_once()
-        self.assertEqual(result["status"], "noop")
+        self.assertEqual(result.status, "noop")
         self.assertIn("Commit locally if needed, do not push.", repair.call_args.args[1])
         log = stderr.getvalue()
         self.assertIn('"event": "admin-bypass-repair-check-start"', log)
         self.assertIn('"check_name": "PR Body"', log)
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
+
+    def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):
+        stderr = io.StringIO()
+        latest = MergifyQueueEvent(
+            "m5811",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-03T06:13:00Z",
+            HEAD,
+            (),
+            ("required-fast / Guardrails",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5811#issuecomment-1",
+            5854,
+            (("required-fast / Guardrails", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/1/job/2",)),),
+        )
+        item = pr(5811, labels={"admin-bypass", "dequeued"}, checks={}, latest=latest)
+        repairer = self.repairer(object(), self.ledger())
+        git_rev_parse = iter([HEAD, HEAD])
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
+                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                        with mock.patch.object(repairer, "run_claude_repair") as repair:
+                            with redirect_stderr(stderr):
+                                result = repairer.repair_check(item, "required-fast / Guardrails")
+        checkout.assert_called_once()
+        repair.assert_called_once()
+        self.assertEqual(result.status, "queue_only_noop")
+        self.assertIn("Queue draft PR: #5854", repair.call_args.args[1])
+        self.assertIn("Job log path: /tmp/guardrails.log", repair.call_args.args[1])
     def test_run_cycle_logs_selected_bottom_repair_context(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
         stack = StackGroup("s", (pr(2606, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}, latest=mergify()),))
@@ -387,7 +436,7 @@ Failing checks
         stdout = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
-                with mock.patch.object(exec_impl, "load_candidate_stacks", return_value=(stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
         self.assertFalse(should_poll)
@@ -404,7 +453,7 @@ Failing checks
         stderr = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
-                with mock.patch.object(exec_impl, "load_candidate_stacks", return_value=(stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
                     with redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
         self.assertTrue(should_poll)
@@ -438,6 +487,7 @@ Failing checks
         )
         ledger = self.ledger()
         fake = FakeGh()
+        repairer = self.repairer(fake, ledger)
         rev_parse = iter([HEAD, "b" * 40])
         git_commands = []
 
@@ -458,8 +508,8 @@ Failing checks
             {
                 "valid": False,
                 "errors": [
-                    exec_impl.PROOF_POLICY_LANE_ERROR,
-                    exec_impl.PROOF_TOOLING_POLICY_UNIT_ERROR,
+                    PROOF_POLICY_LANE_ERROR,
+                    PROOF_TOOLING_POLICY_UNIT_ERROR,
                 ],
                 "reviewLane": "proof",
                 "reviewUnit": "proof",
@@ -476,15 +526,15 @@ Failing checks
             },
         ])
 
-        with mock.patch.object(exec_impl, "github_job_log", return_value="/tmp/pr-body.log"):
-            with mock.patch.object(exec_impl, "checkout_pr_head"):
-                with mock.patch.object(exec_impl, "run_claude_repair"):
-                    with mock.patch.object(exec_impl, "git_output", side_effect=fake_git_output):
-                        with mock.patch.object(exec_impl, "git_lines", side_effect=fake_git_lines):
-                            with mock.patch.object(exec_impl, "validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
-                                result = exec_impl.repair_check("owner/repo", item, "PR Body", fake, ledger, 123)
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+                with mock.patch.object(repairer, "run_claude_repair"):
+                    with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+                        with mock.patch.object(repairer, "git_lines", side_effect=fake_git_lines):
+                            with mock.patch.object(repairer, "validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
+                                result = repairer.repair_check(item, "PR Body", 123)
 
-        self.assertEqual(result["status"], "prereq-created")
+        self.assertEqual(result.status, "prereq_created")
         self.assertEqual(fake.created[0][0], "owner/repo")
         self.assertIn("[PR babysit] Tooling-policy repair prerequisite for #5800: PR Body", fake.created[0][1])
         self.assertEqual(fake.label_edits, [("owner/repo", 5801, "admin-bypass", None)])
@@ -506,7 +556,7 @@ Failing checks
         stdout = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
-                with mock.patch.object(exec_impl, "load_candidate_stacks", return_value=(original, prereq)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(original, prereq)):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
         self.assertTrue(should_poll)
@@ -531,7 +581,7 @@ Failing checks
         fake_gh = FakeGh()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
-                with mock.patch.object(exec_impl, "load_candidate_stacks", return_value=(stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)]))
         self.assertTrue(should_poll)
@@ -540,6 +590,56 @@ Failing checks
         self.assertEqual(refreshed.count("repair-prereq-requeue", 2604, HEAD, "PR Body"), 1)
         self.assertIn("requeue PR #2604", stdout.getvalue())
         self.assertIn("eligible-after-dequeue", stdout.getvalue())
+
+    def test_run_cycle_restores_label_then_requeues_after_queue_only_noop(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+                self.label_edits = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def edit_label(self, repo, pr_number, *, add=None, remove=None):
+                self.label_edits.append((repo, pr_number, add, remove))
+
+        ledger = self.ledger()
+        ledger.record("queue-only-noop", 5811, HEAD, "required-fast / Guardrails", 1)
+        latest = MergifyQueueEvent(
+            "m5811",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-03T06:13:00Z",
+            HEAD,
+            (),
+            ("required-fast / Guardrails",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5811#issuecomment-1",
+            5854,
+            (("required-fast / Guardrails", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/1/job/2",)),),
+        )
+        fake_gh = FakeGh()
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        first_stack = StackGroup("orig", (pr(5811, labels={"dequeued"}, checks={}, latest=latest),))
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), {"required-fast / Guardrails"})):
+            with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(first_stack,)):
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        should_poll = exec_impl.run_cycle(requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)]))
+        self.assertTrue(should_poll)
+        self.assertEqual(fake_gh.label_edits, [("owner/repo", 5811, "admin-bypass", None)])
+        self.assertNotIn("BLOCK PR #5811 missing-check", stdout.getvalue())
+
+        second_stack = StackGroup("orig", (pr(5811, labels={"admin-bypass", "dequeued"}, checks={}, latest=latest),))
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), {"required-fast / Guardrails"})):
+            with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(second_stack,)):
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        should_poll = exec_impl.run_cycle(requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)]))
+        self.assertTrue(should_poll)
+        self.assertIn(("owner/repo", 5811, "@mergifyio queue"), fake_gh.comments)
+        refreshed = Ledger(ledger.path)
+        self.assertEqual(refreshed.count("queue-only-requeue", 5811, HEAD, "required-fast / Guardrails"), 1)
 
     def test_run_cycle_stops_suppressing_after_prereq_requeue(self):
         ledger = self.ledger()
@@ -551,7 +651,7 @@ Failing checks
         stdout = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
-                with mock.patch.object(exec_impl, "load_candidate_stacks", return_value=(stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
         self.assertFalse(should_poll)
@@ -578,8 +678,9 @@ Failing checks
         item = pr(2647, merge_state="DIRTY", latest=mergify())
         action = Action("comment_blocked", 2647, "capped", "GitHub reports merge conflict. The retry cap was reached for current head " + HEAD + ".")
         fake = FakeGh()
-        requeue._execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 1)
-        requeue._execute_action(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 2)
+        executor = self.executor(fake, ledger, "Neko-Catpital-Labs/Invoker")
+        executor.execute(action, item, 1)
+        executor.execute(action, item, 2)
         self.assertEqual(len(fake.comments), 1)
 
     def test_missing_admin_bypass_nudge_comments_once_without_label_edit(self):
@@ -595,16 +696,34 @@ Failing checks
                 self.label_edits.append((repo, pr_number, add, remove))
 
         action = Action("comment_admin_bypass_nudge", 2647, "admin-bypass", "missing admin-bypass label")
-        for execute in (requeue._execute_action, requeue.exec_impl.execute_action):
-            ledger = self.ledger()
-            item = pr(2647, labels={"dequeued"}, latest=mergify())
-            fake = FakeGh()
-            execute(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 1)
-            execute(action, "Neko-Catpital-Labs/Invoker", fake, ledger, {2647: item}, 2)
-            self.assertEqual(len(fake.comments), 1)
-            self.assertIn("tag this PR with `admin-bypass`", fake.comments[0][2])
-            self.assertEqual(fake.label_edits, [])
-            self.assertEqual(ledger.count(requeue.exec_impl.ADMIN_BYPASS_NUDGE_LEDGER_KIND, 2647, HEAD, "admin-bypass"), 1)
+        ledger = self.ledger()
+        item = pr(2647, labels={"dequeued"}, latest=mergify())
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "Neko-Catpital-Labs/Invoker")
+        executor.execute(action, item, 1)
+        executor.execute(action, item, 2)
+        self.assertEqual(len(fake.comments), 1)
+        self.assertIn("tag this PR with `admin-bypass`", fake.comments[0][2])
+        self.assertEqual(fake.label_edits, [])
+        self.assertEqual(ledger.count(ADMIN_BYPASS_NUDGE_LEDGER_KIND, 2647, HEAD, "admin-bypass"), 1)
+
+    def test_restore_admin_bypass_label_edits_once_per_head(self):
+        class FakeGh:
+            def __init__(self):
+                self.label_edits = []
+
+            def edit_label(self, repo, pr_number, *, add=None, remove=None):
+                self.label_edits.append((repo, pr_number, add, remove))
+
+        action = Action("restore_admin_bypass_label", 5811, "required-fast / Guardrails", "restore admin-bypass label after queue-only noop")
+        ledger = self.ledger()
+        item = pr(5811, labels={"dequeued"}, latest=mergify())
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "owner/repo")
+        executor.execute(action, item, 1)
+        executor.execute(action, item, 2)
+        self.assertEqual(fake.label_edits, [("owner/repo", 5811, "admin-bypass", None)])
+        self.assertEqual(ledger.count("restore-admin-bypass-label", 5811, HEAD, "admin-bypass"), 1)
 
     def test_mergify_queue_failure_repairs_even_when_current_required_check_is_missing(self):
         latest = MergifyQueueEvent(

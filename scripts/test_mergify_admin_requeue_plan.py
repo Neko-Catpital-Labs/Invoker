@@ -34,9 +34,9 @@ def check(state, name="build"):
     return m.CheckContext(name=name, state=state, details_url="", head_sha=HEAD, completed_at="")
 
 
-def event(state="dequeued", head=HEAD, comment_id="cm1", failing=(), conditions=()):
+def event(state="dequeued", head=HEAD, comment_id="cm1", failing=(), conditions=(), queue_rule_name="admin-bypass"):
     return m.MergifyQueueEvent(
-        comment_id=comment_id, state=state, queue_rule_name="default",
+        comment_id=comment_id, state=state, queue_rule_name=queue_rule_name,
         queued_at="2026-07-07T05:00:00Z", head_sha=head, waiting_for=(),
         failing_checks=failing, comment_url="u", condition_states=conditions,
     )
@@ -101,6 +101,22 @@ class EffectiveBlockers(unittest.TestCase):
         self.assertNotIn("missing_check", kinds)
 
 
+    def test_dequeued_queue_only_failure_clears_missing_check(self):
+        snapshot = pr(
+            checks={},
+            latest_mergify=event(
+                failing=("required-fast / Guardrails",),
+            ),
+        )
+        kinds = {
+            b.kind for b in p.effective_blockers(
+                snapshot,
+                {"required-fast / Guardrails"},
+                trunk="master",
+            )
+        }
+        self.assertNotIn("missing_check", kinds)
+
 class PlanStackActions(unittest.TestCase):
     """The priority ladder: one PR state in, one Action out."""
 
@@ -151,6 +167,26 @@ class PlanStackActions(unittest.TestCase):
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued", comment_id="cm1"))
         actions = self._plan(snapshot, ledger)
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
+
+    def test_queue_only_missing_head_check_repairs_from_mergify_failure(self):
+        snapshot = pr(
+            checks={},
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            latest_mergify=event(
+                failing=("required-fast / Guardrails",),
+                conditions=(("required-fast / Guardrails", "failure"),),
+            ),
+        )
+        actions = p.plan_stack_actions(
+            m.StackGroup("s", (snapshot,)),
+            {"required-fast / Guardrails"},
+            self._ledger(),
+            now_epoch=0,
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in actions],
+            [("repair_check", "required-fast / Guardrails")],
+        )
 
 
 class PlanStackExecution(unittest.TestCase):
@@ -213,6 +249,74 @@ class PlanStackExecution(unittest.TestCase):
         self.assertEqual(plan.actions[0].kind, "requeue")
         self.assertTrue(plan.prereq_status.needs_followup_requeue)
 
+
+    def test_queue_only_noop_restores_label_then_requeues_then_retries_normally(self):
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            checks={},
+            labels=frozenset({"dequeued"}),
+            latest_mergify=event(
+                state="dequeued",
+                comment_id="cm10",
+                failing=("required-fast / Guardrails",),
+            ),
+        )
+        ledger.record("queue-only-noop", 10, HEAD, "required-fast / Guardrails", 1)
+        restore = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            {"required-fast / Guardrails"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in restore.actions],
+            [("restore_admin_bypass_label", "required-fast / Guardrails")],
+        )
+
+        requeue = p.plan_stack_execution(
+            m.StackGroup("s", (pr(
+                number=10,
+                checks={},
+                labels=frozenset({"admin-bypass", "dequeued"}),
+                latest_mergify=event(
+                    state="dequeued",
+                    comment_id="cm10",
+                    failing=("required-fast / Guardrails",),
+                ),
+            ),)),
+            {"required-fast / Guardrails"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in requeue.actions],
+            [("requeue", "cm10")],
+        )
+
+        ledger.record("queue-only-requeue", 10, HEAD, "required-fast / Guardrails", 2)
+        retry = p.plan_stack_execution(
+            m.StackGroup("s", (pr(
+                number=10,
+                checks={},
+                labels=frozenset({"admin-bypass", "dequeued"}),
+                latest_mergify=event(
+                    state="dequeued",
+                    comment_id="cm10",
+                    failing=("required-fast / Guardrails",),
+                ),
+            ),)),
+            {"required-fast / Guardrails"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in retry.actions],
+            [("repair_check", "required-fast / Guardrails")],
+        )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

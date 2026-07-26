@@ -93,6 +93,19 @@ class RepairPrereqStatus:
     is_open: bool
     needs_followup_requeue: bool
 
+@dataclass(frozen=True)
+class RepairOutcome:
+    status: str
+    check_name: str
+    start_head: str
+    end_head: str
+    repair_commits: tuple[str, ...] = ()
+    status_lines: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+    prereq: Mapping[str, object] | None = None
+
+
+
 
 @dataclass(frozen=True)
 class StackExecutionPlan:

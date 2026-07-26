@@ -30,6 +30,18 @@ except ImportError:
 
 TRUNK = "master"
 
+QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
+    "required-fast / Guardrails",
+    "required-fast / Vitest Workspace",
+    "required-fast / Submit Workflow Chain",
+})
+
+
+def is_queue_only_required_check(name: str) -> bool:
+    # .github/workflows/ci.yml:306-328 gates these required-fast matrix jobs to
+    # merge-queue heads, so they do not exist on ordinary PR heads.
+    return name in QUEUE_ONLY_REQUIRED_CHECKS
+
 
 def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
@@ -100,7 +112,17 @@ def effective_blockers(
     conditions = mergify_condition_map(latest)
     return tuple(
         blocker for blocker in blockers
-        if not (blocker.kind == "missing_check" and conditions.get(blocker.key) == "success")
+        if not (
+            blocker.kind == "missing_check"
+            and (
+                conditions.get(blocker.key) == "success"
+                or (
+                    latest.state == "dequeued"
+                    and is_queue_only_required_check(blocker.key)
+                    and blocker.key in latest.failing_checks
+                )
+            )
+        )
     )
 
 
@@ -173,6 +195,43 @@ def latest_repair_prereq_status(
         is_open=prereq_pr_number in open_pr_numbers,
         needs_followup_requeue=needs_followup_requeue,
     )
+
+def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) -> str | None:
+    bottom = current_bottom_pr(stack, trunk)
+    if not bottom:
+        return None
+    latest = bottom.latest_mergify
+    if (
+        not latest
+        or latest.state != "dequeued"
+        or latest.queue_rule_name != "admin-bypass"
+        or latest.head_sha != bottom.head_ref_oid
+    ):
+        return None
+    latest_row: dict[str, object] | None = None
+    latest_epoch = float("-inf")
+    for row in ledger.rows:
+        if row.get("kind") != "queue-only-noop":
+            continue
+        if int(row.get("pr", -1)) != bottom.number:
+            continue
+        if row.get("headSha") != bottom.head_ref_oid:
+            continue
+        epoch = int(row.get("epoch", 0) or 0)
+        if latest_row is None or epoch >= latest_epoch:
+            latest_row = row
+            latest_epoch = epoch
+    if latest_row is None:
+        return None
+    check_name = str(latest_row.get("key") or "")
+    if (
+        not check_name
+        or not is_queue_only_required_check(check_name)
+        or check_name not in latest.failing_checks
+        or ledger.latest("queue-only-requeue", bottom.number, bottom.head_ref_oid, check_name) is not None
+    ):
+        return None
+    return check_name
 
 
 def summarize_stack(
@@ -313,12 +372,27 @@ def plan_stack_actions(
     if hold_blockers:
         return ()
 
+    latest = bottom.latest_mergify
+    queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, TRUNK)
     if "admin-bypass" not in bottom.labels:
+        if (
+            queue_only_noop_check
+            and latest
+            and latest.queue_rule_name == "admin-bypass"
+            and latest.state == "dequeued"
+        ):
+            return (
+                Action(
+                    "restore_admin_bypass_label",
+                    bottom.number,
+                    queue_only_noop_check,
+                    "restore admin-bypass label after queue-only noop",
+                ),
+            )
         return (Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label"),)
     if upper_stack_needs_acceptance:
         return ()
 
-    latest = bottom.latest_mergify
     if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:
         return ()
     requeue_reason = "eligible-when-ready"
@@ -347,6 +421,7 @@ def plan_stack_execution(
     del now_epoch
     prereq_status = latest_repair_prereq_status(stack, ledger, open_pr_numbers, trunk)
     suppressed_by_pr: Mapping[int, Collection[str]] | None = None
+    queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, trunk)
     if prereq_status and prereq_status.is_open:
         return StackExecutionPlan(
             summary=summarize_stack(stack, required_checks, trunk),
@@ -354,10 +429,14 @@ def plan_stack_execution(
             wait_reason="repair-prereq-open",
             prereq_status=prereq_status,
         )
-    if prereq_status and prereq_status.needs_followup_requeue:
-        bottom = current_bottom_pr(stack, trunk)
-        if bottom:
-            suppressed_by_pr = {bottom.number: (prereq_status.check_name,)}
+    suppressed: dict[int, tuple[str, ...]] = {}
+    bottom = current_bottom_pr(stack, trunk)
+    if prereq_status and prereq_status.needs_followup_requeue and bottom:
+        suppressed[bottom.number] = suppressed.get(bottom.number, ()) + (prereq_status.check_name,)
+    if queue_only_noop_check and bottom:
+        suppressed[bottom.number] = suppressed.get(bottom.number, ()) + (queue_only_noop_check,)
+    if suppressed:
+        suppressed_by_pr = suppressed
     summary = summarize_stack(stack, required_checks, trunk, suppressed_by_pr)
     actions = plan_stack_actions(
         stack,
