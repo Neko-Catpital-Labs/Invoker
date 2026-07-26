@@ -40,6 +40,8 @@ tasks:
     dependencies: []
 `;
 
+const SUBMIT_READY_LINE = 'Reply `submit` to submit it.';
+
 const INLINE_PLAN_RESPONSE = `Here is the plan:
 
 \`\`\`yaml
@@ -52,7 +54,7 @@ tasks:
     dependencies: []
 \`\`\`
 
-Reply \`submit\` to submit it.`;
+${SUBMIT_READY_LINE}`;
 
 describe('plan draft file - activation side', () => {
   let workingDir: string;
@@ -117,15 +119,44 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
+  it('removes the submit instruction when no current-turn draft exists', async () => {
+    const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_READY_LINE}`));
+    const reply = await conversation.sendMessage('Draft it');
+
+    expect(reply).not.toContain(SUBMIT_READY_LINE);
+    expect(conversation.getDraftedPlan()).toBeNull();
+    const lastMessage = conversation.history[conversation.history.length - 1];
+    expect(lastMessage).toMatchObject({ role: 'assistant' });
+    expect(lastMessage.content).not.toContain(SUBMIT_READY_LINE);
+  });
+
+  it('keeps the submit instruction when the current turn created a draft', async () => {
+    const conversation = new PlanConversation({ workingDir, threadTs: 'submit-ready-123', plannerRetryLimit: 0 });
+    const path = conversation.planDraftFilePath();
+    if (!path) throw new Error('expected a plan draft path');
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(
+      `Drafted the plan.\n\n${SUBMIT_READY_LINE}`,
+      () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
+    ));
+    const reply = await conversation.sendMessage('Create the plan');
+
+    expect(reply).toContain(SUBMIT_READY_LINE);
+    const lastMessage = conversation.history[conversation.history.length - 1];
+    expect(lastMessage).toMatchObject({ role: 'assistant' });
+    expect(lastMessage.content).toContain(SUBMIT_READY_LINE);
+  });
+
   it('requires the exact submit line as a standalone post-plan instruction', () => {
     const conversation = new PlanConversation({});
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
 
     const prompt = conversation.buildCursorPrompt();
-    const submitLine = 'Reply `submit` to submit it.';
     const lines = prompt.split('\n');
 
-    expect(lines.filter((line) => line === submitLine)).toHaveLength(1);
+    expect(lines.filter((line) => line === SUBMIT_READY_LINE)).toHaveLength(1);
     expect(prompt.match(/Reply `submit` to submit it\./g)).toHaveLength(1);
     expect(prompt).toContain('Do NOT place that line inline in a sentence.');
   });
