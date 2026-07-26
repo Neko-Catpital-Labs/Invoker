@@ -160,7 +160,7 @@ describe('auto-fix recovery worker', () => {
     await runtime.stop();
   });
 
-  it('scans every failed task and submits a bare restart on the first tick when the registered worker is turned on', async () => {
+  it('scans every failed task and submits a bare retry on the first tick when the registered worker is turned on', async () => {
     const harness = makeRecoveryPolicyHarness();
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
     const definition = registry.get(AUTO_FIX_WORKER_KIND);
@@ -405,7 +405,7 @@ describe('auto-fix recovery candidate validation', () => {
 });
 
 describe('auto-fix recovery scan submission', () => {
-  it('submits a bare restart first, then escalates to fix-with-agent', async () => {
+  it('submits a bare retry first, then escalates to fix-with-agent', async () => {
     const harness = makeRecoveryPolicyHarness();
     const tick = createAutoFixRecoveryTick(harness.options);
 
@@ -477,7 +477,7 @@ describe('auto-fix recovery scan submission', () => {
     harness.intents.length = 0;
     await tick({ identity: { kind: 'recovery', instanceId: 'test' }, reason: 'startup', tickNumber: 3 });
 
-    // budget=1 → exactly one automatic retry total (the bare restart counts),
+    // budget=1 → exactly one automatic retry total (the bare retry counts),
     // then the durable per-task cap exhausts.
     expect(harness.submit).toHaveBeenCalledTimes(1);
     expect(harness.submit.mock.calls.map((call) => call[2])).toEqual(['invoker:retry-task']);
