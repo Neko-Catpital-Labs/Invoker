@@ -49,7 +49,10 @@ describe('planning terminal restore invariant repros', () => {
     vi.restoreAllMocks();
   });
 
-  it('reproduces missing/remapped preset restore behavior', async () => {
+  // `it.fails`: this asserts the desired invariant for the behavior slice. A
+  // persisted planning chat should remain visible under the configured default
+  // when its original preset key is no longer available.
+  it.fails('keeps a restored planning chat visible when its persisted preset key is missing', async () => {
     const sessions = createInAppPlanningChatSessions();
 
     await restorePlanningChatSessions([
@@ -61,18 +64,44 @@ describe('planning terminal restore invariant repros', () => {
         terminalSessionId: 'term-missing-preset',
         terminalStatus: 'running',
       }),
+    ], {
+      config: {
+        defaultSlackHarnessPreset: 'codex',
+      },
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(sessions.get('missing-preset-plan')).toMatchObject({
+      id: 'missing-preset-plan',
+      presetKey: 'codex',
+      terminalMode: 'tmux',
+      terminalSessionId: 'term-missing-preset',
+      terminalStatus: 'running',
+    });
+  });
+
+  // `it.fails`: this asserts the desired invariant for the behavior slice. When
+  // a team renames a custom preset and makes the new key the default, persisted
+  // chats using the old key should restore under that configured replacement.
+  it.fails('remaps a restored planning chat from a removed custom preset key to the configured default', async () => {
+    const sessions = createInAppPlanningChatSessions();
+
+    await restorePlanningChatSessions([
       makeRecord({
         id: 'remapped-preset-plan',
         title: 'Remapped preset plan',
-        presetKey: 'legacy-codex',
+        presetKey: 'team-preset-before-rename',
         terminalMode: 'tmux',
         terminalSessionId: 'term-remapped-preset',
         terminalStatus: 'running',
       }),
     ], {
       config: {
+        defaultSlackHarnessPreset: 'team-preset-after-rename',
         slackHarnessPresets: {
-          'legacy-codex': { tool: 'codex' },
+          'team-preset-after-rename': { tool: 'codex' },
         },
       },
       loadGeneratedPlan: vi.fn(),
@@ -80,17 +109,16 @@ describe('planning terminal restore invariant repros', () => {
       planningCommandBuilder,
     });
 
-    expect(sessions.has('missing-preset-plan')).toBe(false);
     expect(sessions.get('remapped-preset-plan')).toMatchObject({
       id: 'remapped-preset-plan',
-      presetKey: 'legacy-codex',
+      presetKey: 'team-preset-after-rename',
       terminalMode: 'tmux',
       terminalSessionId: 'term-remapped-preset',
       terminalStatus: 'running',
     });
   });
 
-  it('reproduces submitted tmux restore while chat-mode terminal ids stay dormant', async () => {
+  it('restores a submitted tmux planning terminal but rejects writes after restore', async () => {
     const sessions = createInAppPlanningChatSessions();
     sessions.set('submitted-tmux-plan', makeSession({
       id: 'submitted-tmux-plan',
@@ -101,13 +129,6 @@ describe('planning terminal restore invariant repros', () => {
       terminalOutputSnapshot: 'submitted output\n',
       terminalUpdatedAt: '2026-07-26T00:01:00.000Z',
     }));
-    sessions.set('chat-mode-with-terminal-id', makeSession({
-      id: 'chat-mode-with-terminal-id',
-      terminalMode: 'chat',
-      terminalSessionId: 'term-chat-mode',
-      terminalStatus: 'running',
-    }));
-
     const embeddedTerminalManager = {
       on: vi.fn(),
       restoreSpawnSession: vi.fn((seed: any) => ({
@@ -178,5 +199,31 @@ describe('planning terminal restore invariant repros', () => {
     await expect(
       handlers.get('invoker:planning-terminal-write')?.({}, 'term-submitted', 'x'),
     ).resolves.toEqual({ ok: false, reason: 'This planning session was already submitted.' });
+  });
+
+  it('does not restore a tmux process for a chat-mode planning session with stale terminal metadata', () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('chat-mode-with-terminal-id', makeSession({
+      id: 'chat-mode-with-terminal-id',
+      terminalMode: 'chat',
+      terminalSessionId: 'term-chat-mode',
+      terminalStatus: 'running',
+    }));
+
+    const embeddedTerminalManager = {
+      on: vi.fn(),
+      restoreSpawnSession: vi.fn(),
+    };
+    const { restorePersistedPlanningTerminals } = bindPlanningTerminalSessionState({
+      embeddedTerminalManager: embeddedTerminalManager as any,
+      logger: { warn: vi.fn() },
+      planningChatSessions: sessions,
+      getPlanningSessionStore: () => undefined,
+      repoRoot: '/repo',
+    });
+
+    restorePersistedPlanningTerminals();
+
+    expect(embeddedTerminalManager.restoreSpawnSession).not.toHaveBeenCalled();
   });
 });

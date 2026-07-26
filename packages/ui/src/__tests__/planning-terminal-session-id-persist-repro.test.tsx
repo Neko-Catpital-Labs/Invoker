@@ -57,7 +57,10 @@ describe('planning terminal failed first-send session id repro', () => {
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
-  it('reproduces the lost real session id after a failed first send', async () => {
+  // `it.fails`: this asserts the desired invariant for the behavior slice. The
+  // current renderer drops the real session id returned with a failed first send,
+  // so retrying forks into a fresh planning conversation.
+  it.fails('persists the real session id returned by a failed first send before retrying', async () => {
     const plannerError = 'cursor auth expired after the backend created a planner session';
     let sendCount = 0;
     mock.api.planningChatSend = vi.fn(async (request: any) => {
@@ -88,9 +91,9 @@ describe('planning terminal failed first-send session id repro', () => {
 
     const secondRequest = vi.mocked(mock.api.planningChatSend).mock.calls[1]?.[0] as { sessionId?: string };
     expect(secondRequest).toEqual({
+      sessionId: 'real-session-after-fail',
       message: 'retry after login',
       presetKey: 'codex',
     });
-    expect(secondRequest).not.toHaveProperty('sessionId');
   });
 });

@@ -57,7 +57,10 @@ describe('planning terminal preset ownership repros', () => {
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
-  it('reproduces chat-to-chat preset ownership drift after selecting a restored chat', async () => {
+  // `it.fails`: this asserts the desired invariant for the behavior slice. The
+  // current renderer keeps the global preset selected when a restored chat with a
+  // different owner preset becomes active.
+  it.fails('keeps the restored chat preset selected when switching between planning chats', async () => {
     mock.api.planningChatList = vi.fn(async () => ({
       ok: true,
       sessions: [
@@ -105,14 +108,14 @@ describe('planning terminal preset ownership repros', () => {
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Claude restored reply.');
     });
 
-    expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('codex');
+    expect(screen.getByTestId('invoker-terminal-harness')).toHaveValue('omp+claude');
     submitPlanningText('continue with saved preset');
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledWith({
         sessionId: 'chat-claude',
         message: 'continue with saved preset',
-        presetKey: 'codex',
+        presetKey: 'omp+claude',
       });
     });
   });
