@@ -339,6 +339,8 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
   return isDraftingAuthorized(message, normalizedMessages);
 }
 
+const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
 function planConversationConfig(
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'onRawPlannerOutput'>,
@@ -638,8 +640,17 @@ export async function submitPlanningChatDraft(
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
     try {
+      const draftPlanText = session.draftPlanText;
+      if (
+        session.status !== 'draft_ready'
+        || typeof draftPlanText !== 'string'
+        || draftPlanText.trim() === ''
+      ) {
+        return { ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR };
+      }
+
       const approved = await approvePlanningDraft({
-        planText: session.draftPlanText,
+        planText: draftPlanText,
         loadPlan: deps.loadGeneratedPlan,
       });
       if (!approved.ok) {
