@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
 
-import { buildElectronHeadlessArgs, resolveRepoRoot, type WorkerStatusSnapshot } from '@invoker/contracts';
+import { buildElectronHeadlessArgs, resolveRepoRoot, type InAppPlanningSessionSummary, type WorkerStatusSnapshot } from '@invoker/contracts';
 import { hasLiveWritableOwner } from '@invoker/data-store';
 import { IpcBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
@@ -43,6 +43,7 @@ import {
   tryAcknowledgeNoTrackTaskMutationWithoutDb,
   tryAcknowledgeNoTrackTaskMutationWithoutOwner,
 } from './headless-no-track-fallback.js';
+import { submittedPlanningStackWorkflowAliases } from './submitted-planning-workflow-aliases.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -192,6 +193,71 @@ const GENERIC_DELEGATABLE_READ_COMMANDS = new Set([
   'list', 'status', 'task-status', 'audit', 'session', 'query-select',
 ]);
 
+const PLANNING_SESSION_QUERY_TIMEOUT_MS = 2_000;
+
+function isWorkflowListJsonQuery(args: string[]): boolean {
+  return args[0] === 'query'
+    && args[1] === 'workflows'
+    && readOutputFormat(args) === 'json';
+}
+
+function isSerializedWorkflow(value: unknown): value is Record<string, unknown> & { id: string; name: string } {
+  if (!value || typeof value !== 'object') return false;
+  const workflow = value as { id?: unknown; name?: unknown };
+  return typeof workflow.id === 'string' && typeof workflow.name === 'string';
+}
+
+function isPlanningSessionListResponse(value: unknown): value is { ok: true; sessions: InAppPlanningSessionSummary[] } {
+  if (!value || typeof value !== 'object') return false;
+  const response = value as { ok?: unknown; sessions?: unknown };
+  return response.ok === true && Array.isArray(response.sessions);
+}
+
+async function requestPlanningSessionsForWorkflowAliases(
+  messageBus: MessageBus,
+): Promise<InAppPlanningSessionSummary[]> {
+  const timeout = Symbol('planning-session-query-timeout');
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<typeof timeout>((resolve) => {
+    timeoutHandle = setTimeout(() => resolve(timeout), PLANNING_SESSION_QUERY_TIMEOUT_MS);
+    timeoutHandle.unref?.();
+  });
+  try {
+    const response = await Promise.race([
+      messageBus.request('headless.gui-mutation', {
+        channel: 'invoker:planning-chat-list',
+        args: [],
+      }),
+      timeoutPromise,
+    ]);
+    return isPlanningSessionListResponse(response) ? response.sessions : [];
+  } catch {
+    return [];
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
+async function enrichDelegatedWorkflowJsonOutput(
+  args: string[],
+  output: string,
+  messageBus: MessageBus,
+): Promise<string> {
+  if (!isWorkflowListJsonQuery(args)) return output;
+  let workflows: unknown;
+  try {
+    workflows = JSON.parse(output);
+  } catch {
+    return output;
+  }
+  if (!Array.isArray(workflows) || !workflows.every(isSerializedWorkflow)) return output;
+
+  const sessions = await requestPlanningSessionsForWorkflowAliases(messageBus);
+  if (sessions.length === 0) return output;
+  const aliases = submittedPlanningStackWorkflowAliases(workflows, sessions);
+  return aliases.length === 0 ? output : `${JSON.stringify([...workflows, ...aliases])}\n`;
+}
+
 /**
  * Read-only query commands the owner can answer over the generic `cli-query`
  * channel. `queue`, `ui-perf`, and `action-graph` are excluded here — they have
@@ -235,7 +301,7 @@ async function delegateGenericReadQuery(
       READ_ONLY_QUERY_REQUEST_TIMEOUT_MS,
     );
     if (response && typeof response.output === 'string') {
-      process.stdout.write(response.output);
+      process.stdout.write(await enrichDelegatedWorkflowJsonOutput(args, response.output, messageBus));
       return true;
     }
     if (!refreshMessageBus) break;

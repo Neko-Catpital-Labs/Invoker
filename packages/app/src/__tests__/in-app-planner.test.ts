@@ -727,6 +727,7 @@ tasks:
     expect(sessions.get(sent.sessionId)?.messages.at(-1)?.text).toBe(
       'Plan "Workers Surface" submitted as 2 stacked workflows.',
     );
+    expect(sessions.get(sent.sessionId)?.submittedWorkflowIds).toEqual(['wf-1', 'wf-2']);
   });
 
   it('rejects submit for an unknown session', async () => {

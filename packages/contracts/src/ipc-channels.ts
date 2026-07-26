@@ -482,6 +482,7 @@ export interface InAppPlanningSessionSummary {
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
   submittedWorkflowId?: string;
+  submittedWorkflowIds?: string[];
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
   terminalSessionId?: string;
