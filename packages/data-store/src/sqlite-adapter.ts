@@ -53,6 +53,7 @@ import type {
   WorkerActionRecord,
   WorkerActionWrite,
   WorkerDesiredStateRecord,
+  WorkflowListOptions,
   TerminalSessionPatch,
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
@@ -78,6 +79,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -1054,8 +1056,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.workflowRepo.loadWorkflow(workflowId);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(options?: WorkflowListOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(options);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1548,6 +1550,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
   deleteWorkflow(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
+      const workflow = this.queryOne(
+        'SELECT id FROM workflows WHERE id = ? AND deleted_at IS NULL',
+        [workflowId],
+      );
+      if (!workflow) return;
+
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
@@ -1587,7 +1595,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      const deletedAt = Date.now();
+      const updatedAt = new Date(deletedAt).toISOString();
+      this.db.run(
+        'UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+        [deletedAt, updatedAt, workflowId],
+      );
+      const tombstone = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+      if (!tombstone) {
+        throw new Error(`Cannot append tombstone journal entry for missing workflow ${workflowId}`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'workflow',
+        entityId: workflowId,
+        op: 'tombstone',
+        payload: tombstone,
+      });
     });
     this.removeOutputFiles(taskIds);
   }
@@ -1595,10 +1618,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Events ────────────────────────────────────────────
 
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
-    this.execRun(`
-      INSERT INTO events (task_id, event_type, payload)
-      VALUES (?, ?, ?)
-    `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+    this.runTransaction(() => {
+      this.execRun(`
+        INSERT INTO events (task_id, event_type, payload)
+        VALUES (?, ?, ?)
+      `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+      const inserted = this.queryOne('SELECT last_insert_rowid() AS id') as { id?: number | bigint } | undefined;
+      const eventId = Number(inserted?.id ?? 0);
+      const row = this.queryOne('SELECT * FROM events WHERE id = ?', [eventId]);
+      if (!row) {
+        throw new Error(`Cannot append event journal entry for missing event ${eventId}`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'event',
+        entityId: String(eventId),
+        op: 'upsert',
+        payload: row,
+      });
+    });
   }
 
   getEvents(taskId: string): TaskEvent[];
