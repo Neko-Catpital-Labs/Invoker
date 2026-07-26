@@ -444,6 +444,7 @@ interface ConversationLike {
 /** An action staged for a thread, awaiting a yes/no (text or button) confirmation. */
 type PendingConfirm =
   | { kind: 'op'; op: WorkflowOp }
+  | { kind: 'plan_intent'; requestText: string; userId: string; context: PlanningContext; channel: string }
   | { kind: 'restart' };
 
 interface SayResult {
@@ -867,6 +868,36 @@ export class SlackSurface implements Surface {
       this.log('slack', 'info', `Button: lobby_cancel key=${action.value}`);
       await respond?.({ text: '❌ Cancelled.', replace_original: true });
     });
+
+    this.app.action('lobby_plan_for_execution', async ({ action, body, ack, respond }) => {
+      await ack();
+      if (action.type !== 'button' || !action.value) return;
+      const pending = this.getPendingConfirm(action.value);
+      if (!pending || pending.kind !== 'plan_intent') {
+        await respond?.({ text: 'This planning choice has expired.', replace_original: true });
+        return;
+      }
+      this.pendingConfirms.delete(action.value);
+      this.slackSessionRepo?.deletePendingConfirmation(action.value);
+      this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] accepted key=${action.value}`);
+      await respond?.({ text: '✅ Planning for execution.', replace_original: true });
+      await this.startPlanIntent(pending, this.lobbyButtonSay(body, respond), action.value);
+    });
+
+    this.app.action('lobby_continue_conversation', async ({ action, body, ack, respond }) => {
+      await ack();
+      if (action.type !== 'button' || !action.value) return;
+      const pending = this.getPendingConfirm(action.value);
+      if (!pending || pending.kind !== 'plan_intent') {
+        await respond?.({ text: 'This planning choice has expired.', replace_original: true });
+        return;
+      }
+      this.pendingConfirms.delete(action.value);
+      this.slackSessionRepo?.deletePendingConfirmation(action.value);
+      this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] declined key=${action.value}`);
+      await respond?.({ text: '✅ Continuing the conversation without planning.', replace_original: true });
+      await this.startConversationIntent(pending, this.lobbyButtonSay(body, respond), action.value);
+    });
   }
 
   // ── @mention Handler (Plan Conversations) ──────────────
@@ -948,6 +979,24 @@ export class SlackSurface implements Surface {
       ?? detectedRepoResolution.url
       ?? mentionedRepoResolution.url
       ?? this.resolveRepoUrl().url;
+
+    if (/^\/plan\s+.+/i.test(parsed.text)) {
+      const context: PlanningContext = {
+        repoUrl: routeRepoUrl,
+        presetKey: parsed.presetKey,
+        workingDir: this.workingDir,
+        requestedBy: event.user,
+        lobbyChannel: channel,
+      };
+      await this.stagePlanIntentConfirm(threadTs, channel, {
+        kind: 'plan_intent',
+        requestText: parsed.text.replace(/^\/plan\s+/i, ''),
+        userId: event.user ?? 'unknown',
+        context,
+        channel,
+      }, say);
+      return;
+    }
 
     // Confirm/cancel a staged action first (plain yes/no in-thread).
     if (await this.resolveConfirm(threadTs, parsed.text, say, channel)) return;
@@ -1364,6 +1413,75 @@ export class SlackSurface implements Surface {
     ];
   }
 
+  private buildPlanIntentBlocks(confirmKey: string): unknown[] {
+    return [
+      {
+        type: 'section',
+        text: { type: 'mrkdwn', text: 'It sounds like you may want an Invoker plan that can be executed. Which should I do?' },
+      },
+      {
+        type: 'actions',
+        elements: [
+          { type: 'button', action_id: 'lobby_plan_for_execution', style: 'primary', text: { type: 'plain_text', text: 'Plan for execution' }, value: confirmKey },
+          { type: 'button', action_id: 'lobby_continue_conversation', text: { type: 'plain_text', text: 'No planning, just continue conversation' }, value: confirmKey },
+        ],
+      },
+    ];
+  }
+
+  private async stagePlanIntentConfirm(
+    threadTs: string,
+    channel: string,
+    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
+    say: SayFn,
+  ): Promise<void> {
+    this.pendingConfirms.set(threadTs, pending);
+    this.slackSessionRepo?.createPendingConfirmation({
+      confirmKey: threadTs,
+      threadTs,
+      channelId: channel,
+      userId: pending.userId,
+      kind: pending.kind,
+      payload: pending,
+    });
+    this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] staged key=${threadTs} thread_ts=${threadTs}`);
+    await say({
+      text: 'Do you want a plan for execution, or should I continue the conversation without planning?',
+      thread_ts: threadTs,
+      blocks: this.buildPlanIntentBlocks(threadTs),
+    });
+  }
+
+  private async startConversationIntent(
+    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
+    say: SayFn,
+    threadTs: string,
+  ): Promise<void> {
+    const context = pending.context;
+    const conversation = await this.getSession(
+      pending.channel,
+      threadTs,
+      pending.userId,
+      true,
+      this.sessionOptionsFromContext(context, 'agent'),
+    );
+    if (!conversation) {
+      await say({ text: 'Too many active conversations. Please wait.', thread_ts: threadTs });
+      return;
+    }
+    this.persistLaunchContext(threadTs, context);
+    await this.handleConversationMessage(conversation, pending.requestText, threadTs, say, pending.channel);
+  }
+
+  private async startPlanIntent(
+    pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
+    say: SayFn,
+    threadTs: string,
+  ): Promise<void> {
+    await this.startConversationIntent(pending, say, threadTs);
+    await this.handleExplicitPlanAction(pending.channel, threadTs, pending.userId, say);
+  }
+
   /** Stage an action and post the prompt with Approve/Cancel buttons (plain yes/no also works). */
   private async stageConfirm(
     threadTs: string,
@@ -1651,7 +1769,13 @@ export class SlackSurface implements Surface {
   }
 
   private getPendingConfirm(key: string): PendingConfirm | undefined {
-    return this.pendingConfirms.get(key);
+    const inMemory = this.pendingConfirms.get(key);
+    if (inMemory) return inMemory;
+    const persisted = this.slackSessionRepo?.getPendingConfirmation(key);
+    if (persisted?.kind !== 'plan_intent' || !persisted.payload || typeof persisted.payload !== 'object') return undefined;
+    const pending = persisted.payload as PendingConfirm;
+    this.pendingConfirms.set(key, pending);
+    return pending;
   }
 
   private async handleLocalRequest(
