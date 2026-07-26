@@ -1716,8 +1716,6 @@ function startHeadlessMode(): void {
               messageBus,
               executionAgentRegistry: agentRegistry,
               invokerConfig,
-              repoRoot,
-              executorRegistry,
               appRootDir: __dirname,
             },
             apiServerDeps,
