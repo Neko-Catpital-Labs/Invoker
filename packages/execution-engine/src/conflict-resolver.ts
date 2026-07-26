@@ -273,14 +273,12 @@ function shellQuote(s: string): string {
 }
 
 /**
- * Remote shell for agent fix/resolve commands. Load the remote login
- * environment, then exec a plain Bash process to read the generated script from
- * stdin. This matches SshExecutor task payloads while avoiding login-shell
- * teardown after the script exits. Do not forward the local host PATH — that
- * clobbers Linux remotes with macOS paths.
+ * Remote shell for agent fix/resolve commands. Use a login shell so the remote
+ * user's ~/.profile PATH is applied (same as SshExecutor task payloads). Do not
+ * forward the local host PATH — that clobbers Linux remotes with macOS paths.
  */
 export function remoteAgentShellInvocation(): string[] {
-  return ['bash', '-lc', shellQuote('exec bash -s')];
+  return ['bash', '-l', '-s'];
 }
 
 /**

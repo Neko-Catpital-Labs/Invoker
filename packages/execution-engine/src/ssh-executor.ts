@@ -258,9 +258,11 @@ STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
 cleanup_runtime() {
+  local status="$1"
   trap - EXIT HUP INT TERM
   stop_bootstrap_heartbeat
   rm -rf "$STAGING_DIR" >/dev/null 2>&1 || true
+  exit "$status"
 }
 BOOTSTRAP_HEARTBEAT_PID=""
 INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
@@ -282,10 +284,10 @@ stop_bootstrap_heartbeat() {
     BOOTSTRAP_HEARTBEAT_PID=""
   fi
 }
-trap 'status=$?; cleanup_runtime; exit "$status"' EXIT
-trap 'cleanup_runtime; exit 129' HUP
-trap 'cleanup_runtime; exit 130' INT
-trap 'cleanup_runtime; exit 143' TERM
+trap 'cleanup_runtime "$?"' EXIT
+trap 'cleanup_runtime 129' HUP
+trap 'cleanup_runtime 130' INT
+trap 'cleanup_runtime 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
@@ -295,13 +297,7 @@ cd "$WT"
 ${options.envExports}
 start_bootstrap_heartbeat
 ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
-if "$RUNNER_PATH" "$PAYLOAD_PATH"; then
-  PAYLOAD_EXIT=0
-else
-  PAYLOAD_EXIT=$?
-fi
-cleanup_runtime
-exit "$PAYLOAD_EXIT"
+"$RUNNER_PATH" "$PAYLOAD_PATH"
 `;
   }
 
@@ -315,13 +311,12 @@ exit "$PAYLOAD_EXIT"
   }
 
   /**
-   * Remote shell for task payloads. Load the remote user's login environment,
-   * then exec a plain Bash process to read the generated script from stdin.
-   * This preserves ~/.profile PATH updates without running the whole payload in
-   * a fragile login-shell teardown path.
+   * Remote shell for task payloads. Use a login shell so the remote user's
+   * ~/.profile PATH (flutter, android-sdk, etc.) is applied. Never forward the
+   * local host PATH — that clobbers Linux remotes with macOS Homebrew paths.
    */
   private buildPayloadRemoteCommand(): string[] {
-    return ['bash', '-lc', sshGitShellQuote('exec bash -s')];
+    return ['bash', '-l', '-s'];
   }
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
@@ -936,7 +931,7 @@ exit "$PAYLOAD_EXIT"
     return this.remoteGitRecordAndPush('publish-approved-fix', request, worktreePath, branch, 0);
   }
 
-  /** Run a task bash script on the remote shell environment bridge (fed on stdin). */
+  /** Run a task bash script on the remote login shell (fed on stdin). */
   private spawnSshRemoteStdin(
     executionId: string,
     request: WorkRequest,

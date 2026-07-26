@@ -227,9 +227,7 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript.indexOf('stop_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
-    expect(callScript).toContain('trap \'status=$?; cleanup_runtime; exit "$status"\' EXIT');
-    expect(callScript).toContain('if "$RUNNER_PATH" "$PAYLOAD_PATH"; then');
-    expect(callScript).toContain('exit "$PAYLOAD_EXIT"');
+    expect(callScript).toContain("trap 'cleanup_runtime \"$?\"' EXIT");
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
@@ -931,7 +929,7 @@ describe('SshExecutor entry lifecycle', () => {
     vi.spyOn(ssh as any, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
   });
 
-  it('bridges through a login shell for task payloads so remote profile PATH applies', async () => {
+  it('uses a login shell for task payloads so remote profile PATH applies', async () => {
     const request = makeRequest({
       inputs: {
         command: 'echo hello',
@@ -943,7 +941,7 @@ describe('SshExecutor entry lifecycle', () => {
     const childProcessMod = await import('node:child_process');
     const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
     const spawnArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
-    expect(spawnArgs.slice(-3)).toEqual(['bash', '-lc', "'exec bash -s'"]);
+    expect(spawnArgs.slice(-3)).toEqual(['bash', '-l', '-s']);
 
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
     sshProcess.emit('close', 0, null);
