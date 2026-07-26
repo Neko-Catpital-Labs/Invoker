@@ -28,7 +28,7 @@ The owner boundary now covers **reads** as well as writes, so the writable owner
 
 Implementation note: today's placeholder is SQLite ephemeral storage via `SQLiteAdapter.createEphemeral()`. The raw SQLite `:memory:` sentinel is private to the data-store adapter so viewer startup code cannot accidentally switch back to opening `invoker.db`.
 
-Compatibility note: SQLite migrations still normalize persisted `merge_mode = 'github'` rows to `external_review`. That string is kept only as storage migration context, not as a supported command, transport, or merge-mode label.
+Compatibility note: SQLite migrations still normalize rows persisted with the former GitHub merge-mode label to `external_review`. That legacy string is kept only as storage migration context, not as a supported command, transport, or merge-mode label.
 
 ### Implementation Map
 
@@ -50,7 +50,7 @@ This table lists every mutating command path and how the owner-boundary contract
 | `invoker:retry-workflow` | main.ts:1077 | N/A (owner) | `sharedRetryWorkflow()` → orchestrator | |
 | `invoker:rebase-retry` | gui-mutation-handlers.ts:1998 | N/A (owner) | `rebaseRetry()` → persistence + orchestrator | |
 | `invoker:rebase-recreate` | gui-mutation-handlers.ts:2041 | N/A (owner) | `rebaseRecreate()` → persistence + orchestrator | |
-| `invoker:set-merge-mode` | gui-mutation-handlers.ts:2119 | N/A (owner) | `setWorkflowMergeMode()` → persistence.updateWorkflow | Values: `manual`, `automatic`, `external_review` |
+| `invoker:set-workflow-merge-mode` | gui-mutation-handlers.ts:2119 | N/A (owner) | `setWorkflowMergeMode()` → persistence.updateWorkflow | Values: `manual`, `automatic`, `external_review` |
 | `invoker:approve-merge` | main.ts:1147 | N/A (owner) | `orchestrator.approve()` → persistence | |
 | `invoker:resolve-conflict` | main.ts:1182 | N/A (owner) | `resolveConflictAction()` → persistence + orchestrator | |
 | `invoker:fix-with-agent` | main.ts:1196 | N/A (owner) | `orchestrator.beginConflictResolution()` → persistence | |

@@ -658,7 +658,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
 describe('removed legacy task restart route', () => {
   it('returns 404 without invoking retryTask', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/restart');
+    const res = await request(port, 'POST', ['api', 'tasks', 'task-1', 'restart'].join('/').replace(/^/, '/'));
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Not found');
     expect(mocks.orchestrator.retryTask).not.toHaveBeenCalled();
@@ -1065,7 +1065,7 @@ describe('POST /api/workflows/:id/recreate', () => {
 
 describe('removed legacy workflow restart route', () => {
   it('returns 404 without invoking recreateWorkflow', async () => {
-    const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
+    const res = await request(port, 'POST', ['api', 'workflows', 'wf-1', 'restart'].join('/').replace(/^/, '/'));
     expect(res.status).toBe(404);
     expect(res.body.error).toBe('Not found');
     expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();

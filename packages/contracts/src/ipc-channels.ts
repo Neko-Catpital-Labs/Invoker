@@ -1111,7 +1111,7 @@ export const IpcChannels = {
     request: [workflowId: string, baseBranch: string];
     response: WorkflowMutationAcceptedResult;
   },
-  'invoker:set-merge-mode': {} as {
+  'invoker:set-workflow-merge-mode': {} as {
     request: [workflowId: string, mergeMode: string];
     response: WorkflowMutationAcceptedResult;
   },
