@@ -456,7 +456,7 @@ describe('Parity: API endpoints wire to facade methods', () => {
     orchestratorMethod: string;
     expectTopup: boolean;
   }> = [
-    { name: 'POST /api/tasks/:id/restart', method: 'POST', path: '/api/tasks/task-1/restart', orchestratorMethod: 'retryTask', expectTopup: true },
+    { name: 'POST /api/tasks/:id/retry', method: 'POST', path: '/api/tasks/task-1/retry', orchestratorMethod: 'retryTask', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit', method: 'POST', path: '/api/tasks/task-1/edit', body: { command: 'echo ok' }, orchestratorMethod: 'editTaskCommand', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit-prompt', method: 'POST', path: '/api/tasks/task-1/edit-prompt', body: { prompt: 'do it' }, orchestratorMethod: 'editTaskPrompt', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit-agent', method: 'POST', path: '/api/tasks/task-1/edit-agent', body: { agent: 'codex' }, orchestratorMethod: 'editTaskAgent', expectTopup: true },
@@ -498,8 +498,8 @@ describe('Parity: API endpoints wire to facade methods', () => {
     expect(mocks.orchestrator.provideInput).toHaveBeenCalledWith('task-1', 'yes');
   });
 
-  it('POST /api/workflows/:id/restart routes through facade recreateWorkflow', async () => {
-    const res = await httpRequest(port, 'POST', '/api/workflows/wf-1/restart');
+  it('POST /api/workflows/:id/recreate routes through facade recreateWorkflow', async () => {
+    const res = await httpRequest(port, 'POST', '/api/workflows/wf-1/recreate');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(mocks.persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
