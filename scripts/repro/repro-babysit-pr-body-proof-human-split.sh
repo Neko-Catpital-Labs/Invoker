@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/repro-babysit-pr-body-human-split.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/repro-babysit-pr-body-proof-human-split.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
@@ -45,7 +45,7 @@ cat > "$TMP/bin/node" <<'EOF'
 set -euo pipefail
 if [[ "$#" -ge 1 && "$1" == *"/scripts/validate-pr-body-local.mjs" ]]; then
   cat <<'JSON'
-{"valid":false,"errors":["PR body mentions multiple review units (validation-policy, routing); split into one conceptual unit per diff/task.","Review lane behavior cannot ship with policy, proof files in the same PR. Split behavior or cleanup from docs, policy, repro, and benchmark slices.","PR body Review Unit \"routing\" cannot ship with tooling-policy, proof files in the same PR. Split this into one Review Unit per PR."],"reviewLane":"behavior","reviewUnit":"routing","reviewUnits":["routing","tooling-policy","proof"],"scopeKinds":["product","policy"]}
+{"valid":false,"errors":["Review lane behavior cannot ship with proof files in the same PR. Split behavior or cleanup from docs, policy, repro, and benchmark slices.","PR body Review Unit \"routing\" cannot ship with proof files in the same PR. Split this into one Review Unit per PR."],"reviewLane":"behavior","reviewUnit":"routing","reviewUnits":["routing","proof"],"scopeKinds":["product","proof"]}
 JSON
   exit 1
 fi
@@ -57,11 +57,11 @@ BODY_PATH="$TMP/body.md"
 cat > "$BODY_PATH" <<'EOF'
 ## Summary
 
-Adds orphaned-PR repair and tighter maintenance-worker routing.
+Makes Slack planning drafts, approval buttons, and thinking placeholders recoverable.
 
 ## Review Claim
 
-Unmapped broken pull requests receive one deduplicated repair workflow.
+Slack planning state remains actionable after restarts and reconnects.
 
 ## Review Lane
 
@@ -73,23 +73,22 @@ routing
 
 ## Safety Invariant
 
-Mapped PRs remain owned by their existing workers.
+A draft remains separate from execution until its existing approval action runs.
 
 ## Slice Rationale
 
-Worker coordination ships after the orphan classifier so failed PRs have one owner.
+Recovery mechanics precede the new planning-intent entry gate.
 
 ## Non-goals
 
-- No manual stack split.
+Does not change the final workflow execution API.
 
 ## Test Plan
 
 <details>
 <summary>Test Plan</summary>
 
-- [x] `bash scripts/repro/repro-pr-orphan-repair.sh`
-
+- [x] pnpm --filter @invoker/surfaces test
 </details>
 
 ## Revert Plan
@@ -98,17 +97,16 @@ Worker coordination ships after the orphan classifier so failed PRs have one own
 <summary>Revert Plan</summary>
 
 - Safe to revert? Yes
-- Revert command: `git revert <sha>`
+- Revert command: git revert bef53b9
 - Post-revert steps: None
 - Data migration? No
-
 </details>
 EOF
 export BODY_PATH
 
 REMOTE="$TMP/origin.git"
 SEED="$TMP/seed"
-WORK_ROOT="$WORK_PARENT/5803"
+WORK_ROOT="$WORK_PARENT/5804"
 STATE_PATH="$FAKE_GH_STATE_DIR/state.json"
 LEDGER_PATH="$TMP/ledger.jsonl"
 export STATE_PATH
@@ -124,14 +122,14 @@ head = os.environ['ORIGINAL_HEAD']
 state = {
     'prs': [
         {
-            'number': 5803,
-            'title': '[PR maintenance](14) Repair orphaned and failed pull requests',
+            'number': 5804,
+            'title': '[Slack planning](15) Make plan submission and confirmation recoverable',
             'body': body,
-            'url': 'https://github.com/fake/repo/pull/5803',
+            'url': 'https://github.com/fake/repo/pull/5804',
             'state': 'OPEN',
             'isDraft': False,
             'baseRefName': 'stack/base',
-            'headRefName': 'stack/5803',
+            'headRefName': 'stack/5804',
             'headRefOid': head,
             'mergeStateStatus': 'UNSTABLE',
             'mergeable': 'MERGEABLE',
@@ -140,7 +138,7 @@ state = {
             'checks': {'*': 'SUCCESS', 'PR Body': 'FAILURE'},
         }
     ],
-    'issue_comments': {'5803': []},
+    'issue_comments': {'5804': []},
 }
 Path(os.environ['STATE_PATH']).write_text(json.dumps(state, indent=2), encoding='utf-8')
 PY
@@ -151,23 +149,22 @@ assert_first_run_state() {
 import json
 import os
 from pathlib import Path
-ledger_path = Path(os.environ['LEDGER_PATH'])
-rows = [json.loads(line) for line in ledger_path.read_text(encoding='utf-8').splitlines() if line.strip()]
-if not any(row.get('kind') == 'repair-check' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
-    raise SystemExit('missing repair-check ledger row for PR #5803')
-invalid = next((row for row in rows if row.get('kind') == 'repair-invalid' and row.get('pr') == 5803 and row.get('key') == 'PR Body'), None)
+rows = [json.loads(line) for line in Path(os.environ['LEDGER_PATH']).read_text(encoding='utf-8').splitlines() if line.strip()]
+invalid = next((row for row in rows if row.get('kind') == 'repair-invalid' and row.get('pr') == 5804 and row.get('key') == 'PR Body'), None)
 if invalid is None:
-    raise SystemExit('missing repair-invalid ledger row for PR #5803')
+    raise SystemExit('missing repair-invalid row for PR #5804')
 errors = (invalid.get('meta') or {}).get('errors') or []
+if not any('cannot ship with proof files' in str(item) for item in errors):
+    raise SystemExit('repair-invalid row missing proof-file split reason')
 if not any('human stack split required' in str(item) for item in errors):
     raise SystemExit('repair-invalid row missing manual split note')
 state = json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
-comments = state.get('issue_comments', {}).get('5803', [])
+comments = state.get('issue_comments', {}).get('5804', [])
 if len(comments) != 1:
     raise SystemExit(f'expected exactly one stop comment, saw {len(comments)}')
 body = comments[0].get('body', '')
-if 'Split this into one Review Unit per PR.' not in body:
-    raise SystemExit('stop comment missing split guidance')
+if 'cannot ship with proof files' not in body:
+    raise SystemExit('stop comment missing proof-file split reason')
 if 'human stack split required' not in body:
     raise SystemExit('stop comment missing manual split note')
 PY
@@ -179,7 +176,7 @@ import json
 import os
 from pathlib import Path
 state = json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
-comments = state.get('issue_comments', {}).get('5803', [])
+comments = state.get('issue_comments', {}).get('5804', [])
 expected = int(os.environ['expected'])
 actual = len(comments)
 if actual != expected:
@@ -205,16 +202,16 @@ git clone . "$SEED" >/dev/null
   git add base.txt
   git commit -m 'base branch' >/dev/null
   git push publish stack/base >/dev/null
-  git switch -c stack/5803 stack/base >/dev/null
-  mkdir -p packages/execution-engine/src/workers scripts/repro
-  printf 'route\n' > packages/execution-engine/src/workers/pr-maintenance-workers.ts
-  printf '# repro\n' > scripts/repro/repro-pr-orphan-repair.sh
-  git add packages/execution-engine/src/workers/pr-maintenance-workers.ts scripts/repro/repro-pr-orphan-repair.sh
-  git commit -m 'mixed review units' >/dev/null
-  git push publish stack/5803 >/dev/null
+  git switch -c stack/5804 stack/base >/dev/null
+  mkdir -p packages/surfaces/src/slack scripts/repro
+  printf 'planning\n' > packages/surfaces/src/slack/plan-conversation.ts
+  printf '# repro\n' > scripts/repro/repro-slack-plan-intent-confirm.sh
+  git add packages/surfaces/src/slack/plan-conversation.ts scripts/repro/repro-slack-plan-intent-confirm.sh
+  git commit -m 'mixed behavior and proof slice' >/dev/null
+  git push publish stack/5804 >/dev/null
 )
 git --git-dir="$REMOTE" symbolic-ref HEAD refs/heads/master
-ORIGINAL_HEAD="$(git -C "$SEED" rev-parse stack/5803)"
+ORIGINAL_HEAD="$(git -C "$SEED" rev-parse stack/5804)"
 export ORIGINAL_HEAD
 
 git clone "$REMOTE" "$WORK_ROOT" >/dev/null
@@ -227,30 +224,17 @@ fi
 printf '%s\n' "$out1"
 assert_first_run_state
 
+: > "$LEDGER_PATH"
 if ! out2="$(run_worker)"; then
-  fail 'tick 2: worker failed' "$out2"
+  fail 'tick 2: worker failed after ledger loss' "$out2"
 fi
 printf '%s\n' "$out2"
 case "$out2" in
-  *'repair-check PR #5803'*) fail 'tick 2: worker retried the same impossible PR Body fix' "$out2" ;;
+  *'repair-check PR #5804'*) fail 'tick 2: worker retried existing proof split stop after ledger loss' "$out2" ;;
 esac
 case "$out2" in
   *'"reason": "blocked-needs-human"'*) ;;
-  *) fail 'tick 2: worker did not surface blocked-needs-human wait state' "$out2" ;;
-esac
-assert_stop_comment_count 1
-
-: > "$LEDGER_PATH"
-if ! out3="$(run_worker)"; then
-  fail 'tick 3: worker failed after ledger loss' "$out3"
-fi
-printf '%s\n' "$out3"
-case "$out3" in
-  *'repair-check PR #5803'*) fail 'tick 3: worker retried existing split-only stop after ledger loss' "$out3" ;;
-esac
-case "$out3" in
-  *'"reason": "blocked-needs-human"'*) ;;
-  *) fail 'tick 3: worker did not keep blocked-needs-human wait state after ledger loss' "$out3" ;;
+  *) fail 'tick 2: worker did not keep blocked-needs-human wait state after ledger loss' "$out2" ;;
 esac
 assert_stop_comment_count 1
 
