@@ -192,7 +192,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.rejectTask(String(args[0]), args[1] === undefined ? undefined : String(args[1]));
       case 'invoker:provide-input':
         return mutations.provideInput(String(args[0]), String(args[1]));
-      case 'invoker:restart-task':
+      case 'invoker:retry-task':
         return mutations.retryTask(String(args[0]));
       case 'invoker:recreate-task':
         return mutations.recreateTask(String(args[0]));
@@ -231,7 +231,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         );
       case 'invoker:resolve-conflict':
         return mutations.resolveConflict(String(args[0]), args[1] === undefined ? undefined : String(args[1]));
-      case 'invoker:set-merge-mode':
+      case 'invoker:set-workflow-merge-mode':
         return mutations.setWorkflowMergeMode(String(args[0]), String(args[1]));
       case 'invoker:detach-workflow':
         return deps.detachWorkflow(String(args[0]), String(args[1]));
