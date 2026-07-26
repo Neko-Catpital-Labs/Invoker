@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import {
   computeContentHash,
   formatLifecycleTag,
@@ -30,6 +30,25 @@ function createTempRepo(): string {
 
 function gitExec(cmd: string, cwd: string): string {
   return execSync(cmd, { cwd, encoding: 'utf-8' }).trim();
+}
+
+function runBashWithoutGitIdentity(script: string, cwd?: string): string {
+  const home = mkdtempSync(join(tmpdir(), 'branch-utils-no-git-id-home-'));
+  mkdirSync(join(home, '.config'), { recursive: true });
+  try {
+    return execFileSync('bash', ['-lc', script], {
+      cwd,
+      encoding: 'utf-8',
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: home,
+        XDG_CONFIG_HOME: join(home, '.config'),
+        GIT_CONFIG_NOSYSTEM: '1',
+      },
+    });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +428,31 @@ describe('bashPreserveOrReset', () => {
       expect(readFileSync(join(repoDir, 'master-update.txt'), 'utf-8')).toBe('new base');
     });
 
+    it('preserves branch with commits ahead when git identity is not configured', () => {
+      gitExec('git checkout -b invoker/no-identity', repoDir);
+      writeFileSync(join(repoDir, 'task-a.txt'), 'task work');
+      gitExec('git add -A && git commit -m "task commit"', repoDir);
+      gitExec('git checkout master', repoDir);
+
+      writeFileSync(join(repoDir, 'master-update.txt'), 'new base');
+      gitExec('git add -A && git commit -m "base update"', repoDir);
+      gitExec('git config --unset user.email', repoDir);
+      gitExec('git config --unset user.name', repoDir);
+
+      const script = bashPreserveOrReset({
+        repoDir,
+        branch: 'invoker/no-identity',
+        base: 'master',
+      });
+      const stdout = runBashWithoutGitIdentity(script, repoDir);
+      const result = parsePreserveResult(stdout);
+
+      expect(result.preserved).toBe(true);
+      expect(readFileSync(join(repoDir, 'task-a.txt'), 'utf-8')).toBe('task work');
+      expect(readFileSync(join(repoDir, 'master-update.txt'), 'utf-8')).toBe('new base');
+      expect(gitExec('git log -1 --format="%cn <%ce>"', repoDir)).toBe('Invoker Bot <invoker@local>');
+    });
+
     it('force-resets when branch exists but has 0 commits ahead', async () => {
       // Create branch at same point as master
       gitExec('git checkout -b invoker/stale', repoDir);
@@ -659,6 +703,28 @@ describe('bashMergeUpstreams', () => {
 
     expect(readFileSync(join(wtDir, 'x.txt'), 'utf-8')).toBe('x');
     expect(readFileSync(join(wtDir, 'y.txt'), 'utf-8')).toBe('y');
+  });
+
+  it('merges branches when git identity is not configured', () => {
+    gitExec('git checkout -b upstream-no-identity', repoDir);
+    writeFileSync(join(repoDir, 'upstream.txt'), 'from upstream');
+    gitExec('git add -A && git commit -m "upstream change"', repoDir);
+    gitExec('git checkout master', repoDir);
+
+    writeFileSync(join(wtDir, 'local.txt'), 'from worktree');
+    gitExec('git add -A && git commit -m "worktree change"', wtDir);
+    gitExec('git config --unset user.email', repoDir);
+    gitExec('git config --unset user.name', repoDir);
+
+    const script = bashMergeUpstreams({
+      worktreeDir: wtDir,
+      upstreamBranches: ['upstream-no-identity'],
+    });
+    runBashWithoutGitIdentity(script, wtDir);
+
+    expect(readFileSync(join(wtDir, 'local.txt'), 'utf-8')).toBe('from worktree');
+    expect(readFileSync(join(wtDir, 'upstream.txt'), 'utf-8')).toBe('from upstream');
+    expect(gitExec('git log -1 --format="%cn <%ce>"', wtDir)).toBe('Invoker Bot <invoker@local>');
   });
 
   it('resets dirty worktree state before merge to avoid false merge_conflict', async () => {

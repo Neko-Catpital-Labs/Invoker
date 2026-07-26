@@ -120,6 +120,17 @@ function sanitizeAttemptShort(raw: string): string {
   return raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '');
 }
 
+function bashInvokerGitIdentityFallback(repoDirVar: string): string {
+  return `if ! git -C "$${repoDirVar}" var GIT_AUTHOR_IDENT >/dev/null 2>&1 || ! git -C "$${repoDirVar}" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+  # Fresh SSH targets may not have git user.name/user.email configured.
+  : "\${GIT_AUTHOR_NAME:=\${GIT_COMMITTER_NAME:-Invoker Bot}}"
+  : "\${GIT_AUTHOR_EMAIL:=\${GIT_COMMITTER_EMAIL:-invoker@local}}"
+  : "\${GIT_COMMITTER_NAME:=\${GIT_AUTHOR_NAME:-Invoker Bot}}"
+  : "\${GIT_COMMITTER_EMAIL:=\${GIT_AUTHOR_EMAIL:-invoker@local}}"
+  export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+fi`;
+}
+
 export interface PreserveOrResetOpts {
   repoDir: string;
   worktreeDir?: string;
@@ -144,6 +155,7 @@ export function bashPreserveOrReset(opts: PreserveOrResetOpts): string {
   // exists with commits ahead, and either preserves or force-creates.
   return `set -euo pipefail
 REPO_DIR=${q(repoDir)}
+${bashInvokerGitIdentityFallback('REPO_DIR')}
 BRANCH=${q(branch)}
 BASE=${q(base)}
 BASE_SHA=$(git -C "$REPO_DIR" rev-parse "$BASE")
@@ -238,6 +250,7 @@ export function bashMergeUpstreams(opts: MergeUpstreamsOpts): string {
 
   return `set -euo pipefail
 WT_DIR=${q(worktreeDir)}
+${bashInvokerGitIdentityFallback('WT_DIR')}
 # Reused worktrees can retain dirty tracked/untracked files from interrupted runs.
 # Normalize to HEAD so upstream merges are deterministic and not blocked by
 # "local changes would be overwritten by merge".
