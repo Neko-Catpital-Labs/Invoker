@@ -251,7 +251,21 @@ ensure_managed_pnpm_workspace
     const runPayloadSection = `echo "[SshExecutor] Running task payload..."
 `;
 
-    return `set -euo pipefail
+    return `load_remote_profile_path() {
+  local profile
+  for profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+    if [ -f "$profile" ]; then
+      set +eu
+      set +o pipefail 2>/dev/null || true
+      . "$profile" || true
+      set +eu
+      set +o pipefail 2>/dev/null || true
+      break
+    fi
+  done
+}
+load_remote_profile_path
+set -euo pipefail
 ${this.remotePathNormalizeFunction()}
 INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
@@ -311,12 +325,13 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Remote shell for task payloads. Use a login shell so the remote user's
-   * ~/.profile PATH (flutter, android-sdk, etc.) is applied. Never forward the
-   * local host PATH — that clobbers Linux remotes with macOS Homebrew paths.
+   * Remote shell for task payloads. The bootstrap script sources profile files
+   * itself so PATH customizations apply without running login-shell logout hooks.
+   * Never forward the local host PATH — that clobbers Linux remotes with macOS
+   * Homebrew paths.
    */
   private buildPayloadRemoteCommand(): string[] {
-    return ['bash', '-l', '-s'];
+    return ['bash', '-s'];
   }
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
