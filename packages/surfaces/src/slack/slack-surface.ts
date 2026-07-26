@@ -193,6 +193,7 @@ function capTailChars(value: string, max: number): string {
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
 const URL_TOKEN_TERMINATORS = new Set([' ', '\t', '\n', '\r', '<', '>', '(', ')', '[', ']', '{', '}', '"', "'", '|']);
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?']);
+const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git|\/)?$/;
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
@@ -204,12 +205,12 @@ export function extractRepoUrlFromMessage(text: string): string | undefined {
   while (start < text.length) {
     const httpIndex = text.indexOf('http://', start);
     const httpsIndex = text.indexOf('https://', start);
-    const candidateStart = httpIndex === -1
-      ? httpsIndex
-      : httpsIndex === -1
-        ? httpIndex
-        : Math.min(httpIndex, httpsIndex);
-    if (candidateStart === -1) return undefined;
+    const sshIndex = text.indexOf('ssh://', start);
+    const gitIndex = text.indexOf('git@', start);
+    const candidateStart = [httpIndex, httpsIndex, sshIndex, gitIndex]
+      .filter((index) => index !== -1)
+      .reduce((lowest, index) => Math.min(lowest, index), Number.POSITIVE_INFINITY);
+    if (!Number.isFinite(candidateStart)) return undefined;
     let candidateEnd = candidateStart;
     while (candidateEnd < text.length && !URL_TOKEN_TERMINATORS.has(text[candidateEnd])) {
       candidateEnd += 1;
@@ -218,32 +219,30 @@ export function extractRepoUrlFromMessage(text: string): string | undefined {
     while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
       candidate = candidate.slice(0, -1);
     }
-    let url: URL;
-    try {
-      url = new URL(candidate);
-    } catch {
+    if (!isMessageRepoUrlCandidate(candidate)) {
       start = candidateEnd + 1;
       continue;
     }
-    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.username || url.password) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.search || url.hash) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
+    return /^https?:\/\//i.test(candidate) && candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
   }
   return undefined;
+}
+
+function isMessageRepoUrlCandidate(rawUrl: string): boolean {
+  if (/^git@[^:\s]+:[^\s<>]+$/i.test(rawUrl)) return true;
+  if (/^ssh:\/\/[^\s<>]+$/i.test(rawUrl)) return true;
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) return false;
+  if (url.username || url.password) return false;
+  if (url.search || url.hash) return false;
+  if (url.hostname.toLowerCase() === 'github.com') return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname);
+  return url.pathname.endsWith('.git');
 }
 
 type RepoParts = {
@@ -345,18 +344,12 @@ export function parsePlanningRequest(
 }
 
 function isRepoRootUrl(rawUrl: string): boolean {
-  if (/^(ssh:\/\/|git@)/.test(rawUrl)) return true;
-  try {
-    const u = new URL(rawUrl);
-    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(u.pathname);
-  } catch {
-    return false;
-  }
+  return isMessageRepoUrlCandidate(rawUrl);
 }
 
 function extractRepositoryUrls(text: string): string[] {
-  const slackLinks = [...text.matchAll(/<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>/gi)];
-  const withoutSlackLinks = text.replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ');
+  const slackLinks = [...text.matchAll(/<(((?:https?|ssh):\/\/|git@)[^|>\s]+)(?:\|[^>]+)?>/gi)];
+  const withoutSlackLinks = text.replace(/<(?:(?:(?:https?|ssh):\/\/|git@)[^>]+)>/gi, ' ');
   const candidates = [
     ...slackLinks,
     ...withoutSlackLinks.matchAll(/\bhttps?:\/\/[^\s<>]+/gi),

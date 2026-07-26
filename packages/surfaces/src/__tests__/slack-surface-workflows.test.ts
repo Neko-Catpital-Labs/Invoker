@@ -183,6 +183,26 @@ describe('parsePlanningRequest', () => {
     )).toMatchObject({
       repositoryUrls: ['git@github.com:EdbertChan/notarepo.git'],
     });
+    expect(parsePlanningRequest(
+      'plan this in https://gitlab.com/openai/invoker.git',
+      keys,
+      'cursor+claude',
+    )).toMatchObject({
+      repositoryUrls: ['https://gitlab.com/openai/invoker.git'],
+    });
+  });
+
+  it('does not treat generic website or non-GitHub http roots as repository URLs', () => {
+    expect(parsePlanningRequest(
+      'plan around https://www.onorca.dev',
+      keys,
+      'cursor+claude',
+    )).not.toHaveProperty('repositoryUrls');
+    expect(parsePlanningRequest(
+      'plan around https://gitlab.com/openai/invoker',
+      keys,
+      'cursor+claude',
+    )).not.toHaveProperty('repositoryUrls');
   });
 });
 
@@ -202,6 +222,14 @@ describe('extractRepoUrlFromMessage', () => {
 
   it('keeps a .git suffix', () => {
     expect(extractRepoUrlFromMessage('repo is https://github.com/EdbertChan/notarepo.git')).toBe('https://github.com/EdbertChan/notarepo.git');
+    expect(extractRepoUrlFromMessage('repo is https://gitlab.com/openai/invoker.git')).toBe('https://gitlab.com/openai/invoker.git');
+    expect(extractRepoUrlFromMessage('repo is git@github.com:openai/invoker.git')).toBe('git@github.com:openai/invoker.git');
+    expect(extractRepoUrlFromMessage('repo is ssh://git@github.com/openai/invoker.git')).toBe('ssh://git@github.com/openai/invoker.git');
+  });
+
+  it('rejects generic website and non-GitHub http roots without .git', () => {
+    expect(extractRepoUrlFromMessage('https://www.onorca.dev')).toBeUndefined();
+    expect(extractRepoUrlFromMessage('https://gitlab.com/openai/invoker')).toBeUndefined();
   });
 
   it('rejects credential-bearing URLs', () => {
@@ -217,7 +245,7 @@ describe('extractRepoUrlFromMessage', () => {
   });
 
   it('returns the first repo-root URL when multiple are present', () => {
-    expect(extractRepoUrlFromMessage('try https://gitlab.com/first/repo then https://github.com/second/repo')).toBe('https://gitlab.com/first/repo');
+    expect(extractRepoUrlFromMessage('try https://gitlab.com/first/repo then https://github.com/second/repo')).toBe('https://github.com/second/repo');
   });
 
   it('returns undefined when no repo URL is present', () => {
@@ -1125,8 +1153,9 @@ describe('lobby verb routing', () => {
     expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
   });
 
-  it('picks up any repo-shaped URL (including a deep link) as the first-message repo', async () => {
-    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
+  it('does not let a GitHub deep link in the first agent message override defaultRepoUrl', async () => {
+    const defaultRepo = 'git@github.com:default/repo.git';
+    const surface = lobbySurface(true, { defaultRepoUrl: defaultRepo });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
 
@@ -1140,12 +1169,31 @@ describe('lobby verb routing', () => {
       say,
     });
 
-    // `plan:` is literal agent text now (no plan-mode fork), so this uses the same
-    // repo-URL detection as every other agent message: any repo-shaped URL found in
-    // the message wins over defaultRepoUrl, deep link or not.
     expect(planConversationConfigs).toHaveLength(1);
     expect(planConversationConfigs[0].mode).toBe('agent');
-    expect(planConversationConfigs[0].repoUrl).toBe('https://github.com/openai/invoker/pull/123');
+    expect(planConversationConfigs[0].repoUrl).toBe(defaultRepo);
+    expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
+  });
+
+  it('does not let a generic website URL in the first agent message override defaultRepoUrl', async () => {
+    const defaultRepo = 'git@github.com:default/repo.git';
+    const surface = lobbySurface(true, { defaultRepoUrl: defaultRepo });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> plan: inspect https://www.onorca.dev',
+        ts: 't1',
+        user: 'U1',
+        channel: 'CLOBBY',
+      },
+      say,
+    });
+
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
+    expect(planConversationConfigs[0].repoUrl).toBe(defaultRepo);
     expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
   });
 
@@ -1305,7 +1353,7 @@ describe('lobby verb routing', () => {
       const sameRepoSay = vi.fn().mockResolvedValue({ ts: 'b' });
       await mentionHandler(surface)({
         event: {
-          text: '<@BOT> local: continue in https://gitlab.com/openai/invoker',
+          text: '<@BOT> local: continue in https://gitlab.com/openai/invoker.git',
           thread_ts: 't1',
           ts: 't2',
           user: 'U1',
@@ -1368,7 +1416,7 @@ describe('lobby verb routing', () => {
     }
   });
 
-  it('does not rebind a follow-up deep link', async () => {
+  it('does not rebind a follow-up website URL or GitHub deep link', async () => {
     const boundRepo = 'https://github.com/openai/invoker';
     const prepareRepoCheckout = vi.fn().mockResolvedValue('/checkouts/unused');
     const { adapter, slackSessionRepo, surface } = await persistentLobbySurface({
@@ -1386,7 +1434,7 @@ describe('lobby verb routing', () => {
 
       const deepLinkSay = vi.fn().mockResolvedValue({ ts: 'b' });
       await messageHandler(surface)({
-        event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'run local: inspect https://github.com/openai/new-repo/pull/123', channel: 'CLOBBY' },
+        event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'run local: inspect https://www.onorca.dev and https://github.com/openai/new-repo/pull/123', channel: 'CLOBBY' },
         say: deepLinkSay,
       });
 
