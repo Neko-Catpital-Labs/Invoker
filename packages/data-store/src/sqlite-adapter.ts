@@ -38,6 +38,7 @@ import type {
   PersistenceAdapter,
   ReviewGateLookup,
   Workflow,
+  WorkflowReadOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -78,6 +79,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -1050,12 +1052,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, options);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(options?: WorkflowReadOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(options);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1522,6 +1524,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteAllWorkflows(): void {
     const taskIds = this.getAllTaskIds();
+    const workflowIds = (this.queryAll(
+      'SELECT id FROM workflows WHERE deleted_at IS NULL',
+    ) as Array<{ id: string }>).map((row) => row.id);
+    const deletedAt = Date.now();
+    const updatedAt = new Date(deletedAt).toISOString();
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases');
       this.db.run('DELETE FROM workflow_mutation_intents');
@@ -1538,7 +1545,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       this.db.run('DELETE FROM output_spool');
       this.db.run('DELETE FROM terminal_sessions');
       this.db.run('DELETE FROM tasks');
-      this.db.run('DELETE FROM workflows');
+      this.db.run('UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL', [deletedAt, updatedAt]);
+      for (const workflowId of workflowIds) {
+        this.appendWorkflowTombstoneJournal(workflowId);
+      }
     });
     this.removeOutputFiles(taskIds);
     this.outputTailCache.clear();
@@ -1546,7 +1556,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteWorkflow(workflowId: string): void {
+    const workflowRow = this.queryOne('SELECT deleted_at FROM workflows WHERE id = ?', [workflowId]);
+    if (!workflowRow || workflowRow.deleted_at !== null) return;
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
+    const deletedAt = Date.now();
+    const updatedAt = new Date(deletedAt).toISOString();
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
@@ -1587,9 +1601,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      this.db.run('UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ?', [deletedAt, updatedAt, workflowId]);
+      this.appendWorkflowTombstoneJournal(workflowId);
     });
     this.removeOutputFiles(taskIds);
+  }
+
+  private appendWorkflowTombstoneJournal(workflowId: string): void {
+    const payload = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+    if (!payload) return;
+    appendJournalEntry(this.executor, {
+      entityType: 'workflow',
+      entityId: workflowId,
+      op: 'tombstone',
+      payload,
+    });
   }
 
   // ── Events ────────────────────────────────────────────
