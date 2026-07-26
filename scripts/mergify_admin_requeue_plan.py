@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Collection, Mapping
 
 try:
@@ -35,6 +36,22 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
     "required-fast / Vitest Workspace",
     "required-fast / Submit Workflow Chain",
 })
+
+HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed"})
+
+
+@dataclass(frozen=True)
+class StackFacts:
+    stack: StackGroup
+    required_checks: frozenset[str]
+    trunk: str
+    bottom: PrSnapshot | None
+    upper_stack_needs_acceptance: bool
+    prereq_status: RepairPrereqStatus | None
+    queue_only_noop_check: str | None
+    suppressed_failed_checks_by_pr: Mapping[int, tuple[str, ...]]
+    blockers_by_pr: Mapping[int, tuple[Blocker, ...]]
+    all_blockers: tuple[Blocker, ...]
 
 
 def is_queue_only_required_check(name: str) -> bool:
@@ -143,6 +160,7 @@ def mergify_failed_check_actions(
         return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
     return ()
 
+
 def current_bottom_pr(stack: StackGroup, trunk: str) -> PrSnapshot | None:
     for pr in stack.prs:
         if pr.state == "OPEN" and pr.base_ref_name == trunk:
@@ -196,6 +214,7 @@ def latest_repair_prereq_status(
         needs_followup_requeue=needs_followup_requeue,
     )
 
+
 def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) -> str | None:
     bottom = current_bottom_pr(stack, trunk)
     if not bottom:
@@ -234,26 +253,82 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
     return check_name
 
 
-def summarize_stack(
+def _assert_stack_facts_invariants(facts: StackFacts) -> None:
+    assert facts.stack.prs, "stack must contain at least one PR"
+    pr_numbers = tuple(pr.number for pr in facts.stack.prs)
+    assert len(pr_numbers) == len(set(pr_numbers)), "stack PR numbers must be unique"
+    assert set(facts.blockers_by_pr) == set(pr_numbers), "every PR must have blocker facts"
+    expected_all = tuple(
+        blocker
+        for pr in facts.stack.prs
+        for blocker in facts.blockers_by_pr[pr.number]
+    )
+    assert facts.all_blockers == expected_all, "all_blockers must flatten blockers_by_pr in stack order"
+    if facts.suppressed_failed_checks_by_pr:
+        assert facts.bottom is not None, "suppression requires a current bottom PR"
+        assert set(facts.suppressed_failed_checks_by_pr) == {facts.bottom.number}, "derived suppression is bottom-only"
+    if facts.prereq_status is not None:
+        assert facts.bottom is not None, "prerequisite status requires a current bottom PR"
+    if facts.queue_only_noop_check is not None:
+        assert facts.bottom is not None, "queue-only noop requires a current bottom PR"
+        latest = facts.bottom.latest_mergify
+        assert latest is not None, "queue-only noop requires a Mergify event"
+        assert latest.state == "dequeued", "queue-only noop requires a dequeued Mergify event"
+        assert latest.queue_rule_name == "admin-bypass", "queue-only noop requires the admin-bypass queue"
+        assert latest.head_sha == facts.bottom.head_ref_oid, "queue-only noop requires a same-head Mergify event"
+        assert facts.queue_only_noop_check in latest.failing_checks, "queue-only noop check must still be failing in Mergify"
+
+
+def build_stack_facts(
     stack: StackGroup,
     required_checks: Collection[str],
+    ledger: Ledger,
+    open_pr_numbers: Collection[int],
     trunk: str,
-    suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
-) -> dict[str, object]:
-    suppressed_by_pr = suppressed_failed_checks_by_pr or {}
-    blockers_by_pr = {
-        pr.number: [
-            {"kind": blocker.kind, "key": blocker.key, "detail": blocker.detail}
-            for blocker in effective_blockers(pr, required_checks, trunk, suppressed_by_pr.get(pr.number, ()))
-        ]
-        for pr in stack.prs
-    }
+) -> StackFacts:
+    required = frozenset(required_checks)
     bottom = current_bottom_pr(stack, trunk)
     upper_stack_needs_acceptance = stack_has_unaccepted_upper_pr(stack, bottom)
+    prereq_status = latest_repair_prereq_status(stack, ledger, open_pr_numbers, trunk)
+    queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, trunk)
+
+    suppressed_failed_checks_by_pr: dict[int, tuple[str, ...]] = {}
+    if prereq_status and prereq_status.needs_followup_requeue and bottom:
+        suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (prereq_status.check_name,)
+    if queue_only_noop_check and bottom:
+        suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (queue_only_noop_check,)
+
+    blockers_by_pr = {
+        pr.number: effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
+        for pr in stack.prs
+    }
+    facts = StackFacts(
+        stack=stack,
+        required_checks=required,
+        trunk=trunk,
+        bottom=bottom,
+        upper_stack_needs_acceptance=upper_stack_needs_acceptance,
+        prereq_status=prereq_status,
+        queue_only_noop_check=queue_only_noop_check,
+        suppressed_failed_checks_by_pr=suppressed_failed_checks_by_pr,
+        blockers_by_pr=blockers_by_pr,
+        all_blockers=tuple(
+            blocker
+            for pr in stack.prs
+            for blocker in blockers_by_pr[pr.number]
+        ),
+    )
+    _assert_stack_facts_invariants(facts)
+    return facts
+
+
+
+
+def summarize_stack(facts: StackFacts) -> dict[str, object]:
     return {
-        "stack_id": stack.stack_id,
-        "bottom_pr": bottom.number if bottom else None,
-        "upper_stack_needs_acceptance": upper_stack_needs_acceptance,
+        "stack_id": facts.stack.stack_id,
+        "bottom_pr": facts.bottom.number if facts.bottom else None,
+        "upper_stack_needs_acceptance": facts.upper_stack_needs_acceptance,
         "prs": [
             {
                 "number": pr.number,
@@ -272,37 +347,166 @@ def summarize_stack(
                     "failing_checks": list(pr.latest_mergify.failing_checks),
                     "waiting_for": list(pr.latest_mergify.waiting_for),
                 },
-                "blockers": blockers_by_pr[pr.number],
+                "blockers": [
+                    {"kind": blocker.kind, "key": blocker.key, "detail": blocker.detail}
+                    for blocker in facts.blockers_by_pr[pr.number]
+                ],
             }
-            for pr in stack.prs
+            for pr in facts.stack.prs
         ],
     }
 
 
-def wait_reason_for_summary(summary: Mapping[str, object]) -> str:
-    if summary.get("upper_stack_needs_acceptance"):
+def wait_reason_for_facts(facts: StackFacts) -> str:
+    if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
-    bottom_pr = summary.get("bottom_pr")
-    prs = summary.get("prs")
-    if not isinstance(prs, list):
-        return "no-action"
-    for pr in prs:
-        if not isinstance(pr, Mapping):
-            continue
-        latest = pr.get("latest_mergify")
-        if pr.get("number") == bottom_pr and isinstance(latest, Mapping) and latest.get("state") in {"queued", "merging"}:
-            return "bottom-already-queued"
-        blockers = pr.get("blockers")
-        if not isinstance(blockers, list):
-            continue
-        blocker_kinds = {str(blocker.get("kind")) for blocker in blockers if isinstance(blocker, Mapping)}
+    if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
+        return "bottom-already-queued"
+    for pr in facts.stack.prs:
+        blocker_kinds = {blocker.kind for blocker in facts.blockers_by_pr[pr.number]}
         if "pending_check" in blocker_kinds:
             return "pending-check"
         if "merge_hold" in blocker_kinds and len(blocker_kinds) == 1:
             return "merge-hold-only"
-        if {"draft", "human_review_thread", "missing_check", "closed"} & blocker_kinds:
+        if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
     return "no-action"
+
+
+def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
+    return any(blocker.kind == "pending_check" or blocker.kind in HUMAN_BLOCKER_KINDS for blocker in facts.all_blockers)
+
+
+def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
+    del max_repair_attempts
+    for pr in facts.stack.prs:
+        if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
+            continue
+        actions = mergify_failed_check_actions(pr, ledger, facts.suppressed_failed_checks_by_pr.get(pr.number, ()))
+        if actions:
+            return actions[0]
+    return None
+
+
+def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
+    for pr in facts.stack.prs:
+        for blocker in facts.blockers_by_pr[pr.number]:
+            if blocker.kind == "conflict":
+                key = f"conflict:{pr.number}"
+                if ledger.count("conflict-repair", pr.number, pr.head_ref_oid, key) >= max_repair_attempts:
+                    return cap_action(pr, blocker, blocker.detail)
+                return Action("repair_conflict", pr.number, key, blocker.detail)
+            if blocker.kind == "failed_check":
+                if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
+                    return cap_action(pr, blocker, blocker.detail)
+                return Action("repair_check", pr.number, blocker.key, blocker.detail)
+    return None
+
+
+def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
+    for pr in facts.stack.prs:
+        for blocker in facts.blockers_by_pr[pr.number]:
+            if blocker.kind != "bot_review_thread":
+                continue
+            if ledger.has_different_head("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key):
+                return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
+            if ledger.count("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
+                return cap_action(pr, blocker, blocker.detail)
+            return Action("repair_check", pr.number, "bot_review_thread:" + blocker.key, blocker.detail)
+    return None
+
+
+def plan_hard_blockers(facts: StackFacts) -> Action | None:
+    for pr in facts.stack.prs:
+        for blocker in facts.blockers_by_pr[pr.number]:
+            if blocker.kind == "pending_check":
+                return None
+            if blocker.kind in HUMAN_BLOCKER_KINDS:
+                return Action("comment_blocked", pr.number, blocker.key, public_blocker_kind(blocker.kind))
+    return None
+
+
+def plan_merge_hold_cleanup(facts: StackFacts, ledger: Ledger) -> Action | None:
+    if _has_pending_or_human_blocker(facts) or not facts.bottom:
+        return None
+    non_hold_blockers = [blocker for blocker in facts.all_blockers if blocker.kind != "merge_hold"]
+    hold_blockers = [blocker for blocker in facts.all_blockers if blocker.kind == "merge_hold"]
+    if hold_blockers and not non_hold_blockers:
+        blocker = hold_blockers[0]
+        pr = next(pr for pr in facts.stack.prs if pr.number == blocker.pr_number)
+        if ledger.count("remove-merge-hold", pr.number, pr.head_ref_oid, "merge-hold") >= 1:
+            return cap_action(pr, blocker, blocker.detail)
+        return Action("remove_merge_hold", pr.number, "merge-hold", blocker.detail)
+    return None
+
+
+def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts: int) -> Action | None:
+    if _has_pending_or_human_blocker(facts):
+        return None
+    if any(blocker.kind == "merge_hold" for blocker in facts.all_blockers):
+        return None
+    if not facts.bottom:
+        first = facts.stack.prs[0]
+        return Action("comment_blocked", first.number, "no-current-bottom", "no current bottom on master")
+
+    bottom = facts.bottom
+    latest = bottom.latest_mergify
+    if "admin-bypass" not in bottom.labels:
+        if (
+            facts.queue_only_noop_check
+            and latest
+            and latest.queue_rule_name == "admin-bypass"
+            and latest.state == "dequeued"
+        ):
+            return Action(
+                "restore_admin_bypass_label",
+                bottom.number,
+                facts.queue_only_noop_check,
+                "restore admin-bypass label after queue-only noop",
+            )
+        return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
+    if facts.upper_stack_needs_acceptance:
+        return None
+    if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:
+        return None
+    requeue_reason = "eligible-when-ready"
+    requeue_key = "ready"
+    if latest and latest.state == "dequeued":
+        requeue_reason = "eligible-after-dequeue"
+        requeue_key = latest.comment_id or "manual"
+    elif "dequeued" in bottom.labels:
+        requeue_reason = "eligible-after-dequeued-label"
+    attempts = ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key)
+    if attempts >= max_requeue_attempts:
+        return cap_action(bottom, Blocker(requeue_key, "capped", bottom.number, "requeue"), "requeue")
+    return Action("requeue", bottom.number, requeue_key, requeue_reason)
+
+
+def plan_actions_from_facts(
+    facts: StackFacts,
+    ledger: Ledger,
+    max_requeue_attempts: int,
+    max_repair_attempts: int,
+) -> tuple[Action, ...]:
+    action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
+    if action is not None:
+        return (action,)
+    action = plan_direct_repairs(facts, ledger, max_repair_attempts)
+    if action is not None:
+        return (action,)
+    action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts)
+    if action is not None:
+        return (action,)
+    action = plan_hard_blockers(facts)
+    if action is not None:
+        return (action,)
+    action = plan_merge_hold_cleanup(facts, ledger)
+    if action is not None:
+        return (action,)
+    action = plan_bottom_progress(facts, ledger, max_requeue_attempts)
+    if action is not None:
+        return (action,)
+    return ()
 
 
 def plan_stack_actions(
@@ -314,98 +518,10 @@ def plan_stack_actions(
     max_repair_attempts: int = 3,
     suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
 ) -> tuple[Action, ...]:
-    suppressed_by_pr = suppressed_failed_checks_by_pr or {}
-    bottom = current_bottom_pr(stack, TRUNK)
-    upper_stack_needs_acceptance = stack_has_unaccepted_upper_pr(stack, bottom)
-    blockers_by_pr = {
-        pr.number: effective_blockers(pr, required_checks, TRUNK, suppressed_by_pr.get(pr.number, ()))
-        for pr in stack.prs
-    }
-    all_blockers = [b for blockers in blockers_by_pr.values() for b in blockers]
-
-    for pr in stack.prs:
-        if upper_stack_needs_acceptance and bottom and pr.number == bottom.number:
-            continue
-        actions = mergify_failed_check_actions(pr, ledger, suppressed_by_pr.get(pr.number, ()))
-        if actions:
-            return actions
-
-    for pr in stack.prs:
-        for blocker in blockers_by_pr[pr.number]:
-            if blocker.kind == "conflict":
-                key = f"conflict:{pr.number}"
-                if ledger.count("conflict-repair", pr.number, pr.head_ref_oid, key) >= max_repair_attempts:
-                    return (cap_action(pr, blocker, blocker.detail),)
-                return (Action("repair_conflict", pr.number, key, blocker.detail),)
-            if blocker.kind == "failed_check":
-                if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
-                    return (cap_action(pr, blocker, blocker.detail),)
-                return (Action("repair_check", pr.number, blocker.key, blocker.detail),)
-
-    for pr in stack.prs:
-        for blocker in blockers_by_pr[pr.number]:
-            if blocker.kind == "bot_review_thread":
-                if ledger.has_different_head("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key):
-                    return (Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail),)
-                if ledger.count("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
-                    return (cap_action(pr, blocker, blocker.detail),)
-                return (Action("repair_check", pr.number, "bot_review_thread:" + blocker.key, blocker.detail),)
-
-    for pr in stack.prs:
-        for blocker in blockers_by_pr[pr.number]:
-            if blocker.kind == "pending_check":
-                return ()
-            if blocker.kind in {"draft", "human_review_thread", "missing_check", "closed"}:
-                return (Action("comment_blocked", pr.number, blocker.key, public_blocker_kind(blocker.kind)),)
-
-    if not bottom:
-        first = stack.prs[0]
-        return (Action("comment_blocked", first.number, "no-current-bottom", "no current bottom on master"),)
-    non_hold_blockers = [b for b in all_blockers if b.kind != "merge_hold"]
-    hold_blockers = [b for b in all_blockers if b.kind == "merge_hold"]
-    if hold_blockers and not non_hold_blockers:
-        blocker = hold_blockers[0]
-        pr = next(p for p in stack.prs if p.number == blocker.pr_number)
-        if ledger.count("remove-merge-hold", pr.number, pr.head_ref_oid, "merge-hold") >= 1:
-            return (cap_action(pr, blocker, blocker.detail),)
-        return (Action("remove_merge_hold", pr.number, "merge-hold", blocker.detail),)
-    if hold_blockers:
-        return ()
-
-    latest = bottom.latest_mergify
-    queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, TRUNK)
-    if "admin-bypass" not in bottom.labels:
-        if (
-            queue_only_noop_check
-            and latest
-            and latest.queue_rule_name == "admin-bypass"
-            and latest.state == "dequeued"
-        ):
-            return (
-                Action(
-                    "restore_admin_bypass_label",
-                    bottom.number,
-                    queue_only_noop_check,
-                    "restore admin-bypass label after queue-only noop",
-                ),
-            )
-        return (Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label"),)
-    if upper_stack_needs_acceptance:
-        return ()
-
-    if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:
-        return ()
-    requeue_reason = "eligible-when-ready"
-    requeue_key = "ready"
-    if latest and latest.state == "dequeued":
-        requeue_reason = "eligible-after-dequeue"
-        requeue_key = latest.comment_id or "manual"
-    elif "dequeued" in bottom.labels:
-        requeue_reason = "eligible-after-dequeued-label"
-    attempts = ledger.count("requeue", bottom.number, bottom.head_ref_oid, requeue_key)
-    if attempts >= max_requeue_attempts:
-        return (cap_action(bottom, Blocker(requeue_key, "capped", bottom.number, "requeue"), "requeue"),)
-    return (Action("requeue", bottom.number, requeue_key, requeue_reason),)
+    del now_epoch
+    del suppressed_failed_checks_by_pr
+    facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers=(), trunk=TRUNK)
+    return plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts)
 
 
 def plan_stack_execution(
@@ -419,43 +535,28 @@ def plan_stack_execution(
     trunk: str = TRUNK,
 ) -> StackExecutionPlan:
     del now_epoch
-    prereq_status = latest_repair_prereq_status(stack, ledger, open_pr_numbers, trunk)
-    suppressed_by_pr: Mapping[int, Collection[str]] | None = None
-    queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, trunk)
-    if prereq_status and prereq_status.is_open:
+    facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers, trunk)
+    summary = summarize_stack(facts)
+    if facts.prereq_status and facts.prereq_status.is_open:
         return StackExecutionPlan(
-            summary=summarize_stack(stack, required_checks, trunk),
+            summary=summary,
             actions=(),
             wait_reason="repair-prereq-open",
-            prereq_status=prereq_status,
+            prereq_status=facts.prereq_status,
+            queue_only_noop_check=facts.queue_only_noop_check,
         )
-    suppressed: dict[int, tuple[str, ...]] = {}
-    bottom = current_bottom_pr(stack, trunk)
-    if prereq_status and prereq_status.needs_followup_requeue and bottom:
-        suppressed[bottom.number] = suppressed.get(bottom.number, ()) + (prereq_status.check_name,)
-    if queue_only_noop_check and bottom:
-        suppressed[bottom.number] = suppressed.get(bottom.number, ()) + (queue_only_noop_check,)
-    if suppressed:
-        suppressed_by_pr = suppressed
-    summary = summarize_stack(stack, required_checks, trunk, suppressed_by_pr)
-    actions = plan_stack_actions(
-        stack,
-        required_checks,
-        ledger,
-        0,
-        max_requeue_attempts,
-        max_repair_attempts,
-        suppressed_by_pr,
-    )
+    actions = plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts)
     if actions:
         return StackExecutionPlan(
             summary=summary,
             actions=actions,
-            prereq_status=prereq_status,
+            prereq_status=facts.prereq_status,
+            queue_only_noop_check=facts.queue_only_noop_check,
         )
     return StackExecutionPlan(
         summary=summary,
         actions=(),
-        wait_reason=wait_reason_for_summary(summary),
-        prereq_status=prereq_status,
+        wait_reason=wait_reason_for_facts(facts),
+        prereq_status=facts.prereq_status,
+        queue_only_noop_check=facts.queue_only_noop_check,
     )

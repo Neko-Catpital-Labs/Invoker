@@ -12,7 +12,7 @@ try:
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, RepairOutcome, load_mergify_rules
-    from .mergify_admin_requeue_plan import latest_queue_only_noop_check, plan_stack_execution
+    from .mergify_admin_requeue_plan import plan_stack_execution
     from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
 except ImportError:
@@ -20,7 +20,7 @@ except ImportError:
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, RepairOutcome, load_mergify_rules
-    from mergify_admin_requeue_plan import latest_queue_only_noop_check, plan_stack_execution
+    from mergify_admin_requeue_plan import plan_stack_execution
     from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
 
@@ -143,7 +143,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
             args.max_repair_attempts,
             trunk,
         )
-        queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, trunk)
+        queue_only_noop_check = plan.queue_only_noop_check
         logger.stack("admin-bypass-stack", plan.summary)
         if not plan.actions:
             should_poll = True

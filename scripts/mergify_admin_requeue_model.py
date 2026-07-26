@@ -113,7 +113,7 @@ class StackExecutionPlan:
     actions: tuple[Action, ...]
     wait_reason: str | None = None
     prereq_status: RepairPrereqStatus | None = None
-
+    queue_only_noop_check: str | None = None
 
 class Ledger:
     def __init__(self, path: Path):
