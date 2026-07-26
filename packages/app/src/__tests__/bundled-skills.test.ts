@@ -24,6 +24,7 @@ function writePlanToInvokerCommands(sourceRoot: string): void {
   const commandDir = join(sourceRoot, 'skills', 'plan-to-invoker', 'commands');
   mkdirSync(commandDir, { recursive: true });
   writeFileSync(join(commandDir, 'invoker-plan-to-invoker.md'), 'Submit with invoker_submit_plan\n');
+  writeFileSync(join(commandDir, 'invoker-loop-generator.md'), 'Read and follow skill://loop-generator/SKILL.md\n');
 }
 
 afterEach(() => {
@@ -118,10 +119,14 @@ describe('bundled-skills', () => {
       ];
 
       for (const targetRoot of expectedCommandTargets) {
-        const installedCommand = join(targetRoot, 'invoker-plan-to-invoker.md');
-        expect(existsSync(installedCommand)).toBe(true);
-        expect(lstatSync(installedCommand).isSymbolicLink()).toBe(false);
-        expect(readFileSync(installedCommand, 'utf-8')).toBe('Submit with invoker_submit_plan\n');
+        const installedPlanCommand = join(targetRoot, 'invoker-plan-to-invoker.md');
+        const installedLoopCommand = join(targetRoot, 'invoker-loop-generator.md');
+        expect(existsSync(installedPlanCommand)).toBe(true);
+        expect(existsSync(installedLoopCommand)).toBe(true);
+        expect(lstatSync(installedPlanCommand).isSymbolicLink()).toBe(false);
+        expect(lstatSync(installedLoopCommand).isSymbolicLink()).toBe(false);
+        expect(readFileSync(installedPlanCommand, 'utf-8')).toBe('Submit with invoker_submit_plan\n');
+        expect(readFileSync(installedLoopCommand, 'utf-8')).toBe('Read and follow skill://loop-generator/SKILL.md\n');
       }
 
       const mcpConfig = JSON.parse(readFileSync(join(codexHome, '.omp', 'agent', 'mcp.json'), 'utf-8'));
