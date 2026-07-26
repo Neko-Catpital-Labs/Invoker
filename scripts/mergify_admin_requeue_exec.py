@@ -9,14 +9,14 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Collection, Mapping, Sequence
+from typing import Mapping, Sequence
 try:
     from .mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, MergifyQueueEvent, PrSnapshot, StackGroup, load_mergify_rules
-    from .mergify_admin_requeue_plan import TRUNK, effective_blockers, plan_stack_actions
+    from .mergify_admin_requeue_plan import TRUNK, plan_stack_execution
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, group_stack_prs, parse_stack_metadata, run_logged, snapshot_from_detail
 except ImportError:
     from mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, MergifyQueueEvent, PrSnapshot, StackGroup, load_mergify_rules
-    from mergify_admin_requeue_plan import TRUNK, effective_blockers, plan_stack_actions
+    from mergify_admin_requeue_plan import TRUNK, plan_stack_execution
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, group_stack_prs, parse_stack_metadata, run_logged, snapshot_from_detail
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -43,75 +43,6 @@ def log_trace(event: str, **fields: object) -> None:
     print(f"TRACE {json.dumps(payload, sort_keys=True)}", file=sys.stderr)
 
 
-def summarize_stack(stack: StackGroup, required_checks: Collection[str], trunk: str) -> dict[str, object]:
-    blockers_by_pr = {
-        pr.number: [
-            {"kind": blocker.kind, "key": blocker.key, "detail": blocker.detail}
-            for blocker in effective_blockers(pr, required_checks, trunk)
-        ]
-        for pr in stack.prs
-    }
-    current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == trunk]
-    bottom = current_bottoms[0] if current_bottoms else None
-    upper_stack_needs_acceptance = bool(bottom) and any(
-        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
-        for pr in stack.prs
-    )
-    return {
-        "stack_id": stack.stack_id,
-        "bottom_pr": bottom.number if bottom else None,
-        "upper_stack_needs_acceptance": upper_stack_needs_acceptance,
-        "prs": [
-            {
-                "number": pr.number,
-                "state": pr.state,
-                "base": pr.base_ref_name,
-                "head": pr.head_ref_name,
-                "head_sha": pr.head_ref_oid,
-                "labels": sorted(pr.labels),
-                "merge_state_status": pr.merge_state_status,
-                "mergeable": pr.mergeable,
-                "draft": pr.is_draft,
-                "latest_mergify": None if not pr.latest_mergify else {
-                    "state": pr.latest_mergify.state,
-                    "head_sha": pr.latest_mergify.head_sha,
-                    "comment_id": pr.latest_mergify.comment_id,
-                    "failing_checks": list(pr.latest_mergify.failing_checks),
-                    "waiting_for": list(pr.latest_mergify.waiting_for),
-                },
-                "blockers": blockers_by_pr[pr.number],
-            }
-            for pr in stack.prs
-        ],
-    }
-
-
-def wait_reason_for_stack(summary: Mapping[str, object]) -> str:
-    if summary.get("upper_stack_needs_acceptance"):
-        return "upper-stack-needs-acceptance"
-    bottom_pr = summary.get("bottom_pr")
-    prs = summary.get("prs")
-    if not isinstance(prs, list):
-        return "no-action"
-    for pr in prs:
-        if not isinstance(pr, Mapping):
-            continue
-        latest = pr.get("latest_mergify")
-        if pr.get("number") == bottom_pr and isinstance(latest, Mapping) and latest.get("state") in {"queued", "merging"}:
-            return "bottom-already-queued"
-        blockers = pr.get("blockers")
-        if not isinstance(blockers, list):
-            continue
-        blocker_kinds = {str(blocker.get("kind")) for blocker in blockers if isinstance(blocker, Mapping)}
-        if "pending_check" in blocker_kinds:
-            return "pending-check"
-        if "merge_hold" in blocker_kinds and len(blocker_kinds) == 1:
-            return "merge-hold-only"
-        if {"draft", "human_review_thread", "missing_check", "closed"} & blocker_kinds:
-            return "blocked-needs-human"
-    return "no-action"
-
-
 def action_payload(action: Action) -> dict[str, object]:
     return {
         "kind": action.kind,
@@ -125,8 +56,8 @@ def stack_action_payload(actions: Sequence[Action]) -> list[dict[str, object]]:
     return [action_payload(action) for action in actions]
 
 
-def log_stack_summary(event: str, stack: StackGroup, required_checks: Collection[str], trunk: str, **fields: object) -> None:
-    log_trace(event, **fields, summary=summarize_stack(stack, required_checks, trunk))
+def log_stack_summary(event: str, summary: Mapping[str, object], **fields: object) -> None:
+    log_trace(event, **fields, summary=summary)
 
 
 def github_job_log(repo: str, details_url: str, pr_number: int, check_name: str) -> str:
@@ -253,21 +184,6 @@ def prerequisite_body(pr: PrSnapshot, check_name: str) -> str:
     )
 
 
-def latest_repair_prereq_row(ledger: Ledger, pr: PrSnapshot) -> dict[str, object] | None:
-    latest_row: dict[str, object] | None = None
-    latest_epoch = float("-inf")
-    for row in ledger.rows:
-        if row.get("kind") != "repair-prereq-created":
-            continue
-        if int(row.get("pr", -1)) != pr.number:
-            continue
-        if row.get("headSha") != pr.head_ref_oid:
-            continue
-        epoch = int(row.get("epoch", 0) or 0)
-        if latest_row is None or epoch >= latest_epoch:
-            latest_row = row
-            latest_epoch = epoch
-    return latest_row
 
 
 def comment_repair_blocked(
@@ -613,62 +529,53 @@ def run_cycle(args: argparse.Namespace) -> bool:
         candidate_pr_numbers=sorted(pr_by_number),
     )
     should_poll = False
+    open_pr_numbers = set(pr_by_number)
     for stack in stacks:
-        log_stack_summary("admin-bypass-stack", stack, required_checks, trunk)
-        current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == trunk]
-        bottom = current_bottoms[0] if current_bottoms else None
-        suppressed_failed_checks_by_pr: dict[int, tuple[str, ...]] | None = None
-        prereq_requeue_key: str | None = None
-        if bottom:
-            prereq_row = latest_repair_prereq_row(ledger, bottom)
-            if prereq_row:
-                meta = prereq_row.get("meta") if isinstance(prereq_row.get("meta"), Mapping) else {}
-                prereq_number = int(meta.get("prNumber") or 0) if isinstance(meta, Mapping) else 0
-                prereq_key = str(prereq_row.get("key") or "")
-                if prereq_number and prereq_number in pr_by_number:
-                    should_poll = True
-                    summary = summarize_stack(stack, required_checks, trunk)
-                    log_trace(
-                        "admin-bypass-repair-prereq-wait",
-                        repo=args.repo,
-                        pr_number=bottom.number,
-                        check_name=prereq_key,
-                        prereq_pr_number=prereq_number,
-                    )
-                    log_trace("admin-bypass-stack-wait", reason="repair-prereq-open", summary=summary)
-                    continue
-                if prereq_key and ledger.latest("repair-prereq-requeue", bottom.number, bottom.head_ref_oid, prereq_key) is None:
-                    suppressed_failed_checks_by_pr = {bottom.number: (prereq_key,)}
-                    prereq_requeue_key = prereq_key
-        actions = plan_stack_actions(
+        plan = plan_stack_execution(
             stack,
             required_checks,
             ledger,
             now,
+            open_pr_numbers,
             args.max_requeue_attempts,
             args.max_repair_attempts,
-            suppressed_failed_checks_by_pr,
+            trunk,
         )
-        if not actions:
+        log_stack_summary("admin-bypass-stack", plan.summary)
+        if not plan.actions:
             should_poll = True
-            summary = summarize_stack(stack, required_checks, trunk)
-            log_trace("admin-bypass-stack-wait", reason=wait_reason_for_stack(summary), summary=summary)
+            if plan.wait_reason == "repair-prereq-open" and plan.prereq_status:
+                log_trace(
+                    "admin-bypass-repair-prereq-wait",
+                    repo=args.repo,
+                    pr_number=plan.summary.get("bottom_pr"),
+                    check_name=plan.prereq_status.check_name,
+                    prereq_pr_number=plan.prereq_status.prereq_pr_number,
+                )
+            log_trace("admin-bypass-stack-wait", reason=plan.wait_reason, summary=plan.summary)
             continue
-        log_trace("admin-bypass-stack-actions", stack_id=stack.stack_id, actions=stack_action_payload(actions))
-        for action in actions:
+        log_trace("admin-bypass-stack-actions", stack_id=stack.stack_id, actions=stack_action_payload(plan.actions))
+        for action in plan.actions:
             pr = pr_by_number.get(action.pr_number)
             print_action(action, pr, args.dry_run, args.json)
             if args.dry_run:
                 continue
             execute_action(action, args.repo, gh, ledger, pr_by_number, now)
-            if prereq_requeue_key and bottom and action.kind == "requeue" and action.pr_number == bottom.number:
-                ledger.record("repair-prereq-requeue", bottom.number, bottom.head_ref_oid, prereq_requeue_key, now)
-                log_trace(
-                    "admin-bypass-repair-prereq-requeue",
-                    repo=args.repo,
-                    pr_number=bottom.number,
-                    check_name=prereq_requeue_key,
-                )
+            if (
+                plan.prereq_status
+                and plan.prereq_status.needs_followup_requeue
+                and action.kind == "requeue"
+                and action.pr_number == plan.summary.get("bottom_pr")
+            ):
+                bottom = pr_by_number.get(action.pr_number)
+                if bottom is not None:
+                    ledger.record("repair-prereq-requeue", bottom.number, bottom.head_ref_oid, plan.prereq_status.check_name, now)
+                    log_trace(
+                        "admin-bypass-repair-prereq-requeue",
+                        repo=args.repo,
+                        pr_number=bottom.number,
+                        check_name=plan.prereq_status.check_name,
+                    )
             if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
                 return True
     if not stacks:
