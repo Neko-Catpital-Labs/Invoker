@@ -4485,7 +4485,7 @@ describe('SQLiteAdapter', () => {
         status: 'running',
         execution: { isFixingWithAI: true },
       }));
-      (adapter as any).db.run(`UPDATE workflows SET merge_mode = 'github' WHERE id = 'wf-1'`);
+      (adapter as any).db.prepare('UPDATE workflows SET merge_mode = ? WHERE id = ?').run('github', 'wf-1');
 
       const report = adapter.runCompatibilityMigration();
 
