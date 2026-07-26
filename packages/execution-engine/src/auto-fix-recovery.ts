@@ -20,9 +20,9 @@ import {
   type AutoFixAttemptLedger,
 } from './auto-fix-attempt-ledger.js';
 import {
+  classifyAutoFixFailure,
   normalizeAutoFixRetryBudget,
-  shouldSkipAutoFixForError,
-  isLivenessFailureTask,
+  shouldSkipAutoFixForTask,
 } from './auto-fix-gating.js';
 import {
   checkAutoFixRetryCap,
@@ -202,10 +202,7 @@ function isRuntimeAutoFixEligibleTask(task: TaskState, options: AutoFixRecoveryP
   if (task.status !== 'failed') return false;
   if (task.config.isReconciliation) return false;
   if (task.config.parentTask) return false;
-  if (shouldSkipAutoFixForError(task.execution.error)) return false;
-  // Liveness stalls (executor stopped heartbeating) are re-run by the requeue
-  // worker, not "fixed" by the AI — auto-fix would loop on a non-defect.
-  if (isLivenessFailureTask(task)) return false;
+  if (shouldSkipAutoFixForTask(task)) return false;
   const max = retryBudgetForTask(task, options);
   if (max <= 0) return false;
   return true;
@@ -435,7 +432,7 @@ function validateAutoFixCandidate(
       workerRetryBudget: retryBudgetLabel(latestRetryBudget),
       isReconciliation: Boolean(latest.config.isReconciliation),
       hasParentTask: Boolean(latest.config.parentTask),
-      skippedForError: shouldSkipAutoFixForError(latest.execution.error),
+      failureBucket: classifyAutoFixFailure(latest),
     });
     return undefined;
   }

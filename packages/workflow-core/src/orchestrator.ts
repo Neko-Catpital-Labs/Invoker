@@ -1852,11 +1852,16 @@ export class Orchestrator {
 
     const changes: TaskStateChanges = {
       status: 'completed',
-      execution: { completedAt: new Date(), fixSessionEntryStatus: undefined },
+      execution: {
+        completedAt: new Date(),
+        pendingFixError: undefined,
+        fixSessionEntryStatus: undefined,
+      },
     };
     const updated = this.writeAndSync(taskId, changes);
     this.updateSelectedAttempt(taskId, {
       status: 'completed',
+      error: undefined,
       completedAt: changes.execution?.completedAt,
     });
     const delta: TaskDelta = this.buildUpdateDelta(task, updated, changes);
