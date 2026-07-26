@@ -743,6 +743,24 @@ Failing checks
         executor.execute(action, item, 2)
         self.assertEqual(len(fake.comments), 1)
 
+    def test_blocked_comment_records_once_for_exact_key(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+        ledger = self.ledger()
+        item = pr(2647, latest=mergify())
+        action = Action("comment_blocked", 2647, "no-current-bottom", "no current bottom on master")
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "Neko-Catpital-Labs/Invoker")
+        executor.execute(action, item, 1)
+        executor.execute(action, item, 2)
+        self.assertEqual(fake.comments, [("Neko-Catpital-Labs/Invoker", 2647, "Mergify repair stopped: no current bottom on master")])
+        self.assertEqual(ledger.count("comment-blocked", 2647, HEAD, "no-current-bottom"), 1)
+
     def test_missing_admin_bypass_nudge_comments_once_without_label_edit(self):
         class FakeGh:
             def __init__(self):
