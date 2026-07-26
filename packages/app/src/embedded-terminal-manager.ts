@@ -21,6 +21,7 @@ import type {
 } from '@invoker/contracts';
 import type { TerminalSessionRecord } from '@invoker/data-store';
 import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
+import { formatTerminalDisplayBridge } from './terminal-external-launch.js';
 
 export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 export type EmbeddedTerminalSessionKind = 'task' | 'planning';
@@ -318,7 +319,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       updatedAt: createdAt,
       status: 'running' as const,
-      outputSnapshot: '',
+      outputSnapshot: seedOutputSnapshot('', opts.spec.displayBridge),
     };
 
     if (opts.attach) {
@@ -391,7 +392,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt: seed.createdAt,
       updatedAt: new Date().toISOString(),
       status: 'running' as const,
-      outputSnapshot: seed.outputSnapshot,
+      outputSnapshot: seedOutputSnapshot(seed.outputSnapshot, seed.spec.displayBridge),
     });
   }
 
@@ -654,6 +655,11 @@ export class EmbeddedTerminalManager extends EventEmitter {
 function trimOutputSnapshot(snapshot: string): string {
   if (snapshot.length <= MAX_OUTPUT_SNAPSHOT_CHARS) return snapshot;
   return snapshot.slice(snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS);
+}
+
+function seedOutputSnapshot(outputSnapshot: string, displayBridge?: string): string {
+  if (outputSnapshot.length > 0) return outputSnapshot;
+  return trimOutputSnapshot(formatTerminalDisplayBridge(displayBridge));
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {

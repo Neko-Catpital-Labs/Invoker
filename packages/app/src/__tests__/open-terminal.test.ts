@@ -151,7 +151,13 @@ function buildCleanEnv(): Record<string, string> {
 
 function openExternalTerminal(spec: TerminalSpec | null): void {
   const defaultCwd = spec?.cwd ?? process.cwd();
-  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args };
+  const meta = {
+    cwd: spec?.cwd,
+    command: spec?.command,
+    args: spec?.args,
+    displayBridge: spec?.displayBridge,
+    linuxTerminalTail: spec?.linuxTerminalTail,
+  };
 
   if (process.platform === 'linux') {
     const cleanEnv = buildCleanEnv();
@@ -165,7 +171,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
     });
     child.unref();
   } else if (process.platform === 'darwin') {
-    if (spec?.command) {
+    if (spec?.command || spec?.displayBridge) {
       const osaArgs = buildMacOSOsascriptArgs(meta, defaultCwd);
       const child = mockSpawn('osascript', osaArgs, { detached: true, stdio: 'ignore' });
       child.unref();
@@ -432,6 +438,33 @@ describe('terminal-external-launch', () => {
     // Should use '\'' (backslash-quote) not '"'"' (double-quote idiom)
     expect(line).toContain("\\'");
     expect(line).not.toMatch(/'"'"'/);
+  });
+
+  it('prefixes displayBridge with safely quoted printf without changing command argv', () => {
+    const line = buildTerminalShellCommand(
+      {
+        cwd: '/tmp/wt',
+        command: 'codex',
+        args: [
+          'resume',
+          '--dangerously-bypass-approvals-and-sandbox',
+          'session; rm -rf /',
+        ],
+        displayBridge: "Bridge: $(touch /tmp/owned); 'quoted'\nNext line",
+      },
+      '/fallback',
+    );
+
+    expect(line).toBe(String.raw`cd '/tmp/wt' && { printf '%b' 'Bridge: $(touch /tmp/owned); '\''quoted'\''\nNext line\n' || true; 'codex' 'resume' '--dangerously-bypass-approvals-and-sandbox' 'session; rm -rf /'; }`);
+  });
+
+  it('prints displayBridge before opening an interactive shell', () => {
+    const line = buildTerminalShellCommand(
+      { cwd: '/tmp/wt', displayBridge: 'Restored task context' },
+      '/fallback',
+    );
+
+    expect(line).toBe(String.raw`cd '/tmp/wt' && { printf '%b' 'Restored task context\n' || true; exec bash; }`);
   });
 
   it('buildMacOSOsascriptArgs includes activate and uses multi-line AppleScript', () => {

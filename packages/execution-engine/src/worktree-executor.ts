@@ -29,6 +29,9 @@ import { sanitizeBranchForPath } from './git-utils.js';
 // Re-export for backward compatibility
 export { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 
+function withDisplayBridge(spec: TerminalSpec, displayBridge: string | undefined): TerminalSpec {
+  return displayBridge === undefined ? spec : { ...spec, displayBridge };
+}
 
 export interface WorktreeExecutorConfig {
   /** Directory where worktrees are created. */
@@ -579,9 +582,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
-      return { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir };
+      return withDisplayBridge(
+        { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir },
+        handle.displayBridge,
+      );
     }
-    return { cwd: entry.worktreeDir };
+    return withDisplayBridge({ cwd: entry.worktreeDir }, handle.displayBridge);
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
@@ -615,7 +621,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         `[agent-session-trace] WorktreeExecutor.getRestoredTerminalSpec: task="${meta.taskId}" resume with agentSessionId=${meta.agentSessionId}`,
       );
       traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → agent --resume spec, cwd="${spec.cwd}"`);
-      return spec;
+      return withDisplayBridge(spec, meta.displayBridge);
     }
     if (meta.branch) {
       // workspacePath is already a worktree — just checkout the branch there.
@@ -626,10 +632,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         cwd: meta.workspacePath,
       };
       traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
-      return spec;
+      return withDisplayBridge(spec, meta.displayBridge);
     }
     traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
-    return { cwd: meta.workspacePath };
+    return withDisplayBridge({ cwd: meta.workspacePath }, meta.displayBridge);
   }
 
   /**
