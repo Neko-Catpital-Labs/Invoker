@@ -51,7 +51,7 @@ describe('DO1 Slack UX e2e — non-workflow mention routing', () => {
     if (surface) await surface.stop();
   });
 
-  it('routes @mentions outside workflow channels to planning', async () => {
+  it('routes every @mention to the one handler, workflow channel or not', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     const repo = new WorkflowChannelRepository(adapter);
     repo.save({
@@ -68,26 +68,35 @@ describe('DO1 Slack UX e2e — non-workflow mention routing', () => {
       enableImmediateAck: false,
     });
     await surface.start(async () => {});
-    const handlePlanningMention = vi.spyOn(surface as any, 'handlePlanningMention').mockResolvedValue(undefined);
+    const handleMention = vi.spyOn(surface as any, 'handleMention').mockResolvedValue(undefined);
 
     const app = surface.getApp() as any;
     const mention = app._eventHandlers.find((h: MockHandler) => h.pattern === 'app_mention')?.handler;
     const say = vi.fn().mockResolvedValue({ ts: 's1' });
     await mention({
-      event: {
-        text: '<@UBOT> can you help?',
-        ts: 't1',
-        thread_ts: 't1',
-        user: 'U1',
-        channel: 'COTHER',
-      },
+      event: { text: '<@UBOT> can you help?', ts: 't1', thread_ts: 't1', user: 'U1', channel: 'COTHER' },
       say,
     });
 
-    expect(handlePlanningMention).toHaveBeenCalledWith(
+    // Outside a workflow channel: same handler, no workflow context.
+    expect(handleMention).toHaveBeenCalledWith(
       expect.objectContaining({ channel: 'COTHER', ts: 't1' }),
       say,
       'COTHER',
+      undefined,
+    );
+
+    await mention({
+      event: { text: '<@UBOT> can you help?', ts: 't2', thread_ts: 't2', user: 'U1', channel: 'CWF' },
+      say,
+    });
+
+    // Inside one: same handler again, the workflow arrives as context.
+    expect(handleMention).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: 'CWF', ts: 't2' }),
+      say,
+      'CWF',
+      expect.objectContaining({ workflowId: 'wf-1', channelId: 'CWF' }),
     );
   });
 });
