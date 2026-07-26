@@ -1,0 +1,120 @@
+import type {
+  Logger,
+  OpenTerminalResponse,
+  TerminalSessionDescriptor,
+} from '@invoker/contracts';
+import type { SQLiteAdapter } from '@invoker/data-store';
+import type { AgentRegistry, ExecutorRegistry } from '@invoker/execution-engine';
+import type { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
+import type { TaskHandleMap } from './execution/task-runner-wiring.js';
+import {
+  openEmbeddedTerminalForTask,
+  type OpenTerminalPersistence,
+} from './open-terminal-for-task.js';
+import {
+  closeTaskTerminalSession,
+  listTaskTerminalSessions,
+  resizeTaskTerminalSession,
+  writeTaskTerminalSession,
+} from './terminal-session-ipc.js';
+import type {
+  TerminalUiPerfCounters,
+  TerminalUiPerfReporter,
+  TerminalUiPerfSink,
+} from './terminal-ui-perf.js';
+
+export interface TaskTerminalMutationResult {
+  ok: boolean;
+  reason?: string;
+}
+
+export interface TaskTerminalAdapter {
+  open(taskId: string): OpenTerminalResponse | Promise<OpenTerminalResponse>;
+  list(): TerminalSessionDescriptor[] | Promise<TerminalSessionDescriptor[]>;
+  write(
+    sessionId: string,
+    data: string,
+  ): TaskTerminalMutationResult | Promise<TaskTerminalMutationResult>;
+  resize(
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ): TaskTerminalMutationResult | Promise<TaskTerminalMutationResult>;
+  close(sessionId: string): TaskTerminalMutationResult | Promise<TaskTerminalMutationResult>;
+}
+
+export interface CreateTaskTerminalAdapterDeps {
+  persistence: OpenTerminalPersistence &
+    Pick<SQLiteAdapter, 'listTerminalSessions' | 'deleteTerminalSession'>;
+  executorRegistry: ExecutorRegistry;
+  executionAgentRegistry?: AgentRegistry;
+  repoRoot: string;
+  taskHandles: Pick<TaskHandleMap, 'get'>;
+  embeddedTerminalManager: Pick<
+    EmbeddedTerminalManager,
+    'openOrReuse' | 'list' | 'get' | 'write' | 'resize' | 'close'
+  >;
+  uiPerfStats: TerminalUiPerfCounters;
+  terminalUiPerf: TerminalUiPerfReporter;
+  terminalUiPerfSink: TerminalUiPerfSink;
+  logger?: Logger;
+}
+
+export function createTaskTerminalAdapter(
+  deps: CreateTaskTerminalAdapterDeps,
+): TaskTerminalAdapter {
+  return {
+    open(taskId: string) {
+      return openEmbeddedTerminalForTask({
+        taskId,
+        persistence: deps.persistence,
+        executorRegistry: deps.executorRegistry,
+        executionAgentRegistry: deps.executionAgentRegistry,
+        repoRoot: deps.repoRoot,
+        taskHandles: deps.taskHandles,
+        embeddedTerminalManager: deps.embeddedTerminalManager,
+        logger: deps.logger,
+      });
+    },
+    list() {
+      return listTaskTerminalSessions({
+        embeddedTerminalManager: deps.embeddedTerminalManager,
+        persistence: deps.persistence,
+      });
+    },
+    write(sessionId: string, data: string) {
+      return writeTaskTerminalSession(
+        {
+          embeddedTerminalManager: deps.embeddedTerminalManager,
+          uiPerfStats: deps.uiPerfStats,
+          terminalUiPerf: deps.terminalUiPerf,
+          terminalUiPerfSink: deps.terminalUiPerfSink,
+        },
+        sessionId,
+        data,
+      );
+    },
+    resize(sessionId: string, cols: number, rows: number) {
+      return resizeTaskTerminalSession(
+        {
+          embeddedTerminalManager: deps.embeddedTerminalManager,
+          uiPerfStats: deps.uiPerfStats,
+          terminalUiPerf: deps.terminalUiPerf,
+          terminalUiPerfSink: deps.terminalUiPerfSink,
+        },
+        sessionId,
+        cols,
+        rows,
+      );
+    },
+    close(sessionId: string) {
+      return closeTaskTerminalSession(
+        {
+          embeddedTerminalManager: deps.embeddedTerminalManager,
+          persistence: deps.persistence,
+        },
+        sessionId,
+      );
+    },
+  };
+}

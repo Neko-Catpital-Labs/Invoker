@@ -1,6 +1,6 @@
 import type { IpcMain } from 'electron';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, TerminalSessionRecord } from '@invoker/data-store';
 import type { EmbeddedTerminalManager, TerminalSessionPersistenceRecord } from './embedded-terminal-manager.js';
 import {
   timeTerminalResize,
@@ -19,7 +19,7 @@ import {
 /** Coalesce running-session snapshot upserts so PTY output does not 1:1 SQLite-write on main. */
 export const TERMINAL_SESSION_UPSERT_COALESCE_MS = 250;
 
-type TerminalSessionRow = ReturnType<SQLiteAdapter['listTerminalSessions']>[number];
+type TerminalSessionRow = TerminalSessionRecord;
 type PlanningSessionStoreGetter = () => InAppPlanningSessionStore | undefined;
 
 interface PlanningTerminalLogger {
@@ -42,6 +42,93 @@ export function terminalRowToDescriptor(row: TerminalSessionRow): TerminalSessio
     createdAt: row.createdAt,
     outputSnapshot: row.outputSnapshot,
   };
+}
+export function listTaskTerminalSessions(deps: {
+  embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'list'>;
+  persistence: Pick<SQLiteAdapter, 'listTerminalSessions'>;
+}): TerminalSessionDescriptor[] {
+  let persistedRows: TerminalSessionRow[] = [];
+  try {
+    persistedRows = deps.persistence.listTerminalSessions();
+  } catch {
+    persistedRows = [];
+  }
+  const liveSessions = deps.embeddedTerminalManager
+    .list()
+    .filter((session) => session.kind !== 'planning');
+  const live = new Map(liveSessions.map((session) => [session.sessionId, session]));
+  const merged = persistedRows
+    .map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
+  const persistedIds = new Set(merged.map((session) => session.sessionId));
+  for (const session of live.values()) {
+    if (!persistedIds.has(session.sessionId)) {
+      merged.push(session);
+    }
+  }
+  return merged;
+}
+
+function rejectPlanningTaskTerminalSession(
+  embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get'>,
+  sessionId: string,
+): { ok: false; reason: string } | null {
+  const session = embeddedTerminalManager.get(sessionId);
+  if (session?.kind === 'planning') {
+    return { ok: false, reason: `Session "${sessionId}" is a planning terminal session.` };
+  }
+  return null;
+}
+
+export function writeTaskTerminalSession(deps: {
+  embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get' | 'write'>;
+  uiPerfStats: TerminalUiPerfCounters;
+  terminalUiPerf: TerminalUiPerfReporter;
+  terminalUiPerfSink: TerminalUiPerfSink;
+}, sessionId: string, data: string): { ok: boolean; reason?: string } {
+  const rejected = rejectPlanningTaskTerminalSession(deps.embeddedTerminalManager, sessionId);
+  if (rejected) return rejected;
+  return timeTerminalWrite(
+    () => deps.embeddedTerminalManager.write(sessionId, data),
+    deps.uiPerfStats,
+    deps.terminalUiPerf,
+    deps.terminalUiPerfSink,
+    {
+      sessionId,
+      bytes: typeof data === 'string' ? data.length : 0,
+    },
+  );
+}
+
+export function resizeTaskTerminalSession(deps: {
+  embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get' | 'resize'>;
+  uiPerfStats: TerminalUiPerfCounters;
+  terminalUiPerf: TerminalUiPerfReporter;
+  terminalUiPerfSink: TerminalUiPerfSink;
+}, sessionId: string, cols: number, rows: number): { ok: boolean; reason?: string } {
+  const rejected = rejectPlanningTaskTerminalSession(deps.embeddedTerminalManager, sessionId);
+  if (rejected) return rejected;
+  return timeTerminalResize(
+    () => deps.embeddedTerminalManager.resize(sessionId, cols, rows),
+    deps.uiPerfStats,
+    deps.terminalUiPerf,
+    deps.terminalUiPerfSink,
+    {
+      sessionId,
+      cols,
+      rows,
+    },
+  );
+}
+
+export function closeTaskTerminalSession(deps: {
+  embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get' | 'close'>;
+  persistence?: Pick<SQLiteAdapter, 'deleteTerminalSession'>;
+}, sessionId: string): { ok: boolean; reason?: string } {
+  const rejected = rejectPlanningTaskTerminalSession(deps.embeddedTerminalManager, sessionId);
+  if (rejected) return rejected;
+  const result = deps.embeddedTerminalManager.close(sessionId);
+  deps.persistence?.deleteTerminalSession(sessionId);
+  return result.ok ? result : { ok: true };
 }
 
 export function restorePersistedTerminalSessions(deps: {
@@ -215,63 +302,47 @@ export function registerTerminalSessionIpcHandlers(deps: {
   const { ipcMain, embeddedTerminalManager, persistence, uiPerfStats, terminalUiPerf, terminalUiPerfSink } = deps;
 
   ipcMain.handle('invoker:terminal-list', async () => {
-    const liveSessions = embeddedTerminalManager
-      .list()
-      .filter((session) => session.kind !== 'planning');
-    const live = new Map(liveSessions.map((session) => [session.sessionId, session]));
-    const merged = persistence.listTerminalSessions().map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
-    const persistedIds = new Set(merged.map((session) => session.sessionId));
-    for (const session of live.values()) {
-      if (!persistedIds.has(session.sessionId)) {
-        merged.push(session);
-      }
-    }
-    return merged;
+    return listTaskTerminalSessions({
+      embeddedTerminalManager,
+      persistence,
+    });
   });
 
   ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
-    const session = embeddedTerminalManager.get(sessionId);
-    if (session?.kind === 'planning') {
-      return { ok: false, reason: `Session "${sessionId}" is a planning terminal session.` };
-    }
-    return timeTerminalWrite(
-      () => embeddedTerminalManager.write(sessionId, data),
-      uiPerfStats,
-      terminalUiPerf,
-      terminalUiPerfSink,
+    return writeTaskTerminalSession(
       {
-        sessionId,
-        bytes: typeof data === 'string' ? data.length : 0,
+        embeddedTerminalManager,
+        uiPerfStats,
+        terminalUiPerf,
+        terminalUiPerfSink,
       },
+      sessionId,
+      data,
     );
   });
 
   ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
-    const session = embeddedTerminalManager.get(sessionId);
-    if (session?.kind === 'planning') {
-      return { ok: false, reason: `Session "${sessionId}" is a planning terminal session.` };
-    }
-    return timeTerminalResize(
-      () => embeddedTerminalManager.resize(sessionId, cols, rows),
-      uiPerfStats,
-      terminalUiPerf,
-      terminalUiPerfSink,
+    return resizeTaskTerminalSession(
       {
-        sessionId,
-        cols,
-        rows,
+        embeddedTerminalManager,
+        uiPerfStats,
+        terminalUiPerf,
+        terminalUiPerfSink,
       },
+      sessionId,
+      cols,
+      rows,
     );
   });
 
   ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
-    const session = embeddedTerminalManager.get(sessionId);
-    if (session?.kind === 'planning') {
-      return { ok: false, reason: `Session "${sessionId}" is a planning terminal session.` };
-    }
-    const result = embeddedTerminalManager.close(sessionId);
-    persistence.deleteTerminalSession(sessionId);
-    return result.ok ? result : { ok: true };
+    return closeTaskTerminalSession(
+      {
+        embeddedTerminalManager,
+        persistence,
+      },
+      sessionId,
+    );
   });
 }
 
