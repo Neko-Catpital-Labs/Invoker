@@ -1787,7 +1787,13 @@ ${text}`;
     const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repo.toLowerCase());
     const alias = aliasKey && this.repoAliases[aliasKey];
     if (alias) return { url: this.normalizeRepositoryUrl(alias) };
-    if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return { url: this.normalizeRepositoryUrl(repo) };
+    if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) {
+      const normalized = normalizeMessageRepoCandidate(repo);
+      if (!normalized) {
+        return { error: `Invalid repo URL "${repo}". Use a GitHub repo URL or a clone URL ending in .git.` };
+      }
+      return { url: this.normalizeRepositoryUrl(normalized) };
+    }
     const known = Object.keys(this.repoAliases);
     const list = known.length ? known.join(', ') : '(none configured)';
     return { error: `Unknown repo "${repo}". Known aliases: ${list}. Or pass a full git URL.` };

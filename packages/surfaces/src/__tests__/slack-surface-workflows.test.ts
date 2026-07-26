@@ -1157,6 +1157,31 @@ describe('lobby verb routing', () => {
     expect(say.mock.calls.map((call) => call[0].text).join('\n')).not.toContain('from the URL in your message');
   });
 
+  it('rejects an invalid literal [repo:] full URL before creating a session', async () => {
+    const surface = lobbySurface(true, {
+      defaultRepoUrl: 'git@github.com:default/repo.git',
+      repoAliases: { docs: 'git@github.com:example/docs.git' },
+    });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> [repo:https://www.onorca.dev] plan: update the website link',
+        ts: 't1',
+        user: 'U1',
+        channel: 'CLOBBY',
+      },
+      say,
+    });
+
+    expect(say).toHaveBeenCalledWith({
+      text: 'Invalid repo URL "https://www.onorca.dev". Use a GitHub repo URL or a clone URL ending in .git.',
+      thread_ts: 't1',
+    });
+    expect(planConversationConfigs).toHaveLength(0);
+  });
+
   it('keeps the default repo when the first agent message contains a GitHub deep link', async () => {
     const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
     await surface.start(async () => {});
