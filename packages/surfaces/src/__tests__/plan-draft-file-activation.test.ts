@@ -117,6 +117,23 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
+  it('removes the standalone submit instruction when the turn has no draft', async () => {
+    const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
+    const submitLine = 'Reply `submit` to submit it.';
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${submitLine}`));
+    const reply = await conversation.sendMessage('Draft it');
+
+    expect(reply).toBe('Drafted the plan. Summary: one step.');
+    expect(reply).not.toContain(submitLine);
+    expect(conversation.history[1]).toEqual({
+      role: 'assistant',
+      content: 'Drafted the plan. Summary: one step.',
+    });
+    expect(conversation.lastTurnDraftPlanText).toBeNull();
+    expect(conversation.getDraftedPlan()).toBeNull();
+  });
+
   it('requires the exact submit line as a standalone post-plan instruction', () => {
     const conversation = new PlanConversation({});
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
@@ -139,8 +156,10 @@ describe('plan draft file - activation side', () => {
       'Drafted the plan.\n\nReply `submit` to submit it.',
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Create the plan');
+    const reply = await conversation.sendMessage('Create the plan');
 
+    expect(reply).toContain('Reply `submit` to submit it.');
+    expect(conversation.history[1].content).toContain('Reply `submit` to submit it.');
     expect(isConfirmation('submit')).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(conversation.planSubmitted).toBe(false);

@@ -415,6 +415,18 @@ export function isDangerousCommand(cmd: string): boolean {
 // ── Constants ───────────────────────────────────────────────
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const PLAN_SUBMIT_INSTRUCTION_LINE = 'Reply `submit` to submit it.';
+
+function removeSubmitInstructionWithoutDraft(message: string, nextDraft: string | null): string {
+  if (nextDraft) return message;
+
+  return message
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== PLAN_SUBMIT_INSTRUCTION_LINE)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
+}
 
 // ── PlanConversation ────────────────────────────────────────
 
@@ -550,6 +562,7 @@ export class PlanConversation {
     const nextDraft = fileDraft && summarizePlanText(fileDraft)
       ? fileDraft
       : inlineDraft;
+    message = removeSubmitInstructionWithoutDraft(message, nextDraft);
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     this._lastTurnReasoning = formatted.reasoning;
