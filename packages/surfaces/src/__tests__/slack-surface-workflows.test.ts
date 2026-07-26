@@ -1097,6 +1097,30 @@ describe('lobby verb routing', () => {
     }));
   });
 
+  it('rejects an invalid literal [repo:] URL before creating a planning session', async () => {
+    const surface = lobbySurface(true, {
+      defaultRepoUrl: 'git@github.com:default/repo.git',
+    });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+
+    await mentionHandler(surface)({
+      event: {
+        text: '<@BOT> [repo:https://www.onorca.dev] plan: compare against the website',
+        ts: 'invalid-literal-repo',
+        user: 'U1',
+        channel: 'CLOBBY',
+      },
+      say,
+    });
+
+    expect(say).toHaveBeenCalledWith({
+      text: 'Invalid repo URL "https://www.onorca.dev". Use a GitHub repo URL or a clone URL ending in .git.',
+      thread_ts: 'invalid-literal-repo',
+    });
+    expect(planConversationConfigs).toHaveLength(0);
+  });
+
   it('uses a repo-root URL in the first agent message instead of defaultRepoUrl', async () => {
     const surface = lobbySurface(true, {
       defaultRepoUrl: 'git@github.com:default/repo.git',
