@@ -125,6 +125,9 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
@@ -859,6 +862,7 @@ export function App() {
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
+  const activePlanningDraftReady = draftPlanAvailable || activePlanningSession.status === 'draft_ready';
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
   const activePlanningSessionBusy = activePlanningSession.busy;
@@ -2639,6 +2643,11 @@ export function App() {
     }
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
+      if (!activePlanningDraftReady) {
+        setPlanningSubmitError({ title: 'Plan could not be submitted', message: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+        appendTerminalLine(`Plan could not be submitted:\n${NO_COMPLETE_PLAN_DRAFTED_ERROR}`, 'system', 'error');
+        return;
+      }
       await handlePlanningSubmitDraft();
       return;
     }
@@ -2710,6 +2719,7 @@ export function App() {
     }
   }, [
     activePlanningSessionBusy,
+    activePlanningDraftReady,
     activePlanningSessionId,
     activePlanningReadOnly,
     appendTerminalLine,
