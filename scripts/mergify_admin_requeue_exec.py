@@ -69,6 +69,14 @@ def record_repair_outcome(
             check_name=outcome.check_name,
             queue_pr_number=pr.latest_mergify.queue_pr_number if pr.latest_mergify else 0,
         )
+    if outcome.status == "noop" and outcome.check_name == "PR Body":
+        ledger.record("repair-noop", pr.number, pr.head_ref_oid, outcome.check_name, now)
+        logger.trace(
+            "admin-bypass-repair-noop",
+            repo=repo,
+            pr_number=pr.number,
+            check_name=outcome.check_name,
+        )
 
 
 def handle_repair_outcome(

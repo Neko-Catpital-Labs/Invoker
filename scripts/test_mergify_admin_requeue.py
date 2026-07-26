@@ -312,6 +312,11 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual([(a.kind, a.key) for a in actions], [("resolve_bot_threads", "tbot")])
 
+    def test_outdated_bot_thread_resolves_without_repair(self):
+        stack = StackGroup("s", (pr(2608, threads=(ReviewThread("tbot", False, ("coderabbitai[bot]",), True),), latest=mergify()),))
+        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.key) for a in actions], [("resolve_bot_threads", "tbot")])
+
     def test_conflict_uses_claude_repair_cap(self):
         stack = StackGroup("s", (pr(2609, merge_state="DIRTY", latest=mergify()),))
         ledger = self.ledger()
@@ -471,16 +476,57 @@ Failing checks
         git_rev_parse = iter([HEAD, HEAD])
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
-                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                    with mock.patch.object(repairer, "git_lines", return_value=()):
-                        with mock.patch.object(repairer, "run_claude_repair") as repair:
-                            with redirect_stderr(stderr):
-                                result = repairer.repair_check(item, "required-fast / Guardrails")
+                with mock.patch.object(repairer, "job_log_has_evidence", return_value=True):
+                    with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                        with mock.patch.object(repairer, "git_lines", return_value=()):
+                            with mock.patch.object(repairer, "run_claude_repair") as repair:
+                                with redirect_stderr(stderr):
+                                    result = repairer.repair_check(item, "required-fast / Guardrails")
         checkout.assert_called_once()
         repair.assert_called_once()
         self.assertEqual(result.status, "queue_only_noop")
         self.assertIn("Queue draft PR: #5854", repair.call_args.args[1])
         self.assertIn("Job log path: /tmp/guardrails.log", repair.call_args.args[1])
+
+    def test_queue_only_repair_empty_job_log_returns_noop_without_claude(self):
+        latest = MergifyQueueEvent(
+            "m5811",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-03T06:13:00Z",
+            HEAD,
+            (),
+            ("required-fast / Guardrails",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5811#issuecomment-1",
+            5854,
+            (("required-fast / Guardrails", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/1/job/2",)),),
+        )
+        item = pr(5811, labels={"dequeued"}, checks={}, latest=latest)
+        repairer = self.repairer(object(), self.ledger())
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
+                with mock.patch.object(repairer, "job_log_has_evidence", return_value=False):
+                    with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                        with mock.patch.object(repairer, "run_claude_repair") as repair:
+                            result = repairer.repair_check(item, "required-fast / Guardrails")
+        checkout.assert_called_once()
+        repair.assert_not_called()
+        self.assertEqual(result.status, "queue_only_noop")
+
+    def test_pr_body_valid_local_repair_returns_noop_without_claude(self):
+        item = pr(5810, checks={"PR Body": check("PR Body", "failure")}, body=PROOF_BODY)
+        repairer = self.repairer(object(), self.ledger())
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log") as download:
+                with mock.patch.object(repairer, "job_log_is_empty", return_value=True):
+                    with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                        with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True}):
+                            with mock.patch.object(repairer, "run_claude_repair") as repair:
+                                result = repairer.repair_check(item, "PR Body")
+        checkout.assert_called_once()
+        download.assert_called_once()
+        repair.assert_not_called()
+        self.assertEqual(result.status, "noop")
     def test_run_cycle_logs_selected_bottom_repair_context(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
         stack = StackGroup("s", (pr(2606, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}, latest=mergify()),))

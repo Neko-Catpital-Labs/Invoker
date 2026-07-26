@@ -36,8 +36,18 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
     "required-fast / Vitest Workspace",
     "required-fast / Submit Workflow Chain",
 })
+ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
+REPAIR_STOP_PREFIX = "Mergify repair stopped: "
+MANUAL_SPLIT_STOP_MARKERS = (
+    "human stack split required",
+    "Split this into one Review Unit per PR.",
+    "cannot auto-split",
+    "cannot ship with tooling-policy, proof files",
+    "cannot ship with policy, proof files",
+    "cannot ship with proof files",
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +89,8 @@ def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) ->
         authors = set(thread.author_logins)
         if not authors or authors - BOT_OR_SELF_AUTHORS:
             blockers.append(Blocker(thread.id, "human_review_thread", pr.number, f"unresolved human review thread {thread.id}"))
+        elif thread.is_outdated:
+            blockers.append(Blocker(thread.id, "outdated_bot_review_thread", pr.number, f"unresolved outdated bot review thread {thread.id}"))
         else:
             blockers.append(Blocker(thread.id, "bot_review_thread", pr.number, f"unresolved bot review thread {thread.id}"))
 
@@ -88,7 +100,7 @@ def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) ->
     for name in sorted(required_checks):
         ctx = pr.checks.get(name)
         if ctx is None:
-            if pr.base_ref_name == trunk:
+            if pr.base_ref_name == trunk and not is_queue_only_required_check(name):
                 blockers.append(Blocker(name, "missing_check", pr.number, f"missing required check {name}"))
             continue
         if ctx.state == "success":
@@ -268,6 +280,24 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
     return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
 
 
+def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | None:
+    if blocker.kind != "failed_check":
+        return None
+    ctx = pr.checks.get(blocker.key)
+    completed_at = ctx.completed_at if ctx else ""
+    for comment in pr.repair_stop_comments:
+        body = comment.body.strip()
+        if not body.startswith(REPAIR_STOP_PREFIX):
+            continue
+        detail = body[len(REPAIR_STOP_PREFIX):].strip()
+        if not detail or not any(marker in detail for marker in MANUAL_SPLIT_STOP_MARKERS):
+            continue
+        if completed_at and comment.updated_at and comment.updated_at < completed_at:
+            continue
+        return Blocker(blocker.key, "human_decision", pr.number, detail)
+    return None
+
+
 def _assert_stack_facts_invariants(facts: StackFacts) -> None:
     assert facts.stack.prs, "stack must contain at least one PR"
     pr_numbers = tuple(pr.number for pr in facts.stack.prs)
@@ -312,12 +342,18 @@ def build_stack_facts(
         suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (prereq_status.check_name,)
     if queue_only_noop_check and bottom:
         suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (queue_only_noop_check,)
+    if (
+        bottom
+        and "PR Body" in required
+        and ledger.latest("repair-noop", bottom.number, bottom.head_ref_oid, "PR Body") is not None
+    ):
+        suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + ("PR Body",)
 
     blockers_by_pr: dict[int, tuple[Blocker, ...]] = {}
     for pr in stack.prs:
         effective = effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
         blockers_by_pr[pr.number] = tuple(
-            latest_repair_invalid_blocker(pr, blocker, ledger) or blocker
+            latest_repair_invalid_blocker(pr, blocker, ledger) or existing_split_stop_blocker(pr, blocker) or blocker
             for blocker in effective
         )
     facts = StackFacts(
@@ -395,6 +431,16 @@ def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
     return any(blocker.kind == "pending_check" or blocker.kind in HUMAN_BLOCKER_KINDS for blocker in facts.all_blockers)
 
 
+def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
+    if not facts.bottom:
+        return _has_pending_or_human_blocker(facts)
+    return any(
+        blocker.pr_number == facts.bottom.number
+        and (blocker.kind == "pending_check" or blocker.kind in HUMAN_BLOCKER_KINDS)
+        for blocker in facts.all_blockers
+    )
+
+
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
@@ -425,6 +471,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
         for blocker in facts.blockers_by_pr[pr.number]:
+            if blocker.kind == "outdated_bot_review_thread":
+                return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
             if blocker.kind != "bot_review_thread":
                 continue
             if ledger.has_different_head("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key):
@@ -462,7 +510,7 @@ def plan_merge_hold_cleanup(facts: StackFacts, ledger: Ledger) -> Action | None:
 
 
 def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts: int) -> Action | None:
-    if _has_pending_or_human_blocker(facts):
+    if _bottom_has_pending_or_human_blocker(facts):
         return None
     if any(blocker.kind == "merge_hold" for blocker in facts.all_blockers):
         return None
@@ -488,7 +536,7 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
         return None
-    if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:
+    if latest and latest.state in ACTIVE_QUEUE_STATES and (latest.head_sha == bottom.head_ref_oid or "queued" in bottom.labels):
         return None
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
