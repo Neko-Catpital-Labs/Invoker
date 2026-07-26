@@ -385,6 +385,19 @@ def section_items(body: str, heading: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def failing_check_names(body: str) -> tuple[str, ...]:
+    marked_failures: list[str] = []
+    for line in section_lines(body, "Failing checks"):
+        if "❌" not in line and "🛑" not in line:
+            continue
+        item = normalize_check_item(line)
+        if item:
+            marked_failures.append(item)
+    if marked_failures:
+        return tuple(marked_failures)
+    return section_items(body, "Failing checks")
+
+
 def all_condition_states(body: str) -> tuple[tuple[str, str], ...]:
     out: list[tuple[str, str]] = []
     for line in section_lines(body, "All conditions"):

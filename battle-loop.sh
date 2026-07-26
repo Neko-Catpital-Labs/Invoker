@@ -10,6 +10,7 @@ REPROS=(
   scripts/repro/repro-mergify-closed-pr-guard.sh
   scripts/repro/repro-coderabbit-pr5251-mergify-admin-requeue-yaml-alias.sh
   scripts/repro/repro-babysit-pr-body-human-split.sh
+  scripts/repro/repro-babysit-mergify-mixed-failing-checks.sh
 )
 
 # repro-mergify-stack-dogfood.sh is deliberately excluded: it's an opt-in

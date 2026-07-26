@@ -81,6 +81,45 @@ class ParseMergifyQueueEvent(unittest.TestCase):
         self.assertEqual(event.comment_id, "c-9001")
         self.assertEqual(event.queued_at, "2026-07-07T05:00:00Z")
 
+    def test_parses_only_red_failures_from_mixed_mergify_section(self):
+        comment = {
+            "user": {"login": "mergify"},
+            "id": "c-5873",
+            "updated_at": "2026-07-26T08:26:52Z",
+            "body": """\
+- ❌ **Checks failed** · on draft #5874
+- 🚫 **Left the queue** — `2026-07-26 08:26 UTC` · at `%s`
+
+<!-- -*- Mergify Payload -*-
+{"state": "dequeued", "queue_rule_name": "admin-bypass"}
+-*- Mergify Payload -*- -->
+
+## Reason
+
+The merge conditions cannot be satisfied due to failing checks
+
+- `quality / TypeScript Types`
+
+Failing checks:
+- 🟠 [build-artifacts](https://github.com/o/r/actions/runs/1/job/10)
+- 🟠 [PR Body](https://github.com/o/r/actions/runs/1/job/11)
+- ❌ [quality / TypeScript Types](https://github.com/o/r/actions/runs/1/job/12)
+- 🟠 [UI Vitest](https://github.com/o/r/actions/runs/1/job/13)
+""" % HEAD,
+        }
+        event = s.parse_mergify_queue_event(comment)
+        assert event is not None
+        self.assertEqual(event.failing_checks, ("quality / TypeScript Types",))
+        self.assertEqual(
+            event.failing_check_urls,
+            (
+                ("build-artifacts", ("https://github.com/o/r/actions/runs/1/job/10",)),
+                ("PR Body", ("https://github.com/o/r/actions/runs/1/job/11",)),
+                ("quality / TypeScript Types", ("https://github.com/o/r/actions/runs/1/job/12",)),
+                ("UI Vitest", ("https://github.com/o/r/actions/runs/1/job/13",)),
+            ),
+        )
+
 
 class ParseStackMetadata(unittest.TestCase):
     def test_newest_comment_with_marker_wins(self):

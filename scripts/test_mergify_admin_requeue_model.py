@@ -83,6 +83,26 @@ class SectionExtraction(unittest.TestCase):
             ("build (ubuntu-latest)", "test:all"),
         )
 
+    def test_failing_check_names_keep_only_explicit_failure_rows(self):
+        body = """\
+## Failing checks
+
+- 🟠 [build-artifacts](https://github.com/o/r/actions/runs/1/job/10)
+- 🟠 [PR Body](https://github.com/o/r/actions/runs/1/job/11)
+- ❌ [quality / TypeScript Types](https://github.com/o/r/actions/runs/1/job/12)
+- 🟠 [UI Vitest](https://github.com/o/r/actions/runs/1/job/13)
+"""
+        self.assertEqual(
+            m.failing_check_names(body),
+            ("quality / TypeScript Types",),
+        )
+
+    def test_failing_check_names_preserve_unmarked_legacy_sections(self):
+        self.assertEqual(
+            m.failing_check_names(MERGIFY_COMMENT),
+            ("build (ubuntu-latest)", "test:all"),
+        )
+
     def test_all_conditions_are_parsed_with_pass_fail_state(self):
         # The "All conditions" checklist is the ground truth for which required
         # checks passed ([X]) vs failed ([ ]). Non check-success rows (base=...)
