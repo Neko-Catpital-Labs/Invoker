@@ -511,9 +511,15 @@ export async function sendPlanningChatMessage(
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
 
-  let sessionId = rawRequest?.sessionId;
+  const suppliedSessionId = typeof rawRequest?.sessionId === 'string'
+    ? rawRequest.sessionId.trim()
+    : undefined;
+  let sessionId = suppliedSessionId;
   try {
-    let session = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
+    let session = suppliedSessionId ? deps.sessions.get(suppliedSessionId) : undefined;
+    if (suppliedSessionId !== undefined && !session) {
+      return { ok: false, sessionId, error: 'No planning conversation yet.' };
+    }
     if (!session) {
       const created = await createSession({
         presetKey: rawRequest?.presetKey,
