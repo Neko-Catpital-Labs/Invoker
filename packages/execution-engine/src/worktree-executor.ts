@@ -39,6 +39,8 @@ export interface WorktreeExecutorConfig {
   claudeCommand?: string;
   /** Agent registry for pluggable AI agents. When set, overrides claudeCommand. */
   agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  /** Optional dependency/bootstrap command run before the task command in local worktrees. */
+  provisionCommand?: string;
   /** Heartbeat interval in milliseconds. Default: 30000. */
   heartbeatIntervalMs?: number;
   /** Maximum task duration in milliseconds. Default: 4 hours. */
@@ -75,12 +77,13 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private readonly worktreeBaseDir: string;
   private readonly claudeCommand: string;
   private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  private readonly provisionCommand: string;
   private pool: RepoPool;
-
   constructor(config: WorktreeExecutorConfig) {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
+    this.provisionCommand = config.provisionCommand?.trim() || DEFAULT_WORKTREE_PROVISION_COMMAND;
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
     this.pool = new RepoPool({
@@ -693,8 +696,46 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
   }
 
-  private provisionWorktree(dir: string, _executionId?: string): { child: ChildProcess | null; completion: Promise<void> } {
-    traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
-    return { child: null, completion: Promise.resolve() };
+  private provisionWorktree(dir: string, executionId?: string): { child: ChildProcess | null; completion: Promise<void> } {
+    const command = this.provisionCommand.trim();
+    if (!command) {
+      traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
+      return { child: null, completion: Promise.resolve() };
+    }
+    traceExecution(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
+    if (executionId) this.emitOutput(executionId, `[worktree] Provisioning worktree dependencies in ${dir}\n`);
+    const child = spawn('/bin/bash', ['-lc', command], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: dir,
+      detached: true,
+      env: cleanElectronEnv(),
+    });
+    let combinedOutput = '';
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      const text = String(chunk);
+      combinedOutput += text;
+      if (executionId) this.emitOutput(executionId, text);
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      const text = String(chunk);
+      combinedOutput += text;
+      if (executionId) this.emitOutput(executionId, text);
+    });
+    const completion = new Promise<void>((resolve, reject) => {
+      child.on('error', (error) => {
+        reject(new Error(`Worktree provisioning failed: ${error.message}`));
+      });
+      child.on('close', (code, signal) => {
+        if (code === 0) {
+          traceExecution(`[WorktreeExecutor] provisionWorktree done dir=${dir}`);
+          resolve();
+          return;
+        }
+        const tail = combinedOutput.trim().split('\n').slice(-50).join('\n').trim();
+        const detail = tail || `provision command exited with code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`;
+        reject(new Error(`Worktree provisioning failed: ${detail}`));
+      });
+    });
+    return { child, completion };
   }
 }

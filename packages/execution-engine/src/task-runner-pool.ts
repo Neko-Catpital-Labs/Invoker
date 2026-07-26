@@ -29,7 +29,7 @@ import type { ActiveExecutionEntry, TaskRunner } from './task-runner.js';
 
 export type ExecutionPoolMember =
   | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
-  | { type: 'worktree'; id: string; maxConcurrentTasks?: number };
+  | { type: 'worktree'; id: string; maxConcurrentTasks?: number; provisionCommand?: string };
 
 export type ExecutionPoolConfig = {
   members: ExecutionPoolMember[];
@@ -95,6 +95,7 @@ export type TaskRunnerPoolHost = Pick<
   | 'poolRoundRobinCursor'
   | 'poolMemberHealth'
   | 'sshExecutorCache'
+  | 'worktreeExecutorCache'
   | 'runnerInstanceId'
   | 'getRemoteTargets'
   | 'getExecutionPools'
@@ -598,6 +599,7 @@ export function selectExecutor(
     ? 'merge'
     : task.config.runnerKind;
   let selectedPoolMemberId: string | undefined;
+  let selectedWorktreeMember: Extract<ExecutionPoolMember, { type: 'worktree' }> | undefined;
   const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
   let resolvedExecution: ResolvedExecutionSelection = {
     executionAgent: host.resolveExecutionAgent(task),
@@ -620,6 +622,7 @@ export function selectExecutor(
       }
       effectiveType = member.type;
       selectedPoolMemberId = member.id;
+      selectedWorktreeMember = member.type === 'worktree' ? member : undefined;
     }
   } else if (task.config.poolId) {
     const pool = host.getExecutionPools()[task.config.poolId];
@@ -633,6 +636,7 @@ export function selectExecutor(
         if (reserved) {
           effectiveType = member.type;
           selectedPoolMemberId = member.id;
+          selectedWorktreeMember = member.type === 'worktree' ? member : undefined;
           break;
         }
         attempted.add(poolMemberKey(member));
@@ -654,7 +658,11 @@ export function selectExecutor(
 
   if (effectiveType) {
     const registered = host.executorRegistry.get(effectiveType);
-    if (registered && (effectiveType !== 'merge' || registered.type === 'merge')) {
+    if (
+      registered
+      && (effectiveType !== 'merge' || registered.type === 'merge')
+      && (effectiveType !== 'worktree' || !(registered instanceof WorktreeExecutor))
+    ) {
       traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
       return { executor: registered, resolvedExecution, selectedPoolMemberId };
     }
@@ -672,13 +680,27 @@ export function selectExecutor(
 
     if (effectiveType === 'worktree') {
       const invokerHome = resolve(homedir(), '.invoker');
+      const configFingerprint = JSON.stringify({
+        provisionCommand: selectedWorktreeMember?.provisionCommand?.trim() || '',
+        worktreeBaseDir: resolve(invokerHome, 'worktrees'),
+        cacheDir: resolve(invokerHome, 'repos'),
+      });
+      const cached = host.worktreeExecutorCache.get(configFingerprint);
+      if (cached) {
+        host.executorRegistry.register('worktree', cached);
+        traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (cached)`);
+        return { executor: cached, resolvedExecution, selectedPoolMemberId };
+      }
+      host.worktreeExecutorCache.clear();
       const worktree = new WorktreeExecutor({
         worktreeBaseDir: resolve(invokerHome, 'worktrees'),
         cacheDir: resolve(invokerHome, 'repos'),
         maxWorktrees: host.maxWorktreesPerRepo,
         agentRegistry: host.executionAgentRegistry,
+        provisionCommand: selectedWorktreeMember?.provisionCommand,
       });
       host.executorRegistry.register('worktree', worktree);
+      host.worktreeExecutorCache.set(configFingerprint, worktree);
       traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=worktree → worktree (lazy registered)`);
       return { executor: worktree, resolvedExecution, selectedPoolMemberId };
     }
@@ -715,6 +737,7 @@ export function selectExecutor(
         port: target.port,
         managedWorkspaces: target.managedWorkspaces,
         remoteInvokerHome: target.remoteInvokerHome,
+        provisionCommand: target.provisionCommand?.trim() || '',
         use_api_key: target.use_api_key === true,
         secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
         remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,
