@@ -1021,23 +1021,6 @@ export const IpcChannels = {
     request: [taskId: string, experimentId: string | string[]];
     response: WorkflowMutationAcceptedResult;
   },
-  /**
-   * @deprecated Step 13 (`docs/architecture/task-invalidation-roadmap.md`):
-   * `invoker:restart-task` is the legacy channel name from when
-   * `restartTask` was the overloaded "retry-or-recreate" verb the
-   * chart's "Naming inconsistency" section flagged. The channel
-   * itself is preserved for UI compatibility but its handler in
-   * `main.ts` now routes through `commandService.retryTask` →
-   * `Orchestrator.retryTask` (retry-class semantics: preserves
-   * branch/workspacePath lineage). Prefer the explicit channels —
-   * `invoker:retry-task` (when wired) for retry-class invalidation
-   * or `invoker:recreate-task` for recreate-class invalidation.
-   * Once UI is migrated this channel can be removed.
-   */
-  'invoker:restart-task': {} as {
-    request: [taskId: string];
-    response: WorkflowMutationAcceptedResult;
-  },
   'invoker:retry-task': {} as {
     request: [taskId: string];
     response: WorkflowMutationAcceptedResult;
@@ -1126,10 +1109,6 @@ export const IpcChannels = {
   },
   'invoker:set-merge-branch': {} as {
     request: [workflowId: string, baseBranch: string];
-    response: WorkflowMutationAcceptedResult;
-  },
-  'invoker:set-merge-mode': {} as {
-    request: [workflowId: string, mergeMode: string];
     response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-workflow-merge-mode': {} as {
