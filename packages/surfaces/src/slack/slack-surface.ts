@@ -191,9 +191,9 @@ function capTailChars(value: string, max: number): string {
 // ── Planning request parsing ─────────────────────────────────
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
-const URL_TOKEN_TERMINATORS = new Set([' ', '\t', '\n', '\r', '<', '>', '(', ')', '[', ']', '{', '}', '"', "'", '|']);
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?']);
 const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
+const MESSAGE_REPO_CANDIDATE_RE = /<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>|\bhttps?:\/\/[^\s<>|]+|\bssh:\/\/[^\s<>|]+|\bgit@[\w.-]+:[^\s<>|]+/gi;
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
@@ -229,26 +229,17 @@ function normalizeMessageRepoCandidate(rawUrl: string): string | undefined {
   return url.pathname.endsWith('.git') ? candidate : undefined;
 }
 
-export function extractRepoUrlFromMessage(text: string): string | undefined {
-  let start = 0;
-  while (start < text.length) {
-    const httpIndex = text.indexOf('http://', start);
-    const httpsIndex = text.indexOf('https://', start);
-    const candidateStart = httpIndex === -1
-      ? httpsIndex
-      : httpsIndex === -1
-        ? httpIndex
-        : Math.min(httpIndex, httpsIndex);
-    if (candidateStart === -1) return undefined;
-    let candidateEnd = candidateStart;
-    while (candidateEnd < text.length && !URL_TOKEN_TERMINATORS.has(text[candidateEnd])) {
-      candidateEnd += 1;
-    }
-    const repoCandidate = normalizeMessageRepoCandidate(text.slice(candidateStart, candidateEnd));
-    if (repoCandidate) return repoCandidate;
-    start = candidateEnd + 1;
+function extractMessageRepoCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  for (const match of text.matchAll(MESSAGE_REPO_CANDIDATE_RE)) {
+    const normalized = normalizeMessageRepoCandidate((match[1] ?? match[0]).replace(/[)\]}]+$/, ''));
+    if (normalized && !candidates.includes(normalized)) candidates.push(normalized);
   }
-  return undefined;
+  return candidates;
+}
+
+export function extractRepoUrlFromMessage(text: string): string | undefined {
+  return extractMessageRepoCandidates(text)[0];
 }
 
 type RepoParts = {
@@ -350,16 +341,7 @@ export function parsePlanningRequest(
 }
 
 function extractRepositoryUrls(text: string): string[] {
-  const slackLinks = [...text.matchAll(/<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>/gi)];
-  const withoutSlackLinks = text.replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ');
-  const candidates = [
-    ...slackLinks,
-    ...withoutSlackLinks.matchAll(/\bhttps?:\/\/[^\s<>]+/gi),
-    ...withoutSlackLinks.matchAll(/\bssh:\/\/[^\s<>]+/gi),
-    ...withoutSlackLinks.matchAll(/\bgit@[\w.-]+:[^\s<>]+/gi),
-  ].map((match) => normalizeMessageRepoCandidate((match[1] ?? match[0]).replace(/[)\]}]+$/, '')))
-    .filter((repoUrl): repoUrl is string => !!repoUrl);
-  return [...new Set(candidates)];
+  return extractMessageRepoCandidates(text);
 }
 
 function repositoryIdentity(repoUrl: string): string {

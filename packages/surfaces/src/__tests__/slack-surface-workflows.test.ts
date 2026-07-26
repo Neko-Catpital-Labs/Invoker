@@ -225,6 +225,11 @@ describe('extractRepoUrlFromMessage', () => {
     expect(extractRepoUrlFromMessage('repo is https://github.com/EdbertChan/notarepo.git')).toBe('https://github.com/EdbertChan/notarepo.git');
   });
 
+  it('extracts SSH clone URLs unchanged', () => {
+    expect(extractRepoUrlFromMessage('repo is git@github.com:openai/invoker.git')).toBe('git@github.com:openai/invoker.git');
+    expect(extractRepoUrlFromMessage('repo is ssh://git@github.com/openai/invoker.git')).toBe('ssh://git@github.com/openai/invoker.git');
+  });
+
   it('requires .git for non-GitHub HTTP URLs', () => {
     expect(extractRepoUrlFromMessage('repo is https://www.onorca.dev')).toBeUndefined();
     expect(extractRepoUrlFromMessage('repo is https://gitlab.com/openai/invoker')).toBeUndefined();
