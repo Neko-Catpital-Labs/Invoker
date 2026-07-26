@@ -11,6 +11,8 @@ Write the planning artifact to `plans/invoker-handoff.md`.
 
 Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 
+Treat plain approval of the handoff as approval to validate and submit the workflow only. Do not publish local branches, create or update PRs, or perform PR publication unless the user explicitly asks for PR publication.
+
 Validate with `invoker_validate_plan` before submitting.
 
 Submit with `invoker_submit_plan` using mode `live` so the workflow appears in the running Invoker app.
