@@ -503,7 +503,12 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return None
     if not facts.bottom:
         first = facts.stack.prs[0]
-        return Action("comment_blocked", first.number, "no-current-bottom", "no current bottom on master")
+        return Action(
+            "comment_blocked",
+            first.number,
+            "no-current-bottom",
+            f"no current bottom on {facts.trunk}: lowest open stack PR #{first.number} is based on `{first.base_ref_name}`, not `{facts.trunk}`; land or retarget that base before babysitting can queue this stack",
+        )
 
     bottom = facts.bottom
     latest = bottom.latest_mergify

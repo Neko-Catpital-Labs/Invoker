@@ -12,6 +12,7 @@ REPROS=(
   scripts/repro/repro-babysit-pr-body-human-split.sh
   scripts/repro/repro-babysit-targeted-scan-light.sh
   scripts/repro/repro-babysit-queue-repair-invalid-stop.sh
+  scripts/repro/repro-babysit-no-current-bottom-comment.sh
 )
 
 # repro-mergify-stack-dogfood.sh is deliberately excluded: it's an opt-in

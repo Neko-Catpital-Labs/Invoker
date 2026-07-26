@@ -93,8 +93,7 @@ class AdminBypassGhExecutor:
             self.resolve_bot_threads(action.key)
             return
         if action.kind == "comment_blocked":
-            if action.key == "capped":
-                key = f"capped:{action.detail}"
-                self.comment_blocked(pr, action.detail, key, now)
+            key = f"capped:{action.detail}" if action.key == "capped" else action.key
+            self.comment_blocked(pr, action.detail, key, now)
             return
         raise ValueError(f"unsupported executor action: {action.kind}")
