@@ -547,6 +547,16 @@ describe('GitHub auth check', () => {
   it('warns and skips when gh is missing', () => {
     expect(skippedGithubAuthCheck()).toMatchObject({ id: 'github-auth', status: 'warn' });
   });
+
+  it('warns and skips when the injected runner cannot find gh', () => {
+    const missingGh = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
+    const check = checkGithubAuth(() => {
+      throw missingGh;
+    });
+
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
+    expect(check.detail).toContain('skipped auth check');
+  });
 });
 
 describe('setup oneshot ending', () => {
