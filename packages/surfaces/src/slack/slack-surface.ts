@@ -229,6 +229,10 @@ function normalizeMessageRepoCandidate(rawUrl: string): string | undefined {
   return url.pathname.endsWith('.git') ? candidate : undefined;
 }
 
+function invalidRepoUrlMessage(repo: string): string {
+  return `Invalid repo URL "${repo}". Use a GitHub repo URL or a clone URL ending in .git.`;
+}
+
 export function extractRepoUrlFromMessage(text: string): string | undefined {
   let start = 0;
   while (start < text.length) {
@@ -1805,7 +1809,14 @@ ${text}`;
     const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repo.toLowerCase());
     const alias = aliasKey && this.repoAliases[aliasKey];
     if (alias) return { url: this.normalizeRepositoryUrl(alias) };
-    if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return { url: this.normalizeRepositoryUrl(repo) };
+    if (/^(git@|ssh:\/\/)/i.test(repo)) return { url: this.normalizeRepositoryUrl(repo) };
+    if (/^https?:\/\//i.test(repo)) {
+      const normalized = normalizeMessageRepoCandidate(repo);
+      return normalized
+        ? { url: this.normalizeRepositoryUrl(normalized) }
+        : { error: invalidRepoUrlMessage(repo) };
+    }
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(repo)) return { error: invalidRepoUrlMessage(repo) };
     const known = Object.keys(this.repoAliases);
     const list = known.length ? known.join(', ') : '(none configured)';
     return { error: `Unknown repo "${repo}". Known aliases: ${list}. Or pass a full git URL.` };
