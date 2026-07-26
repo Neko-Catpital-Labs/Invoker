@@ -357,6 +357,92 @@ function testStaleBaseDetection() {
     rmSync(harness.root, { recursive: true, force: true });
   }
 }
+function testStaleMergedHelperBaseRejectsPublication() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    gitQuiet(work, 'branch', 'pr/previous', 'origin/master');
+    gitQuiet(work, 'push', 'origin', 'pr/previous');
+    createTrackedBranch(work, 'feature/on-stale-helper', 'origin/pr/previous');
+    commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+
+    const result = runCreatePr(work, harness, ['--title', 'test title', '--base', 'pr/previous', '--body-file', 'pr-body.md'], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 86,
+          state: 'closed',
+          merged_at: '2026-07-26T07:32:31Z',
+          html_url: 'https://example.com/pull/86',
+          head: { ref: 'pr/previous', repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+    });
+
+    assert(result.status === 1, `stale merged helper base should fail\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('Refusing to create/update PR: base branch "pr/previous" belongs to a stale helper PR.'),
+      `stale helper base error should explain the stale helper branch\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('merged helper PR #86'), `stale helper base error should name the merged helper PR\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('git switch -c stack/<name> origin/<live-stack-base>'), 'stale helper base error should include stack rebuild command');
+    assert(result.stderr.includes('git cherry-pick <commit> [<commit> ...]'), 'stale helper base error should include cherry-pick recovery');
+    expectNoPush(harness, 'stale merged helper base');
+    const ghCalls = readGhCalls(harness.ghLog);
+    assert(ghCalls.some((call) => call.route.includes('/pulls?')), 'stale helper base rejection should look up helper-base PRs');
+    assert(
+      !ghCalls.some((call) => /\/pulls(?:\/[0-9]+)?$/.test(call.route)),
+      `stale helper base rejection should fail before PR mutation\n${JSON.stringify(ghCalls, null, 2)}`,
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testDuplicateHelperBasePrsRejectPublication() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    gitQuiet(work, 'branch', 'pr/previous', 'origin/master');
+    gitQuiet(work, 'push', 'origin', 'pr/previous');
+    createTrackedBranch(work, 'feature/on-stale-helper', 'origin/pr/previous');
+    commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+
+    const result = runCreatePr(work, harness, ['--title', 'test title', '--base', 'pr/previous', '--body-file', 'pr-body.md'], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 86,
+          state: 'open',
+          html_url: 'https://example.com/pull/86',
+          head: { ref: 'pr/previous', repo: { full_name: 'owner/repo' } },
+        },
+        {
+          number: 87,
+          state: 'closed',
+          html_url: 'https://example.com/pull/87',
+          head: { ref: 'pr/previous', repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+    });
+
+    assert(result.status === 1, `duplicate helper-base PRs should fail\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('Found multiple PRs for base branch "pr/previous"'),
+      `duplicate helper-base error should name the helper base\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('Refusing to guess. Resolve the duplicate helper-base PRs first.'), 'duplicate helper-base error should refuse to guess');
+    assert(result.stderr.includes('#86: https://example.com/pull/86'), 'duplicate helper-base error should list PR #86');
+    assert(result.stderr.includes('#87: https://example.com/pull/87'), 'duplicate helper-base error should list PR #87');
+    expectNoPush(harness, 'duplicate helper-base PRs');
+    const ghCalls = readGhCalls(harness.ghLog);
+    assert(
+      !ghCalls.some((call) => /\/pulls(?:\/[0-9]+)?$/.test(call.route)),
+      `duplicate helper-base rejection should fail before PR mutation\n${JSON.stringify(ghCalls, null, 2)}`,
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 
 function testNoFileChangesBlockPrCreation() {
   const harness = createHarness();
@@ -854,13 +940,15 @@ Keep entrypoint behavior separate from routing internals.
 function testStackedDiffTitleRequiredForNonTrunkBase() {
   const harness = createHarness();
   try {
+    const branch = 'stack/stacked-diff';
     const { work } = createRepo(harness);
-    gitQuiet(work, 'branch', 'pr/previous', 'origin/master');
-    gitQuiet(work, 'push', 'origin', 'pr/previous');
-    createTrackedBranch(work, 'pr/stacked-diff', 'origin/pr/previous');
+    gitQuiet(work, 'branch', 'stack/previous', 'origin/master');
+    gitQuiet(work, 'push', 'origin', 'stack/previous');
+    createTrackedBranch(work, branch, 'origin/stack/previous');
     commitFile(work, 'stacked.txt', 'stacked\n', 'stacked diff');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
 
-    const result = runCreatePr(work, harness, ['--title', 'plain title', '--base', 'pr/previous', '--body-file', 'pr-body.md']);
+    const result = runCreatePr(work, harness, ['--title', 'plain title', '--base', 'stack/previous', '--body-file', 'pr-body.md', '--update-existing']);
 
     assert(result.status === 1, 'stacked diff PR should reject a plain title');
     assert(result.stderr.includes('Stack PR titles must start with a shared idea'), 'stacked diff title error should explain format');
@@ -870,6 +958,36 @@ function testStackedDiffTitleRequiredForNonTrunkBase() {
     rmSync(harness.root, { recursive: true, force: true });
   }
 }
+
+function testStackedBaseRequiresStackHead() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    gitQuiet(work, 'branch', 'stack/previous', 'origin/master');
+    gitQuiet(work, 'push', 'origin', 'stack/previous');
+    createTrackedBranch(work, 'pr/stacked-diff', 'origin/stack/previous');
+    commitFile(work, 'stacked.txt', 'stacked\n', 'stacked diff');
+
+    const result = runCreatePr(work, harness, stackTitleArgs('stack/previous'));
+
+    assert(result.status === 1, `stacked base should require a stack head branch\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(
+      result.stderr.includes('Refusing to create/update PR: stacked publication requires a stack/ head branch.'),
+      `stacked head guard should explain the stack branch requirement\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('Current branch: pr/stacked-diff'), 'stacked head guard should name the current branch');
+    assert(result.stderr.includes('Requested base: stack/previous'), 'stacked head guard should name the requested base');
+    expectNoPush(harness, 'stacked base requires stack head');
+    const ghCalls = readGhCalls(harness.ghLog);
+    assert(
+      !ghCalls.some((call) => /\/pulls(?:\/[0-9]+)?$/.test(call.route)),
+      `stacked head guard should fail before PR mutation\n${JSON.stringify(ghCalls, null, 2)}`,
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 
 function testDiffAtomicityBlocksMixedDiff() {
   const harness = createHarness();
@@ -966,6 +1084,8 @@ function testHelpMentionsStackUpdateFlow() {
 
 const tests = [
   testStaleBaseDetection,
+  testStaleMergedHelperBaseRejectsPublication,
+  testDuplicateHelperBasePrsRejectPublication,
   testNoFileChangesBlockPrCreation,
   testEmptyCommitAloneBlocksPrCreation,
   testEmptyCommitMixedWithRealChangeBlocksPrCreation,
@@ -978,6 +1098,7 @@ const tests = [
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,
+  testStackedBaseRequiresStackHead,
   testDiffAtomicityBlocksMixedDiff,
   testCreatePrDryRunMatchesCiBodyValidation,
   testDiffComputationFailureBlocksPrCreation,

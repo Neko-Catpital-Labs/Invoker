@@ -619,6 +619,59 @@ function assertCleanPrBase(baseBranch) {
     ].join('\n'),
   );
 }
+function assertStackHeadForStackedBase(baseBranch, currentBranch, mergifyState) {
+  if (!isStackedPrContext(baseBranch, mergifyState)) return;
+  if (!baseBranch.startsWith('stack/')) return;
+  if (currentBranch.startsWith('stack/')) return;
+  const baseRef = TRUNK_BRANCHES.has(baseBranch) ? 'origin/master' : 'origin/<live-stack-base>';
+  throw new Error(
+    [
+      'Refusing to create/update PR: stacked publication requires a stack/ head branch.',
+      `Current branch: ${currentBranch}`,
+      `Requested base: ${baseBranch}`,
+      '',
+      'Recovery:',
+      `  git switch -c stack/<name> ${baseRef}`,
+      '  git cherry-pick <commit> [<commit> ...]',
+      '  publish through the supported stack flow in docs/pr-branching-workflow.md',
+    ].join('\n'),
+  );
+}
+
+function assertOpenHelperBasePr(nwo, baseBranch, dryRun) {
+  if (!baseBranch.startsWith('pr/')) return;
+  if (dryRun) return;
+
+  const prs = listPullRequestsForHead(nwo, baseBranch);
+  if (prs.length === 0) return;
+  if (prs.length > 1) {
+    const choices = prs.map((pr) => `  - #${pr.number}: ${pr.html_url}`).join('\n');
+    throw new Error(
+      [
+        `Found multiple PRs for base branch "${baseBranch}" in ${nwo}.`,
+        'Refusing to guess. Resolve the duplicate helper-base PRs first.',
+        choices,
+      ].join('\n'),
+    );
+  }
+
+  const [pr] = prs;
+  if (pr.state === 'OPEN') return;
+
+  const helperState = pr.merged_at ? 'merged helper PR' : 'closed helper PR';
+  throw new Error(
+    [
+      `Refusing to create/update PR: base branch "${baseBranch}" belongs to a stale helper PR.`,
+      `Found ${helperState} #${pr.number}: ${pr.html_url}`,
+      '',
+      'Recovery:',
+      '  git switch -c stack/<name> origin/<live-stack-base>',
+      '  git cherry-pick <commit> [<commit> ...]',
+      '  publish through the supported stack flow in docs/pr-branching-workflow.md',
+    ].join('\n'),
+  );
+}
+
 
 function getBranchMergeRef(branch) {
   return gitTextOrEmpty(['config', '--get', `branch.${branch}.merge`]);
@@ -789,6 +842,15 @@ async function main() {
 
   assertCleanPrBase(args.base);
 
+  const currentBranch = getCurrentBranch();
+  const mergifyState = getMergifyBranchState(currentBranch);
+  assertStackHeadForStackedBase(args.base, currentBranch, mergifyState);
+  let nwo = '';
+  if (args.base.startsWith('pr/')) {
+    nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
+    assertOpenHelperBasePr(nwo, args.base, args.dryRun);
+  }
+
   let body = '';
   if (args.bodyFile) {
     body = readFileSync(args.bodyFile, 'utf-8');
@@ -808,8 +870,6 @@ async function main() {
   printPrBodyWarnings(body, changedFiles, diffText);
   body = await injectImages(body, args.dryRun);
 
-  const currentBranch = getCurrentBranch();
-  const mergifyState = getMergifyBranchState(currentBranch);
   const requestedUpdatePath = Boolean(args.update || args.updateExisting);
   if (mergifyState.managed && !requestedUpdatePath) {
     throw new Error(
@@ -831,12 +891,13 @@ async function main() {
     assertValidStackPrTitle(args.title);
   }
 
-  const nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
+  if (!nwo) {
+    nwo = args.dryRun ? 'OWNER/REPO' : getRepoNwo();
+  }
   let updatePrNumber = args.update;
   if (args.updateExisting) {
     updatePrNumber = resolveExistingPrNumber(nwo, currentBranch, args.dryRun);
   }
-
   if (!(mergifyState.managed && requestedUpdatePath)) {
     gitPush(args.dryRun);
   }
