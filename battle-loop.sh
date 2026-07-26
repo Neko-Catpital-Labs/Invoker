@@ -10,6 +10,7 @@ REPROS=(
   scripts/repro/repro-mergify-closed-pr-guard.sh
   scripts/repro/repro-coderabbit-pr5251-mergify-admin-requeue-yaml-alias.sh
   scripts/repro/repro-babysit-pr-body-human-split.sh
+  scripts/repro/repro-babysit-human-review-thread-block.sh
   scripts/repro/repro-babysit-pr-body-proof-human-split.sh
   scripts/repro/repro-babysit-pr-body-valid-noop.sh
   scripts/repro/repro-babysit-amended-repair-push.sh
