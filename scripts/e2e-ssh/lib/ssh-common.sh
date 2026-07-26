@@ -86,20 +86,20 @@ invoker_e2e_ssh_setup_keys() {
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_cleanup_keys() {
   local authorized_keys="${_INVOKER_E2E_SSH_HOME:-}/.ssh/authorized_keys"
-  local profile_path="${_INVOKER_E2E_SSH_HOME:-}/.profile"
+  local env_path="${_INVOKER_E2E_SSH_HOME:-}/.invoker/env.sh"
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$authorized_keys" ]; then
     grep -v "$_INVOKER_E2E_SSH_TAG" "$authorized_keys" > "${authorized_keys}.tmp" || true
     mv "${authorized_keys}.tmp" "$authorized_keys"
     chmod 600 "$authorized_keys"
   fi
-  if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$profile_path" ]; then
+  if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$env_path" ]; then
     # Remove the marker line and the following PATH export we appended.
     awk -v marker="# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" '
       $0 == marker { skip=1; next }
       skip && /^export PATH=/ { skip=0; next }
       { skip=0; print }
-    ' "$profile_path" > "${profile_path}.tmp" || true
-    mv "${profile_path}.tmp" "$profile_path"
+    ' "$env_path" > "${env_path}.tmp" || true
+    mv "${env_path}.tmp" "$env_path"
   fi
   rm -rf "${_INVOKER_E2E_SSH_TMPDIR:-}" 2>/dev/null || true
 }
@@ -188,23 +188,28 @@ invoker_e2e_ssh_install_login_path() {
       "bash -s" <<EOF
 set -euo pipefail
 marker='# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}'
-touch "\$HOME/.profile"
-if ! grep -Fq "\$marker" "\$HOME/.profile" 2>/dev/null; then
+mkdir -p "\$HOME/.invoker"
+touch "\$HOME/.invoker/env.sh"
+if ! grep -Fq "\$marker" "\$HOME/.invoker/env.sh" 2>/dev/null; then
   {
     printf '%s\n' "\$marker"
     printf 'export PATH="%s:%s:\$PATH"\n' '${node_dir}' '${pnpm_dir}'
-  } >> "\$HOME/.profile"
+  } >> "\$HOME/.invoker/env.sh"
 fi
 EOF
 
-  # Verify via login shell — matches SshExecutor.buildRemoteCommand().
+  # Verify via non-login bash — matches the executor sourcing ~/.invoker/env.sh explicitly.
   if ! ssh -o BatchMode=yes \
            -o ConnectTimeout=5 \
            -o StrictHostKeyChecking=no \
            -i "$INVOKER_E2E_SSH_KEY" \
            "$_INVOKER_E2E_SSH_USER@localhost" \
-           "bash -l -c 'command -v pnpm >/dev/null && pnpm --version'" >/dev/null 2>&1; then
-    echo "ERROR: 'pnpm' not found in remote login-shell PATH (bash -l)." >&2
+           "bash -s" <<'EOF' >/dev/null 2>&1; then
+. "$HOME/.invoker/env.sh"
+command -v pnpm >/dev/null
+pnpm --version
+EOF
+    echo "ERROR: 'pnpm' not found after sourcing ~/.invoker/env.sh." >&2
     return 1
   fi
 }
