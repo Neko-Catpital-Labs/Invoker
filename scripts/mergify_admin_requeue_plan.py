@@ -87,10 +87,12 @@ def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) ->
         if thread.is_resolved:
             continue
         authors = set(thread.author_logins)
+        if thread.is_outdated:
+            if authors and not (authors - BOT_OR_SELF_AUTHORS):
+                blockers.append(Blocker(thread.id, "outdated_bot_review_thread", pr.number, f"unresolved outdated bot review thread {thread.id}"))
+            continue
         if not authors or authors - BOT_OR_SELF_AUTHORS:
             blockers.append(Blocker(thread.id, "human_review_thread", pr.number, f"unresolved human review thread {thread.id}"))
-        elif thread.is_outdated:
-            blockers.append(Blocker(thread.id, "outdated_bot_review_thread", pr.number, f"unresolved outdated bot review thread {thread.id}"))
         else:
             blockers.append(Blocker(thread.id, "bot_review_thread", pr.number, f"unresolved bot review thread {thread.id}"))
 
