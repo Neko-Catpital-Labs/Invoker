@@ -693,8 +693,48 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
   }
 
-  private provisionWorktree(dir: string, _executionId?: string): { child: ChildProcess | null; completion: Promise<void> } {
-    traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
-    return { child: null, completion: Promise.resolve() };
+  private provisionWorktree(dir: string, executionId?: string): { child: ChildProcess | null; completion: Promise<void> } {
+    const command = DEFAULT_WORKTREE_PROVISION_COMMAND.trim();
+    if (!command) {
+      traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
+      return { child: null, completion: Promise.resolve() };
+    }
+
+    traceExecution(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
+    const child = spawn('/bin/bash', ['-c', command], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: dir,
+      detached: true,
+      env: cleanElectronEnv(),
+    });
+
+    const completion = new Promise<void>((resolve, reject) => {
+      let stderr = '';
+      child.stdout?.on('data', (chunk: Buffer) => {
+        if (executionId) this.emitOutput(executionId, chunk.toString());
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderr += text;
+        if (executionId) this.emitOutput(executionId, text);
+      });
+      child.on('error', (err) => {
+        reject(new Error(`Worktree provisioning failed to start: ${err.message}`));
+      });
+      child.on('close', (code, signal) => {
+        if (code === 0) {
+          traceExecution(`[WorktreeExecutor] provisionWorktree done dir=${dir}`);
+          resolve();
+          return;
+        }
+        const exitReason = signal ? `signal ${signal}` : `exit code ${code ?? 1}`;
+        const details = stderr.trim();
+        reject(new Error(
+          `Worktree provisioning failed with ${exitReason}${details ? `: ${details}` : ''}`,
+        ));
+      });
+    });
+
+    return { child, completion };
   }
 }
