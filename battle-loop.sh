@@ -11,6 +11,7 @@ REPROS=(
   scripts/repro/repro-coderabbit-pr5251-mergify-admin-requeue-yaml-alias.sh
   scripts/repro/repro-babysit-pr-body-human-split.sh
   scripts/repro/repro-babysit-mergify-repair-invalid-stop.sh
+  scripts/repro/repro-babysit-queued-event-waits.sh
 )
 
 # repro-mergify-stack-dogfood.sh is deliberately excluded: it's an opt-in

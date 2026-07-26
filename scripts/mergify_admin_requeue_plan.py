@@ -38,6 +38,7 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
 })
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
+ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,15 @@ def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) ->
 
 def public_blocker_kind(kind: str) -> str:
     return kind.replace("_", "-")
+
+
+def is_current_queue_event(pr: PrSnapshot) -> bool:
+    latest = pr.latest_mergify
+    if not latest or latest.state not in ACTIVE_QUEUE_STATES:
+        return False
+    if latest.head_sha and latest.head_sha != pr.head_ref_oid:
+        return False
+    return latest.head_sha == pr.head_ref_oid or "queued" in pr.labels or latest.state == "merging"
 
 
 def cap_action(pr: PrSnapshot, blocker: Blocker, detail: str) -> Action:
@@ -410,7 +420,7 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
 def wait_reason_for_facts(facts: StackFacts) -> str:
     if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
-    if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
+    if facts.bottom and is_current_queue_event(facts.bottom):
         return "bottom-already-queued"
     for pr in facts.stack.prs:
         blocker_kinds = {blocker.kind for blocker in facts.blockers_by_pr[pr.number]}
@@ -520,7 +530,7 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
         return None
-    if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:
+    if is_current_queue_event(bottom):
         return None
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
@@ -541,6 +551,8 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
+    if facts.bottom and is_current_queue_event(facts.bottom):
+        return ()
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)

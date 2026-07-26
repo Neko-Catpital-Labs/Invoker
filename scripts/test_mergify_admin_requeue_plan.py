@@ -292,6 +292,23 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(snapshot)
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-after-dequeue"))
 
+    def test_current_queued_bottom_waits_before_blockers(self):
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "queued"}),
+            checks={},
+            latest_mergify=event(state="queued", head=""),
+            review_threads=(m.ReviewThread("security-thread", False, ("github-advanced-security",)),),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            self._ledger(),
+            now_epoch=0,
+            open_pr_numbers={1},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "bottom-already-queued")
+
     def test_clean_bottom_queues_without_prior_dequeue(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot)
