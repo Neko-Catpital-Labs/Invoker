@@ -92,10 +92,10 @@ describe('buildMirrorCloneScript', () => {
     });
 
     expect(script).toContain('set -euo pipefail');
-    expect(script).toContain('REPO=$(echo');
-    expect(script).toContain('base64 -d)');
+    expect(script).toContain('invoker_base64_decode() {');
+    expect(script).toContain("REPO=$(printf '%s'");
     expect(script).toContain('H="abc123def456"');
-    expect(script).toContain('INVOKER_HOME=$(echo');
+    expect(script).toContain("INVOKER_HOME=$(printf '%s'");
     expect(script).toContain('CLONE="$INVOKER_HOME/repos/$H"');
     expect(script).toContain('if [ ! -d "$CLONE/.git" ]; then git clone "$REPO" "$CLONE"; fi');
     expect(script).toContain('if ! git -C "$CLONE" fetch --all --prune; then');
@@ -140,8 +140,8 @@ describe('buildMirrorCloneScript', () => {
     // Should not contain the raw malicious string
     expect(script).not.toContain(maliciousUrl);
     // Should contain base64 encoded version
-    expect(script).toContain('REPO=$(echo');
-    expect(script).toContain('base64 -d)');
+    expect(script).toContain("REPO=$(printf '%s'");
+    expect(script).toContain('invoker_base64_decode');
   });
 
   it('fetches branch repo refs without mutating shared mirror remotes', () => {
@@ -152,7 +152,7 @@ describe('buildMirrorCloneScript', () => {
       baseRef: 'main',
     });
 
-    expect(script).toContain('BRANCH_REPO=$(echo');
+    expect(script).toContain("BRANCH_REPO=$(printf '%s'");
     expect(script).not.toContain('remote set-url invoker-branches');
     expect(script).not.toContain('remote add invoker-branches');
     expect(script).toContain('git -C "$CLONE" fetch "$BRANCH_REPO" \'+refs/heads/*:refs/remotes/invoker-branches/*\' --prune');
@@ -241,7 +241,7 @@ describe('buildWorktreeListScript', () => {
     const script = buildWorktreeListScript({ repoHash: 'xyz789' });
     expect(script).toContain('set -euo pipefail');
     expect(script).toContain('H="xyz789"');
-    expect(script).toContain('INVOKER_HOME=$(echo');
+    expect(script).toContain("INVOKER_HOME=$(printf '%s'");
     expect(script).toContain('CLONE="$INVOKER_HOME/repos/$H"');
     expect(script).toContain('git -C "$CLONE" worktree list --porcelain');
   });
@@ -316,9 +316,9 @@ describe('buildWorktreeSandboxResetScript', () => {
     });
 
     expect(script).toContain('set -euo pipefail');
-    expect(script).toContain('WT=$(echo');
-    expect(script).toContain('REF=$(echo');
-    expect(script).toContain('base64 -d)');
+    expect(script).toContain("WT=$(printf '%s'");
+    expect(script).toContain("REF=$(printf '%s'");
+    expect(script).toContain('invoker_base64_decode');
     expect(script).toContain('git -C "$WT" reset --hard "$REF"');
     expect(script).toContain('git -C "$WT" clean -fd');
     expect(script).not.toContain('clean -fdx');
@@ -437,9 +437,9 @@ describe('buildWorktreeRenameBranchScript', () => {
       toBranch: 'experiment/task-new',
     });
 
-    expect(script).toContain('WT=$(echo');
-    expect(script).toContain('FROM=$(echo');
-    expect(script).toContain('TO=$(echo');
+    expect(script).toContain("WT=$(printf '%s'");
+    expect(script).toContain("FROM=$(printf '%s'");
+    expect(script).toContain("TO=$(printf '%s'");
     expect(script).toContain('git -C "$WT" branch -m "$FROM" "$TO"');
     expect(script).toContain('git -C "$WT" rev-parse --abbrev-ref HEAD');
   });
@@ -457,8 +457,8 @@ describe('buildRecordAndPushScript', () => {
     });
 
     expect(script).toContain('set -euo pipefail');
-    expect(script).toContain('WT=$(echo');
-    expect(script).toContain('base64 -d)');
+    expect(script).toContain("WT=$(printf '%s'");
+    expect(script).toContain('invoker_base64_decode');
     expect(script).not.toContain('git config user.name');
     expect(script).not.toContain('git config user.email');
     expect(script).toContain('GIT_AUTHOR_NAME="$GIT_NAME"');
