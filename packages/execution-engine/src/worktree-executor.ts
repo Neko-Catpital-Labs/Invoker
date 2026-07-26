@@ -693,8 +693,54 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
   }
 
-  private provisionWorktree(dir: string, _executionId?: string): { child: ChildProcess | null; completion: Promise<void> } {
-    traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
-    return { child: null, completion: Promise.resolve() };
+  private provisionWorktree(dir: string, executionId?: string): { child: ChildProcess | null; completion: Promise<void> } {
+    const command = DEFAULT_WORKTREE_PROVISION_COMMAND.trim();
+    if (!command) {
+      traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
+      return { child: null, completion: Promise.resolve() };
+    }
+
+    traceExecution(`[WorktreeExecutor] provisionWorktree begin dir=${dir}`);
+    const child = spawn('/bin/bash', ['-c', command], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: dir,
+      detached: true,
+      env: cleanElectronEnv(),
+    });
+
+    if (executionId) {
+      child.stdout?.on('data', (chunk: Buffer) => {
+        this.emitOutput(executionId, chunk.toString());
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        this.emitOutput(executionId, chunk.toString());
+      });
+    }
+
+    const completion = new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        fn();
+      };
+
+      child.on('error', (err) => {
+        traceExecution(`[WorktreeExecutor] provisionWorktree spawn error dir=${dir}: ${err.message}`);
+        finish(() => reject(new Error(`Worktree provisioning failed to spawn: ${err.message}`)));
+      });
+      child.on('close', (code, signal) => {
+        if (code === 0) {
+          traceExecution(`[WorktreeExecutor] provisionWorktree done dir=${dir}`);
+          finish(resolve);
+          return;
+        }
+        const reason = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`;
+        traceExecution(`[WorktreeExecutor] provisionWorktree failed dir=${dir}: ${reason}`);
+        finish(() => reject(new Error(`Worktree provisioning failed with ${reason}`)));
+      });
+    });
+
+    return { child, completion };
   }
 }

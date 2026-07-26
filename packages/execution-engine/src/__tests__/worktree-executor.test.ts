@@ -102,6 +102,19 @@ function createMockProcess(): ChildProcess & EventEmitter {
   return proc;
 }
 
+function isProvisionSpawn(cmd: string, args?: readonly string[]): boolean {
+  return cmd === '/bin/bash'
+    && args?.[0] === '-c'
+    && typeof args[1] === 'string'
+    && args[1].includes('pnpm install --frozen-lockfile');
+}
+
+function findPayloadSpawnCall() {
+  return mockedSpawn.mock.calls.find(
+    ([cmd, args]) => cmd !== 'git' && !isProvisionSpawn(cmd, args as readonly string[] | undefined),
+  );
+}
+
 /**
  * Sets up mockedSpawn to handle both git commands and task commands.
  *
@@ -109,9 +122,11 @@ function createMockProcess(): ChildProcess & EventEmitter {
  */
 function setupSpawnMock(): {
   gitProcesses: Array<ChildProcess & EventEmitter>;
+  provisionProcesses: Array<ChildProcess & EventEmitter>;
   taskProcess: ChildProcess & EventEmitter;
 } {
   const gitProcesses: Array<ChildProcess & EventEmitter> = [];
+  const provisionProcesses: Array<ChildProcess & EventEmitter> = [];
   const taskProcess = createMockProcess();
   let taskProcessReturned = false;
 
@@ -155,6 +170,15 @@ function setupSpawnMock(): {
       return gitProc as any;
     }
 
+    if (isProvisionSpawn(cmd, args)) {
+      const provisionProc = createMockProcess();
+      provisionProcesses.push(provisionProc);
+      Promise.resolve().then(() => {
+        provisionProc.emit('close', 0, null);
+      });
+      return provisionProc as any;
+    }
+
     // For non-git commands (task execution), return the task process
     if (!taskProcessReturned) {
       taskProcessReturned = true;
@@ -166,7 +190,7 @@ function setupSpawnMock(): {
     return extra as any;
   });
 
-  return { gitProcesses, taskProcess };
+  return { gitProcesses, provisionProcesses, taskProcess };
 }
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 500): Promise<void> {
@@ -308,8 +332,8 @@ describe('WorktreeExecutor', () => {
     const request = makeRequest({ inputs: { command: 'make test' } });
     await executor.start(request);
 
-    // Find the task spawn call (non-git)
-    const taskCall = mockedSpawn.mock.calls.find(([cmd]) => cmd !== 'git');
+    // Find the payload spawn call, excluding the bootstrap provision step.
+    const taskCall = findPayloadSpawnCall();
     expect(taskCall).toBeDefined();
 
     const options = taskCall![2] as { cwd: string };
@@ -321,19 +345,21 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
-  it('does not run implicit provisioning before spawning the task process', async () => {
+  it('runs managed pnpm provisioning before spawning the task process', async () => {
     const { taskProcess } = setupSpawnMock();
 
     const request = makeRequest();
     await executor.start(request);
 
     const bootstrapCall = mockedSpawn.mock.calls.find(
-      ([cmd, args]) => cmd === '/bin/bash' && (args as string[])?.[1]?.includes('pnpm install'),
+      ([cmd, args]) => isProvisionSpawn(cmd, args as readonly string[] | undefined),
     );
-    expect(bootstrapCall).toBeUndefined();
-    const taskCall = mockedSpawn.mock.calls.find(([cmd]) => cmd !== 'git');
+    expect(bootstrapCall).toBeDefined();
+    const taskCall = findPayloadSpawnCall();
     expect(taskCall).toBeDefined();
-
+    expect(mockedSpawn.mock.calls.indexOf(bootstrapCall!)).toBeLessThan(
+      mockedSpawn.mock.calls.indexOf(taskCall!),
+    );
 
 
     taskProcess.emit('close', 0, null);
@@ -426,6 +452,14 @@ describe('WorktreeExecutor', () => {
           gitProc.emit('close', 0, null);
         });
         return gitProc as any;
+      }
+
+      if (isProvisionSpawn(cmd, args)) {
+        const provisionProc = createMockProcess();
+        Promise.resolve().then(() => {
+          provisionProc.emit('close', 0, null);
+        });
+        return provisionProc as any;
       }
 
       const tp = createMockProcess();
@@ -871,7 +905,7 @@ describe('WorktreeExecutor', () => {
       const handle = await claudeExecutor.start(request);
 
       // Verify the command is the claude command, not /bin/bash echo
-      const taskCall = mockedSpawn.mock.calls.find(([cmd]) => cmd !== 'git');
+      const taskCall = findPayloadSpawnCall();
       expect(taskCall).toBeDefined();
       expect(taskCall![0]).toBe('/bin/echo');
 
@@ -910,7 +944,7 @@ describe('WorktreeExecutor', () => {
       });
       await claudeExecutor.start(request);
 
-      const taskCall = mockedSpawn.mock.calls.find(([cmd]) => cmd !== 'git');
+      const taskCall = findPayloadSpawnCall();
       const args = taskCall![1] as string[];
       const promptArg = args[args.indexOf('-p') + 1];
       expect(promptArg).toContain('Upstream task: dep-1');
@@ -1037,9 +1071,7 @@ describe('WorktreeExecutor', () => {
       });
       await claudeExecutor.start(request);
 
-      const taskCall = mockedSpawn.mock.calls.find(
-        (call) => call[0] !== 'git',
-      );
+      const taskCall = findPayloadSpawnCall();
       const options = taskCall![2] as { stdio: any[] };
       expect(options.stdio[0]).toBe('ignore');
 
