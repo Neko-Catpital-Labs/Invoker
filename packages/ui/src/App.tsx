@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -125,6 +126,13 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+function appendBoundedTerminalOutputSnapshot(previousSnapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${previousSnapshot ?? ''}${chunk}`;
+  if (nextSnapshot.length <= PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS) return nextSnapshot;
+  return nextSnapshot.slice(nextSnapshot.length - PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS);
+}
+
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
@@ -1121,6 +1129,40 @@ export function App() {
             : session
         )),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || !event.data) return;
+
+      const eventPlanningSessionId = typeof event.planningSessionId === 'string' && event.planningSessionId.length > 0
+        ? event.planningSessionId
+        : null;
+
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const terminalSession = session.terminalSession;
+          if (!terminalSession) return session;
+          const matches = eventPlanningSessionId
+            ? session.id === eventPlanningSessionId || terminalSession.planningSessionId === eventPlanningSessionId
+            : terminalSession.sessionId === event.sessionId;
+          if (!matches) return session;
+          changed = true;
+          return {
+            ...session,
+            terminalSession: {
+              ...terminalSession,
+              kind: 'planning' as const,
+              planningSessionId: eventPlanningSessionId ?? terminalSession.planningSessionId,
+              outputSnapshot: appendBoundedTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data),
+            },
+          };
+        });
+        return changed ? next : prev;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
