@@ -248,6 +248,7 @@ function relativePlanningUpdatedAt(value: string): string {
 }
 const PLANNING_TYPING_LAG_METRIC = 'planning_typing_lag_baseline';
 const PLANNING_TYPING_SCENARIO = 'many-chats-many-messages-typing';
+const NO_COMPLETE_PLAN_DRAFT_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 interface PlanningTypingTelemetryState {
   tasks: Map<string, TaskState>;
@@ -859,6 +860,7 @@ export function App() {
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
+  const activePlanningDraftReady = draftPlanAvailable || activePlanningSession.status === 'draft_ready';
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
   const activePlanningSessionBusy = activePlanningSession.busy;
@@ -2639,6 +2641,11 @@ export function App() {
     }
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
+      if (!activePlanningDraftReady) {
+        setPlanningSubmitError({ title: 'Plan could not be submitted', message: NO_COMPLETE_PLAN_DRAFT_ERROR });
+        appendTerminalLine(`Plan could not be submitted:\n${NO_COMPLETE_PLAN_DRAFT_ERROR}`, 'system', 'error');
+        return;
+      }
       await handlePlanningSubmitDraft();
       return;
     }
@@ -2711,6 +2718,7 @@ export function App() {
   }, [
     activePlanningSessionBusy,
     activePlanningSessionId,
+    activePlanningDraftReady,
     activePlanningReadOnly,
     appendTerminalLine,
     clearPlanningStreamForSessionIds,
