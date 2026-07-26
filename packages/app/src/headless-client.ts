@@ -13,6 +13,7 @@ import {
 
 import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
+import { isHeadlessHelpCommand, isRemovedHeadlessCommandAlias } from './headless-command-registry.js';
 import {
   resolveDelegationTimeoutMs,
   tryDelegateExec,
@@ -43,6 +44,7 @@ import {
   tryAcknowledgeNoTrackTaskMutationWithoutDb,
   tryAcknowledgeNoTrackTaskMutationWithoutOwner,
 } from './headless-no-track-fallback.js';
+import { printHeadlessUsage } from './headless-usage.js';
 
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
@@ -673,6 +675,16 @@ export async function runHeadlessClientCommand(
   const { args, waitForApproval, noTrack } = parseArgs(argv);
   const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1';
   const internalOwnerServe = args[0] === 'owner-serve';
+  const command = args[0];
+
+  if (isHeadlessHelpCommand(command)) {
+    printHeadlessUsage();
+    return 0;
+  }
+
+  if (isRemovedHeadlessCommandAlias(command)) {
+    throw new Error(`Unknown command: ${command}. Run with --help for usage.`);
+  }
 
   if (!internalOwnerServe && await delegateWorkerControl(args, deps.messageBus, invokerConfig, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
