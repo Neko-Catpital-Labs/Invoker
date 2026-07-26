@@ -457,7 +457,7 @@ Failing checks
     def test_plan_stack_actions_stop_retrying_after_repair_invalid(self):
         ledger = self.ledger()
         ledger.record("repair-invalid", 2606, HEAD, "PR Body", 1, meta={"errors": ["human stack split required"]})
-        stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
+        stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types", "failure")}),))
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual(actions, ())
     def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):

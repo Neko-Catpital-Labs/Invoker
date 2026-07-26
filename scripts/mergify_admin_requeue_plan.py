@@ -397,10 +397,16 @@ def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
     return any(blocker.kind == "pending_check" or blocker.kind in HUMAN_BLOCKER_KINDS for blocker in facts.all_blockers)
 
 
+def _has_human_decision_blocker(blockers: Collection[Blocker]) -> bool:
+    return any(blocker.kind == "human_decision" for blocker in blockers)
+
+
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
+            continue
+        if _has_human_decision_blocker(facts.blockers_by_pr[pr.number]):
             continue
         actions = mergify_failed_check_actions(pr, ledger, facts.suppressed_failed_checks_by_pr.get(pr.number, ()))
         if actions:
@@ -410,6 +416,8 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _has_human_decision_blocker(facts.blockers_by_pr[pr.number]):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
