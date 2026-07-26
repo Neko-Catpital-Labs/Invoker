@@ -43,6 +43,14 @@ export interface WorkRequestInputs {
   /** Branch names from completed upstream dependencies to merge into the worktree. */
   upstreamBranches?: string[];
   /**
+   * The direct dependency branch/commit used as the starting point for the new
+   * task branch before any remaining upstream merges.
+   */
+  upstreamBase?: {
+    branch: string;
+    commitHash: string;
+  };
+  /**
    * Visible lifecycle tag (e.g. `g0.t1.aabc12345`) embedded in the branch name
    * to make every dispatch unique-by-construction across recreates and retries.
    * Replaces the legacy `salt` field that mixed lifecycle context into the
