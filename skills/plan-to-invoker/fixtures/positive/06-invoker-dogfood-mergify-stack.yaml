@@ -1,4 +1,4 @@
-# Invoker-on-Invoker dogfood example with explicit Mergify Stacks publication.
+# Invoker-on-Invoker dogfood example with separate Mergify Stacks publication.
 # Source: examples.md Section 7
 
 name: "Dogfood Invoker CI docs update"
@@ -6,9 +6,12 @@ description: |
   Updates Invoker's own contributor guidance for merge automation.
 
   This plan still uses the normal Invoker PR gate shape: `onFinish: pull_request`
-  with `mergeMode: external_review`. Because the target repo is Invoker itself, the
-  branch publication workflow after the commits are ready should use
-  `mergify stack push` so stacked PRs stay synchronized.
+  with `mergeMode: external_review`. Plain approval only hands off completed
+  work to the review boundary.
+
+  Because the target repo is Invoker itself, later GitHub PR publication is a
+  separate explicit action after the commits are ready: use `mergify stack push`
+  so stacked PRs stay synchronized.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: git@github.com:EdbertChan/Invoker.git
@@ -23,8 +26,10 @@ tasks:
       repo-specific dogfood rule:
 
       1. When the target repo is Invoker itself, keep `mergeMode: external_review`
-         and publish/update the resulting commit stack with `mergify stack push`.
-      2. When the target repo is an external repo, keep normal PR flow unless
+         as the plain approval boundary.
+      2. Publish/update the resulting Invoker commit stack with a separate
+         explicit `mergify stack push` action after the commits are ready.
+      3. When the target repo is an external repo, keep normal PR flow unless
          that repo independently uses Mergify Stacks.
 
       Acceptance criteria:
@@ -36,3 +41,8 @@ tasks:
     description: "Run the plan-to-invoker fixture tests"
     command: "bash skills/plan-to-invoker/scripts/test-fixtures.sh"
     dependencies: [update-dogfood-guidance]
+
+  - id: publish-invoker-pr-stack
+    description: "Publish the ready Invoker commit stack with Mergify Stacks"
+    command: "mergify stack push"
+    dependencies: [verify-skill-fixtures]
