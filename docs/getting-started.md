@@ -172,6 +172,8 @@ Minimal example:
 ```
 Invoker does not run repo bootstrap automatically on managed SSH checkouts. If a repo needs setup such as `pnpm install` or `flutter pub get`, make the task command run that repo-owned step explicitly.
 
+SSH task payloads and remote auto-fix/conflict scripts source `<remoteInvokerHome>/env.sh` directly under non-login `bash -s`; they do **not** rely on user dotfiles at runtime. `scripts/provision-ssh-worker.sh` still installs the same env hook into `.bash_profile`, `.bash_login`, `.profile`, and `.bashrc` so interactive shells pick up the worker PATH too.
+
 `autoFixRetries` is a finite per-task cap. `3` means the worker keeps consumed attempts in process memory and can submit at most three auto-fix attempts for the same failed task lineage; `0` disables auto-fix workers.
 
 More examples: [invoker-config-example.json](invoker-config-example.json), [remote-ssh-targets.md](remote-ssh-targets.md), [docker-executor.md](docker-executor.md).
