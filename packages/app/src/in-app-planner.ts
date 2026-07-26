@@ -39,7 +39,6 @@ import {
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
-import { selectHarnessSessionDriver } from '@invoker/surfaces';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
@@ -114,6 +113,10 @@ interface PlannerSurfacesModule {
   DEFAULT_HARNESS_PRESET: string;
   PlanConversation: PlanConversationConstructor;
   extractYamlPlan: (output: string) => string | null;
+  selectHarnessSessionDriver: (
+    preset: HarnessPreset,
+    deps: Pick<InAppPlannerDeps, 'executionAgentRegistry' | 'planningCommandBuilder'>,
+  ) => PlanConversationConfig['harnessSessionDriver'];
 }
 
 async function loadPlannerSurfaces(): Promise<PlannerSurfacesModule> {
@@ -339,12 +342,13 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
   return isDraftingAuthorized(message, normalizedMessages);
 }
 
-function planConversationConfig(
+async function planConversationConfig(
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'onRawPlannerOutput'>,
   threadTs: string,
   options: { conversationalPlanning?: boolean } = {},
-): PlanConversationConfig {
+): Promise<PlanConversationConfig> {
+  const { selectHarnessSessionDriver } = await loadPlannerSurfaces();
   return {
     threadTs,
     conversationRepo: deps.conversationRepo,
@@ -397,7 +401,7 @@ async function createSession(
     presetKey,
     status: 'still_discussing',
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id, { conversationalPlanning: true })),
+    conversation: new PlanConversation(await planConversationConfig(preset, deps, id, { conversationalPlanning: true })),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
@@ -446,7 +450,7 @@ export async function planFromGoal(
 
   try {
     const { PlanConversation, extractYamlPlan } = await loadPlannerSurfaces();
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID()));
+    const conversation = new PlanConversation(await planConversationConfig(preset, deps, randomUUID()));
     const plannerOutput = await conversation.sendMessage(goal);
     const planText = extractYamlPlan(plannerOutput);
     if (!planText) {
@@ -775,7 +779,7 @@ export async function restorePlanningChatSessions(
     const preset = presets[record.presetKey];
     if (!preset) continue;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id));
+    const conversation = new PlanConversation(await planConversationConfig(preset, deps, record.id));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
