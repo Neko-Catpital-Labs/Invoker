@@ -273,12 +273,12 @@ class InMemoryBus implements OrchestratorMessageBus {
   }
 }
 
-const consoleLogger: Logger = {
-  debug: (msg, fields) => console.debug(msg, fields),
-  info: (msg, fields) => console.log(msg, fields),
-  warn: (msg, fields) => console.warn(msg, fields),
-  error: (msg, fields) => console.error(msg, fields),
-  child: () => consoleLogger,
+const testLogger: Logger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  child: () => testLogger,
 };
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -316,7 +316,7 @@ describe('Orchestrator', () => {
       persistence,
       messageBus: bus,
       maxConcurrency: 3,
-      logger: consoleLogger,
+      logger: testLogger,
       resolveRepoDefaultBranch: () => repoDefaultBranch,
     });
   });
@@ -1802,7 +1802,7 @@ describe('Orchestrator', () => {
         persistence,
         messageBus: bus,
         maxConcurrency: 3,
-        logger: consoleLogger,
+        logger: testLogger,
         resolveRepoDefaultBranch: () => {
           throw new Error('repo default unavailable');
         },
@@ -2222,7 +2222,7 @@ describe('Orchestrator', () => {
       const launchingOrchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
-        logger: consoleLogger,
+        logger: testLogger,
         maxConcurrency: 3,
         deferRunningUntilLaunch: true,
       });
@@ -2365,7 +2365,7 @@ describe('Orchestrator', () => {
       const parkOrchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
-        logger: consoleLogger,
+        logger: testLogger,
         maxConcurrency: 3,
         deferRunningUntilLaunch: true,
         launchDeferralBackoffMs: 60_000,
@@ -2400,7 +2400,7 @@ describe('Orchestrator', () => {
       const parkOrchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
-        logger: consoleLogger,
+        logger: testLogger,
         maxConcurrency: 3,
         deferRunningUntilLaunch: true,
         launchDeferralBackoffMs: 60_000,
@@ -2430,7 +2430,7 @@ describe('Orchestrator', () => {
       const parkOrchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
-        logger: consoleLogger,
+        logger: testLogger,
         maxConcurrency: 3,
         launchDeferralBackoffMs: 600_000,
       });
@@ -2464,7 +2464,7 @@ describe('Orchestrator', () => {
       const parkOrchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
-        logger: consoleLogger,
+        logger: testLogger,
         maxConcurrency: 3,
         launchDeferralBackoffMs: 600_000,
       });
@@ -2497,7 +2497,7 @@ describe('Orchestrator', () => {
       const parkOrchestrator = new Orchestrator({
         persistence,
         messageBus: bus,
-        logger: consoleLogger,
+        logger: testLogger,
         maxConcurrency: 3,
         deferRunningUntilLaunch: true,
         launchDeferralBackoffMs: 0,
