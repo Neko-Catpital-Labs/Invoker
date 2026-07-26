@@ -158,7 +158,10 @@ import {
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
 import { execSync } from 'node:child_process';
-import { resolveTaskTerminalSpec } from './open-terminal-for-task.js';
+import {
+  resolveTaskTerminalSpec,
+  shouldAttachEmbeddedTerminalToLiveExecutor,
+} from './open-terminal-for-task.js';
 import {
   createBashTerminalBackend,
   createPtyTerminalBackend,
@@ -2966,12 +2969,18 @@ function createEmbeddedTerminalBackendFromConfig(
       if (!resolved.ok) {
         return { opened: false, reason: resolved.reason };
       }
+      const attachToLiveExecutor = shouldAttachEmbeddedTerminalToLiveExecutor(
+        resolved.meta,
+        liveHandle,
+      );
       try {
         const session = embeddedTerminalManager.openOrReuse({
           taskId,
           spec: resolved.spec,
           cwd: resolved.cwd,
-          attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
+          attach: attachToLiveExecutor && liveHandle
+            ? { handle: liveHandle.handle, executor: liveHandle.executor }
+            : undefined,
         });
         return { opened: true, session };
       } catch (err) {

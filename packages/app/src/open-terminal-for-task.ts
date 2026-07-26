@@ -13,6 +13,7 @@ import {
   WorktreeExecutor,
   SshExecutor,
   type Executor,
+  type ExecutorHandle,
   type ExecutorRegistry,
   type AgentRegistry,
   type PersistedTaskMeta,
@@ -142,6 +143,13 @@ export type ResolveTaskTerminalSpecResult =
       executor: Executor;
     }
   | { ok: false; reason: string };
+
+export function shouldAttachEmbeddedTerminalToLiveExecutor(
+  meta: Pick<PersistedTaskMeta, 'agentSessionId'>,
+  liveHandle: { handle: Pick<ExecutorHandle, 'agentSessionId'>; executor: Pick<Executor, 'type'> } | undefined,
+): boolean {
+  return Boolean(liveHandle && (liveHandle.handle.agentSessionId || meta.agentSessionId));
+}
 
 export interface ResolveTaskTerminalSpecOptions {
   taskId: string;
