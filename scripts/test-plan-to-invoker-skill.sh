@@ -47,6 +47,26 @@ must_contain_count() {
   fi
 }
 
+must_appear_before() {
+  local file="$1"
+  local earlier="$2"
+  local later="$3"
+  local hint="$4"
+  local earlier_line
+  local later_line
+  earlier_line="$(grep -nF -- "$earlier" "$file" | sed -n '1s/:.*//p' || true)"
+  later_line="$(grep -nF -- "$later" "$file" | sed -n '1s/:.*//p' || true)"
+  if [[ -z "$earlier_line" ]]; then
+    fail "$hint — missing earlier marker in $file: $earlier"
+  fi
+  if [[ -z "$later_line" ]]; then
+    fail "$hint — missing later marker in $file: $later"
+  fi
+  if [[ "$earlier_line" -ge "$later_line" ]]; then
+    fail "$hint — expected earlier marker before later marker in $file: $earlier"
+  fi
+}
+
 must_not_exist() {
   local path="$1"
   local hint="$2"
@@ -72,6 +92,7 @@ must_not_exist "$REPO_ROOT/.cursor/commands/plan-to-invoker.md" "legacy Cursor h
 [[ -f "$TUTORIAL" ]] || fail "expected $TUTORIAL"
 must_contain "$CANONICAL_COMMAND" "description: Plan a change and submit it through Invoker" "Invoker handoff command must keep host command description frontmatter"
 must_contain "$CANONICAL_COMMAND" 'argument-hint: "help me plan <change>"' "Invoker handoff command must keep host argument hint frontmatter"
+must_contain "$CANONICAL_COMMAND" "Use this host's native planning mode when the host supports entering it from this command. If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved." "Invoker handoff command must stay scoped to handoff planning before approval"
 must_contain "$CANONICAL_COMMAND" "invoker_validate_plan" "Invoker handoff command must validate through MCP"
 must_contain "$CANONICAL_COMMAND" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
 must_contain "$CANONICAL_COMMAND" "mode \`live\`" "Invoker handoff command must submit in live mode"
@@ -160,6 +181,7 @@ must_contain "$SKILL_MD" "For benchmark/direct-output prompts with" "SKILL front
 must_contain "$SKILL_MD" "\"invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the installed handoff command"
 must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the slash handoff command"
 must_contain "$SKILL_MD" "## Harness handoff mode" "SKILL must document harness handoff mode"
+must_contain "$SKILL_MD" 'Use this mode when invoked by the installed command or MCP prompt. Do not use this mode from a Slack `plan:` or agent thread. The orchestrator owns Slack plan submission, so in those threads do not invoke CLI or MCP handoff tools yourself.' "SKILL handoff mode must stay scoped to command/MCP handoff only"
 must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt." "SKILL must define when handoff mode applies"
 must_contain "$SKILL_MD" "Do not use this mode from a Slack \`plan:\` or agent thread." "SKILL must defer Slack threads to the orchestrator"
 must_contain "$SKILL_MD" "do not invoke CLI or MCP handoff tools yourself." "SKILL must forbid Slack-thread CLI and MCP submission"
@@ -193,6 +215,12 @@ must_contain "$SKILL_MD" "generate a command-only verification plan" "SKILL must
 must_contain "$SKILL_MD" "Do not generate prompt tasks, nested \`steps:\`, or implementation tasks that would call an agent or autofix." "SKILL must prevent autofix-triggering benchmark tasks"
 must_contain "$SKILL_MD" "deterministic local smoke commands" "SKILL must require local benchmark commands"
 must_contain "$SKILL_MD" "https://github.com/Neko-Catpital-Labs/Invoker.git" "SKILL must provide a non-probing Invoker repoUrl fallback"
+must_contain "$SKILL_MD" 'after the work is ready: keep `onFinish: pull_request` + `mergeMode: external_review`, then publish/update the resulting commit stack with `mergify stack push`.' "SKILL must keep Invoker PR publication as a later dogfooding step"
+must_contain "$SKILL_MD" "If the target repo is Invoker itself, finish the PR publication step with \`mergify stack push\` from the working branch after the stack of commits is ready." "SKILL standalone submit path must keep PR publication after the commit stack is ready"
+must_contain "$SKILL_MD" "If the target repo is Invoker itself, publish/update the resulting PR stack with \`mergify stack push\` after submission-side commits are ready." "SKILL stacked submit path must keep PR publication after submission-side commits are ready"
+must_contain "$SKILL_MD" "For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with \`mergify stack push\` once the chain's commits are prepared." "SKILL chain submit path must keep PR publication after chain commits are prepared"
+must_contain "$SKILL_MD" "the branch/PR publication layer should use Mergify Stacks (\`mergify stack push\`) after the commits are ready. Keep external target repos on their own normal PR workflow unless they independently opt into Mergify." "SKILL hardening workflow guidance must keep PR publication separate from handoff"
+must_appear_before "$SKILL_MD" "## Harness handoff mode" "**Invoker dogfooding rule:**" "SKILL must keep handoff-only guidance separate from later PR-publication guidance"
 
 
 # Claude initial repo context — must block first-turn benchmark probes before skill listing is loaded.
