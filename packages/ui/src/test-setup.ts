@@ -16,7 +16,33 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !=
   Element.prototype.scrollIntoView = function noopScrollIntoView(): void {};
 }
 
-if (typeof window !== 'undefined' && !window.localStorage) {
+if (typeof HTMLCanvasElement !== 'undefined') {
+  const canvasContext = {
+    fillStyle: '#000000',
+    globalCompositeOperation: 'source-over',
+    clearRect: () => {},
+    createLinearGradient: () => ({
+      addColorStop: () => {},
+    }),
+    fillRect: () => {},
+    getImageData: () => ({
+      data: new Uint8ClampedArray([0, 0, 0, 255]),
+    }),
+    measureText: (text: string) => ({
+      width: text.length * 8,
+    }),
+  } as unknown as CanvasRenderingContext2D;
+
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    configurable: true,
+    value: function getContext(contextId: string): RenderingContext | null {
+      return contextId === '2d' ? canvasContext : null;
+    },
+  });
+}
+
+if (typeof window !== 'undefined') {
+  const localStorageDescriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
   const store: Record<string, string> = {};
   const storage: Storage = {
     getItem: (key) => (key in store ? store[key] : null),
@@ -34,10 +60,12 @@ if (typeof window !== 'undefined' && !window.localStorage) {
       return Object.keys(store).length;
     },
   };
-  Object.defineProperty(window, 'localStorage', {
-    configurable: true,
-    value: storage,
-  });
+  if (!localStorageDescriptor || typeof localStorageDescriptor.get === 'function' || !localStorageDescriptor.value) {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: storage,
+    });
+  }
 }
 
 // jsdom defaults to 1024px; pin a wide viewport so App auto-collapse matches desktop
