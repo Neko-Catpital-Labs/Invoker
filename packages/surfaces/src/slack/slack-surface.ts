@@ -199,6 +199,32 @@ function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
 }
 
+/**
+ * Whether a URL found in message text may be treated as a repository selector.
+ * `git@` and `ssh://` clone URLs pass unchanged. `http(s)` URLs must be a
+ * GitHub repo root (`/owner/repo`, optional trailing slash or `.git`) or any
+ * other host whose pathname ends in `.git`. Userinfo, query, hash, and deep
+ * links (`/pull/123`, `/tree/...`, …) are rejected so generic website links
+ * never bind as a repo.
+ */
+function isRepoCandidateUrl(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim();
+  if (/^(?:ssh:\/\/|git@)/i.test(trimmed)) return true;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return false;
+  }
+  if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) return false;
+  if (url.username || url.password) return false;
+  if (url.search || url.hash) return false;
+  if (url.hostname.toLowerCase() === 'github.com') {
+    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname);
+  }
+  return /\.git$/i.test(url.pathname);
+}
+
 export function extractRepoUrlFromMessage(text: string): string | undefined {
   let start = 0;
   while (start < text.length) {
@@ -218,26 +244,7 @@ export function extractRepoUrlFromMessage(text: string): string | undefined {
     while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
       candidate = candidate.slice(0, -1);
     }
-    let url: URL;
-    try {
-      url = new URL(candidate);
-    } catch {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.username || url.password) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.search || url.hash) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) {
+    if (!isRepoCandidateUrl(candidate)) {
       start = candidateEnd + 1;
       continue;
     }
@@ -344,16 +351,6 @@ export function parsePlanningRequest(
   };
 }
 
-function isRepoRootUrl(rawUrl: string): boolean {
-  if (/^(ssh:\/\/|git@)/.test(rawUrl)) return true;
-  try {
-    const u = new URL(rawUrl);
-    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(u.pathname);
-  } catch {
-    return false;
-  }
-}
-
 function extractRepositoryUrls(text: string): string[] {
   const slackLinks = [...text.matchAll(/<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>/gi)];
   const withoutSlackLinks = text.replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ');
@@ -363,7 +360,7 @@ function extractRepositoryUrls(text: string): string[] {
     ...withoutSlackLinks.matchAll(/\bssh:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bgit@[\w.-]+:[^\s<>]+/gi),
   ].map((match) => (match[1] ?? match[0]).replace(/[),.;]+$/, ''));
-  return [...new Set(candidates)].filter(isRepoRootUrl);
+  return [...new Set(candidates)].filter(isRepoCandidateUrl);
 }
 
 function repositoryIdentity(repoUrl: string): string {
