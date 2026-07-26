@@ -1641,6 +1641,8 @@ function startHeadlessMode(): void {
             ok: true,
             ownerId: workflowMutationOwnerId,
             mode: 'standalone',
+            buildVersion,
+            buildSha,
           };
         });
         messageBus.onRequest('headless.query', async (req: unknown) =>
@@ -2677,6 +2679,8 @@ startMainProcessBootstrap({
         ok: true,
         ownerId: workflowMutationOwnerId,
         mode: 'gui',
+        buildVersion,
+        buildSha,
       }));
       messageBus.onRequest('headless.query', async (req: unknown) =>
         answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
