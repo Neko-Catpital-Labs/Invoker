@@ -73,12 +73,8 @@ describe('plan draft file - activation side', () => {
 
     expect(path).not.toBeNull();
     expect(prompt).toContain(String(path));
-    // The delivery rule is hoisted to the top, before the YAML schema examples.
-    const deliveryIndex = prompt.indexOf('HOW TO DELIVER THE PLAN');
-    const firstSchemaIndex = prompt.indexOf('```yaml');
-    expect(deliveryIndex).toBeGreaterThanOrEqual(0);
-    expect(deliveryIndex).toBeLessThan(firstSchemaIndex);
-    expect(prompt).toContain('NEVER paste the YAML plan into your chat reply');
+    expect(prompt).toContain(`write the COMPLETE YAML to \`${String(path)}\``);
+    expect(prompt).toContain('Then reply in chat with only a one-or-two-sentence summary. Never paste the YAML into chat.');
     expect(prompt).not.toContain('output the plan inside a ```yaml code block');
   });
 
@@ -87,7 +83,7 @@ describe('plan draft file - activation side', () => {
     const prompt = conversation.buildCursorPrompt();
 
     expect(conversation.planDraftFilePath()).toBeNull();
-    expect(prompt).toContain('output the plan inside a ```yaml code block');
+    expect(prompt).toContain('When the final YAML plan is ready, output the COMPLETE YAML inside a ```yaml code block.');
   });
 
   it('keeps the last valid plan after a later turn clears its draft file', async () => {
@@ -117,17 +113,15 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
-  it('requires the exact submit line as a standalone post-plan instruction', () => {
+  it('routes approval through the review flow instead of a submit reply', () => {
     const conversation = new PlanConversation({});
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
 
     const prompt = conversation.buildCursorPrompt();
-    const submitLine = 'Reply `submit` to submit it.';
-    const lines = prompt.split('\n');
 
-    expect(lines.filter((line) => line === submitLine)).toHaveLength(1);
-    expect(prompt.match(/Reply `submit` to submit it\./g)).toHaveLength(1);
-    expect(prompt).toContain('Do NOT place that line inline in a sentence.');
+    expect(prompt).not.toContain('Reply `submit` to submit it.');
+    expect(prompt).toContain('wait for approval before any submission step');
+    expect(prompt).toContain('Do not tell the user to reply `submit`');
   });
 
   it('exposes the latest draft for the submit handler without marking it submitted', async () => {
@@ -172,8 +166,8 @@ describe('plan draft-file activation prompt policy', () => {
     expect(prompt).toContain('Generate a YAML task plan');
     expect(prompt).toContain('repoUrl: "git@github.com:test/repo.git"');
     expect(prompt).toContain('name: "Plan Name"');
-    expect(prompt).toContain('When ready, output the plan inside a ```yaml code block');
-    expect(prompt).toContain('After generating a plan, include a short post-plan summary');
+    expect(prompt).toContain('When the final YAML plan is ready, output the COMPLETE YAML inside a ```yaml code block.');
+    expect(prompt).toContain('Slack orchestrator reads that exact YAML');
   });
 
   it('keeps YAML and draft-file mechanics unavailable before conversational authorization', () => {
@@ -202,8 +196,8 @@ describe('plan draft-file activation prompt policy', () => {
     expect(prompt).toContain('The user has explicitly approved drafting');
     expect(prompt).toContain('baseBranch: develop');
     expect(prompt).toContain('name: "Plan Name"');
-    expect(prompt).toContain('When ready, output the plan inside a ```yaml code block');
-    expect(prompt).toContain('After generating a plan, include a short post-plan summary');
+    expect(prompt).toContain('When the final YAML plan is ready, output the COMPLETE YAML inside a ```yaml code block.');
+    expect(prompt).toContain('Slack orchestrator reads that exact YAML');
     expect(prompt).toContain('Every implementation task MUST have a corresponding test task');
   });
 });
