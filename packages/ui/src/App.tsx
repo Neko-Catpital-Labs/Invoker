@@ -859,6 +859,7 @@ export function App() {
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
+  const activePlanningDraftReady = draftPlanAvailable || activePlanningSession.status === 'draft_ready';
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
   const activePlanningSessionBusy = activePlanningSession.busy;
@@ -2639,6 +2640,12 @@ export function App() {
     }
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
+      if (!activePlanningDraftReady) {
+        const message = 'No draft plan is ready to submit.';
+        setPlanningSubmitError({ title: 'Plan could not be submitted', message });
+        appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
+        return;
+      }
       await handlePlanningSubmitDraft();
       return;
     }
@@ -2709,6 +2716,7 @@ export function App() {
       appendTerminalLine(message, 'system', 'error');
     }
   }, [
+    activePlanningDraftReady,
     activePlanningSessionBusy,
     activePlanningSessionId,
     activePlanningReadOnly,
