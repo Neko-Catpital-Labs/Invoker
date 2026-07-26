@@ -223,7 +223,7 @@ Failing checks
         self.assertEqual([(a.kind, a.pr_number) for a in actions], [("repair_check", 2605)])
         thread_stack = StackGroup("s", (pr(2604, head="stack/a", latest=mergify()), pr(2605, base="stack/a", threads=(ReviewThread("t1", False, ("alice",)),))))
         actions = plan_stack_actions(thread_stack, REQUIRED, self.ledger(), 1)
-        self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2605, "human-review-thread")])
+        self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2605, "unresolved human review thread t1")])
     def test_unaccepted_upper_failed_check_repairs_upper_before_bottom(self):
         failed = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
         stack = StackGroup(
@@ -301,7 +301,7 @@ Failing checks
     def test_human_review_thread_blocks(self):
         stack = StackGroup("s", (pr(2607, threads=(ReviewThread("t1", False, ("alice",)),), latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
-        self.assertEqual([(a.kind, a.detail) for a in actions], [("comment_blocked", "human-review-thread")])
+        self.assertEqual([(a.kind, a.detail) for a in actions], [("comment_blocked", "unresolved human review thread t1")])
 
     def test_bot_thread_repairs_then_resolves(self):
         stack = StackGroup("s", (pr(2608, threads=(ReviewThread("tbot", False, ("coderabbitai[bot]",)),), latest=mergify()),))
@@ -828,6 +828,31 @@ Failing checks
         self.assertEqual([comment["body"] for comment in fake.comments].count(f"Mergify repair stopped: {detail}"), 1)
         self.assertEqual(ledger.count("comment-blocked", 2647, HEAD, "no-current-bottom:exact"), 1)
 
+    def test_human_block_comment_records_once_then_waits(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+        ledger = self.ledger()
+        item = pr(5885, threads=(ReviewThread("PRRT_kwDOSFkSDM6T5EJA", False, ("reviewer",)),), latest=mergify())
+        stack = StackGroup("s", (item,))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 1)
+        self.assertEqual(
+            [(a.kind, a.key, a.detail) for a in actions],
+            [("comment_blocked", "PRRT_kwDOSFkSDM6T5EJA", "unresolved human review thread PRRT_kwDOSFkSDM6T5EJA")],
+        )
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "Neko-Catpital-Labs/Invoker")
+        executor.execute(actions[0], item, 1)
+        executor.execute(actions[0], item, 2)
+        self.assertEqual(len(fake.comments), 1)
+        self.assertIn("unresolved human review thread PRRT_kwDOSFkSDM6T5EJA", fake.comments[0][2])
+        self.assertEqual(ledger.count("comment-blocked", 5885, HEAD, "PRRT_kwDOSFkSDM6T5EJA"), 1)
+        self.assertEqual(plan_stack_actions(stack, REQUIRED, ledger, 3), ())
+
     def test_missing_admin_bypass_nudge_comments_once_without_label_edit(self):
         class FakeGh:
             def __init__(self):
@@ -918,7 +943,7 @@ The merge conditions cannot be satisfied due to failing checks
     def test_closed_pr_never_requeues_even_when_manually_requested(self):
         stack = StackGroup("s", (pr(2999, state="CLOSED", latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
-        self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2999, "closed")])
+        self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2999, "state=CLOSED")])
 
 
 if __name__ == "__main__":

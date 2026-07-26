@@ -518,7 +518,7 @@ def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attemp
     return None
 
 
-def plan_hard_blockers(facts: StackFacts) -> Action | None:
+def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
     for pr in facts.stack.prs:
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "pending_check":
@@ -526,7 +526,9 @@ def plan_hard_blockers(facts: StackFacts) -> Action | None:
             if blocker.kind == "human_decision":
                 return None
             if blocker.kind in HUMAN_BLOCKER_KINDS:
-                return Action("comment_blocked", pr.number, blocker.key, public_blocker_kind(blocker.kind))
+                if ledger.count("comment-blocked", pr.number, pr.head_ref_oid, blocker.key) > 0:
+                    return None
+                return Action("comment_blocked", pr.number, blocker.key, blocker.detail)
     return None
 
 
@@ -606,7 +608,7 @@ def plan_actions_from_facts(
     action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)
-    action = plan_hard_blockers(facts)
+    action = plan_hard_blockers(facts, ledger)
     if action is not None:
         return (action,)
     action = plan_merge_hold_cleanup(facts, ledger)
