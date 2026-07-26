@@ -44,6 +44,48 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
   };
 }
 
+function fakes() {
+  return {
+    orchestrator: {
+      getQueueStatus: () => ({ q: 1 }),
+      getWorkflowStatus: () => ({ w: 1 }),
+      getAllTasks: () => [{ id: 't' }],
+      syncAllFromDb: vi.fn(),
+      syncFromDb: vi.fn(),
+    },
+    persistence: {
+      listWorkflows: () => [{ id: 'wf' }],
+      loadWorkflow: (id: string) => (id === 'missing' ? undefined : { id, name: 'n' }),
+      loadTasks: () => [{ id: 't', config: {} }],
+      loadTask: (id: string) => ({ id }),
+      getEvents: () => [{ e: 1 }],
+      getTaskOutput: () => 'out',
+      getOutputChunks: () => [{ c: 1 }],
+      getOutputTail: () => ({ t: 1 }),
+      replayOutputFrom: (id: string, off: number) => [{ id, off }],
+      loadAllCompletedTasks: () => [{ id: 'done' }],
+      loadAllHistoryTasks: () => [{ id: 'hist-1', workflowName: 'Plan', lastEventAt: null, eventCount: 0 }],
+      listWorkerActions: vi.fn(() => []),
+    },
+  };
+}
+
+function build(orch: Record<string, unknown> = {}, persist: Record<string, unknown> = {}) {
+  const f = fakes();
+  return buildOwnerReadQueryHandlers({
+    ownerModeLabel: 'gui',
+    getUiPerfStats: () => ({}),
+    resetUiPerfStats: () => {},
+    getStreamSequence: () => 5,
+    getWorkerStatus: () => ({ generatedAt: 'now', workers: [] }),
+    getWorkers: () => ({ generatedAt: 'workers-now', workers: [] }),
+    resolveInvokerHomeRoot: () => '/home',
+    orchestrator: { ...f.orchestrator, ...orch } as never,
+    persistence: { ...f.persistence, ...persist } as never,
+    getActionGraphSnapshot: () => ({ ag: 1 }),
+  });
+}
+
 describe('answerOwnerReadQuery', () => {
   it('ui-perf merges the owner label with the stats; reset only when asked', () => {
     const h = makeHandlers({ ownerModeLabel: 'standalone' });
@@ -76,12 +118,36 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'action-graph' }, h)).toEqual({ nodes: [] });
   });
 
-  it('refreshes the snapshot only for task-graph-refresh', () => {
-    const h = makeHandlers();
-    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toMatchObject({ refreshed: false });
-    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toMatchObject({ refreshed: true });
-    expect(h.getTasksSnapshot).toHaveBeenNthCalledWith(1, { refresh: false });
-    expect(h.getTasksSnapshot).toHaveBeenNthCalledWith(2, { refresh: true });
+  it('syncs before reading both owner task snapshot entrypoints', () => {
+    const events: string[] = [];
+    const syncAllFromDb = vi.fn(() => { events.push('sync'); });
+    const getAllTasks = vi.fn(() => {
+      events.push('tasks');
+      return [{ id: 'fresh-task' }];
+    });
+    const listWorkflows = vi.fn(() => {
+      events.push('workflows');
+      return [{ id: 'fresh-workflow' }];
+    });
+    const h = build({ syncAllFromDb, getAllTasks }, { listWorkflows });
+
+    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toEqual({
+      tasks: [{ id: 'fresh-task' }],
+      workflows: [{ id: 'fresh-workflow' }],
+      streamSequence: 5,
+      invokerHomeRoot: '/home',
+    });
+    expect(events).toEqual(['sync', 'tasks', 'workflows']);
+
+    events.length = 0;
+    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toEqual({
+      tasks: [{ id: 'fresh-task' }],
+      workflows: [{ id: 'fresh-workflow' }],
+      streamSequence: 5,
+      invokerHomeRoot: '/home',
+    });
+    expect(events).toEqual(['sync', 'tasks', 'workflows']);
+    expect(syncAllFromDb).toHaveBeenCalledTimes(2);
   });
 
   it('wraps and routes the param-bearing read kinds', () => {
@@ -145,47 +211,6 @@ describe('answerOwnerReadQuery', () => {
 });
 
 describe('buildOwnerReadQueryHandlers', () => {
-  function fakes() {
-    return {
-      orchestrator: {
-        getQueueStatus: () => ({ q: 1 }),
-        getWorkflowStatus: () => ({ w: 1 }),
-        getAllTasks: () => [{ id: 't' }],
-        syncAllFromDb: vi.fn(),
-        syncFromDb: vi.fn(),
-      },
-      persistence: {
-        listWorkflows: () => [{ id: 'wf' }],
-        loadWorkflow: (id: string) => (id === 'missing' ? undefined : { id, name: 'n' }),
-        loadTasks: () => [{ id: 't', config: {} }],
-        loadTask: (id: string) => ({ id }),
-        getEvents: () => [{ e: 1 }],
-        getTaskOutput: () => 'out',
-        getOutputChunks: () => [{ c: 1 }],
-        getOutputTail: () => ({ t: 1 }),
-        replayOutputFrom: (id: string, off: number) => [{ id, off }],
-        loadAllCompletedTasks: () => [{ id: 'done' }],
-        loadAllHistoryTasks: () => [{ id: 'hist-1', workflowName: 'Plan', lastEventAt: null, eventCount: 0 }],
-        listWorkerActions: vi.fn(() => []),
-      },
-    };
-  }
-  function build(orch: Record<string, unknown> = {}, persist: Record<string, unknown> = {}) {
-    const f = fakes();
-    return buildOwnerReadQueryHandlers({
-      ownerModeLabel: 'gui',
-      getUiPerfStats: () => ({}),
-      resetUiPerfStats: () => {},
-      getStreamSequence: () => 5,
-      getWorkerStatus: () => ({ generatedAt: 'now', workers: [] }),
-      getWorkers: () => ({ generatedAt: 'workers-now', workers: [] }),
-      resolveInvokerHomeRoot: () => '/home',
-      orchestrator: { ...f.orchestrator, ...orch } as never,
-      persistence: { ...f.persistence, ...persist } as never,
-      getActionGraphSnapshot: () => ({ ag: 1 }),
-    });
-  }
-
   it('passes reads straight through to persistence', () => {
     const h = build();
     expect(h.listWorkflows()).toEqual([{ id: 'wf' }]);
@@ -218,17 +243,35 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(build().getReviewGate('missing')).toBeNull();
   });
 
-  it('getTasksSnapshot refreshes only when asked', () => {
-    const syncAllFromDb = vi.fn();
-    const h = build({ syncAllFromDb });
+  it('getTasksSnapshot syncs before every snapshot read', () => {
+    const events: string[] = [];
+    const syncAllFromDb = vi.fn(() => { events.push('sync'); });
+    const getAllTasks = vi.fn(() => {
+      events.push('tasks');
+      return [{ id: 't' }];
+    });
+    const listWorkflows = vi.fn(() => {
+      events.push('workflows');
+      return [{ id: 'wf' }];
+    });
+    const h = build({ syncAllFromDb, getAllTasks }, { listWorkflows });
+
     expect(h.getTasksSnapshot({ refresh: false })).toEqual({
       tasks: [{ id: 't' }],
       workflows: [{ id: 'wf' }],
       streamSequence: 5,
       invokerHomeRoot: '/home',
     });
-    expect(syncAllFromDb).not.toHaveBeenCalled();
-    h.getTasksSnapshot({ refresh: true });
-    expect(syncAllFromDb).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(['sync', 'tasks', 'workflows']);
+
+    events.length = 0;
+    expect(h.getTasksSnapshot({ refresh: true })).toEqual({
+      tasks: [{ id: 't' }],
+      workflows: [{ id: 'wf' }],
+      streamSequence: 5,
+      invokerHomeRoot: '/home',
+    });
+    expect(events).toEqual(['sync', 'tasks', 'workflows']);
+    expect(syncAllFromDb).toHaveBeenCalledTimes(2);
   });
 });
