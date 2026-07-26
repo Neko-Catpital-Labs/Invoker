@@ -6,6 +6,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { buildPortableBase64DecodeFunction } from './remote-shell-fragments.js';
 
 export interface SshRemoteErrorMetadata {
   exitCode?: number;
@@ -64,7 +65,7 @@ export function base64Encode(s: string): string {
 
 /**
  * Bash fragment to expand leading ~ in a variable after base64 decode.
- * After `WT=$(echo … | base64 -d)`, this ensures `cd "$WT"` works with tilde paths.
+ * After `WT=$(printf '%s' … | invoker_base64_decode)`, this ensures `cd "$WT"` works with tilde paths.
  *
  * NOTE: Do NOT use `case ~/*)` — bash tilde-expands case patterns, so `~/*` becomes
  * `/root/*` and never matches literal `~/.invoker/…`.
@@ -130,11 +131,12 @@ export function buildMirrorCloneScript(opts: GitMirrorCloneOpts): string {
   const homeB64 = base64Encode(invokerHome);
 
   return `set -euo pipefail
-REPO=$(echo ${repoB64} | base64 -d)
-BRANCH_REPO=$(echo ${branchRepoB64} | base64 -d)
-BASE=$(echo ${baseB64} | base64 -d)
+${buildPortableBase64DecodeFunction()}
+REPO=$(printf '%s' ${shellPosixSingleQuote(repoB64)} | invoker_base64_decode)
+BRANCH_REPO=$(printf '%s' ${shellPosixSingleQuote(branchRepoB64)} | invoker_base64_decode)
+BASE=$(printf '%s' ${shellPosixSingleQuote(baseB64)} | invoker_base64_decode)
 H="${repoHash}"
-INVOKER_HOME=$(echo ${homeB64} | base64 -d)
+INVOKER_HOME=$(printf '%s' ${shellPosixSingleQuote(homeB64)} | invoker_base64_decode)
 if [[ "$INVOKER_HOME" == '~' ]]; then
   INVOKER_HOME="$HOME"
 elif [[ "\${INVOKER_HOME:0:2}" == '~/' ]]; then
@@ -168,19 +170,19 @@ if [ "$BASE" = "HEAD" ] && [ -n "$ORIGIN_HEAD" ] && git -C "$CLONE" rev-parse --
 elif git -C "$CLONE" rev-parse --verify "origin/$BASE^{commit}" >/dev/null 2>&1; then
   RESOLVED_BASE="origin/$BASE"
 elif git -C "$CLONE" rev-parse --verify "$RESOLVED_BASE^{commit}" >/dev/null 2>&1; then
-  :
+  RESOLVED_BASE="$BASE"
 else
-  if [ -n "$ORIGIN_HEAD" ] && git -C "$CLONE" rev-parse --verify "$ORIGIN_HEAD^{commit}" >/dev/null 2>&1; then
-    RESOLVED_BASE="$ORIGIN_HEAD"
+  FALLBACK="\${ORIGIN_HEAD:-origin/master}"
+  if git -C "$CLONE" rev-parse --verify "$FALLBACK^{commit}" >/dev/null 2>&1; then
+    RESOLVED_BASE="$FALLBACK"
     printf "__INVOKER_BASE_WARNING__=Requested base '%s' not found; falling back to '%s'.\\n" "$BASE" "$RESOLVED_BASE"
   else
-    echo "Requested base '$BASE' does not exist and origin/HEAD is unavailable." >&2
+    echo "ERROR: base ref '$BASE' not found and fallback '$FALLBACK' also missing" >&2
     exit 128
   fi
 fi
-BASE_HEAD=$(git -C "$CLONE" rev-parse "$RESOLVED_BASE")
 printf "__INVOKER_BASE_REF__=%s\\n" "$RESOLVED_BASE"
-printf "__INVOKER_BASE_HEAD__=%s\\n" "$BASE_HEAD"
+printf "__INVOKER_BASE_HEAD__=%s\\n" "$(git -C "$CLONE" rev-parse "$RESOLVED_BASE^{commit}")"
 `;
 }
 
@@ -231,8 +233,9 @@ export function buildWorktreeListScript(opts: GitWorktreeListOpts): string {
   const homeB64 = base64Encode(invokerHome);
 
   return `set -euo pipefail
+${buildPortableBase64DecodeFunction()}
 H="${repoHash}"
-INVOKER_HOME=$(echo ${homeB64} | base64 -d)
+INVOKER_HOME=$(printf '%s' ${shellPosixSingleQuote(homeB64)} | invoker_base64_decode)
 if [[ "$INVOKER_HOME" == '~' ]]; then
   INVOKER_HOME="$HOME"
 elif [[ "\${INVOKER_HOME:0:2}" == '~/' ]]; then
@@ -264,6 +267,7 @@ export interface GitWorktreeCleanupOpts {
 export function buildWorktreeCleanupScript(opts: GitWorktreeCleanupOpts): string {
   const worktreesB64 = base64Encode(`${opts.worktreePaths.join('\n')}\n`);
   return `set -euo pipefail
+${buildPortableBase64DecodeFunction()}
 CLONE="${opts.remoteClone}"
 ${bashNormalizeTildePath('CLONE')}
 WORKTREES_B64="${worktreesB64}"
@@ -278,7 +282,7 @@ while IFS= read -r WT; do
     rm -rf "$WT"
     git -C "$CLONE" worktree prune 2>/dev/null || true
   fi
-done < <(echo "$WORKTREES_B64" | base64 -d)
+done < <(printf '%s' "$WORKTREES_B64" | invoker_base64_decode)
 `;
 }
 
@@ -307,8 +311,9 @@ export function buildWorktreeSandboxResetScript(opts: GitWorktreeSandboxResetOpt
   const wtB64 = base64Encode(opts.worktreePath);
   const refB64 = base64Encode(opts.toRef);
   return `set -euo pipefail
-WT=$(echo ${wtB64} | base64 -d)
-REF=$(echo ${refB64} | base64 -d)
+${buildPortableBase64DecodeFunction()}
+WT=$(printf '%s' ${shellPosixSingleQuote(wtB64)} | invoker_base64_decode)
+REF=$(printf '%s' ${shellPosixSingleQuote(refB64)} | invoker_base64_decode)
 ${bashNormalizeTildePath('WT')}
 git -C "$WT" reset --hard "$REF"
 git -C "$WT" clean -fd
@@ -326,9 +331,10 @@ export function buildWorktreeRenameBranchScript(opts: GitWorktreeRenameBranchOpt
   const fromB64 = base64Encode(opts.fromBranch);
   const toB64 = base64Encode(opts.toBranch);
   return `set -euo pipefail
-WT=$(echo ${wtB64} | base64 -d)
-FROM=$(echo ${fromB64} | base64 -d)
-TO=$(echo ${toB64} | base64 -d)
+${buildPortableBase64DecodeFunction()}
+WT=$(printf '%s' ${shellPosixSingleQuote(wtB64)} | invoker_base64_decode)
+FROM=$(printf '%s' ${shellPosixSingleQuote(fromB64)} | invoker_base64_decode)
+TO=$(printf '%s' ${shellPosixSingleQuote(toB64)} | invoker_base64_decode)
 ${bashNormalizeTildePath('WT')}
 git -C "$WT" branch -m "$FROM" "$TO"
 git -C "$WT" rev-parse --abbrev-ref HEAD
@@ -362,24 +368,25 @@ export function buildRecordAndPushScript(opts: GitRecordAndPushOpts): string {
   const pushRemoteUrlB = base64Encode(opts.pushRemoteUrl ?? '');
 
   return `set -euo pipefail
-WT=$(echo ${wtB} | base64 -d)
+${buildPortableBase64DecodeFunction()}
+WT=$(printf '%s' ${shellPosixSingleQuote(wtB)} | invoker_base64_decode)
 ${bashNormalizeTildePath()}
 cd "$WT"
 git add -A
 M=$(mktemp)
 trap 'rm -f "$M"' EXIT
-GIT_NAME=$(echo ${userNameB} | base64 -d)
-GIT_EMAIL=$(echo ${userEmailB} | base64 -d)
+GIT_NAME=$(printf '%s' ${shellPosixSingleQuote(userNameB)} | invoker_base64_decode)
+GIT_EMAIL=$(printf '%s' ${shellPosixSingleQuote(userEmailB)} | invoker_base64_decode)
 if git diff --cached --quiet; then
-  echo ${emB} | base64 -d > "$M"
+  printf '%s' ${shellPosixSingleQuote(emB)} | invoker_base64_decode > "$M"
   GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit --allow-empty -F "$M"
 else
-  echo ${chB} | base64 -d > "$M"
+  printf '%s' ${shellPosixSingleQuote(chB)} | invoker_base64_decode > "$M"
   GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit -F "$M"
 fi
 HASH=$(git rev-parse HEAD)
-BR=$(echo ${brB} | base64 -d)
-PUSH_URL=$(echo ${pushRemoteUrlB} | base64 -d)
+BR=$(printf '%s' ${shellPosixSingleQuote(brB)} | invoker_base64_decode)
+PUSH_URL=$(printf '%s' ${shellPosixSingleQuote(pushRemoteUrlB)} | invoker_base64_decode)
 if [ -n "$PUSH_URL" ]; then
   git push "$PUSH_URL" "$BR:refs/heads/$BR"
 else

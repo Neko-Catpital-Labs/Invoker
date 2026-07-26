@@ -977,7 +977,7 @@ describe('SshExecutor entry lifecycle', () => {
     vi.spyOn(ssh as any, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
   });
 
-  it('uses a login shell for task payloads so remote profile PATH applies', async () => {
+  it('uses a non-login shell for task payloads and sources ~/.invoker/env.sh explicitly', async () => {
     const request = makeRequest({
       inputs: {
         command: 'echo hello',
@@ -989,9 +989,13 @@ describe('SshExecutor entry lifecycle', () => {
     const childProcessMod = await import('node:child_process');
     const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
     const spawnArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
-    expect(spawnArgs.slice(-3)).toEqual(['bash', '-l', '-s']);
-
+    expect(spawnArgs.slice(-2)).toEqual(['bash', '-s']);
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    const writeMock = (sshProcess.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+    expect(script).toContain('INVOKER_ENV_FILE="$INVOKER_HOME/env.sh"');
+    expect(script).toContain('. "$INVOKER_ENV_FILE"');
+
     sshProcess.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
   });
@@ -1323,7 +1327,7 @@ describe('SshExecutor entry lifecycle', () => {
     // the remote, avoiding the old buggy `WT="~/.invoker/..."` literal (which
     // bash would NOT expand) and avoiding base64 runtime delivery.
     expect(script).not.toContain('base64 -d');
-    expect(script).toContain("INVOKER_HOME=$(normalize_remote_path '~/.invoker')");
+    expect(script).toContain("INVOKER_HOME='~/.invoker'");
     expect(script).toContain('WT=$(normalize_remote_path \'~/.invoker/worktrees/');
     expect(script).toContain(`if [[ "$path" == '~' ]]; then`);
     expect(script).not.toContain('WT="~/.invoker/');
@@ -1503,7 +1507,7 @@ describe('SshExecutor entry lifecycle', () => {
     const script = writeMock.mock.calls[0]![0] as string;
 
     expect(script).not.toContain('base64 -d');
-    expect(script).toContain("INVOKER_HOME=$(normalize_remote_path '/opt/invoker')");
+    expect(script).toContain("INVOKER_HOME='/opt/invoker'");
     expect(script).toContain('STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/');
     expect(script).toContain('WT=$(normalize_remote_path \'/opt/invoker/worktrees/');
     expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
