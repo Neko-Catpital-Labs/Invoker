@@ -274,6 +274,7 @@ export interface CommandRunnerResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  error?: unknown;
 }
 
 export type CommandRunner = (command: string, args: readonly string[]) => CommandRunnerResult;
@@ -284,6 +285,7 @@ export function defaultCommandRunner(command: string, args: readonly string[]): 
     status: result.status,
     stdout: typeof result.stdout === 'string' ? result.stdout : '',
     stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    error: result.error,
   };
 }
 
@@ -297,9 +299,35 @@ export function skippedGithubAuthCheck(): PrerequisiteCheck {
   };
 }
 
+function isMissingCommandError(error: unknown): boolean {
+  if (!error) return false;
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : '';
+  const message = formatCaughtException(error).toLowerCase();
+  return code === 'ENOENT' || message.includes('enoent') || message.includes('not found');
+}
+
+function firstOutputLine(result: Pick<CommandRunnerResult, 'stdout' | 'stderr'>, fallback: string): string {
+  return (result.stderr || result.stdout || fallback).trim().split('\n')[0] || fallback;
+}
+
 /** Probe `gh auth status`. Injectable `runner` keeps tests offline. */
 export function checkGithubAuth(runner: CommandRunner = defaultCommandRunner): PrerequisiteCheck {
-  const result = runner('gh', ['auth', 'status']);
+  let result: CommandRunnerResult;
+  try {
+    result = runner('gh', ['auth', 'status']);
+  } catch (error) {
+    return isMissingCommandError(error)
+      ? skippedGithubAuthCheck()
+      : {
+        id: 'github-auth',
+        name: 'GitHub auth',
+        status: 'error',
+        detail: formatCaughtException(error),
+        remediation: 'Run `gh auth status` to inspect the GitHub CLI failure',
+      };
+  }
   if (result.status === 0) {
     return {
       id: 'github-auth',
@@ -308,8 +336,13 @@ export function checkGithubAuth(runner: CommandRunner = defaultCommandRunner): P
       detail: 'gh is authenticated',
     };
   }
-  const detail = (result.stderr || result.stdout || 'gh auth status failed').trim().split('\n')[0]
-    || 'gh auth status failed';
+  if (isMissingCommandError(result.error) || isMissingCommandError(firstOutputLine(result, ''))) {
+    return skippedGithubAuthCheck();
+  }
+  if (result.status === null && result.stdout.trim() === '' && result.stderr.trim() === '') {
+    return skippedGithubAuthCheck();
+  }
+  const detail = firstOutputLine(result, 'gh auth status failed');
   return {
     id: 'github-auth',
     name: 'GitHub auth',

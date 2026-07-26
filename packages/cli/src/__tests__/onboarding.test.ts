@@ -19,7 +19,6 @@ import {
   REQUIRED_BOT_SCOPES,
   runPlanValidationSmoke,
   slackCredsFromEnv,
-  skippedGithubAuthCheck,
   runSetup,
   setExperimentalPlannerFlag,
   upsertEnvLines,
@@ -544,8 +543,22 @@ describe('GitHub auth check', () => {
     expect(check.remediation).toContain('gh auth login');
   });
 
-  it('warns and skips when gh is missing', () => {
-    expect(skippedGithubAuthCheck()).toMatchObject({ id: 'github-auth', status: 'warn' });
+  it('warns and skips when the injected runner cannot find gh', () => {
+    const error = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
+    const check = checkGithubAuth(() => { throw error; });
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
+    expect(check.detail).toContain('skipped auth check');
+    expect(check.remediation).toContain('gh auth login');
+  });
+
+  it('warns and skips when gh spawn returns no status', () => {
+    const check = checkGithubAuth(() => ({ status: null, stdout: '', stderr: '' }));
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
+  });
+
+  it('warns and skips when a shell runner reports gh as command-not-found', () => {
+    const check = checkGithubAuth(() => ({ status: 127, stdout: '', stderr: 'gh: command not found' }));
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
   });
 });
 
