@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createMainWindow,
   registerMainWindowActivateHandler,
@@ -41,6 +41,9 @@ vi.mock('electron', () => ({
     openExternal: vi.fn(),
   },
 }));
+const savedCaptureMode = process.env.CAPTURE_MODE;
+const savedVisualProofShowUi = process.env.INVOKER_VISUAL_PROOF_SHOW_UI;
+
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -48,6 +51,22 @@ beforeEach(() => {
   electronMock.fakeWindow.isDestroyed.mockReturnValue(false);
   electronMock.fakeWindow.loadURL.mockResolvedValue(undefined);
   electronMock.fakeWindow.loadFile.mockResolvedValue(undefined);
+  delete process.env.CAPTURE_MODE;
+  delete process.env.INVOKER_VISUAL_PROOF_SHOW_UI;
+});
+
+afterAll(() => {
+  if (savedCaptureMode === undefined) {
+    delete process.env.CAPTURE_MODE;
+  } else {
+    process.env.CAPTURE_MODE = savedCaptureMode;
+  }
+
+  if (savedVisualProofShowUi === undefined) {
+    delete process.env.INVOKER_VISUAL_PROOF_SHOW_UI;
+  } else {
+    process.env.INVOKER_VISUAL_PROOF_SHOW_UI = savedVisualProofShowUi;
+  }
 });
 
 describe('window-lifecycle', () => {
@@ -119,6 +138,80 @@ describe('window-lifecycle', () => {
   });
 
   it('maps and focuses e2e compositor windows', () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+    const recordStartupMark = vi.fn();
+    const setUiInteractive = vi.fn();
+    const startDeferredStartupWork = vi.fn();
+
+    createMainWindow({
+      appRootDir: '/tmp/app',
+      invokerConfig: {},
+      logger,
+      hideE2eWindow: true,
+      enableTestCompositor: true,
+      recordStartupMark,
+      setUiInteractive,
+      startDeferredStartupWork,
+      setMainWindow: vi.fn(),
+    });
+
+    const options = electronMock.BrowserWindow.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options.show).toBe(false);
+    expect(options.skipTaskbar).toBe(true);
+    expect(options.x).toBeUndefined();
+    expect(options.y).toBeUndefined();
+
+    const readyHandler = electronMock.fakeWindow.once.mock.calls.find(([eventName]) => eventName === 'ready-to-show')?.[1];
+    expect(readyHandler).toBeDefined();
+    readyHandler?.();
+
+    expect(electronMock.fakeWindow.show).toHaveBeenCalledTimes(1);
+    expect(electronMock.fakeWindow.showInactive).not.toHaveBeenCalled();
+    expect(electronMock.fakeWindow.focus).toHaveBeenCalledTimes(1);
+    expect(setUiInteractive).toHaveBeenCalledWith(true);
+    expect(startDeferredStartupWork).toHaveBeenCalledTimes(1);
+    expect(recordStartupMark).toHaveBeenCalledWith('window.show');
+  });
+  it('keeps visual proof compositor windows off-screen and unfocused by default', () => {
+    process.env.CAPTURE_MODE = 'before';
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
+    const recordStartupMark = vi.fn();
+    const setUiInteractive = vi.fn();
+    const startDeferredStartupWork = vi.fn();
+
+    createMainWindow({
+      appRootDir: '/tmp/app',
+      invokerConfig: {},
+      logger,
+      hideE2eWindow: true,
+      enableTestCompositor: true,
+      recordStartupMark,
+      setUiInteractive,
+      startDeferredStartupWork,
+      setMainWindow: vi.fn(),
+    });
+
+    const options = electronMock.BrowserWindow.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(options.show).toBe(false);
+    expect(options.skipTaskbar).toBe(true);
+    expect(options.x).toBe(-32000);
+    expect(options.y).toBe(-32000);
+
+    const readyHandler = electronMock.fakeWindow.once.mock.calls.find(([eventName]) => eventName === 'ready-to-show')?.[1];
+    expect(readyHandler).toBeDefined();
+    readyHandler?.();
+
+    expect(electronMock.fakeWindow.show).not.toHaveBeenCalled();
+    expect(electronMock.fakeWindow.showInactive).toHaveBeenCalledTimes(1);
+    expect(electronMock.fakeWindow.focus).not.toHaveBeenCalled();
+    expect(setUiInteractive).toHaveBeenCalledWith(true);
+    expect(startDeferredStartupWork).toHaveBeenCalledTimes(1);
+    expect(recordStartupMark).toHaveBeenCalledWith('window.hidden-ready');
+  });
+
+  it('shows visual proof compositor windows when explicitly requested', () => {
+    process.env.CAPTURE_MODE = 'before';
+    process.env.INVOKER_VISUAL_PROOF_SHOW_UI = '1';
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() };
     const recordStartupMark = vi.fn();
     const setUiInteractive = vi.fn();

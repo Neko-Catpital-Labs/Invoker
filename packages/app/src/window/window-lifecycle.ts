@@ -53,7 +53,12 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
   deps.recordStartupMark('createWindow.begin');
   const iconPath = path.join(deps.appRootDir, 'assets', 'icons', 'png', '256x256.png');
   const icon = nativeImage.createFromPath(iconPath);
-  const keepE2eWindowHidden = deps.hideE2eWindow && !deps.enableTestCompositor;
+  const captureMode = process.env.CAPTURE_MODE;
+  // Visual proof capture should stay off-screen unless a maintainer explicitly
+  // opts into watching it with INVOKER_VISUAL_PROOF_SHOW_UI=1.
+  const showVisualProofWindow = captureMode !== undefined && process.env.INVOKER_VISUAL_PROOF_SHOW_UI === '1';
+  const keepE2eWindowHidden = deps.hideE2eWindow
+    && (!deps.enableTestCompositor || (captureMode !== undefined && !showVisualProofWindow));
   const mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -134,7 +139,9 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
       showTriggered = true;
       deps.logger.info(keepE2eWindowHidden ? 'main window ready while hidden' : 'main window show()', { module: 'window' });
       deps.recordStartupMark(keepE2eWindowHidden ? 'window.hidden-ready' : 'window.show');
-      if (!keepE2eWindowHidden) {
+      if (keepE2eWindowHidden && deps.enableTestCompositor) {
+        mainWindow.showInactive();
+      } else if (!keepE2eWindowHidden) {
         mainWindow.show();
         mainWindow.focus();
       }
