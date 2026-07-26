@@ -511,9 +511,15 @@ export async function sendPlanningChatMessage(
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
 
+  const hasSuppliedSessionId = Object.prototype.hasOwnProperty.call(rawRequest ?? {}, 'sessionId');
   let sessionId = rawRequest?.sessionId;
   try {
-    let session = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
+    let session = hasSuppliedSessionId && rawRequest?.sessionId
+      ? deps.sessions.get(rawRequest.sessionId)
+      : undefined;
+    if (hasSuppliedSessionId && !session) {
+      return { ok: false, sessionId, error: `Planning session "${sessionId ?? ''}" was not found.` };
+    }
     if (!session) {
       const created = await createSession({
         presetKey: rawRequest?.presetKey,
