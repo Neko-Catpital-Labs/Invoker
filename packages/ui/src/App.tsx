@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const NO_COMPLETE_PLAN_DRAFT_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -859,6 +860,7 @@ export function App() {
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
+  const activePlanningDraftReady = draftPlanAvailable || activePlanningSession.status === 'draft_ready';
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
   const activePlanningSessionBusy = activePlanningSession.busy;
@@ -2639,6 +2641,11 @@ export function App() {
     }
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
+      if (!activePlanningDraftReady) {
+        setPlanningSubmitError({ title: 'Plan could not be submitted', message: NO_COMPLETE_PLAN_DRAFT_ERROR });
+        appendTerminalLine(`Plan could not be submitted:\n${NO_COMPLETE_PLAN_DRAFT_ERROR}`, 'system', 'error');
+        return;
+      }
       await handlePlanningSubmitDraft();
       return;
     }
@@ -2710,6 +2717,7 @@ export function App() {
     }
   }, [
     activePlanningSessionBusy,
+    activePlanningDraftReady,
     activePlanningSessionId,
     activePlanningReadOnly,
     appendTerminalLine,
