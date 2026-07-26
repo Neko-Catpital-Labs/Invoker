@@ -109,9 +109,11 @@ class ClassifyPr(unittest.TestCase):
         human = pr(review_threads=(m.ReviewThread("t", False, ("alice",)),))
         bot = pr(review_threads=(m.ReviewThread("t", False, ("coderabbitai[bot]",)),))
         outdated = pr(review_threads=(m.ReviewThread("t", False, ("coderabbitai[bot]",), True),))
+        outdated_human = pr(review_threads=(m.ReviewThread("t", False, ("github-advanced-security",), True),))
         self.assertIn("human_review_thread", self._kinds(human))
         self.assertIn("bot_review_thread", self._kinds(bot))
         self.assertIn("outdated_bot_review_thread", self._kinds(outdated))
+        self.assertEqual(self._kinds(outdated_human), set())
 
     def test_merge_hold_label(self):
         self.assertIn("merge_hold", self._kinds(pr(labels=frozenset({"merge-hold"}))))
