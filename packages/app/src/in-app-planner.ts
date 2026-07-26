@@ -43,6 +43,8 @@ import { selectHarnessSessionDriver } from '@invoker/surfaces';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
+const NO_DRAFT_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
 export interface LoadedGeneratedPlan {
   planName: string;
   workflowId: string;
@@ -634,6 +636,10 @@ export async function submitPlanningChatDraft(
   }
   if (session.pendingSubmit) {
     return session.pendingSubmit;
+  }
+
+  if (session.status !== 'draft_ready' || !session.draftPlanText?.trim()) {
+    return { ok: false, error: NO_DRAFT_ERROR };
   }
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {

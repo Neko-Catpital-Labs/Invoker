@@ -46,6 +46,8 @@ tasks:
     dependencies: [first]
     command: echo second`;
 
+const NO_DRAFT_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
 const VALID_PLAN_WITHOUT_CLOSING_FENCE = `Here is the plan.
 
 \`\`\`yaml
@@ -538,6 +540,7 @@ describe('planning chat', () => {
       planningCommandBuilder,
     });
     if (!sent.ok) throw new Error(sent.error);
+    expect(sessions.get(sent.sessionId)?.status).toBe('draft_ready');
     const loadGeneratedPlan = vi.fn().mockResolvedValue({
       planName: 'Mock Plan',
       workflowId: 'wf-1',
@@ -757,7 +760,66 @@ tasks:
     }, {
       sessions,
       loadGeneratedPlan: vi.fn(),
-    })).resolves.toEqual({ ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' });
+    })).resolves.toEqual({ ok: false, error: NO_DRAFT_ERROR });
+  });
+
+  it('rejects submit when a stale draft text is not draft-ready', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('cleared-draft', {
+      id: 'cleared-draft',
+      title: 'Cleared draft',
+      presetKey: 'codex',
+      status: 'still_discussing',
+      messages: [
+        { id: 1, role: 'user', text: 'Draft it', createdAt: '2026-07-07T00:00:00.000Z' },
+        { id: 2, role: 'assistant', text: VALID_PLAN, createdAt: '2026-07-07T00:00:01.000Z' },
+        { id: 3, role: 'user', text: 'Summarize instead', createdAt: '2026-07-07T00:00:02.000Z' },
+        { id: 4, role: 'assistant', text: 'Plan summary only.', createdAt: '2026-07-07T00:00:03.000Z' },
+      ],
+      conversation: new PlanConversation({}),
+      draftPlanText: VALID_PLAN_TEXT,
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:03.000Z',
+      nextMessageId: 5,
+    });
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    } satisfies LoadedGeneratedPlan);
+
+    await expect(submitPlanningChatDraft({ sessionId: 'cleared-draft' }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_DRAFT_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+    expect(sessions.get('cleared-draft')?.status).toBe('still_discussing');
+  });
+
+  it('rejects submit when a draft-ready session has empty draft text', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('empty-draft', {
+      id: 'empty-draft',
+      title: 'Empty draft',
+      presetKey: 'codex',
+      status: 'draft_ready',
+      messages: [],
+      conversation: new PlanConversation({}),
+      draftPlanSummary: { name: 'Empty draft', taskCount: 1, steps: ['Missing YAML'] },
+      draftPlanText: '   ',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+      nextMessageId: 1,
+    });
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Empty draft',
+      workflowId: 'wf-1',
+    } satisfies LoadedGeneratedPlan);
+
+    await expect(submitPlanningChatDraft({ sessionId: 'empty-draft' }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_DRAFT_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
   it('rejects submit when the draft summary cannot be read', async () => {
