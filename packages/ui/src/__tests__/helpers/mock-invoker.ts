@@ -592,14 +592,18 @@ export function makeUITask(overrides: Partial<TaskState> & {
   status?: TaskStatus;
   workflowId?: string;
   isMergeNode?: boolean;
+  poolId?: string;
   command?: string;
   prompt?: string;
 } = {}): TaskState {
   const {
     workflowId,
     isMergeNode,
+    poolId,
     command,
     prompt,
+    config,
+    execution,
     ...rest
   } = overrides;
 
@@ -612,11 +616,12 @@ export function makeUITask(overrides: Partial<TaskState> & {
     config: {
       workflowId,
       isMergeNode,
+      poolId,
       command,
       prompt,
-      ...((overrides as any).config ?? {}),
+      ...(config ?? {}),
     } as TaskConfig,
-    execution: ((overrides as any).execution ?? {}) as TaskExecution,
+    execution: (execution ?? {}) as TaskExecution,
     ...rest,
   } as TaskState;
 }
