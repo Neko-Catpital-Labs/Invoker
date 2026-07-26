@@ -53,9 +53,18 @@ export function defaultPlanningCommand(
 }
 
 const EMPTY_PLANNER_STDERR_TAIL_LIMIT = 500;
+const SUBMIT_INSTRUCTION_LINE = 'Reply `submit` to submit it.';
 
 export const DEFAULT_PLANNER_RETRY_LIMIT = 2;
 export const DEFAULT_PLANNER_RETRY_BASE_DELAY_MS = 500;
+
+function removeStandaloneSubmitInstruction(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => line.trim() !== SUBMIT_INSTRUCTION_LINE)
+    .join('\n')
+    .trimEnd();
+}
 
 // Shared with slack-surface.ts so both planner spawn paths surface the same
 // actionable error when the CLI exits 0 but writes nothing to stdout. The
@@ -550,6 +559,9 @@ export class PlanConversation {
     const nextDraft = fileDraft && summarizePlanText(fileDraft)
       ? fileDraft
       : inlineDraft;
+    if (!nextDraft) {
+      message = removeStandaloneSubmitInstruction(message);
+    }
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     this._lastTurnReasoning = formatted.reasoning;

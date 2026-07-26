@@ -17,6 +17,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 const mockSpawn = vi.mocked(child_process.spawn);
+const SUBMIT_LINE = 'Reply `submit` to submit it.';
 
 function fakePlannerChild(stdout: string, beforeClose?: () => void): any {
   const proc = new EventEmitter() as any;
@@ -52,7 +53,7 @@ tasks:
     dependencies: []
 \`\`\`
 
-Reply \`submit\` to submit it.`;
+${SUBMIT_LINE}`;
 
 describe('plan draft file - activation side', () => {
   let workingDir: string;
@@ -101,20 +102,24 @@ describe('plan draft file - activation side', () => {
     ));
     await conversation.sendMessage('Draft it');
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('What does it do?');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_LINE}`));
+    const reply = await conversation.sendMessage('What does it do?');
 
     expect(existsSync(path)).toBe(false);
     expect(conversation.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
+    expect(reply).not.toContain(SUBMIT_LINE);
+    expect(conversation.history.at(-1)?.content).not.toContain(SUBMIT_LINE);
   });
 
   it('does not expose a plan when a summary-only turn has no prior draft', async () => {
     const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('Draft it');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_LINE}`));
+    const reply = await conversation.sendMessage('Draft it');
 
     expect(conversation.getDraftedPlan()).toBeNull();
+    expect(reply).not.toContain(SUBMIT_LINE);
+    expect(conversation.history.at(-1)?.content).not.toContain(SUBMIT_LINE);
   });
 
   it('requires the exact submit line as a standalone post-plan instruction', () => {
@@ -122,10 +127,9 @@ describe('plan draft file - activation side', () => {
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
 
     const prompt = conversation.buildCursorPrompt();
-    const submitLine = 'Reply `submit` to submit it.';
     const lines = prompt.split('\n');
 
-    expect(lines.filter((line) => line === submitLine)).toHaveLength(1);
+    expect(lines.filter((line) => line === SUBMIT_LINE)).toHaveLength(1);
     expect(prompt.match(/Reply `submit` to submit it\./g)).toHaveLength(1);
     expect(prompt).toContain('Do NOT place that line inline in a sentence.');
   });
@@ -139,8 +143,9 @@ describe('plan draft file - activation side', () => {
       'Drafted the plan.\n\nReply `submit` to submit it.',
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Create the plan');
+    const reply = await conversation.sendMessage('Create the plan');
 
+    expect(reply).toContain(SUBMIT_LINE);
     expect(isConfirmation('submit')).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(conversation.planSubmitted).toBe(false);
