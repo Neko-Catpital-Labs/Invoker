@@ -323,6 +323,7 @@ const SETUP_SMOKE_PLAN = `name: Setup Smoke
 description: Tiny offline plan used by invoker-cli setup.
 repoUrl: .
 onFinish: none
+baseBranch: main
 tasks:
   - id: smoke
     description: Validate plan parsing during setup.
@@ -769,6 +770,17 @@ function printSetupEnding(io: SetupIO, checks: readonly PrerequisiteCheck[]): nu
   return report.ok ? 0 : 1;
 }
 
+async function appendGithubAndSmokeChecks(
+  io: SetupIO,
+  checks: PrerequisiteCheck[],
+  options: SetupDeps,
+): Promise<void> {
+  const extras = await collectGithubAndSmokeChecks(options);
+  checks.push(...extras);
+  io.print('');
+  io.print(formatReport(buildReport(extras)));
+}
+
 export async function runSetup(
   argv: string[],
   io: SetupIO = defaultIO(),
@@ -827,7 +839,7 @@ export async function runSetup(
       io.print(`\n${formatReport(report, { json: parsed.json })}`);
       if (!creds.botToken || !creds.appToken || !creds.signingSecret || !creds.channelId || !report.ok) {
         io.print('Nothing written.');
-        checks.push(...await collectGithubAndSmokeChecks(options));
+        await appendGithubAndSmokeChecks(io, checks, options);
         return printSetupEnding(io, checks);
       }
       const envPath = writeSlackEnv({
@@ -857,7 +869,7 @@ export async function runSetup(
         const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ', parsed.assumeYes);
         if (!proceed) {
           io.print('Nothing written.');
-          checks.push(...await collectGithubAndSmokeChecks(options));
+          await appendGithubAndSmokeChecks(io, checks, options);
           return printSetupEnding(io, checks);
         }
       }
@@ -866,10 +878,7 @@ export async function runSetup(
       io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
     }
 
-    const extras = await collectGithubAndSmokeChecks(options);
-    checks.push(...extras);
-    io.print('');
-    io.print(formatReport(buildReport(extras)));
+    await appendGithubAndSmokeChecks(io, checks, options);
 
     return printSetupEnding(io, checks);
   } catch (error) {
