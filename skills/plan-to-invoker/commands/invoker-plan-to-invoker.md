@@ -1,5 +1,5 @@
 ---
-description: Plan a change and submit it through Invoker
+description: Plan a change and hand it off through Invoker
 argument-hint: "help me plan <change>"
 ---
 
@@ -10,6 +10,8 @@ If the request involves creating, updating, publishing, or splitting pull reques
 Write the planning artifact to `plans/invoker-handoff.md`.
 
 Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
+
+Treat plain approval as approval for workflow handoff only. Do not create, push, or publish local branches or PRs unless the user explicitly asks for PR publication.
 
 Validate with `invoker_validate_plan` before submitting.
 
