@@ -70,9 +70,19 @@ class AdminBypassGhExecutor:
     def resolve_bot_threads(self, thread_id: str) -> None:
         self.gh.resolve_review_thread(thread_id)
 
+    def has_blocked_comment(self, pr: PrSnapshot, body: str) -> bool:
+        if not hasattr(self.gh, "issue_comments"):
+            return False
+        for comment in self.gh.issue_comments(self.repo, pr.number):
+            if str(comment.get("body") or "").strip() == body.strip():
+                return True
+        return False
+
     def comment_blocked(self, pr: PrSnapshot, detail: str, key: str, now: int) -> None:
         if self.ledger.count("comment-blocked", pr.number, pr.head_ref_oid, key) == 0:
-            self.gh.comment(self.repo, pr.number, f"Mergify repair stopped: {detail}")
+            body = f"Mergify repair stopped: {detail}"
+            if not self.has_blocked_comment(pr, body):
+                self.gh.comment(self.repo, pr.number, body)
             self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, key, now)
 
     def execute(self, action: Action, pr: PrSnapshot, now: int) -> None:

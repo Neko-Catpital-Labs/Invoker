@@ -108,14 +108,27 @@ class ClassifyPr(unittest.TestCase):
     def test_human_vs_bot_review_threads(self):
         human = pr(review_threads=(m.ReviewThread("t", False, ("alice",)),))
         bot = pr(review_threads=(m.ReviewThread("t", False, ("coderabbitai[bot]",)),))
+        outdated = pr(review_threads=(m.ReviewThread("t", False, ("coderabbitai[bot]",), True),))
         self.assertIn("human_review_thread", self._kinds(human))
         self.assertIn("bot_review_thread", self._kinds(bot))
+        self.assertIn("outdated_bot_review_thread", self._kinds(outdated))
 
     def test_merge_hold_label(self):
         self.assertIn("merge_hold", self._kinds(pr(labels=frozenset({"merge-hold"}))))
 
 
 class EffectiveBlockers(unittest.TestCase):
+    def test_queue_only_missing_check_is_not_pr_head_blocker(self):
+        snapshot = pr(checks={})
+        kinds = {
+            b.kind for b in p.effective_blockers(
+                snapshot,
+                {QUEUE_ONLY_CHECK},
+                trunk="master",
+            )
+        }
+        self.assertNotIn("missing_check", kinds)
+
     def test_mergify_success_condition_clears_missing_check(self):
         # classify_pr flags "build" as missing, but the current Mergify event
         # says that condition passed -> the loader-derived blocker is dropped.
@@ -215,6 +228,35 @@ class BuildStackFacts(PlannerTestCase):
         self.assertEqual(facts.suppressed_failed_checks_by_pr, {10: (QUEUE_ONLY_CHECK,)})
         self.assertEqual(facts.blockers_by_pr[10], ())
 
+    def test_pr_body_noop_suppresses_stale_failed_check_on_bottom(self):
+        ledger = self._ledger()
+        ledger.record("queue-only-noop", 10, HEAD, QUEUE_ONLY_CHECK, 1)
+        ledger.record("repair-noop", 10, HEAD, "PR Body", 2)
+        facts, _ = self._facts(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=10,
+                        labels=frozenset({"dequeued"}),
+                        checks={"PR Body": check("failure", "PR Body")},
+                        latest_mergify=event(
+                            state="dequeued",
+                            comment_id="cm10",
+                            failing=(QUEUE_ONLY_CHECK,),
+                        ),
+                    ),
+                ),
+            ),
+            required_checks={"PR Body", QUEUE_ONLY_CHECK},
+            ledger=ledger,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(facts.suppressed_failed_checks_by_pr, {10: (QUEUE_ONLY_CHECK, "PR Body")})
+        self.assertEqual(facts.blockers_by_pr[10], ())
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        self.assertEqual([(action.kind, action.key) for action in actions], [("restore_admin_bypass_label", QUEUE_ONLY_CHECK)])
+
     def test_detects_bottom_and_unaccepted_upper(self):
         facts, _ledger = self._facts(
             m.StackGroup(
@@ -263,10 +305,33 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(snapshot)
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-after-dequeue"))
 
+    def test_queued_label_with_headless_active_queue_event_waits(self):
+        snapshot = pr(labels=frozenset({"admin-bypass", "queued"}), latest_mergify=event(state="queued", head=""))
+        actions = self._plan(snapshot)
+        self.assertEqual(actions, ())
+
     def test_clean_bottom_queues_without_prior_dequeue(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot)
         self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
+
+    def test_upper_human_decision_does_not_block_clean_bottom_requeue(self):
+        bottom = pr(number=10, head_ref_name="stack/bottom", labels=frozenset({"admin-bypass"}))
+        upper = pr(
+            number=11,
+            base_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+            repair_stop_comments=(
+                m.RepairStopComment(
+                    "Mergify repair stopped: worker cannot auto-split this PR on a non-trunk base; human stack split required",
+                    "2026-07-20T00:00:00Z",
+                    "EdbertChan",
+                ),
+            ),
+        )
+        actions = self._plan(m.StackGroup("s", (bottom, upper)))
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("requeue", 10))
 
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()

@@ -12,6 +12,7 @@ try:
     from .mergify_admin_requeue_model import (
         MergifyQueueEvent,
         PrSnapshot,
+        RepairStopComment,
         ReviewThread,
         STACK_MARKER_RE,
         StackGroup,
@@ -28,6 +29,7 @@ except ImportError:
     from mergify_admin_requeue_model import (
         MergifyQueueEvent,
         PrSnapshot,
+        RepairStopComment,
         ReviewThread,
         STACK_MARKER_RE,
         StackGroup,
@@ -106,7 +108,7 @@ class GhClient:
             "query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { "
             "pullRequest(number:$number) { number title body url isDraft state baseRefName headRefName headRefOid "
             "mergeStateStatus mergeable labels(first:50) { nodes { name } } "
-            "reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:50) { nodes { author { login } body url } } } } "
+            "reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved isOutdated comments(first:50) { nodes { author { login } body url } } } } "
             "statusCheckRollup { contexts(first:100) { nodes { __typename ... on CheckRun { name conclusion status completedAt startedAt detailsUrl checkSuite { commit { oid } } } "
             "... on StatusContext { context state targetUrl commit { oid } } } } } } } }"
         )
@@ -225,6 +227,23 @@ def parse_mergify_queue_event(comment: Mapping[str, object]) -> MergifyQueueEven
     )
 
 
+def parse_repair_stop_comment(comment: Mapping[str, object]) -> RepairStopComment | None:
+    author = comment.get("user") if isinstance(comment.get("user"), Mapping) else comment.get("author")
+    login = ""
+    if isinstance(author, Mapping):
+        login = str(author.get("login") or "")
+    elif isinstance(author, str):
+        login = author
+    body = str(comment.get("body") or "")
+    if not body.startswith("Mergify repair stopped: "):
+        return None
+    return RepairStopComment(
+        body=body,
+        updated_at=str(comment.get("updated_at") or comment.get("created_at") or comment.get("createdAt") or ""),
+        author_login=login,
+    )
+
+
 def parse_stack_metadata(comments: Sequence[Mapping[str, object]]) -> tuple[str, tuple[int, ...]] | None:
     ordered = sorted(comments, key=lambda c: str(c.get("updated_at") or c.get("created_at") or ""), reverse=True)
     for comment in ordered:
@@ -330,7 +349,12 @@ def review_threads(value: object) -> tuple[ReviewThread, ...]:
             login = author.get("login") if isinstance(author, Mapping) else None
             if login:
                 authors.append(str(login))
-        threads.append(ReviewThread(str(node.get("id") or ""), bool(node.get("isResolved")), tuple(authors)))
+        threads.append(ReviewThread(
+            str(node.get("id") or ""),
+            bool(node.get("isResolved")),
+            tuple(authors),
+            bool(node.get("isOutdated")),
+        ))
     return tuple(threads)
 
 
@@ -345,6 +369,8 @@ def snapshot_from_detail(detail: Mapping[str, object], comments: Sequence[Mappin
     head = str(detail.get("headRefOid") or detail.get("head_ref_oid") or "")
     events = [event for comment in comments for event in [parse_mergify_queue_event(comment)] if event]
     events.sort(key=lambda event: event.queued_at, reverse=True)
+    stop_comments = [stop for comment in comments for stop in [parse_repair_stop_comment(comment)] if stop]
+    stop_comments.sort(key=lambda comment: comment.updated_at, reverse=True)
     return PrSnapshot(
         number=int(detail.get("number") or 0),
         title=str(detail.get("title") or ""),
@@ -361,4 +387,5 @@ def snapshot_from_detail(detail: Mapping[str, object], comments: Sequence[Mappin
         checks=latest_contexts_by_required_check(raw_contexts(detail), head, required_checks),
         review_threads=review_threads(detail.get("reviewThreads")),
         latest_mergify=events[0] if events else None,
+        repair_stop_comments=tuple(stop_comments),
     )
