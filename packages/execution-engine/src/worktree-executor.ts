@@ -569,9 +569,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
-      return { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir };
+      return withDisplayBridge(
+        { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir },
+        handle,
+      );
     }
-    return { cwd: entry.worktreeDir };
+    return withDisplayBridge({ cwd: entry.worktreeDir }, handle);
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
@@ -605,7 +608,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         `[agent-session-trace] WorktreeExecutor.getRestoredTerminalSpec: task="${meta.taskId}" resume with agentSessionId=${meta.agentSessionId}`,
       );
       traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → agent --resume spec, cwd="${spec.cwd}"`);
-      return spec;
+      return withDisplayBridge(spec, meta);
     }
     if (meta.branch) {
       // workspacePath is already a worktree — just checkout the branch there.
@@ -616,10 +619,10 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         cwd: meta.workspacePath,
       };
       traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
-      return spec;
+      return withDisplayBridge(spec, meta);
     }
     traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
-    return { cwd: meta.workspacePath };
+    return withDisplayBridge({ cwd: meta.workspacePath }, meta);
   }
 
   /**
@@ -697,4 +700,12 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
     return { child: null, completion: Promise.resolve() };
   }
+}
+
+function withDisplayBridge(
+  spec: TerminalSpec,
+  source: { displayBridgeText?: string },
+): TerminalSpec {
+  if (source.displayBridgeText === undefined) return spec;
+  return { ...spec, displayBridgeText: source.displayBridgeText };
 }

@@ -2,6 +2,8 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 
 export type Unsubscribe = () => void;
 
+export const MAX_TERMINAL_DISPLAY_BRIDGE_CHARS = 4 * 1024;
+
 export interface ExecutorHandle {
   executionId: string;
   taskId: string;
@@ -9,6 +11,8 @@ export interface ExecutorHandle {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  /** Display-only terminal text. Never passed to agent command argv. */
+  displayBridgeText?: string;
 }
 
 export interface TerminalSpec {
@@ -20,6 +24,8 @@ export interface TerminalSpec {
   args?: string[];
   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
   linuxTerminalTail?: 'exec_bash' | 'pause';
+  /** Display-only terminal text rendered before process output. Never passed to command argv. */
+  displayBridgeText?: string;
 }
 
 export interface PersistedTaskMeta {
@@ -31,6 +37,8 @@ export interface PersistedTaskMeta {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  /** Optional caller-supplied display bridge for restored terminal specs. */
+  displayBridgeText?: string;
 }
 
 export interface Executor {

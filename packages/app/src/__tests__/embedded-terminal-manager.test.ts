@@ -257,6 +257,63 @@ describe('EmbeddedTerminalManager', () => {
     expect(reused.outputSnapshot).toBe(firstFrame);
   });
 
+  it('seeds display bridge text before synchronous backend output and persistence snapshots', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('backend stdout\n');
+        return spawned;
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const outputEvents: string[] = [];
+    const snapshots: string[] = [];
+    mgr.on('output', (event) => outputEvents.push(event.data));
+    mgr.on('session-updated', (record) => snapshots.push(record.outputSnapshot));
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-bridge',
+      spec: {
+        cwd: '/tmp/wt',
+        displayBridgeText: 'Review claim: explain this terminal',
+      },
+      cwd: '/tmp/wt',
+    });
+
+    const expected = 'Review claim: explain this terminal\nbackend stdout\n';
+    expect(session.outputSnapshot).toBe(expected);
+    expect(mgr.getPersistenceRecord(session.sessionId)?.outputSnapshot).toBe(expected);
+    expect(snapshots.at(-1)).toBe(expected);
+    expect(outputEvents).toEqual(['backend stdout\n']);
+  });
+
+  it('does not include display bridge text in terminal target identity', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const first = mgr.openOrReuse({
+      taskId: 'task-bridge-identity',
+      spec: { cwd: '/tmp/wt', displayBridgeText: 'first bridge' },
+      cwd: '/tmp/wt',
+    });
+    const second = mgr.openOrReuse({
+      taskId: 'task-bridge-identity',
+      spec: { cwd: '/tmp/wt', displayBridgeText: 'updated bridge' },
+      cwd: '/tmp/wt',
+    });
+
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(bashSpawnFn).toHaveBeenCalledTimes(1);
+  });
+
   it('opens a distinct session when the same task resolves to a different terminal target', () => {
     const child1 = createFakeChild();
     const child2 = createFakeChild();

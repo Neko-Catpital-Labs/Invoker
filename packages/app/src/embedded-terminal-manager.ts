@@ -20,7 +20,12 @@ import type {
   TerminalExitEvent,
 } from '@invoker/contracts';
 import type { TerminalSessionRecord } from '@invoker/data-store';
-import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
+import {
+  MAX_TERMINAL_DISPLAY_BRIDGE_CHARS,
+  type Executor,
+  type ExecutorHandle,
+  type TerminalSpec,
+} from '@invoker/execution-engine';
 
 export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 export type EmbeddedTerminalSessionKind = 'task' | 'planning';
@@ -318,7 +323,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       updatedAt: createdAt,
       status: 'running' as const,
-      outputSnapshot: '',
+      outputSnapshot: seedDisplayBridgeSnapshot('', opts.spec),
     };
 
     if (opts.attach) {
@@ -391,7 +396,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt: seed.createdAt,
       updatedAt: new Date().toISOString(),
       status: 'running' as const,
-      outputSnapshot: seed.outputSnapshot,
+      outputSnapshot: seedDisplayBridgeSnapshot(seed.outputSnapshot, seed.spec),
     });
   }
 
@@ -654,6 +659,19 @@ export class EmbeddedTerminalManager extends EventEmitter {
 function trimOutputSnapshot(snapshot: string): string {
   if (snapshot.length <= MAX_OUTPUT_SNAPSHOT_CHARS) return snapshot;
   return snapshot.slice(snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS);
+}
+
+function formatDisplayBridgeOutput(text: string | undefined): string {
+  if (!text) return '';
+  const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const bounded = normalized.slice(0, MAX_TERMINAL_DISPLAY_BRIDGE_CHARS);
+  return bounded.endsWith('\n') ? bounded : `${bounded}\n`;
+}
+
+function seedDisplayBridgeSnapshot(snapshot: string, spec: TerminalSpec): string {
+  const bridge = formatDisplayBridgeOutput(spec.displayBridgeText);
+  if (!bridge || snapshot.startsWith(bridge)) return trimOutputSnapshot(snapshot);
+  return trimOutputSnapshot(bridge + snapshot);
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {

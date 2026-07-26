@@ -44,6 +44,7 @@ import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
   buildTerminalShellCommand,
+  shellSingleQuoteForPOSIX,
   spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
 import { openEmbeddedTerminalForTask, openExternalTerminalForTask } from '../open-terminal-for-task.js';
@@ -151,7 +152,12 @@ function buildCleanEnv(): Record<string, string> {
 
 function openExternalTerminal(spec: TerminalSpec | null): void {
   const defaultCwd = spec?.cwd ?? process.cwd();
-  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args };
+  const meta = {
+    cwd: spec?.cwd,
+    command: spec?.command,
+    args: spec?.args,
+    displayBridgeText: spec?.displayBridgeText,
+  };
 
   if (process.platform === 'linux') {
     const cleanEnv = buildCleanEnv();
@@ -419,6 +425,15 @@ describe('terminal-external-launch', () => {
     expect(line).toBe(`cd '/x' && exec zsh`);
   });
 
+  it('prefixes display bridge text before an interactive shell', () => {
+    const line = buildTerminalShellCommand(
+      { cwd: '/x', displayBridgeText: 'interactive context' },
+      '/fallback',
+      { interactiveExec: 'zsh' },
+    );
+    expect(line).toBe(`cd '/x' && printf '%s\\n' 'interactive context' && exec zsh`);
+  });
+
   it('cwd-only defaults to exec bash', () => {
     const line = buildTerminalShellCommand({ cwd: '/x' }, '/fallback');
     expect(line).toBe(`cd '/x' && exec bash`);
@@ -432,6 +447,26 @@ describe('terminal-external-launch', () => {
     // Should use '\'' (backslash-quote) not '"'"' (double-quote idiom)
     expect(line).toContain("\\'");
     expect(line).not.toMatch(/'"'"'/);
+  });
+
+  it('prefixes quoted display bridge text without changing command argv', () => {
+    const bridge = "bridge'; touch /tmp/invoker-terminal-bridge-pwned; echo 'done";
+    const commandArg = 'process.argv.slice(1).join("|")';
+    const line = buildTerminalShellCommand(
+      {
+        cwd: '/tmp/wt',
+        command: 'node',
+        args: ['-e', commandArg],
+        displayBridgeText: bridge,
+      },
+      '/fallback',
+    );
+
+    expect(line).toBe([
+      `cd '/tmp/wt'`,
+      `printf '%s\\n' ${shellSingleQuoteForPOSIX(bridge)}`,
+      `'node' '-e' ${shellSingleQuoteForPOSIX(commandArg)}`,
+    ].join(' && '));
   });
 
   it('buildMacOSOsascriptArgs includes activate and uses multi-line AppleScript', () => {

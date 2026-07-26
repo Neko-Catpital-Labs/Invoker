@@ -557,6 +557,21 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
+  it('getTerminalSpec preserves caller-supplied display bridge text on live handles', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const request = makeRequest();
+    const handle = await executor.start(request);
+    handle.displayBridgeText = 'Live terminal context';
+    const spec = executor.getTerminalSpec(handle);
+
+    expect(spec?.displayBridgeText).toBe('Live terminal context');
+    expect(spec?.command).toBeUndefined();
+
+    // Cleanup
+    taskProcess.emit('close', 0, null);
+  });
+
   it('handle.workspacePath is set to worktree directory', async () => {
     const { taskProcess } = setupSpawnMock();
 
@@ -1241,6 +1256,19 @@ describe('WorktreeExecutor', () => {
     it('returns spec with undefined cwd when no workspace path', () => {
       const spec = executor.getRestoredTerminalSpec(baseMeta);
       expect(spec).toEqual({ cwd: undefined });
+    });
+
+    it('preserves caller-supplied display bridge text on restored specs', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridgeText: 'Why this terminal is being reopened',
+      });
+      expect(spec).toEqual({
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridgeText: 'Why this terminal is being reopened',
+      });
     });
   });
 
