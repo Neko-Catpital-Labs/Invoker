@@ -511,10 +511,16 @@ export async function sendPlanningChatMessage(
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
 
-  let sessionId = rawRequest?.sessionId;
+  const sessionId = typeof rawRequest?.sessionId === 'string' ? rawRequest.sessionId : undefined;
   try {
-    let session = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
-    if (!session) {
+    let session: InAppPlanningChatSession;
+    if (typeof sessionId === 'string') {
+      const existingSession = deps.sessions.get(sessionId);
+      if (!existingSession) {
+        return { ok: false, sessionId, error: `Planning session "${sessionId}" was not found.` };
+      }
+      session = existingSession;
+    } else {
       const created = await createSession({
         presetKey: rawRequest?.presetKey,
         title: titleFromMessage(message),
@@ -523,7 +529,6 @@ export async function sendPlanningChatMessage(
         return { ok: false, sessionId, error: created.error };
       }
       session = created;
-      sessionId = session.id;
     }
     if (session.status === 'submitted') {
       return { ok: false, sessionId: session.id, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
