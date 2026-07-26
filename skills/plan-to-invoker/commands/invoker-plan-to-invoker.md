@@ -1,5 +1,5 @@
 ---
-description: Plan a change and submit an Invoker workflow handoff
+description: Plan a change and submit it through Invoker
 argument-hint: "help me plan <change>"
 ---
 
