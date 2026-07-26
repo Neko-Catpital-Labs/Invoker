@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from typing import Mapping, Sequence
@@ -22,6 +23,8 @@ except ImportError:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+GH_ACTIONS_RUN_RE = re.compile(r"/actions/runs/(\d+)")
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 PROOF_POLICY_LANE_ERROR = (
     "Review lane proof cannot ship with policy files in the same PR. "
     "Keep benchmarks, repros, and regression proof separate from behavior or policy changes."
@@ -41,6 +44,35 @@ def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tupl
         if name == check_name:
             return urls
     return ()
+
+
+def actions_run_id(details_url: str) -> str:
+    match = GH_ACTIONS_RUN_RE.search(details_url)
+    return match.group(1) if match else ""
+
+
+def clean_ci_log_line(line: str) -> str:
+    clean = ANSI_RE.sub("", line).lstrip("\ufeff").strip()
+    return re.sub(r"^\d{4}-\d{2}-\d{2}T\S+Z\s+", "", clean)
+
+
+def queue_infra_failures(log: str) -> tuple[str, ...]:
+    missing_rg = ""
+    sudo_password = False
+    for raw_line in log.splitlines():
+        line = clean_ci_log_line(raw_line)
+        if not missing_rg:
+            match = re.search(r"((?:[^:\s]+/)*[^:\s]+\.sh: line \d+: rg: command not found|rg: command not found)", line)
+            if match:
+                missing_rg = match.group(1)
+        if "sudo: a terminal is required to read the password" in line or "sudo: a password is required" in line:
+            sudo_password = True
+    failures: list[str] = []
+    if missing_rg:
+        failures.append(f"`{missing_rg}`")
+    if sudo_password:
+        failures.append("`playwright install-deps chromium` tried to use sudo without a password")
+    return tuple(failures)
 
 
 class AdminBypassRepairer:
@@ -338,12 +370,65 @@ class AdminBypassRepairer:
             text=True,
         )
 
+    def queue_infra_blocker(self, pr: PrSnapshot, check_name: str, details_url: str) -> str | None:
+        latest = pr.latest_mergify
+        ctx = pr.checks.get(check_name)
+        if (
+            not latest
+            or latest.state != "dequeued"
+            or latest.head_sha != pr.head_ref_oid
+            or not ctx
+            or ctx.state != "success"
+        ):
+            return None
+        run_id = actions_run_id(details_url)
+        if not run_id:
+            return None
+        try:
+            jobs = self.gh.run_jobs(self.repo, run_id)
+        except Exception:
+            return None
+        failures: list[str] = []
+        for job in jobs:
+            if not isinstance(job, Mapping):
+                continue
+            conclusion = str(job.get("conclusion") or "").lower()
+            if conclusion != "failure":
+                continue
+            job_id = str(job.get("databaseId") or job.get("id") or "")
+            if not job_id:
+                continue
+            try:
+                log = self.gh.job_log(self.repo, job_id)
+            except Exception:
+                continue
+            job_name = str(job.get("name") or f"job {job_id}")
+            failures.extend(f"`{job_name}`: {failure}" for failure in queue_infra_failures(log))
+        if not failures:
+            return None
+        joined = "; ".join(dict.fromkeys(failures))
+        return (
+            f"merge-queue run failed outside the PR head: {joined}. "
+            f"Current PR head `{check_name}` is green; fix queue CI runner/tooling outside this PR and requeue."
+        )
+
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
         queue_only = ctx is None and is_queue_only_required_check(check_name)
         mergify_urls = mergify_check_urls(latest, check_name)
-        details_url = (ctx.details_url if ctx and ctx.details_url else "") or (mergify_urls[0] if mergify_urls else "")
+        use_mergify_log = bool(latest and latest.state == "dequeued" and latest.head_sha == pr.head_ref_oid and check_name in latest.failing_checks)
+        mergify_details_url = mergify_urls[0] if mergify_urls else ""
+        details_url = (mergify_details_url if use_mergify_log else "") or (ctx.details_url if ctx and ctx.details_url else "") or mergify_details_url
+        blocker = self.queue_infra_blocker(pr, check_name, details_url)
+        if blocker:
+            return self.blocked_outcome(
+                "blocked_invalid",
+                check_name,
+                pr.head_ref_oid,
+                pr.head_ref_oid,
+                errors=(blocker,),
+            )
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)

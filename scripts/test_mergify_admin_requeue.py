@@ -822,6 +822,92 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED | {"optional / Visual Proof Validate"}, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key, a.detail) for a in actions], [("repair_check", 2969, "PR Body", "Mergify queue check failed: PR Body")])
 
+    def test_repair_check_blocks_queue_infra_failure_when_head_check_is_green(self):
+        class FakeGh:
+            def __init__(self):
+                self.run_job_calls = []
+                self.job_log_calls = []
+
+            def run_jobs(self, repo, run_id):
+                self.run_job_calls.append((repo, run_id))
+                return [
+                    {
+                        "databaseId": 89783312248,
+                        "name": "required-fast / Vitest Workspace",
+                        "conclusion": "failure",
+                    }
+                ]
+
+            def job_log(self, repo, job_id):
+                self.job_log_calls.append((repo, job_id))
+                return "2026-07-26T10:23:33.5548860Z scripts/test-land-stack-skill.sh: line 24: rg: command not found\n"
+
+        latest = MergifyQueueEvent(
+            "m5873",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-26T10:20:52Z",
+            HEAD,
+            ("UI Vitest",),
+            ("UI Vitest",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5873#issuecomment-5083062006",
+            5898,
+            (("UI Vitest", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30198109536/job/89783200539",)),),
+            (("UI Vitest", "failure"),),
+        )
+        checks = {
+            "PR Body": check("PR Body"),
+            "quality / TypeScript Types": check("quality / TypeScript Types"),
+            "UI Vitest": check("UI Vitest"),
+        }
+        fake = FakeGh()
+        repairer = self.repairer(fake, self.ledger())
+
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+            with mock.patch.object(repairer, "run_claude_repair") as run_repair:
+                result = repairer.repair_check(pr(5873, latest=latest, checks=checks), "UI Vitest", 123)
+
+        self.assertEqual(result.status, "blocked_invalid")
+        self.assertEqual(result.check_name, "UI Vitest")
+        self.assertIn("`required-fast / Vitest Workspace`: `scripts/test-land-stack-skill.sh: line 24: rg: command not found`", result.errors[0])
+        self.assertIn("Current PR head `UI Vitest` is green", result.errors[0])
+        self.assertEqual(fake.run_job_calls, [("owner/repo", "30198109536")])
+        self.assertEqual(fake.job_log_calls, [("owner/repo", "89783312248")])
+        checkout.assert_not_called()
+        run_repair.assert_not_called()
+
+    def test_mergify_repair_invalid_blocks_future_queue_repair_when_head_check_is_green(self):
+        ledger = self.ledger()
+        error = (
+            "merge-queue run failed outside the PR head: `required-fast / Vitest Workspace`: "
+            "`scripts/test-land-stack-skill.sh: line 24: rg: command not found`. "
+            "Current PR head `UI Vitest` is green; fix queue CI runner/tooling outside this PR and requeue."
+        )
+        ledger.record("repair-invalid", 5873, HEAD, "UI Vitest", 1, meta={"errors": [error]})
+        latest = MergifyQueueEvent(
+            "m5873",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-26T10:20:52Z",
+            HEAD,
+            ("UI Vitest",),
+            ("UI Vitest",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5873#issuecomment-5083062006",
+            5898,
+            (("UI Vitest", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30198109536/job/89783200539",)),),
+            (("UI Vitest", "failure"),),
+        )
+        checks = {
+            "PR Body": check("PR Body"),
+            "quality / TypeScript Types": check("quality / TypeScript Types"),
+            "UI Vitest": check("UI Vitest"),
+        }
+        stack = StackGroup("s", (pr(5873, latest=latest, checks=checks),))
+
+        actions = plan_stack_actions(stack, REQUIRED | {"UI Vitest"}, ledger, 2)
+
+        self.assertEqual(actions, ())
+
     def test_mergify_reason_failure_repairs_without_failing_checks_section(self):
         comment = {
             "id": "m1814",

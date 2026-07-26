@@ -140,6 +140,16 @@ class GhClient:
         value = self._run_json(["gh", "api", f"repos/{repo}/issues/{number}/comments", "--paginate"])
         return value if isinstance(value, list) else []
 
+    def run_jobs(self, repo: str, run_id: str) -> list[dict]:
+        value = self._run_json(["gh", "run", "view", run_id, "--repo", repo, "--json", "jobs"])
+        if not isinstance(value, Mapping):
+            return []
+        jobs = value.get("jobs")
+        return list(jobs) if isinstance(jobs, list) else []
+
+    def job_log(self, repo: str, job_id: str) -> str:
+        return self._run(["gh", "api", f"repos/{repo}/actions/jobs/{job_id}/logs"])
+
     def comment(self, repo: str, number: int, body: str) -> None:
         subprocess.run(["gh", "pr", "comment", str(number), "--repo", repo, "--body", body], check=True, text=True, capture_output=True)
 
