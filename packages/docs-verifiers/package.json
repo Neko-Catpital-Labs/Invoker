@@ -1,0 +1,9 @@
+{
+  "name": "@invoker/docs-verifiers",
+  "version": "0.0.4",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "verify-empty-canonical-sweeps": "bin/verify-empty-canonical-sweeps.mjs"
+  }
+}

@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@invoker/docs-verifiers':
+        specifier: workspace:*
+        version: link:packages/docs-verifiers
       '@mergifyio/vitest':
         specifier: ^0.3.0
         version: 0.3.0(vitest@3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2))
@@ -215,6 +218,8 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
+
+  packages/docs-verifiers: {}
 
   packages/execution-engine:
     dependencies:

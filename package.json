@@ -61,6 +61,7 @@
     ]
   },
   "devDependencies": {
+    "@invoker/docs-verifiers": "workspace:*",
     "@mergifyio/vitest": "^0.3.0",
     "aws4": "^1.13.2",
     "concurrently": "^10.0.4",
