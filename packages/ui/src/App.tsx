@@ -2130,7 +2130,7 @@ export function App() {
     if (!invoker) return;
     setContextMenu(null);
     try {
-      const result = await invoker.restartTask(taskId);
+      const result = await invoker.retryTask(taskId);
       trackAcceptedMutation(result);
     } catch (err) {
       notifyMutationError('Failed to restart task', err);
@@ -3304,7 +3304,7 @@ export function App() {
     async (workflowId: string, mergeMode: 'manual' | 'automatic' | 'external_review') => {
       if (!invoker) return;
       try {
-        const result = await invoker.setMergeMode(workflowId, mergeMode);
+        const result = await invoker.setWorkflowMergeMode(workflowId, mergeMode);
         trackAcceptedMutation(result);
       } catch (err) {
         notifyMutationError('Failed to set merge mode:', err);

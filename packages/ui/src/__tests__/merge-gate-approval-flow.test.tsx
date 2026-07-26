@@ -158,7 +158,7 @@ describe('Merge gate approval flow (integration)', () => {
     });
 
     fireEvent.change(screen.getByTestId('merge-mode-select'), { target: { value: 'external_review' } });
-    await waitFor(() => expect(mock.api.setMergeMode).toHaveBeenCalledWith('wf-merge', 'external_review'));
+    await waitFor(() => expect(mock.api.setWorkflowMergeMode).toHaveBeenCalledWith('wf-merge', 'external_review'));
     await waitFor(() => expect(mock.api.refreshTaskGraph).toHaveBeenCalled());
   });
 });
