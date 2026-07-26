@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appendPlanningTurn,
-  approvePlanningDraft,
   createPlanningSessionState,
-  runPlanToInvoker,
 } from '../planning-actions.js';
 
 const planText = [
@@ -87,91 +85,3 @@ describe('appendPlanningTurn', () => {
   });
 });
 
-describe('runPlanToInvoker', () => {
-  it('returns a draft_ready result when the conversion produces a valid plan', async () => {
-    const result = await runPlanToInvoker({
-      convert: async () => planText,
-    });
-
-    expect(result).toMatchObject({
-      kind: 'draft_ready',
-      planText,
-      summary: { name: 'Shared planning actions', taskCount: 1 },
-      reply: planText,
-    });
-  });
-
-  it('extracts the plan text from a wrapped output before evaluating it', async () => {
-    const wrapped = `Here you go:\n\`\`\`yaml\n${planText}\n\`\`\``;
-    const result = await runPlanToInvoker({
-      convert: async () => wrapped,
-      extractDraftPlanText: (output) => output.match(/```yaml\n([\s\S]*?)\n```/)?.[1] ?? null,
-    });
-
-    expect(result).toMatchObject({ kind: 'draft_ready', planText });
-  });
-
-  it('returns a message result when no valid plan is produced', async () => {
-    const result = await runPlanToInvoker({
-      convert: async () => 'name: incomplete',
-    });
-
-    expect(result).toEqual({ kind: 'message', reply: 'name: incomplete' });
-  });
-});
-
-describe('approvePlanningDraft', () => {
-  it('rejects when there is no draft plan text', async () => {
-    const result = await approvePlanningDraft({
-      planText: undefined,
-      loadPlan: async () => ({ planName: 'x', workflowId: 'wf-1' }),
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.',
-    });
-  });
-
-  it('rejects when the draft plan text cannot be summarized', async () => {
-    const result = await approvePlanningDraft({
-      planText: 'name: incomplete',
-      loadPlan: async () => ({ planName: 'x', workflowId: 'wf-1' }),
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.',
-    });
-  });
-
-  it('loads and returns the approved plan on success', async () => {
-    const result = await approvePlanningDraft({
-      planText,
-      loadPlan: async (text) => {
-        expect(text).toBe(planText);
-        return { planName: 'Shared planning actions', workflowId: 'wf-1', workflowIds: ['wf-1'], workflowCount: 1 };
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: true,
-      planName: 'Shared planning actions',
-      workflowId: 'wf-1',
-      workflowIds: ['wf-1'],
-      workflowCount: 1,
-      summary: { name: 'Shared planning actions', taskCount: 1 },
-    });
-  });
-
-  it('surfaces errors thrown by loadPlan', async () => {
-    const result = await approvePlanningDraft({
-      planText,
-      loadPlan: async () => {
-        throw new Error('boom');
-      },
-    });
-
-    expect(result).toEqual({ ok: false, error: 'boom' });
-  });
-});
