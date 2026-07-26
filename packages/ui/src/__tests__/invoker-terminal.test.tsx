@@ -689,6 +689,30 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('shows an explicit error instead of restarting when a local transcript has no server session', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: false,
+      error: 'planner failed before creating a session',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan');
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'draft a plan', presetKey: 'codex' });
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('planner failed before creating a session');
+    });
+
+    submitPlanningText('continue anyway');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('This planning chat lost its session. Start a new chat to continue planning.');
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('continue anyway');
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+  });
+
   it('passes the selected planning preset', async () => {
     render(<App />);
     await openPlanningTerminal();
