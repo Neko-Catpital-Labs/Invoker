@@ -33,12 +33,13 @@ export function buildTerminalShellCommand(
   const bridge = buildDisplayBridgeCommand(spec.displayBridgeText);
   if (!spec.command) {
     const execSh = options?.interactiveExec === 'zsh' ? 'exec zsh' : 'exec bash';
-    return [cd, bridge, execSh].filter(Boolean).join(' && ');
+    if (!bridge) return `${cd} && ${execSh}`;
+    return `${cd} && { ${bridge}; ${execSh}; }`;
   }
   const argv = [spec.command, ...(spec.args ?? [])];
-  return [cd, bridge, argv.map(shellSingleQuoteForPOSIX).join(' ')]
-    .filter(Boolean)
-    .join(' && ');
+  const commandLine = argv.map(shellSingleQuoteForPOSIX).join(' ');
+  if (!bridge) return `${cd} && ${commandLine}`;
+  return `${cd} && { ${bridge}; ${commandLine}; }`;
 }
 
 /** Escape for embedding in AppleScript: `tell application "Terminal" to do script "…"`. */
@@ -83,7 +84,7 @@ function buildDisplayBridgeCommand(text: string | undefined): string | undefined
   if (!text) return undefined;
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const bounded = normalized.slice(0, MAX_TERMINAL_DISPLAY_BRIDGE_CHARS);
-  return `printf '%s\\n' ${shellSingleQuoteForPOSIX(bounded)}`;
+  return `printf '%s\\n' ${shellSingleQuoteForPOSIX(bounded)} || true`;
 }
 
 export type OpenTerminalResult = { opened: boolean; reason?: string };

@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdirSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
 
 import {
   computeWorkflowRollup,
@@ -156,6 +157,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
     cwd: spec?.cwd,
     command: spec?.command,
     args: spec?.args,
+    linuxTerminalTail: spec?.linuxTerminalTail,
     displayBridgeText: spec?.displayBridgeText,
   };
 
@@ -171,7 +173,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
     });
     child.unref();
   } else if (process.platform === 'darwin') {
-    if (spec?.command) {
+    if (spec?.command || spec?.displayBridgeText) {
       const osaArgs = buildMacOSOsascriptArgs(meta, defaultCwd);
       const child = mockSpawn('osascript', osaArgs, { detached: true, stdio: 'ignore' });
       child.unref();
@@ -431,7 +433,7 @@ describe('terminal-external-launch', () => {
       '/fallback',
       { interactiveExec: 'zsh' },
     );
-    expect(line).toBe(`cd '/x' && printf '%s\\n' 'interactive context' && exec zsh`);
+    expect(line).toBe(`cd '/x' && { printf '%s\\n' 'interactive context' || true; exec zsh; }`);
   });
 
   it('cwd-only defaults to exec bash', () => {
@@ -463,10 +465,24 @@ describe('terminal-external-launch', () => {
     );
 
     expect(line).toBe([
-      `cd '/tmp/wt'`,
-      `printf '%s\\n' ${shellSingleQuoteForPOSIX(bridge)}`,
-      `'node' '-e' ${shellSingleQuoteForPOSIX(commandArg)}`,
-    ].join(' && '));
+      `cd '/tmp/wt' && { printf '%s\\n' ${shellSingleQuoteForPOSIX(bridge)} || true;`,
+      `'node' '-e' ${shellSingleQuoteForPOSIX(commandArg)};`,
+      '}',
+    ].join(' '));
+  });
+
+  it('does not let bridge printf failure replace the target command exit status', () => {
+    const line = buildTerminalShellCommand(
+      {
+        cwd: tmpdir(),
+        command: process.execPath,
+        args: ['-e', 'process.exit(23)'],
+        displayBridgeText: 'best effort bridge',
+      },
+      '/fallback',
+    );
+    const result = spawnSync('bash', ['-c', `printf() { return 7; }\n${line}`]);
+    expect(result.status).toBe(23);
   });
 
   it('buildMacOSOsascriptArgs includes activate and uses multi-line AppleScript', () => {
