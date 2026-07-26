@@ -46,6 +46,8 @@ tasks:
     dependencies: [first]
     command: echo second`;
 
+const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
 const VALID_PLAN_WITHOUT_CLOSING_FENCE = `Here is the plan.
 
 \`\`\`yaml
@@ -416,9 +418,9 @@ describe('planning chat', () => {
       await expect(submitPlanningChatDraft({ sessionId: session.id }, {
         sessions,
         loadGeneratedPlan,
-    })).resolves.toMatchObject({ ok: false });
-    expect(loadGeneratedPlan).not.toHaveBeenCalled();
-    expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
+      })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+      expect(loadGeneratedPlan).not.toHaveBeenCalled();
+      expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }
@@ -738,9 +740,54 @@ tasks:
     })).resolves.toEqual({ ok: false, error: 'No planning conversation yet.' });
   });
 
+  it('requires draft-ready status and non-empty draft text before submit', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    } satisfies LoadedGeneratedPlan);
+    const baseSession = {
+      title: 'Submit guard',
+      presetKey: 'codex',
+      messages: [],
+      conversation: new PlanConversation({}),
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'], taskGroups: [] },
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+      nextMessageId: 1,
+    };
+    sessions.set('discussion-with-draft-text', {
+      ...baseSession,
+      id: 'discussion-with-draft-text',
+      status: 'still_discussing',
+      draftPlanText: VALID_PLAN_TEXT,
+    });
+    sessions.set('waiting-with-draft-text', {
+      ...baseSession,
+      id: 'waiting-with-draft-text',
+      status: 'waiting_for_answer',
+      draftPlanText: VALID_PLAN_TEXT,
+    });
+    sessions.set('empty-draft-ready', {
+      ...baseSession,
+      id: 'empty-draft-ready',
+      status: 'draft_ready',
+      draftPlanText: '   ',
+    });
+
+    for (const sessionId of ['discussion-with-draft-text', 'waiting-with-draft-text', 'empty-draft-ready']) {
+      await expect(submitPlanningChatDraft({ sessionId }, {
+        sessions,
+        loadGeneratedPlan,
+      })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+    }
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+  });
+
   it('rejects submit when no draft exists', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('No YAML yet.');
     const sessions = createInAppPlanningChatSessions();
+    const loadGeneratedPlan = vi.fn();
     const sent = await sendPlanningChatMessage({
       message: 'hello',
       presetKey: 'codex',
@@ -756,8 +803,9 @@ tasks:
       sessionId: sent.sessionId,
     }, {
       sessions,
-      loadGeneratedPlan: vi.fn(),
-    })).resolves.toEqual({ ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' });
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
   it('rejects submit when the draft summary cannot be read', async () => {
