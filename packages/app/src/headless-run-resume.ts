@@ -8,7 +8,7 @@
  * command-family modules — keeping the import graph acyclic.
  */
 
-import { makeEnvelope, type StartReadyRequest } from '@invoker/contracts';
+import { makeEnvelope, type StartReadyRequest, type StartReadyResult } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   remoteFetchForPool,
@@ -18,6 +18,7 @@ import {
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
 import { startWebSurfaceForHeadless } from './web/start-web-surface.js';
+import type { TaskHandleMap } from './execution/task-runner-wiring.js';
 import {
   fixWithAgentAction,
   rebaseRetry,
@@ -69,6 +70,25 @@ type StartReadyPreviewExt = {
     runningTasks: number;
   };
 };
+function createTrackedHeadlessExecutor(
+  deps: HeadlessDeps,
+  taskHandles: TaskHandleMap,
+) {
+  return createHeadlessExecutor(
+    {
+      ...deps,
+      ownerTaskRunnerProvider: undefined,
+    },
+    {
+      onSpawned: (taskId, handle, executor) => {
+        taskHandles.set(taskId, { handle, executor });
+      },
+      onComplete: (taskId) => {
+        taskHandles.delete(taskId);
+      },
+    },
+  );
+}
 
 export async function headlessWatch(workflowId: string | undefined, deps: HeadlessDeps): Promise<void> {
   const workflows = deps.persistence.listWorkflows();
@@ -114,7 +134,8 @@ export async function headlessRun(
   process.stdout.write(`${BOLD}Loading plan: ${plan.name}${RESET}\n`);
   process.stdout.write(`Tasks: ${plan.tasks.length}\n\n`);
 
-  const taskExecutor = createHeadlessExecutor(deps);
+  const taskHandles: TaskHandleMap = new Map();
+  const taskExecutor = createTrackedHeadlessExecutor(deps, taskHandles);
   wireHeadlessApproveHook(deps, taskExecutor);
 
   const apiServerDeps = buildHeadlessApiServerDeps(deps, taskExecutor);
@@ -125,7 +146,15 @@ export async function headlessRun(
     executorRegistry: deps.executorRegistry,
     ...apiServerDeps,
   });
-  const webSurface = startWebSurfaceForHeadless(deps, apiServerDeps);
+  const webSurface = startWebSurfaceForHeadless(
+    {
+      ...deps,
+      repoRoot: deps.repoRoot,
+      executorRegistry: deps.executorRegistry,
+      taskHandles,
+    },
+    apiServerDeps,
+  );
 
   const wfIdsBefore = new Set(orchestrator.getWorkflowIds());
   orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
@@ -180,7 +209,8 @@ export async function headlessResume(
 
   process.stdout.write(`${BOLD}Resuming workflow: ${workflowId}${RESET}\n\n`);
 
-  const taskExecutor = createHeadlessExecutor(deps);
+  const taskHandles: TaskHandleMap = new Map();
+  const taskExecutor = createTrackedHeadlessExecutor(deps, taskHandles);
   wireHeadlessApproveHook(deps, taskExecutor);
 
   const apiServerDeps = buildHeadlessApiServerDeps(deps, taskExecutor);
@@ -191,7 +221,15 @@ export async function headlessResume(
     executorRegistry: deps.executorRegistry,
     ...apiServerDeps,
   });
-  const webSurface = startWebSurfaceForHeadless(deps, apiServerDeps);
+  const webSurface = startWebSurfaceForHeadless(
+    {
+      ...deps,
+      repoRoot: deps.repoRoot,
+      executorRegistry: deps.executorRegistry,
+      taskHandles,
+    },
+    apiServerDeps,
+  );
 
   orchestrator.syncFromDb(workflowId);
   const allStarted = orchestrator.startExecution();
@@ -268,7 +306,7 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request) as ReturnType<typeof runStartReady> & {
+  const result = runStartReady(deps.orchestrator, request) as StartReadyResult & {
     preview: StartReadyPreviewExt;
   };
   const runnable = result.started.filter(isDispatchableLaunch);
