@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
-const repoRoot = join(dirname(new URL(import.meta.url).pathname), '..', '..', '..', '..');
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 
 describe('plan-to-invoker skill contract', () => {
   it('requires MCP review before host-side submission', () => {
