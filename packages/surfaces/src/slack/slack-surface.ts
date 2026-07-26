@@ -191,8 +191,9 @@ function capTailChars(value: string, max: number): string {
 // ── Planning request parsing ─────────────────────────────────
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
-const URL_TOKEN_TERMINATORS = new Set([' ', '\t', '\n', '\r', '<', '>', '(', ')', '[', ']', '{', '}', '"', "'", '|']);
-const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?']);
+const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+)/gi;
+const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
+const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
@@ -200,50 +201,7 @@ function looksLikePreset(normalized: string): boolean {
 }
 
 export function extractRepoUrlFromMessage(text: string): string | undefined {
-  let start = 0;
-  while (start < text.length) {
-    const httpIndex = text.indexOf('http://', start);
-    const httpsIndex = text.indexOf('https://', start);
-    const candidateStart = httpIndex === -1
-      ? httpsIndex
-      : httpsIndex === -1
-        ? httpIndex
-        : Math.min(httpIndex, httpsIndex);
-    if (candidateStart === -1) return undefined;
-    let candidateEnd = candidateStart;
-    while (candidateEnd < text.length && !URL_TOKEN_TERMINATORS.has(text[candidateEnd])) {
-      candidateEnd += 1;
-    }
-    let candidate = text.slice(candidateStart, candidateEnd);
-    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
-      candidate = candidate.slice(0, -1);
-    }
-    let url: URL;
-    try {
-      url = new URL(candidate);
-    } catch {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.username || url.password) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.search || url.hash) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
-  }
-  return undefined;
+  return extractMessageRepoCandidates(text)[0];
 }
 
 type RepoParts = {
@@ -344,26 +302,47 @@ export function parsePlanningRequest(
   };
 }
 
-function isRepoRootUrl(rawUrl: string): boolean {
-  if (/^(ssh:\/\/|git@)/.test(rawUrl)) return true;
-  try {
-    const u = new URL(rawUrl);
-    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(u.pathname);
-  } catch {
-    return false;
-  }
+function extractRepositoryUrls(text: string): string[] {
+  return extractMessageRepoCandidates(text);
 }
 
-function extractRepositoryUrls(text: string): string[] {
-  const slackLinks = [...text.matchAll(/<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>/gi)];
-  const withoutSlackLinks = text.replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ');
-  const candidates = [
-    ...slackLinks,
-    ...withoutSlackLinks.matchAll(/\bhttps?:\/\/[^\s<>]+/gi),
-    ...withoutSlackLinks.matchAll(/\bssh:\/\/[^\s<>]+/gi),
-    ...withoutSlackLinks.matchAll(/\bgit@[\w.-]+:[^\s<>]+/gi),
-  ].map((match) => (match[1] ?? match[0]).replace(/[),.;]+$/, ''));
-  return [...new Set(candidates)].filter(isRepoRootUrl);
+function extractMessageRepoCandidates(text: string): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  for (const match of text.matchAll(MESSAGE_REPO_TOKEN_RE)) {
+    let candidate = (match[1] ?? match[0]).trim();
+    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
+      candidate = candidate.slice(0, -1);
+    }
+
+    const accepted = (() => {
+      if (/^git@[\w.-]+:.+/.test(candidate)) return candidate;
+      if (/^ssh:\/\//i.test(candidate)) return candidate;
+      if (!/^https?:\/\//i.test(candidate) || /[?#]/.test(candidate)) return undefined;
+
+      let url: URL;
+      try {
+        url = new URL(candidate);
+      } catch {
+        return undefined;
+      }
+      if (!url.host || url.username || url.password || url.search || url.hash) return undefined;
+
+      const host = url.host.toLowerCase();
+      if (host === 'github.com') {
+        return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname)
+          ? candidate.replace(/\/$/, '')
+          : undefined;
+      }
+      return url.pathname.endsWith('.git') ? candidate : undefined;
+    })();
+
+    if (accepted && !seen.has(accepted)) {
+      seen.add(accepted);
+      urls.push(accepted);
+    }
+  }
+  return urls;
 }
 
 function repositoryIdentity(repoUrl: string): string {
