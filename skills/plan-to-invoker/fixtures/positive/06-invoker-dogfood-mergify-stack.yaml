@@ -1,14 +1,18 @@
-# Invoker-on-Invoker dogfood example with explicit Mergify Stacks publication.
+# Invoker-on-Invoker dogfood example with separate later Mergify Stacks publication.
 # Source: examples.md Section 7
 
 name: "Dogfood Invoker CI docs update"
 description: |
   Updates Invoker's own contributor guidance for merge automation.
 
-  This plan still uses the normal Invoker PR gate shape: `onFinish: pull_request`
-  with `mergeMode: external_review`. Because the target repo is Invoker itself, the
-  branch publication workflow after the commits are ready should use
-  `mergify stack push` so stacked PRs stay synchronized.
+  This plan still uses the normal Invoker handoff/review gate shape:
+  `onFinish: pull_request` with `mergeMode: external_review`. Plain approval
+  only approves the Invoker handoff boundary; it does not publish GitHub PRs or
+  update the Mergify stack.
+
+  Later PR publication is a separate explicit action: because the target repo is
+  Invoker itself, publish/update the ready commit stack with `mergify stack push`
+  so stacked PRs stay synchronized.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: git@github.com:EdbertChan/Invoker.git
@@ -22,9 +26,12 @@ tasks:
       Update the Invoker skills and examples so they are explicit about the
       repo-specific dogfood rule:
 
-      1. When the target repo is Invoker itself, keep `mergeMode: external_review`
-         and publish/update the resulting commit stack with `mergify stack push`.
-      2. When the target repo is an external repo, keep normal PR flow unless
+      1. When the target repo is Invoker itself, keep `mergeMode: external_review`.
+      2. Treat plain approval as handoff-only; do not treat approval as GitHub
+         PR publication.
+      3. Show later PR publication as a separate explicit action after the
+         resulting commit stack is ready: run `mergify stack push`.
+      4. When the target repo is an external repo, keep normal PR flow unless
          that repo independently uses Mergify Stacks.
 
       Acceptance criteria:
