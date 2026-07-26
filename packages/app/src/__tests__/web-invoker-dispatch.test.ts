@@ -16,6 +16,7 @@ function makeTask(id: string) {
 
 function makeDispatch(overrides: Record<string, unknown> = {}) {
   const approveTask = vi.fn(async () => ({ ok: true }));
+  const retryTask = vi.fn(async () => ({ ok: true }));
   const deps = {
     orchestrator: {
       getAllTasks: () => [makeTask('wf-1/task-1')],
@@ -25,7 +26,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     persistence: {
       listWorkflows: () => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
     },
-    mutations: { approveTask },
+    mutations: { approveTask, retryTask },
     agentRegistry: { listExecutionHarnesses: () => [] },
     loadConfig: () => ({}),
     getStreamSequence: () => 7,
@@ -34,7 +35,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     detachWorkflow: vi.fn(async () => {}),
     ...overrides,
   };
-  return { dispatch: buildWebInvokerDispatch(deps as never), approveTask };
+  return { dispatch: buildWebInvokerDispatch(deps as never), approveTask, retryTask };
 }
 function makeTaskTerminalAdapter() {
   return {
@@ -150,6 +151,17 @@ describe('buildWebInvokerDispatch', () => {
     const { dispatch, approveTask } = makeDispatch();
     await dispatch('invoker:approve', ['wf/x']);
     expect(approveTask).toHaveBeenCalledWith('wf/x');
+  });
+
+  it('retry-task routes to the mutation facade and the removed channel is unknown', async () => {
+    const { dispatch, retryTask } = makeDispatch();
+    await dispatch('invoker:retry-task', ['wf/x']);
+    expect(retryTask).toHaveBeenCalledWith('wf/x');
+
+    const removedRetryChannel = 'invoker:' + 'restart-task';
+    await expect(dispatch(removedRetryChannel, ['wf/x'])).rejects.toMatchObject({
+      code: 'unknown_channel',
+    });
   });
 
   it('open-terminal degrades gracefully when task terminal support is absent', async () => {

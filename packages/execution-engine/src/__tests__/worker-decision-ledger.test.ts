@@ -190,7 +190,7 @@ describe('autofix decision ledger', () => {
     await tick(tickCtx);
 
     expect(submit).toHaveBeenCalledTimes(2);
-    expect(submit.mock.calls[0]?.[2]).toBe('invoker:restart-task');
+    expect(submit.mock.calls[0]?.[2]).toBe('invoker:retry-task');
     expect(submit.mock.calls[1]?.[2]).toBe('invoker:fix-with-agent');
     const autoFixWrite = upserts.find((w) => w.actionType === 'auto-fix');
     expect(autoFixWrite).toMatchObject({
