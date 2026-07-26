@@ -34,13 +34,13 @@ describe('headless-command-classification', () => {
   it('classifies read-only commands', () => {
     expect(isHeadlessReadOnlyCommand([])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['query'])).toBe(true);
-    expect(isHeadlessReadOnlyCommand(['list'])).toBe(true);
-    expect(isHeadlessReadOnlyCommand(['session'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['open-terminal'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['worker'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['worker', 'status'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['worker', 'disk-headroom'])).toBe(false);
     expect(isHeadlessReadOnlyCommand(['run'])).toBe(false);
+    expect(isHeadlessReadOnlyCommand(['list'])).toBe(false);
+    expect(isHeadlessReadOnlyCommand(['session'])).toBe(false);
   });
 
   it('classifies mutating commands', () => {

@@ -56,12 +56,6 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     }
   });
 
-  it('maps the deprecated alias `list` to `query workflows`', async () => {
-    const deps = makeQueryDeps(() => [{ id: 'wf-9' }]);
-    const output = await runReadOnlyHeadlessQueryToString(['list', '--output', 'label'], deps);
-    expect(output).toBe('wf-9\n');
-  });
-
   it('uses configured default agent when session task has no persisted agent name', async () => {
     const task = {
       id: 'wf-1/task-1',
@@ -85,7 +79,7 @@ describe('runReadOnlyHeadlessQueryToString', () => {
       getAllTasks: vi.fn(() => [task]),
     } as unknown as HeadlessQueryDeps['orchestrator'];
 
-    const output = await runReadOnlyHeadlessQueryToString(['session', 'task-1'], deps);
+    const output = await runReadOnlyHeadlessQueryToString(['query', 'session', 'task-1'], deps);
 
     expect(output).toContain('agent=custom-agent sessionId=sess-1\n');
   });

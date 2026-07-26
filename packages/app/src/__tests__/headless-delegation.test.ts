@@ -163,35 +163,41 @@ describe('headless delegation enforcement', () => {
       stdout.mockRestore();
     });
 
-      it('allows deprecated list command in read-only mode', async () => {
-        await expect(
-          runHeadless(['list'], mockDeps)
-        ).resolves.toBeUndefined();
-      });
+    it('rejects removed list alias in read-only mode', async () => {
+      await expect(
+        runHeadless(['list'], mockDeps),
+      ).rejects.toThrow('Unknown command: list');
+    });
 
-      it('allows query workflow for a single workflow', async () => {
-        mockDeps.persistence.loadWorkflow = vi.fn(() => ({
-          id: 'wf-1',
-          name: 'Workflow one',
-          status: 'pending',
-          generation: 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        } as any));
+    it('rejects removed restart alias', async () => {
+      await expect(
+        runHeadless(['restart', 'wf-1/task-1'], mockDeps),
+      ).rejects.toThrow('Unknown command: restart');
+    });
 
-        await expect(
-          runHeadless(['query', 'workflow', 'wf-1', '--output', 'json'], mockDeps),
-        ).resolves.toBeUndefined();
+    it('allows query workflow for a single workflow', async () => {
+      mockDeps.persistence.loadWorkflow = vi.fn(() => ({
+        id: 'wf-1',
+        name: 'Workflow one',
+        status: 'pending',
+        generation: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      } as any));
 
-        expect(mockDeps.persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
-      });
+      await expect(
+        runHeadless(['query', 'workflow', 'wf-1', '--output', 'json'], mockDeps),
+      ).resolves.toBeUndefined();
 
-    it('allows deprecated status command in read-only mode', async () => {
+      expect(mockDeps.persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
+    });
+
+    it('rejects removed status alias in read-only mode', async () => {
       mockDeps.orchestrator.syncFromDb = vi.fn();
       mockDeps.orchestrator.getAllTasks = vi.fn(() => []);
       await expect(
-        runHeadless(['status'], mockDeps)
-      ).resolves.toBeUndefined();
+        runHeadless(['status'], mockDeps),
+      ).rejects.toThrow('Unknown command: status');
     });
   });
 
@@ -1800,16 +1806,18 @@ describe('headless delegation enforcement', () => {
   });
 
   describe('delete-workflow lifecycle bridge', () => {
-    it('headless delete-workflow always routes through commandService.deleteWorkflow', async () => {
+    it('headless delete-workflow is removed', async () => {
       mockDeps.commandService.deleteWorkflow = vi.fn(async () => ({ ok: true as const, data: undefined })) as any;
       mockDeps.commandService.cancelWorkflow = vi.fn(async () => ({
         ok: true as const,
         data: { cancelled: [], runningCancelled: [] },
       }));
 
-      await runHeadless(['delete-workflow', 'wf-1'], mockDeps);
+      await expect(runHeadless(['delete-workflow', 'wf-1'], mockDeps)).rejects.toThrow(
+        'Unknown command: delete-workflow',
+      );
 
-      expect(mockDeps.commandService.deleteWorkflow).toHaveBeenCalled();
+      expect(mockDeps.commandService.deleteWorkflow).not.toHaveBeenCalled();
     });
 
     it('headless delete preempts running tasks before commandService.deleteWorkflow', async () => {
