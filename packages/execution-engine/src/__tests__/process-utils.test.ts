@@ -15,6 +15,7 @@ function createMockProcess(): ChildProcess & EventEmitter {
   const stderr = new EventEmitter();
   (proc as any).stdout = stdout;
   (proc as any).stderr = stderr;
+  (proc as any).stdin = { write: vi.fn(), end: vi.fn() };
   (proc as any).pid = 4321;
   proc.kill = vi.fn().mockReturnValue(true);
   return proc;
@@ -180,6 +181,28 @@ describe('childProcessHasExited', () => {
 
     expect(processUtils.childProcessHasExited(exited)).toBe(true);
     expect(processUtils.childProcessHasExited(signaled)).toBe(true);
+  });
+});
+
+describe('writeTerminalInputToChildStdin', () => {
+  it('writes ordinary terminal input to child stdin', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const child = createMockProcess();
+
+    processUtils.writeTerminalInputToChildStdin(child, 'hello\n');
+
+    expect((child.stdin as any).write).toHaveBeenCalledWith('hello\n');
+    expect((child.stdin as any).end).not.toHaveBeenCalled();
+  });
+
+  it('treats terminal EOT as EOF for pipe-backed child stdin', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const child = createMockProcess();
+
+    processUtils.writeTerminalInputToChildStdin(child, 'hello\n\x04');
+
+    expect((child.stdin as any).write).toHaveBeenCalledWith('hello\n');
+    expect((child.stdin as any).end).toHaveBeenCalledTimes(1);
   });
 });
 

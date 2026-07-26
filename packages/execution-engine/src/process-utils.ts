@@ -51,6 +51,23 @@ export function childProcessHasExited(child: ChildProcess): boolean {
   return child.exitCode != null || child.signalCode != null;
 }
 
+export function writeTerminalInputToChildStdin(child: ChildProcess | null | undefined, input: string): void {
+  const stdin = child?.stdin;
+  if (!stdin) return;
+
+  const eofIndex = input.indexOf('\x04');
+  if (eofIndex === -1) {
+    stdin.write(input);
+    return;
+  }
+
+  const beforeEof = input.slice(0, eofIndex);
+  if (beforeEof) {
+    stdin.write(beforeEof);
+  }
+  stdin.end();
+}
+
 export async function terminateChildProcessGroup(
   child: ChildProcess,
   isComplete: () => boolean,

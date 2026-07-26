@@ -6,7 +6,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, MergeConflictError, type BaseEntry } from './base-executor.js';
 import { RepoPool } from './repo-pool.js';
-import { killProcessGroup, cleanElectronEnv, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { killProcessGroup, cleanElectronEnv, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS, writeTerminalInputToChildStdin } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
 import {
   computeContentHash,
@@ -558,7 +558,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
-    entry.process?.stdin?.write(input);
+    writeTerminalInputToChildStdin(entry.process, input);
   }
 
   getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {

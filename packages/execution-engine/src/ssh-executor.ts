@@ -5,7 +5,7 @@ import { normalize } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
-import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
+import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS, writeTerminalInputToChildStdin } from './process-utils.js';
 import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import { planManagedWorktree } from './managed-worktree-controller.js';
 import { findManagedWorktreeForBranch, abbrevRefMatchesBranch } from './worktree-discovery.js';
@@ -1136,7 +1136,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
   sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
-    entry.process?.stdin?.write(input);
+    writeTerminalInputToChildStdin(entry.process, input);
   }
 
   getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {

@@ -4,7 +4,7 @@ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { loadSecretsFile } from './secrets-loader.js';
-import { killProcessGroup, cleanElectronEnv } from './process-utils.js';
+import { killProcessGroup, cleanElectronEnv, writeTerminalInputToChildStdin } from './process-utils.js';
 import { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 import type { AgentRegistry } from './agent-registry.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
@@ -522,7 +522,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
   sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);
     if (!entry || entry.completed) return;
-    entry.process?.stdin?.write(input);
+    writeTerminalInputToChildStdin(entry.process, input);
   }
 
   getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {
