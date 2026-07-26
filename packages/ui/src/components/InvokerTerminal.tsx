@@ -25,9 +25,17 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const TERMINAL_OUTPUT_SNAPSHOT_CHAR_CAP = 64 * 1024;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
+}
+
+function appendBoundedTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${snapshot ?? ''}${chunk}`;
+  return nextSnapshot.length > TERMINAL_OUTPUT_SNAPSHOT_CHAR_CAP
+    ? nextSnapshot.slice(-TERMINAL_OUTPUT_SNAPSHOT_CHAR_CAP)
+    : nextSnapshot;
 }
 
 function nowMs(): number {
@@ -219,6 +227,15 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
       if (event.sessionId !== session.sessionId) return;
       try {
         term.write(event.data);
+        const seededSnapshot = seededSnapshotRef.current;
+        const currentSnapshot = seededSnapshot?.sessionId === session.sessionId && seededSnapshot.term === term
+          ? seededSnapshot.snapshot
+          : session.outputSnapshot;
+        seededSnapshotRef.current = {
+          sessionId: session.sessionId,
+          snapshot: appendBoundedTerminalOutputSnapshot(currentSnapshot, event.data),
+          term,
+        };
       } catch {
         /* terminal disposed */
       }
