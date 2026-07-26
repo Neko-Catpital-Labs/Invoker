@@ -929,7 +929,7 @@ describe('SshExecutor entry lifecycle', () => {
     vi.spyOn(ssh as any, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
   });
 
-  it('uses a login shell for task payloads so remote profile PATH applies', async () => {
+  it('loads remote profile env before streaming task payloads', async () => {
     const request = makeRequest({
       inputs: {
         command: 'echo hello',
@@ -941,7 +941,7 @@ describe('SshExecutor entry lifecycle', () => {
     const childProcessMod = await import('node:child_process');
     const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
     const spawnArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
-    expect(spawnArgs.slice(-3)).toEqual(['bash', '-l', '-s']);
+    expect(spawnArgs.slice(-4)).toEqual(['bash', '-l', '-c', 'exec bash -s']);
 
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
     sshProcess.emit('close', 0, null);

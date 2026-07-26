@@ -16,6 +16,45 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !=
   Element.prototype.scrollIntoView = function noopScrollIntoView(): void {};
 }
 
+if (typeof HTMLCanvasElement !== 'undefined') {
+  const createCanvas2dContext = (): CanvasRenderingContext2D => {
+    let fillStyle: string | CanvasGradient | CanvasPattern = '#000000';
+
+    return {
+      get fillStyle() {
+        return fillStyle;
+      },
+      set fillStyle(value: string | CanvasGradient | CanvasPattern) {
+        fillStyle = value;
+      },
+      strokeStyle: '#000000',
+      font: '10px sans-serif',
+      globalCompositeOperation: 'source-over',
+      clearRect(): void {},
+      drawImage(): void {},
+      fillRect(): void {},
+      fillText(): void {},
+      getImageData(): ImageData {
+        return new ImageData(new Uint8ClampedArray([0, 0, 0, 255]), 1, 1);
+      },
+      measureText(): TextMetrics {
+        return { width: 0 } as TextMetrics;
+      },
+      strokeText(): void {},
+      createLinearGradient(): CanvasGradient {
+        return { addColorStop(): void {} } as CanvasGradient;
+      },
+    } as unknown as CanvasRenderingContext2D;
+  };
+
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    configurable: true,
+    value: ((contextId: string) => {
+      return contextId === '2d' ? createCanvas2dContext() : null;
+    }) as unknown as HTMLCanvasElement['getContext'],
+  });
+}
+
 if (typeof window !== 'undefined' && !window.localStorage) {
   const store: Record<string, string> = {};
   const storage: Storage = {
