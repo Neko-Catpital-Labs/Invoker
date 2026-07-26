@@ -206,8 +206,16 @@ function messageRepoCandidate(rawCandidate: string): string | undefined {
     candidate = candidate.slice(0, -1);
   }
   if (!candidate) return undefined;
-  if (/^git@[\w.-]+:.+$/i.test(candidate)) return candidate;
-  if (/^ssh:\/\//i.test(candidate)) return candidate;
+  if (/^git@[\w.-]+:.+$/i.test(candidate)) return /[?#]/.test(candidate) ? undefined : candidate;
+  if (/^ssh:\/\//i.test(candidate)) {
+    try {
+      const url = new URL(candidate);
+      if (!url.host || url.protocol !== 'ssh:' || !url.pathname || url.pathname === '/' || url.search || url.hash) return undefined;
+      return candidate;
+    } catch {
+      return undefined;
+    }
+  }
   if (!/^https?:\/\//i.test(candidate)) return undefined;
 
   let url: URL;
@@ -224,6 +232,14 @@ function messageRepoCandidate(rawCandidate: string): string | undefined {
     return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/i.test(url.pathname) ? candidate : undefined;
   }
   return /\.git$/i.test(url.pathname) ? candidate : undefined;
+}
+
+function textWithoutMessageUrlTokens(text: string): string {
+  return text
+    .replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ')
+    .replace(/\bhttps?:\/\/[^\s<>]+/gi, ' ')
+    .replace(/\bssh:\/\/[^\s<>]+/gi, ' ')
+    .replace(/\bgit@[\w.-]+:[^\s<>]+/gi, ' ');
 }
 
 function nextRepoCandidateStart(text: string, start: number): number {
@@ -1815,8 +1831,9 @@ ${text}`;
   }
 
   private findMentionedRepoAlias(text: string): string | undefined {
+    const searchable = textWithoutMessageUrlTokens(text);
     return Object.keys(this.repoAliases).find((alias) => (
-      new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'i').test(text)
+      new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'i').test(searchable)
     ));
   }
 

@@ -229,6 +229,11 @@ describe('extractRepoUrlFromMessage', () => {
     expect(extractRepoUrlFromMessage('repo is ssh://git@gitlab.com/openai/invoker.git')).toBe('ssh://git@gitlab.com/openai/invoker.git');
   });
 
+  it('rejects query and hash on ssh clone URLs', () => {
+    expect(extractRepoUrlFromMessage('repo is ssh://git@gitlab.com/openai/invoker.git?ref=main')).toBeUndefined();
+    expect(extractRepoUrlFromMessage('repo is git@github.com:openai/invoker.git#main')).toBeUndefined();
+  });
+
   it('requires non-GitHub http URLs to end in .git', () => {
     expect(extractRepoUrlFromMessage('repo is https://www.onorca.dev')).toBeUndefined();
     expect(extractRepoUrlFromMessage('repo is https://gitlab.com/openai/invoker')).toBeUndefined();
@@ -1121,6 +1126,7 @@ describe('lobby verb routing', () => {
       defaultRepoUrl: 'git@github.com:default/repo.git',
       enableImmediateAck: true,
       prepareRepoCheckout,
+      repoAliases: { onorca: 'git@github.com:alias/onorca.git' },
     });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
@@ -1205,7 +1211,10 @@ describe('lobby verb routing', () => {
   });
 
   it('keeps defaultRepoUrl when a first agent message contains a GitHub deep link', async () => {
-    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
+    const surface = lobbySurface(true, {
+      defaultRepoUrl: 'git@github.com:default/repo.git',
+      repoAliases: { invoker: 'git@github.com:alias/invoker.git' },
+    });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
 
@@ -1445,31 +1454,32 @@ describe('lobby verb routing', () => {
   });
 
   it('does not rebind a follow-up deep link', async () => {
-    const boundRepo = 'https://github.com/openai/invoker';
+    const boundRepo = 'git@github.com:default/repo.git';
     const prepareRepoCheckout = vi.fn().mockResolvedValue('/checkouts/unused');
     const { adapter, slackSessionRepo, surface } = await persistentLobbySurface({
       defaultRepoUrl: boundRepo,
-      workingDir: '/checkouts/invoker',
+      workingDir: '/checkouts/default',
       prepareRepoCheckout,
+      repoAliases: { invoker: 'git@github.com:alias/invoker.git' },
     });
 
     try {
       await surface.start(async () => {});
       await mentionHandler(surface)({
-        event: { text: '<@BOT> local: start in invoker', ts: 't1', user: 'U1', channel: 'CLOBBY' },
+        event: { text: '<@BOT> local: start in the default repo', ts: 't1', user: 'U1', channel: 'CLOBBY' },
         say: vi.fn().mockResolvedValue({ ts: 'a' }),
       });
 
       const deepLinkSay = vi.fn().mockResolvedValue({ ts: 'b' });
       await messageHandler(surface)({
-        event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'run local: inspect https://github.com/openai/new-repo/pull/123', channel: 'CLOBBY' },
+        event: { thread_ts: 't1', ts: 't2', user: 'U1', text: 'run local: inspect https://github.com/openai/invoker/pull/123', channel: 'CLOBBY' },
         say: deepLinkSay,
       });
 
       expect(prepareRepoCheckout).not.toHaveBeenCalled();
       expect(slackSessionRepo.getLaunchContext('t1')).toEqual(expect.objectContaining({
         repoUrl: boundRepo,
-        workingDir: '/checkouts/invoker',
+        workingDir: '/checkouts/default',
       }));
       expect(planConversationConfigs).toHaveLength(1);
       const texts = deepLinkSay.mock.calls.map((call) => call[0].text).join('\n');
@@ -1488,6 +1498,7 @@ describe('lobby verb routing', () => {
       defaultRepoUrl: boundRepo,
       workingDir: '/checkouts/default',
       prepareRepoCheckout,
+      repoAliases: { onorca: 'git@github.com:alias/onorca.git' },
     });
 
     try {
