@@ -72,6 +72,8 @@ import {
 } from './lib/graph-camera.js';
 import type { SystemDiagnostics } from '@invoker/contracts';
 
+const PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
+
 type ModalState =
   | { type: 'none' }
   | { type: 'input'; task: TaskState }
@@ -210,6 +212,12 @@ function planningSessionSummaryToView(session: InAppPlanningSessionSummary): Pla
     busy: false,
     conversationKey: session.id,
   };
+}
+
+function appendPlanningTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${snapshot ?? ''}${chunk}`;
+  if (nextSnapshot.length <= PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS) return nextSnapshot;
+  return nextSnapshot.slice(nextSnapshot.length - PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS);
 }
 
 function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
@@ -1080,6 +1088,51 @@ export function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || typeof event.data !== 'string' || event.data.length === 0) return;
+      const eventPlanningSessionId = typeof event.planningSessionId === 'string'
+        ? event.planningSessionId.trim()
+        : '';
+
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const terminalSession = session.terminalSession;
+          if (!terminalSession) return session;
+
+          const matchesPlanningSession = eventPlanningSessionId.length > 0
+            && (
+              session.id === eventPlanningSessionId
+              || terminalSession.planningSessionId === eventPlanningSessionId
+            );
+          const matchesTerminalSession = eventPlanningSessionId.length === 0
+            && terminalSession.sessionId === event.sessionId;
+          if (!matchesPlanningSession && !matchesTerminalSession) return session;
+
+          changed = true;
+          const outputSnapshot = appendPlanningTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data);
+          const terminalUpdatedAt = new Date().toISOString();
+          return {
+            ...session,
+            terminalMode: 'tmux',
+            terminalSessionId: terminalSession.sessionId,
+            terminalStatus: terminalSession.status,
+            terminalExitCode: terminalSession.exitCode,
+            terminalOutputSnapshot: outputSnapshot,
+            terminalUpdatedAt,
+            terminalSession: {
+              ...terminalSession,
+              outputSnapshot,
+            },
+          };
+        });
+        return changed ? next : prev;
+      });
+    });
+    return () => { unsubscribe?.(); };
   }, []);
 
   useEffect(() => {
