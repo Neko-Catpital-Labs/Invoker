@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { accessSync, constants } from 'node:fs';
 import { normalize } from 'node:path';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+import type { TaskState } from '@invoker/workflow-core';
 import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from './executor.js';
 import { BaseExecutor, type BaseEntry } from './base-executor.js';
 import { killProcessGroup, cleanElectronEnv, SIGKILL_TIMEOUT_MS } from './process-utils.js';
@@ -30,6 +31,7 @@ import {
   createSshRemoteScriptError,
   parseOwnedWorktreePath,
 } from './ssh-git-exec.js';
+import { classifyAutoFixFailure } from './auto-fix-gating.js';
 
 export interface SshExecutorConfig {
   host: string;
@@ -55,6 +57,8 @@ export interface SshExecutorConfig {
   useApiKey?: boolean;
   /** Optional local secrets file used when useApiKey is true. */
   secretsFile?: string;
+  /** Optional remote dependency provisioning command run inside managed worktrees. */
+  provisionCommand?: string;
   /**
    * Remote workload heartbeat interval (seconds) emitted by the SSH payload wrapper.
    * Default: 30.
@@ -79,6 +83,16 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   readonly type = 'ssh';
   private static readonly REMOTE_HEARTBEAT_MARKER = '__INVOKER_REMOTE_HEARTBEAT__';
   private static readonly DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS = 30;
+  private static readonly FALLBACK_BANNER_LINES = new Set([
+    '[SshExecutor] Installing pnpm dependencies for managed worktree...',
+    '[SshExecutor] Running task payload...',
+  ]);
+  private static readonly CLEANUP_TAIL_PREFIX = 'Executor cleanup failed (ssh remote finalize):';
+  private static readonly CLEANUP_TAIL_MARKERS = [
+    'pop_var_context',
+    'Orphan function call output',
+    '[SshExecutor] Recording task result and pushing branch on remote...',
+  ] as const;
 
   private readonly host: string;
   private readonly user: string;
@@ -89,7 +103,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly remoteInvokerHome: string;
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
-  private readonly remoteHeartbeatIntervalSeconds: number;
+  private readonly provisionCommand: string;
 
   constructor(config: SshExecutorConfig) {
     super();
@@ -102,6 +116,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
+    this.provisionCommand = config.provisionCommand?.trim() || 'pnpm install --frozen-lockfile';
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
     this.remoteHeartbeatIntervalSeconds =
       typeof configuredRemoteHeartbeatInterval === 'number'
@@ -238,12 +253,8 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
   if [ ! -f pnpm-lock.yaml ] || [ -d node_modules ]; then
     return 0
   fi
-  if ! command -v pnpm >/dev/null 2>&1; then
-    echo "[SshExecutor] pnpm-lock.yaml found and node_modules missing, but pnpm is not installed." >&2
-    return 127
-  fi
   echo "[SshExecutor] Installing pnpm dependencies for managed worktree..."
-  pnpm install --frozen-lockfile
+  ${this.provisionCommand}
 }
 ensure_managed_pnpm_workspace
 `
@@ -885,6 +896,57 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     }
     return 'SSH transport failed (exit 255): remote session terminated unexpectedly.';
   }
+  private classifyFallbackFailureBucket(errorText: string) {
+    return classifyAutoFixFailure({
+      execution: {
+        error: errorText,
+        failureClass: undefined,
+      },
+    } as Pick<TaskState, 'execution'>);
+  }
+
+  private stripFallbackBannerPreamble(output: string): string {
+    const lines = output.split('\n');
+    let index = 0;
+    while (index < lines.length) {
+      const trimmed = lines[index]?.trim() ?? '';
+      if (!trimmed) {
+        index += 1;
+        continue;
+      }
+      if (!SshExecutor.FALLBACK_BANNER_LINES.has(trimmed)) {
+        break;
+      }
+      index += 1;
+    }
+    const stripped = lines.slice(index).join('\n').trim();
+    return stripped || output.trim();
+  }
+
+  private hasCompletedAgentTurn(output: string): boolean {
+    return output.includes('"type":"turn.completed"')
+      || (output.includes('"type":"item.completed"') && output.includes('"type":"agent_message"'));
+  }
+
+  private hasExplicitFailurePayload(output: string): boolean {
+    return output.includes('"type":"turn.failed"') || output.includes('"type":"error"');
+  }
+
+  private buildCleanupFallbackError(output: string): string | undefined {
+    if (!this.hasCompletedAgentTurn(output) || this.hasExplicitFailurePayload(output)) {
+      return undefined;
+    }
+    if (!SshExecutor.CLEANUP_TAIL_MARKERS.some((marker) => output.includes(marker))) {
+      return undefined;
+    }
+    if (output.includes('pop_var_context')) {
+      return `${SshExecutor.CLEANUP_TAIL_PREFIX} bash pop_var_context after remote run completed.`;
+    }
+    if (output.includes('Orphan function call output')) {
+      return `${SshExecutor.CLEANUP_TAIL_PREFIX} orphan function-call output after remote run completed.`;
+    }
+    return `${SshExecutor.CLEANUP_TAIL_PREFIX} remote finalize wrapper output after remote run completed.`;
+  }
 
   /**
    * On the remote host: commit task result (same semantics as local recordTaskResult) then push branch.
@@ -1069,10 +1131,21 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
           // capture the tail of the output buffer so the UI shows what went wrong.
           if (!mappedError && exitCode !== 0 && e) {
             const allOutput = e.outputBuffer.join('');
-            const lines = allOutput.split('\n');
-            const tail = lines.slice(-50).join('\n').trim();
-            if (tail) {
-              mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+            const sanitizedOutput = this.stripFallbackBannerPreamble(allOutput);
+            const cleanupFallbackError = this.buildCleanupFallbackError(sanitizedOutput);
+            if (cleanupFallbackError) {
+              mappedError = cleanupFallbackError;
+            } else {
+              const lines = sanitizedOutput.split('\n');
+              const tail = lines.slice(-50).join('\n').trim();
+              if (tail) {
+                const failureBucket = this.classifyFallbackFailureBucket(tail);
+                if (failureBucket === 'infra_setup' && SshExecutor.FALLBACK_BANNER_LINES.has(tail)) {
+                  mappedError = 'Executor startup failed (ssh): remote task wrapper exited before surfacing a concrete failure.';
+                } else {
+                  mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+                }
+              }
             }
           }
 

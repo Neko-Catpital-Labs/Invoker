@@ -20,7 +20,7 @@ import {
   registerAutoFixWorker,
   RECOVERY_WORKER_KIND,
   type WorkerRuntimeDependencies,
-} from '../workers/auto-fix-recovery.js';
+} from '../../../execution-engine/src/index.js';
 import type { RecoveryWorkerWakeupHint } from '../lifecycle-events.js';
 
 const attemptStateKey = ['auto', 'FixAttempts'].join('');
@@ -462,6 +462,33 @@ describe('auto-fix recovery scan submission', () => {
         owner: 'auto-fix',
         action: 'submit',
         phase: 'worker-autofix-submitted',
+      }),
+    );
+  });
+  it('skips infra-bucket failures before submitting any auto-fix intent', async () => {
+    const harness = makeRecoveryPolicyHarness(makeTask({
+      execution: {
+        error: 'Executor startup failed (ssh): SSH remote script failed (exit=1)',
+        generation: 1,
+        selectedAttemptId: 'attempt-1',
+      },
+    }));
+    const tick = createAutoFixRecoveryTick(harness.options);
+
+    await tick({
+      identity: { kind: 'recovery', instanceId: 'test' },
+      reason: 'startup',
+      tickNumber: 1,
+    });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.logEvent).toHaveBeenCalledWith(
+      'wf-1/task-1',
+      'debug.auto-fix',
+      expect.objectContaining({
+        phase: 'worker-autofix-skip',
+        reason: 'not-eligible',
+        failureBucket: 'infra_setup',
       }),
     );
   });
