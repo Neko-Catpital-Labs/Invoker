@@ -1734,6 +1734,22 @@ function startHeadlessMode(): void {
             setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
           });
         }
+        if (command === 'owner-serve') {
+          const ownerServeTaskExecutor = createStandaloneTaskExecutor();
+          const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
+          headlessWebBridge = startWebSurfaceForHeadless(
+            {
+              logger,
+              orchestrator,
+              persistence,
+              messageBus,
+              executionAgentRegistry: agentRegistry,
+              invokerConfig,
+              appRootDir: __dirname,
+            },
+            apiServerDeps,
+          );
+        }
 
         void recoverWorkflowMutationsOnStartup({
           ownerMode: true,
