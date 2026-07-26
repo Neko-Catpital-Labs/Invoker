@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -229,6 +230,14 @@ function planningSessionStatusLabel(session: PlanningSessionView): string {
   if (session.status === 'waiting_for_answer') return 'Waiting for answer';
   if (session.status === 'submitted') return 'Submitted';
   return 'Still discussing';
+}
+
+function appendTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  if (!chunk) return snapshot ?? '';
+  const nextSnapshot = `${snapshot ?? ''}${chunk}`;
+  return nextSnapshot.length <= TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS
+    ? nextSnapshot
+    : nextSnapshot.slice(nextSnapshot.length - TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS);
 }
 
 function relativePlanningUpdatedAt(value: string): string {
@@ -1043,6 +1052,42 @@ export function App() {
         setTerminalDrawerState('partial');
       }
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || !event.data) return;
+
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const terminalSession = session.terminalSession ?? null;
+          const matchesPlanningSession = Boolean(event.planningSessionId && session.id === event.planningSessionId);
+          const matchesTerminalSession = Boolean(terminalSession && terminalSession.sessionId === event.sessionId);
+          if (!terminalSession || (!matchesPlanningSession && !matchesTerminalSession)) {
+            return session;
+          }
+
+          const outputSnapshot = appendTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data);
+          if (outputSnapshot === (terminalSession.outputSnapshot ?? '')) {
+            return session;
+          }
+
+          changed = true;
+          return {
+            ...session,
+            terminalSession: {
+              ...terminalSession,
+              kind: 'planning',
+              planningSessionId: terminalSession.planningSessionId ?? event.planningSessionId,
+              outputSnapshot,
+            },
+          };
+        });
+        return changed ? next : prev;
+      });
+    });
+    return () => { unsubscribe?.(); };
   }, []);
 
   useEffect(() => {
