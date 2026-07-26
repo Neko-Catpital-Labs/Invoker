@@ -83,6 +83,7 @@ must_contain "$CANONICAL_COMMAND" "description: Plan a change and submit it thro
 must_contain "$CANONICAL_COMMAND" 'argument-hint: "help me plan <change>"' "Invoker handoff command must keep host argument hint frontmatter"
 must_contain "$CANONICAL_COMMAND" "Use this host's native planning mode when the host supports entering it from this command." "Invoker handoff command must enter host-native planning mode when available"
 must_contain "$CANONICAL_COMMAND" "If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved." "Invoker handoff command must stay handoff-only before approval"
+must_not_contain "$CANONICAL_COMMAND" "Mergify Stacks" "Invoker handoff command must not include later PR publication wording"
 must_not_contain "$CANONICAL_COMMAND" "mergify stack push" "Invoker handoff command must not publish PR stacks directly"
 must_contain "$CANONICAL_COMMAND" "invoker_validate_plan" "Invoker handoff command must validate through MCP"
 must_contain "$CANONICAL_COMMAND" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
