@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
@@ -171,6 +171,102 @@ describe('Browser-surface camera (component)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task Two');
+    });
+    await flushFrames(6);
+
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('a background auto-select reshuffle changes selection but issues no camera command', async () => {
+    const workflowAlpha: WorkflowMeta = { id: 'wf-alpha', name: 'Alpha Flow', status: 'running' };
+    const alphaTask = makeUITask({
+      id: 'wf-alpha/fix',
+      description: 'Alpha failed task',
+      workflowId: 'wf-alpha',
+      status: 'failed',
+      taskStateVersion: 1,
+    });
+    const betaTask = makeUITask({
+      id: 'wf-alpha/input',
+      description: 'Beta blocked task',
+      workflowId: 'wf-alpha',
+      status: 'blocked',
+      taskStateVersion: 1,
+    });
+    mock.setTasks([alphaTask, betaTask], [workflowAlpha]);
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    await screen.findByTestId('selected-workflow-mini-dag');
+    fireEvent.click(await screen.findByRole('button', { name: /Beta blocked task/ }));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Beta blocked task');
+    });
+
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    await act(async () => {
+      mock.setTasks([
+        alphaTask,
+        { ...betaTask, status: 'running', taskStateVersion: 2 },
+      ], [workflowAlpha]);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha failed task');
+    });
+    await flushFrames(6);
+
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('a workflow-mutation-failed event selects the failed task but issues no camera command', async () => {
+    const workflowAlpha: WorkflowMeta = { id: 'wf-alpha', name: 'Alpha Flow', status: 'running' };
+    const alphaTask = makeUITask({
+      id: 'wf-alpha/fix',
+      description: 'Alpha failed task',
+      workflowId: 'wf-alpha',
+      status: 'failed',
+      taskStateVersion: 1,
+    });
+    const betaTask = makeUITask({
+      id: 'wf-alpha/pending',
+      description: 'Beta mutation target',
+      workflowId: 'wf-alpha',
+      status: 'pending',
+      taskStateVersion: 1,
+    });
+    mock.setTasks([alphaTask, betaTask], [workflowAlpha]);
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId('sidebar-attention'));
+    await screen.findByTestId('selected-workflow-mini-dag');
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha failed task');
+    });
+
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    act(() => {
+      mock.fireWorkflowMutationFailed({
+        intentId: 99,
+        workflowId: workflowAlpha.id,
+        channel: 'invoker:approve',
+        taskId: betaTask.id,
+        message: 'approve failed',
+        failedAt: '2026-07-26T00:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Beta mutation target');
     });
     await flushFrames(6);
 
