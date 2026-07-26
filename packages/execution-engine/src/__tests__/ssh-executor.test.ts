@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
@@ -361,6 +361,94 @@ describe('SshExecutor managed workspace mode', () => {
     } finally {
       rmSync(fakeHome, { recursive: true, force: true });
       proc.emit('close', 0, null);
+    }
+  });
+  it('managed mode preserves the missing-pnpm sentinel for the default provision command', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 1,
+      remoteInvokerHome: '~/.invoker',
+    });
+    const sshPrivate = ssh as unknown as {
+      execRemoteCapture: (script: string) => Promise<string>;
+      setupTaskBranch: (...args: Array<unknown>) => Promise<void>;
+    };
+
+    vi.spyOn(sshPrivate, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(sshPrivate, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    const handle = await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'payload-ran\\n' > payload.out",
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const completion = Promise.withResolvers<void>();
+    ssh.onComplete(handle, () => {
+      completion.resolve();
+    });
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const stdin = proc.stdin;
+    if (!stdin || typeof stdin.write !== 'function') {
+      throw new Error('Managed SSH bootstrap did not expose a writable stdin');
+    }
+    const mockedWrite = stdin.write as unknown as { mock: { calls: Array<[string]> } };
+    const writeCalls = mockedWrite.mock.calls;
+    const bootstrapScript = writeCalls[0]?.[0];
+    const workspaceMatch = typeof bootstrapScript === 'string'
+      ? bootstrapScript.match(/WT=\$\(normalize_remote_path '([^']+)'\)/)
+      : undefined;
+    if (typeof bootstrapScript !== 'string' || !workspaceMatch?.[1]) {
+      throw new Error('Managed SSH bootstrap did not embed a workspace path');
+    }
+
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-missing-pnpm-home-'));
+    const stubBin = join(fakeHome, 'bin');
+    mkdirSync(stubBin, { recursive: true });
+
+    const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+    for (const command of ['bash', 'cat', 'chmod', 'date', 'mkdir', 'rm', 'sleep']) {
+      const lookup = childProcessModule.spawnSync('/bin/bash', ['-lc', `command -v ${command}`], {
+        encoding: 'utf8',
+      });
+      expect(lookup.status).toBe(0);
+      symlinkSync(lookup.stdout.trim(), join(stubBin, command));
+    }
+
+    try {
+      const workspacePath = workspaceMatch[1].replace(/^~(?=\/|$)/, fakeHome);
+      mkdirSync(workspacePath, { recursive: true });
+      writeFileSync(join(workspacePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', bootstrapScript], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome, PATH: stubBin },
+      });
+
+      expect(bootstrapScript).toContain('command -v pnpm');
+      expect(result.status).toBe(127);
+      expect(result.stderr).toContain(
+        '[SshExecutor] pnpm-lock.yaml found and node_modules missing, but pnpm is not installed.',
+      );
+      expect(result.stderr).not.toContain('pnpm: command not found');
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+      proc.emit('close', 0, null);
+      await completion.promise;
     }
   });
 
