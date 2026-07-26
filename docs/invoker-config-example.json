@@ -16,7 +16,7 @@
       "comment": "DockerExecutor configuration"
     },
     "ssh": {
-      "comment": "SshExecutor uses per-target settings from remoteTargets"
+      "comment": "SshExecutor uses per-target settings from remoteTargets; local worktrees use worktreeTargets"
     }
   },
 
@@ -46,6 +46,13 @@
       "remoteHeartbeatIntervalSeconds": 30
     }
   },
+  "worktreeTargets": {
+    "local-fallback": {
+      "comment": "Named local worktree target with target-owned provisioning",
+      "provisionCommand": "pnpm install --frozen-lockfile",
+      "maxConcurrentTasks": 2
+    }
+  },
 
   "executionPools": {
     "mixed-local-ssh": {
@@ -53,7 +60,7 @@
       "members": [
         { "type": "ssh", "id": "staging-server" },
         { "type": "ssh", "id": "build-server-b" },
-        { "type": "worktree", "id": "local-fallback", "maxConcurrentTasks": 2 }
+        { "type": "worktree", "id": "local-fallback" }
       ],
       "selectionStrategy": "roundRobin",
       "maxConcurrentTasksPerMember": 1

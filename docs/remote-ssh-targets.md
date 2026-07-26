@@ -23,6 +23,7 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "sshKeyPath": "/home/user/.ssh/id_staging",
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "bash scripts/provision-ssh-worker.sh ensure-repo-ready",
       "remoteHeartbeatIntervalSeconds": 30
     },
     "staging-server-b": {
@@ -32,12 +33,13 @@ If you want to use a repo-specific config file, launch Invoker with `INVOKER_REP
       "port": 22,
       "managedWorkspaces": true,
       "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "bash scripts/provision-ssh-worker.sh ensure-repo-ready",
       "remoteHeartbeatIntervalSeconds": 30
     }
   }
 }
 ```
-Invoker does not run repo bootstrap automatically on managed SSH checkouts. If a repo needs setup such as `pnpm install` or `flutter pub get`, make the task command run that repo-owned step explicitly.
+Managed SSH checkouts only run repo bootstrap when the target defines `provisionCommand`. Leave it unset to skip hydration entirely.
 
 ## Owner-host workers
 
@@ -64,6 +66,7 @@ Do not install separate cron jobs on SSH targets for these maintenance paths. Th
 | `port` | number | no | SSH port (default: 22) |
 | `managedWorkspaces` | boolean | no | When true, Invoker clones/fetches the repo and manages per-task worktrees on the remote host |
 | `remoteInvokerHome` | string | no | Base directory used by managed remote workspaces (default: `~/.invoker`) |
+| `provisionCommand` | string | no | Repo-owned bootstrap command run inside each managed remote worktree before the task payload |
 | `remoteHeartbeatIntervalSeconds` | number | no | Interval (seconds) for SSH remote workload heartbeat markers used by executing-stall detection (default: `30`) |
 
 ## Multiple SSH Targets
@@ -121,7 +124,7 @@ The executor validates at runtime that the selected target or pool exists and re
 
 1. The plan parser reads `poolId` from YAML and stores it on the task config.
 2. At dispatch time, Invoker resolves that `poolId` either directly to a `remoteTargets` entry or to an `executionPools` member selection.
-3. An `SshExecutor` instance is created with the chosen target's connection details.
+3. An `SshExecutor` instance is created with the chosen target's connection and managed-worktree bootstrap details.
 4. The runner spawns: `ssh -i <keyPath> -p <port> -o StrictHostKeyChecking=accept-new -o BatchMode=yes user@host <command>`
 5. For `claude` action types, the Claude CLI command is shell-quoted and executed remotely.
 

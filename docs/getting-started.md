@@ -158,19 +158,27 @@ Minimal example:
       "user": "invoker",
       "sshKeyPath": "/home/you/.ssh/invoker_staging_a",
       "managedWorkspaces": true,
-      "remoteInvokerHome": "~/.invoker"
+      "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "bash scripts/provision-ssh-worker.sh ensure-repo-ready"
     },
     "staging-b": {
       "host": "203.0.113.11",
       "user": "invoker",
       "sshKeyPath": "/home/you/.ssh/invoker_staging_b",
       "managedWorkspaces": true,
-      "remoteInvokerHome": "~/.invoker"
+      "remoteInvokerHome": "~/.invoker",
+      "provisionCommand": "bash scripts/provision-ssh-worker.sh ensure-repo-ready"
+    }
+  },
+  "worktreeTargets": {
+    "local-default": {
+      "provisionCommand": "pnpm install --frozen-lockfile",
+      "maxConcurrentTasks": 2
     }
   }
 }
 ```
-Invoker does not run repo bootstrap automatically on managed SSH checkouts. If a repo needs setup such as `pnpm install` or `flutter pub get`, make the task command run that repo-owned step explicitly.
+Managed SSH checkouts only run repo bootstrap when the target defines `provisionCommand`. Local managed worktrees follow the same rule through `worktreeTargets`.
 
 SSH task payloads and remote auto-fix/conflict scripts source `<remoteInvokerHome>/env.sh` directly under non-login `bash -s`; they do **not** rely on user dotfiles at runtime. `scripts/provision-ssh-worker.sh` still installs the same env hook into `.bash_profile`, `.bash_login`, `.profile`, and `.bashrc` so interactive shells pick up the worker PATH too.
 
