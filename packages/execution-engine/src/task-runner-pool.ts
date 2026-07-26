@@ -73,6 +73,7 @@ export type RemoteTargetDisplay = {
   port?: number;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
+  provisionCommand?: string;
   use_api_key?: boolean;
   secretsFile?: string;
   remoteHeartbeatIntervalSeconds?: number;

@@ -78,6 +78,7 @@ interface SshEntry extends BaseEntry {
 export class SshExecutor extends BaseExecutor<SshEntry> {
   readonly type = 'ssh';
   private static readonly REMOTE_HEARTBEAT_MARKER = '__INVOKER_REMOTE_HEARTBEAT__';
+  private static readonly DEFAULT_PROVISION_COMMAND = 'pnpm install --frozen-lockfile';
   private static readonly DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS = 30;
 
   private readonly host: string;
@@ -89,6 +90,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly remoteInvokerHome: string;
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
+  private readonly provisionCommand: string;
+  private readonly usesDefaultProvisionCommand: boolean;
   private readonly remoteHeartbeatIntervalSeconds: number;
 
   constructor(config: SshExecutorConfig) {
@@ -102,6 +105,11 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
+    const configuredProvisionCommand = config.provisionCommand?.trim();
+    this.provisionCommand =
+      configuredProvisionCommand || SshExecutor.DEFAULT_PROVISION_COMMAND;
+    this.usesDefaultProvisionCommand =
+      this.provisionCommand === SshExecutor.DEFAULT_PROVISION_COMMAND;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
     this.remoteHeartbeatIntervalSeconds =
       typeof configuredRemoteHeartbeatInterval === 'number'
@@ -230,6 +238,13 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const managedWorkspaceProvisionCommand = this.usesDefaultProvisionCommand
+      ? `if ! command -v pnpm >/dev/null 2>&1; then
+  echo "[SshExecutor] pnpm-lock.yaml found and node_modules missing, but pnpm is not installed." >&2
+  return 127
+fi
+${SshExecutor.DEFAULT_PROVISION_COMMAND}`
+      : this.provisionCommand;
     const managedWorkspaceBootstrap = options.managed
       ? `ensure_managed_pnpm_workspace() {
   if [ "\${INVOKER_SKIP_MANAGED_PNPM_INSTALL:-}" = "1" ]; then
@@ -243,7 +258,7 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     return 127
   fi
   echo "[SshExecutor] Installing pnpm dependencies for managed worktree..."
-  pnpm install --frozen-lockfile
+  ${managedWorkspaceProvisionCommand}
 }
 ensure_managed_pnpm_workspace
 `
