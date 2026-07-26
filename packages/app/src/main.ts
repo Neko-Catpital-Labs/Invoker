@@ -145,6 +145,7 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { buildHeadlessApiServerDeps } from './headless-shared.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
@@ -210,7 +211,7 @@ import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
-import { resolveWebToken, resolveWebHost, resolveWebPort } from './web/start-web-surface.js';
+import { resolveWebToken, resolveWebHost, resolveWebPort, startWebSurfaceForHeadless } from './web/start-web-surface.js';
 import {
   createGuiMutationRegistrars,
   registerBootstrapStateIpc,
@@ -938,6 +939,7 @@ function startHeadlessMode(): void {
     let workerRuntimeController: WorkerRuntimeController | null = null;
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
+    let headlessWebBridge: WebBridge | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1703,6 +1705,24 @@ function startHeadlessMode(): void {
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
+        if (command === 'owner-serve') {
+          const ownerServeTaskExecutor = createStandaloneTaskExecutor();
+          const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
+          headlessWebBridge = startWebSurfaceForHeadless(
+            {
+              logger,
+              orchestrator,
+              persistence,
+              messageBus,
+              executionAgentRegistry: agentRegistry,
+              invokerConfig,
+              repoRoot,
+              executorRegistry,
+              appRootDir: __dirname,
+            },
+            apiServerDeps,
+          );
+        }
         const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
         if (reconciledWorkerActions > 0) {
           logger.info(
@@ -1736,6 +1756,7 @@ function startHeadlessMode(): void {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      await headlessWebBridge?.close();
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
       await workerRuntimeController?.stopAll();
