@@ -11,8 +11,10 @@ Write the planning artifact to `plans/invoker-handoff.md`.
 
 Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 
-Validate with `invoker_validate_plan` before submitting.
+Call `invoker_prepare_plan_review` on `plans/invoker-handoff.yaml`, show the returned ordered steps and `confirmationText`, and use that review output as the only approval gate.
 
-Submit with `invoker_submit_plan` using mode `live` so the workflow appears in the running Invoker app.
+If the review result says `confirmationMode` is `require`, wait for approval before submission. If it says `auto_submit`, show the same review output and then submit immediately.
 
-If MCP tools are not available but `invoker-cli` is on PATH, run `invoker-cli run plans/invoker-handoff.yaml --live` instead.
+Call `invoker_submit_plan` with mode `live` only after that review step, or immediately after it when `confirmationMode` is `auto_submit`.
+
+If MCP tools are not available but `invoker-cli` is on PATH, mirror the same flow with `invoker-cli run plans/invoker-handoff.yaml --live` only after the review/approval step.
