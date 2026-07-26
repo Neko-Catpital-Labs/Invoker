@@ -70,10 +70,22 @@ class AdminBypassGhExecutor:
     def resolve_bot_threads(self, thread_id: str) -> None:
         self.gh.resolve_review_thread(thread_id)
 
+    def has_blocked_comment(self, pr_number: int, detail: str) -> bool:
+        body = f"Mergify repair stopped: {detail}"
+        return any(str(comment.get("body") or "") == body for comment in self.gh.issue_comments(self.repo, pr_number))
+
     def comment_blocked(self, pr: PrSnapshot, detail: str, key: str, now: int) -> None:
         if self.ledger.count("comment-blocked", pr.number, pr.head_ref_oid, key) == 0:
             self.gh.comment(self.repo, pr.number, f"Mergify repair stopped: {detail}")
             self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, key, now)
+            return
+        if (
+            key == "no-current-bottom"
+            and detail != "no current bottom on master"
+            and not self.has_blocked_comment(pr.number, detail)
+        ):
+            self.gh.comment(self.repo, pr.number, f"Mergify repair stopped: {detail}")
+            self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, "no-current-bottom:exact", now)
 
     def execute(self, action: Action, pr: PrSnapshot, now: int) -> None:
         self.logger.trace("admin-bypass-action-execute", action=self.logger.action_payload(action))
