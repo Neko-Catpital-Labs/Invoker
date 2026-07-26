@@ -763,7 +763,7 @@ export async function selectExperiments(
  *
  * This wrapper deliberately stays a thin async delegate to keep the
  * public surface (`(workflowId, mergeMode, deps)` returning `void`)
- * backward compatible for IPC handlers (`invoker:set-merge-mode`),
+ * compatible with workflow-scoped IPC handlers,
  * the api-server (`POST /api/workflows/:id/merge-mode`), and Slack
  * surfaces. The merge-task-id translation (`workflowId → mergeNodeId`)
  * happens here because callers speak workflow ids; the orchestrator
