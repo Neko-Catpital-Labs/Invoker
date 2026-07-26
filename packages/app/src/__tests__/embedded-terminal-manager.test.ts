@@ -29,6 +29,7 @@ import {
 import { resolveTaskTerminalSpec } from '../open-terminal-for-task.js';
 import {
   ExecutorRegistry,
+  MAX_TERMINAL_DISPLAY_BRIDGE_CHARS,
   WorktreeExecutor,
   type Executor,
   type ExecutorHandle,
@@ -255,6 +256,60 @@ describe('EmbeddedTerminalManager', () => {
     const reused = mgr.openOrReuse({ taskId: 'task-early', spec: {}, cwd: '/tmp/wt' });
     expect(reused.sessionId).toBe(session.sessionId);
     expect(reused.outputSnapshot).toBe(firstFrame);
+  });
+
+  it('seeds display bridge before synchronous backend output and keeps it out of target identity', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('backend-ready\n');
+        return spawned;
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-bridge',
+      spec: { cwd: '/tmp/wt', displayBridge: 'Reopening task: inspect the failed test' },
+      cwd: '/tmp/wt',
+    });
+    const record = mgr.getPersistenceRecord(session.sessionId);
+    const reusedWithUpdatedBridge = mgr.openOrReuse({
+      taskId: 'task-bridge',
+      spec: { cwd: '/tmp/wt', displayBridge: 'Updated summary text should not create a new tab' },
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.outputSnapshot).toBe('Reopening task: inspect the failed test\nbackend-ready\n');
+    expect(record?.outputSnapshot).toBe('Reopening task: inspect the failed test\nbackend-ready\n');
+    expect(reusedWithUpdatedBridge.sessionId).toBe(session.sessionId);
+    expect(backend.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds display bridge before seeding the output snapshot', () => {
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => ({
+        write: vi.fn(),
+        resize: vi.fn(),
+        close: vi.fn(),
+      })),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-bridge-bound',
+      spec: { cwd: '/tmp/wt', displayBridge: 'x'.repeat(MAX_TERMINAL_DISPLAY_BRIDGE_CHARS + 100) },
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.outputSnapshot).toHaveLength(MAX_TERMINAL_DISPLAY_BRIDGE_CHARS);
+    expect(session.outputSnapshot?.endsWith('\n')).toBe(true);
   });
 
   it('opens a distinct session when the same task resolves to a different terminal target', () => {

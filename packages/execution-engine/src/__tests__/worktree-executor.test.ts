@@ -557,6 +557,22 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
+  it('getTerminalSpec preserves caller-supplied display bridge without changing cwd-only spec', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const request = makeRequest();
+    const handle = await executor.start(request);
+    handle.displayBridge = 'Live task context\n';
+    const spec = executor.getTerminalSpec(handle);
+
+    expect(spec).toEqual({
+      cwd: expect.stringMatching(/^\/fake\/worktrees\//),
+      displayBridge: 'Live task context\n',
+    });
+
+    taskProcess.emit('close', 0, null);
+  });
+
   it('handle.workspacePath is set to worktree directory', async () => {
     const { taskProcess } = setupSpawnMock();
 
@@ -1182,6 +1198,19 @@ describe('WorktreeExecutor', () => {
         workspacePath: '/home/user/.invoker/worktrees/wt-abc',
       });
       expect(spec).toEqual({ cwd: '/home/user/.invoker/worktrees/wt-abc' });
+    });
+
+    it('preserves restored display bridge without changing cwd selection', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge: 'Restored task context\n',
+      });
+      expect(spec).toEqual({
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge: 'Restored task context\n',
+      });
     });
 
     it('returns claude --resume spec with cwd when session exists', () => {

@@ -44,6 +44,8 @@ import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
   buildTerminalShellCommand,
+  shellAnsiCQuoteForBashLike,
+  shellSingleQuoteForPOSIX,
   spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
 import { openEmbeddedTerminalForTask, openExternalTerminalForTask } from '../open-terminal-for-task.js';
@@ -151,7 +153,7 @@ function buildCleanEnv(): Record<string, string> {
 
 function openExternalTerminal(spec: TerminalSpec | null): void {
   const defaultCwd = spec?.cwd ?? process.cwd();
-  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args };
+  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args, displayBridge: spec?.displayBridge };
 
   if (process.platform === 'linux') {
     const cleanEnv = buildCleanEnv();
@@ -165,7 +167,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
     });
     child.unref();
   } else if (process.platform === 'darwin') {
-    if (spec?.command) {
+    if (spec?.command || spec?.displayBridge) {
       const osaArgs = buildMacOSOsascriptArgs(meta, defaultCwd);
       const child = mockSpawn('osascript', osaArgs, { detached: true, stdio: 'ignore' });
       child.unref();
@@ -434,6 +436,24 @@ describe('terminal-external-launch', () => {
     expect(line).not.toMatch(/'"'"'/);
   });
 
+  it('uses bash/zsh ANSI-C quoting for display bridge text without raw newlines', () => {
+    expect(shellAnsiCQuoteForBashLike("a'b\nc\\d")).toBe("$'a\\'b\\nc\\\\d'");
+  });
+
+  it('prefixes display bridge with quoted printf without changing command argv', () => {
+    const bridge = "Bridge'; touch /tmp/should-not-run; echo '";
+    const args = ['-e', 'console.log(process.argv.slice(1))', 'literal; rm -rf /'];
+    const line = buildTerminalShellCommand(
+      { cwd: '/tmp/wt', command: 'node', args, displayBridge: bridge },
+      '/fallback',
+    );
+    const quotedBridge = shellAnsiCQuoteForBashLike(`${bridge}\n`);
+    const argv = ['node', ...args].map(shellSingleQuoteForPOSIX).join(' ');
+
+    expect(line).toBe(`cd '/tmp/wt' && { printf '%s' ${quotedBridge}; ${argv}; }`);
+    expect(line).not.toContain('\n');
+  });
+
   it('buildMacOSOsascriptArgs includes activate and uses multi-line AppleScript', () => {
     const args = buildMacOSOsascriptArgs(
       { command: 'echo', args: ['a"b'], cwd: '/tmp' },
@@ -447,6 +467,18 @@ describe('terminal-external-launch', () => {
     const doScriptArg = args.find(a => a.startsWith('do script'));
     expect(doScriptArg).toBeDefined();
     expect(doScriptArg).toContain('\\"');
+  });
+
+  it('buildMacOSOsascriptArgs renders display bridge before cwd-only interactive shell', () => {
+    const args = buildMacOSOsascriptArgs(
+      { cwd: '/tmp/wt', displayBridge: 'Bridge for restored terminal' },
+      '/fallback',
+    );
+    const doScriptArg = args.find(a => a.startsWith('do script'));
+    expect(doScriptArg).toContain("printf '%s'");
+    expect(doScriptArg).toContain('Bridge for restored terminal');
+    expect(doScriptArg).toContain('exec zsh');
+    expect(doScriptArg).not.toContain('\n');
   });
 });
 

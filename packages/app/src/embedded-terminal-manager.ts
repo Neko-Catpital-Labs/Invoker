@@ -20,7 +20,12 @@ import type {
   TerminalExitEvent,
 } from '@invoker/contracts';
 import type { TerminalSessionRecord } from '@invoker/data-store';
-import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
+import {
+  normalizeTerminalDisplayBridge,
+  type Executor,
+  type ExecutorHandle,
+  type TerminalSpec,
+} from '@invoker/execution-engine';
 
 export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 export type EmbeddedTerminalSessionKind = 'task' | 'planning';
@@ -318,7 +323,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       updatedAt: createdAt,
       status: 'running' as const,
-      outputSnapshot: '',
+      outputSnapshot: seedOutputSnapshot('', opts.spec.displayBridge),
     };
 
     if (opts.attach) {
@@ -391,7 +396,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt: seed.createdAt,
       updatedAt: new Date().toISOString(),
       status: 'running' as const,
-      outputSnapshot: seed.outputSnapshot,
+      outputSnapshot: seedOutputSnapshot(seed.outputSnapshot, seed.spec.displayBridge),
     });
   }
 
@@ -656,6 +661,12 @@ function trimOutputSnapshot(snapshot: string): string {
   return snapshot.slice(snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS);
 }
 
+function seedOutputSnapshot(outputSnapshot: string, displayBridge: string | undefined): string {
+  const bridge = normalizeTerminalDisplayBridge(displayBridge);
+  if (!bridge || outputSnapshot.startsWith(bridge)) return outputSnapshot;
+  return trimOutputSnapshot(bridge + outputSnapshot);
+}
+
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
   if (options.backend) return options.backend;
   return createPtyTerminalBackend();
@@ -678,6 +689,7 @@ function loadNodePtySpawn(): PtySpawnFn {
 }
 
 function buildTargetKey(opts: OpenSessionOptions): string {
+  // displayBridge is intentionally excluded so bridge text updates reuse the same terminal target.
   const taskTarget = {
     taskId: opts.taskId,
     cwd: opts.cwd,
