@@ -19,7 +19,6 @@ import {
   REQUIRED_BOT_SCOPES,
   runPlanValidationSmoke,
   slackCredsFromEnv,
-  skippedGithubAuthCheck,
   runSetup,
   setExperimentalPlannerFlag,
   upsertEnvLines,
@@ -45,7 +44,7 @@ function readySetupDeps(overrides: SetupDeps = {}): SetupDeps {
   return {
     isInstalled: () => true,
     githubAuthCheck: async () => okCheck('github-auth', 'GitHub auth', 'gh is authenticated'),
-    smokePlanValidation: async () => okCheck('smoke-plan', 'Smoke plan validation', 'Parsed 1 task(s)'),
+    smokePlanValidation: async () => okCheck('smoke-plan', 'smoke: plan validation', 'Parsed 1 task(s)'),
     ...overrides,
   };
 }
@@ -544,8 +543,118 @@ describe('GitHub auth check', () => {
     expect(check.remediation).toContain('gh auth login');
   });
 
-  it('warns and skips when gh is missing', () => {
-    expect(skippedGithubAuthCheck()).toMatchObject({ id: 'github-auth', status: 'warn' });
+  it('warns and skips when the injected runner cannot find gh', () => {
+    const error = new Error('spawn gh ENOENT') as Error & { code?: string };
+    error.code = 'ENOENT';
+    const check = checkGithubAuth(() => {
+      throw error;
+    });
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
+    expect(check.remediation).toContain('gh auth login');
+  });
+
+  it('reports setup success through the injected gh command runner', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-gh-ok-'));
+    const saved = {
+      HOME: process.env.HOME,
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const lines: string[] = [];
+    const commandRunner = vi.fn(() => ({ status: 0, stdout: 'Logged in', stderr: '' }));
+    try {
+      process.env.HOME = home;
+      delete process.env.INVOKER_REPO_CONFIG_PATH;
+      delete process.env.INVOKER_MCP_CONFIG_PATH;
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, {
+        isInstalled: () => true,
+        commandRunner,
+        smokePlanValidation: async () => okCheck('smoke-plan', 'smoke: plan validation'),
+      });
+
+      expect(code).toBe(0);
+      expect(commandRunner).toHaveBeenCalledWith('gh', ['auth', 'status']);
+      expect(lines.join('\n')).toContain('GitHub auth: gh is authenticated');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('reports setup failure through the injected gh command runner', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-gh-fail-'));
+    const saved = {
+      HOME: process.env.HOME,
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const lines: string[] = [];
+    const commandRunner = vi.fn(() => ({ status: 1, stdout: '', stderr: 'not logged in to any GitHub hosts\n' }));
+    try {
+      process.env.HOME = home;
+      delete process.env.INVOKER_REPO_CONFIG_PATH;
+      delete process.env.INVOKER_MCP_CONFIG_PATH;
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, {
+        isInstalled: () => true,
+        commandRunner,
+        smokePlanValidation: async () => okCheck('smoke-plan', 'smoke: plan validation'),
+      });
+
+      const output = lines.join('\n');
+      expect(code).toBe(1);
+      expect(commandRunner).toHaveBeenCalledWith('gh', ['auth', 'status']);
+      expect(output).toContain('GitHub auth: not logged in to any GitHub hosts');
+      expect(output).toContain('Fix this first: GitHub auth: Run `gh auth login`');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('skips setup gh auth without invoking the runner when gh is missing', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-gh-missing-'));
+    const saved = {
+      HOME: process.env.HOME,
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const lines: string[] = [];
+    const commandRunner = vi.fn(() => ({ status: 0, stdout: 'should not run', stderr: '' }));
+    try {
+      process.env.HOME = home;
+      delete process.env.INVOKER_REPO_CONFIG_PATH;
+      delete process.env.INVOKER_MCP_CONFIG_PATH;
+
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, {
+        isInstalled: (command) => command !== 'gh',
+        commandRunner,
+        smokePlanValidation: async () => okCheck('smoke-plan', 'smoke: plan validation'),
+      });
+
+      expect(code).toBe(0);
+      expect(commandRunner).not.toHaveBeenCalled();
+      expect(lines.join('\n')).toContain('gh not installed; skipped auth check');
+    } finally {
+      restoreEnv('HOME', saved.HOME);
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -554,10 +663,10 @@ describe('setup oneshot ending', () => {
     const checks: Check[] = [
       okCheck('a', 'A'),
       errorCheck('github-auth', 'GitHub auth', 'not logged in', 'Run `gh auth login`'),
-      errorCheck('smoke-plan', 'Smoke plan validation', 'boom'),
+      errorCheck('smoke-plan', 'smoke: plan validation', 'boom'),
     ];
     expect(firstSetupFailure(checks)?.id).toBe('github-auth');
-    expect(formatSetupEnding(checks)).toContain('Fix this first: GitHub auth: not logged in.');
+    expect(formatSetupEnding(checks)).toContain('Fix this first: GitHub auth: Run `gh auth login`');
     expect(formatSetupEnding(checks)).toContain('gh auth login');
     expect(formatSetupEnding([okCheck('a', 'A')])).toBe("You're ready.");
   });
@@ -574,14 +683,14 @@ describe('setup oneshot ending', () => {
       }, readySetupDeps({
         smokePlanValidation: async () => errorCheck(
           'smoke-plan',
-          'Smoke plan validation',
+          'smoke: plan validation',
           'parse failed',
           'Reinstall invoker-cli',
         ),
       }));
 
       expect(code).toBe(1);
-      expect(lines.join('\n')).toContain('Fix this first: Smoke plan validation: parse failed.');
+      expect(lines.join('\n')).toContain('Fix this first: smoke: plan validation: Reinstall invoker-cli');
       expect(lines.join('\n')).not.toContain("You're ready.");
     } finally {
       if (savedHome === undefined) delete process.env.HOME;
