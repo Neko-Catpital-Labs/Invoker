@@ -939,6 +939,33 @@ The merge conditions cannot be satisfied due to failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2999, "closed")])
 
+    def test_hard_blocker_waits_after_blocker_comment_posted(self):
+        ledger = self.ledger()
+        ledger.record("comment-blocked", 2607, HEAD, "thread-human", 1)
+        stack = StackGroup(
+            "s",
+            (pr(2607, threads=(ReviewThread("thread-human", False, ("alice",)),)),),
+        )
+
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 1)
+
+        self.assertEqual(actions, ())
+
+    def test_no_current_bottom_waits_after_blocker_comment_posted(self):
+        ledger = self.ledger()
+        ledger.record("comment-blocked", 5855, HEAD, "no-current-bottom", 1)
+        stack = StackGroup(
+            "s",
+            (
+                pr(5855, base="stack/base", labels={"admin-bypass"}),
+                pr(5856, base="stack/5855", labels={"admin-bypass"}),
+            ),
+        )
+
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 1)
+
+        self.assertEqual(actions, ())
+
 
 if __name__ == "__main__":
     unittest.main()

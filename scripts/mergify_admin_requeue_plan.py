@@ -358,6 +358,12 @@ def build_stack_facts(
             if blocker.key not in seen_blocker_keys
         )
         blockers_by_pr[pr.number] = tuple(repaired_invalid_blockers)
+    if bottom is None and stack.prs:
+        first = stack.prs[0]
+        if ledger.count("comment-blocked", first.number, first.head_ref_oid, "no-current-bottom") > 0:
+            blockers_by_pr[first.number] = blockers_by_pr[first.number] + (
+                Blocker("no-current-bottom", "human_decision", first.number, "no current bottom on master"),
+            )
     facts = StackFacts(
         stack=stack,
         required_checks=required,
@@ -483,7 +489,7 @@ def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attemp
     return None
 
 
-def plan_hard_blockers(facts: StackFacts) -> Action | None:
+def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
     for pr in facts.stack.prs:
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "pending_check":
@@ -491,6 +497,8 @@ def plan_hard_blockers(facts: StackFacts) -> Action | None:
             if blocker.kind == "human_decision":
                 return None
             if blocker.kind in HUMAN_BLOCKER_KINDS:
+                if ledger.count("comment-blocked", pr.number, pr.head_ref_oid, blocker.key) > 0:
+                    continue
                 return Action("comment_blocked", pr.number, blocker.key, public_blocker_kind(blocker.kind))
     return None
 
@@ -566,7 +574,7 @@ def plan_actions_from_facts(
     action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)
-    action = plan_hard_blockers(facts)
+    action = plan_hard_blockers(facts, ledger)
     if action is not None:
         return (action,)
     action = plan_merge_hold_cleanup(facts, ledger)
