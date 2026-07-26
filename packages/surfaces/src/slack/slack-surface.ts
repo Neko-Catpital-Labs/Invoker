@@ -194,6 +194,7 @@ const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
 const MESSAGE_REPO_TOKEN_RE = /<((?:https?|ssh):\/\/[^|>\s]+|git@[\w.-]+:[^|>\s]+)(?:\|[^>]+)?>|\b(?:https?:\/\/[^\s<>()\[\]{}"'|]+|ssh:\/\/[^\s<>()\[\]{}"'|]+|git@[\w.-]+:[^\s<>()\[\]{}"'|]+)/gi;
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!']);
 const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
+const INVALID_LITERAL_REPO_URL_GUIDANCE = 'Use a GitHub repo URL or a clone URL ending in .git.';
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
@@ -315,27 +316,7 @@ function extractMessageRepoCandidates(text: string): string[] {
       candidate = candidate.slice(0, -1);
     }
 
-    const accepted = (() => {
-      if (/^git@[\w.-]+:.+/.test(candidate)) return candidate;
-      if (/^ssh:\/\//i.test(candidate)) return candidate;
-      if (!/^https?:\/\//i.test(candidate) || /[?#]/.test(candidate)) return undefined;
-
-      let url: URL;
-      try {
-        url = new URL(candidate);
-      } catch {
-        return undefined;
-      }
-      if (!url.host || url.username || url.password || url.search || url.hash) return undefined;
-
-      const host = url.host.toLowerCase();
-      if (host === 'github.com') {
-        return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname)
-          ? candidate.replace(/\/$/, '')
-          : undefined;
-      }
-      return url.pathname.endsWith('.git') ? candidate : undefined;
-    })();
+    const accepted = normalizeSupportedRepoCandidate(candidate);
 
     if (accepted && !seen.has(accepted)) {
       seen.add(accepted);
@@ -343,6 +324,28 @@ function extractMessageRepoCandidates(text: string): string[] {
     }
   }
   return urls;
+}
+
+function normalizeSupportedRepoCandidate(candidate: string): string | undefined {
+  if (/^git@[\w.-]+:.+/.test(candidate)) return candidate;
+  if (/^ssh:\/\//i.test(candidate)) return candidate;
+  if (!/^https?:\/\//i.test(candidate) || /[?#]/.test(candidate)) return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return undefined;
+  }
+  if (!url.host || url.username || url.password || url.search || url.hash) return undefined;
+
+  const host = url.host.toLowerCase();
+  if (host === 'github.com') {
+    return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname)
+      ? candidate.replace(/\/$/, '')
+      : undefined;
+  }
+  return url.pathname.endsWith('.git') ? candidate : undefined;
 }
 
 function repositoryIdentity(repoUrl: string): string {
@@ -1912,7 +1915,12 @@ ${text}`;
     const aliasKey = Object.keys(this.repoAliases).find((key) => key.toLowerCase() === repo.toLowerCase());
     const alias = aliasKey && this.repoAliases[aliasKey];
     if (alias) return { url: this.normalizeRepositoryUrl(alias) };
-    if (/^(git@|https?:\/\/|ssh:\/\/)/.test(repo)) return { url: this.normalizeRepositoryUrl(repo) };
+    const literalRepoUrl = repo.trim().replace(/^<([^|>]+)(?:\|[^>]+)?>$/, '$1');
+    if (/^(?:git@|https?:\/\/|ssh:\/\/)/i.test(literalRepoUrl)) {
+      const supportedRepoUrl = normalizeSupportedRepoCandidate(literalRepoUrl);
+      if (supportedRepoUrl) return { url: this.normalizeRepositoryUrl(supportedRepoUrl) };
+      return { error: `Invalid repo URL "${literalRepoUrl}". ${INVALID_LITERAL_REPO_URL_GUIDANCE}` };
+    }
     const known = Object.keys(this.repoAliases);
     const list = known.length ? known.join(', ') : '(none configured)';
     return { error: `Unknown repo "${repo}". Known aliases: ${list}. Or pass a full git URL.` };
