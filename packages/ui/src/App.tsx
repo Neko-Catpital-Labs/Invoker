@@ -86,6 +86,7 @@ type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
+type SelectionOptions = { recenter?: boolean };
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['planning', 'workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const GRAPH_KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
@@ -932,6 +933,7 @@ export function App() {
   }
   const [cameraCommand, setCameraCommand] = useState<GraphCameraCommand | null>(null);
   const workflowGraphViewportRef = useRef<GraphCameraViewport | null>(null);
+  const [quietBrowserSelectionWorkflowId, setQuietBrowserSelectionWorkflowId] = useState<string | null>(null);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1427,6 +1429,12 @@ export function App() {
     next.set(workflowForDag.id, workflowForDag);
     return next;
   }, [displayedSelectedWorkflowGraph, selectedWorkflow, workflows]);
+  useEffect(() => {
+    if (quietBrowserSelectionWorkflowId === null) return;
+    if (displayedSelectedWorkflowGraph?.workflow.id !== quietBrowserSelectionWorkflowId) return;
+    const frame = requestAnimationFrame(() => setQuietBrowserSelectionWorkflowId(null));
+    return () => cancelAnimationFrame(frame);
+  }, [displayedSelectedWorkflowGraph?.workflow.id, quietBrowserSelectionWorkflowId]);
 
   useEffect(() => {
     const workflowId = selectedWorkflow?.id;
@@ -1601,6 +1609,10 @@ export function App() {
     workflowGraphViewportRef.current = viewport;
   }, []);
 
+  const recenterForSelection = useCallback((scope: GraphScope, target: string) => {
+    issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'selection' });
+  }, [issueCameraCommand]);
+
   useEffect(() => {
     if (workflows.size === 0) {
       workflowGraphViewportRef.current = null;
@@ -1614,19 +1626,25 @@ export function App() {
     });
   }, []);
 
-  const selectWorkflowById = useCallback((workflowId: string) => {
+  const selectWorkflowById = useCallback((workflowId: string, options: SelectionOptions = {}) => {
+    const shouldRecenter = options.recenter ?? true;
     armSuppressDagSurfaceDismiss();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
+    setQuietBrowserSelectionWorkflowId(shouldRecenter ? null : workflowId);
+    if (shouldRecenter) {
+      recenterForSelection('workflow', workflowId);
+    }
     focusKeyboardRegion('workflowGraph');
-  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion]);
+  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion, recenterForSelection]);
 
-  const selectTaskById = useCallback((taskId: string) => {
+  const selectTaskById = useCallback((taskId: string, options: SelectionOptions = {}) => {
     const task = tasksRef.current.get(taskId);
     if (!task) return;
+    const shouldRecenter = options.recenter ?? true;
     setSelectedTaskId(task.id);
     setWorkflowSelectionDismissed(false);
     if (task.config.workflowId) {
@@ -1636,20 +1654,25 @@ export function App() {
     setInspectorManualOpen(true);
     setContextMenu(null);
     setWorkflowContextMenu(null);
+    setQuietBrowserSelectionWorkflowId(shouldRecenter ? null : task.config.workflowId ?? null);
+    if (shouldRecenter) {
+      recenterForSelection('task', task.id);
+    }
     focusKeyboardRegion('taskGraph');
-  }, [focusKeyboardRegion]);
+  }, [focusKeyboardRegion, recenterForSelection]);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
       const failedTaskId = event.taskId;
       if (failedTaskId) {
         setMutationFailuresByTaskId((prev) => new Map(prev).set(failedTaskId, event));
+        selectTaskById(failedTaskId, { recenter: false });
         return;
       }
       notifyMutationError('Mutation failed', event.message);
     });
     return () => { unsubscribe?.(); };
-  }, []);
+  }, [selectTaskById]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -1996,7 +2019,9 @@ export function App() {
     setSelectedTaskId(null);
     setContextMenu(null);
     setWorkflowContextMenu(null);
-  }, [armSuppressDagSurfaceDismiss]);
+    setQuietBrowserSelectionWorkflowId(null);
+    recenterForSelection('workflow', workflowId);
+  }, [armSuppressDagSurfaceDismiss, recenterForSelection]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<Element>, workflowId: string) => {
     event.preventDefault();
@@ -2023,7 +2048,7 @@ export function App() {
       if (activeWorkflowId !== null && !selectedWorkflowVanished) {
         return;
       }
-      selectWorkflowById(workflowEntries[0].workflow.id);
+      selectWorkflowById(workflowEntries[0].workflow.id, { recenter: false });
       return;
     }
 
@@ -2039,7 +2064,7 @@ export function App() {
       if (attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
         return;
       }
-      selectTaskById(attentionEntries[0].task.id);
+      selectTaskById(attentionEntries[0].task.id, { recenter: false });
       return;
     }
 
@@ -3600,6 +3625,7 @@ export function App() {
           statusFilters={new Set<string>()}
           runningTaskIds={runningTaskIds}
           surfaceMode={floating ? 'default' : 'browser'}
+          suppressInitialCamera={!floating && quietBrowserSelectionWorkflowId === displayedSelectedWorkflowGraph.workflow.id}
         />
       </div>
     );

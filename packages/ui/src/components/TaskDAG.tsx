@@ -55,6 +55,7 @@ interface TaskDAGProps {
   statusFilters?: Set<string>;
   runningTaskIds?: ReadonlySet<string>;
   surfaceMode?: 'default' | 'browser' | 'overlay';
+  suppressInitialCamera?: boolean;
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
@@ -173,7 +174,7 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds, surfaceMode = 'default' }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds, surfaceMode = 'default', suppressInitialCamera = false }: TaskDAGProps) {
   const { fitView, setCenter, getZoom } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
@@ -183,6 +184,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const lastHandledCameraSeqRef = useRef(0);
   const browserRemountDoneRef = useRef(false);
   const initFitFrameRef = useRef(0);
+  const suppressInitialCameraRef = useRef(suppressInitialCamera);
   const nodesRef = useRef<typeof nodes>([]);
   const selectedTaskIdRef = useRef<string | null>(selectedTaskId ?? null);
   selectedTaskIdRef.current = selectedTaskId ?? null;
@@ -190,6 +192,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const lastLayoutRef = useRef<TaskGraphLayout | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const onInitHandler = useCallback(() => {
+    if (suppressInitialCameraRef.current) return;
     initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
   }, [fitView]);
 
@@ -520,6 +523,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
 
   useEffect(() => {
     if (surfaceMode !== 'browser' || nodesRef.current.length === 0) return;
+    if (suppressInitialCameraRef.current) return;
 
     let cancelled = false;
     const frame = requestAnimationFrame(() => {
