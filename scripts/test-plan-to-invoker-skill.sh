@@ -35,6 +35,15 @@ must_contain() {
   fi
 }
 
+must_not_contain() {
+  local file="$1"
+  local needle="$2"
+  local hint="$3"
+  if grep -qF -- "$needle" "$file"; then
+    fail "$hint — unexpected in $file: $needle"
+  fi
+}
+
 must_contain_count() {
   local file="$1"
   local needle="$2"
@@ -72,6 +81,7 @@ must_not_exist "$REPO_ROOT/.cursor/commands/plan-to-invoker.md" "legacy Cursor h
 [[ -f "$TUTORIAL" ]] || fail "expected $TUTORIAL"
 must_contain "$CANONICAL_COMMAND" "description: Plan a change and submit it through Invoker" "Invoker handoff command must keep host command description frontmatter"
 must_contain "$CANONICAL_COMMAND" 'argument-hint: "help me plan <change>"' "Invoker handoff command must keep host argument hint frontmatter"
+must_contain "$CANONICAL_COMMAND" "Use this host's native planning mode when the host supports entering it from this command. If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved." "Invoker handoff command must stay handoff-only before approval"
 must_contain "$CANONICAL_COMMAND" "invoker_validate_plan" "Invoker handoff command must validate through MCP"
 must_contain "$CANONICAL_COMMAND" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
 must_contain "$CANONICAL_COMMAND" "mode \`live\`" "Invoker handoff command must submit in live mode"
@@ -84,6 +94,7 @@ must_contain "$CANONICAL_COMMAND" "before PR authoring or publication" "Invoker 
 must_contain "$CANONICAL_COMMAND" "skill://review-compression/SKILL.md" "Invoker handoff command must trigger review compression for stack work"
 must_contain "$CANONICAL_COMMAND" "multiple review slices" "Invoker handoff command must define review-compression trigger scope"
 must_contain "$CANONICAL_COMMAND" "before writing workflow YAML" "Invoker handoff command must require review compression before workflow YAML"
+must_not_contain "$CANONICAL_COMMAND" "mergify stack push" "Invoker handoff command must keep repo-specific PR publication out of the handoff entry"
 must_contain "$LOOP_COMMAND" "description: Interview for a loop and prepare Invoker artifacts" "Loop generator command must keep host command description frontmatter"
 must_contain "$LOOP_COMMAND" 'argument-hint: "build me a <loop>"' "Loop generator command must keep host argument hint frontmatter"
 must_contain "$LOOP_COMMAND" "Use this host's native planning mode" "Loop generator command must enter host-native planning mode when available"
@@ -93,6 +104,8 @@ must_contain "$LOOP_COMMAND" "plans/invoker-handoff.md" "Loop generator command 
 must_contain "$LOOP_COMMAND" "Validate and submit only under the submission rules defined by \`skill://loop-generator/SKILL.md\`." "Loop generator command must defer validation and submission rules to the skill"
 must_contain "$LOOP_COMMAND" "skill://make-pr/SKILL.md" "Loop generator command must trigger the PR skill for PR work"
 must_contain "$LOOP_COMMAND" "skill://review-compression/SKILL.md" "Loop generator command must trigger review compression for PR publishing work"
+must_contain "$LOOP_COMMAND" "before authoring reviewable YAML" "Loop generator command must keep PR publication guidance before YAML authoring"
+must_not_contain "$LOOP_COMMAND" "mergify stack push" "Loop generator command must keep repo-specific PR publication out of the handoff entry"
 must_contain "$README" "Install helpers from System Setup or:" "README must document System Setup helper installation"
 must_contain "$README" "invoker-ui --install-skills" "README must document headless helper installation"
 must_contain "$README" "Codex, Claude, Cursor, or OMP" "README must document supported handoff hosts"
@@ -151,6 +164,8 @@ must_contain "$TASK_PATTERNS" "the user for confirmation or correction before su
 must_contain "$REVIEW_COMPRESSION_SKILL" "## Safety Invariant Confirmation" "Review compression must define safety invariant confirmation"
 must_contain "$REVIEW_COMPRESSION_SKILL" "ask the user to confirm or correct" "Review compression must require user confirmation"
 must_contain "$MAKE_PR_SKILL" "does not contain a user-confirmed safety invariant" "PR authoring must reject unconfirmed safety invariants"
+must_contain "$MAKE_PR_SKILL" "Use this skill when the work is already done and the user wants a PR created, updated, rewritten, split, or republished" "PR publication wording must stay in the downstream make-pr skill"
+must_contain "$MAKE_PR_SKILL" "whenever a branch, stack, or PR change could leave GitHub title/body/proof text out of date" "PR publication wording must keep stale-metadata rerun trigger"
 must_contain "$SAFETY_INVARIANT_RULE" "Safety Invariant Confirmation protocol" "Cursor rule must point planning to the confirmation protocol"
 must_contain "$CLAUDE_MD" "user-confirmed \`Safety invariant:\` for every slice" "CLAUDE.md must require user-confirmed safety invariants"
 must_contain "$SKILL_MD" "Stateful bug lifecycle matrix" "SKILL must require lifecycle coverage for stateful bugs"
@@ -176,6 +191,10 @@ must_contain "$SKILL_MD" "multiple review slices" "SKILL handoff mode must defin
 must_contain "$SKILL_MD" "skills/review-compression/SKILL.md" "SKILL handoff mode must trigger review compression for stack work"
 must_contain "$SKILL_MD" "skill://review-compression/SKILL.md" "SKILL handoff mode must include skill URI fallback for review compression"
 must_contain "$SKILL_MD" "before writing workflow YAML" "SKILL handoff mode must require review compression before workflow YAML"
+must_contain "$SKILL_MD" "**Invoker dogfooding rule:** When the target repo is Invoker itself" "SKILL must keep repo-specific PR publication separate from handoff mode"
+must_contain "$SKILL_MD" "GitHub PR publishing should use **Mergify Stacks** after the work is ready" "SKILL must define later Invoker PR publication wording"
+must_contain "$SKILL_MD" "then publish/update the resulting commit stack with \`mergify stack push\`" "SKILL must require later Mergify stack publication command"
+must_contain "$SKILL_MD" "Do **not** generalize this to unrelated target repos" "SKILL must keep Mergify publication repo-specific"
 must_contain "$SKILL_MD" "never version or metadata wrappers" "SKILL frontmatter must reject legacy benchmark YAML wrappers"
 must_contain "$SKILL_MD" "## Benchmark/direct-output mode" "SKILL must document benchmark/direct-output mode"
 must_contain "$SKILL_MD" "Treat the literal absolute output path" "SKILL must require literal output path handling"
