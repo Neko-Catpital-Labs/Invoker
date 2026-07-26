@@ -19,17 +19,45 @@ import type {
 } from '@invoker/contracts';
 import { Channels, type MessageBus } from '@invoker/transport';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import { createWorkerRegistry, registerBuiltinAgents, registerBuiltinWorkers, type AgentRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
+import {
+  createWorkerRegistry,
+  registerBuiltinAgents,
+  registerBuiltinWorkers,
+  type AgentRegistry,
+  type ExecutorRegistry,
+  type WorkerRuntimeDependencies,
+} from '@invoker/execution-engine';
 import type { Orchestrator, TaskDelta } from '@invoker/workflow-core';
 import { loadConfig, type InvokerConfig } from '../config.js';
 import type { ApiMutationFacade } from '../api-server.js';
+import { createEmbeddedTerminalBackend } from '../embedded-terminal-backend.js';
+import { EmbeddedTerminalManager } from '../embedded-terminal-manager.js';
+import type { TaskHandleMap } from '../execution/task-runner-wiring.js';
+import { registerExternalWorkersFromConfig } from '../external-worker-loader.js';
+import {
+  createTaskTerminalAdapter,
+  type TaskTerminalAdapter,
+} from '../task-terminal-adapter.js';
 import { createTaskGraphEventPublisher } from '../task-graph-event-publisher.js';
 import { createTaskDeltaStreamSequence } from '../task-delta-stream-sequence.js';
+import {
+  createTerminalUiPerfCounters,
+  createTerminalUiPerfReporter,
+  createTerminalUiPerfSink,
+} from '../terminal-ui-perf.js';
+import {
+  registerTerminalSessionPersistence,
+  type TerminalSessionPersistenceHandle,
+} from '../terminal-session-ipc.js';
 import { WorkflowRollupProjection } from '../workflow-rollup-projection.js';
-import { buildWebInvokerDispatch } from './web-invoker-dispatch.js';
-import { registerExternalWorkersFromConfig } from '../external-worker-loader.js';
 import { autoStartedOwnerWorkerKindsForConfig, createLocalWorkerStatusSnapshot } from '../worker-control.js';
-import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web-bridge-server.js';
+import { buildWebInvokerDispatch } from './web-invoker-dispatch.js';
+import {
+  startWebBridge,
+  resolveWebUiDistDir,
+  type WebBridge,
+  type WebBridgeTerminalEvents,
+} from './web-bridge-server.js';
 
 const DEFAULT_WEB_HOST = '127.0.0.1';
 const DEFAULT_WEB_PORT = 4200;
@@ -61,6 +89,9 @@ export interface StartHeadlessWebSurfaceDeps {
   detachWorkflow: (workflowId: string, upstreamWorkflowId: string) => Promise<void>;
   loadConfig: () => InvokerConfig;
   config: InvokerConfig;
+  repoRoot?: string;
+  executorRegistry?: ExecutorRegistry;
+  taskHandles?: TaskHandleMap;
   /** Main process dist directory (`__dirname` of main.js) used to locate the built UI. */
   appRootDir: string;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
@@ -80,6 +111,55 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
   const port = resolveWebPort(deps.config);
   const uiDistDir = resolveWebUiDistDir(deps.appRootDir);
 
+  let terminalSessionPersistenceHandle: TerminalSessionPersistenceHandle | null = null;
+  let taskTerminals: TaskTerminalAdapter | undefined;
+  let terminalEvents: WebBridgeTerminalEvents | undefined;
+  if (deps.repoRoot && deps.executorRegistry && deps.taskHandles) {
+    const embeddedTerminalManager = new EmbeddedTerminalManager({
+      backend: createEmbeddedTerminalBackend(deps.config),
+    });
+    const terminalUiPerfStats = createTerminalUiPerfCounters();
+    const terminalUiPerf = createTerminalUiPerfReporter();
+    const terminalUiPerfSink = createTerminalUiPerfSink(
+      (source, level, message) => {
+        deps.persistence.writeActivityLog(source, level, message);
+      },
+      terminalUiPerfStats,
+    );
+    terminalSessionPersistenceHandle = registerTerminalSessionPersistence({
+      embeddedTerminalManager,
+      persistence: deps.persistence,
+      uiPerfStats: terminalUiPerfStats,
+      terminalUiPerf,
+      terminalUiPerfSink,
+    });
+    taskTerminals = createTaskTerminalAdapter({
+      persistence: deps.persistence,
+      executorRegistry: deps.executorRegistry,
+      executionAgentRegistry: deps.agentRegistry,
+      repoRoot: deps.repoRoot,
+      taskHandles: deps.taskHandles,
+      embeddedTerminalManager,
+      uiPerfStats: terminalUiPerfStats,
+      terminalUiPerf,
+      terminalUiPerfSink,
+      logger: deps.logger,
+    });
+    terminalEvents = {
+      onOutput(cb) {
+        embeddedTerminalManager.on('output', cb);
+        return () => {
+          embeddedTerminalManager.off('output', cb);
+        };
+      },
+      onExit(cb) {
+        embeddedTerminalManager.on('exit', cb);
+        return () => {
+          embeddedTerminalManager.off('exit', cb);
+        };
+      },
+    };
+  }
   const streamSeq = createTaskDeltaStreamSequence();
   const projection = new WorkflowRollupProjection();
   let bridge: WebBridge | null = null;
@@ -129,6 +209,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
       persistence: deps.persistence,
       autoStartKinds: autoStartedOwnerWorkerKindsForConfig(deps.config),
     }),
+    taskTerminals,
     logger: deps.logger,
   });
 
@@ -141,6 +222,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     token,
     host,
     port,
+    terminalEvents,
   });
 
   const originalClose = bridge.close;
@@ -152,6 +234,7 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     },
     close: async (): Promise<void> => {
       unsubscribe?.();
+      terminalSessionPersistenceHandle?.dispose();
       await originalClose();
     },
   };
@@ -165,6 +248,9 @@ export interface HeadlessWebSurfaceHost {
   messageBus: MessageBus;
   executionAgentRegistry?: AgentRegistry;
   invokerConfig: InvokerConfig;
+  repoRoot?: string;
+  executorRegistry?: ExecutorRegistry;
+  taskHandles?: TaskHandleMap;
   appRootDir?: string;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
 }
@@ -193,6 +279,9 @@ export function startWebSurfaceForHeadless(
     detachWorkflow: apiServerDeps.detachWorkflow,
     loadConfig,
     config: host.invokerConfig,
+    repoRoot: host.repoRoot,
+    executorRegistry: host.executorRegistry,
+    taskHandles: host.taskHandles,
     appRootDir: host.appRootDir ?? __dirname,
     getBundledSkillsStatus: host.getBundledSkillsStatus,
   });

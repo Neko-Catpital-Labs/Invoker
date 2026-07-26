@@ -31,6 +31,7 @@ import { buildCurrentActionGraphSnapshot } from '../action-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
 import { resolveAgentSession } from '../headless-query-list.js';
 import { buildTaskGraphSnapshot } from './task-graph-snapshot.js';
+import type { TaskTerminalAdapter } from '../task-terminal-adapter.js';
 
 export interface WebInvokerDispatchDeps {
   orchestrator: Orchestrator;
@@ -49,6 +50,7 @@ export interface WebInvokerDispatchDeps {
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   checkPrStatuses?: () => void | Promise<void>;
   getWorkers?: () => WorkerStatusSnapshot;
+  taskTerminals?: TaskTerminalAdapter;
   logger?: Logger;
 }
 
@@ -236,15 +238,36 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:delete-workflow':
         return deps.deleteWorkflow(String(args[0]));
 
-      // ── Terminals: no pty over HTTP — degrade gracefully ──
+      // ── Task terminals: supported when the owner wires an adapter ──
       case 'invoker:open-terminal':
-        return { opened: false, reason: 'Terminals are not available in the web UI' };
+        if (!deps.taskTerminals) {
+          return { opened: false, reason: 'Terminals are not available in the web UI' };
+        }
+        return deps.taskTerminals.open(String(args[0]));
       case 'invoker:terminal-list':
-        return [];
+        if (!deps.taskTerminals) {
+          return [];
+        }
+        return deps.taskTerminals.list();
       case 'invoker:terminal-write':
+        if (!deps.taskTerminals) {
+          return { ok: false, reason: 'unsupported' };
+        }
+        return deps.taskTerminals.write(String(args[0]), String(args[1] ?? ''));
       case 'invoker:terminal-resize':
+        if (!deps.taskTerminals) {
+          return { ok: false, reason: 'unsupported' };
+        }
+        return deps.taskTerminals.resize(
+          String(args[0]),
+          Number(args[1]),
+          Number(args[2]),
+        );
       case 'invoker:terminal-close':
-        return { ok: false, reason: 'unsupported' };
+        if (!deps.taskTerminals) {
+          return { ok: false, reason: 'unsupported' };
+        }
+        return deps.taskTerminals.close(String(args[0]));
       case 'invoker:planning-terminal-open':
         return { opened: false, reason: 'Planning terminals are not available in the web UI' };
       case 'invoker:planning-terminal-list':

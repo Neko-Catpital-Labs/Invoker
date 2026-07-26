@@ -104,9 +104,7 @@ import {
   loadConfig,
   resolveAutoFixExecutionModel,
   resolveConfigFileState,
-  resolveEmbeddedTerminalBackendConfig,
   resolvePrMaintenanceWorkerConfig,
-  type EmbeddedTerminalBackendConfig,
   type InvokerConfig,
 } from './config.js';
 import {
@@ -145,6 +143,7 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { buildHeadlessApiServerDeps } from './headless-shared.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
@@ -158,13 +157,9 @@ import {
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
 import { execSync } from 'node:child_process';
-import { resolveTaskTerminalSpec } from './open-terminal-for-task.js';
-import {
-  createBashTerminalBackend,
-  createPtyTerminalBackend,
-  EmbeddedTerminalManager,
-  type EmbeddedTerminalBackend,
-} from './embedded-terminal-manager.js';
+import { createTaskTerminalAdapter } from './task-terminal-adapter.js';
+import { EmbeddedTerminalManager } from './embedded-terminal-manager.js';
+import { createEmbeddedTerminalBackend } from './embedded-terminal-backend.js';
 import { collectSystemDiagnostics } from './system-diagnostics.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from './bundled-skills.js';
 import {
@@ -188,6 +183,7 @@ import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.j
 import {
   dispatchStartedTasksWithGlobalTopup,
 } from './global-topup.js';
+import type { WebBridgeTerminalEvents } from './web/web-bridge-server.js';
 import { preserveCrashedInFlightTasks } from './crash-preserved-tasks.js';
 
 
@@ -210,7 +206,7 @@ import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
 import { startWebBridge, resolveWebUiDistDir, type WebBridge } from './web/web-bridge-server.js';
-import { resolveWebToken, resolveWebHost, resolveWebPort } from './web/start-web-surface.js';
+import { resolveWebToken, resolveWebHost, resolveWebPort, startWebSurfaceForHeadless } from './web/start-web-surface.js';
 import {
   createGuiMutationRegistrars,
   registerBootstrapStateIpc,
@@ -275,9 +271,8 @@ import {
   registerMainWindowActivateHandler,
   registerMainWindowSecondInstanceHandler,
 } from './window/window-lifecycle.js';
-import { createRendererTaskFeed } from './window/renderer-task-feed.js';
+import { createRendererTaskFeed, type RendererTaskFeed } from './window/renderer-task-feed.js';
 import { tryAcquireGuiInstanceLock, type GuiInstanceLock } from './gui-instance-lock.js';
-import { currentBuildIdentity } from './build-identity.js';
 import { logProcessError } from './process-error-handling.js';
 
 
@@ -350,6 +345,9 @@ function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependenc
   const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
   return registerExternalWorkersFromConfig(invokerConfig.externalWorkers, registry);
 }
+
+declare const __BUILD_SHA__: string | undefined;
+declare const __BUILD_VERSION__: string | undefined;
 
 // ── Detect headless mode ─────────────────────────────────────
 
@@ -448,7 +446,8 @@ const appProcessStartedAt = Date.now();
 
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
 let guiInstanceLock: GuiInstanceLock | null = null;
-const { version: buildVersion, sha: buildSha } = currentBuildIdentity();
+const buildSha = typeof __BUILD_SHA__ !== 'undefined' ? __BUILD_SHA__ : 'dev';
+const buildVersion = typeof __BUILD_VERSION__ !== 'undefined' ? __BUILD_VERSION__ : 'dev';
 logger.info(`Invoker ${buildVersion} (${buildSha})`, { module: 'startup' });
 
 const headlessExecMutationContext: HeadlessExecMutationContext = {
@@ -494,9 +493,6 @@ async function discoverStandaloneOwnerForGui(waitMs: number): Promise<boolean> {
       if (isStandaloneCapable(owner)) {
         logger.info(`daemon owner ready ownerId=${owner.ownerId}`, { module: 'init' });
         return true;
-      }
-      if (owner?.buildMismatchReason) {
-        logger.warn(`daemon owner ${owner.ownerId} incompatible: ${owner.buildMismatchReason}`, { module: 'init' });
       }
       ownerBus.disconnect();
       ownerBus = new IpcBus(undefined, { allowServe: false });
@@ -938,6 +934,7 @@ function startHeadlessMode(): void {
     let workerRuntimeController: WorkerRuntimeController | null = null;
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
+    let headlessWebBridge: WebBridge | null = null;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1593,8 +1590,6 @@ function startHeadlessMode(): void {
             ok: true,
             ownerId: workflowMutationOwnerId,
             mode: 'standalone',
-            buildVersion,
-            buildSha,
           };
         });
         messageBus.onRequest('headless.query', async (req: unknown) =>
@@ -1711,6 +1706,24 @@ function startHeadlessMode(): void {
           );
         }
         workerRuntimeController.startAutoStartedWorkers();
+        if (command === 'owner-serve') {
+          const ownerServeTaskExecutor = createStandaloneTaskExecutor();
+          const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
+          headlessWebBridge = startWebSurfaceForHeadless(
+            {
+              logger,
+              orchestrator,
+              persistence,
+              messageBus,
+              executionAgentRegistry: agentRegistry,
+              invokerConfig,
+              repoRoot,
+              executorRegistry,
+              appRootDir: __dirname,
+            },
+            apiServerDeps,
+          );
+        }
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -1736,6 +1749,7 @@ function startHeadlessMode(): void {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
+      await headlessWebBridge?.close();
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
       await workerRuntimeController?.stopAll();
@@ -1803,24 +1817,6 @@ startMainProcessBootstrap({
 // GUI MODE
 // ══════════════════════════════════════════════════════════════
 
-function createEmbeddedTerminalBackendFromConfig(
-  backend: EmbeddedTerminalBackendConfig,
-): EmbeddedTerminalBackend {
-  // E2E fault injection: reproduce node-pty's synchronous spawn throw (e.g.
-  // a spawn-helper binary without its exec bit) without mutating the shared
-  // node_modules that parallel tests rely on.
-  if (process.env.INVOKER_E2E_BREAK_TERMINAL_SPAWN === '1') {
-    return {
-      name: 'pty',
-      spawn() {
-        throw new Error('posix_spawnp failed. (injected by INVOKER_E2E_BREAK_TERMINAL_SPAWN)');
-      },
-    };
-  }
-  if (backend === 'bash') return createBashTerminalBackend();
-  return createPtyTerminalBackend();
-}
-
   function setupGuiMode(): void {
   const agentRegistry = registerBuiltinAgents();
   const planningChatSessions = createInAppPlanningChatSessions();
@@ -1833,7 +1829,7 @@ function createEmbeddedTerminalBackendFromConfig(
   let ownerMode = true;
   const taskHandles: TaskHandleMap = new Map();
   const embeddedTerminalManager = new EmbeddedTerminalManager({
-    backend: createEmbeddedTerminalBackendFromConfig(resolveEmbeddedTerminalBackendConfig(invokerConfig)),
+    backend: createEmbeddedTerminalBackend(invokerConfig),
   });
 
   embeddedTerminalManager.on('output', (payload) => {
@@ -1856,7 +1852,7 @@ function createEmbeddedTerminalBackendFromConfig(
   const guiMutationHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   let dbPollInterval: { stop(): void } | null = null;
   let uiPerfLogInterval: { stop(): void } | null = null;
-  let rendererTaskFeed: ReturnType<typeof createRendererTaskFeed> | null = null;
+  let rendererTaskFeed: RendererTaskFeed | null = null;
   let guiMutationTaskActions: GuiMutationTaskActions | null = null;
   let terminalSessionPersistenceHandle: TerminalSessionPersistenceHandle | null = null;
   const deferredWorkflowLaunches = new Map<string, {
@@ -1906,6 +1902,32 @@ function createEmbeddedTerminalBackendFromConfig(
     },
     uiPerfStats,
   );
+  const taskTerminals = createTaskTerminalAdapter({
+    persistence,
+    executorRegistry,
+    executionAgentRegistry: agentRegistry,
+    repoRoot,
+    taskHandles,
+    embeddedTerminalManager,
+    uiPerfStats,
+    terminalUiPerf,
+    terminalUiPerfSink,
+    logger,
+  });
+  const terminalEvents: WebBridgeTerminalEvents = {
+    onOutput(cb) {
+      embeddedTerminalManager.on('output', cb);
+      return () => {
+        embeddedTerminalManager.off('output', cb);
+      };
+    },
+    onExit(cb) {
+      embeddedTerminalManager.on('exit', cb);
+      return () => {
+        embeddedTerminalManager.off('exit', cb);
+      };
+    },
+  };
   const startupMarks = new Map<string, number>();
   const startupPhaseDetails: Array<Record<string, unknown>> = [];
   const recordStartupMark = (phase: string, extra?: Record<string, unknown>): void => {
@@ -1973,7 +1995,7 @@ function createEmbeddedTerminalBackendFromConfig(
     ts: new Date().toISOString(),
   });
 
-  const requireRendererTaskFeed = (): ReturnType<typeof createRendererTaskFeed> => {
+  const requireRendererTaskFeed = (): RendererTaskFeed => {
     if (!rendererTaskFeed) throw new Error('Renderer task feed is unavailable');
     return rendererTaskFeed;
   };
@@ -2300,6 +2322,7 @@ function createEmbeddedTerminalBackendFromConfig(
             persistence,
             autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
           }),
+          taskTerminals,
           getSystemDiagnostics: () => collectSystemDiagnostics({
             appVersion: app.getVersion(),
             isPackaged: app.isPackaged,
@@ -2320,6 +2343,7 @@ function createEmbeddedTerminalBackendFromConfig(
           token: webToken,
           host: resolveWebHost(invokerConfig),
           port: resolveWebPort(invokerConfig),
+          terminalEvents,
         });
       } else {
         logger.info('Web surface disabled — set INVOKER_WEB_TOKEN (or config.webToken) to enable it', { module: 'web-bridge' });
@@ -2403,11 +2427,7 @@ function createEmbeddedTerminalBackendFromConfig(
         const owner = await discoverOwner(messageBus, 1500);
         if (!isStandaloneCapable(owner)) {
           process.stderr.write(`${RED}Error:${RESET} ${message}\n`);
-          if (owner?.buildMismatchReason) {
-            process.stderr.write(`${RED}Detached viewer fallback refused: ${owner.buildMismatchReason}\n${RESET}`);
-          } else {
-            process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
-          }
+          process.stderr.write(`${RED}Detached viewer fallback requires a reachable owner, but no owner answered IPC.\n${RESET}`);
           app.quit();
           return;
         }
@@ -2597,8 +2617,6 @@ function createEmbeddedTerminalBackendFromConfig(
         ok: true,
         ownerId: workflowMutationOwnerId,
         mode: 'gui',
-        buildVersion,
-        buildSha,
       }));
       messageBus.onRequest('headless.query', async (req: unknown) =>
         answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({
@@ -2948,40 +2966,7 @@ function createEmbeddedTerminalBackendFromConfig(
     });
 
     ipcMain.handle('invoker:open-terminal', async (_event, taskId: string) => {
-      logger.info(`invoked for task="${taskId}"`, { module: 'open-terminal' });
-      const liveHandle = taskHandles.get(taskId);
-      const resolved = resolveTaskTerminalSpec({
-        taskId,
-        persistence,
-        executorRegistry,
-        executionAgentRegistry: agentRegistry,
-        repoRoot,
-        logger,
-        // If a live executor handle exists we can safely attach instead of
-        // refusing — embedded mode is designed for this case.
-        allowRunning: Boolean(liveHandle),
-        runningTaskReason:
-          'Task is still running or being fixed with AI. View output in the terminal panel below.',
-      });
-      if (!resolved.ok) {
-        return { opened: false, reason: resolved.reason };
-      }
-      try {
-        const session = embeddedTerminalManager.openOrReuse({
-          taskId,
-          spec: resolved.spec,
-          cwd: resolved.cwd,
-          attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
-        });
-        return { opened: true, session };
-      } catch (err) {
-        // A backend spawn failure (e.g. node-pty's spawn-helper missing its
-        // exec bit) must surface as a visible refusal, not a rejected IPC
-        // promise the renderer drops silently.
-        const reason = err instanceof Error ? err.message : String(err);
-        logger.warn(`terminal session spawn failed for task="${taskId}": ${reason}`, { module: 'open-terminal' });
-        return { opened: false, reason: `Failed to start terminal session: ${reason}` };
-      }
+      return taskTerminals.open(taskId);
     });
 
     registerPlanningTerminalSessionIpcHandlers({

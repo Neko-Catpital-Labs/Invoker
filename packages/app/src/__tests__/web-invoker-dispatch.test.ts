@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildWebInvokerDispatch } from '../web/web-invoker-dispatch.js';
+import type { InvokerConfig } from '../config.js';
 
 function makeTask(id: string) {
   return {
@@ -35,6 +36,18 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
   };
   return { dispatch: buildWebInvokerDispatch(deps as never), approveTask };
 }
+function makeTaskTerminalAdapter() {
+  return {
+    open: vi.fn(async (taskId: string) => ({
+      opened: true,
+      session: { sessionId: `session-${taskId}`, taskId, kind: 'task', status: 'running' },
+    })),
+    list: vi.fn(async () => [{ sessionId: 'session-1', taskId: 'task-1', kind: 'task', status: 'running' }]),
+    write: vi.fn(async (sessionId: string, data: string) => ({ ok: true, sessionId, bytes: data.length })),
+    resize: vi.fn(async (sessionId: string, cols: number, rows: number) => ({ ok: true, sessionId, cols, rows })),
+    close: vi.fn(async (sessionId: string) => ({ ok: true, sessionId })),
+  };
+}
 
 describe('buildWebInvokerDispatch', () => {
   it('list-workflows returns the persisted workflows', async () => {
@@ -65,12 +78,13 @@ describe('buildWebInvokerDispatch', () => {
 
   it('get-planning-presets returns configured planning presets', async () => {
     const { dispatch } = makeDispatch({
-      loadConfig: () => ({
-        defaultSlackHarnessPreset: 'omp+claude',
-        slackHarnessPresets: {
-          custom: { tool: 'codex' },
-        },
-      } as any),
+      loadConfig: () =>
+        ({
+          defaultSlackHarnessPreset: 'omp+claude',
+          slackHarnessPresets: {
+            custom: { tool: 'codex' },
+          },
+        } as unknown as InvokerConfig),
     });
     expect(await dispatch('invoker:get-planning-presets', [])).toEqual(expect.arrayContaining([
       { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: true },
@@ -80,7 +94,8 @@ describe('buildWebInvokerDispatch', () => {
 
   it('get-execution-defaults returns configured task execution defaults', async () => {
     const { dispatch } = makeDispatch({
-      loadConfig: () => ({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' } as any),
+      loadConfig: () =>
+        ({ defaultExecutionAgent: 'omp', defaultExecutionModel: 'chatgpt-5.4' } as unknown as InvokerConfig),
     });
     expect(await dispatch('invoker:get-execution-defaults', [])).toEqual({
       executionAgent: 'omp',
@@ -137,11 +152,68 @@ describe('buildWebInvokerDispatch', () => {
     expect(approveTask).toHaveBeenCalledWith('wf/x');
   });
 
-  it('open-terminal degrades gracefully instead of rejecting', async () => {
+  it('open-terminal degrades gracefully when task terminal support is absent', async () => {
     const { dispatch } = makeDispatch();
     expect(await dispatch('invoker:open-terminal', ['t'])).toEqual({
       opened: false,
       reason: expect.any(String),
+    });
+  });
+
+  it('routes task terminal channels through the injected adapter', async () => {
+    const taskTerminals = makeTaskTerminalAdapter();
+    const { dispatch } = makeDispatch({ taskTerminals });
+
+    await expect(dispatch('invoker:open-terminal', ['task-1'])).resolves.toEqual({
+      opened: true,
+      session: expect.objectContaining({ sessionId: 'session-task-1', taskId: 'task-1' }),
+    });
+    await expect(dispatch('invoker:terminal-list', [])).resolves.toEqual([
+      expect.objectContaining({ sessionId: 'session-1', taskId: 'task-1' }),
+    ]);
+    await expect(dispatch('invoker:terminal-write', ['session-1', 'echo hi'])).resolves.toEqual({
+      ok: true,
+      sessionId: 'session-1',
+      bytes: 7,
+    });
+    await expect(dispatch('invoker:terminal-resize', ['session-1', 120, 40])).resolves.toEqual({
+      ok: true,
+      sessionId: 'session-1',
+      cols: 120,
+      rows: 40,
+    });
+    await expect(dispatch('invoker:terminal-close', ['session-1'])).resolves.toEqual({
+      ok: true,
+      sessionId: 'session-1',
+    });
+
+    expect(taskTerminals.open).toHaveBeenCalledWith('task-1');
+    expect(taskTerminals.list).toHaveBeenCalledWith();
+    expect(taskTerminals.write).toHaveBeenCalledWith('session-1', 'echo hi');
+    expect(taskTerminals.resize).toHaveBeenCalledWith('session-1', 120, 40);
+    expect(taskTerminals.close).toHaveBeenCalledWith('session-1');
+  });
+
+  it('keeps planning terminal routes degraded on the web surface', async () => {
+    const taskTerminals = makeTaskTerminalAdapter();
+    const { dispatch } = makeDispatch({ taskTerminals });
+
+    await expect(dispatch('invoker:planning-terminal-open', ['plan-1'])).resolves.toEqual({
+      opened: false,
+      reason: 'Planning terminals are not available in the web UI',
+    });
+    await expect(dispatch('invoker:planning-terminal-list', [])).resolves.toEqual([]);
+    await expect(dispatch('invoker:planning-terminal-write', ['session-1', 'x'])).resolves.toEqual({
+      ok: false,
+      reason: 'unsupported',
+    });
+    await expect(dispatch('invoker:planning-terminal-resize', ['session-1', 80, 24])).resolves.toEqual({
+      ok: false,
+      reason: 'unsupported',
+    });
+    await expect(dispatch('invoker:planning-terminal-close', ['session-1'])).resolves.toEqual({
+      ok: false,
+      reason: 'unsupported',
     });
   });
 

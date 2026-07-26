@@ -21,7 +21,7 @@ import { brotliCompressSync, gzipSync } from 'node:zlib';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { join, normalize, sep, extname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
-import type { Logger } from '@invoker/contracts';
+import type { Logger, TerminalExitEvent, TerminalOutputEvent } from '@invoker/contracts';
 import { Channels, type MessageBus } from '@invoker/transport';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { WebInvokerDispatch } from './web-invoker-dispatch.js';
@@ -44,6 +44,11 @@ export interface WebBridgeDeps {
   token: string;
   host: string;
   port: number;
+  terminalEvents?: WebBridgeTerminalEvents;
+}
+export interface WebBridgeTerminalEvents {
+  onOutput(cb: (payload: TerminalOutputEvent) => void): () => void;
+  onExit(cb: (payload: TerminalExitEvent) => void): () => void;
 }
 
 export interface WebBridge {
@@ -220,7 +225,8 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
         sendJson(res, 200, { ok: false, error: { message: 'request failed', code } }, req);
         return;
       }
-      logger?.warn(`web invoke failed for ${parsed.channel}`, {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger?.warn(`web invoke failed for ${parsed.channel}: ${errorMessage}`, {
         module: 'web-bridge',
       });
       sendJson(res, 200, { ok: false, error: { message: 'internal server error' } }, req);
@@ -310,6 +316,12 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     broadcast('invoker:task-output', payload);
   });
 
+  const unsubscribeTerminalOutput = deps.terminalEvents?.onOutput((payload) => {
+    broadcast('invoker:terminal-output', payload);
+  });
+  const unsubscribeTerminalExit = deps.terminalEvents?.onExit((payload) => {
+    broadcast('invoker:terminal-exit', payload);
+  });
   let activityWatermark = 0;
   const activityTimer = setInterval(() => {
     try {
@@ -357,6 +369,8 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
     clearInterval(workflowsTimer);
     clearInterval(pingTimer);
     unsubscribeOutput?.();
+    unsubscribeTerminalOutput?.();
+    unsubscribeTerminalExit?.();
     for (const client of clients) client.end();
     clients.clear();
     const { promise, resolve } = Promise.withResolvers<void>();
