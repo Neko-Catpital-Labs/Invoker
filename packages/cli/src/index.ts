@@ -97,9 +97,15 @@ type CliRuntimeConfig = {
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
+    provisionCommand?: string;
     use_api_key?: boolean;
     secretsFile?: string;
     remoteHeartbeatIntervalSeconds?: number;
+    maxConcurrentTasks?: number;
+  }>;
+  worktreeTargets?: Record<string, {
+    provisionCommand?: string;
+    maxConcurrentTasks?: number;
   }>;
   executionPools?: Record<string, {
     members: Array<
@@ -422,6 +428,7 @@ async function runPlan(planPath: string, options: CliOptions): Promise<RunResult
         secretsFile: runtimeConfig.docker?.secretsFile,
       },
       remoteTargetsProvider: () => loadRuntimeConfig(options.config).remoteTargets ?? {},
+      worktreeTargetsProvider: () => loadRuntimeConfig(options.config).worktreeTargets ?? {},
       executionPoolsProvider: () => loadRuntimeConfig(options.config).executionPools ?? {},
       executionAgentRegistry,
       callbacks: {
