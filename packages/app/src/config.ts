@@ -248,10 +248,13 @@ export interface InvokerConfig {
      * Remote invoker home directory (e.g., ~/.invoker). Only used in managed mode.
      * Default: ~/.invoker
      *
-     * Invoker does not run repo bootstrap automatically. If a repo needs hydration,
-     * make the task command run the repo-owned setup explicitly.
+     * Managed SSH worktrees only run repo bootstrap when `provisionCommand` is set.
      */
     remoteInvokerHome?: string;
+    /**
+     * Optional repo-owned bootstrap command run inside managed remote worktrees before the task payload.
+     */
+    provisionCommand?: string;
     /**
      * When true, export agent API keys from the local secrets file into SSH task/fix
      * shells. Default false so remote Claude/Codex CLI account auth is preserved.
@@ -271,6 +274,13 @@ export interface InvokerConfig {
      * Max concurrent tasks allowed on this target when used inside an execution pool.
      * Default for pooled SSH members: 1.
      */
+    maxConcurrentTasks?: number;
+  }>;
+  /** Named local worktree targets used by execution pools. */
+  worktreeTargets?: Record<string, {
+    /** Optional repo-owned bootstrap command run inside local managed worktrees before the task payload. */
+    provisionCommand?: string;
+    /** Max concurrent tasks allowed on this target when used inside an execution pool. */
     maxConcurrentTasks?: number;
   }>;
   /**

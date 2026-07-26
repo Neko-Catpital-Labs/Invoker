@@ -326,6 +326,35 @@ describe('loadConfig', () => {
     const config = loadConfig();
     expect(config.defaultPoolId).toBe('mixed-local-ssh');
   });
+  it('reads target-owned provisioning keys from user config', () => {
+    writeFileSync(
+      join(fakeHome, '.invoker', 'config.json'),
+      JSON.stringify({
+        remoteTargets: {
+          ssh: {
+            host: '203.0.113.10',
+            user: 'invoker',
+            sshKeyPath: '/home/you/.ssh/id_ed25519',
+            provisionCommand: 'bash scripts/provision-ssh-worker.sh ensure-repo-ready',
+          },
+        },
+        worktreeTargets: {
+          local: {
+            provisionCommand: 'pnpm install --frozen-lockfile',
+            maxConcurrentTasks: 2,
+          },
+        },
+      }),
+    );
+    const config = loadConfig();
+    expect(config.remoteTargets?.ssh?.provisionCommand).toBe('bash scripts/provision-ssh-worker.sh ensure-repo-ready');
+    expect(config.worktreeTargets).toEqual({
+      local: {
+        provisionCommand: 'pnpm install --frozen-lockfile',
+        maxConcurrentTasks: 2,
+      },
+    });
+  });
   it('reads defaultExecution from user config', () => {
     writeFileSync(
       join(fakeHome, '.invoker', 'config.json'),
