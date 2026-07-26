@@ -481,7 +481,7 @@ describe('runSetup in a non-interactive shell', () => {
 
   it('fails loudly instead of silently answering no to every prompt', async () => {
     const { lines, io } = collectingIO();
-    const code = await runSetup([], io);
+    const code = await runSetup([], io, readySetupDeps());
 
     expect(code).toBe(1);
     expect(lines.join('\n')).toContain('stdin is not a TTY');
@@ -489,11 +489,26 @@ describe('runSetup in a non-interactive shell', () => {
 
   it('names the non-interactive escape hatches in the failure message', async () => {
     const { lines, io } = collectingIO();
-    await runSetup([], io);
+    await runSetup([], io, readySetupDeps());
 
     const output = lines.join('\n');
     expect(output).toContain('--yes');
     expect(output).toContain('--from-env');
+  });
+
+  it('runs final setup checks and prints one ending after a non-interactive prompt error', async () => {
+    const { lines, io } = collectingIO();
+    const githubAuthCheck = vi.fn(async () => okCheck('github-auth', 'GitHub auth', 'gh is authenticated'));
+    const smokePlanValidation = vi.fn(async () => okCheck('smoke-plan', 'Smoke plan validation', 'Parsed 1 task(s)'));
+
+    const code = await runSetup([], io, readySetupDeps({ githubAuthCheck, smokePlanValidation }));
+
+    expect(code).toBe(1);
+    expect(githubAuthCheck).toHaveBeenCalledTimes(1);
+    expect(smokePlanValidation).toHaveBeenCalledTimes(1);
+    expect(lines.filter((line) => line.startsWith('Fix this first:'))).toEqual([
+      'Fix this first: Setup prompts: Re-run with --yes, `invoker-cli setup planner`, or `invoker-cli setup slack --from-env`',
+    ]);
   });
 
   it('accepts the planner prompt under --yes without reading stdin', async () => {

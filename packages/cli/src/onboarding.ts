@@ -397,6 +397,16 @@ export function formatSetupEnding(checks: readonly PrerequisiteCheck[]): string 
   return `Fix this first: ${failure.name}: ${failure.remediation ?? failure.detail}`;
 }
 
+function nonInteractiveSetupCheck(error: NonInteractiveSetupError): PrerequisiteCheck {
+  return {
+    id: 'setup-prompts',
+    name: 'Setup prompts',
+    status: 'error',
+    detail: error.message.split('\n')[0] ?? error.message,
+    remediation: 'Re-run with --yes, `invoker-cli setup planner`, or `invoker-cli setup slack --from-env`',
+  };
+}
+
 export interface SetupDeps {
   isInstalled?: IsInstalled;
   commandRunner?: CommandRunner;
@@ -800,6 +810,7 @@ export async function runSetup(
   const fromEnv = parsed.fromEnv;
   const rl = (io as { rl?: { close: () => void } }).rl;
   const isInstalled = options.isInstalled ?? commandExists;
+  const checks: PrerequisiteCheck[] = [];
   try {
     if (parsed.subcommand === 'planner') {
       return await maybeInstallPlanner(parsed, io);
@@ -815,7 +826,7 @@ export async function runSetup(
 
     io.print('Invoker setup\n');
     const doctorChecks = buildDoctorChecks(loadCliConfig(), isInstalled);
-    const checks: PrerequisiteCheck[] = [...doctorChecks];
+    checks.push(...doctorChecks);
     io.print(formatReport(buildReport(doctorChecks)));
     io.print('');
 
@@ -896,7 +907,9 @@ export async function runSetup(
   } catch (error) {
     if (!(error instanceof NonInteractiveSetupError)) throw error;
     io.print(error.message);
-    return 1;
+    checks.push(nonInteractiveSetupCheck(error));
+    checks.push(...await collectGithubAndSmokeChecks(options));
+    return printSetupEnding(io, checks);
   } finally {
     rl?.close();
   }
