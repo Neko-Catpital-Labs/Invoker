@@ -32,10 +32,47 @@ const workflowGraphSpy = vi.hoisted(() => ({
   },
 }));
 
+const xtermMock = vi.hoisted(() => {
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+
+    loadAddon(_addon: unknown) {}
+
+    open(host: HTMLElement) {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      host.appendChild(terminalElement);
+    }
+
+    onData(_callback: (data: string) => void) {
+      return { dispose() {} };
+    }
+
+    write(_data: string) {}
+
+    focus() {}
+
+    dispose() {}
+  }
+
+  class MockFitAddon {
+    fit() {}
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+  };
+});
+
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
 
 vi.mock('../components/WorkflowGraph.js', async () => {
   const actual = await vi.importActual<typeof import('../components/WorkflowGraph.js')>('../components/WorkflowGraph.js');
@@ -247,6 +284,43 @@ describe('Browser-surface camera (component)', () => {
       command?.kind === 'fitInitial'
       && command.scope === 'workflow'
       && command.reason === 'sidebar-planning'
+    ))).toBe(false);
+  });
+
+  it('returns to the workflow graph from planning tmux mode by restoring the saved viewport instead of fitting', async () => {
+    const savedViewport = { x: -510, y: 96, zoom: 0.58 };
+    mock.setTasks([], workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+    getViewportMock.mockReturnValue(savedViewport);
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    await screen.findByTestId('planning-session-rail');
+    fireEvent.click(screen.getByRole('tab', { name: 'Tmux' }));
+
+    await waitFor(() => expect(mock.api.planningTerminalOpen).toHaveBeenCalledWith('session-1'));
+    await screen.findByTestId('invoker-terminal-tmux-pane');
+    expect(screen.getByRole('tab', { name: 'Tmux' })).toHaveAttribute('aria-selected', 'true');
+
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+    workflowGraphSpy.reset();
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
     ))).toBe(false);
   });
 

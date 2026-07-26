@@ -1,15 +1,77 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { vi } from 'vitest';
 import { useState } from 'react';
+import * as ReactFlowModule from '@xyflow/react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { GraphCameraCommand } from '../lib/graph-camera.js';
+
+const workflowGraphSpy = vi.hoisted(() => ({
+  commands: [] as Array<GraphCameraCommand | null | undefined>,
+  reset() {
+    this.commands.length = 0;
+  },
+}));
+
+const xtermMock = vi.hoisted(() => {
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+
+    loadAddon(_addon: unknown) {}
+
+    open(host: HTMLElement) {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      host.appendChild(terminalElement);
+    }
+
+    onData(_callback: (data: string) => void) {
+      return { dispose() {} };
+    }
+
+    write(_data: string) {}
+
+    focus() {}
+
+    dispose() {}
+  }
+
+  class MockFitAddon {
+    fit() {}
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+  };
+});
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
+
+vi.mock('../components/WorkflowGraph.js', async () => {
+  const actual = await vi.importActual<typeof import('../components/WorkflowGraph.js')>('../components/WorkflowGraph.js');
+  return {
+    ...actual,
+    WorkflowGraph(props: Parameters<typeof actual.WorkflowGraph>[0]) {
+      workflowGraphSpy.commands.push(props.cameraCommand);
+      return actual.WorkflowGraph(props);
+    },
+  };
+});
+
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const setViewportMock = (ReactFlowModule as unknown as { __setViewportMock: Mock }).__setViewportMock;
+const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
+const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock }).__getViewportMock;
 
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
@@ -23,6 +85,14 @@ describe('Invoker terminal (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+    getZoomMock.mockReset();
+    getZoomMock.mockReturnValue(1);
+    getViewportMock.mockReset();
+    getViewportMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+    workflowGraphSpy.reset();
   });
 
   afterEach(() => {
@@ -55,6 +125,29 @@ describe('Invoker terminal (component)', () => {
       expect(screen.getByTestId(`sidebar-${surface}`)).toHaveAttribute('aria-current', 'page');
     });
     expectRailListScrollContract(screen.getByTestId(listTestId));
+  }
+
+  async function flushFrames(count: number): Promise<void> {
+    for (let i = 0; i < count; i += 1) {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      requestAnimationFrame(() => resolve());
+      await promise;
+    }
+  }
+
+  async function settleCamera(): Promise<void> {
+    let stable = 0;
+    let previous = fitViewMock.mock.calls.length + setCenterMock.mock.calls.length;
+    for (let i = 0; i < 40 && stable < 4; i += 1) {
+      await flushFrames(1);
+      const total = fitViewMock.mock.calls.length + setCenterMock.mock.calls.length;
+      if (total === previous) {
+        stable += 1;
+      } else {
+        stable = 0;
+        previous = total;
+      }
+    }
   }
 
   it('renders an empty flush planning pane before the first message', async () => {
@@ -608,6 +701,48 @@ describe('Invoker terminal (component)', () => {
         presetKey: 'codex',
       });
     });
+  });
+
+  it('returns from planning tmux to the Plan graph without reissuing workflow fitInitial', async () => {
+    const savedViewport = { x: -510, y: 96, zoom: 0.58 };
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-a', name: 'Alpha Workflow', status: 'running' },
+    ];
+    mock.setTasks([], workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+    getViewportMock.mockReturnValue(savedViewport);
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    await screen.findByTestId('planning-session-rail');
+    fireEvent.click(screen.getByRole('tab', { name: 'Tmux' }));
+
+    await waitFor(() => expect(mock.api.planningTerminalOpen).toHaveBeenCalledWith('session-1'));
+    await screen.findByTestId('invoker-terminal-tmux-pane');
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Tmux' })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+    workflowGraphSpy.reset();
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+    ))).toBe(false);
   });
 
   it('counts only attention-worthy planning sessions in the sidebar badge', async () => {
