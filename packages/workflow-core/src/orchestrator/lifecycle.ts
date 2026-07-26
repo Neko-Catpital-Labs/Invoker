@@ -258,14 +258,6 @@ export function resetSubgraphToPendingImpl(
   return { affectedIds, readyIds };
 }
 
-export function restartTaskImpl(host: LifecycleHost, taskId: string): TaskState[] {
-  host.logger.warn(
-    '[orchestrator] restartTask is deprecated. Routing to recreateTask. Use retryTask() for lineage-preserving reset or recreateTask() for fresh-lineage reset explicitly.',
-    { taskId },
-  );
-  return host.recreateTask(taskId);
-}
-
 export function retryTaskImpl(host: LifecycleHost, taskId: string): TaskState[] {
   host.refreshFromDb();
   const task = host.stateGetTask(taskId);
