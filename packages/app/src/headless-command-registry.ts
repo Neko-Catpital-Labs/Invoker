@@ -69,8 +69,19 @@ export function isHeadlessHelpCommand(command: string | undefined): boolean {
   return command === undefined || command === '--help' || command === '-h';
 }
 
+const REMOVED_HEADLESS_COMMAND_ALIASES: Record<string, true> = {
+  list: true,
+  status: true,
+  'task-status': true,
+  queue: true,
+  audit: true,
+  session: true,
+  'delete-workflow': true,
+  'set-merge-mode': true,
+};
+
 export function isRemovedHeadlessCommandAlias(command: string | undefined): boolean {
-  return command === ['set', 'merge', 'mode'].join('-');
+  return command !== undefined && REMOVED_HEADLESS_COMMAND_ALIASES[command] === true;
 }
 
 export function isMutatingSetSubcommand(subcommand: string | undefined): boolean {

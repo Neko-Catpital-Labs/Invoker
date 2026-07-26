@@ -9,7 +9,16 @@ import { LocalBus } from '@invoker/transport';
 import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
-  const removedMergeModeAlias = ['set', 'merge', 'mode'].join('-');
+  const removedHeadlessAliases = [
+    ['set', 'merge', 'mode'].join('-'),
+    'list',
+    'status',
+    'task-status',
+    'queue',
+    'audit',
+    'session',
+    'delete-workflow',
+  ];
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
   const savedDbDir = process.env.INVOKER_DB_DIR;
   let dbDir: string;
@@ -66,21 +75,22 @@ describe('headless-client', () => {
       expect(runElectronHeadless).not.toHaveBeenCalled();
       expect(output).toContain('retry-task <taskId>');
       expect(output).not.toContain('Deprecated');
-      expect(output).not.toContain(removedMergeModeAlias);
+      expect(output).not.toContain('set-merge-mode');
     } finally {
       stdout.mockRestore();
     }
   });
 
-  it('rejects removed top-level aliases before booting Electron', async () => {
+  it('rejects removed aliases before booting Electron', async () => {
     const runElectronHeadless = vi.fn(async () => 23);
-
-    await expect(runHeadlessClientCommand([removedMergeModeAlias, 'wf-123', 'manual'], {
-      messageBus: new LocalBus(),
-      ensureStandaloneOwner: vi.fn(async () => {}),
-      refreshMessageBus: vi.fn(async () => new LocalBus()),
-      runElectronHeadless,
-    })).rejects.toThrow(`Unknown command: ${removedMergeModeAlias}`);
+    for (const command of removedHeadlessAliases) {
+      await expect(runHeadlessClientCommand([command], {
+        messageBus: new LocalBus(),
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        refreshMessageBus: vi.fn(async () => new LocalBus()),
+        runElectronHeadless,
+      })).rejects.toThrow(`Unknown command: ${command}`);
+    }
 
     expect(runElectronHeadless).not.toHaveBeenCalled();
   });
@@ -142,7 +152,7 @@ describe('headless-client', () => {
     }
   });
 
-  it('falls back to direct execution for generic standalone reads when no owner exists', async () => {
+  it('falls back to direct execution for canonical standalone reads when no owner exists', async () => {
     process.env.INVOKER_HEADLESS_STANDALONE = '1';
     const firstBus = new LocalBus();
     const secondBus = new LocalBus();
@@ -151,7 +161,7 @@ describe('headless-client', () => {
     const refreshMessageBus = vi.fn().mockResolvedValue(secondBus);
     const runElectronHeadless = vi.fn(async () => 23);
 
-    const argv = ['task-status', 'wf-1/task-a'];
+    const argv = ['query', 'session', 'wf-1/task-a'];
     const exitCode = await runHeadlessClientCommand(argv, {
       messageBus: firstBus,
       ensureStandaloneOwner,
