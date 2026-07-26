@@ -16,6 +16,7 @@ const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+const NO_COMPLETE_PLAN_DRAFT_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
@@ -716,11 +717,25 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
-        'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.',
+        NO_COMPLETE_PLAN_DRAFT_ERROR,
       );
     });
     expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
     expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+    expect(mock.api.startReady).not.toHaveBeenCalled();
+  });
+
+  it('shows the no-draft error when the user starts by typing submit', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('submit');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(NO_COMPLETE_PLAN_DRAFT_ERROR);
+    });
+    expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
+    expect(mock.api.planningChatSend).not.toHaveBeenCalled();
     expect(mock.api.startReady).not.toHaveBeenCalled();
   });
 
@@ -758,6 +773,35 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
     expect(mock.api.start).not.toHaveBeenCalled();
+  });
+
+  it('submits a restored status-ready draft when the user types submit', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'status-ready-chat',
+          title: 'Status ready chat',
+          status: 'draft_ready',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(screen.getByText('Draft ready')).toBeInTheDocument();
+    });
+
+    submitPlanningText('submit');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'status-ready-chat' });
+      expect(mock.api.startReady).toHaveBeenCalledWith({});
+    });
   });
 
   it('shows stacked workflow counts before creating the workflow', async () => {
