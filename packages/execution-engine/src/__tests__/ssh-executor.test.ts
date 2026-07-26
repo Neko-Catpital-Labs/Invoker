@@ -226,8 +226,10 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toContain('stop_bootstrap_heartbeat');
     expect(callScript.indexOf('stop_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(callScript).toMatch(/set \+e\n"\$RUNNER_PATH" "\$PAYLOAD_PATH"\nruntime_status="\$\?"\nset -e\ncleanup_runtime\nexit "\$runtime_status"/);
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
-    expect(callScript).toContain("trap 'cleanup_runtime \"$?\"' EXIT");
+    expect(callScript).toContain('exit_with_cleanup()');
+    expect(callScript).toContain('trap \'runtime_status="$?"; cleanup_runtime; exit "$runtime_status"\' EXIT');
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
