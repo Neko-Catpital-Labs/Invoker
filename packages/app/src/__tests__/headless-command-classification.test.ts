@@ -39,7 +39,8 @@ describe('headless-command-classification', () => {
     expect(isHeadlessReadOnlyCommand(['worker', 'status'])).toBe(true);
     expect(isHeadlessReadOnlyCommand(['worker', 'disk-headroom'])).toBe(false);
     expect(isHeadlessReadOnlyCommand(['run'])).toBe(false);
-    expect(isHeadlessReadOnlyCommand(['unknown-command'])).toBe(false);
+    expect(isHeadlessReadOnlyCommand(['list'])).toBe(false);
+    expect(isHeadlessReadOnlyCommand(['session'])).toBe(false);
   });
 
   it('classifies mutating commands', () => {
@@ -49,8 +50,6 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['slack'])).toBe(false);
 
     expect(isHeadlessMutatingCommand(['run'])).toBe(true);
-    expect(isHeadlessMutatingCommand(['recreate'])).toBe(true);
-    expect(isHeadlessMutatingCommand(['retry-task'])).toBe(true);
     expect(isHeadlessMutatingCommand(['migrate-compat'])).toBe(true);
     expect(isHeadlessMutatingCommand(['cancel-workflow'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'prompt'])).toBe(true);
