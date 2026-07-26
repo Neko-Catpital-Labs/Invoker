@@ -26,6 +26,7 @@ export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 export type EmbeddedTerminalSessionKind = 'task' | 'planning';
 
 const MAX_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+const MAX_DISPLAY_BRIDGE_CHARS = 4 * 1024;
 
 export interface PtyForkOptionsLike {
   name: string;
@@ -318,7 +319,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       updatedAt: createdAt,
       status: 'running' as const,
-      outputSnapshot: '',
+      outputSnapshot: seedOutputSnapshot(opts.spec.displayBridge),
     };
 
     if (opts.attach) {
@@ -391,7 +392,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt: seed.createdAt,
       updatedAt: new Date().toISOString(),
       status: 'running' as const,
-      outputSnapshot: seed.outputSnapshot,
+      outputSnapshot: seedOutputSnapshot(seed.spec.displayBridge, seed.outputSnapshot),
     });
   }
 
@@ -654,6 +655,19 @@ export class EmbeddedTerminalManager extends EventEmitter {
 function trimOutputSnapshot(snapshot: string): string {
   if (snapshot.length <= MAX_OUTPUT_SNAPSHOT_CHARS) return snapshot;
   return snapshot.slice(snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS);
+}
+
+function boundDisplayBridge(displayBridge: string | undefined): string {
+  if (!displayBridge) return '';
+  return displayBridge.slice(0, MAX_DISPLAY_BRIDGE_CHARS);
+}
+
+function seedOutputSnapshot(displayBridge: string | undefined, outputSnapshot = ''): string {
+  const bridge = boundDisplayBridge(displayBridge);
+  if (!bridge || outputSnapshot.startsWith(bridge)) return outputSnapshot;
+  const remainingSnapshotChars = MAX_OUTPUT_SNAPSHOT_CHARS - bridge.length;
+  if (remainingSnapshotChars <= 0) return bridge.slice(0, MAX_OUTPUT_SNAPSHOT_CHARS);
+  return bridge + outputSnapshot.slice(Math.max(0, outputSnapshot.length - remainingSnapshotChars));
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
