@@ -129,7 +129,7 @@ case "$out" in
   *) echo "[repro] missing repair line" >&2; exit 1 ;;
 esac
 case "$out" in
-  *"BLOCK PR #2607 human-review-thread"*) ;;
+  *"BLOCK PR #2607 unresolved human review thread thread-human"*) ;;
   *) echo "[repro] missing human block line" >&2; exit 1 ;;
 esac
 
