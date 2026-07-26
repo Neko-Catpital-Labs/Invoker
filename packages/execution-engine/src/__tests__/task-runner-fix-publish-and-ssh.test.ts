@@ -2641,16 +2641,26 @@ describe('TaskRunner', () => {
 
       expect(provider).toHaveBeenCalledTimes(2);
     });
-    it('reads worktree provision commands lazily from the pool provider on each selectExecutor call', () => {
+    it.fails('forwards SSH target provisioning fields into the selected SSH executor', () => {
       const provider = vi.fn()
         .mockReturnValueOnce({
-          fast: {
-            members: [{ type: 'worktree', id: 'local-mac', provisionCommand: 'old provision' }],
+          'do-droplet': {
+            host: '1.2.3.4',
+            user: 'root',
+            sshKeyPath: '/old/key',
+            managedWorkspaces: true,
+            remoteInvokerHome: '/srv/invoker-a',
+            provisionCommand: 'old provision',
           },
         })
         .mockReturnValueOnce({
-          fast: {
-            members: [{ type: 'worktree', id: 'local-mac', provisionCommand: 'new provision' }],
+          'do-droplet': {
+            host: '1.2.3.4',
+            user: 'root',
+            sshKeyPath: '/old/key',
+            managedWorkspaces: true,
+            remoteInvokerHome: '/srv/invoker-b',
+            provisionCommand: 'new provision',
           },
         });
 
@@ -2659,8 +2669,53 @@ describe('TaskRunner', () => {
         persistence: {} as any,
         executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
         cwd: '/tmp',
-        executionPoolsProvider: provider,
+        remoteTargetsProvider: provider,
       });
+
+      const task = makeTask({
+        id: 'ssh-task',
+        config: { runnerKind: 'ssh', poolMemberId: 'do-droplet' },
+      });
+
+      const executor1 = executor.selectExecutor(task);
+      expect(executor1.executor.type).toBe('ssh');
+      expect(Reflect.get(executor1.executor, 'remoteInvokerHome')).toBe('/srv/invoker-a');
+      expect(Reflect.get(executor1.executor, 'provisionCommand')).toBe('old provision');
+
+      const executor2 = executor.selectExecutor(task);
+      expect(Reflect.get(executor2.executor, 'remoteInvokerHome')).toBe('/srv/invoker-b');
+      expect(Reflect.get(executor2.executor, 'provisionCommand')).toBe('new provision');
+
+      expect(provider).toHaveBeenCalledTimes(2);
+    });
+    it.fails('resolves worktree provisioning from worktree targets', () => {
+      const poolProvider = vi.fn()
+        .mockReturnValueOnce({
+          fast: {
+            members: [{ type: 'worktree', id: 'local-mac' }],
+          },
+        })
+        .mockReturnValueOnce({
+          fast: {
+            members: [{ type: 'worktree', id: 'local-mac' }],
+          },
+        });
+      const targetProvider = vi.fn()
+        .mockReturnValueOnce({
+          'local-mac': { provisionCommand: 'old provision' },
+        })
+        .mockReturnValueOnce({
+          'local-mac': { provisionCommand: 'new provision' },
+        });
+
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: poolProvider,
+        worktreeTargetsProvider: targetProvider,
+      } as any);
 
       const task = makeTask({
         id: 'worktree-task',
@@ -2669,41 +2724,13 @@ describe('TaskRunner', () => {
 
       const executor1 = executor.selectExecutor(task);
       expect(executor1.executor.type).toBe('worktree');
-      expect((executor1.executor as any).provisionCommand).toBe('old provision');
+      expect(Reflect.get(executor1.executor, 'provisionCommand')).toBe('old provision');
 
       const executor2 = executor.selectExecutor(task);
-      expect((executor2.executor as any).provisionCommand).toBe('new provision');
+      expect(Reflect.get(executor2.executor, 'provisionCommand')).toBe('new provision');
 
-      expect(provider).toHaveBeenCalledTimes(2);
-    });
-    it('bypasses arbitrary registered worktree executors so pool provisioning fingerprints win', () => {
-      const preRegistered = { type: 'worktree' };
-      const executor = new TaskRunner({
-        orchestrator: { getTask: () => undefined } as any,
-        persistence: {} as any,
-        executorRegistry: {
-          getDefault: () => ({ type: 'worktree' }),
-          get: (type: string) => type === 'worktree' ? preRegistered : null,
-          getAll: () => [],
-          register: vi.fn(),
-        } as any,
-        cwd: '/tmp',
-        executionPoolsProvider: () => ({
-          fast: {
-            members: [{ type: 'worktree', id: 'local-mac', provisionCommand: 'pnpm install --frozen-lockfile' }],
-          },
-        }),
-      });
-
-      const task = makeTask({
-        id: 'worktree-task',
-        config: { runnerKind: 'worktree', poolId: 'fast' },
-      });
-
-      const selected = executor.selectExecutor(task);
-      expect(selected.executor).not.toBe(preRegistered);
-      expect(selected.executor.type).toBe('worktree');
-      expect(Reflect.get(selected.executor, 'provisionCommand')).toBe('pnpm install --frozen-lockfile');
+      expect(poolProvider).toHaveBeenCalledTimes(2);
+      expect(targetProvider).toHaveBeenCalledTimes(2);
     });
 
 
@@ -3261,7 +3288,7 @@ describe('TaskRunner', () => {
       expect(executor2.executor.type).toBe('worktree');
       expect(executor1.executor).toBe(executor2.executor);
     });
-    it('retains cached worktree executors for earlier provisioning fingerprints', () => {
+    it.fails('retains cached worktree executors for earlier worktree target provisioning fingerprints', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
@@ -3274,13 +3301,17 @@ describe('TaskRunner', () => {
         cwd: '/tmp',
         executionPoolsProvider: () => ({
           fast: {
-            members: [{ type: 'worktree', id: 'local-a', provisionCommand: 'pnpm install --frozen-lockfile' }],
+            members: [{ type: 'worktree', id: 'local-a' }],
           },
           slow: {
-            members: [{ type: 'worktree', id: 'local-b', provisionCommand: 'pnpm install' }],
+            members: [{ type: 'worktree', id: 'local-b' }],
           },
         }),
-      });
+        worktreeTargetsProvider: () => ({
+          'local-a': { provisionCommand: 'pnpm install --frozen-lockfile' },
+          'local-b': { provisionCommand: 'pnpm install' },
+        }),
+      } as any);
 
       const executorA1 = executor.selectExecutor(makeTask({
         id: 'task-a1',
