@@ -16,6 +16,7 @@ import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
+import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   sshInteractiveCdFragment,
@@ -252,7 +253,7 @@ ensure_managed_pnpm_workspace
 
     return `set -euo pipefail
 ${this.remotePathNormalizeFunction()}
-INVOKER_HOME=$(normalize_remote_path ${this.shellQuote(this.remoteInvokerHome)})
+${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_HOME')}
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
@@ -310,12 +311,12 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Remote shell for task payloads. Use a login shell so the remote user's
-   * ~/.profile PATH (flutter, android-sdk, etc.) is applied. Never forward the
-   * local host PATH — that clobbers Linux remotes with macOS Homebrew paths.
+   * Remote shell for task payloads. Keep this non-login so remote dotfiles cannot
+   * trigger login-shell bash bugs or mutate execution semantics. PATH comes from
+   * ~/.invoker/env.sh, sourced explicitly inside the bootstrap script.
    */
   private buildPayloadRemoteCommand(): string[] {
-    return ['bash', '-l', '-s'];
+    return ['bash', '-s'];
   }
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
@@ -930,7 +931,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     return this.remoteGitRecordAndPush('publish-approved-fix', request, worktreePath, branch, 0);
   }
 
-  /** Run a task bash script on the remote login shell (fed on stdin). */
+  /** Run a task bash script on the remote bash stdin transport. */
   private spawnSshRemoteStdin(
     executionId: string,
     request: WorkRequest,
