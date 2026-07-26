@@ -192,7 +192,7 @@ function capTailChars(value: string, max: number): string {
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
 const URL_TOKEN_TERMINATORS = new Set([' ', '\t', '\n', '\r', '<', '>', '(', ')', '[', ']', '{', '}', '"', "'", '|']);
-const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?']);
+const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?', ')']);
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
@@ -202,46 +202,22 @@ function looksLikePreset(normalized: string): boolean {
 export function extractRepoUrlFromMessage(text: string): string | undefined {
   let start = 0;
   while (start < text.length) {
-    const httpIndex = text.indexOf('http://', start);
-    const httpsIndex = text.indexOf('https://', start);
-    const candidateStart = httpIndex === -1
-      ? httpsIndex
-      : httpsIndex === -1
-        ? httpIndex
-        : Math.min(httpIndex, httpsIndex);
+    const candidateStart = ['http://', 'https://', 'ssh://', 'git@']
+      .map((prefix) => text.indexOf(prefix, start))
+      .filter((index) => index !== -1)
+      .sort((a, b) => a - b)[0] ?? -1;
     if (candidateStart === -1) return undefined;
     let candidateEnd = candidateStart;
     while (candidateEnd < text.length && !URL_TOKEN_TERMINATORS.has(text[candidateEnd])) {
       candidateEnd += 1;
     }
-    let candidate = text.slice(candidateStart, candidateEnd);
-    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
-      candidate = candidate.slice(0, -1);
+    const repoCandidate = repoCandidateFromMessageText(text.slice(candidateStart, candidateEnd));
+    if (repoCandidate) {
+      return /^https?:\/\//i.test(repoCandidate) && repoCandidate.endsWith('/')
+        ? repoCandidate.slice(0, -1)
+        : repoCandidate;
     }
-    let url: URL;
-    try {
-      url = new URL(candidate);
-    } catch {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.username || url.password) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.search || url.hash) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
+    start = candidateEnd + 1;
   }
   return undefined;
 }
@@ -344,13 +320,24 @@ export function parsePlanningRequest(
   };
 }
 
-function isRepoRootUrl(rawUrl: string): boolean {
-  if (/^(ssh:\/\/|git@)/.test(rawUrl)) return true;
+function repoCandidateFromMessageText(rawCandidate: string): string | undefined {
+  let candidate = rawCandidate.trim();
+  while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
+    candidate = candidate.slice(0, -1);
+  }
+  if (/^git@[\w.-]+:[^\s<>]+$/i.test(candidate)) return candidate;
+  if (/^ssh:\/\/[^\s<>]+$/i.test(candidate)) return candidate;
+  if (!/^https?:\/\//i.test(candidate)) return undefined;
   try {
-    const u = new URL(rawUrl);
-    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(u.pathname);
+    const u = new URL(candidate);
+    if (!u.host || (u.protocol !== 'http:' && u.protocol !== 'https:')) return undefined;
+    if (u.username || u.password || u.search || u.hash) return undefined;
+    if (u.hostname.toLowerCase() === 'github.com') {
+      return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(u.pathname) ? candidate : undefined;
+    }
+    return u.pathname.endsWith('.git') ? candidate : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -362,8 +349,10 @@ function extractRepositoryUrls(text: string): string[] {
     ...withoutSlackLinks.matchAll(/\bhttps?:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bssh:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bgit@[\w.-]+:[^\s<>]+/gi),
-  ].map((match) => (match[1] ?? match[0]).replace(/[),.;]+$/, ''));
-  return [...new Set(candidates)].filter(isRepoRootUrl);
+  ]
+    .map((match) => repoCandidateFromMessageText(match[1] ?? match[0]))
+    .filter((url): url is string => Boolean(url));
+  return [...new Set(candidates)];
 }
 
 function repositoryIdentity(repoUrl: string): string {
