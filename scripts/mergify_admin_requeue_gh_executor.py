@@ -42,11 +42,12 @@ class AdminBypassGhExecutor:
         match = GH_ACTIONS_JOB_RE.search(details_url)
         if not match:
             return ""
+        job_id = match.group(1)
         tmp = Path(tempfile.mkdtemp(prefix=f"mergify-admin-requeue-{pr_number}-"))
         path = tmp / (re.sub(r"[^A-Za-z0-9_.-]+", "-", check_name).strip("-") + ".log")
         try:
             completed = subprocess.run(
-                ["gh", "run", "view", "--repo", repo, "--job", match.group(1), "--log"],
+                ["gh", "run", "view", "--repo", repo, "--job", job_id, "--log"],
                 check=True,
                 text=True,
                 capture_output=True,
@@ -55,8 +56,18 @@ class AdminBypassGhExecutor:
             output = "\n".join(part for part in (exc.stdout, exc.stderr) if part).strip()
             lowered = output.lower()
             if "logs will be available when it is complete" in lowered or "still in progress" in lowered:
-                raise JobLogUnavailable(output or f"job log for {check_name} is not available yet") from exc
-            raise
+                try:
+                    completed = subprocess.run(
+                        ["gh", "api", f"repos/{repo}/actions/jobs/{job_id}/logs"],
+                        check=True,
+                        text=True,
+                        capture_output=True,
+                    )
+                except subprocess.CalledProcessError as api_exc:
+                    api_output = "\n".join(part for part in (api_exc.stdout, api_exc.stderr) if part).strip()
+                    raise JobLogUnavailable(output or api_output or f"job log for {check_name} is not available yet") from api_exc
+            else:
+                raise
         out = completed.stdout
         path.write_text(out, encoding="utf-8")
         return str(path)

@@ -56,6 +56,18 @@ def save_state(state: dict) -> None:
         json.dump(state, handle, indent=2)
 
 
+def emit_job_log(entry: object) -> None:
+    if isinstance(entry, dict):
+        stdout = str(entry.get("stdout") or "")
+        stderr = str(entry.get("stderr") or "")
+        if stdout:
+            print(stdout, end="")
+        if stderr:
+            print(stderr, end="", file=sys.stderr)
+        sys.exit(int(entry.get("exit_code") or 0))
+    print(str(entry))
+
+
 def required_checks() -> list[str]:
     raw = os.environ.get("FAKE_GH_REQUIRED_CHECKS", "")
     return [name for name in raw.split("\n") if name.strip()]
@@ -181,16 +193,7 @@ def main() -> None:
     if ARGS[:2] == ["run", "view"]:
         job_id = flag_value("--job") or ""
         if job_id and "--log" in ARGS:
-            entry = state.get("job_logs", {}).get(job_id, "")
-            if isinstance(entry, dict):
-                stdout = str(entry.get("stdout") or "")
-                stderr = str(entry.get("stderr") or "")
-                if stdout:
-                    print(stdout, end="")
-                if stderr:
-                    print(stderr, end="", file=sys.stderr)
-                sys.exit(int(entry.get("exit_code") or 0))
-            print(str(entry))
+            emit_job_log(state.get("job_logs", {}).get(job_id, ""))
             return
         print("")
         return
@@ -214,6 +217,11 @@ def main() -> None:
 
     if ARGS[0] == "api":
         path = next((arg for arg in ARGS[1:] if arg.startswith("repos/")), "")
+        job_logs_match = re.fullmatch(r"repos/[^/]+/[^/]+/actions/jobs/(\d+)/logs", path)
+        if job_logs_match and flag_value("--method") in (None, "GET"):
+            job_id = job_logs_match.group(1)
+            emit_job_log(state.get("job_logs_api", {}).get(job_id, state.get("job_logs", {}).get(job_id, "")))
+            return
         comments_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/comments", path)
         if comments_match and flag_value("--method") in (None, "GET"):
             print(json.dumps(state.get("issue_comments", {}).get(comments_match.group(1), [])))

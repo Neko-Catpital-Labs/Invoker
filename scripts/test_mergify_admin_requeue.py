@@ -1,5 +1,6 @@
 import io
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -131,6 +132,25 @@ class MergifyAdminRequeueTests(unittest.TestCase):
         logger = AdminBypassLogger()
         executor = AdminBypassGhExecutor(gh, ledger, logger, repo)
         return AdminBypassRepairer(gh, executor, logger, ledger, repo)
+
+    def test_download_job_log_falls_back_to_job_log_api_when_run_is_active(self):
+        ledger = self.ledger()
+        executor = self.executor(object(), ledger, "owner/repo")
+        run_view_error = subprocess.CalledProcessError(
+            1,
+            ["gh", "run", "view", "--job", "2", "--log"],
+            stderr="run 30219860322 is still in progress; logs will be available when it is complete",
+        )
+        api_result = subprocess.CompletedProcess(
+            ["gh", "api", "repos/owner/repo/actions/jobs/2/logs"],
+            0,
+            stdout="queue job log\n",
+            stderr="",
+        )
+        with mock.patch("scripts.mergify_admin_requeue_gh_executor.subprocess.run", side_effect=[run_view_error, api_result]) as run:
+            path = executor.download_job_log("owner/repo", "https://github.com/owner/repo/actions/runs/1/job/2", 5885, "UI Vitest")
+        self.assertEqual(Path(path).read_text(encoding="utf-8"), "queue job log\n")
+        self.assertEqual(run.call_args_list[1].args[0], ["gh", "api", "repos/owner/repo/actions/jobs/2/logs"])
 
     def test_loads_admin_bypass_rule_from_mergify_yml(self):
         trunk, labels, required = load_mergify_rules(Path(".mergify.yml"))
