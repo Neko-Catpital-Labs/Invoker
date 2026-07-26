@@ -193,10 +193,40 @@ function capTailChars(value: string, max: number): string {
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
 const URL_TOKEN_TERMINATORS = new Set([' ', '\t', '\n', '\r', '<', '>', '(', ')', '[', ']', '{', '}', '"', "'", '|']);
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?']);
+const GITHUB_REPO_ROOT_PATH_RE = /^\/[^/]+\/[^/]+(?:\.git)?\/?$/;
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
+}
+
+function stripTrailingMessageUrlPunctuation(value: string): string {
+  let candidate = value.trim();
+  while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
+    candidate = candidate.slice(0, -1);
+  }
+  return candidate;
+}
+
+function normalizeMessageRepoCandidate(rawUrl: string): string | undefined {
+  const candidate = stripTrailingMessageUrlPunctuation(rawUrl);
+  if (!candidate) return undefined;
+  if (/^(ssh:\/\/|git@)/i.test(candidate)) return candidate;
+
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return undefined;
+  }
+  if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) return undefined;
+  if (url.username || url.password || url.search || url.hash) return undefined;
+  if (url.host.toLowerCase() === 'github.com') {
+    return GITHUB_REPO_ROOT_PATH_RE.test(url.pathname)
+      ? candidate.replace(/\/+$/, '')
+      : undefined;
+  }
+  return url.pathname.endsWith('.git') ? candidate : undefined;
 }
 
 export function extractRepoUrlFromMessage(text: string): string | undefined {
@@ -214,34 +244,9 @@ export function extractRepoUrlFromMessage(text: string): string | undefined {
     while (candidateEnd < text.length && !URL_TOKEN_TERMINATORS.has(text[candidateEnd])) {
       candidateEnd += 1;
     }
-    let candidate = text.slice(candidateStart, candidateEnd);
-    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
-      candidate = candidate.slice(0, -1);
-    }
-    let url: URL;
-    try {
-      url = new URL(candidate);
-    } catch {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.username || url.password) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.search || url.hash) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
+    const repoCandidate = normalizeMessageRepoCandidate(text.slice(candidateStart, candidateEnd));
+    if (repoCandidate) return repoCandidate;
+    start = candidateEnd + 1;
   }
   return undefined;
 }
@@ -344,16 +349,6 @@ export function parsePlanningRequest(
   };
 }
 
-function isRepoRootUrl(rawUrl: string): boolean {
-  if (/^(ssh:\/\/|git@)/.test(rawUrl)) return true;
-  try {
-    const u = new URL(rawUrl);
-    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(u.pathname);
-  } catch {
-    return false;
-  }
-}
-
 function extractRepositoryUrls(text: string): string[] {
   const slackLinks = [...text.matchAll(/<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>/gi)];
   const withoutSlackLinks = text.replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ');
@@ -362,8 +357,9 @@ function extractRepositoryUrls(text: string): string[] {
     ...withoutSlackLinks.matchAll(/\bhttps?:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bssh:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bgit@[\w.-]+:[^\s<>]+/gi),
-  ].map((match) => (match[1] ?? match[0]).replace(/[),.;]+$/, ''));
-  return [...new Set(candidates)].filter(isRepoRootUrl);
+  ].map((match) => normalizeMessageRepoCandidate((match[1] ?? match[0]).replace(/[)\]}]+$/, '')))
+    .filter((repoUrl): repoUrl is string => !!repoUrl);
+  return [...new Set(candidates)];
 }
 
 function repositoryIdentity(repoUrl: string): string {
