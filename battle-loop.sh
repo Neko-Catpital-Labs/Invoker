@@ -17,6 +17,9 @@ REPROS=(
   scripts/repro/repro-babysit-headless-queued-comment.sh
   scripts/repro/repro-babysit-queue-only-empty-log.sh
   scripts/repro/repro-babysit-queue-only-missing-requeues.sh
+  scripts/repro/repro-babysit-targeted-scan-light.sh
+  scripts/repro/repro-babysit-queue-repair-invalid-stop.sh
+  scripts/repro/repro-babysit-no-current-bottom-comment.sh
 )
 
 # repro-mergify-stack-dogfood.sh is deliberately excluded: it's an opt-in
