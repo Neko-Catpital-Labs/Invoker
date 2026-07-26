@@ -79,6 +79,66 @@ describe('headless-client', () => {
     expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 
+  it('enriches delegated workflow JSON with submitted planning stack aliases', async () => {
+    const bus = new LocalBus();
+    bus.onRequest('headless.owner-ping', async () => ({ ok: true, ownerId: 'owner-read', mode: 'gui' }));
+    bus.onRequest('headless.query', async (request: { kind: string; args: string[] }) => {
+      expect(request).toEqual({ kind: 'cli-query', args: ['query', 'workflows', '--output', 'json'] });
+      return { output: '[]\n' };
+    });
+    bus.onRequest('headless.gui-mutation', async (request: { channel: string; args: unknown[] }) => {
+      expect(request).toEqual({ channel: 'invoker:planning-chat-list', args: [] });
+      return {
+        ok: true,
+        sessions: [{
+          id: 'planning-1',
+          title: 'Planning cleanup',
+          status: 'submitted',
+          presetKey: 'codex',
+          messages: [],
+          draftPlanAvailable: true,
+          draftPlanSummary: {
+            name: 'In-App Planning Chat Draft Gate',
+            taskCount: 3,
+            workflowCount: 3,
+            steps: [
+              'In-App Planning Chat Draft Gate Step 1',
+              'In-App Planning Chat Draft Gate Step 2',
+              'In-App Planning Chat Draft Gate Step 3',
+            ],
+            taskGroups: [],
+          },
+          submittedWorkflowId: 'wf-tail',
+          submittedPlanName: 'In-App Planning Chat Draft Gate',
+          createdAt: '2026-07-20T00:00:00.000Z',
+          updatedAt: '2026-07-20T01:00:00.000Z',
+        }],
+      };
+    });
+
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 23);
+    try {
+      const exitCode = await runHeadlessClientCommand(['query', 'workflows', '--output', 'json'], {
+        messageBus: bus,
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        runElectronHeadless,
+      });
+
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(exitCode).toBe(0);
+      expect(runElectronHeadless).not.toHaveBeenCalled();
+      expect(JSON.parse(output)).toEqual([
+        expect.objectContaining({
+          id: 'wf-tail',
+          name: 'In-App Planning Chat Draft Gate Step 3',
+        }),
+      ]);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it('serves query workers locally without booting Electron or delegating to an owner', async () => {
     const previousDbDir = process.env.INVOKER_DB_DIR;
     const homeRoot = mkdtempSync(join(tmpdir(), 'invoker-query-workers-'));

@@ -77,6 +77,7 @@ export interface InAppPlanningChatSession {
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
   submittedWorkflowId?: string;
+  submittedWorkflowIds?: string[];
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
   terminalSessionId?: string;
@@ -224,6 +225,7 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     draftPlanSummary: session.draftPlanSummary,
     draftPlanText: session.draftPlanText,
     submittedWorkflowId: session.submittedWorkflowId,
+    submittedWorkflowIds: session.submittedWorkflowIds,
     submittedPlanName: session.submittedPlanName,
     terminalMode: session.terminalMode ?? 'chat',
     terminalSessionId: session.terminalSessionId,
@@ -248,6 +250,7 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     draftPlanSummary: session.draftPlanSummary,
     draftPlanText: session.draftPlanText,
     submittedWorkflowId: session.submittedWorkflowId,
+    submittedWorkflowIds: session.submittedWorkflowIds,
     submittedPlanName: session.submittedPlanName,
     terminalMode: session.terminalMode ?? 'chat',
     terminalSessionId: session.terminalSessionId,
@@ -648,6 +651,7 @@ export async function submitPlanningChatDraft(
       session.status = 'submitted';
       session.submittedPlanName = approved.planName;
       session.submittedWorkflowId = approved.workflowId;
+      session.submittedWorkflowIds = approved.workflowIds;
       session.updatedAt = new Date().toISOString();
       appendSessionMessage(
         session,
@@ -789,6 +793,7 @@ export async function restorePlanningChatSessions(
       draftPlanSummary: record.draftPlanSummary,
       draftPlanText: record.draftPlanText,
       submittedWorkflowId: record.submittedWorkflowId,
+      submittedWorkflowIds: record.submittedWorkflowIds,
       submittedPlanName: record.submittedPlanName,
       terminalMode: record.terminalMode ?? 'chat',
       terminalSessionId: record.terminalSessionId,
