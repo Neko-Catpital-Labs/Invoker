@@ -191,6 +191,8 @@ $marker
 # <<< invoker ssh worker env <<<
 EOF
 )
+  append_once "$HOME/.bash_profile" "$marker" "$block"
+  append_once "$HOME/.bash_login" "$marker" "$block"
   append_once "$HOME/.profile" "$marker" "$block"
   append_once "$HOME/.bashrc" "$marker" "$block"
 }
