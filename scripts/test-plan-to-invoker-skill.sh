@@ -47,6 +47,37 @@ must_contain_count() {
   fi
 }
 
+must_contain_in_section() {
+  local file="$1"
+  local start_heading="$2"
+  local end_heading="$3"
+  local needle="$4"
+  local hint="$5"
+  local section
+  local section_status=0
+  section="$(awk -v start="$start_heading" -v end="$end_heading" '
+    $0 == start { in_section=1; found_start=1; next }
+    in_section && $0 == end { found_end=1; exit }
+    in_section { print }
+    END {
+      if (!found_start) exit 2
+      if (!found_end) exit 3
+    }
+  ' "$file")" || section_status=$?
+  if [[ "$section_status" -eq 2 ]]; then
+    fail "$hint — missing start heading in $file: $start_heading"
+  fi
+  if [[ "$section_status" -eq 3 ]]; then
+    fail "$hint — missing end heading in $file: $end_heading"
+  fi
+  if [[ "$section_status" -ne 0 ]]; then
+    fail "$hint — could not read section in $file between $start_heading and $end_heading"
+  fi
+  if ! printf '%s\n' "$section" | grep -qF -- "$needle"; then
+    fail "$hint — missing in $file between $start_heading and $end_heading: $needle"
+  fi
+}
+
 must_not_exist() {
   local path="$1"
   local hint="$2"
@@ -156,6 +187,9 @@ must_contain "$CLAUDE_MD" "user-confirmed \`Safety invariant:\` for every slice"
 must_contain "$SKILL_MD" "Stateful bug lifecycle matrix" "SKILL must require lifecycle coverage for stateful bugs"
 must_contain "$SKILL_MD" "plan creation → intervening message → summary-only reply → authorization/submit" "SKILL must name the stateful multi-turn regression sequence"
 must_contain "$SKILL_MD" "include a verification case for each affected surface" "SKILL must require multi-surface state coverage"
+must_contain_in_section "$SKILL_MD" "## Intended flow (do not skip steps)" "## Deterministic step map (plan-to-invoker)" "When the target repo is Invoker itself (\`EdbertChan/Invoker\` or the upstream \`Neko-Catpital-Labs/Invoker\`), be explicit that GitHub PR publishing should use **Mergify Stacks** after the work is ready" "SKILL must keep Invoker PR-publication guidance separate from handoff-only mode"
+must_contain_in_section "$SKILL_MD" "### Workflow steps after validation" "## Runtime verification (Phase 1b)" "If the target repo is Invoker itself, finish the PR publication step with \`mergify stack push\` from the working branch after the stack of commits is ready." "SKILL must keep standalone PR-publication wording in the later workflow steps"
+must_contain_in_section "$SKILL_MD" "### Workflow steps after validation" "## Runtime verification (Phase 1b)" "For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with \`mergify stack push\` once the chain's commits are prepared." "SKILL must keep chained PR-publication wording in the later workflow steps"
 must_contain "$SKILL_MD" "For benchmark/direct-output prompts with" "SKILL frontmatter must expose benchmark mode before body loading"
 must_contain "$SKILL_MD" "\"invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the installed handoff command"
 must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the slash handoff command"
@@ -163,6 +197,8 @@ must_contain "$SKILL_MD" "## Harness handoff mode" "SKILL must document harness 
 must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt." "SKILL must define when handoff mode applies"
 must_contain "$SKILL_MD" "Do not use this mode from a Slack \`plan:\` or agent thread." "SKILL must defer Slack threads to the orchestrator"
 must_contain "$SKILL_MD" "do not invoke CLI or MCP handoff tools yourself." "SKILL must forbid Slack-thread CLI and MCP submission"
+must_contain_count "$SKILL_MD" "do not invoke CLI or MCP handoff tools yourself." 1 "SKILL must keep CLI/MCP handoff prohibition scoped to Slack handoff threads"
+must_contain_in_section "$SKILL_MD" "## Harness handoff mode" "## Intended flow (do not skip steps)" "Use this mode when invoked by the installed command or MCP prompt. Do not use this mode from a Slack \`plan:\` or agent thread. The orchestrator owns Slack plan submission, so in those threads do not invoke CLI or MCP handoff tools yourself." "SKILL handoff mode must keep the handoff-only Slack boundary wording"
 must_contain "$SKILL_MD" "First produce a Markdown planning artifact at \`plans/invoker-handoff.md\`." "SKILL handoff mode must require a Markdown plan"
 must_contain "$SKILL_MD" "In an Invoker source checkout, still run \`bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>\` before submission." "SKILL handoff mode must keep checkout-local skill-doctor validation"
 must_contain "$SKILL_MD" "Outside an Invoker source checkout, \`invoker_validate_plan\` is the deterministic validation gate." "SKILL handoff mode must keep outside-checkout MCP validation"
