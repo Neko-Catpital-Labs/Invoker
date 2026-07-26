@@ -9,6 +9,7 @@ import { LocalBus } from '@invoker/transport';
 import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
 
 describe('headless-client', () => {
+  const removedMergeModeAlias = ['set', 'merge', 'mode'].join('-');
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
   const savedDbDir = process.env.INVOKER_DB_DIR;
   let dbDir: string;
@@ -47,6 +48,41 @@ describe('headless-client', () => {
       '--disable-software-rasterizer',
     ]);
     expect(args.slice(mainIndex + 1)).toEqual(['--headless', 'query', 'workflows']);
+  });
+
+  it('prints help locally without booting Electron or delegating', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 23);
+    try {
+      const exitCode = await runHeadlessClientCommand(['--help'], {
+        messageBus: new LocalBus(),
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        refreshMessageBus: vi.fn(async () => new LocalBus()),
+        runElectronHeadless,
+      });
+
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(exitCode).toBe(0);
+      expect(runElectronHeadless).not.toHaveBeenCalled();
+      expect(output).toContain('retry-task <taskId>');
+      expect(output).not.toContain('Deprecated');
+      expect(output).not.toContain(removedMergeModeAlias);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it('rejects removed top-level aliases before booting Electron', async () => {
+    const runElectronHeadless = vi.fn(async () => 23);
+
+    await expect(runHeadlessClientCommand([removedMergeModeAlias, 'wf-123', 'manual'], {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner: vi.fn(async () => {}),
+      refreshMessageBus: vi.fn(async () => new LocalBus()),
+      runElectronHeadless,
+    })).rejects.toThrow(`Unknown command: ${removedMergeModeAlias}`);
+
+    expect(runElectronHeadless).not.toHaveBeenCalled();
   });
 
   it('refreshes to a reachable standalone owner for read-only queries without bootstrapping', async () => {
