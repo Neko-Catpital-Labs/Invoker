@@ -17,7 +17,8 @@ State schema (see scripts/repro/fixtures/fake-gh/scenarios/*.json):
       "mergeable": "CONFLICTING", "labels": ["admin-bypass"],
       "reviewThreads": [], "checks": {"*": "SUCCESS", "PR Body": "FAILURE"}
     }],
-    "issue_comments": {"501": [ ...gh api issues/N/comments shape... ]}
+    "issue_comments": {"501": [ ...gh api issues/N/comments shape... ]},
+    "job_logs": {"2": "job log text"}
   }
 
 `checks` maps check name -> conclusion; "*" applies to every required check
@@ -178,6 +179,10 @@ def main() -> None:
         return
 
     if ARGS[:2] == ["run", "view"]:
+        job_id = flag_value("--job") or ""
+        if job_id and "--log" in ARGS:
+            print(str(state.get("job_logs", {}).get(job_id, "")))
+            return
         print("")
         return
 
