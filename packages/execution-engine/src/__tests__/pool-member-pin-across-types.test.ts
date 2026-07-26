@@ -53,6 +53,12 @@ function makeRunner() {
         managedWorkspaces: true,
       },
     }),
+    worktreeTargetsProvider: () => ({
+      'member-local': {
+        provisionCommand: 'pnpm install --frozen-lockfile',
+        maxConcurrentTasks: 10,
+      },
+    }),
     executionPoolsProvider: () => ({
       'mixed-pool': {
         selectionStrategy: 'roundRobin', // deterministic rotation
