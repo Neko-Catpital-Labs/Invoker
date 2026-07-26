@@ -16,6 +16,33 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !=
   Element.prototype.scrollIntoView = function noopScrollIntoView(): void {};
 }
 
+if (typeof HTMLCanvasElement !== 'undefined') {
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    configurable: true,
+    value(contextId: string) {
+      if (contextId !== '2d') return null;
+
+      let fillStyle: string | CanvasGradient | CanvasPattern = '#000000';
+      return {
+        globalCompositeOperation: 'source-over',
+        get fillStyle() {
+          return fillStyle;
+        },
+        set fillStyle(value: string | CanvasGradient | CanvasPattern) {
+          fillStyle = value;
+        },
+        createLinearGradient: () => ({
+          addColorStop: () => {},
+        }),
+        fillRect: () => {},
+        getImageData: () => ({
+          data: new Uint8ClampedArray([0, 0, 0, 255]),
+        }),
+      } as unknown as CanvasRenderingContext2D;
+    },
+  });
+}
+
 if (typeof window !== 'undefined' && !window.localStorage) {
   const store: Record<string, string> = {};
   const storage: Storage = {
