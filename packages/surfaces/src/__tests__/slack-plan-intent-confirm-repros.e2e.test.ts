@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as childProcess from 'node:child_process';
-import { ConversationRepository, SQLiteAdapter, SlackSessionRepository } from '@invoker/data-store';
+import { ConversationRepository, SQLiteAdapter, SlackPlanDraftRepository, SlackSessionRepository } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
 
@@ -18,6 +18,7 @@ const sharedSlack = vi.hoisted(() => ({
       update: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue({}),
     },
+    files: { uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F_PLAN' }] }) },
     reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
     conversations: { replies: vi.fn().mockResolvedValue({ messages: [] }) },
   },
@@ -91,6 +92,8 @@ function buttonValue(say: ReturnType<typeof vi.fn>, actionId: string): string {
 describe('Slack plan-intent confirmation repro', () => {
   let adapter: SQLiteAdapter;
   let conversationRepo: ConversationRepository;
+  let slackPlanDraftRepo: SlackPlanDraftRepository;
+  let slackSessionRepo: SlackSessionRepository;
   let surface: SlackSurface;
   let commands: SurfaceCommand[];
 
@@ -99,6 +102,8 @@ describe('Slack plan-intent confirmation repro', () => {
     sharedSlack.client.chat.update.mockClear();
     adapter = await SQLiteAdapter.create(':memory:');
     conversationRepo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
+    slackPlanDraftRepo = new SlackPlanDraftRepository(adapter);
+    slackSessionRepo = new SlackSessionRepository(adapter);
     commands = [];
     surface = new SlackSurface({
       botToken: 'xoxb-test',
@@ -108,7 +113,8 @@ describe('Slack plan-intent confirmation repro', () => {
       lobbyChannelId: 'C_LOBBY',
       defaultRepoUrl: 'https://github.com/EdbertChan/notarepo',
       conversationRepo,
-      slackSessionRepo: new SlackSessionRepository(adapter),
+      slackSessionRepo,
+      slackPlanDraftRepo,
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
@@ -139,6 +145,7 @@ describe('Slack plan-intent confirmation repro', () => {
     expect(() => buttonValue(say, 'lobby_confirm')).toThrow('Missing lobby_confirm button');
 
     mockSpawn.mockImplementationOnce(() => processWith(plan));
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
     const planIntentKey = buttonValue(say, 'lobby_plan_for_execution');
     const respond = vi.fn().mockResolvedValue(undefined);
     await actionHandler(surface, 'lobby_plan_for_execution')({
@@ -148,17 +155,10 @@ describe('Slack plan-intent confirmation repro', () => {
       respond,
     });
 
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(mockSpawn.mock.calls[0])).toContain('Pink/Yellow');
-    expect([...((surface as any).pendingConfirms.values())]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'submit' }),
-    ]));
-
-    const draftMessage = sharedSlack.client.chat.postMessage.mock.calls.at(-1)?.[0];
-    const approve = draftMessage?.blocks?.flatMap((block: any) => block.elements ?? [])
-      .find((element: any) => element.action_id === 'lobby_confirm');
-    expect(approve).toEqual(expect.objectContaining({ text: expect.objectContaining({ text: 'Approve' }) }));
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+    expect(slackSessionRepo.getPendingConfirmation(planIntentKey)).toBeNull();
   });
 
   it('continues the original request without drafting when planning is declined', async () => {
@@ -168,19 +168,41 @@ describe('Slack plan-intent confirmation repro', () => {
       say,
     });
 
+    const continueKey = buttonValue(say, 'lobby_continue_conversation');
     mockSpawn.mockImplementationOnce(() => processWith('I will continue the conversation.'));
     await actionHandler(surface, 'lobby_continue_conversation')({
-      action: { type: 'button', value: buttonValue(say, 'lobby_continue_conversation') },
+      action: { type: 'button', value: continueKey },
       body: { channel: { id: 'C_LOBBY' }, message: { ts: 'continue-intent-message', thread_ts: 'continue-thread' } },
       ack: vi.fn().mockResolvedValue(undefined),
       respond: vi.fn().mockResolvedValue(undefined),
     });
 
     expect(mockSpawn).toHaveBeenCalledTimes(1);
-    expect([...((surface as any).pendingConfirms.values())]).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'submit' }),
-    ]));
+    expect(slackPlanDraftRepo.getReady('C_LOBBY', 'continue-thread')).toBeUndefined();
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+    expect(slackSessionRepo.getPendingConfirmation(continueKey)).toBeNull();
+  });
+
+  it('does not let a stale persisted plan_intent confirmation hijack the next thread reply', async () => {
+    const say = vi.fn().mockResolvedValue({ ts: 'stale-intent-message' });
+    await handler(surface, 'app_mention')({
+      event: { text: '<@UBOT> /plan change the theme to Pink/Yellow', ts: 'stale-thread', user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+
+    const key = buttonValue(say, 'lobby_continue_conversation');
+    mockSpawn.mockImplementationOnce(() => processWith('I will continue the conversation.'));
+    await actionHandler(surface, 'lobby_continue_conversation')({
+      action: { type: 'button', value: key },
+      body: { channel: { id: 'C_LOBBY' }, message: { ts: 'stale-intent-message', thread_ts: 'stale-thread' } },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // The persisted row must be gone, or the next plain-text reply in this
+    // thread rehydrates the stale plan_intent confirmation via getPendingConfirm
+    // and gets misrouted (e.g. into runConfirmedRestart) instead of the agent.
+    expect(slackSessionRepo.getPendingConfirmation('stale-thread')).toBeNull();
   });
 
   it('restores a persisted planning choice after a Slack surface restart', async () => {
@@ -201,12 +223,14 @@ describe('Slack plan-intent confirmation repro', () => {
       defaultRepoUrl: 'https://github.com/EdbertChan/notarepo',
       conversationRepo,
       slackSessionRepo: new SlackSessionRepository(adapter),
+      slackPlanDraftRepo,
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       log: silentLog,
     });
     await surface.start(async (command) => { commands.push(command); });
 
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
     mockSpawn.mockImplementationOnce(() => processWith(plan));
     await actionHandler(surface, 'lobby_plan_for_execution')({
       action: { type: 'button', value: key },
@@ -215,9 +239,6 @@ describe('Slack plan-intent confirmation repro', () => {
       respond: vi.fn().mockResolvedValue(undefined),
     });
 
-    expect(mockSpawn).toHaveBeenCalledTimes(1);
-    expect([...((surface as any).pendingConfirms.values())]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'submit' }),
-    ]));
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 });
