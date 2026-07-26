@@ -108,8 +108,10 @@ class ClassifyPr(unittest.TestCase):
     def test_human_vs_bot_review_threads(self):
         human = pr(review_threads=(m.ReviewThread("t", False, ("alice",)),))
         bot = pr(review_threads=(m.ReviewThread("t", False, ("coderabbitai[bot]",)),))
+        stale = pr(review_threads=(m.ReviewThread("t", False, ("coderabbitai[bot]",), True),))
         self.assertIn("human_review_thread", self._kinds(human))
         self.assertIn("bot_review_thread", self._kinds(bot))
+        self.assertIn("stale_bot_review_thread", self._kinds(stale))
 
     def test_merge_hold_label(self):
         self.assertIn("merge_hold", self._kinds(pr(labels=frozenset({"merge-hold"}))))
@@ -253,6 +255,12 @@ class PlanStackActions(PlannerTestCase):
         # A Mergify dequeue naming a failing check outranks everything else.
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
         self.assertEqual(actions[0].kind, "repair_check")
+
+    def test_outdated_bot_thread_resolves_without_repair(self):
+        actions = self._plan(
+            pr(review_threads=(m.ReviewThread("tbot", False, ("coderabbitai[bot]",), True),))
+        )
+        self.assertEqual([(a.kind, a.key) for a in actions], [("resolve_bot_threads", "tbot")])
 
     def test_clean_bottom_missing_label_nudges_human(self):
         actions = self._plan(pr())  # green, no admin-bypass label

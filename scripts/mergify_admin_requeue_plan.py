@@ -79,6 +79,8 @@ def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) ->
         authors = set(thread.author_logins)
         if not authors or authors - BOT_OR_SELF_AUTHORS:
             blockers.append(Blocker(thread.id, "human_review_thread", pr.number, f"unresolved human review thread {thread.id}"))
+        elif thread.is_outdated:
+            blockers.append(Blocker(thread.id, "stale_bot_review_thread", pr.number, f"outdated bot review thread {thread.id}"))
         else:
             blockers.append(Blocker(thread.id, "bot_review_thread", pr.number, f"unresolved bot review thread {thread.id}"))
 
@@ -425,6 +427,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
         for blocker in facts.blockers_by_pr[pr.number]:
+            if blocker.kind == "stale_bot_review_thread":
+                return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
             if blocker.kind != "bot_review_thread":
                 continue
             if ledger.has_different_head("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key):

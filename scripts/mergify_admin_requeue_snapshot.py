@@ -108,7 +108,7 @@ class GhClient:
             "query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { "
             "pullRequest(number:$number) { number title body url isDraft state baseRefName headRefName headRefOid "
             "mergeStateStatus mergeable labels(first:50) { nodes { name } } "
-            "reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:50) { nodes { author { login } body url } } } } "
+            "reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved isOutdated comments(first:50) { nodes { author { login } body url } } } } "
             "statusCheckRollup { contexts(first:100) { nodes { __typename ... on CheckRun { name conclusion status completedAt startedAt detailsUrl checkSuite { commit { oid } } } "
             "... on StatusContext { context state targetUrl commit { oid } } } } } } } }"
         )
@@ -332,7 +332,14 @@ def review_threads(value: object) -> tuple[ReviewThread, ...]:
             login = author.get("login") if isinstance(author, Mapping) else None
             if login:
                 authors.append(str(login))
-        threads.append(ReviewThread(str(node.get("id") or ""), bool(node.get("isResolved")), tuple(authors)))
+        threads.append(
+            ReviewThread(
+                str(node.get("id") or ""),
+                bool(node.get("isResolved")),
+                tuple(authors),
+                bool(node.get("isOutdated")),
+            )
+        )
     return tuple(threads)
 
 

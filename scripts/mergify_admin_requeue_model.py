@@ -29,6 +29,7 @@ class ReviewThread:
     id: str
     is_resolved: bool
     author_logins: tuple[str, ...]
+    is_outdated: bool = False
 
 
 @dataclass(frozen=True)

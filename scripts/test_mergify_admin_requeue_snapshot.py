@@ -153,14 +153,14 @@ class ReviewThreadsParsing(unittest.TestCase):
         value = {
             "pageInfo": {"hasNextPage": False},
             "nodes": [
-                {"id": "t1", "isResolved": False,
+                {"id": "t1", "isResolved": False, "isOutdated": True,
                  "comments": {"nodes": [{"author": {"login": "coderabbitai[bot]"}}]}},
                 {"id": "t2", "isResolved": True, "comments": {"nodes": []}},
             ],
         }
         self.assertEqual(
             s.review_threads(value),
-            (m.ReviewThread("t1", False, ("coderabbitai[bot]",)),
+            (m.ReviewThread("t1", False, ("coderabbitai[bot]",), True),
              m.ReviewThread("t2", True, ())),
         )
 

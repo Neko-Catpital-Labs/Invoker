@@ -312,6 +312,14 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual([(a.kind, a.key) for a in actions], [("resolve_bot_threads", "tbot")])
 
+    def test_outdated_bot_thread_resolves_without_repair_attempt(self):
+        stack = StackGroup(
+            "s",
+            (pr(2608, threads=(ReviewThread("tbot", False, ("coderabbitai[bot]",), True),), latest=mergify()),),
+        )
+        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 2)
+        self.assertEqual([(a.kind, a.key) for a in actions], [("resolve_bot_threads", "tbot")])
+
     def test_conflict_uses_claude_repair_cap(self):
         stack = StackGroup("s", (pr(2609, merge_state="DIRTY", latest=mergify()),))
         ledger = self.ledger()
