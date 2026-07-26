@@ -9,7 +9,7 @@ If the request involves creating, updating, publishing, or splitting pull reques
 
 Write the planning artifact to `plans/invoker-handoff.md`.
 
-Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
+Treat approval of the Markdown plan as approval for workflow handoff only: convert it to `plans/invoker-handoff.yaml`, validate it, and submit it through Invoker. Plain approval does not authorize local branch publication or PR publication; do that only when the user explicitly asks for PR publication.
 
 Validate with `invoker_validate_plan` before submitting.
 
