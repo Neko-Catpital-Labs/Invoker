@@ -297,7 +297,11 @@ cd "$WT"
 ${options.envExports}
 start_bootstrap_heartbeat
 ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
-"$RUNNER_PATH" "$PAYLOAD_PATH"
+if "$RUNNER_PATH" "$PAYLOAD_PATH"; then
+  cleanup_runtime 0
+else
+  cleanup_runtime "$?"
+fi
 `;
   }
 

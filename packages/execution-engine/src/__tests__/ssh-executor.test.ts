@@ -226,6 +226,9 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toContain('stop_bootstrap_heartbeat');
     expect(callScript.indexOf('stop_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
+    expect(callScript).toContain('if "$RUNNER_PATH" "$PAYLOAD_PATH"; then');
+    expect(callScript).toContain('  cleanup_runtime 0');
+    expect(callScript).toContain('  cleanup_runtime "$?"');
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
     expect(callScript).toContain("trap 'cleanup_runtime \"$?\"' EXIT");
     expect(callAgentId).toBeUndefined();
