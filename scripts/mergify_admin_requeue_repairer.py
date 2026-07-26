@@ -68,6 +68,37 @@ class AdminBypassRepairer:
         self.git_output(work_root, "reset", "--hard", target)
         self.git_output(work_root, "clean", "-fd")
 
+    def is_ancestor(self, work_root: Path, ancestor: str, descendant: str) -> bool:
+        if not work_root.exists():
+            return True
+        completed = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=str(work_root),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        return completed.returncode == 0
+
+    def normalize_repair_commit(self, work_root: Path, start_head: str, end_head: str, check_name: str) -> str:
+        if self.is_ancestor(work_root, start_head, end_head):
+            return end_head
+        diff = self.git_output(work_root, "diff", "--binary", start_head, end_head)
+        self.hard_reset_work_root(work_root, start_head)
+        if not diff.strip():
+            return start_head
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+            handle.write(diff)
+            patch_path = Path(handle.name)
+        try:
+            self.git_output(work_root, "apply", "--index", str(patch_path))
+        finally:
+            patch_path.unlink(missing_ok=True)
+        if not self.git_lines(work_root, "status", "--porcelain"):
+            return start_head
+        self.git_output(work_root, "commit", "-m", f"Repair {check_name}")
+        return self.git_output(work_root, "rev-parse", "HEAD").strip()
+
     def validate_local_pr_body(self, work_root: Path, body: str, base_branch: str) -> dict[str, object]:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write(body)
@@ -185,7 +216,7 @@ class AdminBypassRepairer:
             return False
         if not isinstance(review_units, list):
             return False
-        if "tooling-policy" not in review_units or "proof" not in review_units:
+        if len({str(unit) for unit in review_units}) < 2:
             return False
         joined = "\n".join(str(error) for error in errors)
         return (
@@ -193,6 +224,7 @@ class AdminBypassRepairer:
             or "Split this into one Review Unit per PR." in joined
             or "cannot ship with policy, proof files" in joined
             or "cannot ship with tooling-policy, proof files" in joined
+            or "cannot ship with proof files" in joined
         )
 
     def invalid_repair_errors(self, value: Mapping[str, object], pr: PrSnapshot) -> list[str]:
@@ -338,6 +370,25 @@ class AdminBypassRepairer:
             text=True,
         )
 
+    def job_log_has_evidence(self, log_path: str) -> bool:
+        if not log_path:
+            return False
+        try:
+            return bool(Path(log_path).read_text(encoding="utf-8").strip())
+        except OSError:
+            return False
+
+    def job_log_is_empty(self, log_path: str) -> bool:
+        if not log_path:
+            return False
+        path = Path(log_path)
+        if not path.exists():
+            return False
+        try:
+            return not path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return False
+
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
@@ -357,6 +408,35 @@ class AdminBypassRepairer:
                 errors=(f"queue-only check {check_name} is missing a Mergify job URL",),
             )
         log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
+        if check_name == "PR Body" and self.job_log_is_empty(log_path):
+            validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+            if validation.get("valid"):
+                self.logger.trace(
+                    "admin-bypass-pr-body-valid-noop",
+                    repo=self.repo,
+                    pr_number=pr.number,
+                    check_name=check_name,
+                    head_sha=pr.head_ref_oid,
+                    details_url=details_url,
+                    log_path=log_path,
+                )
+                return self.blocked_outcome("noop", check_name, start_head, start_head)
+        if queue_only and not self.job_log_has_evidence(log_path):
+            self.logger.trace(
+                "admin-bypass-queue-only-empty-log-noop",
+                repo=self.repo,
+                pr_number=pr.number,
+                check_name=check_name,
+                details_url=details_url,
+                log_path=log_path,
+                head_sha=pr.head_ref_oid,
+            )
+            return self.blocked_outcome(
+                "queue_only_noop",
+                check_name,
+                start_head,
+                start_head,
+            )
         queue_pr_number = latest.queue_pr_number if latest else 0
         prompt = (
             f"Fix only the failing check. Add or update a repro if the failure is reproducible. "
@@ -399,6 +479,7 @@ class AdminBypassRepairer:
                 end_head,
                 status_lines=status_lines,
             )
+        end_head = self.normalize_repair_commit(work_root, start_head, end_head, check_name)
         repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
         validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
         if validation.get("valid"):

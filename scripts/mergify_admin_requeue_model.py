@@ -29,6 +29,7 @@ class ReviewThread:
     id: str
     is_resolved: bool
     author_logins: tuple[str, ...]
+    is_outdated: bool = False
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,13 @@ class MergifyQueueEvent:
     queue_pr_number: int = 0
     failing_check_urls: tuple[tuple[str, tuple[str, ...]], ...] = ()
     condition_states: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class RepairStopComment:
+    body: str
+    updated_at: str
+    author_login: str
 
 
 @dataclass(frozen=True)
@@ -63,6 +71,7 @@ class PrSnapshot:
     checks: Mapping[str, CheckContext]
     review_threads: tuple[ReviewThread, ...]
     latest_mergify: MergifyQueueEvent | None
+    repair_stop_comments: tuple[RepairStopComment, ...] = ()
 
 @dataclass(frozen=True)
 class StackGroup:

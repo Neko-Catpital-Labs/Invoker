@@ -10,6 +10,13 @@ REPROS=(
   scripts/repro/repro-mergify-closed-pr-guard.sh
   scripts/repro/repro-coderabbit-pr5251-mergify-admin-requeue-yaml-alias.sh
   scripts/repro/repro-babysit-pr-body-human-split.sh
+  scripts/repro/repro-babysit-pr-body-proof-human-split.sh
+  scripts/repro/repro-babysit-pr-body-valid-noop.sh
+  scripts/repro/repro-babysit-amended-repair-push.sh
+  scripts/repro/repro-babysit-outdated-bot-thread.sh
+  scripts/repro/repro-babysit-headless-queued-comment.sh
+  scripts/repro/repro-babysit-queue-only-empty-log.sh
+  scripts/repro/repro-babysit-queue-only-missing-requeues.sh
 )
 
 # repro-mergify-stack-dogfood.sh is deliberately excluded: it's an opt-in
