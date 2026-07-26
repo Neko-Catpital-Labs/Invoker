@@ -420,7 +420,7 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
             });
         }
       }
-      process.stdout.write('[headless] --no-track enabled: retry-task accepted; exiting without tracking.\n');
+      process.stdout.write('[headless] --no-track enabled: restart task accepted; exiting without tracking.\n');
       return;
     }
 

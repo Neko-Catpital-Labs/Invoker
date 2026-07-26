@@ -94,5 +94,8 @@ describe('--no-track microtask dispatch (no deferRunnableTasks)', () => {
 
     expect(executeTasks).toHaveBeenCalledTimes(1);
     expect(executeTasks).toHaveBeenCalledWith([task]);
+    expect(stdout).toHaveBeenCalledWith(
+      '[headless] --no-track enabled: restart task accepted; exiting without tracking.\n',
+    );
   });
 });
