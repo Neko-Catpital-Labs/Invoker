@@ -85,6 +85,22 @@ class Action:
     key: str
     detail: str
 
+@dataclass(frozen=True)
+class RepairPrereqStatus:
+    check_name: str
+    prereq_pr_number: int
+    prereq_branch: str
+    is_open: bool
+    needs_followup_requeue: bool
+
+
+@dataclass(frozen=True)
+class StackExecutionPlan:
+    summary: Mapping[str, object]
+    actions: tuple[Action, ...]
+    wait_reason: str | None = None
+    prereq_status: RepairPrereqStatus | None = None
+
 
 class Ledger:
     def __init__(self, path: Path):
