@@ -27,7 +27,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     getWorkerStatus: vi.fn(() => ({ generatedAt: 'now', workers: [] })),
     getWorkers: vi.fn(() => ({ generatedAt: 'workers-now', workers: [] })),
     getWorkflowStatus: vi.fn(() => ({ 'wf-1': 'running' })),
-    getTasksSnapshot: vi.fn(({ refresh }) => ({ tasks: [], workflows: [], refreshed: refresh })),
+    getTasksSnapshot: vi.fn(() => ({ tasks: [], workflows: [], authoritative: true })),
     getActionGraphSnapshot: vi.fn(() => ({ nodes: [] })),
     listWorkflows: vi.fn(() => [{ id: 'wf-1' }]),
     loadWorkflowBundle: vi.fn((id: string) => ({ workflow: { id }, tasks: [] })),
@@ -76,12 +76,12 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'action-graph' }, h)).toEqual({ nodes: [] });
   });
 
-  it('refreshes the snapshot only for task-graph-refresh', () => {
+  it('routes both task snapshot kinds through the authoritative snapshot handler', () => {
     const h = makeHandlers();
-    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toMatchObject({ refreshed: false });
-    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toMatchObject({ refreshed: true });
-    expect(h.getTasksSnapshot).toHaveBeenNthCalledWith(1, { refresh: false });
-    expect(h.getTasksSnapshot).toHaveBeenNthCalledWith(2, { refresh: true });
+    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toMatchObject({ authoritative: true });
+    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toMatchObject({ authoritative: true });
+    expect(h.getTasksSnapshot).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(h.getTasksSnapshot).mock.calls).toEqual([[], []]);
   });
 
   it('wraps and routes the param-bearing read kinds', () => {
@@ -150,12 +150,12 @@ describe('buildOwnerReadQueryHandlers', () => {
       orchestrator: {
         getQueueStatus: () => ({ q: 1 }),
         getWorkflowStatus: () => ({ w: 1 }),
-        getAllTasks: () => [{ id: 't' }],
+        getAllTasks: vi.fn(() => [{ id: 't' }]),
         syncAllFromDb: vi.fn(),
         syncFromDb: vi.fn(),
       },
       persistence: {
-        listWorkflows: () => [{ id: 'wf' }],
+        listWorkflows: vi.fn(() => [{ id: 'wf' }]),
         loadWorkflow: (id: string) => (id === 'missing' ? undefined : { id, name: 'n' }),
         loadTasks: () => [{ id: 't', config: {} }],
         loadTask: (id: string) => ({ id }),
@@ -218,17 +218,29 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(build().getReviewGate('missing')).toBeNull();
   });
 
-  it('getTasksSnapshot refreshes only when asked', () => {
+  it('owner task snapshot queries sync from db before reading', () => {
     const syncAllFromDb = vi.fn();
-    const h = build({ syncAllFromDb });
-    expect(h.getTasksSnapshot({ refresh: false })).toEqual({
+    const getAllTasks = vi.fn(() => [{ id: 't' }]);
+    const listWorkflows = vi.fn(() => [{ id: 'wf' }]);
+    const h = build({ syncAllFromDb, getAllTasks }, { listWorkflows });
+    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toEqual({
       tasks: [{ id: 't' }],
       workflows: [{ id: 'wf' }],
       streamSequence: 5,
       invokerHomeRoot: '/home',
     });
-    expect(syncAllFromDb).not.toHaveBeenCalled();
-    h.getTasksSnapshot({ refresh: true });
     expect(syncAllFromDb).toHaveBeenCalledTimes(1);
+    expect(syncAllFromDb.mock.invocationCallOrder[0]).toBeLessThan(getAllTasks.mock.invocationCallOrder[0]);
+    expect(syncAllFromDb.mock.invocationCallOrder[0]).toBeLessThan(listWorkflows.mock.invocationCallOrder[0]);
+
+    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toEqual({
+      tasks: [{ id: 't' }],
+      workflows: [{ id: 'wf' }],
+      streamSequence: 5,
+      invokerHomeRoot: '/home',
+    });
+    expect(syncAllFromDb).toHaveBeenCalledTimes(2);
+    expect(syncAllFromDb.mock.invocationCallOrder[1]).toBeLessThan(getAllTasks.mock.invocationCallOrder[1]);
+    expect(syncAllFromDb.mock.invocationCallOrder[1]).toBeLessThan(listWorkflows.mock.invocationCallOrder[1]);
   });
 });
