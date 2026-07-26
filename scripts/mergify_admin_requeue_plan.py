@@ -37,7 +37,7 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
     "required-fast / Submit Workflow Chain",
 })
 
-HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed"})
+HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
 
 
 @dataclass(frozen=True)
@@ -253,6 +253,21 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
     return check_name
 
 
+def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
+    if blocker.kind != "failed_check":
+        return None
+    latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
+    if latest is None:
+        return None
+    meta = latest.get("meta") if isinstance(latest.get("meta"), Mapping) else {}
+    errors = meta.get("errors") if isinstance(meta, Mapping) else None
+    if isinstance(errors, list):
+        detail = "\n".join(str(error) for error in errors if str(error))
+        if detail:
+            return Blocker(blocker.key, "human_decision", pr.number, detail)
+    return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
+
+
 def _assert_stack_facts_invariants(facts: StackFacts) -> None:
     assert facts.stack.prs, "stack must contain at least one PR"
     pr_numbers = tuple(pr.number for pr in facts.stack.prs)
@@ -298,10 +313,13 @@ def build_stack_facts(
     if queue_only_noop_check and bottom:
         suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (queue_only_noop_check,)
 
-    blockers_by_pr = {
-        pr.number: effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
-        for pr in stack.prs
-    }
+    blockers_by_pr: dict[int, tuple[Blocker, ...]] = {}
+    for pr in stack.prs:
+        effective = effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
+        blockers_by_pr[pr.number] = tuple(
+            latest_repair_invalid_blocker(pr, blocker, ledger) or blocker
+            for blocker in effective
+        )
     facts = StackFacts(
         stack=stack,
         required_checks=required,
@@ -397,7 +415,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
                     return cap_action(pr, blocker, blocker.detail)
                 return Action("repair_conflict", pr.number, key, blocker.detail)
             if blocker.kind == "failed_check":
-                if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
+                attempts = ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key)
+                if attempts >= max_repair_attempts and ledger.latest("repair-evaluated", pr.number, pr.head_ref_oid, blocker.key) is not None:
                     return cap_action(pr, blocker, blocker.detail)
                 return Action("repair_check", pr.number, blocker.key, blocker.detail)
     return None
@@ -420,6 +439,8 @@ def plan_hard_blockers(facts: StackFacts) -> Action | None:
     for pr in facts.stack.prs:
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "pending_check":
+                return None
+            if blocker.kind == "human_decision":
                 return None
             if blocker.kind in HUMAN_BLOCKER_KINDS:
                 return Action("comment_blocked", pr.number, blocker.key, public_blocker_kind(blocker.kind))

@@ -76,11 +76,11 @@ def pr(number):
 
 
 args = sys.argv[1:]
-if args[:2] == ["pr", "list"]:
-    if "--label" not in args or "admin-bypass" not in args:
-        print(f"expected admin-bypass label seed, got: {args}", file=sys.stderr)
-        raise SystemExit(2)
+if args[:2] == ["pr", "list"] and "--label" in args and "admin-bypass" in args:
     print(json.dumps([pr(101)]))
+    raise SystemExit(0)
+if args[:2] == ["pr", "list"] and "--label" not in args:
+    print(json.dumps([pr(100), pr(101)]))
     raise SystemExit(0)
 
 if args[:2] == ["api", "graphql"]:

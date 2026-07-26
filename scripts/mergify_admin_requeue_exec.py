@@ -80,6 +80,8 @@ def handle_repair_outcome(
     outcome: RepairOutcome,
     now: int,
 ) -> None:
+
+    ledger.record("repair-evaluated", pr.number, pr.head_ref_oid, outcome.check_name, now)
     if outcome.status == "blocked_dirty":
         executor.comment_blocked(
             pr,
@@ -89,6 +91,14 @@ def handle_repair_outcome(
         )
         return
     if outcome.status == "blocked_invalid":
+        ledger.record(
+            "repair-invalid",
+            pr.number,
+            pr.head_ref_oid,
+            outcome.check_name,
+            now,
+            meta={"errors": list(outcome.errors)},
+        )
         executor.comment_blocked(
             pr,
             "\n".join(outcome.errors),

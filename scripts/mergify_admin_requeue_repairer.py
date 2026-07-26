@@ -31,6 +31,7 @@ PROOF_TOOLING_POLICY_UNIT_ERROR = (
     "Split this into one Review Unit per PR."
 )
 NON_TRUNK_PREREQ_ERROR = "automatic tooling-policy split is only supported for base master"
+NON_TRUNK_MANUAL_SPLIT_ERROR = "worker cannot auto-split this PR on a non-trunk base; human stack split required"
 
 
 def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tuple[str, ...]:
@@ -99,6 +100,67 @@ class AdminBypassRepairer:
         finally:
             body_path.unlink(missing_ok=True)
 
+    def validate_pr_body_from_current_diff(self, work_root: Path, body: str, base_branch: str) -> dict[str, object]:
+        self.git_output(work_root, "fetch", "origin", f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}")
+        changed_files = self.git_output(work_root, "diff", "--name-only", f"origin/{base_branch}...HEAD")
+        diff_text = self.git_output(work_root, "diff", "--no-ext-diff", f"origin/{base_branch}...HEAD")
+        with (
+            tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as body_handle,
+            tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as changed_handle,
+            tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as diff_handle,
+        ):
+            body_handle.write(body)
+            changed_handle.write(changed_files)
+            diff_handle.write(diff_text)
+            body_path = Path(body_handle.name)
+            changed_path = Path(changed_handle.name)
+            diff_path = Path(diff_handle.name)
+        script = (
+            "import { readFileSync } from 'node:fs';"
+            f"import {{ getReviewMetadata, scopeKindsForChangedFiles, validatePrBody }} from '{(REPO_ROOT / 'scripts' / 'validate-pr-body.mjs').as_posix()}';"
+            f"import {{ reviewUnitsForChangedFiles }} from '{(REPO_ROOT / 'scripts' / 'review-unit-rules.mjs').as_posix()}';"
+            "const body = readFileSync(process.argv[1], 'utf8');"
+            "const changedFiles = readFileSync(process.argv[2], 'utf8').split(/\\r?\\n/).filter(Boolean);"
+            "const diffText = readFileSync(process.argv[3], 'utf8');"
+            "const errors = await validatePrBody(body, { changedFiles, diffText });"
+            "const reviewMetadata = getReviewMetadata(body.trim());"
+            "console.log(JSON.stringify({"
+            "valid: errors.length === 0,"
+            "errors,"
+            "reviewLane: reviewMetadata.reviewLane,"
+            "reviewUnit: reviewMetadata.reviewUnit,"
+            "reviewUnits: reviewUnitsForChangedFiles(changedFiles),"
+            "scopeKinds: scopeKindsForChangedFiles(changedFiles),"
+            "}));"
+        )
+        try:
+            completed = subprocess.run(
+                ["node", "--input-type=module", "-e", script, str(body_path), str(changed_path), str(diff_path)],
+                cwd=str(work_root),
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            stdout = completed.stdout.strip()
+            if completed.returncode not in {0, 1}:
+                raise RuntimeError(completed.stderr.strip() or stdout or "validate-pr-body fallback failed")
+            if not stdout:
+                raise RuntimeError(completed.stderr.strip() or "validate-pr-body fallback produced no JSON output")
+            value = json.loads(stdout)
+            if not isinstance(value, dict):
+                raise RuntimeError("validate-pr-body fallback returned non-object JSON")
+            return value
+        finally:
+            body_path.unlink(missing_ok=True)
+            changed_path.unlink(missing_ok=True)
+            diff_path.unlink(missing_ok=True)
+
+    def validate_current_pr_body(self, work_root: Path, body: str, base_branch: str) -> dict[str, object]:
+        try:
+            return self.validate_local_pr_body(work_root, body, base_branch)
+        except RuntimeError:
+            return self.validate_pr_body_from_current_diff(work_root, body, base_branch)
+
     def is_proof_tooling_policy_validation(self, value: Mapping[str, object]) -> bool:
         errors = value.get("errors")
         scope_kinds = value.get("scopeKinds")
@@ -115,6 +177,50 @@ class AdminBypassRepairer:
 
     def is_prereq_split_validation(self, value: Mapping[str, object], pr: PrSnapshot) -> bool:
         return pr.base_ref_name == TRUNK and self.is_proof_tooling_policy_validation(value)
+
+    def is_manual_split_validation(self, value: Mapping[str, object]) -> bool:
+        errors = value.get("errors")
+        review_units = value.get("reviewUnits")
+        if not isinstance(errors, list) or not errors:
+            return False
+        if not isinstance(review_units, list):
+            return False
+        if "tooling-policy" not in review_units or "proof" not in review_units:
+            return False
+        joined = "\n".join(str(error) for error in errors)
+        return (
+            "multiple review units" in joined
+            or "Split this into one Review Unit per PR." in joined
+            or "cannot ship with policy, proof files" in joined
+            or "cannot ship with tooling-policy, proof files" in joined
+        )
+
+    def invalid_repair_errors(self, value: Mapping[str, object], pr: PrSnapshot) -> list[str]:
+        errors = [str(error) for error in value.get("errors", [])]
+        if self.is_proof_tooling_policy_validation(value) and pr.base_ref_name != TRUNK:
+            errors = [*errors, NON_TRUNK_PREREQ_ERROR]
+        if self.is_manual_split_validation(value) and pr.base_ref_name != TRUNK:
+            errors = [*errors, NON_TRUNK_MANUAL_SPLIT_ERROR]
+        return errors
+
+    def invalid_repair_outcome(
+        self,
+        pr: PrSnapshot,
+        check_name: str,
+        start_head: str,
+        end_head: str,
+        value: Mapping[str, object],
+        *,
+        repair_commits: Sequence[str] = (),
+    ) -> RepairOutcome:
+        return self.blocked_outcome(
+            "blocked_invalid",
+            check_name,
+            start_head,
+            end_head,
+            repair_commits=repair_commits,
+            errors=self.invalid_repair_errors(value, pr),
+        )
 
     def prerequisite_branch_name(self, pr: PrSnapshot, start_head: str) -> str:
         return f"stack/pr-babysit-prereq-{pr.number}-{start_head[:7]}"
@@ -195,7 +301,7 @@ class AdminBypassRepairer:
         self.git_output(work_root, "reset", "--hard", f"origin/{TRUNK}")
         for commit in repair_commits:
             self.git_output(work_root, "cherry-pick", commit)
-        validation = self.validate_local_pr_body(work_root, body, TRUNK)
+        validation = self.validate_current_pr_body(work_root, body, TRUNK)
         if not validation.get("valid"):
             errors = [str(error) for error in validation.get("errors", [])]
             raise RuntimeError("prerequisite PR body failed validation: " + "; ".join(errors))
@@ -274,6 +380,10 @@ class AdminBypassRepairer:
         end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
         status_lines = self.git_lines(work_root, "status", "--porcelain")
         if end_head == start_head and not status_lines:
+            if not queue_only:
+                validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+                if not validation.get("valid"):
+                    return self.invalid_repair_outcome(pr, check_name, start_head, end_head, validation)
             return self.blocked_outcome(
                 "queue_only_noop" if queue_only else "noop",
                 check_name,
@@ -290,7 +400,7 @@ class AdminBypassRepairer:
                 status_lines=status_lines,
             )
         repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
-        validation = self.validate_local_pr_body(work_root, pr.body, pr.base_ref_name)
+        validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
         if validation.get("valid"):
             self.push_branch(work_root, pr.head_ref_name)
             return self.blocked_outcome(
@@ -300,7 +410,6 @@ class AdminBypassRepairer:
                 end_head,
                 repair_commits=repair_commits,
             )
-        errors = [str(error) for error in validation.get("errors", [])]
         if self.is_prereq_split_validation(validation, pr):
             try:
                 created = self.create_repair_prerequisite(pr, check_name, start_head, repair_commits, work_root, now)
@@ -316,15 +425,13 @@ class AdminBypassRepairer:
                 prereq=created,
             )
         self.hard_reset_work_root(work_root, start_head)
-        if self.is_proof_tooling_policy_validation(validation) and pr.base_ref_name != TRUNK:
-            errors = [*errors, NON_TRUNK_PREREQ_ERROR]
-        return self.blocked_outcome(
-            "blocked_invalid",
+        return self.invalid_repair_outcome(
+            pr,
             check_name,
             start_head,
             end_head,
+            validation,
             repair_commits=repair_commits,
-            errors=errors,
         )
 
     def repair_conflict(self, pr: PrSnapshot, reason: str) -> None:

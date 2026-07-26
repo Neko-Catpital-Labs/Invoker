@@ -30,6 +30,7 @@ from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
 from scripts.mergify_admin_requeue_repairer import (
+    NON_TRUNK_MANUAL_SPLIT_ERROR,
     NON_TRUNK_PREREQ_ERROR,
     PROOF_POLICY_LANE_ERROR,
     PROOF_TOOLING_POLICY_UNIT_ERROR,
@@ -270,6 +271,18 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
 
+    def test_failed_check_at_cap_gets_one_more_attempt_until_evaluated(self):
+        checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
+        ledger = self.ledger()
+        for epoch in range(3):
+            ledger.record("repair-check", 2606, HEAD, "PR Body", epoch)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
+        ledger.record("repair-evaluated", 2606, HEAD, "PR Body", 4)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 5)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("comment_blocked", 2606, "capped")])
+
     def test_pending_check_waits(self):
         checks = {"PR Body": check("PR Body", "pending"), "quality / TypeScript Types": check("quality / TypeScript Types")}
         stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
@@ -388,8 +401,9 @@ Failing checks
                 with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
                     with mock.patch.object(repairer, "git_lines", return_value=()):
                         with mock.patch.object(repairer, "run_claude_repair") as repair:
-                            with redirect_stderr(stderr):
-                                result = repairer.repair_check(item, "PR Body")
+                            with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True, "errors": []}):
+                                with redirect_stderr(stderr):
+                                    result = repairer.repair_check(item, "PR Body")
         checkout.assert_called_once()
         repair.assert_called_once()
         self.assertEqual(result.status, "noop")
@@ -400,6 +414,44 @@ Failing checks
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
 
+
+    def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):
+        item = pr(
+            5803,
+            base="stack/base",
+            body="## Summary\n\nMixed slice.\n",
+            checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")},
+        )
+        repairer = self.repairer(object(), self.ledger())
+        git_rev_parse = iter([HEAD, HEAD])
+        validation = {
+            "valid": False,
+            "errors": [
+                "PR body mentions multiple review units (validation-policy, routing); split into one conceptual unit per diff/task.",
+                "Review lane behavior cannot ship with policy, proof files in the same PR. Split behavior or cleanup from docs, policy, repro, and benchmark slices.",
+                'PR body Review Unit \"routing\" cannot ship with tooling-policy, proof files in the same PR. Split this into one Review Unit per PR.',
+            ],
+            "reviewLane": "behavior",
+            "reviewUnit": "routing",
+            "reviewUnits": ["routing", "tooling-policy", "proof"],
+            "scopeKinds": ["product", "policy"],
+        }
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                        with mock.patch.object(repairer, "run_claude_repair"):
+                            with mock.patch.object(repairer, "validate_current_pr_body", return_value=validation):
+                                result = repairer.repair_check(item, "PR Body")
+        self.assertEqual(result.status, "blocked_invalid")
+        self.assertIn(NON_TRUNK_MANUAL_SPLIT_ERROR, result.errors)
+
+    def test_plan_stack_actions_stop_retrying_after_repair_invalid(self):
+        ledger = self.ledger()
+        ledger.record("repair-invalid", 2606, HEAD, "PR Body", 1, meta={"errors": ["human stack split required"]})
+        stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
+        self.assertEqual(actions, ())
     def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):
         stderr = io.StringIO()
         latest = MergifyQueueEvent(
