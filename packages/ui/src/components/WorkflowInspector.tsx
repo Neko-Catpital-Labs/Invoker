@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
+import { formatTaskExecutionErrorForDisplay } from '../lib/task-execution-error-display.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
 import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
@@ -453,6 +454,7 @@ export function WorkflowInspector({
   const logEntries = taskLogEvents.map(taskEventToLogEntry);
   const visibleLogEntries = logEntries
     .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter]);
+  const displayError = formatTaskExecutionErrorForDisplay(task?.execution.error);
   const selectedWorkflowId = workflow?.id ?? task?.config.workflowId;
   const timelineDecisionTitle = task ? 'Worker decisions' : 'Workflow decisions';
   const timelineDecisionEmptyText = task
@@ -534,16 +536,16 @@ export function WorkflowInspector({
             )}
             {formatStatus(task?.status ?? workflow?.status)}
           </div>
-          {task?.execution.error && (
+          {displayError && (
             <div className="mt-3 border-t border-red-500/30 pt-2">
               <h3 className="text-[11px] uppercase tracking-wide text-red-300">Error</h3>
-              <p className="mt-1 text-xs text-red-300 break-words">{task.execution.error}</p>
+              <p className="mt-1 text-xs text-red-300 break-words">{displayError}</p>
               {task.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
                 <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
               )}
             </div>
           )}
-          {!task?.execution.error && task?.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
+          {!displayError && task?.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
             <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
           )}
           {task?.execution.pendingFixError && (

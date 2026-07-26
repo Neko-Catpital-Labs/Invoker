@@ -754,6 +754,38 @@ describe('WorkflowInspector', () => {
       'Approval blocked: capability mismatch',
     );
   });
+  it('normalizes legacy ssh cleanup-tail blobs in the inspector error card', () => {
+    const task = makeTask({
+      status: 'failed',
+      execution: {
+        error: [
+          '{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}',
+          '{"type":"turn.completed","usage":{"input_tokens":1}}',
+          'main: line 1: pop_var_context: head of shell_variables not a function context',
+          '[SshExecutor] Recording task result and pushing branch on remote...',
+        ].join('\n'),
+        exitCode: 1,
+      },
+    });
+
+    render(
+      <WorkflowInspector
+        workflow={workflow}
+        task={task}
+        collapsed={false}
+        advancedExpanded={false}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByText(
+      'Executor cleanup failed (ssh remote finalize): bash pop_var_context after remote run completed.',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/Recording task result and pushing branch on remote/)).not.toBeInTheDocument();
+  });
   it('surfaces crash-preserved inspection actions for orphaned running tasks', () => {
     const onRestartTask = vi.fn();
     const onRecreateTask = vi.fn();

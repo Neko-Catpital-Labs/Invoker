@@ -55,6 +55,31 @@ describe('TaskPanel error display', () => {
     expect(screen.getByText('SSH key not found')).toBeInTheDocument();
     expect(screen.getByText('Exit code: 1')).toBeInTheDocument();
   });
+  it('normalizes legacy ssh cleanup-tail blobs before rendering', () => {
+    const rawError = [
+      '{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}',
+      '{"type":"turn.completed","usage":{"input_tokens":1}}',
+      'main: line 1: pop_var_context: head of shell_variables not a function context',
+      '[SshExecutor] Recording task result and pushing branch on remote...',
+    ].join('\n');
+    const task = makeTask({
+      execution: { error: rawError, exitCode: 1 },
+    });
+    render(
+      <TaskPanel
+        task={task}
+        onProvideInput={noop}
+        onApprove={noop}
+        onReject={noop}
+        onSelectExperiment={noop}
+      />,
+    );
+    expect(screen.getByText(
+      'Executor cleanup failed (ssh remote finalize): bash pop_var_context after remote run completed.',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/Recording task result and pushing branch on remote/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/"type":"turn.completed"/)).not.toBeInTheDocument();
+  });
 
   it('shows only exit code when error is undefined', () => {
     const task = makeTask({

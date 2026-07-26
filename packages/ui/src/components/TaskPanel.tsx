@@ -16,10 +16,10 @@ import {
   formatStatusLabel,
   getRunningPhaseLabel,
 } from '../lib/colors.js';
+import { formatTaskExecutionErrorForDisplay } from '../lib/task-execution-error-display.js';
 import { useNow } from '../hooks/useNow.js';
 import { mergeGatePanelHeading } from '../lib/merge-gate.js';
 import { Button } from './primitives/index.js';
-
 interface TaskAuditEvent {
   eventType: string;
   payload?: string;
@@ -377,6 +377,7 @@ export function TaskPanel({
     const current = dep.gatePolicy ?? 'review_ready';
     return draft !== current;
   }).length;
+  const displayError = formatTaskExecutionErrorForDisplay(task.execution.error);
 
   const handleSaveGatePolicies = async () => {
     if (!onSetExternalGatePolicies || changedGatePolicyCount === 0) {
@@ -720,14 +721,14 @@ export function TaskPanel({
       )}
 
       {/* Error / Exit Code */}
-      {(task.execution.error || visibleWorkspaceSetupFailures.length > 0 || (task.execution.exitCode !== undefined && task.execution.exitCode !== 0)) && (
+      {(displayError || visibleWorkspaceSetupFailures.length > 0 || (task.execution.exitCode !== undefined && task.execution.exitCode !== 0)) && (
         <div className="bg-red-900/30 border border-red-700 rounded p-3">
           <h3 className="text-sm font-medium text-red-400 mb-1">Error</h3>
-          {task.execution.error && (
-            <p className="text-xs text-red-300 whitespace-pre-wrap">{task.execution.error}</p>
+          {displayError && (
+            <p className="text-xs text-red-300 whitespace-pre-wrap">{displayError}</p>
           )}
           {visibleWorkspaceSetupFailures.length > 0 && (
-            <div className={task.execution.error ? 'mt-2 space-y-2' : 'space-y-2'}>
+            <div className={displayError ? 'mt-2 space-y-2' : 'space-y-2'}>
               {visibleWorkspaceSetupFailures.map((error) => (
                 <pre
                   key={error}
