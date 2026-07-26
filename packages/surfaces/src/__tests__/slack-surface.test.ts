@@ -100,9 +100,18 @@ describe('SlackSurface', () => {
     it('registers action handlers for approve, reject, select, input', async () => {
       await surface.start(async () => {});
       const app = surface.getApp() as any;
-      // 8 action registrations: approve:, reject:, select:, input:, plan_draft_approve,
-      // plan_draft_cancel, lobby_confirm (op/restart only), lobby_cancel
-      expect(app.action).toHaveBeenCalledTimes(8);
+      const actionPatterns = app._actionHandlers.map((handler: MockHandler) => String(handler.pattern));
+      expect(actionPatterns).toEqual(expect.arrayContaining([
+        '/^approve:/',
+        '/^reject:/',
+        '/^select:/',
+        '/^input:/',
+        'plan_draft_approve',
+        'plan_draft_cancel',
+        'plan_draft_discard',
+        'lobby_confirm',
+        'lobby_cancel',
+      ]));
     });
 
     it('registers app_mention and message event handlers', async () => {
@@ -131,6 +140,7 @@ describe('SlackSurface', () => {
         instanceId: 'do1-proof',
         log,
       });
+      mockSendMessage.mockResolvedValue('hello');
       await surface.start(async () => {});
       const app = surface.getApp() as any;
       const mention = app._eventHandlers.find((handler: MockHandler) => handler.pattern === 'app_mention').handler;
@@ -141,7 +151,7 @@ describe('SlackSurface', () => {
       });
 
       expect(log).toHaveBeenCalledWith('slack', 'info', expect.stringContaining('[MENTION_RECEIVED] instance=do1-proof event_ts=event-1'));
-      expect(log).toHaveBeenCalledWith('slack', 'info', expect.stringContaining('[MENTION_ROUTE] instance=do1-proof event_ts=event-1 workflow=none'));
+      expect(log).toHaveBeenCalledWith('slack', 'info', expect.stringContaining('[MENTION_ROUTE] instance=do1-proof event_ts=event-1 route=planning'));
     });
   });
 
