@@ -16,6 +16,7 @@
     "test:pr-body-rollout": "node scripts/test-pr-body-rollout.mjs",
     "test:create-pr-e2e": "node scripts/test-create-pr-stack-workflow.mjs",
     "test:pr-diff-atomicity": "node scripts/test-pr-diff-atomicity.mjs",
+    "verify-empty-canonical-sweeps": "bash scripts/verify-empty-canonical-sweeps.sh",
     "test:e2e-dry-run": "bash scripts/e2e-dry-run/run-all.sh",
     "test:e2e": "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && pnpm --filter @invoker/app test:e2e",
     "test:e2e:visible": "pnpm --filter @invoker/ui build && pnpm --filter @invoker/app build && pnpm --filter @invoker/app test:e2e:visible",
