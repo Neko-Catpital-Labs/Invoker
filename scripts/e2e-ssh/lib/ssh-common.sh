@@ -105,6 +105,16 @@ invoker_e2e_ssh_cleanup_keys() {
 }
 
 # --------------------------------------------------------------------------- #
+# Print the repo-owned SSH provision command used by managed remote worktrees.
+# --------------------------------------------------------------------------- #
+invoker_e2e_ssh_provision_command() {
+  (
+    cd "$INVOKER_E2E_REPO_ROOT"
+    bash scripts/provision-ssh-worker.sh print-provision-command
+  )
+}
+
+# --------------------------------------------------------------------------- #
 # Write temp JSON config with a localhost-e2e execution pool.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_write_config() {
@@ -112,7 +122,7 @@ invoker_e2e_ssh_write_config() {
   local remote_home
   local provision_cmd
   remote_home="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
-  provision_cmd="$(command -v pnpm) install --frozen-lockfile"
+  provision_cmd="$(invoker_e2e_ssh_provision_command)"
 
   cat > "$config_file" <<EOJSON
 {
