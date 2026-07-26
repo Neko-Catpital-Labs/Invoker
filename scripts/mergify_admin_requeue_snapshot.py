@@ -8,6 +8,12 @@ import sys
 from typing import Mapping, Sequence
 from urllib.parse import quote
 
+PR_LIST_FIELDS = (
+    "number,title,url,headRefName,headRefOid,baseRefName,state,isDraft,"
+    "labels,mergeStateStatus,mergeable,reviewDecision"
+)
+PR_CANDIDATE_FIELDS = PR_LIST_FIELDS + ",statusCheckRollup"
+
 try:
     from .mergify_admin_requeue_model import (
         MergifyQueueEvent,
@@ -58,7 +64,7 @@ class GhClient:
         args = [
             "gh", "pr", "list", "--repo", repo, "--state", "open",
             "--label", "admin-bypass", "--limit", "200", "--json",
-            "number,title,url,headRefName,headRefOid,baseRefName,state,isDraft,labels,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup",
+            PR_CANDIDATE_FIELDS,
         ]
         if author:
             args[5:5] = ["--author", author]
@@ -98,7 +104,7 @@ class GhClient:
     def list_open_prs(self, repo: str) -> list[dict]:
         value = self._run_json([
             "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json",
-            "number,title,url,headRefName,headRefOid,baseRefName,state,isDraft,labels,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup",
+            PR_LIST_FIELDS,
         ])
         return value if isinstance(value, list) else []
 

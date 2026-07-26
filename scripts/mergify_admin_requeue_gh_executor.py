@@ -70,11 +70,17 @@ class AdminBypassGhExecutor:
     def resolve_bot_threads(self, thread_id: str) -> None:
         self.gh.resolve_review_thread(thread_id)
 
-    def has_blocked_comment(self, pr: PrSnapshot, body: str) -> bool:
+    def has_blocked_comment(self, pr: PrSnapshot | int, body_or_detail: str) -> bool:
         if not hasattr(self.gh, "issue_comments"):
             return False
-        for comment in self.gh.issue_comments(self.repo, pr.number):
-            if str(comment.get("body") or "").strip() == body.strip():
+        if isinstance(pr, PrSnapshot):
+            pr_number = pr.number
+            body = body_or_detail.strip()
+        else:
+            pr_number = pr
+            body = f"Mergify repair stopped: {body_or_detail}".strip()
+        for comment in self.gh.issue_comments(self.repo, pr_number):
+            if str(comment.get("body") or "").strip() == body:
                 return True
         return False
 
@@ -84,6 +90,14 @@ class AdminBypassGhExecutor:
             if not self.has_blocked_comment(pr, body):
                 self.gh.comment(self.repo, pr.number, body)
             self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, key, now)
+            return
+        if (
+            key == "no-current-bottom"
+            and detail != "no current bottom on master"
+            and not self.has_blocked_comment(pr.number, detail)
+        ):
+            self.gh.comment(self.repo, pr.number, f"Mergify repair stopped: {detail}")
+            self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, "no-current-bottom:exact", now)
 
     def execute(self, action: Action, pr: PrSnapshot, now: int) -> None:
         self.logger.trace("admin-bypass-action-execute", action=self.logger.action_payload(action))
@@ -103,8 +117,7 @@ class AdminBypassGhExecutor:
             self.resolve_bot_threads(action.key)
             return
         if action.kind == "comment_blocked":
-            if action.key == "capped":
-                key = f"capped:{action.detail}"
-                self.comment_blocked(pr, action.detail, key, now)
+            key = f"capped:{action.detail}" if action.key == "capped" else action.key
+            self.comment_blocked(pr, action.detail, key, now)
             return
         raise ValueError(f"unsupported executor action: {action.kind}")

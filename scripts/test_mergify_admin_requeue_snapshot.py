@@ -276,6 +276,9 @@ class GhClientLabelEdit(unittest.TestCase):
 
         args = run_json.call_args.args[0]
         self.assertNotIn("--label", args)
+        fields = args[args.index("--json") + 1]
+        self.assertNotIn("statusCheckRollup", fields)
+        self.assertIn("headRefName", fields)
 
     def test_add_label_uses_rest_issue_labels_endpoint(self):
         client = s.GhClient()

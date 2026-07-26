@@ -781,6 +781,53 @@ Failing checks
         executor.execute(action, item, 2)
         self.assertEqual(len(fake.comments), 1)
 
+    def test_human_blocker_comment_records_once(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def issue_comments(self, repo, pr_number):
+                return [{"body": body} for _repo, _pr_number, body in self.comments]
+
+        ledger = self.ledger()
+        item = pr(2647)
+        action = Action("comment_blocked", 2647, "no-current-bottom", "no current bottom on master: lowest open stack PR #2647 is based on `feature/base`, not `master`; land or retarget that base before babysitting can queue this stack")
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "Neko-Catpital-Labs/Invoker")
+        executor.execute(action, item, 1)
+        executor.execute(action, item, 2)
+        self.assertEqual(len(fake.comments), 1)
+        self.assertIn("lowest open stack PR #2647", fake.comments[0][2])
+        self.assertEqual(ledger.count("comment-blocked", 2647, HEAD, "no-current-bottom"), 1)
+
+    def test_no_current_bottom_upgrades_legacy_generic_comment_once(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = [{
+                    "body": "Mergify repair stopped: no current bottom on master",
+                }]
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append({"body": body})
+
+            def issue_comments(self, repo, pr_number):
+                return list(self.comments)
+
+        ledger = self.ledger()
+        ledger.record("comment-blocked", 2647, HEAD, "no-current-bottom", 1)
+        item = pr(2647)
+        detail = "no current bottom on master: lowest open stack PR #2647 is based on `feature/base`, not `master`; land or retarget that base before babysitting can queue this stack"
+        action = Action("comment_blocked", 2647, "no-current-bottom", detail)
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "Neko-Catpital-Labs/Invoker")
+        executor.execute(action, item, 2)
+        executor.execute(action, item, 3)
+        self.assertEqual([comment["body"] for comment in fake.comments].count(f"Mergify repair stopped: {detail}"), 1)
+        self.assertEqual(ledger.count("comment-blocked", 2647, HEAD, "no-current-bottom:exact"), 1)
+
     def test_missing_admin_bypass_nudge_comments_once_without_label_edit(self):
         class FakeGh:
             def __init__(self):

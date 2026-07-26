@@ -333,6 +333,28 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(m.StackGroup("s", (bottom, upper)))
         self.assertEqual((actions[0].kind, actions[0].pr_number), ("requeue", 10))
 
+    def test_no_current_bottom_blocker_names_base_branch(self):
+        actions = self._plan(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=5885,
+                        base_ref_name="pr/babysit-prereq-split",
+                        labels=frozenset({"admin-bypass"}),
+                    ),
+                    pr(
+                        number=5886,
+                        base_ref_name="stack/slack-routing",
+                        labels=frozenset({"admin-bypass"}),
+                    ),
+                ),
+            )
+        )
+        self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "no-current-bottom"))
+        self.assertIn("lowest open stack PR #5885 is based on `pr/babysit-prereq-split`", actions[0].detail)
+        self.assertIn("land or retarget that base", actions[0].detail)
+
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
         # Two prior requeue attempts on this head+key -> the third is capped.
@@ -515,6 +537,39 @@ class PlanStackExecution(PlannerTestCase):
             [(action.kind, action.key) for action in retry.actions],
             [("repair_check", QUEUE_ONLY_CHECK)],
         )
+
+    def test_repair_invalid_queue_failure_stops_retrying(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            5873,
+            HEAD,
+            "UI Vitest",
+            1,
+            meta={
+                "errors": [
+                    "merge-queue run failed outside the PR head: fix queue CI runner/tooling outside this PR and requeue."
+                ],
+            },
+        )
+        snapshot = pr(
+            number=5873,
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={"build": check("success"), "UI Vitest": check("success", "UI Vitest")},
+            latest_mergify=event(failing=("UI Vitest",)),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"build"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={5873},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "human_decision")
+        self.assertIn("outside the PR head", blockers[0]["detail"])
 
 
 if __name__ == "__main__":
