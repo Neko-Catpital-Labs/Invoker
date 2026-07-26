@@ -300,6 +300,25 @@ class PlanStackActions(PlannerTestCase):
             [("repair_check", QUEUE_ONLY_CHECK)],
         )
 
+    def test_queued_blank_head_waits_for_queue_only_missing_check(self):
+        latest = m.MergifyQueueEvent(
+            comment_id="cm1",
+            state="queued",
+            queue_rule_name="admin-bypass",
+            queued_at="2026-07-07T05:00:00Z",
+            head_sha="",
+            waiting_for=(QUEUE_ONLY_CHECK,),
+            failing_checks=(),
+            comment_url="u",
+        )
+        snapshot = pr(
+            checks={},
+            labels=frozenset({"admin-bypass", "queued"}),
+            latest_mergify=latest,
+        )
+        actions = self._plan(snapshot, required_checks={QUEUE_ONLY_CHECK})
+        self.assertEqual(actions, ())
+
     def test_admin_bypass_stack_members_progress_as_they_become_bottom(self):
         before_land = m.StackGroup(
             "s",

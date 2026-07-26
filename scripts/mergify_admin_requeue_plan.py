@@ -126,7 +126,12 @@ def effective_blockers(
         if b.kind != "not_current_bottom" and not (b.kind == "failed_check" and b.key in suppressed)
     ]
     latest = pr.latest_mergify
-    if not latest or latest.head_sha != pr.head_ref_oid:
+    active_queue_event = bool(
+        latest
+        and latest.state in {"queued", "merging"}
+        and latest.head_sha in {"", pr.head_ref_oid}
+    )
+    if not latest or (latest.head_sha != pr.head_ref_oid and not active_queue_event):
         return tuple(blockers)
     conditions = mergify_condition_map(latest)
     return tuple(
@@ -139,6 +144,10 @@ def effective_blockers(
                     latest.state == "dequeued"
                     and is_queue_only_required_check(blocker.key)
                     and blocker.key in latest.failing_checks
+                )
+                or (
+                    active_queue_event
+                    and is_queue_only_required_check(blocker.key)
                 )
             )
         )
@@ -500,7 +509,7 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
         return None
-    if latest and latest.head_sha == bottom.head_ref_oid and latest.state in {"queued", "merging"}:
+    if latest and latest.state in {"queued", "merging"} and latest.head_sha in {"", bottom.head_ref_oid}:
         return None
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
