@@ -258,11 +258,9 @@ STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
 cleanup_runtime() {
-  local status="$1"
   trap - EXIT HUP INT TERM
   stop_bootstrap_heartbeat
   rm -rf "$STAGING_DIR" >/dev/null 2>&1 || true
-  exit "$status"
 }
 BOOTSTRAP_HEARTBEAT_PID=""
 INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
@@ -284,10 +282,10 @@ stop_bootstrap_heartbeat() {
     BOOTSTRAP_HEARTBEAT_PID=""
   fi
 }
-trap 'cleanup_runtime "$?"' EXIT
-trap 'cleanup_runtime 129' HUP
-trap 'cleanup_runtime 130' INT
-trap 'cleanup_runtime 143' TERM
+trap 'cleanup_runtime' EXIT
+trap 'cleanup_runtime; exit 129' HUP
+trap 'cleanup_runtime; exit 130' INT
+trap 'cleanup_runtime; exit 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
