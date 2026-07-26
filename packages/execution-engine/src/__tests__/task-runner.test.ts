@@ -1095,6 +1095,121 @@ describe('TaskRunner', () => {
       expect(executor.collectUpstreamBranches(task)).toEqual(['experiment/wf-ext/gate-task-abc123']);
     });
   });
+  describe('WorkRequest upstreamBase', () => {
+    function createCapturingRunner(tasks: Map<string, TaskState>) {
+      let capturedRequest: WorkRequest | undefined;
+      const capturingExecutor = {
+        type: 'worktree',
+        start: async (req: WorkRequest) => {
+          capturedRequest = req;
+          return { executionId: 'exec-1', taskId: req.actionId };
+        },
+        onOutput: () => () => {},
+        onComplete: (_handle: unknown, cb: (response: WorkResponse) => void) => {
+          cb({ requestId: 'r', actionId: 'child-task', status: 'completed', outputs: { exitCode: 0 } });
+          return () => {};
+        },
+        onHeartbeat: () => () => {},
+      };
+
+      const runner = new TaskRunner({
+        orchestrator: {
+          getTask: (id: string) => tasks.get(id),
+          handleWorkerResponse: vi.fn(),
+        } as any,
+        persistence: { updateTask: vi.fn() } as any,
+        executorRegistry: {
+          getDefault: () => capturingExecutor,
+          get: () => capturingExecutor,
+          getAll: () => [capturingExecutor],
+        } as any,
+        cwd: '/tmp',
+      });
+
+      return {
+        runner,
+        getCapturedRequest: () => capturedRequest,
+      };
+    }
+
+    it('uses the only completed dependency branch and commit as upstreamBase', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-a', makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        execution: {
+          branch: 'experiment/dep-a',
+          commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        },
+      }));
+
+      const { runner, getCapturedRequest } = createCapturingRunner(tasks);
+      await runner.executeTask(makeTask({
+        id: 'child-task',
+        status: 'running',
+        dependencies: ['dep-a'],
+        config: { command: 'echo test' },
+      }));
+
+      expect(getCapturedRequest()?.inputs.upstreamBase).toEqual({
+        branch: 'experiment/dep-a',
+        commitHash: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      });
+    });
+
+    it('uses the first dependency in declared order when multiple commits exist', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-a', makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        execution: {
+          branch: 'experiment/dep-a',
+          commit: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        },
+      }));
+      tasks.set('dep-b', makeTask({
+        id: 'dep-b',
+        status: 'completed',
+        execution: {
+          branch: 'experiment/dep-b',
+          commit: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        },
+      }));
+
+      const { runner, getCapturedRequest } = createCapturingRunner(tasks);
+      await runner.executeTask(makeTask({
+        id: 'child-task',
+        status: 'running',
+        dependencies: ['dep-b', 'dep-a'],
+        config: { command: 'echo test' },
+      }));
+
+      expect(getCapturedRequest()?.inputs.upstreamBase).toEqual({
+        branch: 'experiment/dep-b',
+        commitHash: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      });
+    });
+
+    it('leaves upstreamBase unset when only branch metadata exists', async () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('dep-a', makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        execution: { branch: 'experiment/dep-a' },
+      }));
+
+      const { runner, getCapturedRequest } = createCapturingRunner(tasks);
+      await runner.executeTask(makeTask({
+        id: 'child-task',
+        status: 'running',
+        dependencies: ['dep-a'],
+        config: { command: 'echo test' },
+      }));
+
+      expect(getCapturedRequest()?.inputs.upstreamBase).toBeUndefined();
+      expect(getCapturedRequest()?.inputs.upstreamBranches).toEqual(['experiment/dep-a']);
+    });
+  });
 
   describe('executeTask error handling', () => {
     it('sends failed WorkResponse when executor.start throws', async () => {

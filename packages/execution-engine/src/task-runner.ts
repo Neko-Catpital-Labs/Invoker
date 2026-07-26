@@ -1812,6 +1812,28 @@ export class TaskRunner {
 
     return branches;
   }
+  /** @internal */ collectUpstreamBase(task: TaskState): { branch: string; commitHash: string } | undefined {
+    const resolveUpstreamBase = (dep: TaskState | undefined): { branch: string; commitHash: string } | undefined => {
+      if (dep?.status !== 'completed') return undefined;
+      const branch = dep.execution.branch?.trim();
+      const commitHash = dep.execution.commit?.trim();
+      if (!branch || !commitHash) return undefined;
+      return { branch, commitHash };
+    };
+
+    for (const depId of task.dependencies) {
+      const upstreamBase = resolveUpstreamBase(this.orchestrator.getTask(depId));
+      if (upstreamBase) return upstreamBase;
+    }
+    for (const depRef of task.config.externalDependencies ?? []) {
+      const upstreamBase = resolveUpstreamBase(
+        this.resolveExternalDependencyTask(depRef.workflowId, depRef.taskId),
+      );
+      if (upstreamBase) return upstreamBase;
+    }
+
+    return undefined;
+  }
 
   /** @internal */ buildAlternatives(
     task: TaskState,

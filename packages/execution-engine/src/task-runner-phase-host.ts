@@ -28,6 +28,7 @@ export type TaskRunnerPhaseHost = Pick<
   // Prepare-phase helpers
   | 'buildUpstreamContext'
   | 'collectUpstreamBranches'
+  | 'collectUpstreamBase'
   | 'buildAlternatives'
   | 'resolveExternalDependencyTask'
   | 'shouldUseFreshWorkspace'

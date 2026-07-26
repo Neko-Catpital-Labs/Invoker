@@ -42,6 +42,7 @@ export async function buildWorkRequest(
   bench('collectUpstreamBranches.end', {
     upstreamBranchCount: upstreamBranches.length,
   });
+  const upstreamBase = host.collectUpstreamBase(task);
   bench('buildAlternatives.start');
   const alternatives = host.buildAlternatives(task);
   bench('buildAlternatives.end', {
@@ -142,6 +143,7 @@ export async function buildWorkRequest(
       upstreamContext: upstreamContext.length > 0 ? upstreamContext : undefined,
       alternatives: alternatives.length > 0 ? alternatives : undefined,
       upstreamBranches: upstreamBranches.length > 0 ? upstreamBranches : undefined,
+      upstreamBase,
       lifecycleTag,
       baseBranch,
       baseCommit,
