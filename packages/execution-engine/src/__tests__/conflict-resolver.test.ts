@@ -785,7 +785,7 @@ describe('conflict-resolver fail-fast workspace invariant', () => {
 });
 
 describe('remoteAgentShellInvocation', () => {
-  it('uses a remote login shell so ~/.profile PATH (flutter, agents) applies', () => {
-    expect(remoteAgentShellInvocation()).toEqual(['bash', '-l', '-s']);
+  it('loads the remote login profile before handing streamed agent scripts to plain bash', () => {
+    expect(remoteAgentShellInvocation()).toEqual(['bash', '-lc', "'unset BASH_ENV; exec bash -s'"]);
   });
 });

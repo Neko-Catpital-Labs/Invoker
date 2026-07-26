@@ -29,6 +29,7 @@ import {
   parseRecordAndPushOutput,
   createSshRemoteScriptError,
   parseOwnedWorktreePath,
+  remoteLoginShellStdinBridgeInvocation,
 } from './ssh-git-exec.js';
 
 export interface SshExecutorConfig {
@@ -311,12 +312,13 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Remote shell for task payloads. Use a login shell so the remote user's
-   * ~/.profile PATH (flutter, android-sdk, etc.) is applied. Never forward the
-   * local host PATH — that clobbers Linux remotes with macOS Homebrew paths.
+   * Remote shell for task payloads. Load the remote user's login profile so
+   * ~/.profile PATH (flutter, android-sdk, etc.) is applied, then hand stdin to
+   * a plain bash for the actual task script. Never forward the local host PATH
+   * — that clobbers Linux remotes with macOS Homebrew paths.
    */
   private buildPayloadRemoteCommand(): string[] {
-    return ['bash', '-l', '-s'];
+    return remoteLoginShellStdinBridgeInvocation();
   }
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {

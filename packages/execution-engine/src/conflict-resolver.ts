@@ -16,7 +16,11 @@ import { buildAgentExitFailureDetail, cleanElectronEnv, resolveExecutableOnCurre
 import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT, type ExecutionAgent } from './agent.js';
 import type { SessionDriver } from './session-driver.js';
 import type { AgentRegistry } from './agent-registry.js';
-import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-exec.js';
+import {
+  buildWorktreeListScript,
+  createSshRemoteScriptError,
+  remoteLoginShellStdinBridgeInvocation,
+} from './ssh-git-exec.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { findManagedWorktreeForBranch } from './worktree-discovery.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
@@ -273,12 +277,13 @@ function shellQuote(s: string): string {
 }
 
 /**
- * Remote shell for agent fix/resolve commands. Use a login shell so the remote
- * user's ~/.profile PATH is applied (same as SshExecutor task payloads). Do not
- * forward the local host PATH — that clobbers Linux remotes with macOS paths.
+ * Remote shell for agent fix/resolve commands. Load the remote user's login
+ * profile for PATH/secrets, then run the streamed script under a plain bash
+ * (same as SshExecutor task payloads). Do not forward the local host PATH —
+ * that clobbers Linux remotes with macOS paths.
  */
 export function remoteAgentShellInvocation(): string[] {
-  return ['bash', '-l', '-s'];
+  return remoteLoginShellStdinBridgeInvocation();
 }
 
 /**

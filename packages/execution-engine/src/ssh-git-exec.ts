@@ -55,6 +55,16 @@ export function shellPosixSingleQuote(s: string): string {
 }
 
 /**
+ * Remote command argv for scripts streamed on stdin that still need the remote
+ * user's login profile. The login shell loads PATH/secrets, then execs a plain
+ * stdin-reading bash so profile teardown cannot consume or perturb the task
+ * script's exit status.
+ */
+export function remoteLoginShellStdinBridgeInvocation(): string[] {
+  return ['bash', '-lc', shellPosixSingleQuote('unset BASH_ENV; exec bash -s')];
+}
+
+/**
  * Base64-encode a string for safe transmission over SSH.
  * Used to avoid shell interpolation issues with complex strings.
  */
