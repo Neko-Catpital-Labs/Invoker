@@ -311,12 +311,25 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Remote shell for task payloads. Use a login shell so the remote user's
-   * ~/.profile PATH (flutter, android-sdk, etc.) is applied. Never forward the
-   * local host PATH — that clobbers Linux remotes with macOS Homebrew paths.
+   * Remote shell for task payloads. Start a login shell with inherited shell
+   * startup hooks disabled so the remote user's ~/.profile PATH (flutter,
+   * android-sdk, etc.) is applied, then exec a clean non-login bash for the
+   * streamed script. The exec preserves exported profile environment while
+   * avoiding profile EXIT traps, BASH_ENV/ENV, and exported shell functions
+   * during long-running task payloads.
+   *
+   * OpenSSH joins remote command args with spaces before the remote login shell
+   * parses them, so the -c command must be quoted as a shell word here.
    */
   private buildPayloadRemoteCommand(): string[] {
-    return ['bash', '-l', '-s'];
+    return [
+      'BASH_ENV=',
+      'ENV=',
+      'bash',
+      '-l',
+      '-c',
+      this.shellQuote('trap - EXIT; unset BASH_ENV ENV; exec bash --noprofile --norc -p -s'),
+    ];
   }
 
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {

@@ -929,7 +929,7 @@ describe('SshExecutor entry lifecycle', () => {
     vi.spyOn(ssh as any, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
   });
 
-  it('uses a login shell for task payloads so remote profile PATH applies', async () => {
+  it('execs a clean payload bash after login shell environment setup', async () => {
     const request = makeRequest({
       inputs: {
         command: 'echo hello',
@@ -941,11 +941,71 @@ describe('SshExecutor entry lifecycle', () => {
     const childProcessMod = await import('node:child_process');
     const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
     const spawnArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
-    expect(spawnArgs.slice(-3)).toEqual(['bash', '-l', '-s']);
+    expect(spawnArgs.slice(-6)).toEqual([
+      'BASH_ENV=',
+      'ENV=',
+      'bash',
+      '-l',
+      '-c',
+      "'trap - EXIT; unset BASH_ENV ENV; exec bash --noprofile --norc -p -s'",
+    ]);
 
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
     sshProcess.emit('close', 0, null);
     await new Promise((r) => setTimeout(r, 50));
+  });
+
+  it('keeps login PATH but skips profile teardown and function imports for streamed payloads', async () => {
+    const remoteShellArgs = [
+      'BASH_ENV=',
+      'ENV=',
+      'bash',
+      '-l',
+      '-c',
+      "'trap - EXIT; unset BASH_ENV ENV; exec bash --noprofile --norc -p -s'",
+    ];
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-payload-shell-home-'));
+    try {
+      mkdirSync(join(fakeHome, 'bin'), { recursive: true });
+      writeFileSync(
+        join(fakeHome, '.bash_profile'),
+        [
+          'export PATH="$HOME/bin:$PATH"',
+          'main() { echo main-imported; }',
+          'export -f main',
+          "trap 'echo profile-exit >&2; exit 42' EXIT",
+          '',
+        ].join('\n'),
+      );
+      const inheritedBashEnv = join(fakeHome, 'bash-env.sh');
+      writeFileSync(inheritedBashEnv, 'echo bash-env-sourced >&2\nexit 43\n');
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/sh', ['-c', remoteShellArgs.join(' ')], {
+        input: [
+          'set -e',
+          'case ":$PATH:" in',
+          '  *":$HOME/bin:"*) printf "path-ok\\n" ;;',
+          '  *) printf "path-missing\\n" >&2; exit 2 ;;',
+          'esac',
+          'if type main >/dev/null 2>&1; then main; exit 3; fi',
+          'printf "payload-ok\\n"',
+          '',
+        ].join('\n'),
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          BASH_ENV: inheritedBashEnv,
+          HOME: fakeHome,
+        },
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe('path-ok\npayload-ok\n');
+      expect(result.stderr).toBe('');
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
   });
   it('decreases entries.size after terminal close', async () => {
     const request = makeRequest({
