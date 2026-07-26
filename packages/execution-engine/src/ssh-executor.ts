@@ -302,11 +302,20 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
   }
 
   /**
-   * Remote shell for task scripts. Use a login shell so the remote user's
+   * Remote shell for engine-managed SSH utility scripts (bootstrap, git finalize,
+   * worktree inspection). Keep this non-login so remote dotfiles cannot mutate or
+   * break deterministic helper runs.
+   */
+  private buildUtilityRemoteCommand(): string[] {
+    return ['bash', '-s'];
+  }
+
+  /**
+   * Remote shell for task payloads. Use a login shell so the remote user's
    * ~/.profile PATH (flutter, android-sdk, etc.) is applied. Never forward the
    * local host PATH — that clobbers Linux remotes with macOS Homebrew paths.
    */
-  private buildRemoteCommand(): string[] {
+  private buildPayloadRemoteCommand(): string[] {
     return ['bash', '-l', '-s'];
   }
 
@@ -321,7 +330,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     });
     bench('SshExecutor.execRemoteCapture.begin');
     return new Promise((resolve, reject) => {
-      const child = spawn('ssh', [...this.buildSshArgs(), ...this.buildRemoteCommand()], {
+      const child = spawn('ssh', [...this.buildSshArgs(), ...this.buildUtilityRemoteCommand()], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: cleanElectronEnv(),
       });
@@ -922,7 +931,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     return this.remoteGitRecordAndPush('publish-approved-fix', request, worktreePath, branch, 0);
   }
 
-  /** Run a bash script on the remote (fed to `bash -s` on stdin). */
+  /** Run a task bash script on the remote login shell (fed on stdin). */
   private spawnSshRemoteStdin(
     executionId: string,
     request: WorkRequest,
@@ -932,7 +941,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     finalizeRemote: { worktreePath: string; branch: string } | undefined,
     effectiveAgentName?: string,
   ): ExecutorHandle {
-    const child = spawn('ssh', [...this.buildSshArgs(), ...this.buildRemoteCommand()], {
+    const child = spawn('ssh', [...this.buildSshArgs(), ...this.buildPayloadRemoteCommand()], {
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
       env: cleanElectronEnv(),
