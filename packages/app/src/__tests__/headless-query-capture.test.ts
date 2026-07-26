@@ -56,10 +56,14 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     }
   });
 
-  it('maps the deprecated alias `list` to `query workflows`', async () => {
+  it('rejects removed top-level query aliases', async () => {
     const deps = makeQueryDeps(() => [{ id: 'wf-9' }]);
-    const output = await runReadOnlyHeadlessQueryToString(['list', '--output', 'label'], deps);
-    expect(output).toBe('wf-9\n');
+    await expect(runReadOnlyHeadlessQueryToString(['list', '--output', 'label'], deps)).rejects.toThrow(
+      /not a delegatable read-only query/,
+    );
+    await expect(runReadOnlyHeadlessQueryToString(['session', 'task-1'], deps)).rejects.toThrow(
+      /not a delegatable read-only query/,
+    );
   });
 
   it('uses configured default agent when session task has no persisted agent name', async () => {
@@ -85,7 +89,7 @@ describe('runReadOnlyHeadlessQueryToString', () => {
       getAllTasks: vi.fn(() => [task]),
     } as unknown as HeadlessQueryDeps['orchestrator'];
 
-    const output = await runReadOnlyHeadlessQueryToString(['session', 'task-1'], deps);
+    const output = await runReadOnlyHeadlessQueryToString(['query', 'session', 'task-1'], deps);
 
     expect(output).toContain('agent=custom-agent sessionId=sess-1\n');
   });

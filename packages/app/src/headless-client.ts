@@ -189,7 +189,7 @@ async function delegateMutation(
 }
 
 const GENERIC_DELEGATABLE_READ_COMMANDS = new Set([
-  'list', 'status', 'task-status', 'audit', 'session', 'query-select',
+  'query-select',
 ]);
 
 /**
@@ -319,8 +319,7 @@ function shouldBootstrapStandaloneReadQuery(
 ): boolean {
   if (!standaloneMode || internalOwnerServe) return false;
   const isSpecialRead =
-    (args[0] === 'query' && (args[1] === 'queue' || args[1] === 'ui-perf' || args[1] === 'action-graph'))
-    || args[0] === 'queue';
+    args[0] === 'query' && (args[1] === 'queue' || args[1] === 'ui-perf' || args[1] === 'action-graph');
   return isSpecialRead;
 }
 
@@ -330,7 +329,7 @@ async function delegateReadOnlyQuery(
   refreshMessageBus?: () => Promise<MessageBus>,
 ): Promise<boolean> {
   const isUiPerf = args[0] === 'query' && args[1] === 'ui-perf';
-  const isQueue = (args[0] === 'query' && args[1] === 'queue') || args[0] === 'queue';
+  const isQueue = args[0] === 'query' && args[1] === 'queue';
   const isActionGraph = args[0] === 'query' && args[1] === 'action-graph';
   if (!isUiPerf && !isQueue && !isActionGraph) {
     return delegateGenericReadQuery(args, bus, refreshMessageBus);

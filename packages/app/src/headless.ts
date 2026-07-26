@@ -334,6 +334,7 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessDeleteTask(args[1], deps);
       break;
     case 'delete':
+      if (!args[1]) throw new Error('Missing workflowId. Usage: --headless delete <workflowId>');
       await headlessDeleteWorkflow(args[1], deps);
       break;
     case 'delete-all':
@@ -560,7 +561,7 @@ ${BOLD}Options:${RESET}
 }
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless edit <taskId> <newCommand>');
+  if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless set command <taskId> <newCommand>');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set command');
   if (!restored) return;
   taskId = restored.resolvedTaskId;

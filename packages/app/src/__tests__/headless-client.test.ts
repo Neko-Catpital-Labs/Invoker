@@ -115,7 +115,7 @@ describe('headless-client', () => {
     const refreshMessageBus = vi.fn().mockResolvedValue(secondBus);
     const runElectronHeadless = vi.fn(async () => 23);
 
-    const argv = ['task-status', 'wf-1/task-a'];
+    const argv = ['query', 'task', 'wf-1/task-a'];
     const exitCode = await runHeadlessClientCommand(argv, {
       messageBus: firstBus,
       ensureStandaloneOwner,
