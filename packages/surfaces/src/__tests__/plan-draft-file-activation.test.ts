@@ -53,6 +53,15 @@ tasks:
 \`\`\`
 
 Reply \`submit\` to submit it.`;
+const SUBMIT_LINE = 'Reply `submit` to submit it.';
+
+function fakeConversationRepo(): any {
+  return {
+    loadConversation: vi.fn().mockReturnValue(null),
+    saveConversation: vi.fn(),
+    deleteConversation: vi.fn(),
+  };
+}
 
 describe('plan draft file - activation side', () => {
   let workingDir: string;
@@ -101,19 +110,34 @@ describe('plan draft file - activation side', () => {
     ));
     await conversation.sendMessage('Draft it');
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('What does it do?');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_LINE}`));
+    const reply = await conversation.sendMessage('What does it do?');
 
     expect(existsSync(path)).toBe(false);
+    expect(reply).not.toContain(SUBMIT_LINE);
+    expect(conversation.history.at(-1)?.content).not.toContain(SUBMIT_LINE);
     expect(conversation.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
   });
 
   it('does not expose a plan when a summary-only turn has no prior draft', async () => {
-    const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
+    const conversationRepo = fakeConversationRepo();
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'abc-123',
+      conversationRepo,
+      plannerRetryLimit: 0,
+    });
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('Draft it');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_LINE}`));
+    const reply = await conversation.sendMessage('Draft it');
 
+    expect(reply).toBe('Drafted the plan. Summary: one step.');
+    expect(conversation.lastTurnDraftPlanText).toBeNull();
+    expect(conversation.history.at(-1)?.content).toBe(reply);
+    expect(conversationRepo.saveConversation).toHaveBeenCalledOnce();
+    const savedMessages = conversationRepo.saveConversation.mock.calls[0][1];
+    expect(savedMessages.at(-1).content).toBe(reply);
+    expect(savedMessages.at(-1).content).not.toContain(SUBMIT_LINE);
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
@@ -139,12 +163,15 @@ describe('plan draft file - activation side', () => {
       'Drafted the plan.\n\nReply `submit` to submit it.',
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Create the plan');
+    const reply = await conversation.sendMessage('Create the plan');
 
     expect(isConfirmation('submit')).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(conversation.planSubmitted).toBe(false);
     expect(conversation.submittedPlanText).toBeNull();
+    expect(reply).toContain(SUBMIT_LINE);
+    expect(conversation.history.at(-1)?.content).toContain(SUBMIT_LINE);
+    expect(conversation.lastTurnDraftPlanText).toBe(VALID_PLAN_YAML.trim());
 
     const draftedPlan = conversation.getDraftedPlan();
     expect(draftedPlan).not.toBeNull();

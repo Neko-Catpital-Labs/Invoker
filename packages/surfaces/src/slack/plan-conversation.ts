@@ -53,6 +53,7 @@ export function defaultPlanningCommand(
 }
 
 const EMPTY_PLANNER_STDERR_TAIL_LIMIT = 500;
+const SUBMIT_CONFIRMATION_INSTRUCTION = 'Reply `submit` to submit it.';
 
 export const DEFAULT_PLANNER_RETRY_LIMIT = 2;
 export const DEFAULT_PLANNER_RETRY_BASE_DELAY_MS = 500;
@@ -88,6 +89,15 @@ class RetryableEmptyPlannerOutputError extends Error {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function removeStandaloneSubmitInstruction(message: string): string {
+  return message
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== SUBMIT_CONFIRMATION_INSTRUCTION)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd();
 }
 
 export interface PlanConversationConfig {
@@ -550,6 +560,9 @@ export class PlanConversation {
     const nextDraft = fileDraft && summarizePlanText(fileDraft)
       ? fileDraft
       : inlineDraft;
+    if (!nextDraft) {
+      message = removeStandaloneSubmitInstruction(message);
+    }
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     this._lastTurnReasoning = formatted.reasoning;
