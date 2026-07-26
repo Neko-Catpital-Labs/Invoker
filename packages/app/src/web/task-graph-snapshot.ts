@@ -17,12 +17,13 @@ export interface TaskGraphSnapshot {
 }
 
 export interface BuildTaskGraphSnapshotDeps {
-  orchestrator: Pick<Orchestrator, 'getAllTasks'>;
+  orchestrator: Pick<Orchestrator, 'syncAllFromDb' | 'getAllTasks'>;
   persistence: Pick<SQLiteAdapter, 'listWorkflows'>;
   getStreamSequence: () => number;
 }
 
 export function buildTaskGraphSnapshot(deps: BuildTaskGraphSnapshotDeps): TaskGraphSnapshot {
+  deps.orchestrator.syncAllFromDb();
   return {
     tasks: deps.orchestrator.getAllTasks(),
     workflows: deps.persistence.listWorkflows() as WorkflowMeta[],
