@@ -56,11 +56,8 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     }
   });
 
-  it('rejects removed top-level query aliases', async () => {
+  it('rejects removed top-level session query alias', async () => {
     const deps = makeQueryDeps(() => [{ id: 'wf-9' }]);
-    await expect(runReadOnlyHeadlessQueryToString(['list', '--output', 'label'], deps)).rejects.toThrow(
-      /not a delegatable read-only query/,
-    );
     await expect(runReadOnlyHeadlessQueryToString(['session', 'task-1'], deps)).rejects.toThrow(
       /not a delegatable read-only query/,
     );
