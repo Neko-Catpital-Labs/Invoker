@@ -80,6 +80,11 @@ export type RemoteTargetDisplay = {
   maxConcurrentTasks?: number;
 };
 
+export type WorktreeTargetDisplay = {
+  provisionCommand?: string;
+  maxConcurrentTasks?: number;
+};
+
 // ── Host surface ─────────────────────────────────────────
 
 /**
@@ -99,8 +104,8 @@ export type TaskRunnerPoolHost = Pick<
   | 'worktreeExecutorCache'
   | 'runnerInstanceId'
   | 'getRemoteTargets'
+  | 'getWorktreeTargets'
   | 'getExecutionPools'
-  | 'resolveExecutionAgent'
   | 'resolveExecutionModel'
   | 'executorRegistry'
   | 'dockerConfig'

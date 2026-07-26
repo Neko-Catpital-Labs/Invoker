@@ -94,6 +94,7 @@ import type {
   RemoteTargetDisplay,
   ResolvedExecutionSelection,
   SelectedExecutor,
+  WorktreeTargetDisplay,
 } from './task-runner-pool.js';
 
 export type { TaskHeartbeatEvent, TaskRunnerCallbacks } from './task-runner-callbacks.js';
@@ -185,10 +186,14 @@ export interface TaskRunnerConfig {
     remoteHeartbeatIntervalSeconds?: number;
     maxConcurrentTasks?: number;
   }>;
+  worktreeTargetsProvider?: () => Record<string, {
+    provisionCommand?: string;
+    maxConcurrentTasks?: number;
+  }>;
   executionPoolsProvider?: () => Record<string, {
     members: Array<
       | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
-      | { type: 'worktree'; id: string; maxConcurrentTasks?: number; provisionCommand?: string }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
     >;
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
     maxConcurrentTasksPerMember?: number;
@@ -226,6 +231,7 @@ export class TaskRunner {
   /** @internal */ reviewGateMergeConflictInFlight = new Set<string>();
 
   /** @internal */ getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
+  /** @internal */ getWorktreeTargets: () => Record<string, WorktreeTargetDisplay>;
   /** @internal */ getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private getExecutionDefaults: () => { executionAgent?: string; executionModel?: string };
   /** @internal */ dockerConfig: { imageName?: string; secretsFile?: string };
@@ -344,6 +350,7 @@ export class TaskRunner {
     this.reviewGateCiFailurePublisher = config.reviewGateCiFailurePublisher;
     this.reviewGateMergeConflictPublisher = config.reviewGateMergeConflictPublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
+    this.getWorktreeTargets = config.worktreeTargetsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};
@@ -1811,6 +1818,28 @@ export class TaskRunner {
     }
 
     return branches;
+  }
+  /** @internal */ collectUpstreamBase(task: TaskState): { branch: string; commitHash: string } | undefined {
+    const resolveUpstreamBase = (dep: TaskState | undefined): { branch: string; commitHash: string } | undefined => {
+      if (dep?.status !== 'completed') return undefined;
+      const branch = dep.execution.branch?.trim();
+      const commitHash = dep.execution.commit?.trim();
+      if (!branch || !commitHash) return undefined;
+      return { branch, commitHash };
+    };
+
+    for (const depId of task.dependencies) {
+      const upstreamBase = resolveUpstreamBase(this.orchestrator.getTask(depId));
+      if (upstreamBase) return upstreamBase;
+    }
+    for (const depRef of task.config.externalDependencies ?? []) {
+      const upstreamBase = resolveUpstreamBase(
+        this.resolveExternalDependencyTask(depRef.workflowId, depRef.taskId),
+      );
+      if (upstreamBase) return upstreamBase;
+    }
+
+    return undefined;
   }
 
   /** @internal */ buildAlternatives(

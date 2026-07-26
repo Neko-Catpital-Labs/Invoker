@@ -56,6 +56,13 @@ vi.mock('../config.js', () => ({
     remoteTargets: {
       remote: {
         host: 'host',
+        provisionCommand: 'bash scripts/provision-ssh-worker.sh ensure-repo-ready',
+      },
+    },
+    worktreeTargets: {
+      local: {
+        provisionCommand: 'pnpm install --frozen-lockfile',
+        maxConcurrentTasks: 2,
       },
     },
     executionPools: {
@@ -147,6 +154,13 @@ describe('task-runner-wiring', () => {
     expect(config.remoteTargetsProvider()).toEqual({
       remote: {
         host: 'host',
+        provisionCommand: 'bash scripts/provision-ssh-worker.sh ensure-repo-ready',
+      },
+    });
+    expect(config.worktreeTargetsProvider()).toEqual({
+      local: {
+        provisionCommand: 'pnpm install --frozen-lockfile',
+        maxConcurrentTasks: 2,
       },
     });
     expect(config.executionPoolsProvider()).toEqual({
@@ -160,7 +174,7 @@ describe('task-runner-wiring', () => {
       },
     });
     expect(config.executionDefaultsProvider()).toEqual({ executionAgent: 'claude' });
-    expect(loadConfig).toHaveBeenCalledTimes(3);
+    expect(loadConfig).toHaveBeenCalledTimes(4);
 
     config.callbacks.onOutput('task-1', 'chunk');
     expect(taskRunnerConstructor.mock.calls[0]?.[0].callbacks.onOutput).toBe(config.callbacks.onOutput);
