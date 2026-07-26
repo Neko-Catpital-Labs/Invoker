@@ -11,6 +11,8 @@ Write the planning artifact to `plans/invoker-handoff.md`.
 
 Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 
+Plain approval for this command authorizes only workflow handoff: create, validate, and submit the Invoker workflow. It does not authorize local branch publication, GitHub PR creation/update, or Mergify stack publication unless the user explicitly asks for PR publication work.
+
 Validate with `invoker_validate_plan` before submitting.
 
 Submit with `invoker_submit_plan` using mode `live` so the workflow appears in the running Invoker app.
