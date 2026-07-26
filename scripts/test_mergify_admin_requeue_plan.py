@@ -254,6 +254,35 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
         self.assertEqual(actions[0].kind, "repair_check")
 
+    def test_mergify_dequeue_repair_invalid_stops_repair_and_requeue(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            1,
+            HEAD,
+            "build",
+            1,
+            meta={"errors": ["merge-queue run failed outside the PR head"]},
+        )
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={"build": check("success")},
+            latest_mergify=event(failing=("build",)),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={1},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        self.assertEqual(
+            plan.summary["prs"][0]["blockers"],
+            [{"kind": "human_decision", "key": "build", "detail": "merge-queue run failed outside the PR head"}],
+        )
+
     def test_clean_bottom_missing_label_nudges_human(self):
         actions = self._plan(pr())  # green, no admin-bypass label
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_admin_bypass_nudge", "admin-bypass"))

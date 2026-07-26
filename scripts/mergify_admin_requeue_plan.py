@@ -155,6 +155,8 @@ def mergify_failed_check_actions(
     for name in latest.failing_checks:
         if name in suppressed:
             continue
+        if repair_invalid_blocker_for_check(pr, name, f"Mergify queue check failed: {name}", ledger) is not None:
+            return ()
         if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= 3:
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"), f"Mergify queue check failed: {name}"),)
         return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
@@ -253,10 +255,8 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
     return check_name
 
 
-def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
-    if blocker.kind != "failed_check":
-        return None
-    latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
+def repair_invalid_blocker_for_check(pr: PrSnapshot, check_name: str, detail: str, ledger: Ledger) -> Blocker | None:
+    latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, check_name)
     if latest is None:
         return None
     meta = latest.get("meta") if isinstance(latest.get("meta"), Mapping) else {}
@@ -264,8 +264,33 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
     if isinstance(errors, list):
         detail = "\n".join(str(error) for error in errors if str(error))
         if detail:
-            return Blocker(blocker.key, "human_decision", pr.number, detail)
-    return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
+            return Blocker(check_name, "human_decision", pr.number, detail)
+    return Blocker(check_name, "human_decision", pr.number, detail)
+
+
+def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
+    if blocker.kind != "failed_check":
+        return None
+    return repair_invalid_blocker_for_check(pr, blocker.key, blocker.detail, ledger)
+
+
+def mergify_repair_invalid_blockers(
+    pr: PrSnapshot,
+    ledger: Ledger,
+    suppressed_failed_checks: Collection[str] = (),
+) -> tuple[Blocker, ...]:
+    suppressed = set(suppressed_failed_checks)
+    latest = pr.latest_mergify
+    if not latest or latest.state != "dequeued" or latest.head_sha != pr.head_ref_oid:
+        return ()
+    blockers: list[Blocker] = []
+    for name in latest.failing_checks:
+        if name in suppressed:
+            continue
+        blocker = repair_invalid_blocker_for_check(pr, name, f"Mergify queue check failed: {name}", ledger)
+        if blocker is not None:
+            blockers.append(blocker)
+    return tuple(blockers)
 
 
 def _assert_stack_facts_invariants(facts: StackFacts) -> None:
@@ -316,10 +341,17 @@ def build_stack_facts(
     blockers_by_pr: dict[int, tuple[Blocker, ...]] = {}
     for pr in stack.prs:
         effective = effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
-        blockers_by_pr[pr.number] = tuple(
+        blockers = list(
             latest_repair_invalid_blocker(pr, blocker, ledger) or blocker
             for blocker in effective
         )
+        seen = {(blocker.kind, blocker.key) for blocker in blockers}
+        for blocker in mergify_repair_invalid_blockers(pr, ledger, suppressed_failed_checks_by_pr.get(pr.number, ())):
+            marker = (blocker.kind, blocker.key)
+            if marker not in seen:
+                blockers.append(blocker)
+                seen.add(marker)
+        blockers_by_pr[pr.number] = tuple(blockers)
     facts = StackFacts(
         stack=stack,
         required_checks=required,
