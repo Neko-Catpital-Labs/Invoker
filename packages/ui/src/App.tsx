@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -112,6 +112,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -123,6 +124,16 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+function appendTerminalOutputSnapshot(
+  currentSnapshot: string | undefined,
+  chunk: string,
+  capChars = TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS,
+): string {
+  const nextSnapshot = `${currentSnapshot ?? ''}${chunk}`;
+  return nextSnapshot.length <= capChars ? nextSnapshot : nextSnapshot.slice(-capChars);
+}
+
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
@@ -176,6 +187,35 @@ type PlanningStreamState = {
   text: string;
   status: 'streaming' | 'failed';
 };
+
+function planningTerminalSessionFromOutputEvent(
+  session: PlanningSessionView,
+  event: TerminalOutputEvent,
+): TerminalSessionDescriptor {
+  const previousTerminalSession = session.terminalSession ?? null;
+  const sameTerminalSession = previousTerminalSession?.sessionId === event.sessionId;
+  const previousSnapshot = sameTerminalSession ? previousTerminalSession.outputSnapshot : undefined;
+  const baseTerminalSession: TerminalSessionDescriptor = sameTerminalSession && previousTerminalSession
+    ? previousTerminalSession
+    : {
+        sessionId: event.sessionId,
+        taskId: event.taskId,
+        kind: 'planning',
+        planningSessionId: event.planningSessionId ?? session.id,
+        status: 'running',
+        mode: 'spawn',
+        attached: false,
+        createdAt: previousTerminalSession?.createdAt ?? session.updatedAt,
+      };
+  return {
+    ...baseTerminalSession,
+    sessionId: event.sessionId,
+    taskId: event.taskId,
+    kind: 'planning',
+    planningSessionId: event.planningSessionId ?? baseTerminalSession.planningSessionId ?? session.id,
+    outputSnapshot: appendTerminalOutputSnapshot(previousSnapshot, event.data),
+  };
+}
 
 function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
   return {
@@ -1118,6 +1158,30 @@ export function App() {
             : session
         )),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || !event.data) return;
+      setPlanningSessions((prev) => {
+        const planningSessionIndex = event.planningSessionId
+          ? prev.findIndex((session) => session.id === event.planningSessionId)
+          : -1;
+        const targetIndex = planningSessionIndex >= 0
+          ? planningSessionIndex
+          : prev.findIndex((session) => session.terminalSession?.sessionId === event.sessionId);
+        if (targetIndex < 0) return prev;
+
+        const next = prev.slice();
+        const session = next[targetIndex]!;
+        next[targetIndex] = {
+          ...session,
+          terminalSession: planningTerminalSessionFromOutputEvent(session, event),
+        };
+        return next;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
