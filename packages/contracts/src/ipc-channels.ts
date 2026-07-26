@@ -1021,10 +1021,6 @@ export const IpcChannels = {
     request: [taskId: string, experimentId: string | string[]];
     response: WorkflowMutationAcceptedResult;
   },
-  'invoker:restart-task': {} as {
-    request: [taskId: string];
-    response: WorkflowMutationAcceptedResult;
-  },
   'invoker:retry-task': {} as {
     request: [taskId: string];
     response: WorkflowMutationAcceptedResult;
@@ -1113,10 +1109,6 @@ export const IpcChannels = {
   },
   'invoker:set-merge-branch': {} as {
     request: [workflowId: string, baseBranch: string];
-    response: WorkflowMutationAcceptedResult;
-  },
-  'invoker:set-merge-mode': {} as {
-    request: [workflowId: string, mergeMode: string];
     response: WorkflowMutationAcceptedResult;
   },
   'invoker:set-workflow-merge-mode': {} as {
