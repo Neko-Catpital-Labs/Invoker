@@ -1001,7 +1001,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:set-merge-branch':
         return { channel: 'headless.gui-mutation', request: payload };
-      case 'invoker:set-merge-mode':
+      case 'invoker:set-workflow-merge-mode':
         return { channel: 'headless.exec', request: { args: ['set', 'merge-mode', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:approve-merge': {
         const workflowId = String(arg0);
@@ -2273,13 +2273,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
 
   registerTaskScopedGuiMutationHandler(
-    'invoker:set-merge-mode',
+    'invoker:set-workflow-merge-mode',
     (workflowIdArg: unknown) => String(workflowIdArg),
     'normal',
     async (workflowIdArg: unknown, mergeModeArg: unknown) => {
     const workflowId = String(workflowIdArg);
     const mergeMode = String(mergeModeArg);
-    logger.info(`set-merge-mode: workflow="${workflowId}" → "${mergeMode}"`, { module: 'ipc' });
+    logger.info(`set workflow merge mode: workflow="${workflowId}" -> "${mergeMode}"`, { module: 'ipc' });
     try {
       await setWorkflowMergeMode(workflowId, mergeMode, {
         orchestrator,
@@ -2287,12 +2287,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         taskExecutor: requireTaskExecutor(),
       });
     } catch (err) {
-      logger.error(`set-merge-mode failed: ${err}`, { module: 'ipc' });
+      logger.error(`set workflow merge mode failed: ${err}`, { module: 'ipc' });
       throw err;
     }
     const workflows = persistence.listWorkflows();
     rendererTaskFeed.setLastKnownWorkflowCount(workflows.length);
-    requestWorkflowMetadataPublish('set-merge-mode');
+    requestWorkflowMetadataPublish('set-workflow-merge-mode');
   });
 
   registerWorkflowScopedGuiMutationHandler(
