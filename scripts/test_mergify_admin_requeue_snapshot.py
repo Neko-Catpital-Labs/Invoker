@@ -145,7 +145,7 @@ class RawContexts(unittest.TestCase):
 class GroupStackPrs(unittest.TestCase):
     def _pr(self, number, base, head, state="OPEN"):
         return m.PrSnapshot(
-            number=number, title="t", url="u", state=state, is_draft=False,
+            number=number, title="t", body="", url="u", state=state, is_draft=False,
             base_ref_name=base, head_ref_name=head, head_ref_oid=HEAD,
             merge_state_status="BLOCKED", mergeable="MERGEABLE",
             labels=frozenset(), checks={}, review_threads=(), latest_mergify=None,
@@ -173,7 +173,7 @@ class SnapshotFromDetail(unittest.TestCase):
 
     def test_builds_full_snapshot(self):
         detail = {
-            "number": 3221, "title": "Add model", "url": "https://x/3221",
+            "number": 3221, "title": "Add model", "body": "## Summary\n\nBody.\n", "url": "https://x/3221",
             "state": "OPEN", "isDraft": False,
             "baseRefName": "master", "headRefName": "stack/x", "headRefOid": HEAD,
             "mergeStateStatus": "BLOCKED", "mergeable": "MERGEABLE",

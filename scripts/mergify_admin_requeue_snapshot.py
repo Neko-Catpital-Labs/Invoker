@@ -104,7 +104,7 @@ class GhClient:
         owner, name = repo.split("/", 1)
         query = (
             "query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { "
-            "pullRequest(number:$number) { number title url isDraft state baseRefName headRefName headRefOid "
+            "pullRequest(number:$number) { number title body url isDraft state baseRefName headRefName headRefOid "
             "mergeStateStatus mergeable labels(first:50) { nodes { name } } "
             "reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved comments(first:50) { nodes { author { login } body url } } } } "
             "statusCheckRollup { contexts(first:100) { nodes { __typename ... on CheckRun { name conclusion status completedAt startedAt detailsUrl checkSuite { commit { oid } } } "
@@ -119,6 +119,20 @@ class GhClient:
         if not isinstance(pr, dict):
             raise RuntimeError(f"missing PR #{number}")
         return pr
+
+    def create_pr(self, repo: str, title: str, body: str, head: str, base: str) -> dict:
+        payload = json.dumps({"title": title, "body": body, "head": head, "base": base})
+        completed = subprocess.run(
+            ["gh", "api", f"repos/{repo}/pulls", "--method", "POST", "--input", "-"],
+            check=True,
+            text=True,
+            input=payload,
+            capture_output=True,
+        )
+        value = json.loads(completed.stdout) if completed.stdout.strip() else None
+        if not isinstance(value, dict):
+            raise RuntimeError("empty PR create response")
+        return value
 
     def issue_comments(self, repo: str, number: int) -> list[dict]:
         value = self._run_json(["gh", "api", f"repos/{repo}/issues/{number}/comments", "--paginate"])
@@ -322,14 +336,9 @@ def review_threads(value: object) -> tuple[ReviewThread, ...]:
 
 def raw_contexts(pr: Mapping[str, object]) -> list[Mapping[str, object]]:
     rollup = pr.get("statusCheckRollup")
-    if not isinstance(rollup, Mapping):
-        return []
-    contexts = rollup.get("contexts")
-    if isinstance(contexts, Mapping):
-        nodes = contexts.get("nodes")
-    else:
-        nodes = contexts
-    return [node for node in nodes] if isinstance(nodes, list) else []
+    contexts = rollup.get("contexts") if isinstance(rollup, Mapping) else {}
+    nodes = contexts.get("nodes") if isinstance(contexts, Mapping) else []
+    return [node for node in nodes if isinstance(node, Mapping)] if isinstance(nodes, list) else []
 
 
 def snapshot_from_detail(detail: Mapping[str, object], comments: Sequence[Mapping[str, object]], required_checks: Sequence[str]) -> PrSnapshot:
@@ -339,6 +348,7 @@ def snapshot_from_detail(detail: Mapping[str, object], comments: Sequence[Mappin
     return PrSnapshot(
         number=int(detail.get("number") or 0),
         title=str(detail.get("title") or ""),
+        body=str(detail.get("body") or ""),
         url=str(detail.get("url") or ""),
         state=str(detail.get("state") or ""),
         is_draft=bool(detail.get("isDraft") or detail.get("is_draft")),
