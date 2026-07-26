@@ -28,6 +28,8 @@ The owner boundary now covers **reads** as well as writes, so the writable owner
 
 Implementation note: today's placeholder is SQLite ephemeral storage via `SQLiteAdapter.createEphemeral()`. The raw SQLite `:memory:` sentinel is private to the data-store adapter so viewer startup code cannot accidentally switch back to opening `invoker.db`.
 
+Compatibility note: SQLite migrations still normalize persisted `merge_mode = 'github'` rows to `external_review`. That string is kept only as storage migration context, not as a supported command, transport, or merge-mode label.
+
 ### Implementation Map
 
 This table lists every mutating command path and how the owner-boundary contract is enforced.
@@ -76,7 +78,7 @@ This table lists every mutating command path and how the owner-boundary contract
 | `delete` | headless.ts:1005 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `delete-all` | headless.ts:434 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set command` | headless.ts:829 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `set executor` | headless.ts:841 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
+| `set pool` | headless.ts:617 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set agent` | headless.ts:853 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set merge-mode` | headless.ts:714 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | Values: `manual`, `automatic`, `external_review` |
 | **Headless Read-Only Commands** | | | | delegate to the owner when present; open `readOnly` only when none |
