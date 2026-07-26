@@ -31,7 +31,6 @@ import {
   createSshRemoteScriptError,
   parseOwnedWorktreePath,
 } from './ssh-git-exec.js';
-
 export interface SshExecutorConfig {
   host: string;
   user: string;
@@ -82,6 +81,16 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   readonly type = 'ssh';
   private static readonly REMOTE_HEARTBEAT_MARKER = '__INVOKER_REMOTE_HEARTBEAT__';
   private static readonly DEFAULT_REMOTE_HEARTBEAT_INTERVAL_SECONDS = 30;
+  private static readonly FALLBACK_BANNER_LINES = new Set([
+    '[SshExecutor] Installing pnpm dependencies for managed worktree...',
+    '[SshExecutor] Running task payload...',
+  ]);
+  private static readonly CLEANUP_TAIL_PREFIX = 'Executor cleanup failed (ssh remote finalize):';
+  private static readonly CLEANUP_TAIL_MARKERS = [
+    'pop_var_context',
+    'Orphan function call output',
+    '[SshExecutor] Recording task result and pushing branch on remote...',
+  ] as const;
 
   private readonly host: string;
   private readonly user: string;
@@ -258,11 +267,9 @@ STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
 cleanup_runtime() {
-  local status="$1"
   trap - EXIT HUP INT TERM
   stop_bootstrap_heartbeat
   rm -rf "$STAGING_DIR" >/dev/null 2>&1 || true
-  exit "$status"
 }
 BOOTSTRAP_HEARTBEAT_PID=""
 INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
@@ -284,10 +291,14 @@ stop_bootstrap_heartbeat() {
     BOOTSTRAP_HEARTBEAT_PID=""
   fi
 }
-trap 'cleanup_runtime "$?"' EXIT
-trap 'cleanup_runtime 129' HUP
-trap 'cleanup_runtime 130' INT
-trap 'cleanup_runtime 143' TERM
+# On Ubuntu bash 5.2, bash -l -s can die with:
+#   pop_var_context: head of shell_variables not a function context
+# when an EXIT trap calls a shell function that itself runs exit.
+# Keep cleanup side-effect-only and let the shell preserve its own exit status.
+trap 'cleanup_runtime' EXIT
+trap 'cleanup_runtime; exit 129' HUP
+trap 'cleanup_runtime; exit 130' INT
+trap 'cleanup_runtime; exit 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
@@ -1072,10 +1083,16 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
           // capture the tail of the output buffer so the UI shows what went wrong.
           if (!mappedError && exitCode !== 0 && e) {
             const allOutput = e.outputBuffer.join('');
-            const lines = allOutput.split('\n');
-            const tail = lines.slice(-50).join('\n').trim();
-            if (tail) {
-              mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+            const sanitizedOutput = this.stripFallbackBannerPreamble(allOutput);
+            const cleanupFallbackError = this.buildCleanupFallbackError(sanitizedOutput);
+            if (cleanupFallbackError) {
+              mappedError = cleanupFallbackError;
+            } else {
+              const lines = allOutput.split('\n');
+              const tail = lines.slice(-50).join('\n').trim();
+              if (tail) {
+                mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
+              }
             }
           }
 
@@ -1142,6 +1159,49 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
 
     this.startHeartbeat(executionId, child, { emitIntervalHeartbeat: false });
     return handle;
+  }
+
+  private stripFallbackBannerPreamble(output: string): string {
+    const lines = output.split('\n');
+    let index = 0;
+    while (index < lines.length) {
+      const trimmed = lines[index]?.trim() ?? '';
+      if (!trimmed) {
+        index += 1;
+        continue;
+      }
+      if (!SshExecutor.FALLBACK_BANNER_LINES.has(trimmed)) {
+        break;
+      }
+      index += 1;
+    }
+    const stripped = lines.slice(index).join('\n').trim();
+    return stripped || output.trim();
+  }
+
+  private hasCompletedAgentTurn(output: string): boolean {
+    return output.includes('"type":"turn.completed"')
+      || (output.includes('"type":"item.completed"') && output.includes('"type":"agent_message"'));
+  }
+
+  private hasExplicitFailurePayload(output: string): boolean {
+    return output.includes('"type":"turn.failed"') || output.includes('"type":"error"');
+  }
+
+  private buildCleanupFallbackError(output: string): string | undefined {
+    if (!this.hasCompletedAgentTurn(output) || this.hasExplicitFailurePayload(output)) {
+      return undefined;
+    }
+    if (!SshExecutor.CLEANUP_TAIL_MARKERS.some((marker) => output.includes(marker))) {
+      return undefined;
+    }
+    if (output.includes('pop_var_context')) {
+      return `${SshExecutor.CLEANUP_TAIL_PREFIX} bash pop_var_context after remote run completed.`;
+    }
+    if (output.includes('Orphan function call output')) {
+      return `${SshExecutor.CLEANUP_TAIL_PREFIX} orphan function-call output after remote run completed.`;
+    }
+    return `${SshExecutor.CLEANUP_TAIL_PREFIX} remote finalize wrapper output after remote run completed.`;
   }
 
 
