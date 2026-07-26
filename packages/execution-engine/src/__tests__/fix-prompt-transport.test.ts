@@ -154,8 +154,9 @@ describe('fix prompt transport for oversized prompts', () => {
     expect(bootstrapPrompt).toContain('The full task instructions are in this file:');
     expect(bootstrapPrompt).toContain('/tmp/invoker-agent-prompt-');
     expect(stdinScript).toContain('PROMPT_FILE=');
-    expect(stdinScript).toContain('base64 -d > "$PROMPT_FILE"');
-    expect(stdinScript).toContain("trap 'rm -f \"$PROMPT_FILE\"' EXIT");
+    expect(stdinScript).toContain('INVOKER_ENV_FILE="$INVOKER_RUNTIME_HOME/env.sh"');
+    expect(stdinScript).toContain('invoker_base64_decode > "$PROMPT_FILE"');
+    expect(stdinScript).toContain('cleanup_remote_fix() {');
   });
 
   it('passes resolved executionModel into local OMP fix commands', async () => {
@@ -226,7 +227,9 @@ describe('fix prompt transport for oversized prompts', () => {
       'small prompt',
       { executionModel: 'anthropic/claude-opus-4' },
     );
-    expect(stdinScript).toContain('eval "$(echo "');
+    expect(stdinScript).toContain('AGENT_CMD_FILE=$(mktemp)');
+    expect(stdinScript).toContain('bash "$AGENT_CMD_FILE"');
+    expect(stdinScript).not.toContain('eval "$(echo ');
   });
 });
 

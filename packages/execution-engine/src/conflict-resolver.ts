@@ -20,6 +20,7 @@ import { buildWorktreeListScript, createSshRemoteScriptError } from './ssh-git-e
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { findManagedWorktreeForBranch } from './worktree-discovery.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
+import { buildPortableBase64DecodeFunction, buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
 import {
   buildAgentPromptFileBootstrap,
   materializeLocalAgentPrompt,
@@ -273,12 +274,12 @@ function shellQuote(s: string): string {
 }
 
 /**
- * Remote shell for agent fix/resolve commands. Use a login shell so the remote
- * user's ~/.profile PATH is applied (same as SshExecutor task payloads). Do not
- * forward the local host PATH — that clobbers Linux remotes with macOS paths.
+ * Remote shell for agent fix/resolve commands. Keep this non-login so remote
+ * dotfiles cannot trigger login-shell bash bugs or mutate execution semantics.
+ * PATH comes from ~/.invoker/env.sh, sourced explicitly inside each script.
  */
 export function remoteAgentShellInvocation(): string[] {
-  return ['bash', '-l', '-s'];
+  return ['bash', '-s'];
 }
 
 /**
@@ -381,17 +382,28 @@ async function resolveConflictRemote(
   const envExports = buildRemoteAgentEnvExports(target.secretsFile, target.use_api_key === true);
 
   const script = `set -euo pipefail
+${buildPortableBase64DecodeFunction()}
+${buildSourceInvokerEnvScript(target.remoteInvokerHome)}
 WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
 ${envExports}
+AGENT_CMD_FILE=""
+cleanup_remote_agent() {
+  if [ -n "$AGENT_CMD_FILE" ]; then
+    rm -f "$AGENT_CMD_FILE"
+  fi
+}
+trap cleanup_remote_agent EXIT
 git checkout "${taskBranch}"
-MERGE_MSG=$(echo "${mergeMsgB64}" | base64 -d)
+MERGE_MSG=$(printf '%s' ${shellQuote(mergeMsgB64)} | invoker_base64_decode)
 if git merge --no-edit -m "$MERGE_MSG" "${conflictInfo.failedBranch}" 2>/dev/null; then
   echo "[resolveConflict] Merge succeeded without conflict on retry"
 else
   echo "[resolveConflict] Conflict reproduced, spawning agent to resolve..."
-  eval "$(echo "${agentCmdB64}" | base64 -d)"
+  AGENT_CMD_FILE=$(mktemp)
+  printf '%s' ${shellQuote(agentCmdB64)} | invoker_base64_decode > "$AGENT_CMD_FILE"
+  bash "$AGENT_CMD_FILE"
 fi
 `;
 
@@ -669,19 +681,32 @@ export function spawnRemoteAgentFixImpl(
   const promptWrite = promptTransport.remotePromptFilePath && promptTransport.promptB64
     ? [
         `PROMPT_FILE=${shellQuote(promptTransport.remotePromptFilePath)}`,
-        `printf '%s' ${shellQuote(promptTransport.promptB64)} | base64 -d > "$PROMPT_FILE"`,
-        `trap 'rm -f "$PROMPT_FILE"' EXIT`,
+        `printf '%s' ${shellQuote(promptTransport.promptB64)} | invoker_base64_decode > "$PROMPT_FILE"`,
       ].join('\n') + '\n'
     : '';
   const envExports = buildRemoteAgentEnvExports(target.secretsFile, target.use_api_key === true);
 
   const script = `set -euo pipefail
+${buildPortableBase64DecodeFunction()}
+${buildSourceInvokerEnvScript(target.remoteInvokerHome)}
 WT="${remoteCwd}"
 if [[ "$WT" == '~' ]]; then WT="$HOME"; elif [[ "\${WT:0:2}" == '~/' ]]; then WT="$HOME/\${WT:2}"; fi
 cd "$WT"
 ${envExports}
-${promptWrite}
-eval "$(echo "${agentCmdB64}" | base64 -d)"
+PROMPT_FILE=""
+AGENT_CMD_FILE=""
+cleanup_remote_fix() {
+  if [ -n "$PROMPT_FILE" ]; then
+    rm -f "$PROMPT_FILE"
+  fi
+  if [ -n "$AGENT_CMD_FILE" ]; then
+    rm -f "$AGENT_CMD_FILE"
+  fi
+}
+trap cleanup_remote_fix EXIT
+${promptWrite}AGENT_CMD_FILE=$(mktemp)
+printf '%s' ${shellQuote(agentCmdB64)} | invoker_base64_decode > "$AGENT_CMD_FILE"
+bash "$AGENT_CMD_FILE"
 `;
 
   const sshArgs = [
