@@ -13,6 +13,7 @@ BOT_OR_SELF_AUTHORS = {"coderabbitai", "coderabbitai[bot]", "EdbertChan"}
 STACK_MARKER_RE = re.compile(r"<!--\s*mergify-stack-data:\s*(\{.*?\})\s*-->", re.DOTALL)
 SHA_RE = re.compile(r"`([0-9a-fA-F]{40})`")
 GH_ACTIONS_JOB_RE = re.compile(r"/actions/runs/\d+/job/(\d+)")
+GH_ACTIONS_RUN_JOB_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
 
 
 @dataclass(frozen=True)

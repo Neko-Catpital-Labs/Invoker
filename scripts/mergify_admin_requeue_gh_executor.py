@@ -7,11 +7,11 @@ from pathlib import Path
 
 try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, PrSnapshot
+    from .mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, GH_ACTIONS_RUN_JOB_RE, Ledger, PrSnapshot
     from .mergify_admin_requeue_snapshot import GhClient
 except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, Ledger, PrSnapshot
+    from mergify_admin_requeue_model import Action, GH_ACTIONS_JOB_RE, GH_ACTIONS_RUN_JOB_RE, Ledger, PrSnapshot
     from mergify_admin_requeue_snapshot import GhClient
 
 
@@ -48,6 +48,21 @@ class AdminBypassGhExecutor:
         ).stdout
         path.write_text(out, encoding="utf-8")
         return str(path)
+
+    def rerun_check(self, pr: PrSnapshot, check_name: str) -> bool:
+        ctx = pr.checks.get(check_name)
+        details_url = ctx.details_url if ctx else ""
+        match = GH_ACTIONS_RUN_JOB_RE.search(details_url)
+        if not match:
+            return False
+        run_id, job_id = match.groups()
+        subprocess.run(
+            ["gh", "run", "rerun", run_id, "--repo", self.repo, "--job", job_id],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        return True
 
     def requeue(self, pr: PrSnapshot, key: str, now: int) -> None:
         self.gh.comment(self.repo, pr.number, "@mergifyio queue")

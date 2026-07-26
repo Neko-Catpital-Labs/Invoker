@@ -71,6 +71,34 @@ def record_repair_outcome(
         )
 
 
+def record_check_rerun(
+    executor: AdminBypassGhExecutor,
+    ledger: Ledger,
+    logger: AdminBypassLogger,
+    repo: str,
+    pr: PrSnapshot,
+    check_name: str,
+    now: int,
+) -> bool:
+    if not executor.rerun_check(pr, check_name):
+        return False
+    ctx = pr.checks.get(check_name)
+    meta = {
+        "detailsUrl": ctx.details_url if ctx else "",
+        "completedAt": ctx.completed_at if ctx else "",
+    }
+    ledger.record("rerun-check", pr.number, pr.head_ref_oid, check_name, now, meta=meta)
+    logger.trace(
+        "admin-bypass-check-rerun",
+        repo=repo,
+        pr_number=pr.number,
+        check_name=check_name,
+        details_url=meta["detailsUrl"],
+        completed_at=meta["completedAt"],
+    )
+    return True
+
+
 def handle_repair_outcome(
     executor: AdminBypassGhExecutor,
     ledger: Ledger,
@@ -106,6 +134,9 @@ def handle_repair_outcome(
             now,
         )
         return
+    if outcome.status == "stale_check_valid":
+        if record_check_rerun(executor, ledger, logger, repo, pr, outcome.check_name, now):
+            return
     record_repair_outcome(ledger, logger, repo, pr, outcome, now)
 
 

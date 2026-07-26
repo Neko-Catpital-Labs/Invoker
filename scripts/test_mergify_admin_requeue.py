@@ -36,6 +36,7 @@ from scripts.mergify_admin_requeue_repairer import (
     PROOF_TOOLING_POLICY_UNIT_ERROR,
     AdminBypassRepairer,
 )
+from scripts.mergify_admin_requeue_model import RepairOutcome
 
 REQUIRED = {"PR Body", "quality / TypeScript Types"}
 HEAD = "c2532d229dbed2fd57419698c48d973001c78e9e"
@@ -271,6 +272,27 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
 
+    def test_rerun_check_ledger_waits_until_check_context_changes(self):
+        stale = check("PR Body", "failure")
+        checks = {"PR Body": stale, "quality / TypeScript Types": check("quality / TypeScript Types")}
+        ledger = self.ledger()
+        ledger.record(
+            "rerun-check",
+            2606,
+            HEAD,
+            "PR Body",
+            1,
+            meta={"detailsUrl": stale.details_url, "completedAt": stale.completed_at},
+        )
+        stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
+        self.assertEqual(plan_stack_actions(stack, REQUIRED, ledger, 2), ())
+
+        refreshed = CheckContext("PR Body", "failure", "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/3/job/4", HEAD, "2026-07-03T00:02:00Z")
+        checks = {"PR Body": refreshed, "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 3)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
+
     def test_failed_check_at_cap_gets_one_more_attempt_until_evaluated(self):
         checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
         stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
@@ -406,13 +428,35 @@ Failing checks
                                     result = repairer.repair_check(item, "PR Body")
         checkout.assert_called_once()
         repair.assert_called_once()
-        self.assertEqual(result.status, "noop")
+        self.assertEqual(result.status, "stale_check_valid")
         self.assertIn("Commit locally if needed, do not push.", repair.call_args.args[1])
         log = stderr.getvalue()
         self.assertIn('"event": "admin-bypass-repair-check-start"', log)
         self.assertIn('"check_name": "PR Body"', log)
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
+
+    def test_stale_valid_repair_reruns_check_and_records_context(self):
+        ledger = self.ledger()
+        item = pr(
+            2606,
+            checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")},
+        )
+        executor = self.executor(object(), ledger)
+        outcome = RepairOutcome("stale_check_valid", "PR Body", HEAD, HEAD)
+        with mock.patch("scripts.mergify_admin_requeue_gh_executor.subprocess.run") as run:
+            exec_impl.handle_repair_outcome(executor, ledger, AdminBypassLogger(), "owner/repo", item, outcome, 7)
+        run.assert_called_once_with(
+            ["gh", "run", "rerun", "1", "--repo", "owner/repo", "--job", "2"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+        latest = ledger.latest("rerun-check", 2606, HEAD, "PR Body")
+        self.assertIsNotNone(latest)
+        self.assertEqual(latest["meta"]["detailsUrl"], item.checks["PR Body"].details_url)
+        self.assertEqual(latest["meta"]["completedAt"], item.checks["PR Body"].completed_at)
+        self.assertEqual(ledger.count("repair-evaluated", 2606, HEAD, "PR Body"), 1)
 
 
     def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):

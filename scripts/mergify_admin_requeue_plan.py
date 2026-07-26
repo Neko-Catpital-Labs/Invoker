@@ -38,6 +38,7 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
 })
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
+RERUN_CHECK_LEDGER_KIND = "rerun-check"
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,8 @@ def mergify_failed_check_actions(
     for name in latest.failing_checks:
         if name in suppressed:
             continue
+        if latest_rerun_check_matches_current_context(pr, name, ledger):
+            continue
         if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= 3:
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"), f"Mergify queue check failed: {name}"),)
         return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
@@ -268,6 +271,29 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
     return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
 
 
+def latest_rerun_check_matches_current_context(pr: PrSnapshot, check_name: str, ledger: Ledger) -> bool:
+    ctx = pr.checks.get(check_name)
+    if ctx is None:
+        return False
+    latest = ledger.latest(RERUN_CHECK_LEDGER_KIND, pr.number, pr.head_ref_oid, check_name)
+    if latest is None:
+        return False
+    meta = latest.get("meta") if isinstance(latest.get("meta"), Mapping) else {}
+    return (
+        isinstance(meta, Mapping)
+        and meta.get("detailsUrl") == ctx.details_url
+        and meta.get("completedAt") == ctx.completed_at
+    )
+
+
+def latest_rerun_check_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
+    if blocker.kind != "failed_check":
+        return None
+    if not latest_rerun_check_matches_current_context(pr, blocker.key, ledger):
+        return None
+    return Blocker(blocker.key, "pending_check", pr.number, f"check rerun requested: {blocker.key}")
+
+
 def _assert_stack_facts_invariants(facts: StackFacts) -> None:
     assert facts.stack.prs, "stack must contain at least one PR"
     pr_numbers = tuple(pr.number for pr in facts.stack.prs)
@@ -317,7 +343,9 @@ def build_stack_facts(
     for pr in stack.prs:
         effective = effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
         blockers_by_pr[pr.number] = tuple(
-            latest_repair_invalid_blocker(pr, blocker, ledger) or blocker
+            latest_repair_invalid_blocker(pr, blocker, ledger)
+            or latest_rerun_check_blocker(pr, blocker, ledger)
+            or blocker
             for blocker in effective
         )
     facts = StackFacts(

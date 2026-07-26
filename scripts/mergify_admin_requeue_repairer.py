@@ -384,8 +384,14 @@ class AdminBypassRepairer:
                 validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
                 if not validation.get("valid"):
                     return self.invalid_repair_outcome(pr, check_name, start_head, end_head, validation)
+                return self.blocked_outcome(
+                    "stale_check_valid",
+                    check_name,
+                    start_head,
+                    end_head,
+                )
             return self.blocked_outcome(
-                "queue_only_noop" if queue_only else "noop",
+                "queue_only_noop",
                 check_name,
                 start_head,
                 end_head,

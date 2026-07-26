@@ -186,6 +186,9 @@ def main() -> None:
         print("")
         return
 
+    if ARGS[:2] == ["run", "rerun"]:
+        return
+
     if ARGS[:2] == ["api", "graphql"]:
         number = 0
         for arg in ARGS:
