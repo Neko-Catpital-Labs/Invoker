@@ -506,14 +506,19 @@ export async function sendPlanningChatMessage(
   },
 ): Promise<InAppPlanningChatResponse> {
   const rawRequest = request as Partial<InAppPlanningChatRequest> | null | undefined;
+  const rawSessionId = typeof rawRequest?.sessionId === 'string' ? rawRequest.sessionId : undefined;
+  const suppliedSessionId = rawSessionId !== undefined;
+  let sessionId = rawSessionId?.trim();
   const message = typeof rawRequest?.message === 'string' ? rawRequest.message.trim() : '';
   if (!message) {
-    return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
+    return { ok: false, sessionId, error: 'Type a message first.' };
   }
 
-  let sessionId = rawRequest?.sessionId;
   try {
-    let session = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
+    let session = suppliedSessionId && sessionId ? deps.sessions.get(sessionId) : undefined;
+    if (suppliedSessionId && !session) {
+      return { ok: false, sessionId, error: 'Planning session not found.' };
+    }
     if (!session) {
       const created = await createSession({
         presetKey: rawRequest?.presetKey,
