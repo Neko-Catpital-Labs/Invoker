@@ -82,7 +82,7 @@ out="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo Neko-Cat
 printf '%s\n' "$out"
 
 case "$out" in
-  *"BLOCK PR #2999 closed"*) ;;
+  *"BLOCK PR #2999 state=CLOSED"*) ;;
   *) echo "[repro] missing closed block line" >&2; exit 1 ;;
 esac
 case "$out" in
