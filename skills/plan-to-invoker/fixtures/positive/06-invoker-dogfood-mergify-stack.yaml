@@ -1,4 +1,4 @@
-# Invoker-on-Invoker dogfood example with explicit Mergify Stacks publication.
+# Invoker-on-Invoker dogfood example with explicit post-handoff PR publication.
 # Source: examples.md Section 7
 
 name: "Dogfood Invoker CI docs update"
@@ -6,9 +6,13 @@ description: |
   Updates Invoker's own contributor guidance for merge automation.
 
   This plan still uses the normal Invoker PR gate shape: `onFinish: pull_request`
-  with `mergeMode: external_review`. Because the target repo is Invoker itself, the
-  branch publication workflow after the commits are ready should use
-  `mergify stack push` so stacked PRs stay synchronized.
+  with `mergeMode: external_review`. Plain approval of the Invoker handoff only
+  authorizes the workflow/review gate; it does not publish GitHub PRs.
+
+  Because the target repo is Invoker itself, PR-stack publication remains a
+  separate later action: after the workflow commits are ready and publication is
+  explicitly requested, run `mergify stack push` from the prepared branch so
+  stacked PRs stay synchronized.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: git@github.com:EdbertChan/Invoker.git
@@ -22,12 +26,18 @@ tasks:
       Update the Invoker skills and examples so they are explicit about the
       repo-specific dogfood rule:
 
-      1. When the target repo is Invoker itself, keep `mergeMode: external_review`
-         and publish/update the resulting commit stack with `mergify stack push`.
-      2. When the target repo is an external repo, keep normal PR flow unless
+      1. Plain approval/submission of an Invoker handoff only starts the
+         workflow/review gate. It must not be described as publishing or
+         updating GitHub PRs.
+      2. When the target repo is Invoker itself, keep `mergeMode: external_review`
+         and document PR publication as a separate later action: after the
+         commit stack is ready and publication is explicitly requested, run
+         `mergify stack push`.
+      3. When the target repo is an external repo, keep normal PR flow unless
          that repo independently uses Mergify Stacks.
 
       Acceptance criteria:
+      - Guidance separates plain handoff approval from later PR publication.
       - Relevant skills mention the Invoker-only scope.
       - Examples include an Invoker positive case and an external-repo counterexample.
     dependencies: []
