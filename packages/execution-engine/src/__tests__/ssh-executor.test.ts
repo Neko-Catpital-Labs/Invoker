@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
-import type { WorkRequest } from '@invoker/contracts';
+import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
@@ -1309,6 +1309,36 @@ describe('SshExecutor entry lifecycle', () => {
     );
     expect(response.outputs.error).not.toContain('[SshExecutor] Running task payload...');
     expect(response.outputs.error).not.toContain('"type":"turn.completed"');
+  });
+  it('normalizes managed-workspace banner-only fallback errors into a generic startup failure', async () => {
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+
+    const handle = await ssh.start(request);
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    const completion = new Promise<WorkResponse>((resolve) => {
+      ssh.onComplete(handle, (response) => resolve(response));
+    });
+    const stdout = sshProcess.stdout;
+    if (!stdout) throw new Error('Expected mock SSH process stdout');
+    stdout.emit('data', Buffer.from([
+      '[SshExecutor] Installing pnpm dependencies for managed worktree...',
+      '[SshExecutor] Running task payload...',
+      '',
+    ].join('\n')));
+    sshProcess.emit('close', 1, null);
+
+    const response = await completion;
+    expect(response.status).toBe('failed');
+    expect(response.outputs.error).toBe(
+      'Executor startup failed (ssh): remote task wrapper exited before surfacing a concrete failure.',
+    );
+    expect(response.outputs.error).not.toContain('[SshExecutor] Installing pnpm dependencies');
+    expect(response.outputs.error).not.toContain('[SshExecutor] Running task payload...');
   });
 
   it('uses a non-login shell for internal SSH utility scripts', async () => {

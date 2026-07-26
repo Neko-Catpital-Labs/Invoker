@@ -94,6 +94,11 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     'Orphan function call output',
     '[SshExecutor] Recording task result and pushing branch on remote...',
   ] as const;
+  private static readonly FALLBACK_WRAPPER_ONLY_LINES: Record<string, true> = {
+    '[SshExecutor] Installing pnpm dependencies for managed worktree...': true,
+    '[SshExecutor] Running task payload...': true,
+    '[SshExecutor] Recording task result and pushing branch on remote...': true,
+  };
 
   private readonly host: string;
   private readonly user: string;
@@ -935,6 +940,20 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     const stripped = lines.slice(index).join('\n').trim();
     return stripped || output.trim();
   }
+  private buildWrapperOnlyFallbackError(output: string): string | undefined {
+    const lines = output.split('\n').map((line) => line.trim()).filter(Boolean);
+    if (lines.length === 0) {
+      return undefined;
+    }
+    const sawStartupBanner = lines.some((line) => SshExecutor.FALLBACK_BANNER_LINES.has(line));
+    if (!sawStartupBanner) {
+      return undefined;
+    }
+    if (!lines.every((line) => Boolean(SshExecutor.FALLBACK_WRAPPER_ONLY_LINES[line]))) {
+      return undefined;
+    }
+    return 'Executor startup failed (ssh): remote task wrapper exited before surfacing a concrete failure.';
+  }
 
   private hasCompletedAgentTurn(output: string): boolean {
     return output.includes('"type":"turn.completed"')
@@ -1144,20 +1163,18 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
           // capture the tail of the output buffer so the UI shows what went wrong.
           if (!mappedError && exitCode !== 0 && e) {
             const allOutput = e.outputBuffer.join('');
+            const wrapperOnlyFallbackError = this.buildWrapperOnlyFallbackError(allOutput);
             const sanitizedOutput = this.stripFallbackBannerPreamble(allOutput);
             const cleanupFallbackError = this.buildCleanupFallbackError(sanitizedOutput);
             if (cleanupFallbackError) {
               mappedError = cleanupFallbackError;
+            } else if (wrapperOnlyFallbackError) {
+              mappedError = wrapperOnlyFallbackError;
             } else {
               const lines = sanitizedOutput.split('\n');
               const tail = lines.slice(-50).join('\n').trim();
               if (tail) {
-                const failureBucket = this.classifyFallbackFailureBucket(tail);
-                if (failureBucket === 'infra_setup' && SshExecutor.FALLBACK_BANNER_LINES.has(tail)) {
-                  mappedError = 'Executor startup failed (ssh): remote task wrapper exited before surfacing a concrete failure.';
-                } else {
-                  mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
-                }
+                mappedError = tail.length > 3000 ? tail.slice(-3000) : tail;
               }
             }
           }
