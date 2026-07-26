@@ -25,6 +25,30 @@ function makeBus() {
     },
   };
 }
+function makeTerminalEvents() {
+  let outputListener: ((payload: unknown) => void) | null = null;
+  let exitListener: ((payload: unknown) => void) | null = null;
+  return {
+    onOutput(cb: (payload: unknown) => void) {
+      outputListener = cb;
+      return () => {
+        outputListener = null;
+      };
+    },
+    onExit(cb: (payload: unknown) => void) {
+      exitListener = cb;
+      return () => {
+        exitListener = null;
+      };
+    },
+    emitOutput(payload: unknown) {
+      outputListener?.(payload);
+    },
+    emitExit(payload: unknown) {
+      exitListener?.(payload);
+    },
+  };
+}
 
 interface RequestResult {
   status: number;
@@ -58,7 +82,10 @@ function request(
 
 let bridge: WebBridge | null = null;
 
-async function startBridge(dispatch = vi.fn(async () => ({ ok: true }))) {
+async function startBridge(
+  dispatch = vi.fn(async () => ({ ok: true })),
+  options: { terminalEvents?: { onOutput(cb: (payload: unknown) => void): () => void; onExit(cb: (payload: unknown) => void): () => void } } = {},
+) {
   const bus = makeBus();
   bridge = startWebBridge({
     dispatch: dispatch as never,
@@ -68,6 +95,7 @@ async function startBridge(dispatch = vi.fn(async () => ({ ok: true }))) {
     token: TOKEN,
     host: '127.0.0.1',
     port: 0,
+    terminalEvents: options.terminalEvents as never,
   });
   const port = await bridge.whenReady;
   return { port, bus, dispatch };
@@ -196,6 +224,42 @@ describe('startWebBridge', () => {
     expect(received).toContain('event: invoker:task-graph-event');
     expect(received).toContain('event: invoker:task-output');
     expect(received).toContain('"taskId":"wf-1/task-1"');
+  });
+  it('streams terminal output and exit events over /events', async () => {
+    const terminalEvents = makeTerminalEvents();
+    const { port } = await startBridge(undefined, { terminalEvents });
+    const { promise, resolve } = Promise.withResolvers<string>();
+    const req = http.request(
+      { host: '127.0.0.1', port, path: '/events', headers: { cookie: `invoker_web=${TOKEN}` } },
+      (res) => {
+        expect(res.statusCode).toBe(200);
+        let buffer = '';
+        res.on('data', (c) => {
+          buffer += (c as Buffer).toString('utf8');
+          if (
+            buffer.includes('event: invoker:terminal-output')
+            && buffer.includes('event: invoker:terminal-exit')
+          ) {
+            req.destroy();
+            resolve(buffer);
+          }
+        });
+      },
+    );
+    req.on('error', () => { /* destroyed after resolve */ });
+    req.end();
+
+    await new Promise((r) => setTimeout(r, 50));
+    terminalEvents.emitOutput({ sessionId: 'session-1', taskId: 'task-1', chunk: 'hello' });
+    terminalEvents.emitExit({ sessionId: 'session-1', taskId: 'task-1', exitCode: 0 });
+
+    const received = await Promise.race([
+      promise,
+      new Promise<string>((_, rej) => setTimeout(() => rej(new Error('terminal SSE timeout')), 2000)),
+    ]);
+    expect(received).toContain('event: invoker:terminal-output');
+    expect(received).toContain('event: invoker:terminal-exit');
+    expect(received).toContain('"sessionId":"session-1"');
   });
 });
 

@@ -85,6 +85,15 @@ describe('installWebInvoker', () => {
     es.fire('invoker:planning-chat-stream', payload);
     expect(cb).toHaveBeenCalledWith(payload);
   });
+  it('onTerminalOutput receives terminal SSE payloads through the generic event source path', () => {
+    installWebInvoker({});
+    const cb = vi.fn();
+    window.invoker.onTerminalOutput(cb as never);
+    const es = FakeEventSource.instances[0];
+    const payload = { sessionId: 'session-1', taskId: 'task-1', chunk: 'browser-output' };
+    es.fire('invoker:terminal-output', payload);
+    expect(cb).toHaveBeenCalledWith(payload);
+  });
 
   it('approve POSTs the approve channel with args', async () => {
     fetchResult = undefined;
