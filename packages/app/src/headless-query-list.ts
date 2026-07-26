@@ -4,10 +4,6 @@
  * session · workers · worker-actions · cost · cost-events · costs · ui-perf · stats), the cost-event
  * collection/rollup
  * helpers, agent session resolution, and `query-select`.
- *
- * The deprecated top-level aliases (`list`, `status`, `task-status`, `queue`,
- * `audit`, `session`) route here through the `headless.ts` router. It depends on
- * `headless-shared.ts` and reuses `worker-control.ts` for the worker-decisions view.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -966,7 +962,7 @@ export async function renderWorkerStatus(
 
 /**
  * Top-level read-only headless commands that the writable owner can answer on
- * behalf of a non-owner caller. Mirrors the read-command routing in
+ * behalf of a non-owner caller. Mirrors the canonical read-command routing in
  * `headless.ts` (`runHeadless`) but needs only {@link HeadlessQueryDeps}.
  */
 async function dispatchReadOnlyHeadlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
@@ -981,19 +977,6 @@ async function dispatchReadOnlyHeadlessQuery(args: string[], deps: HeadlessQuery
       return headlessQuery(args.slice(1), deps);
     case 'query-select':
       return headlessQuerySelect(args[1], deps);
-    // Deprecated top-level aliases → canonical `query <sub>`.
-    case 'list':
-      return headlessQuery(['workflows', ...args.slice(1)], deps);
-    case 'status':
-      return headlessQuery(['tasks', ...args.slice(1)], deps);
-    case 'task-status':
-      return headlessQuery(['task', ...args.slice(1)], deps);
-    case 'queue':
-      return headlessQuery(['queue', ...args.slice(1)], deps);
-    case 'audit':
-      return headlessQuery(['audit', ...args.slice(1)], deps);
-    case 'session':
-      return headlessQuery(['session', ...args.slice(1)], deps);
     case 'worker': {
       const workerSub = args[1] ?? 'list';
       if (workerSub === 'status') {
