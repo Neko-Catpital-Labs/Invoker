@@ -346,6 +346,9 @@ export function migrateWorkflowStatusColumn(exec: SqliteExecutor): void {
   if (exec.readOnly) return;
   const columns = exec.queryAll('PRAGMA table_info(workflows)') as Array<{ name: string }>;
   if (!columns.some((column) => column.name === 'status')) return;
+  if (!columns.some((column) => column.name === 'deleted_at')) {
+    exec.run('ALTER TABLE workflows ADD COLUMN deleted_at INTEGER');
+  }
 
   const foreignKeys = exec.queryOne('PRAGMA foreign_keys') as { foreign_keys?: number } | undefined;
   const foreignKeysEnabled = foreignKeys?.foreign_keys === 1;
