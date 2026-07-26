@@ -192,26 +192,6 @@ export class CommandService {
     );
   }
 
-  /**
-   * @deprecated Step 13 (`docs/architecture/task-invalidation-roadmap.md`):
-   * `restartTask` was the overloaded "retry-or-recreate" verb the
-   * chart's "Naming inconsistency" section flagged. Use the explicit
-   * verb instead — `retryTask` to preserve branch/workspacePath
-   * lineage or `recreateTask` to discard it. This shim delegates to
-   * `recreateTask` (the conservative choice) so any unmigrated
-   * external caller gets the safer, more aggressive reset rather
-   * than the historical retry-class behavior.
-   */
-  async restartTask(
-    envelope: CommandEnvelope<{ taskId: string }>,
-  ): Promise<CommandResult<TaskState[]>> {
-    console.warn(
-      `[command-service] restartTask("${envelope.payload.taskId}") is deprecated (Step 13). ` +
-        'Routing to recreateTask. Use retryTask/recreateTask explicitly.',
-    );
-    return this.recreateTask(envelope);
-  }
-
   async selectExperiment(
     envelope: CommandEnvelope<{ taskId: string; experimentId: string }>,
   ): Promise<CommandResult<TaskState[]>> {
