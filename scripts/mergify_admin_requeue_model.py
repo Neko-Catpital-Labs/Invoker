@@ -50,6 +50,7 @@ class MergifyQueueEvent:
 class PrSnapshot:
     number: int
     title: str
+    body: str
     url: str
     state: str
     is_draft: bool
@@ -62,7 +63,6 @@ class PrSnapshot:
     checks: Mapping[str, CheckContext]
     review_threads: tuple[ReviewThread, ...]
     latest_mergify: MergifyQueueEvent | None
-
 
 @dataclass(frozen=True)
 class StackGroup:
@@ -85,6 +85,35 @@ class Action:
     key: str
     detail: str
 
+@dataclass(frozen=True)
+class RepairPrereqStatus:
+    check_name: str
+    prereq_pr_number: int
+    prereq_branch: str
+    is_open: bool
+    needs_followup_requeue: bool
+
+@dataclass(frozen=True)
+class RepairOutcome:
+    status: str
+    check_name: str
+    start_head: str
+    end_head: str
+    repair_commits: tuple[str, ...] = ()
+    status_lines: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+    prereq: Mapping[str, object] | None = None
+
+
+
+
+@dataclass(frozen=True)
+class StackExecutionPlan:
+    summary: Mapping[str, object]
+    actions: tuple[Action, ...]
+    wait_reason: str | None = None
+    prereq_status: RepairPrereqStatus | None = None
+    queue_only_noop_check: str | None = None
 
 class Ledger:
     def __init__(self, path: Path):
@@ -110,6 +139,24 @@ class Ledger:
             and row.get("key") == key
         )
 
+    def latest(self, kind: str, pr: int, head_sha: str, key: str) -> dict[str, object] | None:
+        latest_row: dict[str, object] | None = None
+        latest_epoch = float("-inf")
+        for row in self.rows:
+            if row.get("kind") != kind:
+                continue
+            if int(row.get("pr", -1)) != pr:
+                continue
+            if row.get("headSha") != head_sha:
+                continue
+            if row.get("key") != key:
+                continue
+            epoch = int(row.get("epoch", 0) or 0)
+            if latest_row is None or epoch >= latest_epoch:
+                latest_row = row
+                latest_epoch = epoch
+        return latest_row
+
     def has_different_head(self, kind: str, pr: int, current_head: str, key: str) -> bool:
         for row in self.rows:
             if row.get("kind") != kind:
@@ -122,9 +169,17 @@ class Ledger:
                 return True
         return False
 
-    def record(self, kind: str, pr: int, head_sha: str, key: str, epoch: int | None = None) -> None:
+    def record(self, kind: str, pr: int, head_sha: str, key: str, epoch: int | None = None, meta: Mapping[str, object] | None = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        row = {"kind": kind, "pr": pr, "headSha": head_sha, "key": key, "epoch": epoch if epoch is not None else int(time.time())}
+        row = {
+            "kind": kind,
+            "pr": pr,
+            "headSha": head_sha,
+            "key": key,
+            "epoch": epoch if epoch is not None else int(time.time()),
+        }
+        if meta:
+            row["meta"] = dict(meta)
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
         self.rows.append(row)

@@ -63,6 +63,9 @@ def pr():
     }
 
 args = sys.argv[1:]
+if args[:2] == ["pr", "list"] and "--label" not in args:
+    print("[]")
+    raise SystemExit(0)
 if args[:2] == ["api", "graphql"]:
     print(json.dumps({"data": {"repository": {"pullRequest": pr()}}}))
     raise SystemExit(0)

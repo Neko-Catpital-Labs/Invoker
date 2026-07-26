@@ -1,13 +1,9 @@
 """Behavioural tests for ``mergify_admin_requeue_plan``.
 
-Documentation-by-test for the planner. This layer does not parse text — it reads
-a typed ``PrSnapshot``/``StackGroup`` and decides the single next ``Action`` to
-take, via a fixed priority ladder. The ``Ledger`` caps how often the same repair
-repeats on the same commit.
-
-`classify_pr` reads a PR's state into blockers; `plan_stack_actions` turns those
-blockers into exactly one action, honouring priority and the retry caps. Each
-test pins one rung of that ladder and why it fires.
+Documentation-by-test for the staged planner. This layer first classifies raw PR
+state, then builds immutable stack facts, then runs named planning passes to
+pick exactly one next ``Action`` from the priority ladder. The ``Ledger`` caps
+how often the same repair repeats on the same commit.
 
 Run:  python3 scripts/test_mergify_admin_requeue_plan.py
 """
@@ -28,30 +24,58 @@ import mergify_admin_requeue_plan as p
 
 HEAD = "a" * 40
 REQUIRED = {"build"}
+QUEUE_ONLY_CHECK = "required-fast / Guardrails"
 
 
 def check(state, name="build"):
     return m.CheckContext(name=name, state=state, details_url="", head_sha=HEAD, completed_at="")
 
 
-def event(state="dequeued", head=HEAD, comment_id="cm1", failing=(), conditions=()):
+def event(state="dequeued", head=HEAD, comment_id="cm1", failing=(), conditions=(), queue_rule_name="admin-bypass"):
     return m.MergifyQueueEvent(
-        comment_id=comment_id, state=state, queue_rule_name="default",
-        queued_at="2026-07-07T05:00:00Z", head_sha=head, waiting_for=(),
-        failing_checks=failing, comment_url="u", condition_states=conditions,
+        comment_id=comment_id,
+        state=state,
+        queue_rule_name=queue_rule_name,
+        queued_at="2026-07-07T05:00:00Z",
+        head_sha=head,
+        waiting_for=(),
+        failing_checks=failing,
+        comment_url="u",
+        condition_states=conditions,
     )
 
 
 def pr(**kw):
     base = dict(
-        number=1, title="t", url="u", state="OPEN", is_draft=False,
-        base_ref_name="master", head_ref_name="branch", head_ref_oid=HEAD,
-        merge_state_status="BLOCKED", mergeable="MERGEABLE",
-        labels=frozenset(), checks={"build": check("success")},
-        review_threads=(), latest_mergify=None,
+        number=1,
+        title="t",
+        body="",
+        url="u",
+        state="OPEN",
+        is_draft=False,
+        base_ref_name="master",
+        head_ref_name="branch",
+        head_ref_oid=HEAD,
+        merge_state_status="BLOCKED",
+        mergeable="MERGEABLE",
+        labels=frozenset(),
+        checks={"build": check("success")},
+        review_threads=(),
+        latest_mergify=None,
     )
     base.update(kw)
     return m.PrSnapshot(**base)
+
+
+class PlannerTestCase(unittest.TestCase):
+    def _ledger(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
+        return m.Ledger(Path(d) / "ledger.jsonl")
+
+    def _facts(self, stack, required_checks=REQUIRED, ledger=None, open_pr_numbers=(), trunk="master"):
+        ledger = ledger or self._ledger()
+        return p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, trunk), ledger
 
 
 class ClassifyPr(unittest.TestCase):
@@ -75,8 +99,7 @@ class ClassifyPr(unittest.TestCase):
     def test_missing_required_check_only_on_bottom(self):
         # Missing check counts as a blocker only when the PR sits on trunk.
         self.assertEqual(self._kinds(pr(checks={})), {"missing_check"})
-        self.assertEqual(self._kinds(pr(checks={}, base_ref_name="other")),
-                         {"not_current_bottom"})
+        self.assertEqual(self._kinds(pr(checks={}, base_ref_name="other")), {"not_current_bottom"})
 
     def test_conflict_from_git_state(self):
         self.assertIn("conflict", self._kinds(pr(merge_state_status="DIRTY")))
@@ -100,18 +123,120 @@ class EffectiveBlockers(unittest.TestCase):
         kinds = {b.kind for b in p.effective_blockers(snapshot, REQUIRED, trunk="master")}
         self.assertNotIn("missing_check", kinds)
 
+    def test_dequeued_queue_only_failure_clears_missing_check(self):
+        snapshot = pr(
+            checks={},
+            latest_mergify=event(
+                failing=(QUEUE_ONLY_CHECK,),
+            ),
+        )
+        kinds = {
+            b.kind for b in p.effective_blockers(
+                snapshot,
+                {QUEUE_ONLY_CHECK},
+                trunk="master",
+            )
+        }
+        self.assertNotIn("missing_check", kinds)
 
-class PlanStackActions(unittest.TestCase):
-    """The priority ladder: one PR state in, one Action out."""
 
-    def _ledger(self):
-        d = tempfile.mkdtemp()
-        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
-        return m.Ledger(Path(d) / "ledger.jsonl")
+class BuildStackFacts(PlannerTestCase):
+    """Derived stack facts stay stable and enforce planner invariants."""
 
-    def _plan(self, snapshot, ledger=None):
+    def test_queue_only_missing_check_suppressed_from_blockers(self):
+        facts, _ledger = self._facts(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        checks={},
+                        latest_mergify=event(failing=(QUEUE_ONLY_CHECK,)),
+                    ),
+                ),
+            ),
+            required_checks={QUEUE_ONLY_CHECK},
+        )
+        self.assertEqual(facts.blockers_by_pr[1], ())
+        self.assertIsNone(facts.queue_only_noop_check)
+
+    def test_prerequisite_created_suppresses_one_followup_requeue(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-prereq-created",
+            10,
+            HEAD,
+            "build",
+            1,
+            meta={"prNumber": 99, "branch": "stack/pr-babysit-prereq-10-aaaaaaa"},
+        )
+        facts, _ = self._facts(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=10,
+                        labels=frozenset({"admin-bypass"}),
+                        checks={"build": check("failure")},
+                        latest_mergify=event(state="dequeued", comment_id="cm10"),
+                    ),
+                ),
+            ),
+            ledger=ledger,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(facts.suppressed_failed_checks_by_pr, {10: ("build",)})
+        self.assertEqual(facts.blockers_by_pr[10], ())
+        self.assertTrue(facts.prereq_status.needs_followup_requeue)
+
+    def test_queue_only_noop_suppresses_one_followup_requeue(self):
+        ledger = self._ledger()
+        ledger.record("queue-only-noop", 10, HEAD, QUEUE_ONLY_CHECK, 1)
+        facts, _ = self._facts(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=10,
+                        labels=frozenset({"admin-bypass", "dequeued"}),
+                        checks={},
+                        latest_mergify=event(
+                            state="dequeued",
+                            comment_id="cm10",
+                            failing=(QUEUE_ONLY_CHECK,),
+                        ),
+                    ),
+                ),
+            ),
+            required_checks={QUEUE_ONLY_CHECK},
+            ledger=ledger,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(facts.queue_only_noop_check, QUEUE_ONLY_CHECK)
+        self.assertEqual(facts.suppressed_failed_checks_by_pr, {10: (QUEUE_ONLY_CHECK,)})
+        self.assertEqual(facts.blockers_by_pr[10], ())
+
+    def test_detects_bottom_and_unaccepted_upper(self):
+        facts, _ledger = self._facts(
+            m.StackGroup(
+                "s",
+                (
+                    pr(number=10, head_ref_name="stack/a", labels=frozenset({"admin-bypass"})),
+                    pr(number=11, base_ref_name="stack/a", labels=frozenset({"dequeued"})),
+                ),
+            ),
+        )
+        self.assertEqual(facts.bottom.number, 10)
+        self.assertTrue(facts.upper_stack_needs_acceptance)
+
+
+class PlanStackActions(PlannerTestCase):
+    """Named planning passes over prebuilt facts still honor the same ladder."""
+
+    def _plan(self, stack_or_snapshot, ledger=None, required_checks=REQUIRED, open_pr_numbers=()):
         ledger = ledger or self._ledger()
-        return p.plan_stack_actions(m.StackGroup("s", (snapshot,)), REQUIRED, ledger, now_epoch=0)
+        stack = stack_or_snapshot if isinstance(stack_or_snapshot, m.StackGroup) else m.StackGroup("s", (stack_or_snapshot,))
+        facts = p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, "master")
+        return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
 
     def test_pending_check_means_wait_do_nothing(self):
         self.assertEqual(self._plan(pr(checks={"build": check("pending")})), ())
@@ -151,6 +276,180 @@ class PlanStackActions(unittest.TestCase):
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="dequeued", comment_id="cm1"))
         actions = self._plan(snapshot, ledger)
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
+
+    def test_queue_only_missing_head_check_repairs_from_mergify_failure(self):
+        snapshot = pr(
+            checks={},
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            latest_mergify=event(
+                failing=(QUEUE_ONLY_CHECK,),
+                conditions=((QUEUE_ONLY_CHECK, "failure"),),
+            ),
+        )
+        actions = self._plan(snapshot, required_checks={QUEUE_ONLY_CHECK})
+        self.assertEqual(
+            [(action.kind, action.key) for action in actions],
+            [("repair_check", QUEUE_ONLY_CHECK)],
+        )
+
+    def test_admin_bypass_stack_members_progress_as_they_become_bottom(self):
+        before_land = m.StackGroup(
+            "s",
+            (
+                pr(number=10, head_ref_name="stack/a", labels=frozenset({"admin-bypass"})),
+                pr(number=11, base_ref_name="stack/a", labels=frozenset({"admin-bypass"})),
+            ),
+        )
+        after_land = m.StackGroup(
+            "s",
+            (
+                pr(number=11, labels=frozenset({"admin-bypass"})),
+            ),
+        )
+        self.assertEqual(
+            [(action.kind, action.pr_number, action.detail) for action in self._plan(before_land)],
+            [("requeue", 10, "eligible-when-ready")],
+        )
+        self.assertEqual(
+            [(action.kind, action.pr_number, action.detail) for action in self._plan(after_land)],
+            [("requeue", 11, "eligible-when-ready")],
+        )
+
+
+class PlanStackExecution(PlannerTestCase):
+    def test_open_prerequisite_forces_wait_plan(self):
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+            latest_mergify=event(state="dequeued"),
+        )
+        ledger.record(
+            "repair-prereq-created",
+            10,
+            HEAD,
+            "build",
+            1,
+            meta={"prNumber": 99, "branch": "stack/pr-babysit-prereq-10-aaaaaaa"},
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10, 99},
+        )
+        self.assertEqual(plan.wait_reason, "repair-prereq-open")
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.prereq_status.prereq_pr_number, 99)
+        self.assertTrue(plan.prereq_status.is_open)
+        self.assertIsNone(plan.queue_only_noop_check)
+
+    def test_closed_prerequisite_suppresses_one_failed_check_for_requeue(self):
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+            latest_mergify=event(state="dequeued", comment_id="cm1"),
+        )
+        ledger.record(
+            "repair-prereq-created",
+            10,
+            HEAD,
+            "build",
+            1,
+            meta={"prNumber": 99, "branch": "stack/pr-babysit-prereq-10-aaaaaaa"},
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(plan.actions[0].kind, "requeue")
+        self.assertTrue(plan.prereq_status.needs_followup_requeue)
+
+    def test_queue_only_noop_restores_label_then_requeues_then_retries_normally(self):
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            checks={},
+            labels=frozenset({"dequeued"}),
+            latest_mergify=event(
+                state="dequeued",
+                comment_id="cm10",
+                failing=(QUEUE_ONLY_CHECK,),
+            ),
+        )
+        ledger.record("queue-only-noop", 10, HEAD, QUEUE_ONLY_CHECK, 1)
+        restore = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            {QUEUE_ONLY_CHECK},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in restore.actions],
+            [("restore_admin_bypass_label", QUEUE_ONLY_CHECK)],
+        )
+        self.assertEqual(restore.queue_only_noop_check, QUEUE_ONLY_CHECK)
+
+        requeue = p.plan_stack_execution(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=10,
+                        checks={},
+                        labels=frozenset({"admin-bypass", "dequeued"}),
+                        latest_mergify=event(
+                            state="dequeued",
+                            comment_id="cm10",
+                            failing=(QUEUE_ONLY_CHECK,),
+                        ),
+                    ),
+                ),
+            ),
+            {QUEUE_ONLY_CHECK},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in requeue.actions],
+            [("requeue", "cm10")],
+        )
+
+        ledger.record("queue-only-requeue", 10, HEAD, QUEUE_ONLY_CHECK, 2)
+        retry = p.plan_stack_execution(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=10,
+                        checks={},
+                        labels=frozenset({"admin-bypass", "dequeued"}),
+                        latest_mergify=event(
+                            state="dequeued",
+                            comment_id="cm10",
+                            failing=(QUEUE_ONLY_CHECK,),
+                        ),
+                    ),
+                ),
+            ),
+            {QUEUE_ONLY_CHECK},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(
+            [(action.kind, action.key) for action in retry.actions],
+            [("repair_check", QUEUE_ONLY_CHECK)],
+        )
 
 
 if __name__ == "__main__":

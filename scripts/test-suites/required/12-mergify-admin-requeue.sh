@@ -7,3 +7,4 @@ bash scripts/repro/repro-mergify-admin-requeue.sh
 bash scripts/repro/repro-mergify-admin-requeue-stack-expansion.sh
 bash scripts/repro/repro-mergify-rejected-pr.sh
 bash scripts/repro/repro-mergify-closed-pr-guard.sh
+bash scripts/repro/repro-babysit-pr-body-human-split.sh

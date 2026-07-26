@@ -224,7 +224,7 @@ function stripDetailsBlocks(text) {
   return String(text).replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, '').trim();
 }
 
-function classifyScopeKind(filePath) {
+export function classifyScopeKind(filePath) {
   const path = filePath.replace(/\\/g, '/');
 
   if (path.startsWith('scripts/repro/')) return 'proof';
@@ -244,6 +244,15 @@ function classifyScopeKind(filePath) {
   return 'other';
 }
 
+export function scopeKindsForChangedFiles(changedFiles = []) {
+  const kinds = new Set();
+  for (const changedFile of changedFiles) {
+    const kind = classifyScopeKind(changedFile);
+    if (kind !== 'other') kinds.add(kind);
+  }
+  return Array.from(kinds).sort();
+}
+
 function formatKinds(kinds) {
   return Array.from(kinds).sort().join(', ');
 }
@@ -252,7 +261,7 @@ export function validatePrScope({ changedFiles = [], reviewLane = '', body = '' 
   const errors = [];
   if (!reviewLane || changedFiles.length === 0) return errors;
 
-  const kinds = new Set(changedFiles.map(classifyScopeKind).filter((kind) => kind !== 'other'));
+  const kinds = new Set(scopeKindsForChangedFiles(changedFiles));
   const nonGoals = getSectionBody(body, '## Non-goals').toLowerCase();
 
   if (reviewLane === 'behavior' || reviewLane === 'refactor' || reviewLane === 'cleanup') {
