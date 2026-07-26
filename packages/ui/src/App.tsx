@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const PLANNING_CONTINUATION_LOST_MESSAGE = 'This planning chat lost its continuation id. Start a new planning chat to continue planning.';
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -858,6 +859,7 @@ export function App() {
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
+  const activePlanningSessionHasTranscript = activePlanningSession.messages.some((line) => line.role !== 'system');
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
@@ -2648,6 +2650,12 @@ export function App() {
       return;
     }
 
+    if (!planningSessionId && activePlanningSessionHasTranscript) {
+      appendTerminalLine(PLANNING_CONTINUATION_LOST_MESSAGE, 'system', 'error');
+      setPlanningSubmitError({ title: 'Planning chat could not continue', message: PLANNING_CONTINUATION_LOST_MESSAGE });
+      return;
+    }
+
     const previousSessionId = activePlanningSessionId;
     pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
     clearPlanningStreamForSessionIds([previousSessionId, planningSessionId]);
@@ -2690,12 +2698,31 @@ export function App() {
         pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
         setHasLoadedPlan(false);
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        const resultSessionId = typeof result.sessionId === 'string' && result.sessionId.trim()
+          ? result.sessionId
+          : null;
+        const updatedAt = new Date().toISOString();
+        const errorLineId = nextTerminalLineIdRef.current;
+        nextTerminalLineIdRef.current += 1;
+        setPlanningSessions((prev) => prev.map((session) => {
+          if (session.id !== previousSessionId) return session;
+          return {
+            ...session,
+            busy: false,
+            ...(resultSessionId ? { id: resultSessionId } : {}),
+            messages: [...session.messages, { id: errorLineId, text: result.error, role: 'system', tone: 'error' }],
+            updatedAt,
+          };
+        }));
+        if (resultSessionId) {
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === previousSessionId ? resultSessionId : currentSessionId
+          ));
+        }
         keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
         forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
@@ -2710,6 +2737,7 @@ export function App() {
     }
   }, [
     activePlanningSessionBusy,
+    activePlanningSessionHasTranscript,
     activePlanningSessionId,
     activePlanningReadOnly,
     appendTerminalLine,
