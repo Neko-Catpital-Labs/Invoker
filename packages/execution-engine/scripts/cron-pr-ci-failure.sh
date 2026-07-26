@@ -25,6 +25,17 @@ while IFS= read -r pr; do
     continue
   fi
 
+  # Unmapped PRs belong to the orphan-repair worker, which submits one
+  # combined repair task. Only a clean no-workflow miss skips; a broken
+  # lookup falls through so the owner-side repair path reports it.
+  if rec="$(resolve_workflow_for_pr "$num")"; then
+    wf="$(jq -r '.workflowId // empty' <<<"$rec" 2>/dev/null || true)"
+    if [ -z "$wf" ]; then
+      log_line "PR #$num: no Invoker workflow; orphan-repair owns it"
+      continue
+    fi
+  fi
+
   if ! output="$(headless_mutation repair-review-gate-ci "$num" 2>&1)"; then
     failures=1
     while IFS= read -r line; do

@@ -17,6 +17,7 @@ import {
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_ORPHAN_REPAIR_WORKER_KIND,
 } from '../workers/pr-maintenance-workers.js';
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 import { PR_SUMMARY_REFRESH_WORKER_KIND } from '../workers/pr-summary-refresh-worker.js';
@@ -84,6 +85,7 @@ describe('worker registry', () => {
       PR_CONFLICT_REBASE_WORKER_KIND,
       PR_CI_FAILURE_SCAN_WORKER_KIND,
       PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+      PR_ORPHAN_REPAIR_WORKER_KIND,
       E2E_AUTOFIX_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();

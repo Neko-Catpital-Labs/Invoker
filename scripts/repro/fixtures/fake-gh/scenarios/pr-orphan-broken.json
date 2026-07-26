@@ -1,0 +1,57 @@
+{
+  "prs": [
+    {
+      "number": 801,
+      "title": "Orphan PR broken three ways",
+      "url": "https://github.com/fake/repo/pull/801",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "feature/orphan-801",
+      "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "mergeStateStatus": "DIRTY",
+      "mergeable": "CONFLICTING",
+      "reviewDecision": "CHANGES_REQUESTED",
+      "labels": [],
+      "reviewThreads": [],
+      "checks": {"Unit Tests": "FAILURE", "Lint": "SUCCESS"}
+    },
+    {
+      "number": 802,
+      "title": "Orphan PR that is perfectly healthy",
+      "url": "https://github.com/fake/repo/pull/802",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "feature/orphan-802",
+      "headRefOid": "ffffffffffffffffffffffffffffffffffffffff",
+      "mergeStateStatus": "CLEAN",
+      "mergeable": "MERGEABLE",
+      "reviewDecision": "",
+      "labels": [],
+      "reviewThreads": [],
+      "checks": {"Unit Tests": "SUCCESS"}
+    },
+    {
+      "number": 803,
+      "title": "Mapped PR the orphan worker must leave alone",
+      "url": "https://github.com/fake/repo/pull/803",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/803",
+      "headRefOid": "abababababababababababababababababababab",
+      "mergeStateStatus": "DIRTY",
+      "mergeable": "CONFLICTING",
+      "reviewDecision": "",
+      "labels": [],
+      "reviewThreads": [],
+      "checks": {"Unit Tests": "FAILURE"}
+    }
+  ],
+  "issue_comments": {
+    "801": [],
+    "802": [],
+    "803": []
+  }
+}

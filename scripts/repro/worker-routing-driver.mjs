@@ -20,6 +20,7 @@ import {
   createPrConflictRebaseWorker,
   createPrCiFailureScanWorker,
   createPrAdminBypassLandWorker,
+  createPrOrphanRepairWorker,
 } from '../../packages/execution-engine/src/workers/pr-maintenance-workers.ts';
 
 const ROOT = resolve(process.env.ROUTING_REPO_ROOT ?? process.cwd());
@@ -130,8 +131,18 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
 // ---------------------------------------------------------------------------
 {
   const leg = makeLeg('pr-ci-failure-scan');
+  // The scanned PRs model MAPPED workflows (unmapped ones belong to the
+  // orphan-repair worker), so the review-gate stub reports a hit.
+  const reviewGate = join(leg.legDir, 'review-gate.sh');
+  writeFileSync(
+    reviewGate,
+    '#!/usr/bin/env bash\nprintf \'{"workflowId":"wf-ci-mapped","workflowGeneration":0,"baseBranch":"master"}\\n\'\n',
+    { mode: 0o755 },
+  );
   console.log('\n=== leg 2: CI-failed PR (pr-ci-failed.json) -> pr-ci-failure-scan ===');
-  const err = await tickWorker(leg, createPrCiFailureScanWorker, {}, 'pr-ci-failed.json');
+  const err = await tickWorker(leg, createPrCiFailureScanWorker, {
+    INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
+  }, 'pr-ci-failed.json');
   assert(leg, has(leg, '[worker:pr-ci-failure-scan] spawning packages/execution-engine/scripts/cron-pr-ci-failure.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
@@ -177,10 +188,38 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
   assert(leg, callsLog(leg).length > 0, 'sweep queried the fake GitHub');
 }
 
+// ---------------------------------------------------------------------------
+// Leg 5: unmapped broken PR -> pr-orphan-repair worker (combined repair task)
+// ---------------------------------------------------------------------------
+{
+  const leg = makeLeg('pr-orphan-repair');
+  const reviewGate = join(leg.legDir, 'review-gate.sh');
+  writeFileSync(
+    reviewGate,
+    '#!/usr/bin/env bash\nif [ "${1:-}" = "803" ]; then\n  printf \'{"workflowId":"wf-mapped-803"}\\n\'\nelse\n  printf \'{}\\n\'\nfi\n',
+    { mode: 0o755 },
+  );
+  console.log('\n=== leg 5: unmapped broken PR (pr-orphan-broken.json) -> pr-orphan-repair ===');
+  const err = await tickWorker(leg, createPrOrphanRepairWorker, {
+    INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
+    INVOKER_PR_ORPHAN_STATE_FILE: join(leg.legDir, 'ledger.tsv'),
+    INVOKER_PR_ORPHAN_PLAN_DIR: join(leg.legDir, 'plans'),
+  }, 'pr-orphan-broken.json');
+  assert(leg, has(leg, '[worker:pr-orphan-repair] spawning scripts/cron-pr-orphan-repair.sh'),
+    'worker spawned its own cron entrypoint');
+  assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
+  assert(leg, /exec -- run .*repair-pr-801\.yaml/.test(nodeLogText(leg)),
+    'unmapped broken PR #801 got ONE combined Invoker repair task');
+  assert(leg, !nodeLogText(leg).includes('repair-pr-802'),
+    'healthy unmapped PR #802 was untouched');
+  assert(leg, !nodeLogText(leg).includes('repair-pr-803'),
+    'mapped PR #803 was left to the existing workers');
+}
+
 console.log('');
 if (failures.length > 0) {
   console.log(`[worker-routing] FAILED (${failures.length}):`);
   for (const f of failures) console.log(`  - ${f}`);
   process.exit(1);
 }
-console.log('[worker-routing] all four workers routed their issue class correctly');
+console.log('[worker-routing] all five workers routed their issue class correctly');
