@@ -11,6 +11,7 @@ TASK_PATTERNS="$SKILL_DIR/references/task-patterns.md"
 REVIEW_COMPRESSION_SKILL="$REPO_ROOT/skills/review-compression/SKILL.md"
 MAKE_PR_SKILL="$REPO_ROOT/skills/make-pr/SKILL.md"
 SAFETY_INVARIANT_RULE="$REPO_ROOT/.cursor/rules/plan-safety-invariant.mdc"
+MCP_SERVER="$REPO_ROOT/packages/cli/src/mcp-server.ts"
 CANONICAL_COMMAND_DIR="$SKILL_DIR/commands"
 CANONICAL_COMMAND="$CANONICAL_COMMAND_DIR/invoker-plan-to-invoker.md"
 LOOP_COMMAND="$CANONICAL_COMMAND_DIR/invoker-loop-generator.md"
@@ -47,6 +48,15 @@ must_contain_count() {
   fi
 }
 
+must_not_contain() {
+  local file="$1"
+  local needle="$2"
+  local hint="$3"
+  if grep -qF -- "$needle" "$file"; then
+    fail "$hint — unexpected in $file: $needle"
+  fi
+}
+
 must_not_exist() {
   local path="$1"
   local hint="$2"
@@ -70,8 +80,11 @@ must_not_exist "$REPO_ROOT/.claude/commands/plan-to-invoker.md" "legacy Claude h
 must_not_exist "$REPO_ROOT/.cursor/commands/plan-to-invoker.md" "legacy Cursor handoff command copy must not drift from canonical source"
 [[ -f "$README" ]] || fail "expected $README"
 [[ -f "$TUTORIAL" ]] || fail "expected $TUTORIAL"
+[[ -f "$MCP_SERVER" ]] || fail "expected $MCP_SERVER"
 must_contain "$CANONICAL_COMMAND" "description: Plan a change and submit it through Invoker" "Invoker handoff command must keep host command description frontmatter"
 must_contain "$CANONICAL_COMMAND" 'argument-hint: "help me plan <change>"' "Invoker handoff command must keep host argument hint frontmatter"
+must_contain "$CANONICAL_COMMAND" "Use this host's native planning mode when the host supports entering it from this command." "Invoker handoff command must enter host-native planning mode when available"
+must_contain "$CANONICAL_COMMAND" "If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved." "Invoker handoff command must stay handoff-only when host-native planning is unavailable"
 must_contain "$CANONICAL_COMMAND" "invoker_validate_plan" "Invoker handoff command must validate through MCP"
 must_contain "$CANONICAL_COMMAND" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
 must_contain "$CANONICAL_COMMAND" "mode \`live\`" "Invoker handoff command must submit in live mode"
@@ -84,6 +97,12 @@ must_contain "$CANONICAL_COMMAND" "before PR authoring or publication" "Invoker 
 must_contain "$CANONICAL_COMMAND" "skill://review-compression/SKILL.md" "Invoker handoff command must trigger review compression for stack work"
 must_contain "$CANONICAL_COMMAND" "multiple review slices" "Invoker handoff command must define review-compression trigger scope"
 must_contain "$CANONICAL_COMMAND" "before writing workflow YAML" "Invoker handoff command must require review compression before workflow YAML"
+must_not_contain "$CANONICAL_COMMAND" "mergify stack push" "Invoker handoff command must not inline later PR publication commands"
+must_contain "$MCP_SERVER" "Use this host's native planning mode when the host supports entering it from this command." "MCP handoff prompt must enter host-native planning mode when available"
+must_contain "$MCP_SERVER" "If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved." "MCP handoff prompt must stay handoff-only when host-native planning is unavailable"
+must_contain "$MCP_SERVER" "creating, updating, publishing, or splitting pull requests or PR stacks" "MCP handoff prompt must define PR skill trigger scope"
+must_contain "$MCP_SERVER" "before PR authoring or publication" "MCP handoff prompt must keep later PR-publication wording separate from handoff"
+must_not_contain "$MCP_SERVER" "mergify stack push" "MCP handoff prompt must not inline later PR publication commands"
 must_contain "$LOOP_COMMAND" "description: Interview for a loop and prepare Invoker artifacts" "Loop generator command must keep host command description frontmatter"
 must_contain "$LOOP_COMMAND" 'argument-hint: "build me a <loop>"' "Loop generator command must keep host argument hint frontmatter"
 must_contain "$LOOP_COMMAND" "Use this host's native planning mode" "Loop generator command must enter host-native planning mode when available"
@@ -176,6 +195,9 @@ must_contain "$SKILL_MD" "multiple review slices" "SKILL handoff mode must defin
 must_contain "$SKILL_MD" "skills/review-compression/SKILL.md" "SKILL handoff mode must trigger review compression for stack work"
 must_contain "$SKILL_MD" "skill://review-compression/SKILL.md" "SKILL handoff mode must include skill URI fallback for review compression"
 must_contain "$SKILL_MD" "before writing workflow YAML" "SKILL handoff mode must require review compression before workflow YAML"
+must_contain "$SKILL_MD" "GitHub PR publishing should use **Mergify Stacks** after the work is ready" "SKILL must keep later Invoker PR-publication timing separate from handoff"
+must_contain "$SKILL_MD" "then publish/update the resulting commit stack with \`mergify stack push\`" "SKILL must document the later Invoker PR-publication command"
+must_contain "$SKILL_MD" "Do **not** generalize this to unrelated target repos" "SKILL must scope later PR-publication wording to Invoker itself"
 must_contain "$SKILL_MD" "never version or metadata wrappers" "SKILL frontmatter must reject legacy benchmark YAML wrappers"
 must_contain "$SKILL_MD" "## Benchmark/direct-output mode" "SKILL must document benchmark/direct-output mode"
 must_contain "$SKILL_MD" "Treat the literal absolute output path" "SKILL must require literal output path handling"
