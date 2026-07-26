@@ -1,13 +1,16 @@
 # Invoker-on-Invoker dogfood example with explicit Mergify Stacks publication.
 # Source: examples.md Section 7
 
-name: "Dogfood Invoker CI docs update"
+name: "Dogfood Invoker CI docs handoff update"
 description: |
   Updates Invoker's own contributor guidance for merge automation.
 
   This plan still uses the normal Invoker PR gate shape: `onFinish: pull_request`
-  with `mergeMode: external_review`. Because the target repo is Invoker itself, the
-  branch publication workflow after the commits are ready should use
+  with `mergeMode: external_review`. Plain approval only approves the Invoker
+  handoff/review gate; it does not publish the GitHub PR stack.
+
+  Later publication action: because the target repo is Invoker itself, once the
+  branch's commit stack is ready, explicitly publish/update it with
   `mergify stack push` so stacked PRs stay synchronized.
 onFinish: pull_request
 mergeMode: external_review
@@ -17,18 +20,22 @@ featureBranch: docs/dogfood-mergify-stack
 
 tasks:
   - id: update-dogfood-guidance
-    description: "Clarify when Invoker-on-Invoker changes should use Mergify Stacks"
+    description: "Clarify Invoker-on-Invoker handoff approval and later Mergify publication"
     prompt: |
       Update the Invoker skills and examples so they are explicit about the
       repo-specific dogfood rule:
 
-      1. When the target repo is Invoker itself, keep `mergeMode: external_review`
-         and publish/update the resulting commit stack with `mergify stack push`.
-      2. When the target repo is an external repo, keep normal PR flow unless
+      1. When the target repo is Invoker itself, keep `onFinish: pull_request`
+         with `mergeMode: external_review` as the plain approval/review gate.
+      2. Treat GitHub PR publication as a separate later action: after the
+         branch's commit stack is ready, explicitly publish/update it with
+         `mergify stack push`.
+      3. When the target repo is an external repo, keep normal PR flow unless
          that repo independently uses Mergify Stacks.
 
       Acceptance criteria:
       - Relevant skills mention the Invoker-only scope.
+      - Examples keep approval separate from later PR publication.
       - Examples include an Invoker positive case and an external-repo counterexample.
     dependencies: []
 
