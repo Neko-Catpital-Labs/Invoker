@@ -140,6 +140,43 @@ describe('useTasks', () => {
 
     expect(result.current.tasks.get('wf-1/task-1')?.status).toBe('running');
   });
+  it('clears pendingFixError when an updated task delta sets it to undefined', async () => {
+    const task = makeUITask({
+      id: 'wf-1/task-1',
+      workflowId: 'wf-1',
+      status: 'awaiting_approval',
+      execution: { pendingFixError: 'Approval blocked: stale failure text' },
+    });
+    (window as unknown as { __INVOKER_BOOTSTRAP__?: unknown }).__INVOKER_BOOTSTRAP__ = {
+      tasks: [task],
+      workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'awaiting_approval' }],
+    };
+
+    const { result } = renderHook(() => useTasks());
+
+    await waitFor(() => {
+      expect(taskGraphEventHandler).toBeDefined();
+    });
+
+    await act(async () => {
+      taskGraphEventHandler!({
+        type: 'delta',
+        delta: {
+          type: 'updated',
+          taskId: 'wf-1/task-1',
+          changes: {
+            execution: { pendingFixError: undefined },
+          },
+          taskStateVersion: 2,
+          previousTaskStateVersion: 1,
+        },
+        workflowRollups: [],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 110));
+    });
+
+    expect(result.current.tasks.get('wf-1/task-1')?.execution.pendingFixError).toBeUndefined();
+  });
 
   it('replaces workflows when onWorkflowsChanged receives a non-empty list', async () => {
     const { result } = renderHook(() => useTasks());

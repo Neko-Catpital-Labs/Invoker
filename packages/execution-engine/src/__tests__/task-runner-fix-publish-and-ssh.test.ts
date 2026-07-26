@@ -2613,10 +2613,22 @@ describe('TaskRunner', () => {
     it('reads remote targets lazily from the provider on each selectExecutor call', () => {
       const provider = vi.fn()
         .mockReturnValueOnce({
-          'do-droplet': { host: '1.2.3.4', user: 'root', sshKeyPath: '/old/key' },
+          'do-droplet': {
+            host: '1.2.3.4',
+            user: 'root',
+            sshKeyPath: '/old/key',
+            remoteInvokerHome: '/old/home',
+            provisionCommand: 'old provision',
+          },
         })
         .mockReturnValueOnce({
-          'do-droplet': { host: '1.2.3.4', user: 'root', sshKeyPath: '/new/key' },
+          'do-droplet': {
+            host: '1.2.3.4',
+            user: 'root',
+            sshKeyPath: '/new/key',
+            remoteInvokerHome: '/new/home',
+            provisionCommand: 'new provision',
+          },
         });
 
       const executor = new TaskRunner({
@@ -2635,9 +2647,13 @@ describe('TaskRunner', () => {
       const executor1 = executor.selectExecutor(task);
       expect(executor1.executor.type).toBe('ssh');
       expect((executor1.executor as any).sshKeyPath).toBe('/old/key');
+      expect((executor1.executor as any).remoteInvokerHome).toBe('/old/home');
+      expect((executor1.executor as any).provisionCommand).toBe('old provision');
 
       const executor2 = executor.selectExecutor(task);
       expect((executor2.executor as any).sshKeyPath).toBe('/new/key');
+      expect((executor2.executor as any).remoteInvokerHome).toBe('/new/home');
+      expect((executor2.executor as any).provisionCommand).toBe('new provision');
 
       expect(provider).toHaveBeenCalledTimes(2);
     });

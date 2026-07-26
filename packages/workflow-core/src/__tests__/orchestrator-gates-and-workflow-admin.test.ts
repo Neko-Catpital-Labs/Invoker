@@ -1036,8 +1036,13 @@ describe('Orchestrator', () => {
       expect(orchestrator.getTask('f2')!.execution.pendingFixError).toBe(plainTextError);
 
       await orchestrator.approve('f2');
-      expect(orchestrator.getTask('f2')!.status).toBe('completed');
-      expect(persistence.loadAttempt(fixAttemptId!)?.status).toBe('completed');
+      const approved = orchestrator.getTask('f2')!;
+      expect(approved.status).toBe('completed');
+      expect(approved.execution.pendingFixError).toBeUndefined();
+      expect(approved.execution.fixSessionEntryStatus).toBeUndefined();
+      const approvedAttempt = persistence.loadAttempt(fixAttemptId!);
+      expect(approvedAttempt?.status).toBe('completed');
+      expect(approvedAttempt?.error).toBeUndefined();
     });
   });
 
