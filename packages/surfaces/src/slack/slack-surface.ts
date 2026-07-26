@@ -191,6 +191,7 @@ function capTailChars(value: string, max: number): string {
 // ── Planning request parsing ─────────────────────────────────
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
+const REPO_CANDIDATE_PREFIXES = ['http://', 'https://', 'ssh://', 'git@'];
 const URL_TOKEN_TERMINATORS = new Set([' ', '\t', '\n', '\r', '<', '>', '(', ')', '[', ']', '{', '}', '"', "'", '|']);
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?']);
 
@@ -199,49 +200,54 @@ function looksLikePreset(normalized: string): boolean {
   return normalized.includes('+') || PRESET_TOOL_HINTS.some((hint) => normalized.includes(hint));
 }
 
+function messageRepoCandidate(rawCandidate: string): string | undefined {
+  let candidate = rawCandidate.trim();
+  while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
+    candidate = candidate.slice(0, -1);
+  }
+  if (!candidate) return undefined;
+  if (/^git@[\w.-]+:.+$/i.test(candidate)) return candidate;
+  if (/^ssh:\/\//i.test(candidate)) return candidate;
+  if (!/^https?:\/\//i.test(candidate)) return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return undefined;
+  }
+  if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) return undefined;
+  if (url.username || url.password) return undefined;
+  if (url.search || url.hash) return undefined;
+
+  if (url.hostname.toLowerCase() === 'github.com') {
+    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/i.test(url.pathname) ? candidate : undefined;
+  }
+  return /\.git$/i.test(url.pathname) ? candidate : undefined;
+}
+
+function nextRepoCandidateStart(text: string, start: number): number {
+  const lowerText = text.toLowerCase();
+  const indexes = REPO_CANDIDATE_PREFIXES
+    .map((prefix) => lowerText.indexOf(prefix, start))
+    .filter((index) => index !== -1);
+  return indexes.length === 0 ? -1 : Math.min(...indexes);
+}
+
 export function extractRepoUrlFromMessage(text: string): string | undefined {
   let start = 0;
   while (start < text.length) {
-    const httpIndex = text.indexOf('http://', start);
-    const httpsIndex = text.indexOf('https://', start);
-    const candidateStart = httpIndex === -1
-      ? httpsIndex
-      : httpsIndex === -1
-        ? httpIndex
-        : Math.min(httpIndex, httpsIndex);
+    const candidateStart = nextRepoCandidateStart(text, start);
     if (candidateStart === -1) return undefined;
     let candidateEnd = candidateStart;
     while (candidateEnd < text.length && !URL_TOKEN_TERMINATORS.has(text[candidateEnd])) {
       candidateEnd += 1;
     }
-    let candidate = text.slice(candidateStart, candidateEnd);
-    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
-      candidate = candidate.slice(0, -1);
+    const candidate = messageRepoCandidate(text.slice(candidateStart, candidateEnd));
+    if (candidate) {
+      return /^https?:\/\//i.test(candidate) && candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
     }
-    let url: URL;
-    try {
-      url = new URL(candidate);
-    } catch {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.username || url.password) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.search || url.hash) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
+    start = candidateEnd + 1;
   }
   return undefined;
 }
@@ -344,16 +350,6 @@ export function parsePlanningRequest(
   };
 }
 
-function isRepoRootUrl(rawUrl: string): boolean {
-  if (/^(ssh:\/\/|git@)/.test(rawUrl)) return true;
-  try {
-    const u = new URL(rawUrl);
-    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(u.pathname);
-  } catch {
-    return false;
-  }
-}
-
 function extractRepositoryUrls(text: string): string[] {
   const slackLinks = [...text.matchAll(/<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>/gi)];
   const withoutSlackLinks = text.replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ');
@@ -362,8 +358,11 @@ function extractRepositoryUrls(text: string): string[] {
     ...withoutSlackLinks.matchAll(/\bhttps?:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bssh:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bgit@[\w.-]+:[^\s<>]+/gi),
-  ].map((match) => (match[1] ?? match[0]).replace(/[),.;]+$/, ''));
-  return [...new Set(candidates)].filter(isRepoRootUrl);
+  ].flatMap((match) => {
+    const candidate = messageRepoCandidate(match[1] ?? match[0]);
+    return candidate ? [candidate] : [];
+  });
+  return [...new Set(candidates)];
 }
 
 function repositoryIdentity(repoUrl: string): string {
