@@ -25,31 +25,41 @@ import {
 } from '@invoker/workflow-core';
 import type { TaskStateChanges } from '@invoker/workflow-graph';
 import {
-  DockerExecutor, WorktreeExecutor, ExecutorRegistry, SshExecutor,
+  DockerExecutor,
+  WorktreeExecutor,
+  ExecutorRegistry,
+  SshExecutor,
   MergeGateExecutor,
   BaseExecutor,
   getEffectivePath,
-  type ExecutorHandle, type TerminalSpec, type PersistedTaskMeta,
+  registerBuiltinAgents as registerBuiltinAgentsStatic,
+  type Executor,
+  type ExecutorHandle,
+  type TerminalSpec,
+  type PersistedTaskMeta,
 } from '@invoker/execution-engine';
-import type { WorkResponse, WorkRequest } from '@invoker/contracts';
-vi.mock('../terminal-external-launch.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../terminal-external-launch.js')>();
-  return {
-    ...actual,
-    spawnDetachedTerminal: vi.fn(async () => ({ opened: true })),
-  };
-});
+import type * as NodeFsModule from 'node:fs';
+import type * as TerminalExternalLaunchModule from '../terminal-external-launch.js';
 import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
   buildTerminalShellCommand,
   spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
-import { openExternalTerminalForTask } from '../open-terminal-for-task.js';
+import { openEmbeddedTerminalForTask, openExternalTerminalForTask } from '../open-terminal-for-task.js';
+import type { EmbeddedTerminalManager } from '../embedded-terminal-manager.js';
 import * as configModule from '../config.js';
 
+vi.mock('../terminal-external-launch.js', async (importOriginal) => {
+  const actual = await importOriginal<TerminalExternalLaunchModule>();
+  return {
+    ...actual,
+    spawnDetachedTerminal: vi.fn(async () => ({ opened: true })),
+  };
+});
+
 vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('node:fs')>();
+  const actual = await importOriginal<NodeFsModule>();
   return { ...actual, existsSync: vi.fn(actual.existsSync) };
 });
 import { existsSync } from 'node:fs';
@@ -1044,7 +1054,7 @@ describe('SshExecutor getRestoredTerminalSpec', () => {
 
 describe('getRestoredTerminalSpec dispatches codex vs claude session resume', () => {
   // Lazy import to avoid circular dep issues at module level
-  let registerBuiltinAgents: typeof import('@invoker/execution-engine').registerBuiltinAgents;
+  let registerBuiltinAgents: typeof registerBuiltinAgentsStatic;
 
   beforeEach(async () => {
     ({ registerBuiltinAgents } = await import('@invoker/execution-engine'));
@@ -1209,7 +1219,7 @@ describe('getRestoredTerminalSpec dispatches codex vs claude session resume', ()
  * openExternalTerminalForTask does, and getRestoredTerminalSpec dispatches correctly.
  */
 describe('fix-with-agent → open-terminal produces correct agent resume command', () => {
-  let registerBuiltinAgents: typeof import('@invoker/execution-engine').registerBuiltinAgents;
+  let registerBuiltinAgents: typeof registerBuiltinAgentsStatic;
 
   beforeEach(async () => {
     ({ registerBuiltinAgents } = await import('@invoker/execution-engine'));
@@ -1647,5 +1657,46 @@ describe('openExternalTerminalForTask fail-fast workspace invariant', () => {
       expect(result.reason).not.toContain('workspace metadata is missing');
       expect(result.reason).not.toContain('requires a managed workspace');
     }
+  });
+});
+
+describe('openEmbeddedTerminalForTask', () => {
+  it('attaches running tasks without persistence metadata when a live handle exists', () => {
+    const openOrReuse = vi.fn(() => ({
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      kind: 'task',
+      status: 'running',
+      mode: 'attached',
+      attached: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      outputSnapshot: '',
+    }));
+    const liveExecutor = { type: 'worktree' } as unknown as Executor;
+    const liveHandle = {
+      executionId: 'exec-1',
+      taskId: 'task-1',
+      workspacePath: '/tmp/task-1',
+    } as ExecutorHandle;
+
+    const result = openEmbeddedTerminalForTask({
+      taskId: 'task-1',
+      executorRegistry: new ExecutorRegistry(),
+      repoRoot: '/repo',
+      taskHandles: new Map([['task-1', { handle: liveHandle, executor: liveExecutor }]]),
+      embeddedTerminalManager: { openOrReuse } as unknown as Pick<EmbeddedTerminalManager, 'openOrReuse'>,
+    });
+
+    expect(result).toEqual({
+      opened: true,
+      session: expect.objectContaining({ sessionId: 'session-1', taskId: 'task-1', mode: 'attached' }),
+    });
+    expect(openOrReuse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-1',
+        cwd: '/tmp/task-1',
+        attach: { handle: liveHandle, executor: liveExecutor },
+      }),
+    );
   });
 });
