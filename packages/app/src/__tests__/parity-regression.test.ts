@@ -609,16 +609,6 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
     expect(orchestrator.reject).not.toHaveBeenCalled();
   });
 
-  it('restartTask (deprecated) delegates to recreateTask', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const result = await commandService.restartTask(envelope({ taskId: 'task-1' }));
-
-    expect(result.ok).toBe(true);
-    expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-1');
-    expect(orchestrator.retryTask).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
-  });
-
   it('all commands wrap OrchestratorError into { ok: false }', async () => {
     const { OrchestratorError, OrchestratorErrorCode } = await import('@invoker/workflow-core');
     orchestrator.retryTask.mockImplementation(() => {

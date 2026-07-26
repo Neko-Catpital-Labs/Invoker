@@ -86,7 +86,7 @@ export async function tryDelegateResume(
 function usesExtendedDelegationTimeout(command: string): boolean {
   return command === 'rebase-retry'
     || command === 'rebase-recreate'
-    || command === 'restart'
+    || command === 'recreate'
     || command === 'start-ready';
 }
 

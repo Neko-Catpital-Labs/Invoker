@@ -46,7 +46,7 @@ describe('headless auto-fix cutover', () => {
 });
 
 describe('headless worker autofix', () => {
-  it('runs a one-shot scan under the single-instance lock and enqueues a bare restart first', async () => {
+  it('runs a one-shot scan under the single-instance lock and enqueues a bare retry first', async () => {
     const task = makeTask();
     const actions = new Map<string, WorkerActionRecord>();
     const enqueueWorkflowMutationIntent = vi.fn((
