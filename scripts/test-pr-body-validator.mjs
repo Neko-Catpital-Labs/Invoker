@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, validatePrBody, validatePrScope } from './validate-pr-body.mjs';
+import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validatePrBody, validatePrScope } from './validate-pr-body.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -746,6 +746,26 @@ assert(
   docsScopeErrors.some((error) => error.includes('Review lane docs cannot ship with policy files')),
   'docs lane should reject policy/tooling files in the same PR',
 );
+const proofToolingPolicyBody = validMinimal.replace('- behavior', '- proof').replace('- routing', '- proof');
+const proofToolingPolicyFiles = [
+  '.github/workflows/ci.yml',
+  'scripts/test-suites/required/guardrails.sh',
+];
+const proofToolingPolicyErrors = await validatePrBody(proofToolingPolicyBody, {
+  changedFiles: proofToolingPolicyFiles,
+});
+assert(
+  proofToolingPolicyErrors.includes('Review lane proof cannot ship with policy files in the same PR. Keep benchmarks, repros, and regression proof separate from behavior or policy changes.'),
+  'proof lane should reject tooling-policy repairs via the policy lane mismatch',
+);
+assert(
+  proofToolingPolicyErrors.includes('PR body Review Unit "proof" cannot ship with tooling-policy files in the same PR. Split this into one Review Unit per PR.'),
+  'proof review unit should reject tooling-policy-only changed files',
+);
+assert(
+  JSON.stringify(scopeKindsForChangedFiles(proofToolingPolicyFiles)) === JSON.stringify(['policy']),
+  'scopeKindsForChangedFiles should drop other files and keep sorted unique policy kinds',
+);
 
 const refactorBody = `## Summary
 
@@ -1113,6 +1133,43 @@ try {
   assert(
     trustedBaseLocalWrapper.status === 0,
     `local wrapper should use the trusted base classifier, not the head classifier: ${trustedBaseLocalWrapper.stderr}`,
+  );
+  runGit(['switch', '-c', 'proof-policy-json', 'master']);
+  writeFileSync(bodyPath, proofToolingPolicyBody);
+  mkdirSync(join(localWrapperTmp, '.github', 'workflows'), { recursive: true });
+  mkdirSync(join(localWrapperTmp, 'scripts', 'test-suites', 'required'), { recursive: true });
+  writeFileSync(join(localWrapperTmp, '.github', 'workflows', 'ci.yml'), 'name: ci\n');
+  writeFileSync(join(localWrapperTmp, 'scripts', 'test-suites', 'required', 'guardrails.sh'), '#!/usr/bin/env bash\n');
+  runGit(['add', '.github/workflows/ci.yml', 'scripts/test-suites/required/guardrails.sh']);
+  runGit(['commit', '-m', 'tooling policy repair']);
+  const jsonLocalWrapper = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts', 'validate-pr-body-local.mjs'), '--body-file', bodyPath, '--base', 'master', '--json'],
+    { cwd: localWrapperTmp, encoding: 'utf8' },
+  );
+  assert(jsonLocalWrapper.status === 1, 'local wrapper JSON mode should fail the proof/tooling-policy mismatch');
+  const jsonPayload = JSON.parse(jsonLocalWrapper.stdout);
+  assert(jsonPayload.valid === false, 'local wrapper JSON mode should mark the proof/tooling-policy mismatch invalid');
+  assert(
+    JSON.stringify(jsonPayload.errors) === JSON.stringify([
+      'Review lane proof cannot ship with policy files in the same PR. Keep benchmarks, repros, and regression proof separate from behavior or policy changes.',
+      'PR body Review Unit "proof" cannot ship with tooling-policy files in the same PR. Split this into one Review Unit per PR.',
+    ]),
+    'local wrapper JSON mode should preserve the trusted-base proof/tooling-policy errors',
+  );
+  assert(
+    JSON.stringify(jsonPayload.changedFiles) === JSON.stringify(proofToolingPolicyFiles),
+    'local wrapper JSON mode should report changed files from the trusted-base diff',
+  );
+  assert(jsonPayload.reviewLane === 'proof', 'local wrapper JSON mode should report the proof review lane');
+  assert(jsonPayload.reviewUnit === 'proof', 'local wrapper JSON mode should report the proof review unit');
+  assert(
+    JSON.stringify(jsonPayload.reviewUnits) === JSON.stringify(['tooling-policy']),
+    'local wrapper JSON mode should report tooling-policy review units from changed files',
+  );
+  assert(
+    JSON.stringify(jsonPayload.scopeKinds) === JSON.stringify(['policy']),
+    'local wrapper JSON mode should report sorted non-other scope kinds',
   );
 } finally {
   rmSync(localWrapperTmp, { recursive: true, force: true });
