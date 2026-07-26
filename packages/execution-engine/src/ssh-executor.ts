@@ -620,12 +620,15 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
         `[WARNING] Continuing with existing refs. Tasks may use stale commits.\n`;
       this.emitOutput(executionId, msg);
     }
+    const startupBaseHead = request.inputs.upstreamBase?.commitHash?.trim()
+      || request.inputs.baseCommit?.trim()
+      || baseHead;
     const contentHash = computeContentHash(
       request.actionId,
       request.inputs.command,
       request.inputs.prompt,
       upstreamCommits,
-      baseHead,
+      startupBaseHead,
     );
     const experimentBranch = buildExperimentBranchName(
       request.actionId,
@@ -739,23 +742,23 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     if (skippedRemotePreserve) {
       bench('SshExecutor.startManagedWorkspace.sandboxReset.before', { remoteWt });
       await this.execRemoteCapture(
-        buildWorktreeSandboxResetScript({ worktreePath: remoteWt, toRef: resolvedBaseRef }),
+        buildWorktreeSandboxResetScript({ worktreePath: remoteWt, toRef: startupBaseHead }),
         'sandbox_reset',
       );
       bench('SshExecutor.startManagedWorkspace.sandboxReset.after', { remoteWt });
       bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.before', { remoteWt });
-      await this.mergeRequestUpstreamBranches(request, remoteWt, resolvedBaseRef);
+      await this.mergeRequestUpstreamBranches(request, remoteWt, startupBaseHead);
       bench('SshExecutor.startManagedWorkspace.mergeRequestUpstreamBranches.after', { remoteWt });
     } else {
       try {
         bench('SshExecutor.startManagedWorkspace.setupTaskBranch.before', {
           branchName: experimentBranch,
-          base: resolvedBaseRef,
+          base: startupBaseHead,
           remoteWt,
         });
         await this.setupTaskBranch(remoteClone, request, handle, {
           branchName: experimentBranch,
-          base: resolvedBaseRef,
+          base: startupBaseHead,
           worktreeDir: remoteWt,
         });
         bench('SshExecutor.startManagedWorkspace.setupTaskBranch.after', {

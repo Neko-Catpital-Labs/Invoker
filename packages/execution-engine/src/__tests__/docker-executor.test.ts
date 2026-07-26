@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import type { WorkRequest, WorkResponse } from '@invoker/contracts';
 import type { ExecutorHandle, PersistedTaskMeta } from '../executor.js';
 import { BaseExecutor } from '../base-executor.js';
-
+import { buildExperimentBranchName, computeContentHash } from '../branch-utils.js';
 // ---------------------------------------------------------------------------
 // Mock helpers
 // ---------------------------------------------------------------------------
@@ -231,6 +231,36 @@ describe('DockerExecutor', () => {
       expect.any(Object),
       expect.objectContaining({
         branchName: expect.stringMatching(/^experiment\/action-1\/g\d+\.t\d+\.a[a-z0-9_-]*-[0-9a-f]{8}$/),
+      }),
+    );
+  });
+
+  it('uses upstreamBase commit for docker branch hashing and setup base', async () => {
+    const upstreamBaseCommit = '1234567890abcdef1234567890abcdef12345678';
+    const expectedBranch = buildExperimentBranchName(
+      'action-1',
+      '',
+      computeContentHash('action-1', 'echo hello', undefined, [], upstreamBaseCommit),
+    );
+
+    await executor.start(makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'https://github.com/test/repo.git',
+        upstreamBase: {
+          branch: 'experiment/dep-a',
+          commitHash: upstreamBaseCommit,
+        },
+      },
+    }));
+
+    expect(setupTaskBranchSpy).toHaveBeenCalledWith(
+      '/app',
+      expect.objectContaining({ actionId: 'action-1' }),
+      expect.any(Object),
+      expect.objectContaining({
+        branchName: expectedBranch,
+        base: upstreamBaseCommit,
       }),
     );
   });

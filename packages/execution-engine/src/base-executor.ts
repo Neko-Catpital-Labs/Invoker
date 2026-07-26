@@ -662,12 +662,13 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     setupBranchExplicitBase?: string,
   ): Promise<void> {
     const upstreams = request.inputs.upstreamBranches ?? [];
-    const upstreamsToMerge = this.selectUpstreamBranchesToMerge(
-      upstreams,
-      request.inputs.baseBranch,
-      setupBranchExplicitBase,
-    );
-    const baseFromUpstream = !setupBranchExplicitBase && upstreams.length > 0;
+    const upstreamsToMerge = this.selectUpstreamBranchesToMerge({
+      upstreamBranches: upstreams,
+      requestBaseBranch: request.inputs.baseBranch,
+      upstreamBaseBranch: request.inputs.upstreamBase?.branch,
+      baseAlreadyApplied: Boolean(setupBranchExplicitBase || request.inputs.upstreamBase?.commitHash),
+    });
+    const baseFromUpstream = !setupBranchExplicitBase && !request.inputs.upstreamBase?.commitHash && upstreams.length > 0;
     traceExecution(
       `${RESTART_TO_BRANCH_TRACE} [mergeRequestUpstreamBranches] upstreamsToMerge=${JSON.stringify(upstreamsToMerge)} ` +
         `(baseFromUpstream=${baseFromUpstream}) mergeCwd=${mergeCwd}`,
@@ -709,24 +710,30 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     }
   }
 
-  private selectUpstreamBranchesToMerge(
-    upstreamBranches: string[],
-    requestBaseBranch?: string,
-    setupBranchExplicitBase?: string,
-  ): string[] {
-    const requestBase = requestBaseBranch?.trim();
+  private selectUpstreamBranchesToMerge(opts: {
+    upstreamBranches: string[];
+    requestBaseBranch?: string;
+    upstreamBaseBranch?: string;
+    baseAlreadyApplied: boolean;
+  }): string[] {
+    const requestBase = opts.requestBaseBranch?.trim();
+    const upstreamBaseBranch = opts.upstreamBaseBranch?.trim();
+    let branches = opts.upstreamBranches;
+
     // Contract: upstreamBranches may be shaped as
-    // [workflowBase, dependencyBranch, ...]. When the workflow base was already
-    // resolved and supplied explicitly, do not merge that marker again.
-    if (setupBranchExplicitBase && requestBase && upstreamBranches[0] === requestBase) {
-      return upstreamBranches.slice(1);
+    // [workflowBase, dependencyBranch, ...]. When the branch already starts from
+    // an explicit base ref/commit, do not merge that workflow-base marker again.
+    if (opts.baseAlreadyApplied && requestBase && branches[0] === requestBase) {
+      branches = branches.slice(1);
+    } else if (!opts.baseAlreadyApplied && !upstreamBaseBranch && branches.length > 0) {
+      branches = branches.slice(1);
     }
 
-    if (!setupBranchExplicitBase && upstreamBranches.length > 0) {
-      return upstreamBranches.slice(1);
+    if (!upstreamBaseBranch) {
+      return branches;
     }
 
-    return upstreamBranches;
+    return branches.filter((branch) => branch !== upstreamBaseBranch);
   }
 
   protected async setupTaskBranch(
@@ -738,9 +745,14 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     try {
       const branchName = opts?.branchName ?? `invoker/${request.actionId}`;
       const upstreams = request.inputs.upstreamBranches ?? [];
-      // When opts.base is provided, all upstreams need merging.
-      // When not provided, upstreams[0] becomes the base and the rest are merged.
-      const base = opts?.base ?? upstreams[0] ?? request.inputs.baseBranch ?? 'HEAD';
+      // When opts.base is provided, or upstreamBase is available, the branch
+      // starts from that explicit ref/commit and only the remaining upstreams
+      // are merged. Otherwise upstreams[0] becomes the base.
+      const base = opts?.base
+        ?? request.inputs.upstreamBase?.commitHash?.trim()
+        ?? upstreams[0]
+        ?? request.inputs.baseBranch
+        ?? 'HEAD';
       const mergeCwd = opts?.worktreeDir ?? cwd;
 
       traceExecution(

@@ -381,6 +381,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
 
       const baseRef = request.inputs.baseBranch ?? 'HEAD';
       const baseHead = (await this.execGitSimple(['rev-parse', baseRef], CONTAINER_CWD)).trim();
+      const startupBaseHead = request.inputs.upstreamBase?.commitHash?.trim() || baseHead;
       const upstreamCommits = (request.inputs.upstreamContext ?? [])
         .map(c => c.commitHash)
         .filter((h): h is string => !!h);
@@ -389,7 +390,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
         request.inputs.command,
         request.inputs.prompt,
         upstreamCommits,
-        baseHead,
+        startupBaseHead,
       );
       const branchName = buildExperimentBranchName(
         request.actionId,
@@ -406,13 +407,9 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
         // Best-effort early persistence; the post-start path persists the
         // same value again.
       }
-      const baseBranch = request.inputs.upstreamBranches?.[0]
-        ?? request.inputs.baseBranch
-        ?? 'HEAD';
-
       await this.setupTaskBranch(CONTAINER_CWD, request, handle, {
         branchName,
-        base: baseBranch,
+        base: startupBaseHead,
       });
       entry.branch = handle.branch;
 

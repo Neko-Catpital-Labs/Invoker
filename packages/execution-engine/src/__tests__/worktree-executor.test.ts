@@ -735,25 +735,58 @@ describe('WorktreeExecutor', () => {
       taskProcess.emit('close', 0, null);
     });
 
-    it('merges upstream branches into the worktree after creation', async () => {
+    it('branches from upstreamBase commit without re-merging the parent branch', async () => {
       const { taskProcess } = setupSpawnMock();
+      const pool = mockPool(executor);
+      const parentCommit = '1111111111111111111111111111111111111111';
 
       const request = makeRequest({
         inputs: {
           command: 'echo hello',
-          upstreamBranches: ['experiment/dep-1', 'experiment/dep-2'],
+          upstreamBranches: ['experiment/dep-parent'],
+          upstreamBase: {
+            branch: 'experiment/dep-parent',
+            commitHash: parentCommit,
+          },
         },
       });
       await executor.start(request);
 
-      // setupTaskBranch uses runBash for merging. Verify the merge script contains both branches.
+      expect(pool.acquireWorktree.mock.calls[0][2]).toBe(parentCommit);
+      const runBashMock = vi.mocked((BaseExecutor.prototype as any).runBash);
+      const mergeCall = runBashMock.mock.calls.find(
+        (call) => call[0].includes('Invoker: merge'),
+      );
+      expect(mergeCall).toBeUndefined();
+
+      taskProcess.emit('close', 0, null);
+    });
+
+    it('merges only the remaining parent branches after branching from upstreamBase', async () => {
+      const { taskProcess } = setupSpawnMock();
+      const pool = mockPool(executor);
+      const parentCommit = '2222222222222222222222222222222222222222';
+
+      const request = makeRequest({
+        inputs: {
+          command: 'echo hello',
+          upstreamBranches: ['experiment/dep-parent', 'experiment/dep-sibling'],
+          upstreamBase: {
+            branch: 'experiment/dep-parent',
+            commitHash: parentCommit,
+          },
+        },
+      });
+      await executor.start(request);
+
+      expect(pool.acquireWorktree.mock.calls[0][2]).toBe(parentCommit);
       const runBashMock = vi.mocked((BaseExecutor.prototype as any).runBash);
       const mergeCall = runBashMock.mock.calls.find(
         (call) => call[0].includes('Invoker: merge'),
       );
       expect(mergeCall).toBeDefined();
-      expect(mergeCall![0]).toContain('experiment/dep-1');
-      expect(mergeCall![0]).toContain('experiment/dep-2');
+      expect(mergeCall![0]).not.toContain('experiment/dep-parent');
+      expect(mergeCall![0]).toContain('experiment/dep-sibling');
 
       taskProcess.emit('close', 0, null);
     });
@@ -855,7 +888,11 @@ describe('WorktreeExecutor', () => {
       const request = makeRequest({
         inputs: {
           command: 'echo hello',
-          upstreamBranches: ['experiment/conflicting'],
+          upstreamBranches: ['experiment/dep-parent', 'experiment/conflicting'],
+          upstreamBase: {
+            branch: 'experiment/dep-parent',
+            commitHash: '3333333333333333333333333333333333333333',
+          },
         },
       });
 
@@ -894,7 +931,11 @@ describe('WorktreeExecutor', () => {
       const request = makeRequest({
         inputs: {
           command: 'echo hello',
-          upstreamBranches: ['experiment/conflicting'],
+          upstreamBranches: ['experiment/dep-parent', 'experiment/conflicting'],
+          upstreamBase: {
+            branch: 'experiment/dep-parent',
+            commitHash: '4444444444444444444444444444444444444444',
+          },
         },
       });
 
@@ -929,7 +970,11 @@ describe('WorktreeExecutor', () => {
       const request = makeRequest({
         inputs: {
           command: 'echo hello',
-          upstreamBranches: ['experiment/nonexistent-branch'],
+          upstreamBranches: ['experiment/dep-parent', 'experiment/nonexistent-branch'],
+          upstreamBase: {
+            branch: 'experiment/dep-parent',
+            commitHash: '5555555555555555555555555555555555555555',
+          },
         },
       });
 

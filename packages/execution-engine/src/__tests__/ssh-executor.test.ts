@@ -153,7 +153,7 @@ describe('SshExecutor pre-flight validation', () => {
       expect.any(String),
       expect.any(Object),
       expect.any(Object),
-      expect.objectContaining({ base: 'origin/master' }),
+      expect.objectContaining({ base: '0123456789abcdef0123456789abcdef01234567' }),
     );
   });
 });
@@ -412,6 +412,7 @@ branch refs/heads/experiment/test-task-oldhash
 
     const repoHash = computeRepoUrlHash('git@github.com:owner/repo.git');
     const baseHead = 'aabbccddeeff00112233445566778899aabbccdd';
+    const upstreamBaseCommit = '11223344556677889900aabbccddeeff00112233';
     const actionId = 'reuse-sandbox-test';
     const command = 'pnpm test';
     const lifecycleTag = '';
@@ -419,7 +420,7 @@ branch refs/heads/experiment/test-task-oldhash
 
     // Compute the exact branch the executor will derive from these inputs.
     // The executor uses request.inputs.prompt (not description) as the third arg.
-    const contentHash = computeContentHash(actionId, command, undefined, upstreamCommits, baseHead);
+    const contentHash = computeContentHash(actionId, command, undefined, upstreamCommits, upstreamBaseCommit);
     const experimentBranch = buildExperimentBranchName(actionId, lifecycleTag, contentHash);
     const san = experimentBranch.replace(/\//g, '-');
     const invokerHome = '/home/testuser/.invoker';
@@ -456,7 +457,15 @@ branch refs/heads/experiment/test-task-oldhash
     await ssh.start(makeRequest({
       actionType: 'command',
       actionId,
-      inputs: { command, description: 'sandbox reset test', repoUrl: 'git@github.com:owner/repo.git' },
+      inputs: {
+        command,
+        description: 'sandbox reset test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        upstreamBase: {
+          branch: 'experiment/dep-parent',
+          commitHash: upstreamBaseCommit,
+        },
+      },
     }));
 
     // sandbox_reset must have been called with the right script content
@@ -464,10 +473,11 @@ branch refs/heads/experiment/test-task-oldhash
     expect(sandboxResetCall).toBeDefined();
     expect(sandboxResetCall?.script).toContain('git -C "$WT" reset --hard "$REF"');
     expect(sandboxResetCall?.script).toContain('git -C "$WT" clean -fd');
+    expect(sandboxResetCall?.script).toContain(Buffer.from(upstreamBaseCommit).toString('base64'));
 
     // mergeRequestUpstreamBranches must have been called exactly once
     expect(mergeUpstreamSpy).toHaveBeenCalledTimes(1);
-
+    expect(mergeUpstreamSpy).toHaveBeenCalledWith(expect.any(Object), exactPath, upstreamBaseCommit);
     // sandbox_reset (execRemoteCapture call) must be ordered before mergeRequestUpstreamBranches.
     // We verify this via invocationCallOrder so a future refactor cannot silently move
     // the reset after the merge without breaking this test.

@@ -302,15 +302,19 @@ describe('A→B→C branch chain', { timeout: 120_000 }, () => {
       }
     });
 
-    it('transitive history: C contains A commits', async () => {
+    it('linear chain branches directly from each parent commit history', async () => {
       const { tasks, executor } = buildChain({ a: worktreeCmd, b: worktreeCmd, c: worktreeCmd });
 
       await executeTask(executor, tasks, 'task-a');
       const hashA = execSync(`git rev-parse ${tasks[0].execution.branch}`, { cwd: tmpDir }).toString().trim();
 
       await executeTask(executor, tasks, 'task-b');
+      const hashB = execSync(`git rev-parse ${tasks[1].execution.branch}`, { cwd: tmpDir }).toString().trim();
+      expect(isAncestor(tmpDir, hashA, tasks[1].execution.branch!)).toBe(true);
+
       await executeTask(executor, tasks, 'task-c');
 
+      expect(isAncestor(tmpDir, hashB, tasks[2].execution.branch!)).toBe(true);
       expect(isAncestor(tmpDir, hashA, tasks[2].execution.branch!)).toBe(true);
     });
 

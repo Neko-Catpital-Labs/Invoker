@@ -178,6 +178,8 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       bench('WorktreeExecutor.resolveBase.after', { baseRef, baseHead });
       log(`resolve base ${baseRef} done → ${baseHead}`);
     }
+    const startupBaseHead = request.inputs.upstreamBase?.commitHash?.trim()
+      || baseHead;
     const upstreamCommits = (request.inputs.upstreamContext ?? [])
       .map(c => c.commitHash)
       .filter((h): h is string => !!h);
@@ -186,7 +188,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       request.inputs.command,
       request.inputs.prompt,
       upstreamCommits,
-      baseHead,
+      startupBaseHead,
     );
     const branch = buildExperimentBranchName(
       request.actionId,
@@ -215,11 +217,11 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       traceExecution(
         `${RESTART_TO_BRANCH_TRACE} WorktreeExecutor.start() actionId=${request.actionId} reconciliation → acquireWorktree (skip upstream merge)`,
       );
-      bench('RepoPool.acquireWorktree.reconciliation.before', { branch, baseHead });
+      bench('RepoPool.acquireWorktree.reconciliation.before', { branch, baseHead: startupBaseHead });
       const acquired = await this.pool.acquireWorktree(
         repoUrl,
         branch,
-        baseHead,
+        startupBaseHead,
         request.actionId,
         {
           forceFresh: request.inputs.freshWorkspace === true,
@@ -283,11 +285,11 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     bench('WorktreeExecutor.reconcilePoolSlots.before');
     this.reconcilePoolSlots(repoUrl);
     bench('WorktreeExecutor.reconcilePoolSlots.after');
-    bench('RepoPool.acquireWorktree.before', { branch, baseHead });
+    bench('RepoPool.acquireWorktree.before', { branch, baseHead: startupBaseHead });
     const acquired = await this.pool.acquireWorktree(
       repoUrl,
       branch,
-      baseHead,
+      startupBaseHead,
       request.actionId,
       {
         forceFresh: request.inputs.freshWorkspace === true,
@@ -308,7 +310,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     if (poolUpstreams.length > 0) {
       try {
         bench('WorktreeExecutor.mergeRequestUpstreamBranches.before', { upstreamCount: poolUpstreams.length });
-        await this.mergeRequestUpstreamBranches(request, acquired.worktreePath, baseHead);
+        await this.mergeRequestUpstreamBranches(request, acquired.worktreePath, startupBaseHead);
         bench('WorktreeExecutor.mergeRequestUpstreamBranches.after', { upstreamCount: poolUpstreams.length });
       } catch (err: any) {
         if (err instanceof MergeConflictError) {
