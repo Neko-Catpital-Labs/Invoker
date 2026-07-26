@@ -33,16 +33,14 @@ export function buildTerminalShellCommand(
 ): string {
   const cwd = spec.cwd ?? defaultCwd;
   const cd = `cd ${shellSingleQuoteForPOSIX(cwd)}`;
-  const bridge = formatTerminalDisplayBridge(spec);
-  const displayBridge = bridge
-    ? ` && printf %s ${shellSingleQuoteForPOSIX(bridge)}`
-    : '';
+  const displayBridge = buildDisplayBridgeCommand(spec.displayBridge);
   if (!spec.command) {
     const execSh = options?.interactiveExec === 'zsh' ? 'exec zsh' : 'exec bash';
-    return `${cd}${displayBridge} && ${execSh}`;
+    return displayBridge ? `${cd} && { ${displayBridge}; ${execSh}; }` : `${cd} && ${execSh}`;
   }
   const argv = [spec.command, ...(spec.args ?? [])];
-  return `${cd}${displayBridge} && ${argv.map(shellSingleQuoteForPOSIX).join(' ')}`;
+  const commandLine = argv.map(shellSingleQuoteForPOSIX).join(' ');
+  return displayBridge ? `${cd} && { ${displayBridge}; ${commandLine}; }` : `${cd} && ${commandLine}`;
 }
 
 /** Escape for embedding in AppleScript: `tell application "Terminal" to do script "…"`. */
@@ -81,6 +79,12 @@ export function buildLinuxXTerminalBashScript(
     ? '; exec bash'
     : '; echo ""; echo "Exit code: $?"; echo "Press Enter to close..."; read';
   return base + suffix;
+}
+
+function buildDisplayBridgeCommand(text: string | undefined): string | undefined {
+  const bridge = formatTerminalDisplayBridge({ displayBridge: text });
+  if (!bridge) return undefined;
+  return `printf '%s\\n' ${shellSingleQuoteForPOSIX(bridge)} || true`;
 }
 
 export type OpenTerminalResult = { opened: boolean; reason?: string };

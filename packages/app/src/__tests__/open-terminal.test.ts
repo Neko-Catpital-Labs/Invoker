@@ -471,7 +471,7 @@ describe('terminal-external-launch', () => {
       '/fallback',
     );
 
-    expect(script).toContain(`printf %s 'context before`);
+    expect(script).toContain(`printf '%s\\n' 'context before`);
     expect(script).toContain("\\'");
     expect(script).toContain(shellSingleQuoteForPOSIX(process.execPath));
 
@@ -489,6 +489,21 @@ describe('terminal-external-launch', () => {
       "quote'arg",
       '$(echo not-substituted)',
     ]);
+  });
+
+  it('does not let displayBridge printf failure replace the target command exit status', () => {
+    const script = buildTerminalShellCommand(
+      {
+        cwd: tmpdir(),
+        command: process.execPath,
+        args: ['-e', 'process.exit(23)'],
+        displayBridge: 'best effort bridge',
+      },
+      '/fallback',
+    );
+
+    const result = spawnSync('bash', ['-c', `printf() { return 7; }\n${script}`]);
+    expect(result.status).toBe(23);
   });
 });
 
