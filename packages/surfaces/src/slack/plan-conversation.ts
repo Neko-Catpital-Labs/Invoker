@@ -561,7 +561,7 @@ export class PlanConversation {
     const nextDraft = fileDraft && summarizePlanText(fileDraft)
       ? fileDraft
       : inlineDraft;
-    if (!nextDraft) message = removeStandaloneSubmitInstruction(message);
+    if (nextDraft === null) message = removeStandaloneSubmitInstruction(message);
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     this._lastTurnReasoning = formatted.reasoning;
