@@ -74,7 +74,7 @@ describe('Planning terminal tmux history sync', () => {
     vi.restoreAllMocks();
   });
 
-  it.fails('restores planning tmux output received while the terminal surface is hidden', async () => {
+  it('restores planning tmux output received while the terminal surface is hidden', async () => {
     render(<App />);
 
     fireEvent.click(await screen.findByTestId('sidebar-home'));

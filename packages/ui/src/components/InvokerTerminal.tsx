@@ -134,7 +134,6 @@ function MessageBody({ text, toneClass }: { text: string; toneClass: string }): 
 
 type SeededOutputSnapshot = {
   sessionId: string;
-  snapshot: string;
   term: XTermTerminal;
 };
 
@@ -146,27 +145,32 @@ function seedTerminalOutputSnapshot(
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
   if (
-    outputSnapshot &&
-    (
-      !seededSnapshot ||
-      seededSnapshot.sessionId !== session.sessionId ||
-      seededSnapshot.snapshot !== outputSnapshot ||
-      seededSnapshot.term !== term
-    )
+    seededSnapshot &&
+    seededSnapshot.sessionId === session.sessionId &&
+    seededSnapshot.term === term
   ) {
-    try {
-      term.write(outputSnapshot);
-      seededSnapshotRef.current = {
-        sessionId: session.sessionId,
-        snapshot: outputSnapshot,
-        term,
-      };
-    } catch (err) {
-      console.warn(
-        `Failed to seed output snapshot for planning terminal session ${session.sessionId}:`,
-        err,
-      );
-    }
+    return;
+  }
+
+  if (!outputSnapshot) {
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      term,
+    };
+    return;
+  }
+
+  try {
+    term.write(outputSnapshot);
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      term,
+    };
+  } catch (err) {
+    console.warn(
+      `Failed to seed output snapshot for planning terminal session ${session.sessionId}:`,
+      err,
+    );
   }
 }
 
