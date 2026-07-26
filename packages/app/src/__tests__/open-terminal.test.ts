@@ -11,7 +11,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import {
@@ -44,6 +45,7 @@ import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
   buildTerminalShellCommand,
+  shellSingleQuoteForPOSIX,
   spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
 import { openEmbeddedTerminalForTask, openExternalTerminalForTask } from '../open-terminal-for-task.js';
@@ -151,7 +153,13 @@ function buildCleanEnv(): Record<string, string> {
 
 function openExternalTerminal(spec: TerminalSpec | null): void {
   const defaultCwd = spec?.cwd ?? process.cwd();
-  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args };
+  const meta = {
+    cwd: spec?.cwd,
+    command: spec?.command,
+    args: spec?.args,
+    linuxTerminalTail: spec?.linuxTerminalTail,
+    displayBridge: spec?.displayBridge,
+  };
 
   if (process.platform === 'linux') {
     const cleanEnv = buildCleanEnv();
@@ -432,6 +440,45 @@ describe('terminal-external-launch', () => {
     // Should use '\'' (backslash-quote) not '"'"' (double-quote idiom)
     expect(line).toContain("\\'");
     expect(line).not.toMatch(/'"'"'/);
+  });
+
+  it('quotes displayBridge without command injection and preserves command argv', () => {
+    const tempDir = join(tmpdir(), `terminal-bridge-${randomUUID()}`);
+    mkdirSync(tempDir, { recursive: true });
+    const sentinelPath = join(tempDir, 'injected');
+    const argvPath = join(tempDir, 'argv.json');
+    const bridge = `Bridge text'; touch ${sentinelPath}; echo 'still bridge\n`;
+    const argvWriter = [
+      "require('node:fs').writeFileSync(",
+      'process.argv[1],',
+      'JSON.stringify(process.argv.slice(2))',
+      ');',
+    ].join('');
+
+    try {
+      const line = buildTerminalShellCommand(
+        {
+          cwd: tempDir,
+          command: process.execPath,
+          args: ['-e', argvWriter, argvPath, 'alpha beta', 'semi;colon', "quote'value"],
+          displayBridge: bridge,
+        },
+        '/fallback',
+      );
+
+      expect(line).toContain(`printf %s ${shellSingleQuoteForPOSIX(bridge)} && `);
+      expect(line).toContain(`${shellSingleQuoteForPOSIX(process.execPath)} '-e'`);
+      execFileSync('bash', ['-c', line], { stdio: 'pipe' });
+
+      expect(existsSync(sentinelPath)).toBe(false);
+      expect(JSON.parse(readFileSync(argvPath, 'utf8'))).toEqual([
+        'alpha beta',
+        'semi;colon',
+        "quote'value",
+      ]);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('buildMacOSOsascriptArgs includes activate and uses multi-line AppleScript', () => {

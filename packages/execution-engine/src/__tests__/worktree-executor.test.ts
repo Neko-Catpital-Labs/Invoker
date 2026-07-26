@@ -669,6 +669,27 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
+  it('getTerminalSpec preserves displayBridge without changing command task launch shape', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const request = makeRequest();
+    const handle = await executor.start(request);
+    const spec = executor.getTerminalSpec({
+      ...handle,
+      displayBridge: 'Context before terminal output\n',
+    });
+
+    expect(spec).toEqual({
+      cwd: expect.stringMatching(/^\/fake\/worktrees\//),
+      displayBridge: 'Context before terminal output\n',
+    });
+    expect(spec!.command).toBeUndefined();
+    expect(spec!.args).toBeUndefined();
+
+    // Cleanup
+    taskProcess.emit('close', 0, null);
+  });
+
   it('handle.workspacePath is set to worktree directory', async () => {
     const { taskProcess } = setupSpawnMock();
 
@@ -1307,6 +1328,22 @@ describe('WorktreeExecutor', () => {
         command: 'claude',
         args: ['--resume', 'session-wt-1', '--dangerously-skip-permissions'],
         cwd: '/home/user/.invoker/worktrees/wt-abc',
+      });
+    });
+
+    it('preserves displayBridge on restored agent resume specs without changing argv', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        agentSessionId: 'session-wt-1',
+        displayBridge: 'Resume context\n',
+      });
+      expect(spec).toEqual({
+        command: 'claude',
+        args: ['--resume', 'session-wt-1', '--dangerously-skip-permissions'],
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge: 'Resume context\n',
       });
     });
 

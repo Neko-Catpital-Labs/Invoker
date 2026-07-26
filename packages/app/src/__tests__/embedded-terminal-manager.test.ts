@@ -124,6 +124,28 @@ describe('EmbeddedTerminalManager', () => {
     expect(mgr.list()).toHaveLength(1);
   });
 
+  it('keeps displayBridge out of terminal target identity', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+
+    const first = mgr.openOrReuse({
+      taskId: 'task-bridge-target',
+      spec: { cwd: '/tmp/wt', displayBridge: 'First context\n' },
+      cwd: '/tmp/wt',
+    });
+    const second = mgr.openOrReuse({
+      taskId: 'task-bridge-target',
+      spec: { cwd: '/tmp/wt', displayBridge: 'Updated context\n' },
+      cwd: '/tmp/wt',
+    });
+
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(bashSpawnFn).toHaveBeenCalledTimes(1);
+  });
+
   it('opens planning sessions as reusable raw shells distinct from task terminals', () => {
     const planningChild = createFakeChild();
     const taskChild = createFakeChild();
@@ -255,6 +277,36 @@ describe('EmbeddedTerminalManager', () => {
     const reused = mgr.openOrReuse({ taskId: 'task-early', spec: {}, cwd: '/tmp/wt' });
     expect(reused.sessionId).toBe(session.sessionId);
     expect(reused.outputSnapshot).toBe(firstFrame);
+  });
+
+  it('seeds displayBridge before synchronous backend output and persists the snapshot', () => {
+    const bridge = 'Context: resume the task from the last checkpoint.\n\n';
+    const firstFrame = 'FIRST_FRAME_FROM_BACKEND\n';
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput(firstFrame);
+        return spawned;
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+    const updates: string[] = [];
+    mgr.on('session-updated', (record) => updates.push(record.outputSnapshot));
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-bridge-output',
+      spec: { cwd: '/tmp/wt', displayBridge: bridge },
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.outputSnapshot).toBe(bridge + firstFrame);
+    expect(mgr.getPersistenceRecord(session.sessionId)?.outputSnapshot).toBe(bridge + firstFrame);
+    expect(updates).toContain(bridge + firstFrame);
   });
 
   it('opens a distinct session when the same task resolves to a different terminal target', () => {

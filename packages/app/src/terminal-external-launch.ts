@@ -5,6 +5,8 @@
 
 import { spawn, type SpawnOptions } from 'node:child_process';
 
+const MAX_DISPLAY_BRIDGE_CHARS = 4 * 1024;
+
 /** Escape one argument for POSIX shell single-quoted strings. */
 export function shellSingleQuoteForPOSIX(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -12,22 +14,29 @@ export function shellSingleQuoteForPOSIX(s: string): string {
 
 export type InteractiveExecShell = 'bash' | 'zsh';
 
+function buildDisplayBridgePrefix(displayBridge: string | undefined): string {
+  if (!displayBridge) return '';
+  const bridge = displayBridge.slice(0, MAX_DISPLAY_BRIDGE_CHARS);
+  return `printf %s ${shellSingleQuoteForPOSIX(bridge)} && `;
+}
+
 /**
  * Full shell line: `cd '<cwd>' && ...` plus either `exec bash` / `exec zsh` or `command` with args properly quoted.
  */
 export function buildTerminalShellCommand(
-  spec: { cwd?: string; command?: string; args?: string[] },
+  spec: { cwd?: string; command?: string; args?: string[]; displayBridge?: string },
   defaultCwd: string,
   options?: { interactiveExec?: InteractiveExecShell },
 ): string {
   const cwd = spec.cwd ?? defaultCwd;
   const cd = `cd ${shellSingleQuoteForPOSIX(cwd)}`;
+  const displayBridgePrefix = buildDisplayBridgePrefix(spec.displayBridge);
   if (!spec.command) {
     const execSh = options?.interactiveExec === 'zsh' ? 'exec zsh' : 'exec bash';
-    return `${cd} && ${execSh}`;
+    return `${cd} && ${displayBridgePrefix}${execSh}`;
   }
   const argv = [spec.command, ...(spec.args ?? [])];
-  return `${cd} && ${argv.map(shellSingleQuoteForPOSIX).join(' ')}`;
+  return `${cd} && ${displayBridgePrefix}${argv.map(shellSingleQuoteForPOSIX).join(' ')}`;
 }
 
 /** Escape for embedding in AppleScript: `tell application "Terminal" to do script "…"`. */
@@ -37,7 +46,7 @@ export function appleScriptEscapeForDoubleQuotedString(s: string): string {
 
 /** argv for `osascript` to run the built shell command in Terminal.app. */
 export function buildMacOSOsascriptArgs(
-  spec: { cwd?: string; command?: string; args?: string[] },
+  spec: { cwd?: string; command?: string; args?: string[]; displayBridge?: string },
   defaultCwd: string,
 ): string[] {
   const shellCmd = buildTerminalShellCommand(spec, defaultCwd, { interactiveExec: 'zsh' });
@@ -54,7 +63,7 @@ export function buildMacOSOsascriptArgs(
  * Inner script passed to `bash -c` for Linux x-terminal-emulator (includes optional suffix).
  */
 export function buildLinuxXTerminalBashScript(
-  spec: { cwd?: string; command?: string; args?: string[]; linuxTerminalTail?: 'exec_bash' | 'pause' },
+  spec: { cwd?: string; command?: string; args?: string[]; linuxTerminalTail?: 'exec_bash' | 'pause'; displayBridge?: string },
   defaultCwd: string,
 ): string {
   const base = buildTerminalShellCommand(spec, defaultCwd);
