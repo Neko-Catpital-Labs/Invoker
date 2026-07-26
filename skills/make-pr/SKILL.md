@@ -71,6 +71,9 @@ The unit must match the changed files. The CI validator rejects a declared unit 
 ## Safety Invariant
 
 Explain why this slice is safe to review locally.
+If the source plan or slice does not contain a user-confirmed safety invariant,
+propose one and ask the user to confirm or correct it before publishing this PR
+body.
 
 ## Slice Rationale
 
