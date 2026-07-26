@@ -93,6 +93,8 @@ export interface InAppPlanningChatSession {
 
 export type InAppPlanningChatSessions = Map<string, InAppPlanningChatSession>;
 
+const NO_COMPLETE_PLAN_DRAFT_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
 export function createInAppPlanningChatSessions(): InAppPlanningChatSessions {
   return new Map();
 }
@@ -631,6 +633,9 @@ export async function submitPlanningChatDraft(
   }
   if (session.status === 'submitted') {
     return { ok: false, error: 'This planning session was already submitted.' };
+  }
+  if (session.status !== 'draft_ready' || !session.draftPlanText?.trim()) {
+    return { ok: false, error: NO_COMPLETE_PLAN_DRAFT_ERROR };
   }
   if (session.pendingSubmit) {
     return session.pendingSubmit;
