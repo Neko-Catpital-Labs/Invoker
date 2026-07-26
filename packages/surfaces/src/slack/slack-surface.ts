@@ -878,6 +878,7 @@ export class SlackSurface implements Surface {
         return;
       }
       this.pendingConfirms.delete(action.value);
+      this.slackSessionRepo?.deletePendingConfirmation(action.value);
       this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] accepted key=${action.value}`);
       await respond?.({ text: '✅ Planning for execution.', replace_original: true });
       await this.startPlanIntent(pending, this.lobbyButtonSay(body, respond), action.value);
@@ -892,6 +893,7 @@ export class SlackSurface implements Surface {
         return;
       }
       this.pendingConfirms.delete(action.value);
+      this.slackSessionRepo?.deletePendingConfirmation(action.value);
       this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] declined key=${action.value}`);
       await respond?.({ text: '✅ Continuing the conversation without planning.', replace_original: true });
       await this.startConversationIntent(pending, this.lobbyButtonSay(body, respond), action.value);
