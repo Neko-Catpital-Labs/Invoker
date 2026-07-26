@@ -108,12 +108,29 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
   });
 
-  it('does not expose a plan when a summary-only turn has no prior draft', async () => {
-    const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
+  it('removes the submit instruction from a current turn with no draft', async () => {
+    const repo = {
+      loadConversation: vi.fn().mockReturnValue(null),
+      saveConversation: vi.fn(),
+      deleteConversation: vi.fn(),
+    };
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'abc-123',
+      conversationRepo: repo as any,
+      plannerRetryLimit: 0,
+    });
+    const submitLine = 'Reply `submit` to submit it.';
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('Draft it');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${submitLine}`));
+    const reply = await conversation.sendMessage('Draft it');
 
+    expect(reply).toBe('Drafted the plan. Summary: one step.');
+    expect(reply.split('\n')).not.toContain(submitLine);
+    expect(repo.saveConversation).toHaveBeenCalledTimes(1);
+    const savedMessages = repo.saveConversation.mock.calls[0][1] as Array<{ role: string; content: string }>;
+    const savedReply = savedMessages[savedMessages.length - 1];
+    expect(savedReply).toEqual({ role: 'assistant', content: 'Drafted the plan. Summary: one step.' });
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
@@ -139,8 +156,9 @@ describe('plan draft file - activation side', () => {
       'Drafted the plan.\n\nReply `submit` to submit it.',
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Create the plan');
+    const reply = await conversation.sendMessage('Create the plan');
 
+    expect(reply.split('\n')).toContain('Reply `submit` to submit it.');
     expect(isConfirmation('submit')).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(conversation.planSubmitted).toBe(false);
