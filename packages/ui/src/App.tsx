@@ -34,6 +34,7 @@ import { SystemSetupModal } from './components/SystemSetupModal.js';
 import { WorkflowGraph } from './components/WorkflowGraph.js';
 import { FloatingGraphPanel } from './components/FloatingGraphPanel.js';
 import { WorkflowInspector } from './components/WorkflowInspector.js';
+import { BulkPoolReassignmentModal, type BulkPoolReassignmentResult } from './components/BulkPoolReassignmentModal.js';
 import { WorkerDetailsPanel } from './components/WorkerDetailsPanel.js';
 import { WorkerDetailControl } from './components/WorkerDetailControl.js';
 import { WorkerActivityCard } from './components/WorkerActivityCard.js';
@@ -77,7 +78,8 @@ type ModalState =
   | { type: 'input'; task: TaskState }
   | { type: 'approval'; task: TaskState; action: 'approve' | 'reject' }
   | { type: 'experiment'; task: TaskState }
-  | { type: 'replace'; task: TaskState };
+  | { type: 'replace'; task: TaskState }
+  | { type: 'bulkPoolReassignment' };
 
 type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar' | 'planning';
 type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'>;
@@ -780,6 +782,7 @@ export function App() {
   }, [refreshTaskGraph, tasks.size, workflows.size]);
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
+  const loadedTasks = useMemo(() => [...tasks.values()], [tasks]);
   const [viewMode, setViewMode] = useState<'dag' | 'history' | 'timeline' | 'queue' | 'actionGraph'>('dag');
   const {
     graph: actionGraph,
@@ -3176,6 +3179,75 @@ export function App() {
     [invoker, trackAcceptedMutation],
   );
 
+  const handleBulkPoolReassignment = useCallback(
+    async (sourcePoolId: string, destinationPoolId: string): Promise<BulkPoolReassignmentResult> => {
+      const result: BulkPoolReassignmentResult = {
+        moved: 0,
+        failed: 0,
+        skipped: 0,
+        skippedMerge: 0,
+        skippedAlreadyTargeted: 0,
+        attempted: 0,
+        failureDetails: [],
+      };
+      const candidates: TaskState[] = [];
+
+      for (const task of tasksRef.current.values()) {
+        if (task.config.isMergeNode) {
+          if (task.config.poolId === sourcePoolId) result.skippedMerge += 1;
+          continue;
+        }
+        if (task.config.poolId === destinationPoolId) {
+          result.skippedAlreadyTargeted += 1;
+          continue;
+        }
+        if (task.config.poolId !== sourcePoolId) continue;
+        candidates.push(task);
+      }
+
+      result.skipped = result.skippedMerge + result.skippedAlreadyTargeted;
+      result.attempted = candidates.length;
+
+      if (!invoker) {
+        result.failed = candidates.length;
+        result.failureDetails = candidates.map((task) => ({
+          taskId: task.id,
+          message: 'Invoker API is unavailable.',
+        }));
+        toast.error('Pool reassignment failed', { description: 'Invoker API is unavailable.' });
+        return result;
+      }
+
+      for (const task of candidates) {
+        try {
+          const mutationResult = await invoker.editTaskPool(task.id, destinationPoolId);
+          trackAcceptedMutation(mutationResult);
+          result.moved += 1;
+        } catch (err) {
+          result.failed += 1;
+          result.failureDetails.push({
+            taskId: task.id,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      if (result.moved > 0) {
+        toast.success('Pool reassignment submitted', {
+          description: `${formatCount(result.moved, 'task')} moved to ${destinationPoolId}.`,
+        });
+      }
+      if (result.failed > 0) {
+        toast.error('Some pool edits failed', {
+          description: `${formatCount(result.failed, 'task')} could not be moved.`,
+        });
+      }
+
+      return result;
+    },
+    [invoker, trackAcceptedMutation],
+  );
+
   // ── Edit task execution agent ────────────────────────────
   const handleEditAgent = useCallback(
     async (taskId: string, agentName: string) => {
@@ -3459,6 +3531,17 @@ export function App() {
                 className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
               >
                 Queue
+              </button>
+              <button
+                type="button"
+                data-testid="rail-move-tasks-between-pools"
+                onClick={() => {
+                  setGraphActionsMenuOpen(false);
+                  setModal({ type: 'bulkPoolReassignment' });
+                }}
+                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
+              >
+                Move Tasks Between Pools
               </button>
               <div className="my-1 border-t border-border" />
               <button
@@ -4440,6 +4523,7 @@ export function App() {
                   executionPools={executionPools}
                   executionHarnesses={executionHarnesses}
                   executionDefaults={executionDefaults}
+                  onEditPool={handleEditPool}
                   onEditAgent={handleEditAgent}
                   onEditModel={handleEditModel}
                   onEditPrompt={handleEditPrompt}
@@ -4681,6 +4765,15 @@ export function App() {
       )}
 
       {/* Modals */}
+      {modal.type === 'bulkPoolReassignment' && (
+        <BulkPoolReassignmentModal
+          executionPools={executionPools}
+          tasks={loadedTasks}
+          onConfirm={handleBulkPoolReassignment}
+          onClose={closeModal}
+        />
+      )}
+
       {modal.type === 'input' && (
         <InputModal
           task={modal.task}

@@ -117,6 +117,100 @@ describe('Side rail controls (component)', () => {
     });
   });
 
+  it('selected task inspector edits executor pool', async () => {
+    vi.mocked(mock.api.getExecutionPools).mockResolvedValue(['pool-a', 'pool-b']);
+    const pooledTasks = [
+      makeUITask({
+        id: 'wf-a/task-a',
+        description: 'Alpha Task',
+        workflowId: 'wf-a',
+        command: 'echo alpha',
+        poolId: 'pool-a',
+      }),
+    ];
+    mock.setTasks(pooledTasks, [{ id: 'wf-a', name: 'Alpha Workflow', status: 'running' }]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('selected-workflow-mini-dag');
+    fireEvent.click(await screen.findByTestId('rf__node-wf-a/task-a'));
+
+    const select = await screen.findByTestId('executor-pool-select');
+    fireEvent.change(select, { target: { value: 'pool-b' } });
+
+    await waitFor(() => {
+      expect(mock.api.editTaskPool).toHaveBeenCalledWith('wf-a/task-a', 'pool-b');
+    });
+  });
+
+  it('bulk pool reassignment moves matching loaded tasks and continues after one failure', async () => {
+    vi.mocked(mock.api.getExecutionPools).mockResolvedValue(['pool-a', 'pool-b', 'pool-c']);
+    vi.mocked(mock.api.editTaskPool).mockImplementation(async (taskId, poolId) => {
+      if (taskId === 'wf-a/source-1') throw new Error('pool edit rejected');
+      return {
+        ok: true,
+        accepted: true,
+        intentId: 42,
+        workflowId: 'wf-a',
+        channel: 'invoker:edit-task-pool',
+      };
+    });
+    const pooledTasks = [
+      makeUITask({
+        id: 'wf-a/source-1',
+        description: 'First Source Task',
+        workflowId: 'wf-a',
+        command: 'echo source 1',
+        poolId: 'pool-a',
+      }),
+      makeUITask({
+        id: 'wf-a/source-2',
+        description: 'Second Source Task',
+        workflowId: 'wf-a',
+        command: 'echo source 2',
+        dependencies: ['wf-a/source-1'],
+        poolId: 'pool-a',
+      }),
+      makeUITask({
+        id: 'wf-a/already-targeted',
+        description: 'Already Targeted Task',
+        workflowId: 'wf-a',
+        command: 'echo target',
+        poolId: 'pool-b',
+      }),
+      makeUITask({
+        id: 'wf-a/merge',
+        description: 'Merge Task',
+        workflowId: 'wf-a',
+        isMergeNode: true,
+        poolId: 'pool-a',
+      }),
+    ];
+    mock.setTasks(pooledTasks, [{ id: 'wf-a', name: 'Alpha Workflow', status: 'running' }]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    fireEvent.click(await screen.findByTestId('graph-more-button'));
+    fireEvent.click(await screen.findByTestId('rail-move-tasks-between-pools'));
+
+    await screen.findByTestId('bulk-pool-reassignment-modal');
+    await waitFor(() => expect(screen.getByTestId('bulk-pool-source-select')).toHaveValue('pool-a'));
+    await waitFor(() => expect(screen.getByTestId('bulk-pool-preview-count')).toHaveTextContent('2'));
+    expect(screen.getByTestId('bulk-pool-already-targeted-count')).toHaveTextContent('1');
+    expect(screen.getByTestId('bulk-pool-merge-skipped-count')).toHaveTextContent('1');
+
+    fireEvent.click(screen.getByTestId('bulk-pool-confirm'));
+
+    await waitFor(() => {
+      expect(mock.api.editTaskPool).toHaveBeenCalledTimes(2);
+    });
+    expect(mock.api.editTaskPool).toHaveBeenNthCalledWith(1, 'wf-a/source-1', 'pool-b');
+    expect(mock.api.editTaskPool).toHaveBeenNthCalledWith(2, 'wf-a/source-2', 'pool-b');
+    expect(await screen.findByTestId('bulk-pool-result')).toHaveTextContent('Moved 1 of 2 matching tasks');
+    expect(screen.getByTestId('bulk-pool-skipped-count')).toHaveTextContent('Skipped 2 tasks');
+    expect(screen.getByTestId('bulk-pool-skipped-count')).toHaveTextContent('Failed 1');
+  });
+
   it('cycles major keyboard regions with Tab', async () => {
     await renderKeyboardFixture(mock);
 
