@@ -274,8 +274,8 @@ function shellQuote(s: string): string {
 
 /**
  * Remote shell for agent fix/resolve commands. Use a login shell so the remote
- * user's ~/.profile PATH is applied (same as SshExecutor task payloads). Do not
- * forward the local host PATH — that clobbers Linux remotes with macOS paths.
+ * user's ~/.profile PATH is applied. Do not forward the local host PATH — that
+ * clobbers Linux remotes with macOS paths.
  */
 export function remoteAgentShellInvocation(): string[] {
   return ['bash', '-l', '-s'];
