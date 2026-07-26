@@ -191,8 +191,8 @@ function capTailChars(value: string, max: number): string {
 // ── Planning request parsing ─────────────────────────────────
 
 const PRESET_TOOL_HINTS = ['cursor', 'omp', 'codex', 'claude'];
-const URL_TOKEN_TERMINATORS = new Set([' ', '\t', '\n', '\r', '<', '>', '(', ')', '[', ']', '{', '}', '"', "'", '|']);
 const TRAILING_URL_PUNCTUATION = new Set(['.', ',', ';', ':', '!', '?']);
+const MESSAGE_REPO_CANDIDATE_RE = /<((?:(?:https?|ssh):\/\/|git@)[^|>\s]+)(?:\|[^>]+)?>|\b(?:(?:https?|ssh):\/\/[^\s<>]+|git@[\w.-]+:[^\s<>]+)/gi;
 
 /** A leading bracket tag is a likely preset attempt when it names a known tool or uses the tool+model form. */
 function looksLikePreset(normalized: string): boolean {
@@ -200,48 +200,10 @@ function looksLikePreset(normalized: string): boolean {
 }
 
 export function extractRepoUrlFromMessage(text: string): string | undefined {
-  let start = 0;
-  while (start < text.length) {
-    const httpIndex = text.indexOf('http://', start);
-    const httpsIndex = text.indexOf('https://', start);
-    const candidateStart = httpIndex === -1
-      ? httpsIndex
-      : httpsIndex === -1
-        ? httpIndex
-        : Math.min(httpIndex, httpsIndex);
-    if (candidateStart === -1) return undefined;
-    let candidateEnd = candidateStart;
-    while (candidateEnd < text.length && !URL_TOKEN_TERMINATORS.has(text[candidateEnd])) {
-      candidateEnd += 1;
-    }
-    let candidate = text.slice(candidateStart, candidateEnd);
-    while (candidate && TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!)) {
-      candidate = candidate.slice(0, -1);
-    }
-    let url: URL;
-    try {
-      url = new URL(candidate);
-    } catch {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.username || url.password) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (url.search || url.hash) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    if (!/^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(url.pathname)) {
-      start = candidateEnd + 1;
-      continue;
-    }
-    return candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
+  for (const match of text.matchAll(MESSAGE_REPO_CANDIDATE_RE)) {
+    const candidate = trimMessageRepoCandidate(match[1] ?? match[0]);
+    if (!isRepoCandidateFromMessage(candidate)) continue;
+    return /^https?:\/\//i.test(candidate) && candidate.endsWith('/') ? candidate.slice(0, -1) : candidate;
   }
   return undefined;
 }
@@ -257,6 +219,32 @@ function stripGitSuffix(path: string): string {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function trimMessageRepoCandidate(candidate: string): string {
+  let trimmed = candidate.trim();
+  while (trimmed && (TRAILING_URL_PUNCTUATION.has(trimmed.at(-1)!) || trimmed.endsWith(')') || trimmed.endsWith(']'))) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  return trimmed;
+}
+
+function isRepoCandidateFromMessage(rawUrl: string): boolean {
+  if (/^(?:ssh:\/\/|git@)/i.test(rawUrl)) return true;
+
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  if (!url.host || (url.protocol !== 'http:' && url.protocol !== 'https:')) return false;
+  if (url.username || url.password || url.search || url.hash) return false;
+  if (url.host.toLowerCase() === 'github.com') {
+    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/i.test(url.pathname);
+  }
+  return /\.git$/i.test(url.pathname);
 }
 
 function parseRepoParts(repoUrl: string): RepoParts | undefined {
@@ -344,16 +332,6 @@ export function parsePlanningRequest(
   };
 }
 
-function isRepoRootUrl(rawUrl: string): boolean {
-  if (/^(ssh:\/\/|git@)/.test(rawUrl)) return true;
-  try {
-    const u = new URL(rawUrl);
-    return /^\/[^/]+\/[^/]+(?:\.git|\/)?$/.test(u.pathname);
-  } catch {
-    return false;
-  }
-}
-
 function extractRepositoryUrls(text: string): string[] {
   const slackLinks = [...text.matchAll(/<((?:https?|ssh):\/\/[^|>\s]+)(?:\|[^>]+)?>/gi)];
   const withoutSlackLinks = text.replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ');
@@ -362,8 +340,8 @@ function extractRepositoryUrls(text: string): string[] {
     ...withoutSlackLinks.matchAll(/\bhttps?:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bssh:\/\/[^\s<>]+/gi),
     ...withoutSlackLinks.matchAll(/\bgit@[\w.-]+:[^\s<>]+/gi),
-  ].map((match) => (match[1] ?? match[0]).replace(/[),.;]+$/, ''));
-  return [...new Set(candidates)].filter(isRepoRootUrl);
+  ].map((match) => trimMessageRepoCandidate(match[1] ?? match[0]));
+  return [...new Set(candidates)].filter(isRepoCandidateFromMessage);
 }
 
 function repositoryIdentity(repoUrl: string): string {
