@@ -44,7 +44,7 @@ def event(state="dequeued", head=HEAD, comment_id="cm1", failing=(), conditions=
 
 def pr(**kw):
     base = dict(
-        number=1, title="t", url="u", state="OPEN", is_draft=False,
+        number=1, title="t", body="", url="u", state="OPEN", is_draft=False,
         base_ref_name="master", head_ref_name="branch", head_ref_oid=HEAD,
         merge_state_status="BLOCKED", mergeable="MERGEABLE",
         labels=frozenset(), checks={"build": check("success")},

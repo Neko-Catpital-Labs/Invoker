@@ -4,12 +4,13 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, parse } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 
 const DEFAULT_BASE_BRANCH = 'master';
 const DEFAULT_BASE_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'origin';
 
 function usage() {
-  console.error(`Usage: node scripts/validate-pr-body-local.mjs --body-file <file> [--base <branch>] [--base-remote <remote>]
+  console.error(`Usage: node scripts/validate-pr-body-local.mjs --body-file <file> [--base <branch>] [--base-remote <remote>] [--json]
 
 Validates a local PR body against the current branch diff using the same changed-files
 and full-diff inputs as the PR Body CI workflow.`);
@@ -20,6 +21,7 @@ function parseArgs(argv) {
   let bodyFile = '';
   let baseBranch = DEFAULT_BASE_BRANCH;
   let baseRemote = DEFAULT_BASE_REMOTE;
+  let json = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     switch (argv[index]) {
@@ -31,6 +33,9 @@ function parseArgs(argv) {
         break;
       case '--base-remote':
         baseRemote = argv[++index] || '';
+        break;
+      case '--json':
+        json = true;
         break;
       case '--help':
         usage();
@@ -46,7 +51,7 @@ function parseArgs(argv) {
     usage();
   }
 
-  return { bodyFile, baseBranch, baseRemote };
+  return { bodyFile, baseBranch, baseRemote, json };
 }
 
 function gitText(args) {
@@ -87,6 +92,7 @@ function runTrustedBaseValidator({ repoRoot, baseRef, body, changedFiles, diffTe
   const bodyPath = join(inputsDir, 'pr-body.md');
   const changedFilesPath = join(inputsDir, 'changed-files.txt');
   const diffPath = join(inputsDir, 'pr.diff');
+  const scriptPath = join(inputsDir, 'run-validator.mjs');
   let worktreeAdded = false;
 
   try {
@@ -104,35 +110,49 @@ function runTrustedBaseValidator({ repoRoot, baseRef, body, changedFiles, diffTe
     writeFileSync(bodyPath, body);
     writeFileSync(changedFilesPath, `${changedFiles.join('\n')}\n`);
     writeFileSync(diffPath, diffText);
+    writeFileSync(scriptPath, `import { readFileSync } from 'node:fs';
+import { getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validatePrBody } from ${JSON.stringify(join(validatorWorktree, 'scripts', 'validate-pr-body.mjs'))};
+import { reviewUnitsForChangedFiles } from ${JSON.stringify(join(validatorWorktree, 'scripts', 'review-unit-rules.mjs'))};
+
+const [bodyPath, changedFilesPath, diffPath] = process.argv.slice(2);
+const body = readFileSync(bodyPath, 'utf8');
+const changedFiles = readFileSync(changedFilesPath, 'utf8').split('\\n').map((line) => line.trim()).filter(Boolean);
+const diffText = readFileSync(diffPath, 'utf8');
+const errors = await validatePrBody(body, { changedFiles, diffText });
+const warnings = getPrBodyWarnings(body, { changedFiles, diffText });
+const metadata = getReviewMetadata(body);
+
+console.log(JSON.stringify({
+  errors,
+  warnings,
+  reviewLane: metadata.reviewLane,
+  reviewUnit: metadata.reviewUnit,
+  reviewUnits: reviewUnitsForChangedFiles(changedFiles),
+  scopeKinds: scopeKindsForChangedFiles(changedFiles),
+}));
+`);
 
     const result = spawnSync(
       process.execPath,
-      [
-        join(validatorWorktree, 'scripts', 'validate-pr-body.mjs'),
-        '--body-file',
-        bodyPath,
-        '--changed-files-file',
-        changedFilesPath,
-        '--diff-file',
-        diffPath,
-      ],
+      [scriptPath, bodyPath, changedFilesPath, diffPath],
       { cwd: validatorWorktree, encoding: 'utf8' },
     );
     if (result.error) throw result.error;
 
-    const stdout = String(result.stdout ?? '');
-    const stderr = String(result.stderr ?? '');
-    if (result.status === 0) {
-      return {
-        errors: [],
-        warnings: parseValidatorMessages(stdout, 'PR body validation warnings:'),
-      };
+    const stdout = String(result.stdout ?? '').trim();
+    const stderr = String(result.stderr ?? '').trim();
+    if (result.status !== 0) {
+      throw new Error(`Trusted-base PR body validator failed: ${stderr || stdout}`);
     }
-
-    const errors = parseValidatorMessages(stderr, 'PR body validation failed:');
-    if (errors.length > 0) return { errors, warnings: [] };
-
-    throw new Error(`Trusted-base PR body validator failed: ${stderr || stdout}`);
+    const parsed = JSON.parse(stdout || '{}');
+    return {
+      errors: Array.isArray(parsed.errors) ? parsed.errors : [],
+      warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+      reviewLane: typeof parsed.reviewLane === 'string' ? parsed.reviewLane : '',
+      reviewUnit: typeof parsed.reviewUnit === 'string' ? parsed.reviewUnit : '',
+      reviewUnits: Array.isArray(parsed.reviewUnits) ? parsed.reviewUnits : [],
+      scopeKinds: Array.isArray(parsed.scopeKinds) ? parsed.scopeKinds : [],
+    };
   } finally {
     try {
       if (worktreeAdded) {
@@ -174,7 +194,7 @@ export async function validateLocalPrBody({ body, baseBranch = DEFAULT_BASE_BRAN
     `${baseRef}...HEAD`,
     '--',
   ]);
-  const { errors, warnings } = runTrustedBaseValidator({
+  const trusted = runTrustedBaseValidator({
     repoRoot,
     baseRef,
     body,
@@ -182,17 +202,42 @@ export async function validateLocalPrBody({ body, baseBranch = DEFAULT_BASE_BRAN
     diffText,
   });
 
-  return { changedFiles, diffText, errors, warnings, requiresVisualProof: false };
+  return {
+    valid: trusted.errors.length === 0,
+    errors: trusted.errors,
+    warnings: trusted.warnings,
+    changedFiles,
+    diffText,
+    reviewLane: trusted.reviewLane,
+    reviewUnit: trusted.reviewUnit,
+    reviewUnits: trusted.reviewUnits,
+    scopeKinds: trusted.scopeKinds,
+    requiresVisualProof: false,
+  };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const body = readFileSync(args.bodyFile, 'utf8');
+  const body = await readFile(args.bodyFile, 'utf8');
   const result = await validateLocalPrBody({
     body,
     baseBranch: args.baseBranch,
     baseRemote: args.baseRemote,
   });
+
+  if (args.json) {
+    console.log(JSON.stringify({
+      valid: result.valid,
+      errors: result.errors,
+      warnings: result.warnings,
+      changedFiles: result.changedFiles,
+      reviewLane: result.reviewLane,
+      reviewUnit: result.reviewUnit,
+      reviewUnits: result.reviewUnits,
+      scopeKinds: result.scopeKinds,
+    }));
+    process.exit(result.valid ? 0 : 1);
+  }
 
   if (result.errors.length > 0) {
     console.error('PR body validation failed:');

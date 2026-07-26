@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Collection
+from typing import Collection, Mapping
 
 try:
     from .mergify_admin_requeue_model import Action, BOT_OR_SELF_AUTHORS, Blocker, Ledger, MergifyQueueEvent, PrSnapshot, StackGroup
@@ -63,8 +63,17 @@ def mergify_condition_map(event: MergifyQueueEvent | None) -> dict[str, str]:
     return dict(event.condition_states) if event else {}
 
 
-def effective_blockers(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
-    blockers = [b for b in classify_pr(pr, required_checks, trunk) if b.kind != "not_current_bottom"]
+def effective_blockers(
+    pr: PrSnapshot,
+    required_checks: Collection[str],
+    trunk: str,
+    suppressed_failed_checks: Collection[str] = (),
+) -> tuple[Blocker, ...]:
+    suppressed = set(suppressed_failed_checks)
+    blockers = [
+        b for b in classify_pr(pr, required_checks, trunk)
+        if b.kind != "not_current_bottom" and not (b.kind == "failed_check" and b.key in suppressed)
+    ]
     latest = pr.latest_mergify
     if not latest or latest.head_sha != pr.head_ref_oid:
         return tuple(blockers)
@@ -75,11 +84,18 @@ def effective_blockers(pr: PrSnapshot, required_checks: Collection[str], trunk: 
     )
 
 
-def mergify_failed_check_actions(pr: PrSnapshot, ledger: Ledger) -> tuple[Action, ...]:
+def mergify_failed_check_actions(
+    pr: PrSnapshot,
+    ledger: Ledger,
+    suppressed_failed_checks: Collection[str] = (),
+) -> tuple[Action, ...]:
+    suppressed = set(suppressed_failed_checks)
     latest = pr.latest_mergify
     if not latest or latest.state != "dequeued" or latest.head_sha != pr.head_ref_oid:
         return ()
     for name in latest.failing_checks:
+        if name in suppressed:
+            continue
         if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= 3:
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"), f"Mergify queue check failed: {name}"),)
         return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
@@ -93,21 +109,26 @@ def plan_stack_actions(
     now_epoch: int,
     max_requeue_attempts: int = 2,
     max_repair_attempts: int = 3,
+    suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
 ) -> tuple[Action, ...]:
     del now_epoch
+    suppressed_by_pr = suppressed_failed_checks_by_pr or {}
     current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == TRUNK]
     bottom = current_bottoms[0] if current_bottoms else None
     upper_stack_needs_acceptance = bool(bottom) and any(
         pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
         for pr in stack.prs
     )
-    blockers_by_pr = {pr.number: effective_blockers(pr, required_checks, TRUNK) for pr in stack.prs}
+    blockers_by_pr = {
+        pr.number: effective_blockers(pr, required_checks, TRUNK, suppressed_by_pr.get(pr.number, ()))
+        for pr in stack.prs
+    }
     all_blockers = [b for blockers in blockers_by_pr.values() for b in blockers]
 
     for pr in stack.prs:
         if upper_stack_needs_acceptance and bottom and pr.number == bottom.number:
             continue
-        actions = mergify_failed_check_actions(pr, ledger)
+        actions = mergify_failed_check_actions(pr, ledger, suppressed_by_pr.get(pr.number, ()))
         if actions:
             return actions
 

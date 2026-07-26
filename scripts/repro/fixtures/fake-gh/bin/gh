@@ -116,6 +116,7 @@ def graphql_detail(pr: dict) -> dict:
     return {
         "number": pr.get("number"),
         "title": pr.get("title", ""),
+        "body": pr.get("body", ""),
         "url": pr.get("url", ""),
         "isDraft": pr.get("isDraft", False),
         "state": pr.get("state", "OPEN"),
@@ -176,6 +177,10 @@ def main() -> None:
         save_state(state)
         return
 
+    if ARGS[:2] == ["run", "view"]:
+        print("")
+        return
+
     if ARGS[:2] == ["api", "graphql"]:
         number = 0
         for arg in ARGS:
@@ -189,16 +194,41 @@ def main() -> None:
             print(json.dumps({"data": {"repository": {"pullRequest": graphql_detail(pr)}}}))
             return
         if any("resolveReviewThread" in arg for arg in ARGS):
-            # Thread resolution is observable via calls.log only.
             print(json.dumps({"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}))
             return
         unhandled()
 
     if ARGS[0] == "api":
-        path = next((arg for arg in ARGS[1:] if not arg.startswith("-")), "")
+        path = next((arg for arg in ARGS[1:] if arg.startswith("repos/")), "")
         comments_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/comments", path)
         if comments_match and flag_value("--method") in (None, "GET"):
             print(json.dumps(state.get("issue_comments", {}).get(comments_match.group(1), [])))
+            return
+        pulls_match = re.fullmatch(r"repos/[^/]+/[^/]+/pulls", path)
+        if pulls_match and flag_value("--method") == "POST":
+            payload = json.loads(STDIN or "{}")
+            prs = state.setdefault("prs", [])
+            next_number = max((int(pr.get("number", 0)) for pr in prs), default=0) + 1
+            created = {
+                "number": next_number,
+                "title": payload.get("title", ""),
+                "body": payload.get("body", ""),
+                "url": f"https://github.com/fake/repo/pull/{next_number}",
+                "state": "OPEN",
+                "isDraft": False,
+                "baseRefName": payload.get("base", ""),
+                "headRefName": payload.get("head", ""),
+                "headRefOid": payload.get("head_sha", ""),
+                "mergeStateStatus": "BLOCKED",
+                "mergeable": "MERGEABLE",
+                "labels": [],
+                "reviewThreads": [],
+                "checks": {"*": "SUCCESS"},
+            }
+            prs.append(created)
+            state.setdefault("issue_comments", {}).setdefault(str(next_number), [])
+            save_state(state)
+            print(json.dumps(created))
             return
         add_label_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/labels", path)
         if add_label_match and flag_value("--method") == "POST":
