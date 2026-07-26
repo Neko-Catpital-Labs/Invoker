@@ -307,7 +307,16 @@ function repoCandidateFromMessage(rawUrl: string): string | undefined {
   while (candidate && (TRAILING_URL_PUNCTUATION.has(candidate.at(-1)!) || candidate.at(-1) === ')')) {
     candidate = candidate.slice(0, -1);
   }
-  if (/^(ssh:\/\/|git@)/i.test(candidate)) return candidate;
+  if (/^git@/i.test(candidate)) return /[?#]/.test(candidate) ? undefined : candidate;
+  if (/^ssh:\/\//i.test(candidate)) {
+    try {
+      const u = new URL(candidate);
+      if (!u.host || u.protocol !== 'ssh:' || !u.pathname || u.pathname === '/' || u.search || u.hash) return undefined;
+      return candidate;
+    } catch {
+      return undefined;
+    }
+  }
   try {
     const u = new URL(candidate);
     if (!u.host || (u.protocol !== 'http:' && u.protocol !== 'https:')) return undefined;
@@ -319,6 +328,14 @@ function repoCandidateFromMessage(rawUrl: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function textWithoutMessageUrlTokens(text: string): string {
+  return text
+    .replace(/<(?:(?:https?|ssh):\/\/[^>]+)>/gi, ' ')
+    .replace(/\bhttps?:\/\/[^\s<>]+/gi, ' ')
+    .replace(/\bssh:\/\/[^\s<>]+/gi, ' ')
+    .replace(/\bgit@[\w.-]+:[^\s<>]+/gi, ' ');
 }
 
 function extractRepositoryUrls(text: string): string[] {
@@ -1783,8 +1800,9 @@ ${text}`;
   }
 
   private findMentionedRepoAlias(text: string): string | undefined {
+    const searchable = textWithoutMessageUrlTokens(text);
     return Object.keys(this.repoAliases).find((alias) => (
-      new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'i').test(text)
+      new RegExp(`\\b${escapeRegExp(alias)}\\b`, 'i').test(searchable)
     ));
   }
 

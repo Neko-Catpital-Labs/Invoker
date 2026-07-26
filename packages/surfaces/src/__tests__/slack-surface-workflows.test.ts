@@ -210,6 +210,11 @@ describe('extractRepoUrlFromMessage', () => {
     expect(extractRepoUrlFromMessage('repo is ssh://git@github.com/openai/invoker.git')).toBe('ssh://git@github.com/openai/invoker.git');
   });
 
+  it('rejects query and hash on ssh clone URLs', () => {
+    expect(extractRepoUrlFromMessage('repo is ssh://git@github.com/openai/invoker.git?ref=main')).toBeUndefined();
+    expect(extractRepoUrlFromMessage('repo is ssh://git@github.com/openai/invoker.git#main')).toBeUndefined();
+  });
+
   it('rejects credential-bearing URLs', () => {
     expect(extractRepoUrlFromMessage('https://token@github.com/openai/invoker')).toBeUndefined();
     expect(extractRepoUrlFromMessage('https://token:secret@github.com/openai/invoker.git')).toBeUndefined();
@@ -1142,7 +1147,10 @@ describe('lobby verb routing', () => {
 
   it('does not let a GitHub deep link override defaultRepoUrl in the first message', async () => {
     const defaultRepoUrl = 'git@github.com:default/repo.git';
-    const surface = lobbySurface(true, { defaultRepoUrl });
+    const surface = lobbySurface(true, {
+      defaultRepoUrl,
+      repoAliases: { invoker: 'git@github.com:alias/invoker.git' },
+    });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
 
@@ -1164,7 +1172,10 @@ describe('lobby verb routing', () => {
 
   it('does not let a website URL override defaultRepoUrl in the first message', async () => {
     const defaultRepoUrl = 'git@github.com:default/repo.git';
-    const surface = lobbySurface(true, { defaultRepoUrl });
+    const surface = lobbySurface(true, {
+      defaultRepoUrl,
+      repoAliases: { onorca: 'git@github.com:alias/onorca.git' },
+    });
     await surface.start(async () => {});
     const say = vi.fn().mockResolvedValue({ ts: 'a' });
 
