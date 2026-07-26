@@ -3,9 +3,29 @@ from __future__ import annotations
 from typing import Collection, Mapping
 
 try:
-    from .mergify_admin_requeue_model import Action, BOT_OR_SELF_AUTHORS, Blocker, Ledger, MergifyQueueEvent, PrSnapshot, StackGroup
+    from .mergify_admin_requeue_model import (
+        Action,
+        BOT_OR_SELF_AUTHORS,
+        Blocker,
+        Ledger,
+        MergifyQueueEvent,
+        PrSnapshot,
+        RepairPrereqStatus,
+        StackExecutionPlan,
+        StackGroup,
+    )
 except ImportError:
-    from mergify_admin_requeue_model import Action, BOT_OR_SELF_AUTHORS, Blocker, Ledger, MergifyQueueEvent, PrSnapshot, StackGroup
+    from mergify_admin_requeue_model import (
+        Action,
+        BOT_OR_SELF_AUTHORS,
+        Blocker,
+        Ledger,
+        MergifyQueueEvent,
+        PrSnapshot,
+        RepairPrereqStatus,
+        StackExecutionPlan,
+        StackGroup,
+    )
 
 
 TRUNK = "master"
@@ -101,6 +121,130 @@ def mergify_failed_check_actions(
         return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
     return ()
 
+def current_bottom_pr(stack: StackGroup, trunk: str) -> PrSnapshot | None:
+    for pr in stack.prs:
+        if pr.state == "OPEN" and pr.base_ref_name == trunk:
+            return pr
+    return None
+
+
+def stack_has_unaccepted_upper_pr(stack: StackGroup, bottom: PrSnapshot | None) -> bool:
+    return bool(bottom) and any(
+        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
+        for pr in stack.prs
+    )
+
+
+def latest_repair_prereq_status(
+    stack: StackGroup,
+    ledger: Ledger,
+    open_pr_numbers: Collection[int],
+    trunk: str,
+) -> RepairPrereqStatus | None:
+    bottom = current_bottom_pr(stack, trunk)
+    if not bottom:
+        return None
+    latest_row: dict[str, object] | None = None
+    latest_epoch = float("-inf")
+    for row in ledger.rows:
+        if row.get("kind") != "repair-prereq-created":
+            continue
+        if int(row.get("pr", -1)) != bottom.number:
+            continue
+        if row.get("headSha") != bottom.head_ref_oid:
+            continue
+        epoch = int(row.get("epoch", 0) or 0)
+        if latest_row is None or epoch >= latest_epoch:
+            latest_row = row
+            latest_epoch = epoch
+    if latest_row is None:
+        return None
+    meta = latest_row.get("meta") if isinstance(latest_row.get("meta"), Mapping) else {}
+    prereq_pr_number = int(meta.get("prNumber") or 0) if isinstance(meta, Mapping) else 0
+    check_name = str(latest_row.get("key") or "")
+    needs_followup_requeue = (
+        bool(check_name)
+        and ledger.latest("repair-prereq-requeue", bottom.number, bottom.head_ref_oid, check_name) is None
+    )
+    return RepairPrereqStatus(
+        check_name=check_name,
+        prereq_pr_number=prereq_pr_number,
+        prereq_branch=str(meta.get("branch") or "") if isinstance(meta, Mapping) else "",
+        is_open=prereq_pr_number in open_pr_numbers,
+        needs_followup_requeue=needs_followup_requeue,
+    )
+
+
+def summarize_stack(
+    stack: StackGroup,
+    required_checks: Collection[str],
+    trunk: str,
+    suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
+) -> dict[str, object]:
+    suppressed_by_pr = suppressed_failed_checks_by_pr or {}
+    blockers_by_pr = {
+        pr.number: [
+            {"kind": blocker.kind, "key": blocker.key, "detail": blocker.detail}
+            for blocker in effective_blockers(pr, required_checks, trunk, suppressed_by_pr.get(pr.number, ()))
+        ]
+        for pr in stack.prs
+    }
+    bottom = current_bottom_pr(stack, trunk)
+    upper_stack_needs_acceptance = stack_has_unaccepted_upper_pr(stack, bottom)
+    return {
+        "stack_id": stack.stack_id,
+        "bottom_pr": bottom.number if bottom else None,
+        "upper_stack_needs_acceptance": upper_stack_needs_acceptance,
+        "prs": [
+            {
+                "number": pr.number,
+                "state": pr.state,
+                "base": pr.base_ref_name,
+                "head": pr.head_ref_name,
+                "head_sha": pr.head_ref_oid,
+                "labels": sorted(pr.labels),
+                "merge_state_status": pr.merge_state_status,
+                "mergeable": pr.mergeable,
+                "draft": pr.is_draft,
+                "latest_mergify": None if not pr.latest_mergify else {
+                    "state": pr.latest_mergify.state,
+                    "head_sha": pr.latest_mergify.head_sha,
+                    "comment_id": pr.latest_mergify.comment_id,
+                    "failing_checks": list(pr.latest_mergify.failing_checks),
+                    "waiting_for": list(pr.latest_mergify.waiting_for),
+                },
+                "blockers": blockers_by_pr[pr.number],
+            }
+            for pr in stack.prs
+        ],
+    }
+
+
+def wait_reason_for_summary(summary: Mapping[str, object]) -> str:
+    if summary.get("upper_stack_needs_acceptance"):
+        return "upper-stack-needs-acceptance"
+    bottom_pr = summary.get("bottom_pr")
+    prs = summary.get("prs")
+    if not isinstance(prs, list):
+        return "no-action"
+    for pr in prs:
+        if not isinstance(pr, Mapping):
+            continue
+        latest = pr.get("latest_mergify")
+        if pr.get("number") == bottom_pr and isinstance(latest, Mapping) and latest.get("state") in {"queued", "merging"}:
+            return "bottom-already-queued"
+        blockers = pr.get("blockers")
+        if not isinstance(blockers, list):
+            continue
+        blocker_kinds = {str(blocker.get("kind")) for blocker in blockers if isinstance(blocker, Mapping)}
+        if "pending_check" in blocker_kinds:
+            return "pending-check"
+        if "merge_hold" in blocker_kinds and len(blocker_kinds) == 1:
+            return "merge-hold-only"
+        if {"draft", "human_review_thread", "missing_check", "closed"} & blocker_kinds:
+            return "blocked-needs-human"
+    return "no-action"
+
 
 def plan_stack_actions(
     stack: StackGroup,
@@ -111,14 +255,9 @@ def plan_stack_actions(
     max_repair_attempts: int = 3,
     suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
 ) -> tuple[Action, ...]:
-    del now_epoch
     suppressed_by_pr = suppressed_failed_checks_by_pr or {}
-    current_bottoms = [pr for pr in stack.prs if pr.state == "OPEN" and pr.base_ref_name == TRUNK]
-    bottom = current_bottoms[0] if current_bottoms else None
-    upper_stack_needs_acceptance = bool(bottom) and any(
-        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
-        for pr in stack.prs
-    )
+    bottom = current_bottom_pr(stack, TRUNK)
+    upper_stack_needs_acceptance = stack_has_unaccepted_upper_pr(stack, bottom)
     blockers_by_pr = {
         pr.number: effective_blockers(pr, required_checks, TRUNK, suppressed_by_pr.get(pr.number, ()))
         for pr in stack.prs
@@ -160,10 +299,9 @@ def plan_stack_actions(
             if blocker.kind in {"draft", "human_review_thread", "missing_check", "closed"}:
                 return (Action("comment_blocked", pr.number, blocker.key, public_blocker_kind(blocker.kind)),)
 
-    if not current_bottoms:
+    if not bottom:
         first = stack.prs[0]
         return (Action("comment_blocked", first.number, "no-current-bottom", "no current bottom on master"),)
-    bottom = current_bottoms[0]
     non_hold_blockers = [b for b in all_blockers if b.kind != "merge_hold"]
     hold_blockers = [b for b in all_blockers if b.kind == "merge_hold"]
     if hold_blockers and not non_hold_blockers:
@@ -194,3 +332,51 @@ def plan_stack_actions(
     if attempts >= max_requeue_attempts:
         return (cap_action(bottom, Blocker(requeue_key, "capped", bottom.number, "requeue"), "requeue"),)
     return (Action("requeue", bottom.number, requeue_key, requeue_reason),)
+
+
+def plan_stack_execution(
+    stack: StackGroup,
+    required_checks: Collection[str],
+    ledger: Ledger,
+    now_epoch: int,
+    open_pr_numbers: Collection[int],
+    max_requeue_attempts: int = 2,
+    max_repair_attempts: int = 3,
+    trunk: str = TRUNK,
+) -> StackExecutionPlan:
+    del now_epoch
+    prereq_status = latest_repair_prereq_status(stack, ledger, open_pr_numbers, trunk)
+    suppressed_by_pr: Mapping[int, Collection[str]] | None = None
+    if prereq_status and prereq_status.is_open:
+        return StackExecutionPlan(
+            summary=summarize_stack(stack, required_checks, trunk),
+            actions=(),
+            wait_reason="repair-prereq-open",
+            prereq_status=prereq_status,
+        )
+    if prereq_status and prereq_status.needs_followup_requeue:
+        bottom = current_bottom_pr(stack, trunk)
+        if bottom:
+            suppressed_by_pr = {bottom.number: (prereq_status.check_name,)}
+    summary = summarize_stack(stack, required_checks, trunk, suppressed_by_pr)
+    actions = plan_stack_actions(
+        stack,
+        required_checks,
+        ledger,
+        0,
+        max_requeue_attempts,
+        max_repair_attempts,
+        suppressed_by_pr,
+    )
+    if actions:
+        return StackExecutionPlan(
+            summary=summary,
+            actions=actions,
+            prereq_status=prereq_status,
+        )
+    return StackExecutionPlan(
+        summary=summary,
+        actions=(),
+        wait_reason=wait_reason_for_summary(summary),
+        prereq_status=prereq_status,
+    )
