@@ -254,6 +254,41 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
         self.assertEqual(actions[0].kind, "repair_check")
 
+    def test_mergify_repair_invalid_blocks_retry_even_when_head_check_is_green(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            1,
+            HEAD,
+            "UI Vitest",
+            1,
+            meta={"errors": ["merge-queue run failed outside the PR head"]},
+        )
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={
+                "build": check("success"),
+                "UI Vitest": check("success", "UI Vitest"),
+            },
+            latest_mergify=event(
+                failing=("UI Vitest",),
+                conditions=(("UI Vitest", "failure"),),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"build", "UI Vitest"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={1},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        self.assertEqual(
+            plan.summary["prs"][0]["blockers"],
+            [{"kind": "human_decision", "key": "UI Vitest", "detail": "merge-queue run failed outside the PR head"}],
+        )
+
     def test_clean_bottom_missing_label_nudges_human(self):
         actions = self._plan(pr())  # green, no admin-bypass label
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_admin_bypass_nudge", "admin-bypass"))

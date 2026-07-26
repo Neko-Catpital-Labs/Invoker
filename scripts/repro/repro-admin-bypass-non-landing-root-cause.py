@@ -9,8 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DB_PATH = Path.home() / '.invoker' / 'invoker.db'
+LEDGER_PATH = Path.home() / '.invoker' / 'mergify-admin-requeue-state.jsonl'
 REPO = 'Neko-Catpital-Labs/Invoker'
-TARGET_PRS = (5801, 5811)
+TARGET_PRS = (5801, 5811, 5873)
 WORKER_SOURCE = 'pr-maintenance-worker'
 WORKER_TAG = '[worker:pr-admin-bypass-land]'
 PLACEHOLDER_REQUIRED_FAST = 'required-fast / ${{ matrix.name }}'
@@ -61,12 +62,37 @@ def require_line(logs: list[LogEvidence], needle: str, label: str) -> LogEvidenc
 def gh_pr_snapshot(pr_number: int) -> dict:
     return run_gh_json([
         'pr', 'view', str(pr_number), '--repo', REPO,
-        '--json', 'number,title,state,labels,headRefOid,statusCheckRollup',
+        '--json', 'number,title,state,labels,headRefOid,statusCheckRollup,comments,mergeStateStatus',
     ])
 
 
 def check_names(snapshot: dict) -> list[str]:
     return [node.get('name') or node.get('context') or '' for node in snapshot.get('statusCheckRollup') or []]
+
+
+def check_state(snapshot: dict, check_name: str) -> str:
+    for node in snapshot.get('statusCheckRollup') or []:
+        name = node.get('name') or node.get('context') or ''
+        if name != check_name:
+            continue
+        return str(node.get('conclusion') or node.get('state') or '').lower()
+    return ''
+
+
+def ledger_rows(pr_number: int) -> list[dict]:
+    if not LEDGER_PATH.exists():
+        raise AssertionError(f'missing ledger: {LEDGER_PATH}')
+    rows: list[dict] = []
+    for raw in LEDGER_PATH.read_text(encoding='utf-8').splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if row.get('pr') == pr_number:
+            rows.append(row)
+    return rows
 
 
 def summarize_5801(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
@@ -117,34 +143,112 @@ def summarize_5811(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
     }, names
 
 
+def summarize_5873(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
+    del conn
+    snapshot = gh_pr_snapshot(5873)
+    names = check_names(snapshot)
+    head = snapshot['headRefOid']
+    rows = ledger_rows(5873)
+    invalid = next(
+        (
+            row for row in rows
+            if row.get('kind') == 'repair-invalid'
+            and row.get('headSha') == head
+            and row.get('key') == 'UI Vitest'
+        ),
+        None,
+    )
+    if invalid is None:
+        raise AssertionError('5873 missing current-head repair-invalid ledger row for UI Vitest')
+    errors = (invalid.get('meta') or {}).get('errors') or []
+    exact_reason = next((str(error) for error in errors if 'merge-queue run failed outside the PR head' in str(error)), '')
+    if not exact_reason:
+        raise AssertionError('5873 repair-invalid row missing exact queue-runner/tooling reason')
+    blocked = next(
+        (
+            row for row in rows
+            if row.get('kind') == 'comment-blocked'
+            and row.get('headSha') == head
+            and row.get('key') == f'repair-invalid:UI Vitest:{head}'
+        ),
+        None,
+    )
+    if blocked is None:
+        raise AssertionError('5873 missing dedupe comment-blocked ledger row for current head')
+    stop_comment = next(
+        (
+            comment for comment in snapshot.get('comments') or []
+            if 'Mergify repair stopped: merge-queue run failed outside the PR head' in str(comment.get('body') or '')
+        ),
+        None,
+    )
+    if stop_comment is None:
+        raise AssertionError('5873 missing exact worker stop comment')
+    ui_state = check_state(snapshot, 'UI Vitest')
+    if ui_state != 'success':
+        raise AssertionError(f'5873 expected current PR-head UI Vitest success, got {ui_state or "missing"}')
+    return {
+        'pr': 5873,
+        'state': snapshot['state'],
+        'labels': [label['name'] for label in snapshot['labels']],
+        'head': head,
+        'repair_invalid_at': invalid.get('epoch'),
+        'blocked_at': stop_comment.get('createdAt') or blocked.get('epoch'),
+        'root_cause': exact_reason,
+    }, names
+
+
 def main() -> int:
     conn = connect_db()
+    summaries: list[tuple[dict, list[str]]] = []
+    skipped: list[str] = []
     try:
-        summary_5801, names_5801 = summarize_5801(conn)
-        summary_5811, names_5811 = summarize_5811(conn)
+        for pr_number, summarize in (
+            (5801, summarize_5801),
+            (5811, summarize_5811),
+            (5873, summarize_5873),
+        ):
+            try:
+                summaries.append(summarize(conn))
+            except AssertionError as exc:
+                skipped.append(f'{pr_number}: {exc}')
     finally:
         conn.close()
 
+    if not summaries:
+        raise AssertionError('no target evidence could be reproduced')
+
     print('Admin-bypass non-landing root cause repro')
     print(f'DB: {DB_PATH}')
+    print(f'Ledger: {LEDGER_PATH}')
+    if skipped:
+        print()
+        print('Skipped stale/unavailable historical evidence:')
+        for item in skipped:
+            print(f'  - {item}')
     print()
     print('| PR | labels | live proof of worker handling | live proof of fix | live blocker after fix | root cause |')
     print('|---|---|---|---|---|---|')
-    print(
-        f"| 5801 | {','.join(summary_5801['labels'])} | repair-check at {summary_5801['repair_started_at']} | pushed at {summary_5801['repair_pushed_at']}; rebased/fixed at {summary_5801['fixed_note_at']} | stack blocked at {summary_5801['stalled_on_stack_at']} while required-fast checks were absent on head {summary_5801['head']} | {summary_5801['root_cause']} |"
-    )
-    print(
-        f"| 5811 | {','.join(summary_5811['labels'])} | dequeued failing-check trace at {summary_5811['dequeued_trace_at']} | none in worker logs | repeated missing-check block at {summary_5811['blocked_at']} while required-fast check was absent on head {summary_5811['head']} | {summary_5811['root_cause']} |"
-    )
+    for summary, _names in summaries:
+        if summary['pr'] == 5801:
+            print(
+                f"| 5801 | {','.join(summary['labels'])} | repair-check at {summary['repair_started_at']} | pushed at {summary['repair_pushed_at']}; rebased/fixed at {summary['fixed_note_at']} | stack blocked at {summary['stalled_on_stack_at']} while required-fast checks were absent on head {summary['head']} | {summary['root_cause']} |"
+            )
+        elif summary['pr'] == 5811:
+            print(
+                f"| 5811 | {','.join(summary['labels'])} | dequeued failing-check trace at {summary['dequeued_trace_at']} | none in worker logs | repeated missing-check block at {summary['blocked_at']} while required-fast check was absent on head {summary['head']} | {summary['root_cause']} |"
+            )
+        elif summary['pr'] == 5873:
+            print(
+                f"| 5873 | {','.join(summary['labels'])} | repair-invalid ledger row for `UI Vitest` on head {summary['head']} | current PR-head `UI Vitest` is green | exact worker stop comment at {summary['blocked_at']} | {summary['root_cause']} |"
+            )
     print()
-    print('5801 check names:')
-    for name in names_5801:
-        print(f'  - {name}')
-    print('5811 check names:')
-    for name in names_5811:
-        print(f'  - {name}')
+    for summary, names in summaries:
+        print(f"{summary['pr']} check names:")
+        for name in names:
+            print(f'  - {name}')
     print()
-    print('Shared signature: both PR heads are missing the exact required-fast check names that Mergify requires; only placeholder skipped check names remain on the PR heads.')
+    print('Shared signature: the worker must not retry a current-head blocker after it has recorded a human-only stop reason.')
     return 0
 
 

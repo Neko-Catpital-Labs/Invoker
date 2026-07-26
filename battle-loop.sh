@@ -9,6 +9,7 @@ REPROS=(
   scripts/repro/repro-mergify-rejected-pr.sh
   scripts/repro/repro-mergify-closed-pr-guard.sh
   scripts/repro/repro-coderabbit-pr5251-mergify-admin-requeue-yaml-alias.sh
+  scripts/repro/repro-babysit-queue-invalid-stop.sh
   scripts/repro/repro-babysit-pr-body-human-split.sh
 )
 

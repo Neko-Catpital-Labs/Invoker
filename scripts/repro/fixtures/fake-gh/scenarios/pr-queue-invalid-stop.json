@@ -1,0 +1,33 @@
+{
+  "prs": [
+    {
+      "number": 873,
+      "title": "Queue failed outside PR head",
+      "url": "https://github.com/fake/repo/pull/873",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/873",
+      "headRefOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "mergeStateStatus": "BLOCKED",
+      "mergeable": "MERGEABLE",
+      "labels": ["admin-bypass", "dequeued"],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS", "UI Vitest": "SUCCESS"}
+    }
+  ],
+  "issue_comments": {
+    "873": [
+      {
+        "id": "m873",
+        "user": {"login": "mergify[bot]"},
+        "updated_at": "2026-07-26T10:26:47Z",
+        "html_url": "https://github.com/fake/repo/pull/873#m873",
+        "body": "<!---\nDO NOT EDIT\n-*- Mergify Payload -*-\n{\"version\":1,\"state\":\"dequeued\",\"queue_rule_name\":\"admin-bypass\",\"queued_at\":\"2026-07-26T10:20:47.026661+00:00\",\"required_conditions\":[]}\n-*- Mergify Payload End -*-\n-->\n\n# Merge Queue Status\n\n- Entered queue - `2026-07-26 10:20 UTC` - Rule: `admin-bypass`\n- Checks failed - on draft #899\n- Left the queue - `2026-07-26 10:26 UTC` - at `eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`\n\n<details>\n<summary><strong>Waiting for</strong></summary>\n\n- [ ] `check-success = UI Vitest`\n\n</details>\n<details>\n<summary>All conditions</summary>\n\n- [ ] `check-success = UI Vitest`\n- [X] `check-success = PR Body`\n- [X] `check-success = quality / TypeScript Types`\n\n</details>\n\n## Reason\n\nThe merge conditions cannot be satisfied due to failing checks\n\n- `UI Vitest`\n\nFailing checks:\n- [UI Vitest](https://github.com/fake/repo/actions/runs/1/job/2) ([job log](https://github.com/fake/repo/actions/runs/1/job/2))\n"
+      }
+    ]
+  },
+  "job_logs": {
+    "2": "required-fast / Vitest Workspace failed on the queue runner because rg was not installed\nplaywright install-deps chromium tried to use sudo without a password\n"
+  }
+}
