@@ -274,6 +274,7 @@ export interface CommandRunnerResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  error?: unknown;
 }
 
 export type CommandRunner = (command: string, args: readonly string[]) => CommandRunnerResult;
@@ -284,7 +285,15 @@ export function defaultCommandRunner(command: string, args: readonly string[]): 
     status: result.status,
     stdout: typeof result.stdout === 'string' ? result.stdout : '',
     stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    error: result.error,
   };
+}
+
+function isMissingCommandError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === 'ENOENT';
 }
 
 export function skippedGithubAuthCheck(): PrerequisiteCheck {
@@ -299,7 +308,20 @@ export function skippedGithubAuthCheck(): PrerequisiteCheck {
 
 /** Probe `gh auth status`. Injectable `runner` keeps tests offline. */
 export function checkGithubAuth(runner: CommandRunner = defaultCommandRunner): PrerequisiteCheck {
-  const result = runner('gh', ['auth', 'status']);
+  let result: CommandRunnerResult;
+  try {
+    result = runner('gh', ['auth', 'status']);
+  } catch (error) {
+    if (isMissingCommandError(error)) return skippedGithubAuthCheck();
+    return {
+      id: 'github-auth',
+      name: 'GitHub auth',
+      status: 'error',
+      detail: formatCaughtException(error),
+      remediation: 'Run `gh auth login` and re-run `invoker-cli setup`',
+    };
+  }
+  if (isMissingCommandError(result.error)) return skippedGithubAuthCheck();
   if (result.status === 0) {
     return {
       id: 'github-auth',
@@ -372,8 +394,7 @@ export function firstSetupFailure(checks: readonly PrerequisiteCheck[]): Prerequ
 export function formatSetupEnding(checks: readonly PrerequisiteCheck[]): string {
   const failure = firstSetupFailure(checks);
   if (!failure) return "You're ready.";
-  const remediation = failure.remediation ? ` ${failure.remediation}` : '';
-  return `Fix this first: ${failure.name}: ${failure.detail}.${remediation}`;
+  return `Fix this first: ${failure.name}: ${failure.remediation ?? failure.detail}`;
 }
 
 export interface SetupDeps {
