@@ -103,6 +103,39 @@ describe('planning terminal restore invariants repro', () => {
     });
   });
 
+  // `it.fails`: desired invariant for the behavior slice. When a team renames a
+  // custom preset and makes the new key the default, persisted chats using the
+  // old key should restore under that configured replacement instead of being
+  // silently skipped.
+  it.fails('remaps a restored planning chat from a removed custom preset key to the configured default', async () => {
+    const sessions = createInAppPlanningChatSessions();
+
+    await restorePlanningChatSessions([
+      makePlanningRecord({
+        id: 'planning-remapped-preset',
+        presetKey: 'team-preset-before-rename',
+      }),
+    ], {
+      config: {
+        defaultSlackHarnessPreset: 'team-preset-after-rename',
+        slackHarnessPresets: {
+          'team-preset-after-rename': { tool: 'codex' },
+        },
+      },
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    expect(sessions.get('planning-remapped-preset')).toMatchObject({
+      id: 'planning-remapped-preset',
+      presetKey: 'team-preset-after-rename',
+      messages: [
+        expect.objectContaining({ text: 'Keep this restored chat visible' }),
+      ],
+    });
+  });
+
   it('does not restore a tmux process for a chat-mode planning session with stale terminal metadata', () => {
     const sessions = createInAppPlanningChatSessions();
     sessions.set('planning-chat-mode', makePlanningSession({
