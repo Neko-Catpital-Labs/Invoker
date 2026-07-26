@@ -224,7 +224,9 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript.indexOf('stop_bootstrap_heartbeat')).toBeLessThan(callScript.indexOf('"$RUNNER_PATH" "$PAYLOAD_PATH"'));
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
-    expect(callScript).toContain("trap 'cleanup_runtime \"$?\"' EXIT");
+    expect(callScript).toContain('cleanup_runtime() {');
+    expect(callScript).toContain('trap \'runtime_status="$?"; cleanup_runtime; exit "$runtime_status"\' EXIT');
+    expect(callScript).not.toContain('local status="$1"');
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
   });
@@ -520,6 +522,70 @@ branch refs/heads/experiment/test-task-oldhash
     expect(rmIndex).toBeGreaterThanOrEqual(0);
     expect(mkdirIndex).toBeGreaterThanOrEqual(0);
     expect(rmIndex).toBeLessThan(mkdirIndex);
+  });
+
+  it('runtime cleanup trap preserves the payload exit status without local trap variables', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 1,
+      remoteInvokerHome: '~/.invoker',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: 'exit 7',
+        description: 'run failing payload',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const bootstrapScript = writeMock.mock.calls[0]![0] as string;
+    const workspaceMatch = bootstrapScript.match(/WT=\$\(normalize_remote_path '([^']+)'\)/);
+    if (!workspaceMatch?.[1]) {
+      throw new Error('Managed SSH bootstrap did not embed a workspace path');
+    }
+    const stagingMatch = bootstrapScript.match(/STAGING_DIR="\$INVOKER_HOME\/runtime\/ssh-executor\/([^"]+)"/);
+    if (!stagingMatch?.[1]) {
+      throw new Error('Managed SSH bootstrap did not embed a staging directory');
+    }
+
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-runtime-cleanup-home-'));
+    try {
+      const workspacePath = workspaceMatch[1].replace(/^~(?=\/|$)/, fakeHome);
+      const stagingPath = join(fakeHome, '.invoker/runtime/ssh-executor', stagingMatch[1]);
+      mkdirSync(workspacePath, { recursive: true });
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-lc', bootstrapScript], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome },
+      });
+
+      expect(result.status).toBe(7);
+      expect(result.stderr).not.toContain('pop_var_context');
+      expect(existsSync(stagingPath)).toBe(false);
+      expect(bootstrapScript).not.toContain('local status="$1"');
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+      proc.emit('close', 0, null);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   });
 
   it('persists the owning worktree path on startup failure when Git reports a branch owner', async () => {
