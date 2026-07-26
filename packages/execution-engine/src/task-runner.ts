@@ -188,7 +188,7 @@ export interface TaskRunnerConfig {
   executionPoolsProvider?: () => Record<string, {
     members: Array<
       | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
-      | { type: 'worktree'; id: string; maxConcurrentTasks?: number }
+      | { type: 'worktree'; id: string; maxConcurrentTasks?: number; provisionCommand?: string }
     >;
     selectionStrategy?: 'roundRobin' | 'leastLoaded';
     maxConcurrentTasksPerMember?: number;
@@ -234,6 +234,8 @@ export class TaskRunner {
   /** @internal */ readonly runnerInstanceId = randomUUID();
   /** Cache for SSH executors, keyed by poolMemberId. One instance per target for correct git locking. */
   /** @internal */ sshExecutorCache = new Map<string, SshExecutor>();
+  /** Cache for worktree executors keyed by local provisioning config fingerprint. */
+  /** @internal */ worktreeExecutorCache = new Map<string, WorktreeExecutor>();
   /** @internal */ poolRoundRobinCursor = new Map<string, number>();
   poolMemberHealth = new Map<string, PoolMemberHealth>();
   /** @internal */ readonly pendingPoolSelections = new Map<string, PoolSelection>();

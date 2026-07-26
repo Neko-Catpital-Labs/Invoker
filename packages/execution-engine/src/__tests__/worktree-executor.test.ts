@@ -24,6 +24,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
 import { BaseExecutor } from '../base-executor.js';
 import { registerBuiltinAgents } from '../agents/index.js';
+import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
 
 const mockedSpawn = vi.mocked(spawn);
 
@@ -338,6 +339,117 @@ describe('WorktreeExecutor', () => {
 
     taskProcess.emit('close', 0, null);
   });
+  it('runs a configured provision command before spawning the task process', async () => {
+    const { taskProcess } = setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const provisionProcess = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile') {
+        return provisionProcess;
+      }
+      return baseImpl!(cmd, args, options);
+    });
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+    });
+    mockPool(provisionedExecutor);
+
+    const startPromise = provisionedExecutor.start(makeRequest());
+    await vi.waitFor(() => {
+      expect(mockedSpawn.mock.calls.find(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+      )).toBeDefined();
+    });
+
+    const provisionCall = mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+    );
+    expect((provisionCall?.[2] as { cwd: string }).cwd).toMatch(/^\/fake\/worktrees\//);
+
+    provisionProcess.emit('close', 0, null);
+    await startPromise;
+
+    const taskCall = mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo hello',
+    );
+    expect(taskCall).toBeDefined();
+
+    taskProcess.emit('close', 0, null);
+  });
+  it('times out hung provision commands and terminates their process group', async () => {
+    vi.useFakeTimers();
+    const previousTimeout = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
+    process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = '25';
+    setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const provisionProcess = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile') {
+        return provisionProcess;
+      }
+      return baseImpl!(cmd, args, options);
+    });
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+    });
+    mockPool(provisionedExecutor);
+
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((_pid, _signal?) => true);
+    try {
+      const startPromise = provisionedExecutor.start(makeRequest());
+      const rejection = expect(startPromise).rejects.toThrow('provision command timed out after 25ms');
+      await vi.waitFor(() => {
+        expect(mockedSpawn.mock.calls.find(
+          ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+        )).toBeDefined();
+      });
+
+      await vi.advanceTimersByTimeAsync(25 + SIGKILL_TIMEOUT_MS);
+
+      await rejection;
+      expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
+      expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGKILL');
+    } finally {
+      killSpy.mockRestore();
+      if (previousTimeout === undefined) {
+        delete process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
+      } else {
+        process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS = previousTimeout;
+      }
+      vi.useRealTimers();
+    }
+  });
+
+  it('retains only a bounded provisioning output tail', () => {
+    const tailingExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+    });
+    const appendProvisionOutputTail = Reflect.get(
+      tailingExecutor,
+      'appendProvisionOutputTail',
+    ) as (tail: string, text: string) => string;
+
+    let tail = '';
+    for (let index = 0; index < 75; index += 1) {
+      tail = appendProvisionOutputTail(tail, `line-${index}\n`);
+    }
+
+    expect(tail).not.toContain('line-0');
+    expect(tail).toContain('line-74');
+    expect(tail.trim().split('\n')).toHaveLength(50);
+
+    const oversized = appendProvisionOutputTail('', `${'x'.repeat(40_000)}\n`);
+    expect(oversized.length).toBeLessThanOrEqual(32_000);
+  });
+
 
   it('completion captures branch and commit hash in summary', async () => {
     const { taskProcess } = setupSpawnMock();

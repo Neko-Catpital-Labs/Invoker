@@ -2641,6 +2641,71 @@ describe('TaskRunner', () => {
 
       expect(provider).toHaveBeenCalledTimes(2);
     });
+    it('reads worktree provision commands lazily from the pool provider on each selectExecutor call', () => {
+      const provider = vi.fn()
+        .mockReturnValueOnce({
+          fast: {
+            members: [{ type: 'worktree', id: 'local-mac', provisionCommand: 'old provision' }],
+          },
+        })
+        .mockReturnValueOnce({
+          fast: {
+            members: [{ type: 'worktree', id: 'local-mac', provisionCommand: 'new provision' }],
+          },
+        });
+
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: provider,
+      });
+
+      const task = makeTask({
+        id: 'worktree-task',
+        config: { runnerKind: 'worktree', poolId: 'fast' },
+      });
+
+      const executor1 = executor.selectExecutor(task);
+      expect(executor1.executor.type).toBe('worktree');
+      expect((executor1.executor as any).provisionCommand).toBe('old provision');
+
+      const executor2 = executor.selectExecutor(task);
+      expect((executor2.executor as any).provisionCommand).toBe('new provision');
+
+      expect(provider).toHaveBeenCalledTimes(2);
+    });
+    it('bypasses arbitrary registered worktree executors so pool provisioning fingerprints win', () => {
+      const preRegistered = { type: 'worktree' };
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: {
+          getDefault: () => ({ type: 'worktree' }),
+          get: (type: string) => type === 'worktree' ? preRegistered : null,
+          getAll: () => [],
+          register: vi.fn(),
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          fast: {
+            members: [{ type: 'worktree', id: 'local-mac', provisionCommand: 'pnpm install --frozen-lockfile' }],
+          },
+        }),
+      });
+
+      const task = makeTask({
+        id: 'worktree-task',
+        config: { runnerKind: 'worktree', poolId: 'fast' },
+      });
+
+      const selected = executor.selectExecutor(task);
+      expect(selected.executor).not.toBe(preRegistered);
+      expect(selected.executor.type).toBe('worktree');
+      expect(Reflect.get(selected.executor, 'provisionCommand')).toBe('pnpm install --frozen-lockfile');
+    });
+
 
     it('throws when provider returns no entry for the target ID', () => {
       const provider = vi.fn().mockReturnValue({});
@@ -3166,7 +3231,7 @@ describe('TaskRunner', () => {
       expect(executor2.executor).not.toBe(executor3.executor);
     });
 
-    it('does not cache non-SSH executors', () => {
+    it('caches worktree executors by provisioning fingerprint', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
@@ -3191,11 +3256,49 @@ describe('TaskRunner', () => {
       const executor1 = executor.selectExecutor(task1);
       const executor2 = executor.selectExecutor(task2);
 
-      // Worktree executors are created fresh each time (lazy registration creates new instances)
-      // Both should be worktree type but may be different instances
+      // Worktree executors are cached by local provisioning fingerprint.
       expect(executor1.executor.type).toBe('worktree');
       expect(executor2.executor.type).toBe('worktree');
+      expect(executor1.executor).toBe(executor2.executor);
     });
+    it('retains cached worktree executors for earlier provisioning fingerprints', () => {
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
+        persistence: {} as any,
+        executorRegistry: {
+          getDefault: () => ({ type: 'worktree' }),
+          get: () => null,
+          getAll: () => [],
+          register: vi.fn(),
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          fast: {
+            members: [{ type: 'worktree', id: 'local-a', provisionCommand: 'pnpm install --frozen-lockfile' }],
+          },
+          slow: {
+            members: [{ type: 'worktree', id: 'local-b', provisionCommand: 'pnpm install' }],
+          },
+        }),
+      });
+
+      const executorA1 = executor.selectExecutor(makeTask({
+        id: 'task-a1',
+        config: { runnerKind: 'worktree', poolId: 'fast' },
+      }));
+      const executorB = executor.selectExecutor(makeTask({
+        id: 'task-b',
+        config: { runnerKind: 'worktree', poolId: 'slow' },
+      }));
+      const executorA2 = executor.selectExecutor(makeTask({
+        id: 'task-a2',
+        config: { runnerKind: 'worktree', poolId: 'fast' },
+      }));
+
+      expect(executorA1.executor).not.toBe(executorB.executor);
+      expect(executorA1.executor).toBe(executorA2.executor);
+    });
+
 
     it('clearSshExecutorCache removes all cached SSH executors', async () => {
       const remoteTargets = {

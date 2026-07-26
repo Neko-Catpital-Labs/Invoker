@@ -8,7 +8,8 @@ import type { AgentRegistry } from './agent-registry.js';
 import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { checkStaleness } from './git-staleness-detector.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
-import { childProcessHasExited, terminateChildProcessGroup } from './process-utils.js';
+import { childProcessHasExited, cleanElectronEnv, killProcessGroup, SIGKILL_TIMEOUT_MS, terminateChildProcessGroup } from './process-utils.js';
+import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -17,6 +18,8 @@ const DEFAULT_MAX_BUFFER_CHUNKS = 1000;
 const DEFAULT_MAX_BUFFER_BYTES = 5 * 1024 * 1024; // 5MB
 /** Default cap for `git fetch` / `git push` (network-bound). Override via INVOKER_GIT_NETWORK_TIMEOUT_MS; use 0 for unbounded. */
 const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
+const PROVISION_OUTPUT_TAIL_LINE_LIMIT = 50;
+const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
 
 export interface BaseEntry {
   request: WorkRequest;
@@ -108,6 +111,8 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected maxDurationMs: number;
   protected maxBufferChunks: number;
   protected maxBufferBytes: number;
+  protected provisionCommand = '';
+  private readonly localProvisioningTimeoutsMs = new Map<string, number>();
 
   constructor(
     heartbeatIntervalMs?: number,
@@ -119,6 +124,25 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     this.maxDurationMs = maxDurationMs ?? DEFAULT_MAX_DURATION_MS;
     this.maxBufferChunks = maxBufferChunks ?? DEFAULT_MAX_BUFFER_CHUNKS;
     this.maxBufferBytes = maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
+  }
+  protected setProvisionCommand(command: string | undefined, fallback: string): void {
+    const trimmed = command?.trim();
+    this.provisionCommand = trimmed ? trimmed : fallback;
+  }
+
+  protected setLocalProvisioningTimeout(executionId: string, timeoutMs: number): void {
+    this.localProvisioningTimeoutsMs.set(executionId, timeoutMs);
+  }
+
+  protected appendProvisionOutputTail(tail: string, text: string): string {
+    const segments = `${tail}${text}`.split('\n');
+    const segmentLimit = segments.at(-1) === ''
+      ? PROVISION_OUTPUT_TAIL_LINE_LIMIT + 1
+      : PROVISION_OUTPUT_TAIL_LINE_LIMIT;
+    const nextTail = segments.slice(-segmentLimit).join('\n');
+    return nextTail.length <= PROVISION_OUTPUT_TAIL_CHAR_LIMIT
+      ? nextTail
+      : nextTail.slice(nextTail.length - PROVISION_OUTPUT_TAIL_CHAR_LIMIT);
   }
 
   protected createHandle(request: WorkRequest): ExecutorHandle {
@@ -199,6 +223,92 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         this.entries.delete(executionId);
       });
     }
+  }
+  protected spawnLocalProvisioningProcess(options: {
+    command: string;
+    cwd: string;
+    executionId?: string;
+    traceLabel: string;
+    startMessage?: string;
+    failurePrefix: string;
+  }): { child: ChildProcess | null; completion: Promise<void> } {
+    const command = options.command.trim();
+    if (!command) {
+      traceExecution(`[${options.traceLabel}] skipped dir=${options.cwd}`);
+      return { child: null, completion: Promise.resolve() };
+    }
+    traceExecution(`[${options.traceLabel}] begin dir=${options.cwd}`);
+    if (options.executionId && options.startMessage) {
+      this.emitOutput(options.executionId, options.startMessage);
+    }
+    const child = spawn('/bin/bash', ['-lc', command], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: options.cwd,
+      detached: true,
+      env: cleanElectronEnv(),
+    });
+    let combinedOutputTail = '';
+    const appendOutput = (chunk: Buffer | string): void => {
+      const text = String(chunk);
+      combinedOutputTail = this.appendProvisionOutputTail(combinedOutputTail, text);
+      if (options.executionId) this.emitOutput(options.executionId, text);
+    };
+    child.stdout?.on('data', appendOutput);
+    child.stderr?.on('data', appendOutput);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let forceKillTimeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let timedOutMessage: string | undefined;
+    const timeoutMs = options.executionId
+      ? this.localProvisioningTimeoutsMs.get(options.executionId) ?? getExecutorStartTimeoutMs()
+      : getExecutorStartTimeoutMs();
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearTimeout(forceKillTimeout);
+      if (options.executionId) {
+        this.localProvisioningTimeoutsMs.delete(options.executionId);
+      }
+      fn();
+    };
+    const completion = new Promise<void>((resolve, reject) => {
+      child.on('error', (error) => {
+        finish(() => reject(new Error(`${options.failurePrefix} ${error.message}`)));
+      });
+      child.on('close', (code, signal) => {
+        finish(() => {
+          if (code === 0) {
+            traceExecution(`[${options.traceLabel}] done dir=${options.cwd}`);
+            resolve();
+            return;
+          }
+          const tail = combinedOutputTail.trim();
+          const fallback = timedOutMessage
+            ?? `provision command exited with code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`;
+          const detail = tail ? `${fallback}\n${tail}` : fallback;
+          reject(new Error(`${options.failurePrefix} ${detail}`));
+        });
+      });
+      if (timeoutMs > 0) {
+        timeout = setTimeout(() => {
+          if (settled) return;
+          timedOutMessage = `provision command timed out after ${timeoutMs}ms`;
+          killProcessGroup(child, 'SIGTERM');
+          forceKillTimeout = setTimeout(() => {
+            if (!settled) killProcessGroup(child, 'SIGKILL');
+            finish(() => {
+              const tail = combinedOutputTail.trim();
+              const detail = tail ? `${timedOutMessage!}\n${tail}` : timedOutMessage!;
+              reject(new Error(`${options.failurePrefix} ${detail}`));
+            });
+          }, SIGKILL_TIMEOUT_MS);
+          forceKillTimeout.unref?.();
+        }, timeoutMs);
+        timeout.unref?.();
+      }
+    });
+    return { child, completion };
   }
 
   /**

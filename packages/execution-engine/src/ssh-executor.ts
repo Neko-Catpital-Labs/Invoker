@@ -90,7 +90,6 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly remoteInvokerHome: string;
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
-  private readonly provisionCommand: string;
   private readonly usesDefaultProvisionCommand: boolean;
   private readonly remoteHeartbeatIntervalSeconds: number;
 
@@ -105,9 +104,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
-    const configuredProvisionCommand = config.provisionCommand?.trim();
-    this.provisionCommand =
-      configuredProvisionCommand || SshExecutor.DEFAULT_PROVISION_COMMAND;
+    this.setProvisionCommand(config.provisionCommand, SshExecutor.DEFAULT_PROVISION_COMMAND);
     this.usesDefaultProvisionCommand =
       this.provisionCommand === SshExecutor.DEFAULT_PROVISION_COMMAND;
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;

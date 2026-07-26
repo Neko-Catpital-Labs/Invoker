@@ -8,6 +8,7 @@ import { BaseExecutor, MergeConflictError, type BaseEntry } from './base-executo
 import { RepoPool } from './repo-pool.js';
 import { killProcessGroup, cleanElectronEnv, resolveExecutableOnCurrentPath, SIGKILL_TIMEOUT_MS } from './process-utils.js';
 import { DEFAULT_WORKTREE_PROVISION_COMMAND } from './default-worktree-provision-command.js';
+import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
 import {
   computeContentHash,
   buildExperimentBranchName,
@@ -28,6 +29,7 @@ import { sanitizeBranchForPath } from './git-utils.js';
 // Re-export for backward compatibility
 export { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 
+
 export interface WorktreeExecutorConfig {
   /** Directory where worktrees are created. */
   worktreeBaseDir?: string;
@@ -39,6 +41,8 @@ export interface WorktreeExecutorConfig {
   claudeCommand?: string;
   /** Agent registry for pluggable AI agents. When set, overrides claudeCommand. */
   agentRegistry?: import('./agent-registry.js').AgentRegistry;
+  /** Optional dependency/bootstrap command run before the task command in local worktrees. */
+  provisionCommand?: string;
   /** Heartbeat interval in milliseconds. Default: 30000. */
   heartbeatIntervalMs?: number;
   /** Maximum task duration in milliseconds. Default: 4 hours. */
@@ -76,11 +80,11 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   private readonly claudeCommand: string;
   private readonly agentRegistry?: import('./agent-registry.js').AgentRegistry;
   private pool: RepoPool;
-
   constructor(config: WorktreeExecutorConfig) {
     super(config.heartbeatIntervalMs, config.maxDurationMs);
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
+    this.setProvisionCommand(config.provisionCommand, DEFAULT_WORKTREE_PROVISION_COMMAND);
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
     this.pool = new RepoPool({
@@ -89,6 +93,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       worktreeBaseDir: this.worktreeBaseDir,
     });
   }
+
 
   /** Pool mirror used for this executor (rebase-and-retry / tests). */
   getRepoPool(): RepoPool {
@@ -142,6 +147,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const executionId = handle.executionId;
     const t0 = Date.now();
     const log = (step: string) => traceExecution(`[WorktreeExecutor] start task=${request.actionId} step=${step} elapsed=${Date.now() - t0}ms`);
+    const startupDeadlineMs = Date.now() + getExecutorStartTimeoutMs();
 
     bench('RepoPool.ensureCloneThroughRepoQueue.before');
     const clonePath = await this.pool.ensureCloneThroughRepoQueue(repoUrl);
@@ -395,7 +401,11 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
       branch: handle.branch,
     });
 
-    const provisioning = this.provisionWorktree(acquired.worktreePath, executionId);
+    this.setLocalProvisioningTimeout(executionId, Math.max(1, startupDeadlineMs - Date.now()));
+    const provisioning = this.provisionWorktree(
+      acquired.worktreePath,
+      executionId,
+    );
     entry.process = provisioning.child;
     try {
       await provisioning.completion;
@@ -693,8 +703,17 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     }
   }
 
-  private provisionWorktree(dir: string, _executionId?: string): { child: ChildProcess | null; completion: Promise<void> } {
-    traceExecution(`[WorktreeExecutor] provisionWorktree skipped dir=${dir}`);
-    return { child: null, completion: Promise.resolve() };
+  private provisionWorktree(
+    dir: string,
+    executionId?: string,
+  ): { child: ChildProcess | null; completion: Promise<void> } {
+    return this.spawnLocalProvisioningProcess({
+      command: this.provisionCommand,
+      cwd: dir,
+      executionId,
+      traceLabel: 'WorktreeExecutor.provisionWorktree',
+      startMessage: `[worktree] Provisioning worktree dependencies in ${dir}\n`,
+      failurePrefix: 'Worktree provisioning failed:',
+    });
   }
 }
