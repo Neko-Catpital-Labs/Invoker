@@ -452,6 +452,7 @@ Failing checks
         stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual(actions, ())
+
     def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):
         stderr = io.StringIO()
         latest = MergifyQueueEvent(
