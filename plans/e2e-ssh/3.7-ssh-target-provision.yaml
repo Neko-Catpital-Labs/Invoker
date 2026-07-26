@@ -1,0 +1,13 @@
+# E2E SSH Group 3.7 — SSH target-owned provision command hydrates a managed worktree.
+name: "e2e-ssh group3 3.7 ssh-target-provision"
+repoUrl: git@github.com:example-org/acme-repo.git
+onFinish: none
+mergeMode: manual
+baseBranch: HEAD
+
+tasks:
+  - id: e2e-g337-taskA
+    description: "E2E 3.7 — SSH worktree runs vitest through target provisioning"
+    command: pnpm --dir packages/app exec vitest --version
+    dependencies: []
+    poolId: localhost-e2e
