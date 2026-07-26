@@ -452,5 +452,66 @@ class PlanStackExecution(PlannerTestCase):
         )
 
 
+class PlanStackExecution(unittest.TestCase):
+    def _ledger(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
+        return m.Ledger(Path(d) / "ledger.jsonl")
+
+    def test_open_prerequisite_forces_wait_plan(self):
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+            latest_mergify=event(state="dequeued"),
+        )
+        ledger.record(
+            "repair-prereq-created",
+            10,
+            HEAD,
+            "build",
+            1,
+            meta={"prNumber": 99, "branch": "stack/pr-babysit-prereq-10-aaaaaaa"},
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10, 99},
+        )
+        self.assertEqual(plan.wait_reason, "repair-prereq-open")
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.prereq_status.prereq_pr_number, 99)
+        self.assertTrue(plan.prereq_status.is_open)
+
+    def test_closed_prerequisite_suppresses_one_failed_check_for_requeue(self):
+        ledger = self._ledger()
+        bottom = pr(
+            number=10,
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+            latest_mergify=event(state="dequeued", comment_id="cm1"),
+        )
+        ledger.record(
+            "repair-prereq-created",
+            10,
+            HEAD,
+            "build",
+            1,
+            meta={"prNumber": 99, "branch": "stack/pr-babysit-prereq-10-aaaaaaa"},
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+        )
+        self.assertEqual(plan.actions[0].kind, "requeue")
+        self.assertTrue(plan.prereq_status.needs_followup_requeue)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
