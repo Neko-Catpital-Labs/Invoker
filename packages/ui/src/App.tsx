@@ -112,6 +112,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const TERMINAL_OUTPUT_SNAPSHOT_CHAR_CAP = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -123,6 +124,14 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+function appendBoundedTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${snapshot ?? ''}${chunk}`;
+  return nextSnapshot.length > TERMINAL_OUTPUT_SNAPSHOT_CHAR_CAP
+    ? nextSnapshot.slice(-TERMINAL_OUTPUT_SNAPSHOT_CHAR_CAP)
+    : nextSnapshot;
+}
+
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
@@ -1118,6 +1127,50 @@ export function App() {
             : session
         )),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || !event.data) return;
+      const planningSessionId = typeof event.planningSessionId === 'string' && event.planningSessionId
+        ? event.planningSessionId
+        : null;
+
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const nextSessions = prev.map((session) => {
+          const terminalSession = session.terminalSession;
+          if (!terminalSession) return session;
+          const matches = planningSessionId
+            ? session.id === planningSessionId
+            : terminalSession.sessionId === event.sessionId;
+          if (!matches) return session;
+
+          const nextPlanningSessionId = terminalSession.planningSessionId ?? planningSessionId ?? undefined;
+          const nextOutputSnapshot = appendBoundedTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data);
+          if (
+            terminalSession.kind === 'planning' &&
+            terminalSession.planningSessionId === nextPlanningSessionId &&
+            terminalSession.outputSnapshot === nextOutputSnapshot
+          ) {
+            return session;
+          }
+
+          changed = true;
+          return {
+            ...session,
+            terminalSession: {
+              ...terminalSession,
+              kind: 'planning',
+              planningSessionId: nextPlanningSessionId,
+              outputSnapshot: nextOutputSnapshot,
+            },
+          };
+        });
+        return changed ? nextSessions : prev;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
