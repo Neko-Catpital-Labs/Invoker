@@ -1156,7 +1156,7 @@ const MANUAL_MERGE_ONFINISH_NONE_PLAN: PlanDefinition = {
 
 // ── Flow 9c: UI external_review merge mode ───────────────────
 
-describe('Flow 9c: set-merge-mode external_review', () => {
+describe('Flow 9c: workflow merge mode external_review', () => {
   const mockMergeGate: MergeGateProvider = {
     name: 'mock',
     createReview: async () => ({

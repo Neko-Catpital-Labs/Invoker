@@ -42,7 +42,7 @@ function getPerformDetachWorkflowSource(): string {
 
 function getSetMergeBranchSource(): string {
   const start = guiMutationHandlersSource.lastIndexOf("'invoker:set-merge-branch'");
-  const end = guiMutationHandlersSource.indexOf("'invoker:set-merge-mode'", start);
+  const end = guiMutationHandlersSource.indexOf("'invoker:set-workflow-merge-mode'", start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return guiMutationHandlersSource.slice(start, end);
@@ -62,7 +62,7 @@ describe('GUI mutation translation', () => {
     );
   });
   it.each([
-    ['invoker:restart-task', 'retry-task'],
+    ['invoker:retry-task', 'retry-task'],
     ['invoker:cancel-task', 'cancel'],
     ['invoker:delete-task', 'delete-task'],
     ['invoker:cancel-workflow', 'cancel-workflow'],
