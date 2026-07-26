@@ -929,6 +929,24 @@ describe('SshExecutor entry lifecycle', () => {
     vi.spyOn(ssh as any, 'mergeRequestUpstreamBranches').mockResolvedValue(undefined);
   });
 
+  it('uses a login shell for task payloads so remote profile PATH applies', async () => {
+    const request = makeRequest({
+      inputs: {
+        command: 'echo hello',
+        repoUrl: 'git@github.com:test/repo.git',
+      },
+    });
+    await ssh.start(request);
+
+    const childProcessMod = await import('node:child_process');
+    const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
+    const spawnArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
+    expect(spawnArgs.slice(-3)).toEqual(['bash', '-l', '-s']);
+
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    sshProcess.emit('close', 0, null);
+    await new Promise((r) => setTimeout(r, 50));
+  });
   it('decreases entries.size after terminal close', async () => {
     const request = makeRequest({
       inputs: {
@@ -1114,7 +1132,7 @@ describe('SshExecutor entry lifecycle', () => {
     expect(response.outputs.error).toContain('broken pipe');
   });
 
-  it('includes SSH transport timeout/keepalive options in spawned SSH args', async () => {
+  it('uses a non-login shell for internal SSH utility scripts', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',
       user: 'testuser',
@@ -1137,6 +1155,7 @@ describe('SshExecutor entry lifecycle', () => {
       '-o', 'ServerAliveCountMax=3',
       '-o', 'BatchMode=yes',
     ]));
+    expect(firstCallArgs.slice(-2)).toEqual(['bash', '-s']);
   });
 
   it('uses configured remote heartbeat interval from SSH target config', async () => {
