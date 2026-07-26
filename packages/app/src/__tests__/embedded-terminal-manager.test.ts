@@ -257,6 +257,39 @@ describe('EmbeddedTerminalManager', () => {
     expect(reused.outputSnapshot).toBe(firstFrame);
   });
 
+  it('seeds displayBridge before synchronous backend output and persists it in the snapshot', () => {
+    const bridge = 'Context: restoring task terminal\n\n';
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('backend-ready\n');
+        return spawned;
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-bridge',
+      spec: { cwd: '/tmp/wt', displayBridge: bridge },
+      cwd: '/tmp/wt',
+    });
+    const reused = mgr.openOrReuse({
+      taskId: 'task-bridge',
+      spec: { cwd: '/tmp/wt', displayBridge: 'updated bridge text\n' },
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.outputSnapshot).toBe(`${bridge}backend-ready\n`);
+    expect(mgr.getPersistenceRecord(session.sessionId)?.outputSnapshot).toBe(`${bridge}backend-ready\n`);
+    expect(reused.sessionId).toBe(session.sessionId);
+    expect(backend.spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('opens a distinct session when the same task resolves to a different terminal target', () => {
     const child1 = createFakeChild();
     const child2 = createFakeChild();

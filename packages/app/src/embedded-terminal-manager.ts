@@ -21,6 +21,7 @@ import type {
 } from '@invoker/contracts';
 import type { TerminalSessionRecord } from '@invoker/data-store';
 import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
+import { formatTerminalDisplayBridge } from './terminal-external-launch.js';
 
 export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 export type EmbeddedTerminalSessionKind = 'task' | 'planning';
@@ -318,7 +319,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt,
       updatedAt: createdAt,
       status: 'running' as const,
-      outputSnapshot: '',
+      outputSnapshot: buildInitialOutputSnapshot(opts.spec, ''),
     };
 
     if (opts.attach) {
@@ -391,7 +392,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
       createdAt: seed.createdAt,
       updatedAt: new Date().toISOString(),
       status: 'running' as const,
-      outputSnapshot: seed.outputSnapshot,
+      outputSnapshot: buildInitialOutputSnapshot(seed.spec, seed.outputSnapshot),
     });
   }
 
@@ -654,6 +655,23 @@ export class EmbeddedTerminalManager extends EventEmitter {
 function trimOutputSnapshot(snapshot: string): string {
   if (snapshot.length <= MAX_OUTPUT_SNAPSHOT_CHARS) return snapshot;
   return snapshot.slice(snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS);
+}
+
+function buildInitialOutputSnapshot(spec: TerminalSpec, outputSnapshot: string): string {
+  const bridge = formatTerminalDisplayBridge(spec);
+  const trimmedSnapshot = trimOutputSnapshot(outputSnapshot);
+  if (!bridge || trimmedSnapshot.startsWith(bridge)) {
+    return trimmedSnapshot;
+  }
+  const outputTailChars = Math.max(0, MAX_OUTPUT_SNAPSHOT_CHARS - bridge.length);
+  if (trimmedSnapshot.length > outputTailChars) {
+    return `${bridge}${trimmedSnapshot.slice(trimmedSnapshot.length - outputTailChars)}`;
+  }
+  const seededSnapshot = `${bridge}${trimmedSnapshot}`;
+  if (seededSnapshot.length <= MAX_OUTPUT_SNAPSHOT_CHARS) {
+    return seededSnapshot;
+  }
+  return trimOutputSnapshot(seededSnapshot);
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {

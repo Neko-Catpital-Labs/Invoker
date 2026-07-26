@@ -547,11 +547,13 @@ describe('WorktreeExecutor', () => {
 
     const request = makeRequest();
     const handle = await executor.start(request);
+    handle.displayBridge = 'Display context for task\n';
     const spec = executor.getTerminalSpec(handle);
 
     expect(spec).toBeDefined();
     expect(spec!.cwd).toMatch(/^\/fake\/worktrees\//);
     expect(spec!.command).toBeUndefined();
+    expect(spec!.displayBridge).toBe('Display context for task\n');
 
     // Cleanup
     taskProcess.emit('close', 0, null);
@@ -1182,6 +1184,19 @@ describe('WorktreeExecutor', () => {
         workspacePath: '/home/user/.invoker/worktrees/wt-abc',
       });
       expect(spec).toEqual({ cwd: '/home/user/.invoker/worktrees/wt-abc' });
+    });
+
+    it('preserves displayBridge on restored specs', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge: 'Restored terminal context\n',
+      });
+      expect(spec).toEqual({
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge: 'Restored terminal context\n',
+      });
     });
 
     it('returns claude --resume spec with cwd when session exists', () => {

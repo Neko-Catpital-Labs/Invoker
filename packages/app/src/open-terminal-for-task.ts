@@ -22,6 +22,7 @@ import { loadConfig } from './config.js';
 import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
+  formatTerminalDisplayBridge,
   spawnDetachedTerminal,
   type OpenTerminalResult,
 } from './terminal-external-launch.js';
@@ -428,7 +429,7 @@ export async function openExternalTerminalForTask(
   }
 
   if (process.platform === 'darwin') {
-    if (spec.command) {
+    if (spec.command || formatTerminalDisplayBridge(spec)) {
       const osaArgs = buildMacOSOsascriptArgs(spec, cwd);
       return spawnDetachedTerminal('osascript', osaArgs, {}, onTerminalClose);
     }

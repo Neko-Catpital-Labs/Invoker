@@ -9,6 +9,7 @@ export interface ExecutorHandle {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  displayBridge?: string;
 }
 
 export interface TerminalSpec {
@@ -20,6 +21,7 @@ export interface TerminalSpec {
   args?: string[];
   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
   linuxTerminalTail?: 'exec_bash' | 'pause';
+  displayBridge?: string;
 }
 
 export interface PersistedTaskMeta {
@@ -31,6 +33,7 @@ export interface PersistedTaskMeta {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  displayBridge?: string;
 }
 
 export interface Executor {

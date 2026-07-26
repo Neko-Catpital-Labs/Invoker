@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdirSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
 
 import {
   computeWorkflowRollup,
@@ -44,6 +45,7 @@ import {
   buildLinuxXTerminalBashScript,
   buildMacOSOsascriptArgs,
   buildTerminalShellCommand,
+  shellSingleQuoteForPOSIX,
   spawnDetachedTerminal,
 } from '../terminal-external-launch.js';
 import { openEmbeddedTerminalForTask, openExternalTerminalForTask } from '../open-terminal-for-task.js';
@@ -151,7 +153,7 @@ function buildCleanEnv(): Record<string, string> {
 
 function openExternalTerminal(spec: TerminalSpec | null): void {
   const defaultCwd = spec?.cwd ?? process.cwd();
-  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args };
+  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args, displayBridge: spec?.displayBridge };
 
   if (process.platform === 'linux') {
     const cleanEnv = buildCleanEnv();
@@ -165,7 +167,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
     });
     child.unref();
   } else if (process.platform === 'darwin') {
-    if (spec?.command) {
+    if (spec?.command || spec?.displayBridge) {
       const osaArgs = buildMacOSOsascriptArgs(meta, defaultCwd);
       const child = mockSpawn('osascript', osaArgs, { detached: true, stdio: 'ignore' });
       child.unref();
@@ -447,6 +449,46 @@ describe('terminal-external-launch', () => {
     const doScriptArg = args.find(a => a.startsWith('do script'));
     expect(doScriptArg).toBeDefined();
     expect(doScriptArg).toContain('\\"');
+  });
+
+  it('prints displayBridge with shell quoting and preserves command argv', () => {
+    const marker = '\nARGV_JSON:';
+    const bridge = "context before\n' ; printf INJECTED >&2 ; : '\nafter\n";
+    const targetArgs = [
+      '-e',
+      `process.stdout.write(${JSON.stringify(marker)} + JSON.stringify(process.argv.slice(1)))`,
+      'semi;colon',
+      "quote'arg",
+      '$(echo not-substituted)',
+    ];
+    const script = buildTerminalShellCommand(
+      {
+        cwd: tmpdir(),
+        command: process.execPath,
+        args: targetArgs,
+        displayBridge: bridge,
+      },
+      '/fallback',
+    );
+
+    expect(script).toContain(`printf %s 'context before`);
+    expect(script).toContain("\\'");
+    expect(script).toContain(shellSingleQuoteForPOSIX(process.execPath));
+
+    const result = spawnSync('bash', ['-c', script], { encoding: 'utf8' });
+    const stdout = String(result.stdout);
+    const stderr = String(result.stderr);
+
+    expect(result.status).toBe(0);
+    expect(stderr).toBe('');
+    expect(stdout.startsWith(bridge)).toBe(true);
+    const markerIndex = stdout.lastIndexOf(marker);
+    expect(markerIndex).toBeGreaterThan(-1);
+    expect(JSON.parse(stdout.slice(markerIndex + marker.length))).toEqual([
+      'semi;colon',
+      "quote'arg",
+      '$(echo not-substituted)',
+    ]);
   });
 });
 
