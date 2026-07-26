@@ -96,5 +96,7 @@ class AdminBypassGhExecutor:
             if action.key == "capped":
                 key = f"capped:{action.detail}"
                 self.comment_blocked(pr, action.detail, key, now)
+            else:
+                self.comment_blocked(pr, action.detail, action.key, now)
             return
         raise ValueError(f"unsupported executor action: {action.kind}")
