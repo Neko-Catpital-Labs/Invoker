@@ -762,6 +762,13 @@ async function collectGithubAndSmokeChecks(options: SetupDeps): Promise<Prerequi
   return checks;
 }
 
+async function collectAndPrintGithubAndSmokeChecks(io: SetupIO, options: SetupDeps): Promise<PrerequisiteCheck[]> {
+  const checks = await collectGithubAndSmokeChecks(options);
+  io.print('');
+  io.print(formatReport(buildReport(checks)));
+  return checks;
+}
+
 function printSetupEnding(io: SetupIO, checks: readonly PrerequisiteCheck[]): number {
   const report = buildReport([...checks]);
   io.print('');
@@ -827,7 +834,7 @@ export async function runSetup(
       io.print(`\n${formatReport(report, { json: parsed.json })}`);
       if (!creds.botToken || !creds.appToken || !creds.signingSecret || !creds.channelId || !report.ok) {
         io.print('Nothing written.');
-        checks.push(...await collectGithubAndSmokeChecks(options));
+        checks.push(...await collectAndPrintGithubAndSmokeChecks(io, options));
         return printSetupEnding(io, checks);
       }
       const envPath = writeSlackEnv({
@@ -857,7 +864,7 @@ export async function runSetup(
         const proceed = await promptYes(io, '\nSome checks failed. Save these values anyway? [y/N] ', parsed.assumeYes);
         if (!proceed) {
           io.print('Nothing written.');
-          checks.push(...await collectGithubAndSmokeChecks(options));
+          checks.push(...await collectAndPrintGithubAndSmokeChecks(io, options));
           return printSetupEnding(io, checks);
         }
       }
@@ -866,10 +873,8 @@ export async function runSetup(
       io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
     }
 
-    const extras = await collectGithubAndSmokeChecks(options);
+    const extras = await collectAndPrintGithubAndSmokeChecks(io, options);
     checks.push(...extras);
-    io.print('');
-    io.print(formatReport(buildReport(extras)));
 
     return printSetupEnding(io, checks);
   } catch (error) {
