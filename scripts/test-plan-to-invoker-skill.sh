@@ -55,6 +55,15 @@ must_not_exist() {
   fi
 }
 
+must_not_contain() {
+  local file="$1"
+  local needle="$2"
+  local hint="$3"
+  if grep -qF -- "$needle" "$file"; then
+    fail "$hint — unexpected in $file: $needle"
+  fi
+}
+
 
 must_output_contain() {
   local output="$1"
@@ -72,6 +81,10 @@ must_not_exist "$REPO_ROOT/.cursor/commands/plan-to-invoker.md" "legacy Cursor h
 [[ -f "$TUTORIAL" ]] || fail "expected $TUTORIAL"
 must_contain "$CANONICAL_COMMAND" "description: Plan a change and submit it through Invoker" "Invoker handoff command must keep host command description frontmatter"
 must_contain "$CANONICAL_COMMAND" 'argument-hint: "help me plan <change>"' "Invoker handoff command must keep host argument hint frontmatter"
+must_contain "$CANONICAL_COMMAND" "Use this host's native planning mode when the host supports entering it from this command." "Invoker handoff command must enter host-native planning mode when available"
+must_contain "$CANONICAL_COMMAND" "If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved." "Invoker handoff command must stay handoff-only before approval"
+must_not_contain "$CANONICAL_COMMAND" "Mergify Stacks" "Invoker handoff command must not include later PR publication wording"
+must_not_contain "$CANONICAL_COMMAND" "mergify stack push" "Invoker handoff command must not publish PR stacks directly"
 must_contain "$CANONICAL_COMMAND" "invoker_validate_plan" "Invoker handoff command must validate through MCP"
 must_contain "$CANONICAL_COMMAND" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
 must_contain "$CANONICAL_COMMAND" "mode \`live\`" "Invoker handoff command must submit in live mode"
@@ -160,6 +173,7 @@ must_contain "$SKILL_MD" "For benchmark/direct-output prompts with" "SKILL front
 must_contain "$SKILL_MD" "\"invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the installed handoff command"
 must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the slash handoff command"
 must_contain "$SKILL_MD" "## Harness handoff mode" "SKILL must document harness handoff mode"
+must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt. Do not use this mode from a Slack \`plan:\` or agent thread. The orchestrator owns Slack plan submission, so in those threads do not invoke CLI or MCP handoff tools yourself." "SKILL must keep harness handoff mode scoped to installed-command/MCP handoff only"
 must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt." "SKILL must define when handoff mode applies"
 must_contain "$SKILL_MD" "Do not use this mode from a Slack \`plan:\` or agent thread." "SKILL must defer Slack threads to the orchestrator"
 must_contain "$SKILL_MD" "do not invoke CLI or MCP handoff tools yourself." "SKILL must forbid Slack-thread CLI and MCP submission"
@@ -171,6 +185,7 @@ must_contain "$SKILL_MD" "Prefer the MCP tools \`invoker_validate_plan\` and \`i
 must_contain "$SKILL_MD" "creating, updating, publishing, or splitting pull requests or PR stacks" "SKILL handoff mode must define PR skill trigger scope"
 must_contain "$SKILL_MD" "skills/make-pr/SKILL.md" "SKILL handoff mode must trigger the PR skill for PR work"
 must_contain "$SKILL_MD" "skill://make-pr/SKILL.md" "SKILL handoff mode must include skill URI fallback for PR work"
+must_contain "$SKILL_MD" "If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow \`skills/make-pr/SKILL.md\` (or \`skill://make-pr/SKILL.md\` when available) before PR authoring or publication." "SKILL must keep PR authoring/publication as a separate skill handoff"
 must_contain "$SKILL_MD" "before PR authoring or publication" "SKILL handoff mode must require PR skill before publication work"
 must_contain "$SKILL_MD" "multiple review slices" "SKILL handoff mode must define review-compression trigger scope"
 must_contain "$SKILL_MD" "skills/review-compression/SKILL.md" "SKILL handoff mode must trigger review compression for stack work"
@@ -206,6 +221,7 @@ must_contain "$SKILL_MD" 'Use `skills/plan-to-invoker/scripts/skill-doctor.sh <p
 must_contain "$SKILL_MD" "Schema-only validation or ad hoc individual script checks are not sufficient as the review gate" "SKILL must reject incomplete primary gates"
 must_contain "$SKILL_MD" "Individual validator scripts remain fallback diagnostics only" "SKILL must preserve fallback diagnostics"
 must_contain "$SKILL_MD" "lint-review-units.mjs" "SKILL must document review-unit lint enforcement"
+must_contain "$SKILL_MD" "When those hardening workflows target Invoker itself, the branch/PR publication layer should use Mergify Stacks (\`mergify stack push\`) after the commits are ready. Keep external target repos on their own normal PR workflow unless they independently opt into Mergify." "SKILL must keep Invoker PR publication separate and after commit preparation"
 
 DOCTOR_SCRIPT="$REPO_ROOT/skills/plan-to-invoker/scripts/skill-doctor.sh"
 DOCTOR_HELP="$(bash "$DOCTOR_SCRIPT" --help)"
