@@ -63,6 +63,7 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 - Prefer the MCP tools `invoker_validate_plan` and `invoker_submit_plan` when available.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before submission.
 - Outside an Invoker source checkout, `invoker_validate_plan` is the deterministic validation gate.
+- Treat plain approval of the plan as authorization for workflow handoff only: validate and submit the Invoker workflow, then stop. Creating, updating, publishing, or splitting PRs after the workflow handoff is a separate explicit action that requires a user request naming that PR/stack work.
 
 - If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
@@ -75,7 +76,7 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts — prefer rendering a matching formula (`skills/plan-to-invoker/formulas/`) and specializing its slots over authoring the shape from scratch.
 5. Validate with deterministic scripts.
-6. Present plan and submit on confirmation.
+6. Present plan and submit on confirmation; this confirmation covers workflow handoff, not later PR publication.
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
 
