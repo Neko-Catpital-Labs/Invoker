@@ -1705,22 +1705,6 @@ function startHeadlessMode(): void {
           autoFixRetries: resolveAutoFixRetries(invokerConfig),
           canControl: () => !readOnlyMode,
         });
-        if (command === 'owner-serve') {
-          const ownerServeTaskExecutor = createStandaloneTaskExecutor();
-          const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
-          headlessWebBridge = startWebSurfaceForHeadless(
-            {
-              logger,
-              orchestrator,
-              persistence,
-              messageBus,
-              executionAgentRegistry: agentRegistry,
-              invokerConfig,
-              appRootDir: __dirname,
-            },
-            apiServerDeps,
-          );
-        }
         const reconciledWorkerActions = reconcileTerminalWorkerActionsOnStartup(persistence);
         if (reconciledWorkerActions > 0) {
           logger.info(
@@ -1738,6 +1722,22 @@ function startHeadlessMode(): void {
             createTaskExecutor: createStandaloneTaskExecutor,
             setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
           });
+        }
+        if (command === 'owner-serve') {
+          const ownerServeTaskExecutor = createStandaloneTaskExecutor();
+          const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
+          headlessWebBridge = startWebSurfaceForHeadless(
+            {
+              logger,
+              orchestrator,
+              persistence,
+              messageBus,
+              executionAgentRegistry: agentRegistry,
+              invokerConfig,
+              appRootDir: __dirname,
+            },
+            apiServerDeps,
+          );
         }
 
         void recoverWorkflowMutationsOnStartup({
