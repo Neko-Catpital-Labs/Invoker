@@ -40,6 +40,8 @@ tasks:
     dependencies: []
 `;
 
+const SUBMIT_READY_LINE = 'Reply `submit` to submit it.';
+
 const INLINE_PLAN_RESPONSE = `Here is the plan:
 
 \`\`\`yaml
@@ -52,7 +54,7 @@ tasks:
     dependencies: []
 \`\`\`
 
-Reply \`submit\` to submit it.`;
+${SUBMIT_READY_LINE}`;
 
 describe('plan draft file - activation side', () => {
   let workingDir: string;
@@ -117,15 +119,25 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
+  it('removes the standalone submit instruction when the current turn has no draft', async () => {
+    const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan.\n\n${SUBMIT_READY_LINE}`));
+    const response = await conversation.sendMessage('Draft it');
+
+    expect(response.split('\n').map((line) => line.trim())).not.toContain(SUBMIT_READY_LINE);
+    expect(conversation.history.at(-1)).toEqual({ role: 'assistant', content: 'Drafted the plan.' });
+    expect(conversation.getDraftedPlan()).toBeNull();
+  });
+
   it('requires the exact submit line as a standalone post-plan instruction', () => {
     const conversation = new PlanConversation({});
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
 
     const prompt = conversation.buildCursorPrompt();
-    const submitLine = 'Reply `submit` to submit it.';
     const lines = prompt.split('\n');
 
-    expect(lines.filter((line) => line === submitLine)).toHaveLength(1);
+    expect(lines.filter((line) => line === SUBMIT_READY_LINE)).toHaveLength(1);
     expect(prompt.match(/Reply `submit` to submit it\./g)).toHaveLength(1);
     expect(prompt).toContain('Do NOT place that line inline in a sentence.');
   });
@@ -136,15 +148,20 @@ describe('plan draft file - activation side', () => {
     if (!path) throw new Error('expected a plan draft path');
 
     mockSpawn.mockReturnValueOnce(fakePlannerChild(
-      'Drafted the plan.\n\nReply `submit` to submit it.',
+      `Drafted the plan.\n\n${SUBMIT_READY_LINE}`,
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Create the plan');
+    const response = await conversation.sendMessage('Create the plan');
 
     expect(isConfirmation('submit')).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(conversation.planSubmitted).toBe(false);
     expect(conversation.submittedPlanText).toBeNull();
+    expect(response.split('\n')).toContain(SUBMIT_READY_LINE);
+    expect(conversation.history.at(-1)).toEqual({
+      role: 'assistant',
+      content: `Drafted the plan.\n\n${SUBMIT_READY_LINE}`,
+    });
 
     const draftedPlan = conversation.getDraftedPlan();
     expect(draftedPlan).not.toBeNull();
