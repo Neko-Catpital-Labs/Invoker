@@ -117,6 +117,81 @@ describe('Side rail controls (component)', () => {
     });
   });
 
+  it('moves loaded non-merge tasks between pools from the graph More menu and keeps going after a failure', async () => {
+    const poolTasks = [
+      makeUITask({
+        id: 'wf-a/source-1',
+        description: 'Source one',
+        workflowId: 'wf-a',
+        command: 'echo source-1',
+        config: { workflowId: 'wf-a', command: 'echo source-1', poolId: 'mixed-local-ssh' },
+      }),
+      makeUITask({
+        id: 'wf-a/source-2',
+        description: 'Source two',
+        workflowId: 'wf-a',
+        command: 'echo source-2',
+        config: { workflowId: 'wf-a', command: 'echo source-2', poolId: 'mixed-local-ssh' },
+      }),
+      makeUITask({
+        id: 'wf-a/already-target',
+        description: 'Already target',
+        workflowId: 'wf-a',
+        command: 'echo target',
+        config: { workflowId: 'wf-a', command: 'echo target', poolId: 'pnpm-ssh' },
+      }),
+      makeUITask({
+        id: 'wf-a/unpooled',
+        description: 'No pool',
+        workflowId: 'wf-a',
+        command: 'echo none',
+        config: { workflowId: 'wf-a', command: 'echo none' },
+      }),
+      makeUITask({
+        id: '__merge__wf-a',
+        description: 'Merge gate',
+        workflowId: 'wf-a',
+        isMergeNode: true,
+        config: { workflowId: 'wf-a', isMergeNode: true, poolId: 'mixed-local-ssh' },
+      }),
+    ];
+    mock.setTasks(poolTasks, workflows);
+    mock.api.editTaskPool = vi.fn(async (taskId: string) => {
+      if (taskId === 'wf-a/source-2') {
+        throw new Error('pool update rejected');
+      }
+      return {
+        ok: true,
+        accepted: true,
+        intentId: 1,
+        workflowId: 'wf-a',
+        channel: 'invoker:edit-task-pool',
+      };
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
+    fireEvent.click(screen.getByTestId('graph-more-button'));
+    const menuItem = await screen.findByTestId('rail-move-tasks-between-pools');
+    await waitFor(() => expect(menuItem).not.toBeDisabled());
+    fireEvent.click(menuItem);
+
+    expect(await screen.findByTestId('bulk-pool-reassignment-dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('bulk-pool-source-select')).toHaveValue('mixed-local-ssh');
+    expect(screen.getByTestId('bulk-pool-destination-select')).toHaveValue('pnpm-ssh');
+    expect(screen.getByTestId('bulk-pool-scope-select')).toHaveValue('loaded-non-merge');
+    expect(screen.getByTestId('bulk-pool-match-count')).toHaveTextContent('2');
+
+    fireEvent.click(screen.getByTestId('bulk-pool-confirm'));
+
+    await waitFor(() => expect(mock.api.editTaskPool).toHaveBeenCalledTimes(2));
+    expect(mock.api.editTaskPool).toHaveBeenNthCalledWith(1, 'wf-a/source-1', 'pnpm-ssh');
+    expect(mock.api.editTaskPool).toHaveBeenNthCalledWith(2, 'wf-a/source-2', 'pnpm-ssh');
+    expect(screen.getByTestId('bulk-pool-result')).toHaveTextContent('Moved 1 task. Skipped 3. Failed 1.');
+    expect(screen.getByTestId('bulk-pool-result')).toHaveTextContent('wf-a/source-2: pool update rejected');
+  });
+
   it('cycles major keyboard regions with Tab', async () => {
     await renderKeyboardFixture(mock);
 
