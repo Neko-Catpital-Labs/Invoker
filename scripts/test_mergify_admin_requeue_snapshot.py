@@ -208,7 +208,7 @@ class GhClientCandidateDiscovery(unittest.TestCase):
         bottom = {
             "number": 100,
             "title": "bottom",
-            "labels": {"nodes": [{"name": "dequeued"}]},
+            "labels": {"nodes": []},
         }
         upper = {
             "number": 101,
@@ -221,16 +221,18 @@ class GhClientCandidateDiscovery(unittest.TestCase):
                 "body": '<!-- mergify-stack-data: {"stack_id":"s","pull_numbers_bottom_to_top":[100,101]} -->',
             }],
         }
+        seeds_by_label = {"admin-bypass": [upper], "dequeued": []}
 
         class FakeGh(s.GhClient):
             def __init__(self):
-                self.list_args = []
+                self.label_calls = []
                 self.detail_calls = []
                 self.comment_calls = []
 
             def _run_json(self, args):
-                self.list_args = list(args)
-                return [upper]
+                label = args[args.index("--label") + 1]
+                self.label_calls.append(label)
+                return seeds_by_label.get(label, [])
 
             def pr_detail(self, repo, number):
                 self.detail_calls.append((repo, number))
@@ -243,11 +245,44 @@ class GhClientCandidateDiscovery(unittest.TestCase):
         client = FakeGh()
         found = client.list_candidate_prs("Neko-Catpital-Labs/Invoker", "EdbertChan", [])
 
-        self.assertIn("--label", client.list_args)
-        self.assertIn("admin-bypass", client.list_args)
+        self.assertEqual(client.label_calls, ["admin-bypass", "dequeued"])
         self.assertEqual([pr["number"] for pr in found], [101, 100])
         self.assertEqual(client.detail_calls, [("Neko-Catpital-Labs/Invoker", 100)])
         self.assertEqual(client.comment_calls, [("Neko-Catpital-Labs/Invoker", 101)])
+
+    def test_candidate_scan_seeds_standalone_dequeued_only_pr(self):
+        # A PR that Mergify dequeued loses admin-bypass and keeps only
+        # `dequeued`; with no admin-bypass stackmate it is discoverable only if
+        # the scan seeds from the `dequeued` label too (real PR #5810).
+        dequeued_only = {
+            "number": 810,
+            "title": "standalone dequeued",
+            "labels": {"nodes": [{"name": "dequeued"}]},
+        }
+        seeds_by_label = {"admin-bypass": [], "dequeued": [dequeued_only]}
+
+        class FakeGh(s.GhClient):
+            def __init__(self):
+                self.label_calls = []
+                self.detail_calls = []
+
+            def _run_json(self, args):
+                label = args[args.index("--label") + 1]
+                self.label_calls.append(label)
+                return seeds_by_label.get(label, [])
+
+            def pr_detail(self, repo, number):
+                self.detail_calls.append((repo, number))
+                raise AssertionError("directly-labelled candidate must not need pr_detail")
+
+            def issue_comments(self, repo, number):
+                return []
+
+        client = FakeGh()
+        found = client.list_candidate_prs("Neko-Catpital-Labs/Invoker", None, [])
+
+        self.assertEqual(client.label_calls, ["admin-bypass", "dequeued"])
+        self.assertEqual([pr["number"] for pr in found], [810])
 
 
 class GhClientLabelEdit(unittest.TestCase):

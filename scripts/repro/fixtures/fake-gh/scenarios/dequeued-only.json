@@ -1,0 +1,30 @@
+{
+  "prs": [
+    {
+      "number": 810,
+      "title": "Standalone dequeued PR that lost its admin-bypass label",
+      "url": "https://github.com/fake/repo/pull/810",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/810",
+      "headRefOid": "8108108108108108108108108108108108108108",
+      "mergeStateStatus": "BLOCKED",
+      "mergeable": "MERGEABLE",
+      "labels": ["dequeued"],
+      "reviewThreads": [],
+      "checks": {"*": "SUCCESS"}
+    }
+  ],
+  "issue_comments": {
+    "810": [
+      {
+        "id": "m810",
+        "user": {"login": "mergify[bot]"},
+        "updated_at": "2026-07-20T00:00:00Z",
+        "html_url": "https://github.com/fake/repo/pull/810#m810",
+        "body": "# Merge Queue Status\n\n- Left the queue at `8108108108108108108108108108108108108108`\n\n-*- Mergify Payload -*-\n{\"state\":\"dequeued\",\"queue_rule_name\":\"admin-bypass\"}\n\n## Reason\n\nThe merge conditions cannot be satisfied due to failing checks\n\n- required-fast / Guardrails\n\n## Failing checks\n\n- [required-fast / Guardrails](https://github.com/fake/repo/actions/runs/1/job/2)\n"
+      }
+    ]
+  }
+}

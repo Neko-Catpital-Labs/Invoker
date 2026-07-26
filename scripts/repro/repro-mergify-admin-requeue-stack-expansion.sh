@@ -76,8 +76,10 @@ def pr(number):
 
 
 args = sys.argv[1:]
-if args[:2] == ["pr", "list"] and "--label" in args and "admin-bypass" in args:
-    print(json.dumps([pr(101)]))
+if args[:2] == ["pr", "list"] and "--label" in args:
+    label = args[args.index("--label") + 1]
+    seeds = [p for p in (pr(100), pr(101)) if label in [node["name"] for node in p["labels"]["nodes"]]]
+    print(json.dumps(seeds))
     raise SystemExit(0)
 if args[:2] == ["pr", "list"] and "--label" not in args:
     print(json.dumps([pr(100), pr(101)]))

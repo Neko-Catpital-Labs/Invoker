@@ -42,6 +42,9 @@ except ImportError:
     )
 
 
+CANDIDATE_SEED_LABELS = ("admin-bypass", "dequeued")
+
+
 class GhClient:
     def _run_json(self, args: Sequence[str]) -> object:
         out = self._run(args)
@@ -53,15 +56,6 @@ class GhClient:
     def list_candidate_prs(self, repo: str, author: str | None, pr_numbers: Sequence[int]) -> list[dict]:
         if pr_numbers:
             return [self.pr_detail(repo, number) for number in pr_numbers]
-        args = [
-            "gh", "pr", "list", "--repo", repo, "--state", "open",
-            "--label", "admin-bypass", "--limit", "200", "--json",
-            "number,title,url,headRefName,headRefOid,baseRefName,state,isDraft,labels,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup",
-        ]
-        if author:
-            args[5:5] = ["--author", author]
-        value = self._run_json(args)
-        seeds = value if isinstance(value, list) else []
         by_number: dict[int, dict] = {}
         ordered_numbers: list[int] = []
 
@@ -70,12 +64,24 @@ class GhClient:
                 ordered_numbers.append(number)
             by_number[number] = detail
 
-        for item in seeds:
-            if not isinstance(item, dict):
-                continue
-            number = int(item.get("number") or 0)
-            if number:
-                remember(number, item)
+        # Mergify strips `admin-bypass` and applies `dequeued` when it drops a PR
+        # from the queue, so a standalone recovered PR only carries `dequeued`.
+        # Seed from both labels or those PRs are never scanned.
+        for label in CANDIDATE_SEED_LABELS:
+            args = [
+                "gh", "pr", "list", "--repo", repo, "--state", "open",
+                "--label", label, "--limit", "200", "--json",
+                "number,title,url,headRefName,headRefOid,baseRefName,state,isDraft,labels,mergeStateStatus,mergeable,reviewDecision,statusCheckRollup",
+            ]
+            if author:
+                args[5:5] = ["--author", author]
+            value = self._run_json(args)
+            for item in value if isinstance(value, list) else []:
+                if not isinstance(item, dict):
+                    continue
+                number = int(item.get("number") or 0)
+                if number:
+                    remember(number, item)
 
         queued_stack_numbers: list[int] = []
         queued_stack_number_set: set[int] = set()
