@@ -52,8 +52,16 @@ Everything the desktop UI does, except local-only features:
 - Live task graph updates (pushed over Server-Sent Events).
 - Full control: approve / reject / retry / recreate / cancel / provide input /
   edit, via the same `WorkflowMutationFacade` the REST API uses.
-- **Terminals are not available** over HTTP — the "open terminal" action reports
-  that it is unsupported instead of failing.
+- Task terminals work over HTTP for both desktop-owned and headless web
+  surfaces. The browser can open, stream, type into, resize, and close task
+  terminal sessions, and refreshes rehydrate existing task tabs from
+  `terminalList()` + saved snapshots.
+- Planning chat tmux stays desktop-only. The planning terminal routes still
+  report that they are unavailable in the web UI.
+
+Because auth is a single shared secret, any authenticated web client now also
+has terminal input / resize / close capability. Keep the token private, use
+TLS, and prefer a tunnel or trusted network boundary.
 
 ## Transport
 
