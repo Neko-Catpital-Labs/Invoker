@@ -41,7 +41,7 @@ export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
-const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:restart-task';
+const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:retry-task';
 const AUTO_FIX_ACTION_TYPE = 'auto-fix';
 const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
 
@@ -256,7 +256,7 @@ function autoFixDecisionExternalKey(candidate: AutoFixRecoveryCandidate): string
 }
 
 function autoFixBareRetryExternalKey(candidate: AutoFixRecoveryCandidate): string {
-  // Bare retry is once-per-task: after restart-task bumps generation, the next
+  // Bare retry is once-per-task: after retry-task bumps generation, the next
   // failure must escalate to fix-with-agent instead of another bare retry.
   return `${AUTO_FIX_WORKER_KIND}:retry:${candidate.taskId}`;
 }

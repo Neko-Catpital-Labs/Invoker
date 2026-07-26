@@ -17,7 +17,7 @@ import { recordWorkerDecisionRow, type WorkerDecisionStore } from './worker-deci
  * This counter is stored in the durable `worker_actions` table under a key that
  * is stable across generations, attempts, and process restarts, so the total
  * number of worker-initiated retries for a task can never exceed the config.
- * Both automatic retry kinds (bare `restart-task` and `fix-with-agent`) count,
+ * Both automatic retry kinds (bare `retry-task` and `fix-with-agent`) count,
  * and every worker shares the one counter so the cap is per-task, not
  * per-worker. It is a hard cap with no automatic reset; a human who wants more
  * attempts uses the explicit `fix` command, which bypasses the worker entirely.
