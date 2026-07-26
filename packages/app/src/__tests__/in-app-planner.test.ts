@@ -232,6 +232,7 @@ describe('planning chat', () => {
     expect(result.ok && result.sessionId).toBeTruthy();
     expect(sessions.size).toBe(1);
     const session = [...sessions.values()][0];
+    expect(session?.id).toBe(result.ok ? result.sessionId : undefined);
     expect(session?.messages).toEqual([
       expect.objectContaining({ id: 1, role: 'user', text: 'hello' }),
       expect.objectContaining({ id: 2, role: 'assistant', text: 'I can help.' }),
@@ -260,6 +261,24 @@ describe('planning chat', () => {
     expect(prompt).toContain('Talk through edge cases, corner cases, architecture, and ambiguity with the human.');
     expect(prompt).toContain('Resolve those points before producing a YAML plan.');
     expect(prompt).toContain('Draft YAML only after the human asks you to draft/proceed');
+  });
+
+  it('rejects an unknown continuation session without creating a new one', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('should not send');
+    const sessions = createInAppPlanningChatSessions();
+
+    await expect(sendPlanningChatMessage({
+      sessionId: 'missing-session',
+      message: 'continue planning',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    })).resolves.toEqual({ ok: false, sessionId: 'missing-session', error: 'Planning session not found.' });
+    expect(sessions.size).toBe(0);
+    expect(spawnPlanner).not.toHaveBeenCalled();
   });
 
   it('reuses an existing session and keeps its original preset', async () => {
@@ -291,6 +310,7 @@ describe('planning chat', () => {
     });
 
     expect(second).toMatchObject({ ok: true, sessionId: first.sessionId, reply: 'second' });
+    expect(sessions.size).toBe(1);
     expect(sessions.get(first.sessionId)?.presetKey).toBe('codex');
     expect(spawnPlanner).toHaveBeenCalledTimes(2);
   });
