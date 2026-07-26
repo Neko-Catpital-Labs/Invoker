@@ -14,10 +14,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
 import type { AgentSessionData, NormalizedCostEvent, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
 import { AUTO_FIX_WORKER_KIND, createWorkerRegistry, registerBuiltinWorkers, type AgentRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
-import type { CostAttributionAttempt } from '@invoker/data-store';
+import type { CostAttributionAttempt, InAppPlanningSessionRecord, Workflow } from '@invoker/data-store';
 import type { CostGroupDimension } from './cost-rollup.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { buildReviewGateQueryResponse } from './review-gate-query.js';
+import { submittedPlanningStackWorkflowAliases } from './submitted-planning-workflow-aliases.js';
 
 import {
   type HeadlessDeps,
@@ -65,6 +66,18 @@ export type HeadlessQueryDeps = Pick<
   'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig' | 'getUiPerfStats' | 'resetUiPerfStats'
 >;
 
+function listWorkflowsWithSubmittedPlanningAliases(deps: HeadlessQueryDeps): Workflow[] {
+  const workflows = deps.persistence.listWorkflows();
+  const listSessions = (deps.persistence as {
+    listInAppPlanningSessions?: () => InAppPlanningSessionRecord[];
+  }).listInAppPlanningSessions;
+  if (!listSessions) return workflows;
+  const sessions = listSessions.call(deps.persistence);
+  if (sessions.length === 0) return workflows;
+  const aliases = submittedPlanningStackWorkflowAliases(workflows, sessions);
+  return aliases.length === 0 ? workflows : [...workflows, ...aliases];
+}
+
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
@@ -81,7 +94,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
 
   switch (subCommand) {
     case 'workflows': {
-      let workflows = deps.persistence.listWorkflows();
+      let workflows = listWorkflowsWithSubmittedPlanningAliases(deps);
       if (flags.status) {
         workflows = workflows.filter(wf => wf.status === flags.status);
       }

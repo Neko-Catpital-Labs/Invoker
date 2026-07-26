@@ -62,6 +62,51 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     expect(output).toBe('wf-9\n');
   });
 
+  it('exposes a submitted in-app planning stack tail when the workflow row is missing', async () => {
+    const deps = makeQueryDeps(() => []);
+    deps.persistence = {
+      ...deps.persistence,
+      listInAppPlanningSessions: () => [{
+        id: 'planning-1',
+        title: 'Planning cleanup',
+        presetKey: 'codex',
+        status: 'submitted',
+        messages: [],
+        draftPlanSummary: {
+          name: 'In-App Planning Chat Draft Gate',
+          taskCount: 3,
+          workflowCount: 3,
+          steps: [
+            'In-App Planning Chat Draft Gate Step 1',
+            'In-App Planning Chat Draft Gate Step 2',
+            'In-App Planning Chat Draft Gate Step 3',
+          ],
+          taskGroups: [],
+        },
+        submittedWorkflowId: 'wf-tail',
+        submittedPlanName: 'In-App Planning Chat Draft Gate',
+        pendingResponse: false,
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T01:00:00.000Z',
+      }],
+    } as unknown as HeadlessQueryDeps['persistence'];
+
+    const output = await runReadOnlyHeadlessQueryToString(
+      ['query', 'workflows', '--output', 'json'],
+      deps,
+    );
+
+    expect(JSON.parse(output)).toEqual([
+      expect.objectContaining({
+        id: 'wf-tail',
+        name: 'In-App Planning Chat Draft Gate Step 3',
+        status: 'closed',
+        createdAt: '2026-07-20T00:00:00.000Z',
+        updatedAt: '2026-07-20T01:00:00.000Z',
+      }),
+    ]);
+  });
+
   it('uses configured default agent when session task has no persisted agent name', async () => {
     const task = {
       id: 'wf-1/task-1',
