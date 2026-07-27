@@ -28,6 +28,7 @@ import { createHarnessSessionDriverFactory, createPlanningCommandBuilder, create
 import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
+import { maybeStartHiSmokeServer } from './slack-hi-smoke.js';
 const VERSION = '0.0.8';
 
 const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
@@ -157,6 +158,10 @@ async function main(): Promise<void> {
 
   await slack.start(commandHandler);
   watchdog.start();
+  const hiSmokeServer = await maybeStartHiSmokeServer({
+    inject: (opts) => slack.injectHiSmoke(opts),
+    log,
+  });
   // Establish the IPC connection (and re-apply subscriptions) if Invoker is already up.
   void client.ping();
   log('info', `slack-manager started (store=${managerHome})`);
@@ -168,6 +173,7 @@ async function main(): Promise<void> {
     log('info', `received ${signal}, shutting down`);
     watchdog.stop();
     stopEvents();
+    await hiSmokeServer?.close().catch((err) => log('warn', `hi-smoke close failed: ${errMessage(err)}`));
     await slack.stop().catch((err) => log('warn', `slack.stop failed: ${errMessage(err)}`));
     client.disconnect();
     adapter.close();
