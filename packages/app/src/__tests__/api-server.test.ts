@@ -597,25 +597,25 @@ describe('workflow HTTP mutation boundary', () => {
   });
 });
 
-describe('POST /api/tasks/:id/restart', () => {
-  it('restarts task via facade retryTask', async () => {
-    const res = await request(port, 'POST', '/api/tasks/task-1/restart');
+describe('POST /api/tasks/:id/retry', () => {
+  it('retries task via facade retryTask', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/retry');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.action).toBe('restarted');
+    expect(res.body.action).toBe('retried');
     expect(mocks.orchestrator.retryTask).toHaveBeenCalledWith('task-1');
   });
 
   it('returns 400 on error', async () => {
     mocks.orchestrator.retryTask.mockImplementation(() => {
-      throw new Error('task not restartable');
+      throw new Error('task not retriable');
     });
-    const res = await request(port, 'POST', '/api/tasks/task-1/restart');
+    const res = await request(port, 'POST', '/api/tasks/task-1/retry');
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('task not restartable');
+    expect(res.body.error).toBe('task not retriable');
   });
 
-  it('tops up globally ready tasks after scoped restart launch', async () => {
+  it('tops up globally ready tasks after scoped retry launch', async () => {
     const scoped = makeTask({
       id: 'task-1',
       status: 'running',
@@ -630,7 +630,7 @@ describe('POST /api/tasks/:id/restart', () => {
     mocks.orchestrator.retryTask.mockReturnValue([scoped]);
     mocks.orchestrator.startExecution.mockReturnValue([topup]);
 
-    const res = await request(port, 'POST', '/api/tasks/task-1/restart');
+    const res = await request(port, 'POST', '/api/tasks/task-1/retry');
     expect(res.status).toBe(200);
     expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
     expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
@@ -650,9 +650,18 @@ describe('POST /api/tasks/:id/restart', () => {
     mocks.orchestrator.retryTask.mockReturnValue([scoped]);
     mocks.orchestrator.startExecution.mockReturnValue([duplicate]);
 
-    const res = await request(port, 'POST', '/api/tasks/task-1/restart');
+    const res = await request(port, 'POST', '/api/tasks/task-1/retry');
     expect(res.status).toBe(200);
     expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/tasks/:id/restart', () => {
+  it('returns 404 and does not route to retryTask', async () => {
+    const res = await request(port, 'POST', '/api/tasks/task-1/restart');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Not found');
+    expect(mocks.orchestrator.retryTask).not.toHaveBeenCalled();
   });
 });
 
@@ -997,23 +1006,23 @@ describe('POST /api/tasks/:id/gate-policy', () => {
   });
 });
 
-describe('POST /api/workflows/:id/restart', () => {
-  it('restarts workflow via facade recreateWorkflow', async () => {
+describe('POST /api/workflows/:id/recreate', () => {
+  it('recreates workflow via facade recreateWorkflow', async () => {
     mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
-    const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
+    const res = await request(port, 'POST', '/api/workflows/wf-1/recreate');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.action).toBe('restarted');
+    expect(res.body.action).toBe('recreated');
     expect(mocks.persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
     expect(mocks.persistence.updateWorkflow).toHaveBeenCalled();
   });
 
-  it('handles concurrent restart requests independently', async () => {
+  it('handles concurrent recreate requests independently', async () => {
     mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
 
     const [r1, r2] = await Promise.all([
-      request(port, 'POST', '/api/workflows/wf-1/restart'),
-      request(port, 'POST', '/api/workflows/wf-1/restart'),
+      request(port, 'POST', '/api/workflows/wf-1/recreate'),
+      request(port, 'POST', '/api/workflows/wf-1/recreate'),
     ]);
 
     expect(r1.status).toBe(200);
@@ -1027,12 +1036,12 @@ describe('POST /api/workflows/:id/restart', () => {
 
   it('returns 404 when workflow not found', async () => {
     mocks.persistence.loadWorkflow.mockReturnValue(undefined);
-    const res = await request(port, 'POST', '/api/workflows/missing/restart');
+    const res = await request(port, 'POST', '/api/workflows/missing/recreate');
     expect(res.status).toBe(404);
     expect(res.body.error).toContain('not found');
   });
 
-  it('tops up globally ready tasks after workflow restart launch', async () => {
+  it('tops up globally ready tasks after workflow recreate launch', async () => {
     const scoped = makeTask({
       id: 'wf-1/task-1',
       config: { workflowId: 'wf-1' },
@@ -1046,11 +1055,22 @@ describe('POST /api/workflows/:id/restart', () => {
     mocks.orchestrator.recreateWorkflow = vi.fn(() => [scoped]);
     mocks.orchestrator.startExecution.mockReturnValue([topup]);
 
-    const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
+    const res = await request(port, 'POST', '/api/workflows/wf-1/recreate');
     expect(res.status).toBe(200);
     expect(res.body.tasksStarted).toBe(1);
     expect(mocks.orchestrator.startExecution).toHaveBeenCalled();
     expect(mocks.taskExecutor.executeTasks).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/workflows/:id/restart', () => {
+  it('returns 404 and does not route to recreateWorkflow', async () => {
+    mocks.orchestrator.recreateWorkflow = vi.fn(() => [makeTask()]);
+    const res = await request(port, 'POST', '/api/workflows/wf-1/restart');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Not found');
+    expect(mocks.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(mocks.persistence.updateWorkflow).not.toHaveBeenCalled();
   });
 });
 
