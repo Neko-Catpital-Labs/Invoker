@@ -43,7 +43,7 @@ function currentReviewGateLineage(task: TaskState, reviewId: string): {
   };
 }
 
-function loadSourceTask(
+export function loadSourceTask(
   sourceWorkflowId: string,
   sourceTaskId: string,
   deps: SpawnReviewGateCiRepairWorkflowDeps,
@@ -55,7 +55,7 @@ function loadSourceTask(
   return deps.persistence.loadTasks(sourceWorkflowId).find((task) => task.id === sourceTaskId);
 }
 
-function assertSourceReviewGateLineage(task: TaskState, args: ReviewGateCiRepairWorkflowMutationArgs): void {
+export function assertSourceReviewGateLineage(task: TaskState, args: ReviewGateCiRepairWorkflowMutationArgs): void {
   if (task.config.workflowId !== args.sourceWorkflowId) {
     throw new Error(
       `Review-gate CI repair workflow is stale: source workflow changed (${args.sourceWorkflowId} → ${task.config.workflowId ?? 'missing'}).`,
@@ -102,7 +102,7 @@ function resolveBranch(task: TaskState, featureBranch: string | undefined, args:
   return branch;
 }
 
-function resolveBaseBranch(baseBranch: string | undefined): string {
+export function resolveBaseBranch(baseBranch: string | undefined): string {
   const resolved = baseBranch?.trim();
   if (!resolved) {
     throw new Error('Review-gate CI repair requires source workflow baseBranch.');
@@ -110,7 +110,7 @@ function resolveBaseBranch(baseBranch: string | undefined): string {
   return resolved;
 }
 
-function buildFailedCheckBullet(check: ReviewGateCiRepairWorkflowMutationArgs['failedChecks'][number]): string {
+export function buildFailedCheckBullet(check: ReviewGateCiRepairWorkflowMutationArgs['failedChecks'][number]): string {
   const conclusion = check.conclusion ? ` (${check.conclusion})` : '';
   const detailsUrl = check.detailsUrl ? ` — ${check.detailsUrl}` : '';
   return `- ${check.name}${conclusion}${detailsUrl}`;
