@@ -224,6 +224,8 @@ export function createMockInvoker(
     })),
     planningChatDiscardDraft: vi.fn(async () => ({ ok: true })),
     planningChatReset: vi.fn(async () => ({ ok: true })),
+    planningChatDelete: vi.fn(async () => ({ ok: true })),
+    planningChatDeleteSubmitted: vi.fn(async () => ({ ok: true, deletedSessionIds: [] })),
     onPlanningChatStream: vi.fn((cb: (event: InAppPlanningStreamEvent) => void) => {
       planningChatStreamCallbacks.add(cb);
       return () => { planningChatStreamCallbacks.delete(cb); };
