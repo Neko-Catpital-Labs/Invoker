@@ -20,6 +20,7 @@ import {
   remoteFetchForPool,
   registerBuiltinAgents,
   assertPlanExecutionAgentsRegistered,
+  type TaskRunner,
 } from '@invoker/execution-engine';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer } from './api-server.js';
@@ -57,6 +58,7 @@ import {
   preemptWorkflowExecution,
 } from './headless-shared.js';
 import { runStartReady } from './start-ready.js';
+import { LaunchDispatcher } from './launch-dispatcher.js';
 type StartReadyRequestExt = StartReadyRequest & {
   recreateFailedAndPending?: boolean;
   recreateFailedPendingAndRunning?: boolean;
@@ -216,6 +218,42 @@ function createTrackedHeadlessExecutor(
   );
 }
 
+function startTrackedHeadlessLaunchDispatcher(
+  deps: HeadlessDeps,
+  taskExecutor: TaskRunner,
+  context: string,
+): () => void {
+  const dispatcher = new LaunchDispatcher({
+    persistence: deps.persistence,
+    orchestrator: {
+      prepareTaskForNewAttempt: (taskId, reason) =>
+        deps.orchestrator.prepareTaskForNewAttempt(taskId, reason),
+      syncFromDb: (workflowId) => deps.orchestrator.syncFromDb(workflowId),
+      getTask: (taskId) => deps.orchestrator.getTask(taskId),
+      getTaskLaunchReadiness: (taskId) => deps.orchestrator.getTaskLaunchReadiness(taskId),
+    },
+    taskRunnerProvider: () => taskExecutor,
+    ownerId: `headless-tracked-${process.pid}-${context}`,
+    logger: deps.logger,
+  });
+
+  const poll = (): void => {
+    try {
+      dispatcher.poll();
+    } catch (err) {
+      deps.logger.warn(
+        `[headless] ${context}: tracked launch dispatcher poll failed: ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'headless' },
+      );
+    }
+  };
+
+  poll();
+  const timer = setInterval(poll, 250);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 export async function headlessWatch(workflowId: string | undefined, deps: HeadlessDeps): Promise<void> {
   const workflows = deps.persistence.listWorkflows();
   if (workflows.length === 0) {
@@ -306,18 +344,22 @@ export async function headlessRun(
     return;
   }
 
-  if (started.length > 0) {
-    await taskExecutor.executeTasks(started);
-  }
+  const stopLaunchDispatcher = started.length > 0
+    ? startTrackedHeadlessLaunchDispatcher(deps, taskExecutor, 'run')
+    : undefined;
 
-  if (currentWorkflowId) {
-    await trackHeadlessWorkflow(currentWorkflowId, deps, {
-      waitForApproval,
-      printSnapshot: true,
-      printSummary: true,
-      printTaskOutput: true,
-      setExitCodeOnFailure: true,
-    });
+  try {
+    if (currentWorkflowId) {
+      await trackHeadlessWorkflow(currentWorkflowId, deps, {
+        waitForApproval,
+        printSnapshot: true,
+        printSummary: true,
+        printTaskOutput: true,
+        setExitCodeOnFailure: true,
+      });
+    }
+  } finally {
+    stopLaunchDispatcher?.();
   }
 
   await api.close().catch(() => {});
@@ -383,15 +425,18 @@ export async function headlessResume(
     return;
   }
 
-  await taskExecutor.executeTasks(allStarted);
-
-  await trackHeadlessWorkflow(workflowId, deps, {
-    waitForApproval,
-    printSnapshot: true,
-    printSummary: true,
-    printTaskOutput: true,
-    setExitCodeOnFailure: true,
-  });
+  const stopLaunchDispatcher = startTrackedHeadlessLaunchDispatcher(deps, taskExecutor, 'resume');
+  try {
+    await trackHeadlessWorkflow(workflowId, deps, {
+      waitForApproval,
+      printSnapshot: true,
+      printSummary: true,
+      printTaskOutput: true,
+      setExitCodeOnFailure: true,
+    });
+  } finally {
+    stopLaunchDispatcher();
+  }
 
   await api.close().catch(() => {});
   await webSurface?.close().catch(() => {});
