@@ -191,6 +191,7 @@ export const SCHEMA_DDL = `
         working_dir TEXT NOT NULL,
         requested_by TEXT NOT NULL,
         lobby_channel_id TEXT NOT NULL,
+        confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
         harness_session_id TEXT
       );
 
@@ -209,6 +210,7 @@ export const SCHEMA_DDL = `
         harness_preset TEXT NOT NULL,
         working_dir TEXT NOT NULL,
         requested_by TEXT NOT NULL,
+        confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
         created_at TEXT NOT NULL,
         decided_at TEXT,
         decided_by TEXT,
@@ -239,6 +241,7 @@ export const SCHEMA_DDL = `
         title TEXT NOT NULL,
         preset_key TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('still_discussing', 'waiting_for_answer', 'draft_ready', 'submitted')),
+        confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit')),
         draft_plan_summary_json TEXT CHECK (draft_plan_summary_json IS NULL OR json_valid(draft_plan_summary_json)),
         draft_plan_text TEXT,
         submitted_workflow_id TEXT,
@@ -515,9 +518,11 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE workflow_channels ADD COLUMN progress_card_ts TEXT',
   "ALTER TABLE conversations ADD COLUMN mode TEXT DEFAULT 'plan'",
   'ALTER TABLE slack_launch_contexts ADD COLUMN harness_session_id TEXT',
+  "ALTER TABLE slack_launch_contexts ADD COLUMN confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit'))",
   'ALTER TABLE slack_plan_drafts ADD COLUMN slack_file_id TEXT',
   'ALTER TABLE slack_plan_drafts ADD COLUMN execution_key TEXT',
   'ALTER TABLE slack_plan_drafts ADD COLUMN workflow_ids_json TEXT',
+  "ALTER TABLE slack_plan_drafts ADD COLUMN confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit'))",
   'ALTER TABLE tasks ADD COLUMN claude_session_id TEXT',
   'ALTER TABLE tasks ADD COLUMN workspace_path TEXT',
   'ALTER TABLE tasks ADD COLUMN container_id TEXT',
@@ -585,6 +590,7 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE attempts ADD COLUMN lease_expires_at TEXT',
   'ALTER TABLE tasks ADD COLUMN task_state_version INTEGER NOT NULL DEFAULT 1',
   'ALTER TABLE in_app_planning_sessions ADD COLUMN draft_plan_text TEXT',
+  "ALTER TABLE in_app_planning_sessions ADD COLUMN confirmation_mode TEXT NOT NULL DEFAULT 'require' CHECK (confirmation_mode IN ('require', 'auto_submit'))",
   "ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_mode TEXT NOT NULL DEFAULT 'chat' CHECK (terminal_mode IN ('chat', 'tmux'))",
   'ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_session_id TEXT',
   "ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_status TEXT CHECK (terminal_status IS NULL OR terminal_status IN ('running', 'exited'))",

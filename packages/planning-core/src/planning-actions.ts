@@ -1,6 +1,6 @@
 import type { PlanningMessage } from './lifecycle.js';
 import { evaluatePlanningTurn } from './planning-turn.js';
-import { summarizePlanText, type PlanSummary } from './plan-summary.js';
+import { type PlanSummary } from './plan-summary.js';
 
 export type PlanningSessionStatus = 'still_discussing' | 'waiting_for_answer' | 'draft_ready' | 'submitted';
 
@@ -72,66 +72,3 @@ export async function appendPlanningTurn({
   };
 }
 
-export interface RunPlanToInvokerInput {
-  convert: () => Promise<string>;
-  extractDraftPlanText?: (output: string) => string | null | undefined;
-}
-
-export type RunPlanToInvokerResult =
-  | { kind: 'draft_ready'; planText: string; summary: PlanSummary; reply: string }
-  | { kind: 'message'; reply: string };
-
-export async function runPlanToInvoker({
-  convert,
-  extractDraftPlanText,
-}: RunPlanToInvokerInput): Promise<RunPlanToInvokerResult> {
-  const reply = await convert();
-  const immediateDraftPlanText = extractDraftPlanText ? extractDraftPlanText(reply) : reply;
-  const turn = evaluatePlanningTurn({
-    userMessage: '',
-    messagesBeforeTurn: [],
-    assistantReply: reply,
-    immediateDraftPlanText,
-    requireDraftAuthorization: false,
-  });
-
-  if (turn.kind === 'draft_ready') {
-    return { kind: 'draft_ready', planText: turn.planText, summary: turn.summary, reply };
-  }
-  return { kind: 'message', reply };
-}
-
-export interface ApprovedPlanLoadResult {
-  planName: string;
-  workflowId: string;
-  workflowIds?: string[];
-  workflowCount?: number;
-}
-
-export interface ApprovePlanningDraftInput {
-  planText: string | null | undefined;
-  loadPlan: (planText: string) => ApprovedPlanLoadResult | Promise<ApprovedPlanLoadResult>;
-}
-
-export type ApprovePlanningDraftResult =
-  | ({ ok: true; summary: PlanSummary } & ApprovedPlanLoadResult)
-  | { ok: false; error: string };
-
-export async function approvePlanningDraft({
-  planText,
-  loadPlan,
-}: ApprovePlanningDraftInput): Promise<ApprovePlanningDraftResult> {
-  if (!planText) {
-    return { ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' };
-  }
-  const summary = summarizePlanText(planText);
-  if (!summary) {
-    return { ok: false, error: 'I found a draft plan but could not read it. Ask the AI to regenerate the plan, then submit again.' };
-  }
-  try {
-    const loaded = await loadPlan(planText);
-    return { ok: true, summary, ...loaded };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-}

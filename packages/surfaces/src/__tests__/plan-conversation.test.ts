@@ -600,7 +600,8 @@ describe('PlanConversation', () => {
     expect(prompt).toContain('The user has explicitly approved drafting');
     expect(prompt).toContain('name: "Plan Name"');
     expect(prompt).toContain('Generate a YAML task plan');
-    expect(prompt).toContain('Reply `submit` to submit it.');
+    expect(prompt).not.toContain('Reply `submit` to submit it.');
+    expect(prompt).toContain('Do not tell the user to reply `submit`');
   });
 
   it('submittedPlanText is null before confirmation', async () => {
@@ -918,16 +919,15 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).not.toContain('repoUrl: "git@github.com:user/repo.git"');
   });
 
-  it('requires the submit instruction as a standalone post-plan summary line', () => {
+  it('routes post-yaml approval through the Slack review flow', () => {
     const conv = new PlanConversation({});
     (conv as any).messages.push({ role: 'user', content: 'Build a feature' });
     const prompt = conv.buildCursorPrompt();
-    const submitLine = 'Reply `submit` to submit it.';
 
-    expect(prompt.split('\n').filter((line) => line === submitLine)).toHaveLength(1);
-    expect(prompt.match(/Reply `submit` to submit it\./g)).toHaveLength(1);
-    expect(prompt).toContain('short post-plan summary');
-    expect(prompt).toContain('Do NOT place that line inline in a sentence.');
+    expect(prompt).not.toContain('Reply `submit` to submit it.');
+    expect(prompt).toContain('Slack orchestrator reads that exact YAML');
+    expect(prompt).toContain('wait for approval before any submission step');
+    expect(prompt).toContain('Do not tell the user to reply `submit`');
   });
 
   it('keeps existing plan delivery, stack, and merge mode guidance', () => {
@@ -937,7 +937,7 @@ describe('PlanConversation prompt construction', () => {
 
     expect(prompt).toContain('mergeMode: external_review');
     expect(prompt).toContain('Prefer small reviewable slices');
-    expect(prompt).toContain('The Slack orchestrator validates and executes the plan after the user replies `submit` and approves it.');
+    expect(prompt).toContain('Only the Slack orchestrator may submit the plan after approval from its review flow.');
   });
 
   it('delegates Slack plan submission to the orchestrator', () => {
@@ -945,13 +945,12 @@ describe('PlanConversation prompt construction', () => {
     (conv as any).messages.push({ role: 'user', content: 'Build a feature' });
     const prompt = conv.buildCursorPrompt();
 
-    expect(prompt).toContain('Do NOT invoke `invoker-cli` (with any flags)');
+    expect(prompt).toContain('`invoker-cli`');
     expect(prompt).toContain('`invoker_submit_plan`');
     expect(prompt).toContain('`invoker_validate_plan`');
     expect(prompt).toContain('`submit-plan.sh`');
     expect(prompt).toContain('Harness handoff mode');
-    expect(prompt).toContain('This rule overrides that skill\'s handoff instructions in this Slack thread');
-    expect(prompt).toContain('remind them to reply with `submit`; never run it yourself');
+    expect(prompt).toContain('This rule overrides the plan-to-invoker skill\'s Harness handoff mode in this Slack thread');
   });
 
   it('system prompt requires discovered verification commands for target repos', () => {
@@ -972,8 +971,8 @@ describe('PlanConversation prompt construction', () => {
     // The canonical GitHub review gate must be named explicitly for reviewable plans.
     expect(prompt).toContain('mergeMode: external_review');
     expect(prompt).toContain('GitHub-backed review gate');
-    // Manual remains the verification-only default; automatic still documented.
-    expect(prompt).toContain('"manual" (default)');
+    // Pull-request plans now default to external_review; manual stays available for verification-only plans.
+    expect(prompt).toContain('default for pull_request plans');
     expect(prompt).toContain('"automatic"');
   });
 

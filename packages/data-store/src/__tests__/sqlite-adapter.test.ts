@@ -72,6 +72,7 @@ describe('SQLiteAdapter', () => {
       title: `Planning ${id}`,
       presetKey: 'codex',
       status: 'draft_ready',
+      confirmationMode: 'require',
       messages: [
         {
           id: 1,
@@ -462,6 +463,7 @@ describe('SQLiteAdapter', () => {
         'title',
         'preset_key',
         'status',
+        'confirmation_mode',
         'draft_plan_summary_json',
         'draft_plan_text',
         'submitted_workflow_id',

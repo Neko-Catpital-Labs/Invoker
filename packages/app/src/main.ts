@@ -60,6 +60,7 @@ import type {
   InAppPlanningCreateSessionRequest,
   InAppPlanningChatRequest,
   InAppPlanningDeleteRequest,
+  InAppPlanningDiscardDraftRequest,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
@@ -252,6 +253,7 @@ import {
   createPlanningCommandBuilderFromRegistry,
   deletePlanningChat,
   deleteSubmittedPlanningChats,
+  discardPlanningChatDraft,
   listPlanningChatSessions,
   planFromGoal as planFromGoalInApp,
   resetPlanningChat,
@@ -1152,6 +1154,12 @@ function startHeadlessMode(): void {
             return submitPlanningChatDraft(payload.args[0] as InAppPlanningSubmitRequest, {
               sessions: planningChatSessions,
               loadGeneratedPlan,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
+            });
+          }
+          case 'invoker:planning-chat-discard-draft': {
+            return discardPlanningChatDraft(payload.args[0] as InAppPlanningDiscardDraftRequest, {
+              sessions: planningChatSessions,
               planningSessionStore: readOnlyMode ? undefined : persistence,
             });
           }

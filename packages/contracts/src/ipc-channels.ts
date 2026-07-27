@@ -436,12 +436,14 @@ export type InAppPlanResponse =
       error: string;
     };
 
+export type PlanningConfirmationMode = 'require' | 'auto_submit';
 export interface PlanningPresetOption {
   key: string;
   label: string;
   tool: string;
   model?: string;
   isDefault: boolean;
+  defaultConfirmationMode?: PlanningConfirmationMode;
 }
 
 export interface InAppPlanningPlanSummaryTaskGroup {
@@ -477,6 +479,7 @@ export interface InAppPlanningSessionSummary {
   title: string;
   status: InAppPlanningSessionStatus;
   presetKey: string;
+  confirmationMode?: PlanningConfirmationMode;
   messages: InAppPlanningChatLine[];
   draftPlanAvailable: boolean;
   draftPlanSummary?: InAppPlanningPlanSummary;
@@ -496,6 +499,7 @@ export interface InAppPlanningSessionSummary {
 export interface InAppPlanningCreateSessionRequest {
   presetKey?: string;
   title?: string;
+  confirmationMode?: PlanningConfirmationMode;
 }
 
 export type InAppPlanningCreateSessionResponse =
@@ -522,6 +526,7 @@ export interface InAppPlanningChatRequest {
   sessionId?: string;
   message: string;
   presetKey?: string;
+  confirmationMode?: PlanningConfirmationMode;
 }
 
 export type InAppPlanningChatResponse =
@@ -529,6 +534,7 @@ export type InAppPlanningChatResponse =
       ok: true;
       sessionId: string;
       reply: string;
+      confirmationMode?: PlanningConfirmationMode;
       draftPlanAvailable: boolean;
       draftPlanSummary?: InAppPlanningPlanSummary;
       draftPlanText?: string;
@@ -561,6 +567,13 @@ export interface InAppPlanningResetRequest {
 }
 
 export type InAppPlanningResetResponse = { ok: true };
+export interface InAppPlanningDiscardDraftRequest {
+  sessionId: string;
+}
+
+export type InAppPlanningDiscardDraftResponse =
+  | { ok: true }
+  | { ok: false; error: string };
 
 export interface InAppPlanningSetTerminalModeRequest {
   sessionId: string;
@@ -880,6 +893,10 @@ export const IpcChannels = {
   'invoker:planning-chat-submit': {} as {
     request: [request: InAppPlanningSubmitRequest];
     response: InAppPlanningSubmitResponse;
+  },
+  'invoker:planning-chat-discard-draft': {} as {
+    request: [request: InAppPlanningDiscardDraftRequest];
+    response: InAppPlanningDiscardDraftResponse;
   },
   'invoker:planning-chat-reset': {} as {
     request: [request: InAppPlanningResetRequest];

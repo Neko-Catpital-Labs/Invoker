@@ -27,6 +27,7 @@ describe('SlackSessionRepository', () => {
       workingDir: '/tmp/repo',
       requestedBy: 'U123',
       lobbyChannelId: 'C456',
+      confirmationMode: 'require' as const,
     };
 
     repo.saveLaunchContext(context);
@@ -46,6 +47,7 @@ describe('SlackSessionRepository', () => {
       workingDir: '/tmp/repo',
       requestedBy: 'U123',
       lobbyChannelId: 'C456',
+      confirmationMode: 'require' as const,
     };
     try {
       const writer = await SQLiteAdapter.create(databasePath, { ownerCapability: true });
