@@ -63,8 +63,9 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 - Prefer the MCP tools `invoker_validate_plan` and `invoker_submit_plan` when available.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before submission.
 - Outside an Invoker source checkout, `invoker_validate_plan` is the deterministic validation gate.
+- Plain approval in this mode authorizes workflow handoff only: convert, validate, and submit the Invoker workflow, then stop and report the submitted workflow result. Do not treat plain plan approval as approval to create, publish, update, or split GitHub PRs.
 
-- If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
+- If the user explicitly asks about creating, updating, publishing, or splitting pull requests or PR stacks, handle that as a separate action after workflow handoff and first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
 
 ## Intended flow (do not skip steps)
@@ -173,18 +174,18 @@ If `skill-doctor.sh` fails, run individual checks to isolate the problem:
 10. `step-submit-standalone-waived` (exception path)
     Use only for verify-only plans, explicitly requested single-workflow plans, or implementation plans that satisfy the `Standalone workflow waiver:` rule.
     `./submit-plan.sh <plan-file>`
-    If the target repo is Invoker itself, finish the PR publication step with `mergify stack push` from the working branch after the stack of commits is ready.
+    For Invoker-on-Invoker work, `mergify stack push` is a later PR publication action only after the stack of commits is ready and the user explicitly asks for publication.
 10a. `step-submit-stacked` (single plan with upstream dependency)
      Use when the plan HAS `externalDependencies` with a concrete workflow ID (not `__UPSTREAM_WORKFLOW_ID__`).
      1. Query upstream workflow: `./run.sh --headless query workflows --output json | jq '.[] | select(.id == "<workflowId>")'`
      2. Extract the upstream workflow's `featureBranch`
      3. Rewrite baseBranch: `sed -E -i "s|^baseBranch:.*$|baseBranch: <featureBranch>|" <plan-file>`
      4. Submit: `./submit-plan.sh <plan-file>`
-     5. If the target repo is Invoker itself, publish/update the resulting PR stack with `mergify stack push` after submission-side commits are ready.
+     5. For Invoker-on-Invoker work, publish/update the resulting PR stack with `mergify stack push` only as a later explicit PR publication action after submission-side commits are ready.
 10b. `step-submit-chain` (batch stacking, multiple template plans)
      Default path for implementation work with more than one review slice.
      `./scripts/submit-workflow-chain.sh [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...`
-     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with `mergify stack push` once the chain's commits are prepared.
+     The chain script handles: template rendering, baseBranch rewrite, merge-gate injection, sequential submission. For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with `mergify stack push` only as a later explicit PR publication action once the chain's commits are prepared.
      Strict default: when `--gate-policy` is omitted, chain submission enforces `taskId: "__merge__"` + `requiredStatus: completed` + `gatePolicy: review_ready` for upstream workflow dependencies.
 
 ## Runtime verification (Phase 1b)
