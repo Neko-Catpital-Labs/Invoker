@@ -277,6 +277,7 @@ export interface GuiMutationTaskActions {
     args: unknown[],
   ) => WorkflowMutationAcceptedResult;
   workflowIdForTargetArg: (targetArg: unknown) => string | undefined;
+  workflowIdForRepairWorkflowPayload: (payloadArg: unknown) => string | undefined;
   workflowIdForTaskArg: (taskIdArg: unknown) => string | undefined;
   refreshRuntime: () => void;
 }
@@ -1046,6 +1047,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     runWorkflowMutation,
     submitWorkflowMutation,
     workflowIdForTargetArg,
+    workflowIdForRepairWorkflowPayload,
     workflowIdForTaskArg,
     refreshRuntime,
   };
@@ -1118,6 +1120,8 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   const performDetachWorkflow = actions.performDetachWorkflow;
   const performSharedApproveTask = actions.performSharedApproveTask;
   const executeFixWithAgentMutation = actions.executeFixWithAgentMutation;
+  const executeSpawnRepairWorkflowMutation = actions.executeSpawnRepairWorkflowMutation;
+  const workflowIdForRepairWorkflowPayload = actions.workflowIdForRepairWorkflowPayload;
 
   function publishOrchestratorSnapshotToRenderer(): void {
     const workflows = persistence.listWorkflows();
