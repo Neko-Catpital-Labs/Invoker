@@ -165,6 +165,14 @@ class GhClient:
                 capture_output=True,
             )
 
+    def retarget_base(self, repo: str, number: int, base: str) -> None:
+        subprocess.run(
+            ["gh", "api", "--method", "PATCH", f"repos/{repo}/pulls/{number}", "-f", f"base={base}"],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
     def resolve_review_thread(self, thread_id: str) -> None:
         query = "mutation($threadId:ID!) { resolveReviewThread(input:{threadId:$threadId}) { thread { id isResolved } } }"
         subprocess.run(["gh", "api", "graphql", "-f", f"threadId={thread_id}", "-f", f"query={query}"], check=True, text=True, capture_output=True)
