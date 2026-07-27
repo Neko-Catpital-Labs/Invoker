@@ -649,8 +649,8 @@ describe('Graph camera controls (component)', () => {
     await screen.findByTestId(`workflow-node-${wfs[0].id}`);
     await screen.findByTestId('selected-workflow-mini-dag');
     await waitFor(() => expect(fitViewMock.mock.calls.length).toBeGreaterThanOrEqual(2));
-    // Opening Plan graph issues a fit; drain any trailing center/fit from that
-    // transition before tests assert on post-mount camera moves.
+    // Opening Plan graph performs the graph components' initial fits; drain any
+    // trailing center/fit before tests assert on post-mount camera moves.
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     fitViewMock.mockClear();
