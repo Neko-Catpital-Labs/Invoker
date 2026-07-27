@@ -3,12 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationPriority } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
-import { parseFixWithAgentMutationArgs } from '../auto-fix-intents.js';
 import {
   autoFixAttemptLedgerKeyFromLifecycleEvent,
   createAutoFixAttemptLedger,
 } from '../auto-fix-attempt-ledger.js';
 import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
+import {
+  buildRepairWorkflowSpec,
+  parseSpawnRepairWorkflowMutationArgs,
+} from '../repair-workflow-spec.js';
 import {
   CI_FAILURE_WORKER_KIND,
   ciFailureActionKey,
@@ -122,7 +125,7 @@ function makeHarness(task = makeTask()) {
   const submit = vi.fn((workflowId: string, priority: WorkflowMutationPriority, channel: string, args: unknown[]) => {
     expect(workflowId).toBe('wf-1');
     expect(priority).toBe('normal');
-    expect(channel).toBe('invoker:fix-with-agent');
+    expect(channel).toBe('invoker:spawn-repair-workflow');
     expect(args).toBeDefined();
     return 42;
   });
@@ -166,7 +169,7 @@ describe('PR status and CI failure workers', () => {
     await worker.stop();
   });
 
-  it('queues a head-SHA guarded CI repair intent and records its dedupe action', async () => {
+  it('queues a head-SHA guarded CI repair workflow spawn intent and records its dedupe action', async () => {
     const event = makeEvent({
       failedChecks: [
         { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' },
@@ -193,31 +196,35 @@ describe('PR status and CI failure workers', () => {
     expect(ciFailureActionKey(sameChecksDifferentOrder)).toBe(ciFailureActionKey(event));
     expect(harness.submit).toHaveBeenCalledTimes(1);
     const [, , , args] = harness.submit.mock.calls[0];
-    const parsed = parseFixWithAgentMutationArgs(args);
+    const parsed = parseSpawnRepairWorkflowMutationArgs(args);
     expect(parsed).toMatchObject({
-      taskId: 'wf-1/merge',
-      agentName: 'codex',
-      context: {
-        autoFix: true,
-        executionModel: 'openai/gpt-5.2',
-        reviewGateContext: {
-          reviewId: '123',
-          generation: 2,
-          selectedAttemptId: 'attempt-1',
-          headSha: 'sha-1',
-        },
+      upstreamWorkflowId: 'wf-1',
+      upstreamFeatureBranch: 'feature/ci',
+      prHeadSha: 'sha-1',
+      failedCheckNames: ['unit', 'lint'],
+      source: 'worker',
+      queuedByRepairWorkflowGuard: true,
+      event: {
+        taskId: 'wf-1/merge',
+        reviewId: '123',
+        generation: 2,
+        attemptId: 'attempt-1',
+        headSha: 'sha-1',
       },
     });
     expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
       workerKind: CI_FAILURE_WORKER_KIND,
-      actionType: 'fix-ci-failure',
+      actionType: 'spawn-repair-workflow',
       status: 'queued',
       intentId: '42',
       externalKey: ciFailureActionKey(event),
+      payload: expect.objectContaining({
+        channel: 'invoker:spawn-repair-workflow',
+      }),
     });
   });
 
-  it('queues CI repair while the in-memory retry budget allows it', async () => {
+  it('queues CI repair workflow spawn while the durable retry budget allows it', async () => {
     const event = makeEvent();
     const harness = makeHarness();
     const tick = createCiFailureTick({
@@ -234,16 +241,61 @@ describe('PR status and CI failure workers', () => {
     expect(harness.submit).toHaveBeenCalledTimes(1);
   });
 
-  it('skips CI repair once the in-memory retry budget is exhausted', async () => {
+  it('skips CI repair workflow spawn once the durable retry budget is exhausted', async () => {
     const event = makeEvent();
+    const nextEvent = makeEvent({
+      failedChecks: [
+        { name: 'types', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/3' },
+      ],
+    });
     const harness = makeHarness();
-    harness.attemptLedger.consume(autoFixAttemptLedgerKeyFromLifecycleEvent(event), 1);
     const tick = createCiFailureTick({
       store: harness.store,
       submitter: { submit: harness.submit },
       logger,
       attemptLedger: harness.attemptLedger,
       defaultAutoFixRetries: 1,
+      drainEvents: () => [event, nextEvent],
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).toHaveBeenCalledTimes(1);
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(nextEvent)}`)).toMatchObject({
+      status: 'skipped',
+      payload: expect.objectContaining({
+        reason: 'worker-retry-budget-exhausted',
+        workerRetryBudget: 1,
+      }),
+    });
+  });
+
+  it('suppresses CI repair workflow spawn when the same review gate has a merge conflict', async () => {
+    const event = makeEvent();
+    const harness = makeHarness(makeTask({
+      execution: {
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            provider: 'github',
+            required: true,
+            status: 'open',
+            generation: 2,
+            headSha: 'sha-1',
+            mergeState: 'dirty',
+          }],
+        },
+      },
+    }));
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
       drainEvents: () => [event],
     });
 
@@ -251,12 +303,44 @@ describe('PR status and CI failure workers', () => {
 
     expect(harness.submit).not.toHaveBeenCalled();
     expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+      actionType: 'spawn-repair-workflow',
       status: 'skipped',
       payload: expect.objectContaining({
-        reason: 'worker-retry-budget-exhausted',
-        workerRetryBudget: 1,
+        reason: 'merge-conflict-present',
+        conflictOwner: 'review-gate-merge-conflict',
       }),
     });
+  });
+
+  it('queues the upstream workflow reference that repair-workflow cascade uses', async () => {
+    const event = makeEvent();
+    const harness = makeHarness();
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      attemptLedger: harness.attemptLedger,
+      defaultAutoFixRetries: 2,
+      drainEvents: () => [event],
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    const [, , , args] = harness.submit.mock.calls[0];
+    const payload = parseSpawnRepairWorkflowMutationArgs(args);
+    const spec = buildRepairWorkflowSpec({
+      event: payload.event,
+      upstreamWorkflowId: payload.upstreamWorkflowId,
+      upstreamFeatureBranch: payload.upstreamFeatureBranch,
+      prHeadSha: payload.prHeadSha,
+      failedCheckNames: payload.failedCheckNames,
+      repoUrl: 'git@github.com:owner/repo.git',
+    });
+    expect(spec.externalDependencies).toEqual([{
+      workflowId: 'wf-1',
+      taskId: '__merge__',
+      gatePolicy: 'ci_failed',
+    }]);
   });
 
   it('rejects stale CI failure events when the PR head changed before submit', async () => {
@@ -321,7 +405,7 @@ describe('PR status and CI failure workers', () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it('skips fix-with-agent for PR #5188-shaped infra checkout failures', async () => {
+  it('skips repair workflow spawn for PR #5188-shaped infra checkout failures', async () => {
     const event = makeEvent({
       failedChecks: [
         {
@@ -372,7 +456,7 @@ describe('PR status and CI failure workers', () => {
     });
   });
 
-  it('still queues fix-with-agent when fetched logs look like code failures', async () => {
+  it('still queues repair workflow spawn when fetched logs look like code failures', async () => {
     const event = makeEvent({
       failedChecks: [
         {

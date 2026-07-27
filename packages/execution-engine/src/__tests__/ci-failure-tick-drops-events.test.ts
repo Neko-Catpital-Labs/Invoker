@@ -5,6 +5,7 @@ import type { TaskState } from '@invoker/workflow-core';
 
 import { createAutoFixAttemptLedger } from '../auto-fix-attempt-ledger.js';
 import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
+import { parseSpawnRepairWorkflowMutationArgs } from '../repair-workflow-spec.js';
 import {
   CI_FAILURE_WORKER_KIND,
   createCiFailureTick,
@@ -139,7 +140,9 @@ describe('createCiFailureTick resilience', () => {
       signal: new AbortController().signal,
     });
 
-    const submittedTaskIds = submit.mock.calls.map((call) => (call[3] as [string, ...unknown[]])[0]);
+    const submittedTaskIds = submit.mock.calls.map((call) =>
+      parseSpawnRepairWorkflowMutationArgs(call[3]).event.taskId,
+    );
     expect(submittedTaskIds).toContain('task-1');
     expect(submittedTaskIds).toContain('task-3');
     expect(submit).toHaveBeenCalledTimes(2);
