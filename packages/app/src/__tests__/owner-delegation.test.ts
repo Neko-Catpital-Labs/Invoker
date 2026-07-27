@@ -100,6 +100,8 @@ describe('headless→owner delegation', () => {
       ['failed fresh-base', ['--fresh-base-failed']],
       ['failed and pending fresh-base', ['--fresh-base-failed-and-pending']],
       ['failed, pending, and running fresh-base', ['--fresh-base-failed-pending-and-running']],
+      ['all fresh-base', ['--fresh-base-all']],
+      ['fresh-base with recreate-all present', ['--recreate-all', '--fresh-base-failed']],
     ])('uses 60s timeout for global start-ready %s scope', async (_label, flags) => {
       const args = ['start-ready', ...flags];
 
@@ -307,6 +309,11 @@ describe('headless→owner delegation', () => {
       ['rebase-retry', ['rebase-retry', 'wf-1']],
       ['rebase-recreate', ['rebase-recreate', 'wf-1']],
       ['restart workflow', ['restart', 'wf-123']],
+      ['start-ready fresh-base failed', ['start-ready', '--fresh-base-failed']],
+      ['start-ready fresh-base failed and pending', ['start-ready', '--fresh-base-failed-and-pending']],
+      ['start-ready fresh-base failed, pending, and running', ['start-ready', '--fresh-base-failed-pending-and-running']],
+      ['start-ready fresh-base all', ['start-ready', '--fresh-base-all']],
+      ['start-ready fresh-base with recreate-all present', ['start-ready', '--recreate-all', '--fresh-base-failed']],
     ])('keeps %s pending at 5s and only times out at 60s', async (_label, args) => {
       const delegatedPromise = tryDelegateExec(
         args,
