@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { delegationTimeoutMs, tryDelegateExec, tryDelegateRun, tryDelegateResume } from '../headless.js';
+import {
+  delegationTimeoutMs,
+  resolveDelegationTimeoutMs,
+  tryDelegateExec,
+  tryDelegateRun,
+  tryDelegateResume,
+} from '../headless.js';
 import { LocalBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import type { HeadlessTargetLookup } from '../headless-command-classification.js';
@@ -90,6 +96,30 @@ describe('headless→owner delegation', () => {
       expect(delegationTimeoutMs(['start-ready'], targetLookup)).toBe(60_000);
       expect(delegationTimeoutMs(['start-ready', '--recreate-failed-and-pending'], targetLookup)).toBe(60_000);
       expect(delegationTimeoutMs(['start-ready', '--recreate-all'], targetLookup)).toBe(300_000);
+    });
+
+    it('keeps scoped start-ready fresh-base flags in the 60s timeout bucket', async () => {
+      const scopedFreshBaseArgs = [
+        ['start-ready', '--fresh-base'],
+        ['start-ready', '--fresh-base-failed'],
+        ['start-ready', '--fresh-base-failed-and-pending'],
+        ['start-ready', '--fresh-base-failed-pending-and-running'],
+        ['start-ready', '--fresh-base', '--recreate-failed'],
+        ['start-ready', '--fresh-base', '--recreate-failed-and-pending'],
+        ['start-ready', '--fresh-base', '--recreate-failed-pending-and-running'],
+      ];
+
+      for (const args of scopedFreshBaseArgs) {
+        expect(delegationTimeoutMs(args, targetLookup)).toBe(60_000);
+        await expect(resolveDelegationTimeoutMs(args)).resolves.toBe(60_000);
+      }
+    });
+
+    it('keeps start-ready recreate-all in the broad timeout bucket with fresh-base modifiers', async () => {
+      const args = ['start-ready', '--fresh-base', '--recreate-all'];
+
+      expect(delegationTimeoutMs(args, targetLookup)).toBe(300_000);
+      await expect(resolveDelegationTimeoutMs(args)).resolves.toBe(300_000);
     });
   });
 
