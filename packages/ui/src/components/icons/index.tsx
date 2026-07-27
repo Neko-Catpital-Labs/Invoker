@@ -16,6 +16,7 @@ import {
   Settings,
   Sun,
   TerminalSquare,
+  Trash2,
   type LucideProps,
 } from 'lucide-react';
 
@@ -46,6 +47,7 @@ export const ChevronLeftIcon = withDefaults(ChevronLeft);
 export const ChevronRightIcon = withDefaults(ChevronRight);
 export const ChevronDownIcon = withDefaults(ChevronDown);
 export const PlayIcon = withDefaults(Play);
+export const TrashIcon = withDefaults(Trash2);
 export const GitPullRequestIcon = withDefaults(GitPullRequest);
 export const GitMergeIcon = withDefaults(GitMerge);
 export const SunIcon = withDefaults(Sun);
