@@ -258,42 +258,108 @@ async function syncGateWorkspaceToFeatureBranch(
   await execGitInMergeSafe(host, ['checkout', featureBranch], gateWorkspacePath);
 }
 
+type ReviewableChangedFiles = {
+  changedFiles: string[];
+  effectiveBaseBranch: string;
+};
+
+function reviewBaseBranchCandidates(baseBranch: string): string[] {
+  const normalizedBase = normalizeBranchForGithubCli(baseBranch);
+  const candidates = [normalizedBase];
+  if (normalizedBase === 'main') {
+    candidates.push('master');
+  } else if (normalizedBase === 'master') {
+    candidates.push('main');
+  }
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+async function fetchRemoteBranchIfExists(
+  host: MergeRunnerHost,
+  dir: string,
+  branch: string,
+): Promise<boolean> {
+  try {
+    await execGitInMergeSafe(
+      host,
+      ['fetch', '--', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`],
+      dir,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveCommit(
+  host: MergeRunnerHost,
+  dir: string,
+  ref: string,
+): Promise<string | undefined> {
+  try {
+    const resolved = (await execGitInMergeSafe(
+      host,
+      ['rev-parse', '--verify', `${ref}^{commit}`],
+      dir,
+    )).trim();
+    return resolved || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function listReviewableChangedFiles(
   host: MergeRunnerHost,
   dir: string,
   baseBranch: string,
   featureBranch: string,
-): Promise<string[]> {
-  const normalizedBase = normalizeBranchForGithubCli(baseBranch);
-  let diffBaseRef = baseBranch;
-  for (const candidate of [
-    `refs/remotes/origin/${normalizedBase}`,
-    `origin/${normalizedBase}`,
-    baseBranch,
-  ]) {
-    try {
-      const resolved = (await execGitInMergeSafe(
-        host,
-        ['rev-parse', '--verify', `${candidate}^{commit}`],
-        dir,
-      )).trim();
-      if (resolved) {
-        diffBaseRef = candidate;
-        break;
-      }
-    } catch {
-      // Try the next base spelling.
+): Promise<ReviewableChangedFiles> {
+  const baseCandidates = reviewBaseBranchCandidates(baseBranch);
+  let baseCommit: string | undefined;
+  let effectiveBaseBranch = normalizeBranchForGithubCli(baseBranch);
+
+  for (const candidate of baseCandidates) {
+    const fetched = await fetchRemoteBranchIfExists(host, dir, candidate);
+    if (!fetched) continue;
+
+    const resolved = await resolveCommit(host, dir, `refs/remotes/origin/${candidate}`);
+    if (resolved) {
+      baseCommit = resolved;
+      effectiveBaseBranch = candidate;
+      break;
     }
   }
+
+  if (!baseCommit) {
+    throw new Error(
+      `Unable to resolve review diff base "${baseBranch}" from origin ` +
+        `(tried ${baseCandidates.map((candidate) => `origin/${candidate}`).join(', ')})`,
+    );
+  }
+
+  const normalizedFeature = normalizeBranchForGithubCli(featureBranch);
+  await fetchRemoteBranchIfExists(host, dir, normalizedFeature);
+  const featureCommit =
+    await resolveCommit(host, dir, `refs/remotes/origin/${normalizedFeature}`) ??
+    await resolveCommit(host, dir, `refs/heads/${normalizedFeature}`) ??
+    await resolveCommit(host, dir, featureBranch);
+
+  if (!featureCommit) {
+    throw new Error(`Unable to resolve review diff feature branch "${featureBranch}"`);
+  }
+
   const out = await execGitInMergeSafe(
     host,
-    ['diff', '--name-only', `${diffBaseRef}...${featureBranch}`, '--'],
+    ['diff', '--name-only', `${baseCommit}...${featureCommit}`, '--'],
     dir,
   );
-  return out
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return {
+    changedFiles: out
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean),
+    effectiveBaseBranch,
+  };
 }
 
 // ── Host interface ───────────────────────────────────────
@@ -886,22 +952,25 @@ export async function runMergeGateActionImpl(
         });
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
 
+        let reviewBaseBranch = baseBranch;
         if (isInvokerRepoUrl(workflow?.repoUrl)) {
-          const changedFiles = await listReviewableChangedFiles(
+          const reviewableChanges = await listReviewableChangedFiles(
             host,
             gateWorkspacePath!,
             baseBranch,
             featureBranch,
           );
+          const { changedFiles, effectiveBaseBranch } = reviewableChanges;
+          reviewBaseBranch = effectiveBaseBranch;
           if (changedFiles.length === 0) {
             logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty Invoker branch', {
-              baseBranch,
+              baseBranch: reviewBaseBranch,
               featureBranch,
             });
             mergeTrace('GATE_WS_PATH_REVIEW_PUBLISH_NOOP', {
               taskId: task.id,
               gateWorkspacePath: gateWorkspacePath ?? null,
-              baseBranch,
+              baseBranch: reviewBaseBranch,
               featureBranch,
               onFinish,
               mergeMode,
@@ -934,7 +1003,12 @@ export async function runMergeGateActionImpl(
         let fullSummary = summary;
         if (visualProof && host.runVisualProofCapture) {
           const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
-          const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow?.repoUrl);
+          const vpMarkdown = await host.runVisualProofCapture(
+            reviewBaseBranch,
+            featureBranch!,
+            slug,
+            workflow?.repoUrl,
+          );
           if (vpMarkdown) {
             fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
           }
@@ -944,7 +1018,7 @@ export async function runMergeGateActionImpl(
           workflowId,
           mergeNodeTaskId: task.id,
           workflowName: workflow?.name ?? 'Workflow',
-          baseBranch,
+          baseBranch: reviewBaseBranch,
           featureBranch,
           workflowSummary: fullSummary ?? '',
           cwd: gateWorkspacePath!,

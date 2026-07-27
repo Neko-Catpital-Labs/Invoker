@@ -4164,7 +4164,7 @@ console.log(JSON.stringify(out));
           id: 'wf-1',
           onFinish: 'none',
           mergeMode: 'external_review',
-          baseBranch: 'master',
+          baseBranch: 'main',
           featureBranch: 'plan/empty',
           name: 'Empty Invoker Workflow',
           repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
@@ -4189,8 +4189,14 @@ console.log(JSON.stringify(out));
       (executor as any).execGitIn = async (args: string[], _dir: string) => {
         gitCalls.push([...args]);
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'base-sha';
+        if (args[0] === 'fetch' && args[3] === '+refs/heads/main:refs/remotes/origin/main') {
+          throw new Error('could not fetch main');
+        }
         if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2] === 'refs/remotes/origin/master^{commit}') {
           return 'origin-base-sha';
+        }
+        if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2] === 'refs/remotes/origin/plan/empty^{commit}') {
+          return 'origin-feature-sha';
         }
         if (args[0] === 'diff' && args[1] === '--name-only') return '';
         return '';
@@ -4202,7 +4208,9 @@ console.log(JSON.stringify(out));
 
       await (executor as any).executeMergeNode(mergeTask);
 
-      expect(gitCalls).toContainEqual(['diff', '--name-only', 'refs/remotes/origin/master...plan/empty', '--']);
+      expect(gitCalls).toContainEqual(['fetch', '--', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
+      expect(gitCalls).toContainEqual(['fetch', '--', 'origin', '+refs/heads/master:refs/remotes/origin/master']);
+      expect(gitCalls).toContainEqual(['diff', '--name-only', 'origin-base-sha...origin-feature-sha', '--']);
       expect((executor as any).publishReviewStackWithMakePrSkill).not.toHaveBeenCalled();
       expect((executor as any).authorPrBodyWithSkill).not.toHaveBeenCalled();
       expect(mergeGateProvider.createReview).not.toHaveBeenCalled();
