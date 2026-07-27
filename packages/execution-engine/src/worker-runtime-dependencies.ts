@@ -17,7 +17,11 @@ import type {
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
-import type { InfraRepairWorkerConfig } from './workers/infra-repair-worker.js';
+import type {
+  InfraRepairWorkerConfig,
+  InfraRepairWorkerStore,
+  InfraRepairWorkerSubmitter,
+} from './workers/infra-repair-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
 import type {
   ReviewGateMergeConflictWorkerStore,
@@ -38,6 +42,7 @@ export interface WorkerRuntimeDependencies {
     & CiFailureWorkerStore
     & ReviewGateCiRepairStore
     & AutoApproveWorkerStore
+    & InfraRepairWorkerStore
     & ReviewGateMergeConflictWorkerStore
     & WorkflowResumeWorkerStore
     & PrSummaryRefreshWorkerStore;
@@ -47,6 +52,7 @@ export interface WorkerRuntimeDependencies {
     & ReviewGateCiRepairSubmitter
     & RequeueWorkerSubmitter
     & AutoApproveWorkerSubmitter
+    & InfraRepairWorkerSubmitter
     & ReviewGateMergeConflictWorkerSubmitter
     & WorkflowResumeWorkerSubmitter;
   /** Operator logger. */
