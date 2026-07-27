@@ -140,6 +140,25 @@ export interface HarnessPreset {
   model?: string;
 }
 
+export interface StageSlackPlanDraftInput {
+  channelId: string;
+  threadTs: string;
+  planText: string;
+  repoUrl: string;
+  harnessPreset: string;
+  workingDir: string;
+  requestedBy: string;
+}
+
+export interface StageSlackPlanDraftResult {
+  draftId: string;
+  version: number;
+  messageTs?: string;
+  slackFileId?: string;
+  status: SlackPlanDraft['status'];
+  summary: PlanSummary;
+}
+
 export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
   'cursor+codex': { tool: 'cursor', model: 'codex' },
@@ -1168,6 +1187,46 @@ export class SlackSurface implements Surface {
         this.log('slack', 'error', `Auto-submit failed for draft ${draft.draftId}:${draft.version}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+  }
+
+  async stageSlackPlanDraftForReview(input: StageSlackPlanDraftInput): Promise<StageSlackPlanDraftResult> {
+    if (!this.slackPlanDraftRepo) {
+      throw new Error('Slack plan reviews are not configured in this deployment.');
+    }
+    const summary = summarizePlanText(input.planText);
+    if (!summary) {
+      throw new Error('The supplied plan YAML could not be summarized for Slack review.');
+    }
+    const draft = this.slackPlanDraftRepo.create({
+      channelId: input.channelId,
+      threadTs: input.threadTs,
+      planText: input.planText,
+      summaryJson: JSON.stringify(summary),
+      repoUrl: input.repoUrl,
+      harnessPreset: input.harnessPreset,
+      workingDir: input.workingDir,
+      requestedBy: input.requestedBy,
+      confirmationMode: 'require',
+    });
+    const say: SayFn = async ({ text, thread_ts, blocks }) => {
+      const posted = await this.app.client.chat.postMessage({
+        channel: input.channelId,
+        text,
+        thread_ts,
+        ...(blocks ? { blocks: blocks as never } : {}),
+      });
+      return { ts: posted.ts as string | undefined };
+    };
+    await this.postSlackPlanDraft(draft, summary, say);
+    const ready = this.slackPlanDraftRepo.get(draft.draftId, draft.version) ?? draft;
+    return {
+      draftId: ready.draftId,
+      version: ready.version,
+      messageTs: ready.messageTs,
+      slackFileId: ready.slackFileId,
+      status: ready.status,
+      summary,
+    };
   }
 
   /** Post the immediate "received it" acknowledgment and track it for in-place replacement. */
