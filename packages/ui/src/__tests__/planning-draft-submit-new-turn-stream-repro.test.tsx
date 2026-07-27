@@ -49,6 +49,7 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
       ok: true,
       sessionId: 'session-1',
       reply: 'Here is the plan.',
+      confirmationMode: 'require',
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
     };
@@ -91,6 +92,7 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
       expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
         message: 'draft the next plan',
         presetKey: 'codex',
+        confirmationMode: 'require',
       });
     });
 
@@ -155,6 +157,64 @@ describe('planning draft submit -> new turn live planner stream repro', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'draft-1' });
+    });
+  });
+  it('keeps the same draft after cancel and exposes discard on reopen', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [makePlanningSessionSummary({
+        id: 'draft-keep',
+        draftPlanSummary: {
+          name: 'Kept draft',
+          taskCount: 2,
+          steps: ['Add API endpoint', 'Verify API endpoint'],
+          taskGroups: [{ workflow: 'Backend workflow', tasks: ['Add API endpoint', 'Verify API endpoint'] }],
+        },
+        draftPlanText: 'name: Kept draft\ntasks:\n  - id: keep\n    description: Add API endpoint\n',
+      })],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.click(await screen.findByTestId('invoker-terminal-review-draft'));
+    fireEvent.click(await screen.findByTestId('planning-cancel-review'));
+
+    expect(await screen.findByText('Submission cancelled. Draft kept.')).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-review-draft')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('invoker-terminal-review-draft'));
+    expect(await screen.findByTestId('planning-discard-draft')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('planning-discard-draft'));
+
+    await waitFor(() => {
+      expect(mock.api.planningChatDiscardDraft).toHaveBeenCalledWith({ sessionId: 'draft-keep' });
+    });
+  });
+
+  it('auto-submits after rendering a draft when review mode is auto-submit', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-auto',
+      reply: 'Here is the auto-submit plan.',
+      confirmationMode: 'auto_submit',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Auto submit plan', taskCount: 1, steps: ['Ship it'] },
+      draftPlanText: 'name: Auto submit plan\ntasks:\n  - id: ship\n    description: Ship it\n',
+    })) as any;
+    mock.api.planningChatSubmit = vi.fn(async () => ({
+      ok: true,
+      planName: 'Auto submit plan',
+      workflowId: 'wf-auto',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft and submit');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-auto' });
     });
   });
 });

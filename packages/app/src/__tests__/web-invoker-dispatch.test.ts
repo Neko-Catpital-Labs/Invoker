@@ -87,8 +87,8 @@ describe('buildWebInvokerDispatch', () => {
         } as unknown as InvokerConfig),
     });
     expect(await dispatch('invoker:get-planning-presets', [])).toEqual(expect.arrayContaining([
-      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: true },
-      { key: 'custom', label: 'custom', tool: 'codex', model: undefined, isDefault: false },
+      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: true, defaultConfirmationMode: 'require' },
+      { key: 'custom', label: 'custom', tool: 'codex', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
     ]));
   });
 

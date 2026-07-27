@@ -7,7 +7,7 @@ import { LocalBus } from '@invoker/transport';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { main } from '../index.js';
-import { HANDOFF_PROMPT_DESCRIPTION, handoffPrompt, resolveCliInvocation, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
+import { HANDOFF_PROMPT_DESCRIPTION, handoffPrompt, preparePlanReviewForMcp, resolveCliInvocation, submitPlanForMcp, validatePlanForMcp, type McpCliRunner } from '../mcp-server.js';
 
 const repoRoot = resolve(__dirname, '../../../..');
 const cliPath = resolve(repoRoot, 'packages/cli/dist/index.js');
@@ -345,6 +345,39 @@ tasks:
     expect(prompt).toContain('multiple review slices');
     expect(prompt).toContain('skill://review-compression/SKILL.md');
     expect(prompt).toContain('before writing workflow YAML');
+  });
+  it('tells MCP handoff users to keep review and approval ahead of submission', () => {
+    const prompt = handoffPrompt('ship this change');
+
+    expect(prompt).toContain('show the returned ordered steps and confirmation text to the user');
+    expect(prompt).toContain('wait for approval before any submission step');
+    expect(prompt).toContain('Do not tell the user to reply `submit`');
+    expect(prompt).toContain('If `invoker_prepare_plan_review` returns `confirmationMode: "require"`');
+  });
+  it('prepares a canonical MCP review from a YAML file', async () => {
+    const result = await preparePlanReviewForMcp(fixturePlan);
+
+    expect(result).toMatchObject({
+      planText: expect.any(String),
+      summary: { name: 'Hello World CLI', taskCount: 1, taskGroups: [{ workflow: null, tasks: ['Print hello from the standalone CLI.'] }] },
+      confirmationMode: 'require',
+      confirmationText: 'Approve to submit this exact YAML. Cancel keeps the draft. Discard removes it.',
+    });
+  });
+
+  it('tells MCP handoff users to call invoker_prepare_plan_review before approval', () => {
+    const prompt = handoffPrompt('ship this change');
+
+    expect(prompt).toContain('Call `invoker_prepare_plan_review` on that exact YAML file');
+    expect(prompt).toContain('show the returned ordered steps and confirmation text to the user');
+  });
+
+  it('documents the auto-submit branch in the MCP handoff prompt', () => {
+    const prompt = handoffPrompt('ship this change');
+
+    expect(prompt).toContain('If `invoker_prepare_plan_review` returns `confirmationMode: "require"`');
+    expect(prompt).toContain('If it returns `confirmationMode: "auto_submit"`');
+    expect(prompt).toContain('call `invoker_submit_plan` immediately');
   });
 
   it('describes PR skill triggers in the MCP prompt metadata', () => {

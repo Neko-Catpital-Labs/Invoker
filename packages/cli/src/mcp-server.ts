@@ -1,8 +1,12 @@
+import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { PlanningConfirmationMode, PlanningReviewDraft } from '../../planning-core/src/planning-review.js';
+import { buildPlanningHandoffInstructions } from '../../planning-core/src/planning-handoff-prompt.js';
+import { preparePlanningReview } from '../../planning-core/src/planning-review.js';
 import { parsePlanFile } from '@invoker/workflow-core';
 import { z } from 'zod';
 
@@ -12,7 +16,7 @@ export interface McpCliRunner {
   run(args: string[], options?: { cwd?: string }): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
-export const HANDOFF_PROMPT_DESCRIPTION = 'Plan a requested change, trigger PR skills for PR/stack work, convert it to Invoker YAML, validate it, and submit it live.';
+export const HANDOFF_PROMPT_DESCRIPTION = 'Plan a requested change, trigger PR skills for PR/stack work, convert it to Invoker YAML, review the canonical ordered steps, and submit it live.';
 
 type SubmitSuccess = { ok: true; workflowId: string; stdout: string };
 type SubmitFailure = { ok: false; exitCode: number; stdout: string; stderr: string; error?: string };
@@ -91,6 +95,21 @@ export async function validatePlanForMcp(
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+export async function preparePlanReviewForMcp(
+  planPath: string,
+  confirmationMode: PlanningConfirmationMode = 'require',
+): Promise<PlanningReviewDraft | { ok: false; error: string }> {
+  try {
+    const planText = await readFile(resolve(planPath), 'utf8');
+    const review = preparePlanningReview({ plannerOutput: planText, confirmationMode });
+    if ('kind' in review && review.kind === 'message') {
+      return { ok: false, error: 'I could not read that Invoker YAML plan. Regenerate the YAML, then try the review step again.' };
+    }
+    return review;
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 export async function submitPlanForMcp(
   planPath: string,
@@ -128,6 +147,12 @@ function formatSubmitFailure(result: SubmitFailure): string {
 }
 
 export function handoffPrompt(request: string): string {
+  const handoffInstructions = buildPlanningHandoffInstructions({
+    planFilePath: 'plans/invoker-handoff.yaml',
+    reviewInstruction: 'Call `invoker_prepare_plan_review` on that exact YAML file, then show the returned ordered steps and confirmation text to the user.',
+    shortReplyInstruction: 'Then keep the chat reply focused on the review summary and approval state. Never paste the YAML into chat.',
+    submissionInstruction: 'If `invoker_prepare_plan_review` returns `confirmationMode: "require"`, wait for approval before `invoker_submit_plan`. If it returns `confirmationMode: "auto_submit"`, show the same review output and then call `invoker_submit_plan` immediately. Use mode `live` so the workflow appears in the running Invoker app.',
+  });
   return [
     `User request: ${request}`,
     '',
@@ -136,9 +161,8 @@ export function handoffPrompt(request: string): string {
     'If the request involves multiple review slices, first read and follow skill://review-compression/SKILL.md before writing workflow YAML.',
     'Write the planning artifact to plans/invoker-handoff.md.',
     'Convert the approved Markdown plan to plans/invoker-handoff.yaml.',
-    'Validate with invoker_validate_plan before submitting.',
-    'Submit with invoker_submit_plan using mode "live" so the workflow appears in the running Invoker app.',
-    'If MCP tools are not available but invoker-cli is on PATH, run invoker-cli run plans/invoker-handoff.yaml --live instead.',
+    handoffInstructions,
+    'If MCP tools are unavailable but `invoker-cli` is on PATH, mirror the same flow with `invoker-cli run plans/invoker-handoff.yaml --live` only after the approval step that `invoker_prepare_plan_review` would have gated.',
   ].join('\n');
 }
 
@@ -165,6 +189,33 @@ export async function runMcpServer(options: { runner?: McpCliRunner; cliPath?: s
           {
             type: 'text',
             text: `Valid Invoker plan: ${result.name} (${result.taskCount} tasks).`,
+          },
+        ],
+      };
+    },
+  );
+  server.registerTool(
+    'invoker_prepare_plan_review',
+    {
+      description: 'Prepare the canonical ordered-step review for an existing Invoker YAML plan.',
+      inputSchema: {
+        planPath: z.string(),
+        confirmationMode: z.enum(['require', 'auto_submit']).optional(),
+      },
+    },
+    async ({ planPath, confirmationMode }) => {
+      const result = await preparePlanReviewForMcp(planPath, confirmationMode ?? 'require');
+      if ('ok' in result && result.ok === false) {
+        return {
+          content: [{ type: 'text', text: `Could not prepare Invoker plan review: ${result.error}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
           },
         ],
       };

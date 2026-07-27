@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
+import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { SendIcon } from './icons/index.js';
 
 export interface InvokerTerminalLine {
@@ -48,6 +49,7 @@ interface InvokerTerminalProps {
   value: string;
   selectedPresetKey: string;
   presetOptions: PlanningPresetOptionView[];
+  selectedConfirmationMode: PlanningConfirmationMode;
   draftPlanAvailable: boolean;
   draftPlanSummary?: {
     name: string;
@@ -65,6 +67,7 @@ interface InvokerTerminalProps {
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
+  onConfirmationModeChange: (confirmationMode: PlanningConfirmationMode) => void;
   onModeChange?: (mode: PlanningTerminalMode) => void;
   onExpand: () => void;
   onCloseExpanded?: () => void;
@@ -326,6 +329,7 @@ export function InvokerTerminal({
   value,
   selectedPresetKey,
   presetOptions,
+  selectedConfirmationMode,
   draftPlanAvailable,
   draftPlanSummary,
   planningStream,
@@ -338,6 +342,7 @@ export function InvokerTerminal({
   onValueChange,
   onSubmit,
   onPresetChange,
+  onConfirmationModeChange,
   onModeChange,
   onExpand,
   onCloseExpanded,
@@ -727,20 +732,35 @@ export function InvokerTerminal({
                     Options
                   </button>
                   {showComposerOptions && (
-                    <label className="ml-3 text-xs text-muted-foreground">
-                      Agent
-                      <select
-                        data-testid="invoker-terminal-harness"
-                        value={selectedPresetKey}
-                        onChange={(event) => onPresetChange(event.target.value)}
-                        disabled={readOnly}
-                        className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
-                      >
-                        {presetOptions.map((option) => (
-                          <option key={option.key} value={option.key}>{option.label}</option>
-                        ))}
-                      </select>
-                    </label>
+                    <div className="ml-3 flex flex-wrap items-center gap-3">
+                      <label className="text-xs text-muted-foreground">
+                        Agent
+                        <select
+                          data-testid="invoker-terminal-harness"
+                          value={selectedPresetKey}
+                          onChange={(event) => onPresetChange(event.target.value)}
+                          disabled={readOnly}
+                          className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                        >
+                          {presetOptions.map((option) => (
+                            <option key={option.key} value={option.key}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="text-xs text-muted-foreground">
+                        Review
+                        <select
+                          data-testid="invoker-terminal-confirmation-mode"
+                          value={selectedConfirmationMode}
+                          onChange={(event) => onConfirmationModeChange(event.target.value as PlanningConfirmationMode)}
+                          disabled={readOnly}
+                          className="ml-2 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground outline-none hover:border-border-strong focus:border-ring"
+                        >
+                          <option value="require">Ask first</option>
+                          <option value="auto_submit">Auto-submit</option>
+                        </select>
+                      </label>
+                    </div>
                   )}
                 </div>
                 <button
