@@ -4522,6 +4522,7 @@ export function App() {
             readOnly={activePlanningReadOnly}
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
+            terminalActive={!planningTerminalExpanded}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
             submittedPlanName={activePlanningSession.submittedPlanName}
@@ -4856,6 +4857,7 @@ export function App() {
             expanded
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
+            terminalActive={true}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
             submittedPlanName={activePlanningSession.submittedPlanName}

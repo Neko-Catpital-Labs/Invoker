@@ -4,12 +4,71 @@ import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
+
+const xtermMock = vi.hoisted(() => {
+  type DataHandler = (data: string) => void;
+
+  const instances: MockTerminal[] = [];
+  const fitInstances: MockFitAddon[] = [];
+  const writeLog: string[] = [];
+
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    dataHandler: DataHandler | null = null;
+    loadAddon = vi.fn();
+    open = vi.fn((host: HTMLElement) => {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      terminalElement.textContent = 'mock terminal';
+      host.appendChild(terminalElement);
+    });
+    write = vi.fn((data: string) => {
+      writeLog.push(data);
+    });
+    onData = vi.fn((cb: DataHandler) => {
+      this.dataHandler = cb;
+      return { dispose: vi.fn() };
+    });
+    focus = vi.fn();
+    dispose = vi.fn();
+
+    constructor() {
+      instances.push(this);
+    }
+  }
+
+  class MockFitAddon {
+    fit = vi.fn();
+
+    constructor() {
+      fitInstances.push(this);
+    }
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+    instances,
+    fitInstances,
+    writeLog,
+    reset: () => {
+      instances.length = 0;
+      fitInstances.length = 0;
+      writeLog.length = 0;
+    },
+  };
+});
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
 
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
@@ -21,11 +80,14 @@ describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermMock.reset();
     mock = createMockInvoker();
     mock.install();
   });
 
   afterEach(() => {
+    delete (window as unknown as { __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: unknown }).__INVOKER_TEST_ON_TERMINAL_OUTPUT__;
+    xtermMock.reset();
     mock.cleanup();
   });
 
@@ -135,15 +197,70 @@ describe('Invoker terminal (component)', () => {
       value: '',
       selectedPresetKey: 'codex',
       presetOptions: [{ key: 'codex', label: 'Codex' }],
+      selectedConfirmationMode: 'require' as const,
       draftPlanAvailable: false,
       onValueChange: vi.fn(),
       onSubmit: vi.fn(),
       onSubmitDraft: vi.fn(),
       onPresetChange: vi.fn(),
+      onConfirmationModeChange: vi.fn(),
       onExpand: vi.fn(),
       ...overrides,
     };
   }
+
+  function planningTerminalSession(overrides: Partial<TerminalSessionDescriptor> = {}): TerminalSessionDescriptor {
+    return {
+      sessionId: 'planning-terminal-1',
+      taskId: 'planning:chat-1',
+      kind: 'planning',
+      planningSessionId: 'chat-1',
+      status: 'running',
+      mode: 'spawn',
+      attached: false,
+      createdAt: '2026-07-27T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('mounts planning tmux xterm by default for the active view', async () => {
+    const subscribeToOutput = vi.fn(() => vi.fn());
+    window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = subscribeToOutput;
+
+    render(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalSession: planningTerminalSession({ outputSnapshot: 'restored planning output\n' }),
+    })} />);
+
+    await waitFor(() => expect(xtermMock.instances).toHaveLength(1));
+    expect(screen.getByTestId('invoker-terminal-tmux-pane').querySelector('.xterm')).not.toBeNull();
+    expect(xtermMock.writeLog).toEqual(['restored planning output\n']);
+    expect(subscribeToOutput).toHaveBeenCalledTimes(1);
+    expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
+    expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
+    expect(mock.api.planningTerminalResize).toHaveBeenCalledWith('planning-terminal-1', 80, 24);
+  });
+
+  it('does not mount planning tmux xterm or resize while inactive', () => {
+    const subscribeToOutput = vi.fn(() => vi.fn());
+    window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = subscribeToOutput;
+
+    render(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalActive: false,
+      terminalSession: planningTerminalSession({ outputSnapshot: 'restored planning output\n' }),
+    })} />);
+
+    const pane = screen.getByTestId('invoker-terminal-tmux-pane');
+    expect(pane).toHaveAttribute('data-session-id', 'planning-terminal-1');
+    expect(pane.querySelector('.xterm')).toBeNull();
+    expect(xtermMock.instances).toHaveLength(0);
+    expect(xtermMock.fitInstances).toHaveLength(0);
+    expect(xtermMock.writeLog).toEqual([]);
+    expect(subscribeToOutput).not.toHaveBeenCalled();
+    expect(mock.api.onTerminalOutput).not.toHaveBeenCalled();
+    expect(mock.api.planningTerminalResize).not.toHaveBeenCalled();
+  });
 
   it('generates a planning reply from plain language', async () => {
     render(<App />);
