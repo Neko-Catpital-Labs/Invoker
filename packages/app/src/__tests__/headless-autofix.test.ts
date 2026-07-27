@@ -99,7 +99,7 @@ describe('headless worker autofix', () => {
 
     expect(enqueueWorkflowMutationIntent).toHaveBeenCalledWith(
       'wf-1',
-      'invoker:restart-task',
+      'invoker:retry-task',
       ['wf-1/task-1'],
       'normal',
     );
