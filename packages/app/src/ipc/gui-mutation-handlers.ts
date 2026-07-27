@@ -94,7 +94,7 @@ import {
   autoStartedOwnerWorkerKindsForConfig,
   createLocalWorkerStatusSnapshot,
 } from '../worker-control.js';
-import { runStartReady } from '../start-ready.js';
+import { createStartReadyFreshBaseActions, runStartReady } from '../start-ready.js';
 import type { WorkerRuntimeController } from '../worker-control.js';
 import { buildTaskGraphSnapshot } from '../web/task-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
@@ -1101,13 +1101,26 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
   }
 
-  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
-    const result = runStartReady(orchestrator, request);
+  async function executeStartReady(request: StartReadyRequest = {}): Promise<StartReadyResult> {
+    const result = await runStartReady(
+      orchestrator,
+      request,
+      {
+        freshBase: createStartReadyFreshBaseActions(() => ({
+          logger,
+          orchestrator,
+          persistence,
+          commandService,
+          taskExecutor: context.requireTaskExecutor(),
+          mutationTiming: context.getActiveMutationContext()?.mutationTiming,
+        })),
+      },
+    );
     if (!result.dryRun) {
       publishOrchestratorSnapshotToRenderer();
     }
     logger.info(
-      `start-ready: ready=${result.preview.readyTaskIds.length} recoverable=${result.preview.recoverableTaskIds.length} failedWorkflows=${result.preview.failedWorkflowIds.length} recreated=${result.recreatedWorkflowIds.length} started=${result.started.length} dryRun=${result.dryRun ? 'true' : 'false'}`,
+      `start-ready: ready=${result.preview.readyTaskIds.length} recoverable=${result.preview.recoverableTaskIds.length} failedWorkflows=${result.preview.failedWorkflowIds.length} recreated=${result.recreatedWorkflowIds.length} freshBaseRecreated=${result.freshBaseRecreatedWorkflowIds?.length ?? 0} started=${result.started.length} errors=${result.errors?.length ?? 0} dryRun=${result.dryRun ? 'true' : 'false'}`,
       { module: 'ipc' },
     );
     const launchDispatcher = context.getLaunchDispatcher();
@@ -1390,7 +1403,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       logger.info('resume-workflow: no workflows found', { module: 'ipc' });
       return null;
     }
-    const result = executeStartReady({});
+    const result = await executeStartReady({});
     const tasks = orchestrator.getAllTasks();
     logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${result.started.length} started`, { module: 'ipc' });
     return { workflow: workflows[0], taskCount: tasks.length, startedCount: result.started.length };

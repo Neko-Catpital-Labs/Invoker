@@ -202,7 +202,7 @@ import {
   createWorkerRuntimeController,
   type WorkerRuntimeController,
 } from './worker-control.js';
-import { runStartReady } from './start-ready.js';
+import { createStartReadyFreshBaseActions, runStartReady } from './start-ready.js';
 import { startSurfaceEventRelay } from './surface-event-relay.js';
 import { createTaskGraphEventPublisher } from './task-graph-event-publisher.js';
 import { buildWebInvokerDispatch } from './web/web-invoker-dispatch.js';
@@ -1459,9 +1459,26 @@ function startHeadlessMode(): void {
           });
         }
         if (!workflowMutationDispatcher.has('invoker:start-ready')) {
-          workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
-            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined),
-          );
+          workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) => {
+            let freshBaseTaskExecutor: TaskRunner | undefined;
+            return runStartReady(
+              orchestrator,
+              requestArg as StartReadyRequest | undefined,
+              {
+                freshBase: createStartReadyFreshBaseActions(() => {
+                  freshBaseTaskExecutor ??= createStandaloneTaskExecutor();
+                  return {
+                    logger,
+                    orchestrator,
+                    persistence,
+                    commandService,
+                    taskExecutor: freshBaseTaskExecutor,
+                    mutationTiming: activeMutationContext?.mutationTiming,
+                  };
+                }),
+              },
+            );
+          });
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
           workflowMutationDispatcher.set('invoker:fix-with-agent', async (...fixArgs: unknown[]) => {
@@ -2250,13 +2267,26 @@ startMainProcessBootstrap({
     }
   }
 
-  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
-    const result = runStartReady(orchestrator, request);
+  async function executeStartReady(request: StartReadyRequest = {}): Promise<StartReadyResult> {
+    const result = await runStartReady(
+      orchestrator,
+      request,
+      {
+        freshBase: createStartReadyFreshBaseActions(() => ({
+          logger,
+          orchestrator,
+          persistence,
+          commandService,
+          taskExecutor: requireTaskExecutor(),
+          mutationTiming: activeMutationContext?.mutationTiming,
+        })),
+      },
+    );
     if (!result.dryRun) {
       publishOrchestratorSnapshotToRenderer();
     }
     logger.info(
-      `start-ready: ready=${result.preview.readyTaskIds.length} recoverable=${result.preview.recoverableTaskIds.length} failedWorkflows=${result.preview.failedWorkflowIds.length} recreated=${result.recreatedWorkflowIds.length} started=${result.started.length} dryRun=${result.dryRun ? 'true' : 'false'}`,
+      `start-ready: ready=${result.preview.readyTaskIds.length} recoverable=${result.preview.recoverableTaskIds.length} failedWorkflows=${result.preview.failedWorkflowIds.length} recreated=${result.recreatedWorkflowIds.length} freshBaseRecreated=${result.freshBaseRecreatedWorkflowIds?.length ?? 0} started=${result.started.length} errors=${result.errors?.length ?? 0} dryRun=${result.dryRun ? 'true' : 'false'}`,
       { module: 'ipc' },
     );
     if (!result.dryRun && result.started.length > 0 && launchDispatcher) {

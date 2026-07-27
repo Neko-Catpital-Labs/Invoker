@@ -1,9 +1,17 @@
 import type {
+  StartReadyFreshBasePreview,
+  StartReadyFreshBaseRequest,
+  StartReadyFreshBaseScope,
+  StartReadyPartialOutcome,
   StartReadyPreview,
   StartReadyRequest,
   StartReadyResult,
 } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
+import {
+  recreateWorkflowFromFreshBase as recreateWorkflowFromFreshBaseAction,
+  type CommandActionDeps,
+} from './workflow-actions.js';
 
 type StartReadyOrchestrator = Pick<
   Orchestrator,
@@ -12,13 +20,31 @@ type StartReadyOrchestrator = Pick<
   | 'getPersistedActiveTaskIds'
   | 'getExecutableReadyTasks'
   | 'prepareTaskForNewAttempt'
+  | 'getTask'
   | 'recreateWorkflow'
   | 'startExecution'
 >;
 
-type StartReadyRequestExt = StartReadyRequest & {
-  recreateFailedAndPending?: boolean;
-  recreateFailedPendingAndRunning?: boolean;
+export interface StartReadyFreshBaseActions {
+  recreateWorkflowFromFreshBase(workflowId: string): Promise<TaskState[]>;
+}
+
+export interface RunStartReadyOptions {
+  freshBase?: StartReadyFreshBaseActions;
+}
+
+export function createStartReadyFreshBaseActions(
+  resolveDeps: () => CommandActionDeps,
+): StartReadyFreshBaseActions {
+  return {
+    recreateWorkflowFromFreshBase: (workflowId) =>
+      recreateWorkflowFromFreshBaseAction(workflowId, resolveDeps()),
+  };
+}
+
+type FreshBasePlan = {
+  preview: StartReadyFreshBasePreview;
+  workflowIds: string[];
 };
 
 type StartReadyPreviewExt = StartReadyPreview & {
@@ -92,7 +118,7 @@ function unionWorkflowIds(...groups: readonly (readonly string[])[]): string[] {
 }
 
 function workflowIdsToRecreate(
-  request: StartReadyRequestExt,
+  request: StartReadyRequest,
   preview: StartReadyPreviewExt,
 ): string[] {
   if (request.recreateAll) {
@@ -117,6 +143,99 @@ function workflowIdsToRecreate(
     return [...preview.failedWorkflowIds];
   }
   return [];
+}
+
+function normalizeIds(ids: readonly string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const id of ids ?? []) {
+    const normalized = id.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function workflowIdsForTaskIds(
+  orchestrator: StartReadyOrchestrator,
+  taskIds: readonly string[] | undefined,
+): string[] {
+  const ids = new Set<string>();
+  for (const taskId of normalizeIds(taskIds)) {
+    const workflowId = orchestrator.getTask(taskId)?.config.workflowId;
+    if (workflowId) ids.add(workflowId);
+  }
+  return Array.from(ids);
+}
+
+function freshBaseEnabled(request: StartReadyFreshBaseRequest | undefined): request is StartReadyFreshBaseRequest {
+  return Boolean(request && request.enabled !== false);
+}
+
+function freshBaseScope(request: StartReadyFreshBaseRequest): StartReadyFreshBaseScope {
+  return request.scope ?? 'failed';
+}
+
+function freshBaseWorkflowIdsForScope(
+  orchestrator: StartReadyOrchestrator,
+  request: StartReadyFreshBaseRequest,
+  preview: StartReadyPreviewExt,
+): string[] {
+  switch (freshBaseScope(request)) {
+    case 'failed':
+      return [...preview.failedWorkflowIds];
+    case 'failed_and_pending':
+      return unionWorkflowIds(preview.failedWorkflowIds, preview.pendingWorkflowIds);
+    case 'failed_pending_and_running':
+      return unionWorkflowIds(
+        preview.failedWorkflowIds,
+        preview.pendingWorkflowIds,
+        preview.runningWorkflowIds,
+      );
+    case 'all':
+      return unionWorkflowIds(
+        preview.failedWorkflowIds,
+        preview.pendingWorkflowIds,
+        preview.runningWorkflowIds,
+        preview.completedWorkflowIds,
+      );
+    case 'custom':
+      return unionWorkflowIds(
+        normalizeIds(request.workflowIds),
+        workflowIdsForTaskIds(orchestrator, request.taskIds),
+      );
+  }
+}
+
+function collectFreshBasePlan(
+  orchestrator: StartReadyOrchestrator,
+  request: StartReadyRequest,
+  preview: StartReadyPreviewExt,
+): FreshBasePlan | undefined {
+  if (!freshBaseEnabled(request.freshBase)) return undefined;
+
+  const scope = freshBaseScope(request.freshBase);
+  const workflowIds = freshBaseWorkflowIdsForScope(orchestrator, request.freshBase, preview);
+  const selected = new Set(workflowIds);
+  const taskIds = normalizeIds(request.freshBase.taskIds);
+  return {
+    workflowIds,
+    preview: {
+      scope,
+      workflowIds,
+      ...(taskIds.length > 0 ? { taskIds } : {}),
+      failedWorkflowIds: preview.failedWorkflowIds.filter((id) => selected.has(id)),
+      pendingWorkflowIds: preview.pendingWorkflowIds.filter((id) => selected.has(id)),
+      runningWorkflowIds: preview.runningWorkflowIds.filter((id) => selected.has(id)),
+      completedWorkflowIds: preview.completedWorkflowIds.filter((id) => selected.has(id)),
+    },
+  };
+}
+
+function errorMessageForWorkflow(workflowId: string, err: unknown): string {
+  const detail = err instanceof Error ? err.message : String(err);
+  return `fresh-base recreate failed for workflow ${workflowId}: ${detail}`;
 }
 
 export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): StartReadyPreview {
@@ -148,27 +267,65 @@ export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): 
   return preview;
 }
 
-export function runStartReady(
+export async function runStartReady(
   orchestrator: StartReadyOrchestrator,
   request: StartReadyRequest = {},
-): StartReadyResult {
-  const extendedRequest = request as StartReadyRequestExt;
+  options: RunStartReadyOptions = {},
+): Promise<StartReadyResult> {
   orchestrator.syncAllFromDb();
   const preview = collectStartReadyPreview(orchestrator) as StartReadyPreviewExt;
+  const freshBasePlan = collectFreshBasePlan(orchestrator, request, preview);
+  if (freshBasePlan) {
+    preview.freshBase = freshBasePlan.preview;
+  }
   if (request.dryRun) {
-    return {
+    const result: StartReadyResult = {
       preview,
       started: [],
       recreatedWorkflowIds: [],
       dryRun: true,
     };
+    if (freshBasePlan) {
+      result.freshBaseRecreatedWorkflowIds = [];
+      result.partialOutcomes = [];
+    }
+    return result;
   }
 
   const started: TaskState[] = [];
   const recreatedWorkflowIds: string[] = [];
-  for (const workflowId of workflowIdsToRecreate(extendedRequest, preview)) {
-    started.push(...orchestrator.recreateWorkflow(workflowId));
-    recreatedWorkflowIds.push(workflowId);
+  const freshBaseRecreatedWorkflowIds: string[] = [];
+  const partialOutcomes: StartReadyPartialOutcome[] = [];
+  const errors: string[] = [];
+
+  if (freshBasePlan) {
+    for (const workflowId of freshBasePlan.workflowIds) {
+      if (!options.freshBase) {
+        const error = errorMessageForWorkflow(workflowId, new Error('fresh-base executor unavailable'));
+        partialOutcomes.push({ workflowId, ok: false, error });
+        errors.push(error);
+        continue;
+      }
+      try {
+        const freshBaseStarted = await options.freshBase.recreateWorkflowFromFreshBase(workflowId);
+        started.push(...freshBaseStarted);
+        freshBaseRecreatedWorkflowIds.push(workflowId);
+        partialOutcomes.push({
+          workflowId,
+          ok: true,
+          startedTaskIds: freshBaseStarted.map((task) => task.id),
+        });
+      } catch (err) {
+        const error = errorMessageForWorkflow(workflowId, err);
+        partialOutcomes.push({ workflowId, ok: false, error });
+        errors.push(error);
+      }
+    }
+  } else {
+    for (const workflowId of workflowIdsToRecreate(request, preview)) {
+      started.push(...orchestrator.recreateWorkflow(workflowId));
+      recreatedWorkflowIds.push(workflowId);
+    }
   }
 
   const recoverableTasks = collectRecoverableTasks(orchestrator);
@@ -178,10 +335,16 @@ export function runStartReady(
 
   started.push(...orchestrator.startExecution());
 
-  return {
+  const result: StartReadyResult = {
     preview,
     started: uniqueTasks(started),
     recreatedWorkflowIds,
     dryRun: false,
   };
+  if (freshBasePlan) {
+    result.freshBaseRecreatedWorkflowIds = freshBaseRecreatedWorkflowIds;
+    result.partialOutcomes = partialOutcomes;
+    if (errors.length > 0) result.errors = errors;
+  }
+  return result;
 }

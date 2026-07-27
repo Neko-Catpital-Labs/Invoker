@@ -49,7 +49,7 @@ import {
   preemptTaskSubgraph,
   preemptWorkflowExecution,
 } from './headless-shared.js';
-import { runStartReady } from './start-ready.js';
+import { createStartReadyFreshBaseActions, runStartReady } from './start-ready.js';
 type StartReadyRequestExt = StartReadyRequest & {
   recreateFailedAndPending?: boolean;
   recreateFailedPendingAndRunning?: boolean;
@@ -61,6 +61,7 @@ type StartReadyPreviewExt = {
   failedWorkflowIds: string[];
   pendingWorkflowIds: string[];
   runningWorkflowIds: string[];
+  completedWorkflowIds?: string[];
   skipped: {
     awaitingApproval: number;
     reviewReady: number;
@@ -306,7 +307,25 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request) as StartReadyResult & {
+  let startReadyTaskExecutor: ReturnType<typeof createHeadlessExecutor> | undefined;
+  const getStartReadyTaskExecutor = (): ReturnType<typeof createHeadlessExecutor> => {
+    if (!startReadyTaskExecutor) {
+      startReadyTaskExecutor = createHeadlessExecutor(deps);
+      wireHeadlessApproveHook(deps, startReadyTaskExecutor);
+    }
+    return startReadyTaskExecutor;
+  };
+  const result = await runStartReady(
+    deps.orchestrator,
+    request,
+    {
+      freshBase: createStartReadyFreshBaseActions(() => ({
+        ...deps,
+        taskExecutor: getStartReadyTaskExecutor(),
+        mutationTiming: deps.mutationTiming,
+      })),
+    },
+  ) as StartReadyResult & {
     preview: StartReadyPreviewExt;
   };
   const runnable = result.started.filter(isDispatchableLaunch);
@@ -339,6 +358,12 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     process.stdout.write(`  completed workflows: ${preview.completedWorkflowIds?.length ?? 0}\n`);
   }
   process.stdout.write(`  recreated workflows: ${result.recreatedWorkflowIds.length}\n`);
+  if (result.freshBaseRecreatedWorkflowIds) {
+    process.stdout.write(`  fresh-base recreated workflows: ${result.freshBaseRecreatedWorkflowIds.length}\n`);
+  }
+  if (result.errors?.length) {
+    process.stdout.write(`  errors: ${result.errors.length}\n`);
+  }
   process.stdout.write(`  started: ${runnable.length}\n`);
 
   if (result.dryRun || runnable.length === 0) {
@@ -349,7 +374,7 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     if (deps.deferRunnableTasks) {
       deps.deferRunnableTasks(runnable);
     } else {
-      const taskExecutor = createHeadlessExecutor(deps);
+      const taskExecutor = startReadyTaskExecutor ?? createHeadlessExecutor(deps);
       void Promise.resolve()
         .then(() => taskExecutor.executeTasks(runnable))
         .catch((err) => {
@@ -363,8 +388,8 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     return;
   }
 
-  const taskExecutor = createHeadlessExecutor(deps);
-  wireHeadlessApproveHook(deps, taskExecutor);
+  const taskExecutor = startReadyTaskExecutor ?? createHeadlessExecutor(deps);
+  if (!startReadyTaskExecutor) wireHeadlessApproveHook(deps, taskExecutor);
   await taskExecutor.executeTasks(runnable);
 }
 
