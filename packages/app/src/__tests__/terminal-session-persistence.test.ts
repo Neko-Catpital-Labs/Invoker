@@ -7,12 +7,18 @@ import {
   type BashSpawnFn,
 } from '../embedded-terminal-manager.js';
 import {
+  bindPlanningTerminalSessionState,
   closeTaskTerminalSession,
   listTaskTerminalSessions,
+  registerPlanningTerminalSessionIpcHandlers,
   registerTerminalSessionIpcHandlers,
   registerTerminalSessionPersistence,
   restorePersistedTerminalSessions,
 } from '../terminal-session-ipc.js';
+import {
+  createInAppPlanningChatSessions,
+  type InAppPlanningChatSession,
+} from '../in-app-planner.js';
 import type { SQLiteAdapter, TerminalSessionRecord } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 import {
@@ -62,6 +68,28 @@ function makeTerminalRow(
     ...overrides,
   };
 }
+
+function makePlanningSession(
+  id: string,
+  overrides: Partial<InAppPlanningChatSession> = {},
+): InAppPlanningChatSession {
+  return {
+    id,
+    title: `Planning ${id}`,
+    presetKey: 'codex',
+    confirmationMode: 'require',
+    status: 'still_discussing',
+    messages: [],
+    conversation: {} as InAppPlanningChatSession['conversation'],
+    createdAt: '2026-07-26T00:00:00.000Z',
+    updatedAt: '2026-07-26T00:00:00.000Z',
+    nextMessageId: 1,
+    terminalMode: 'chat',
+    terminalOutputSnapshot: '',
+    ...overrides,
+  };
+}
+
 describe('registerTerminalSessionPersistence coalesce', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -222,6 +250,88 @@ describe('registerTerminalSessionPersistence coalesce', () => {
 
     handle.dispose();
   });
+
+  it('restores persisted planning terminal sessions with saved output snapshots', () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('plan-restore', makePlanningSession('plan-restore', {
+      terminalMode: 'tmux',
+      terminalSessionId: 'term-plan-restore',
+      terminalStatus: 'running',
+      terminalOutputSnapshot: 'saved planning tmux output\n',
+      terminalUpdatedAt: '2026-07-26T00:00:03.000Z',
+    }));
+    const restoreSpawnSession = vi.fn();
+    const embeddedTerminalManager = Object.assign(new EventEmitter(), {
+      restoreSpawnSession,
+    }) as unknown as EmbeddedTerminalManager;
+
+    const { restorePersistedPlanningTerminals } = bindPlanningTerminalSessionState({
+      embeddedTerminalManager,
+      logger: { info: vi.fn(), warn: vi.fn() },
+      planningChatSessions: sessions,
+      getPlanningSessionStore: () => undefined,
+      repoRoot: '/repo',
+    });
+
+    restorePersistedPlanningTerminals();
+
+    expect(restoreSpawnSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'term-plan-restore',
+      taskId: 'planning:plan-restore',
+      kind: 'planning',
+      planningSessionId: 'plan-restore',
+      cwd: '/repo',
+      outputSnapshot: 'saved planning tmux output\n',
+    }));
+  });
+
+  it('planning terminal open persists the returned session snapshot onto the planning chat', async () => {
+    type IpcHandler = (...args: unknown[]) => Promise<unknown>;
+    const handlers = new Map<string, IpcHandler>();
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('plan-open', makePlanningSession('plan-open'));
+    const openedSession = {
+      sessionId: 'term-plan-open',
+      taskId: 'planning:plan-open',
+      kind: 'planning' as const,
+      planningSessionId: 'plan-open',
+      status: 'running' as const,
+      cwd: '/repo',
+      mode: 'spawn' as const,
+      attached: false,
+      createdAt: '2026-07-26T00:00:00.000Z',
+      outputSnapshot: 'shell restored from open\n',
+    };
+    const embeddedTerminalManager = Object.assign(new EventEmitter(), {
+      openOrReuse: vi.fn(() => openedSession),
+    }) as unknown as EmbeddedTerminalManager;
+    const ipcMain = {
+      handle(channel: string, callback: IpcHandler) {
+        handlers.set(channel, callback);
+      },
+    };
+
+    registerPlanningTerminalSessionIpcHandlers({
+      ipcMain: ipcMain as unknown as IpcMain,
+      embeddedTerminalManager,
+      logger: { info: vi.fn(), warn: vi.fn() },
+      planningChatSessions: sessions,
+      getPlanningSessionStore: () => undefined,
+      repoRoot: '/repo',
+    });
+
+    await expect(handlers.get('invoker:planning-terminal-open')?.({}, 'plan-open')).resolves.toEqual({
+      opened: true,
+      session: openedSession,
+    });
+    expect(sessions.get('plan-open')).toMatchObject({
+      terminalMode: 'tmux',
+      terminalSessionId: 'term-plan-open',
+      terminalStatus: 'running',
+      terminalOutputSnapshot: 'shell restored from open\n',
+    });
+  });
+
   it('falls back to live task sessions when persisted terminal rows fail to load', () => {
     const child = createFakeChild();
     const mgr = new EmbeddedTerminalManager({
