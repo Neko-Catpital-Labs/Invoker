@@ -561,8 +561,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
   sendInput(handle: ExecutorHandle, input: string): void {
     const entry = this.entries.get(handle.executionId);
-    if (!entry || entry.completed) return;
-    entry.process?.stdin?.write(input);
+    this.writeProcessInput(entry, input);
   }
 
   getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {

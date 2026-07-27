@@ -654,6 +654,22 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
+  it('sendInput maps terminal Ctrl-D to stdin EOF for command processes', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const request = makeRequest({ inputs: { command: 'cat' } });
+    const handle = await executor.start(request);
+
+    executor.sendInput(handle, 'hello\n\x04');
+
+    expect((taskProcess.stdin as any).write).toHaveBeenCalledWith('hello\n');
+    expect((taskProcess.stdin as any).write).not.toHaveBeenCalledWith('\x04');
+    expect((taskProcess.stdin as any).end).toHaveBeenCalledTimes(1);
+
+    // Cleanup
+    taskProcess.emit('close', 0, null);
+  });
+
   it('getTerminalSpec returns worktree directory for command tasks', async () => {
     const { taskProcess } = setupSpawnMock();
 
