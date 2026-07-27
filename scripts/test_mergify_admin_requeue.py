@@ -488,9 +488,53 @@ Failing checks
     def test_plan_stack_actions_stop_retrying_after_repair_invalid(self):
         ledger = self.ledger()
         ledger.record("repair-invalid", 2606, HEAD, "PR Body", 1, meta={"errors": ["human stack split required"]})
-        stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
+        stack = StackGroup(
+            "s",
+            (pr(
+                2606,
+                labels={"admin-bypass"},
+                checks={
+                    "PR Body": check("PR Body", "failure"),
+                    "quality / TypeScript Types": check("quality / TypeScript Types"),
+                },
+            ),),
+        )
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual(actions, ())
+
+    def test_repair_invalid_stops_other_repairs_on_same_pr_head(self):
+        ledger = self.ledger()
+        ledger.record("repair-invalid", 6163, HEAD, "UI Vitest", 1, meta={"errors": ["manual split required"]})
+        checks = {
+            "UI Vitest": check("UI Vitest", "failure"),
+            "quality / TypeScript Types": check("quality / TypeScript Types", "failure"),
+        }
+        stack = StackGroup("s", (pr(6163, labels={"admin-bypass"}, checks=checks),))
+        actions = plan_stack_actions(stack, REQUIRED | {"UI Vitest"}, ledger, 2)
+        self.assertEqual(actions, ())
+
+    def test_bot_thread_repair_invalid_stops_retrying_thread_repair(self):
+        ledger = self.ledger()
+        ledger.record("repair-bot-thread", 6158, HEAD, "PRRT_kwDOSFkSDM6T97v9", 1)
+        ledger.record(
+            "repair-invalid",
+            6158,
+            HEAD,
+            "PRRT_kwDOSFkSDM6T97v9",
+            1,
+            meta={"errors": ["PR body Review Unit must be split"]},
+        )
+        stack = StackGroup(
+            "s",
+            (pr(
+                6158,
+                threads=(ReviewThread("PRRT_kwDOSFkSDM6T97v9", False, ("coderabbitai[bot]",)),),
+                latest=mergify(),
+            ),),
+        )
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
+        self.assertEqual(actions, ())
+
     def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):
         stderr = io.StringIO()
         latest = MergifyQueueEvent(
