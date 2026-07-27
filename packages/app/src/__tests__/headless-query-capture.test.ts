@@ -4,7 +4,9 @@ import {
   type HeadlessQueryDeps,
 } from '../headless-query-list.js';
 
-function makeQueryDeps(listWorkflows: () => Array<{ id: string; status?: string }>): HeadlessQueryDeps {
+function makeQueryDeps(
+  listWorkflows: () => Array<{ id: string; name?: string; status?: string; createdAt?: string; updatedAt?: string }>,
+): HeadlessQueryDeps {
   return {
     persistence: { listWorkflows } as unknown as HeadlessQueryDeps['persistence'],
     orchestrator: {} as unknown as HeadlessQueryDeps['orchestrator'],
@@ -60,6 +62,55 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     const deps = makeQueryDeps(() => [{ id: 'wf-9' }]);
     const output = await runReadOnlyHeadlessQueryToString(['list', '--output', 'label'], deps);
     expect(output).toBe('wf-9\n');
+  });
+
+  it('adds submitted stacked planning workflow aliases to workflow JSON output', async () => {
+    const deps = makeQueryDeps(() => [{
+      id: 'wf-existing',
+      name: 'Existing Workflow',
+      status: 'running',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:01.000Z',
+    }]);
+    deps.persistence = {
+      ...deps.persistence,
+      listInAppPlanningSessions: () => [{
+        id: 'planning-1',
+        title: 'Planning 1',
+        presetKey: 'codex',
+        status: 'submitted',
+        confirmationMode: 'require',
+        messages: [],
+        draftPlanAvailable: true,
+        draftPlanSummary: {
+          name: 'In-App Planning Chat Draft Gate',
+          taskCount: 3,
+          workflowCount: 3,
+          steps: [
+            'In-App Planning Chat Draft Gate Step 1',
+            'In-App Planning Chat Draft Gate Step 2',
+            'In-App Planning Chat Draft Gate Step 3',
+          ],
+          taskGroups: [],
+        },
+        submittedWorkflowId: 'wf-step-3',
+        submittedPlanName: 'In-App Planning Chat Draft Gate',
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:02.000Z',
+      }],
+    } as unknown as HeadlessQueryDeps['persistence'];
+
+    const output = await runReadOnlyHeadlessQueryToString(['query', 'workflows', '--output', 'json'], deps);
+    const workflows = JSON.parse(output) as Array<{ id?: string; name?: string; status?: string }>;
+
+    expect(workflows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'wf-step-3',
+        name: 'In-App Planning Chat Draft Gate Step 3',
+        status: 'closed',
+      }),
+    ]));
   });
 
   it('uses configured default agent when session task has no persisted agent name', async () => {

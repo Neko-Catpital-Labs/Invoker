@@ -297,6 +297,7 @@ export interface InAppPlanningSessionRecord {
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
   submittedWorkflowId?: string;
+  submittedWorkflowIds?: string[];
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
   terminalSessionId?: string;
@@ -318,6 +319,7 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'draftPlanSummary'
   | 'draftPlanText'
   | 'submittedWorkflowId'
+  | 'submittedWorkflowIds'
   | 'submittedPlanName'
   | 'terminalMode'
   | 'terminalSessionId'

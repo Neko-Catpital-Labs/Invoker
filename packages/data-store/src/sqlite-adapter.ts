@@ -530,6 +530,7 @@ type InAppPlanningSessionRow = {
   draft_plan_summary_json?: unknown;
   draft_plan_text?: unknown;
   submitted_workflow_id?: unknown;
+  submitted_workflow_ids?: unknown;
   submitted_plan_name?: unknown;
   terminal_mode?: unknown;
   terminal_session_id?: unknown;
@@ -558,6 +559,18 @@ function parseTerminalArgsJson(value: unknown): string[] {
     return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string') ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+function parseStringArray(value: unknown): string[] | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')
+      ? parsed
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -1218,6 +1231,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           draft_plan_summary_json,
           draft_plan_text,
           submitted_workflow_id,
+          submitted_workflow_ids,
           submitted_plan_name,
           terminal_mode,
           terminal_session_id,
@@ -1228,7 +1242,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           pending_response,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
@@ -1237,6 +1251,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           draft_plan_summary_json = excluded.draft_plan_summary_json,
           draft_plan_text = excluded.draft_plan_text,
           submitted_workflow_id = excluded.submitted_workflow_id,
+          submitted_workflow_ids = excluded.submitted_workflow_ids,
           submitted_plan_name = excluded.submitted_plan_name,
           terminal_mode = excluded.terminal_mode,
           terminal_session_id = excluded.terminal_session_id,
@@ -1256,6 +1271,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
           record.draftPlanText ?? null,
           record.submittedWorkflowId ?? null,
+          record.submittedWorkflowIds ? JSON.stringify(record.submittedWorkflowIds) : null,
           record.submittedPlanName ?? null,
           record.terminalMode ?? 'chat',
           record.terminalSessionId ?? null,
@@ -1317,6 +1333,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (Object.hasOwn(patch, 'submittedWorkflowId')) {
         setClauses.push('submitted_workflow_id = ?');
         values.push(patch.submittedWorkflowId ?? null);
+      }
+      if (Object.hasOwn(patch, 'submittedWorkflowIds')) {
+        setClauses.push('submitted_workflow_ids = ?');
+        values.push(patch.submittedWorkflowIds ? JSON.stringify(patch.submittedWorkflowIds) : null);
       }
       if (Object.hasOwn(patch, 'submittedPlanName')) {
         setClauses.push('submitted_plan_name = ?');
@@ -2839,6 +2859,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         [id],
       ) as InAppPlanningMessageRow[];
       const draftPlanSummary = parseInAppPlanningPlanSummary(row.draft_plan_summary_json);
+      const submittedWorkflowIds = parseStringArray(row.submitted_workflow_ids);
       const messages: InAppPlanningChatLine[] = [];
       for (const messageRow of messageRows) {
         if (
@@ -2869,6 +2890,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         ...(draftPlanSummary ? { draftPlanSummary } : {}),
         ...(typeof row.draft_plan_text === 'string' ? { draftPlanText: row.draft_plan_text } : {}),
         ...(typeof row.submitted_workflow_id === 'string' ? { submittedWorkflowId: row.submitted_workflow_id } : {}),
+        ...(submittedWorkflowIds ? { submittedWorkflowIds } : {}),
         ...(typeof row.submitted_plan_name === 'string' ? { submittedPlanName: row.submitted_plan_name } : {}),
         terminalMode,
         ...(typeof row.terminal_session_id === 'string' ? { terminalSessionId: row.terminal_session_id } : {}),
