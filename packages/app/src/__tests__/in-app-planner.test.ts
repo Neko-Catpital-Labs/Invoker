@@ -240,6 +240,29 @@ describe('planning chat', () => {
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
   });
 
+  it('rejects an unknown continuation session without creating a new session', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('should not run');
+    const sessions = createInAppPlanningChatSessions();
+
+    await expect(sendPlanningChatMessage({
+      sessionId: 'missing-session',
+      message: 'continue',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    })).resolves.toEqual({
+      ok: false,
+      sessionId: 'missing-session',
+      error: 'Planning session "missing-session" was not found.',
+    });
+
+    expect(sessions.size).toBe(0);
+    expect(spawnPlanner).not.toHaveBeenCalled();
+  });
+
   it('tells the in-app planner to resolve ambiguity before drafting', async () => {
     const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('What edge cases matter most?');
     const sessions = createInAppPlanningChatSessions();
