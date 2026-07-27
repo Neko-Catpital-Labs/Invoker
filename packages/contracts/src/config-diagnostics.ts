@@ -49,6 +49,13 @@ function checkOptionalPositiveInteger(collector: DiagnosticCollector, path: stri
   }
 }
 
+function checkOptionalString(collector: DiagnosticCollector, path: string, value: unknown): void {
+  if (value === undefined) return;
+  if (typeof value !== 'string') {
+    collector.error(path, `${path} must be a string, received ${JSON.stringify(value)}`);
+  }
+}
+
 function checkRegex(collector: DiagnosticCollector, path: string, value: unknown): void {
   if (value === undefined) return;
   if (typeof value !== 'string') {
@@ -82,6 +89,7 @@ function collectRemoteTargetIds(collector: DiagnosticCollector, config: UnknownR
     checkRequiredString(collector, `${base}.host`, target.host);
     checkRequiredString(collector, `${base}.user`, target.user);
     checkRequiredString(collector, `${base}.sshKeyPath`, target.sshKeyPath);
+    checkOptionalString(collector, `${base}.provisionCommand`, target.provisionCommand);
     checkOptionalPositiveInteger(collector, `${base}.maxConcurrentTasks`, target.maxConcurrentTasks);
     checkOptionalPositiveInteger(collector, `${base}.remoteHeartbeatIntervalSeconds`, target.remoteHeartbeatIntervalSeconds);
 
@@ -93,10 +101,34 @@ function collectRemoteTargetIds(collector: DiagnosticCollector, config: UnknownR
   return ids;
 }
 
+function collectWorktreeTargetIds(collector: DiagnosticCollector, config: UnknownRecord): Set<string> {
+  const ids = new Set<string>();
+  const worktreeTargets = config.worktreeTargets;
+  if (worktreeTargets === undefined) return ids;
+  if (!isRecord(worktreeTargets)) {
+    collector.error('worktreeTargets', 'worktreeTargets must be an object keyed by target id');
+    return ids;
+  }
+
+  for (const [id, target] of Object.entries(worktreeTargets)) {
+    ids.add(id);
+    const base = `worktreeTargets.${id}`;
+    if (!isRecord(target)) {
+      collector.error(base, `${base} must be an object`);
+      continue;
+    }
+    checkOptionalString(collector, `${base}.provisionCommand`, target.provisionCommand);
+    checkOptionalPositiveInteger(collector, `${base}.maxConcurrentTasks`, target.maxConcurrentTasks);
+  }
+
+  return ids;
+}
+
 function collectExecutionPoolIds(
   collector: DiagnosticCollector,
   config: UnknownRecord,
   remoteTargetIds: Set<string>,
+  worktreeTargetIds: Set<string>,
 ): Set<string> {
   const poolIds = new Set<string>();
   const executionPools = config.executionPools;
@@ -153,6 +185,9 @@ function collectExecutionPoolIds(
       if (type === 'ssh' && isNonEmptyString(id) && !remoteTargetIds.has(id)) {
         collector.error(`${memberPath}.id`, `${memberPath}.id "${id}" has no matching entry in remoteTargets`);
       }
+      if (type === 'worktree' && isNonEmptyString(id) && !worktreeTargetIds.has(id)) {
+        collector.error(`${memberPath}.id`, `${memberPath}.id "${id}" has no matching entry in worktreeTargets`);
+      }
 
       if (!isNonEmptyString(id) || typeof type !== 'string') return;
       const key = `${type}:${id}`;
@@ -176,6 +211,7 @@ function collectExecutionPoolIds(
 
   return poolIds;
 }
+
 
 function checkPoolReference(
   collector: DiagnosticCollector,
@@ -256,7 +292,8 @@ export function collectInvokerConfigDiagnostics(config: unknown): ConfigDiagnost
   checkOptionalPositiveInteger(collector, 'maxConcurrency', config.maxConcurrency);
 
   const remoteTargetIds = collectRemoteTargetIds(collector, config);
-  const poolIds = collectExecutionPoolIds(collector, config, remoteTargetIds);
+  const worktreeTargetIds = collectWorktreeTargetIds(collector, config);
+  const poolIds = collectExecutionPoolIds(collector, config, remoteTargetIds, worktreeTargetIds);
 
   if (config.defaultPoolId !== undefined) {
     checkPoolReference(collector, 'defaultPoolId', config.defaultPoolId, poolIds);

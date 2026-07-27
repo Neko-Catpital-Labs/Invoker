@@ -17,6 +17,9 @@ function warnings(config: unknown): ConfigDiagnostic[] {
 }
 
 const sshTarget = { host: 'build-1', user: 'ci', sshKeyPath: '/home/ci/.ssh/id_ed25519' };
+const worktreeTarget = { provisionCommand: 'pnpm install --frozen-lockfile', maxConcurrentTasks: 2 };
+const worktreeTargets = { local: worktreeTarget };
+const worktreePools = { fast: { members: [{ type: 'worktree', id: 'local' }] } };
 
 describe('collectInvokerConfigDiagnostics', () => {
   it('accepts an empty config', () => {
@@ -33,6 +36,12 @@ describe('collectInvokerConfigDiagnostics', () => {
         'remoteTargets.box.host',
         'remoteTargets.box.user',
         'remoteTargets.box.sshKeyPath',
+      ]);
+    });
+
+    it('rejects a non-string provisionCommand', () => {
+      expect(errorPaths({ remoteTargets: { box: { ...sshTarget, provisionCommand: 42 } } })).toEqual([
+        'remoteTargets.box.provisionCommand',
       ]);
     });
 
@@ -59,6 +68,28 @@ describe('collectInvokerConfigDiagnostics', () => {
     });
   });
 
+  describe('worktreeTargets', () => {
+    it('rejects a non-object worktree target entry', () => {
+      expect(errorPaths({ worktreeTargets: { local: 'nope' } })).toEqual(['worktreeTargets.local']);
+    });
+
+    it('rejects a non-string provisionCommand', () => {
+      expect(errorPaths({ worktreeTargets: { local: { provisionCommand: 42 } } })).toEqual([
+        'worktreeTargets.local.provisionCommand',
+      ]);
+    });
+
+    it('rejects a non-positive maxConcurrentTasks', () => {
+      expect(errorPaths({ worktreeTargets: { local: { maxConcurrentTasks: 0 } } })).toEqual([
+        'worktreeTargets.local.maxConcurrentTasks',
+      ]);
+    });
+
+    it('accepts a declared target', () => {
+      expect(collectInvokerConfigDiagnostics({ worktreeTargets })).toEqual([]);
+    });
+  });
+
   describe('executionPools', () => {
     it('rejects an empty member list', () => {
       expect(errorPaths({ executionPools: { fast: { members: [] } } })).toEqual(['executionPools.fast.members']);
@@ -76,6 +107,12 @@ describe('collectInvokerConfigDiagnostics', () => {
       ]);
     });
 
+    it('rejects a worktree member with no matching worktree target', () => {
+      expect(errorPaths({ executionPools: { fast: { members: [{ type: 'worktree', id: 'ghost' }] } } })).toEqual([
+        'executionPools.fast.members[0].id',
+      ]);
+    });
+
     it('accepts an ssh member backed by a declared remote target', () => {
       expect(collectInvokerConfigDiagnostics({
         remoteTargets: { box: sshTarget },
@@ -83,14 +120,23 @@ describe('collectInvokerConfigDiagnostics', () => {
       })).toEqual([]);
     });
 
+    it('accepts a worktree member backed by a declared target', () => {
+      expect(collectInvokerConfigDiagnostics({
+        worktreeTargets,
+        executionPools: worktreePools,
+      })).toEqual([]);
+    });
+
     it('rejects a member duplicated inside one pool', () => {
       expect(errorPaths({
+        worktreeTargets,
         executionPools: { fast: { members: [{ type: 'worktree', id: 'local' }, { type: 'worktree', id: 'local' }] } },
       })).toEqual(['executionPools.fast.members[1]']);
     });
 
     it('warns when one member is shared across pools, because capacity is de-duplicated', () => {
       const shared = warnings({
+        worktreeTargets,
         executionPools: {
           fast: { members: [{ type: 'worktree', id: 'local' }] },
           slow: { members: [{ type: 'worktree', id: 'local' }] },
@@ -102,6 +148,7 @@ describe('collectInvokerConfigDiagnostics', () => {
 
     it('rejects an unknown selection strategy', () => {
       expect(errorPaths({
+        worktreeTargets,
         executionPools: { fast: { members: [{ type: 'worktree', id: 'local' }], selectionStrategy: 'random' } },
       })).toEqual(['executionPools.fast.selectionStrategy']);
     });
@@ -114,37 +161,43 @@ describe('collectInvokerConfigDiagnostics', () => {
 
     it('rejects a default pool id that does not match a configured pool', () => {
       expect(errorPaths({
-        executionPools: { fast: { members: [{ type: 'worktree', id: 'local' }] } },
+        worktreeTargets,
+        executionPools: worktreePools,
         defaultPoolId: 'slow',
       })).toEqual(['defaultPoolId']);
     });
 
     it('accepts a default pool id that matches a configured pool', () => {
       expect(collectInvokerConfigDiagnostics({
-        executionPools: { fast: { members: [{ type: 'worktree', id: 'local' }] } },
+        worktreeTargets,
+        executionPools: worktreePools,
         defaultPoolId: 'fast',
       })).toEqual([]);
     });
   });
 
   describe('executorRoutingRules', () => {
-    const pools = { fast: { members: [{ type: 'worktree', id: 'local' }] } };
+    const pools = worktreePools;
 
     it('rejects an uncompilable regex at config time', () => {
       expect(errorPaths({
+        worktreeTargets,
         executionPools: pools,
         executorRoutingRules: [{ regex: '([unclosed', poolId: 'fast' }],
       })).toEqual(['executorRoutingRules[0].regex']);
     });
 
     it('rejects a rule that defines neither pattern nor regex', () => {
-      expect(errorPaths({ executionPools: pools, executorRoutingRules: [{ poolId: 'fast' }] })).toEqual([
-        'executorRoutingRules[0]',
-      ]);
+      expect(errorPaths({
+        worktreeTargets,
+        executionPools: pools,
+        executorRoutingRules: [{ poolId: 'fast' }],
+      })).toEqual(['executorRoutingRules[0]']);
     });
 
     it('rejects a rule pointing at an unknown pool', () => {
       expect(errorPaths({
+        worktreeTargets,
         executionPools: pools,
         executorRoutingRules: [{ pattern: 'build', poolId: 'ghost' }],
       })).toEqual(['executorRoutingRules[0].poolId']);
@@ -152,6 +205,7 @@ describe('collectInvokerConfigDiagnostics', () => {
 
     it('rejects an unknown routing strategy', () => {
       expect(errorPaths({
+        worktreeTargets,
         executionPools: pools,
         executorRoutingRules: [{ pattern: 'build', poolId: 'fast', strategy: 'prefer' }],
       })).toEqual(['executorRoutingRules[0].strategy']);
@@ -159,6 +213,7 @@ describe('collectInvokerConfigDiagnostics', () => {
 
     it('accepts a well-formed rule', () => {
       expect(collectInvokerConfigDiagnostics({
+        worktreeTargets,
         executionPools: pools,
         executorRoutingRules: [{ regex: '^pnpm ', poolId: 'fast', strategy: 'route' }],
       })).toEqual([]);
@@ -166,22 +221,27 @@ describe('collectInvokerConfigDiagnostics', () => {
   });
 
   describe('heavyweightCommandRouting', () => {
-    const pools = { fast: { members: [{ type: 'worktree', id: 'local' }] } };
+    const pools = worktreePools;
 
     it('rejects a missing poolId', () => {
-      expect(errorPaths({ executionPools: pools, heavyweightCommandRouting: { enabled: true } })).toEqual([
-        'heavyweightCommandRouting.poolId',
-      ]);
+      expect(errorPaths({
+        worktreeTargets,
+        executionPools: pools,
+        heavyweightCommandRouting: { enabled: true },
+      })).toEqual(['heavyweightCommandRouting.poolId']);
     });
 
     it('rejects a poolId that is not configured', () => {
-      expect(errorPaths({ executionPools: pools, heavyweightCommandRouting: { poolId: 'ghost' } })).toEqual([
-        'heavyweightCommandRouting.poolId',
-      ]);
+      expect(errorPaths({
+        worktreeTargets,
+        executionPools: pools,
+        heavyweightCommandRouting: { poolId: 'ghost' },
+      })).toEqual(['heavyweightCommandRouting.poolId']);
     });
 
     it('rejects an uncompilable matcher regex', () => {
       expect(errorPaths({
+        worktreeTargets,
         executionPools: pools,
         heavyweightCommandRouting: { poolId: 'fast', matchers: [{ regex: '([unclosed' }] },
       })).toEqual(['heavyweightCommandRouting.matchers[0].regex']);
