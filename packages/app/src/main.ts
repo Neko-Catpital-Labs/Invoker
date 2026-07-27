@@ -130,6 +130,10 @@ import {
   isHeadlessReadOnlyCommand,
   resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
+import {
+  isHeadlessHelpCommand,
+  isRemovedHeadlessCommandAlias,
+} from './headless-command-registry.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -145,6 +149,7 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
@@ -863,6 +868,18 @@ function startHeadlessMode(): void {
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
     const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve';
     const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
+
+    if (isHeadlessHelpCommand(command)) {
+      printHeadlessUsage();
+      process.exit(0);
+      return;
+    }
+
+    if (isRemovedHeadlessCommandAlias(command)) {
+      process.stderr.write(`${RED}Error:${RESET} Unknown command: ${command}. Run with --help for usage.\n`);
+      process.exit(1);
+      return;
+    }
 
     // Try delegation for mutating commands first (owner mode).
     // In standalone mode we skip delegation and run locally.
