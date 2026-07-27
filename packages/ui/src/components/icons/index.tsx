@@ -16,6 +16,7 @@ import {
   Settings,
   Sun,
   TerminalSquare,
+  Trash2,
   type LucideProps,
 } from 'lucide-react';
 
@@ -50,6 +51,7 @@ export const GitPullRequestIcon = withDefaults(GitPullRequest);
 export const GitMergeIcon = withDefaults(GitMerge);
 export const SunIcon = withDefaults(Sun);
 export const MoonIcon = withDefaults(Moon);
+export const TrashIcon = withDefaults(Trash2);
 
 export function SendIcon(props: SVGProps<SVGSVGElement>): JSX.Element {
   return (

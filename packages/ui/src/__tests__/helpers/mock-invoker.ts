@@ -35,7 +35,7 @@ import type {
 
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
-  api: InvokerAPI;
+  api: MockInvokerAPI;
   /** Replace the task snapshot and fire matching 'created' graph events. */
   setTasks: (tasks: TaskState[], workflows?: WorkflowMeta[]) => void;
   /** Replace the history list returned by getHistoryTasks. */
@@ -71,6 +71,13 @@ export interface MockInvoker {
   /** Remove window.invoker. */
   cleanup: () => void;
 }
+
+type MockPlanningChatDeleteMethods = {
+  planningChatDelete: (request: { sessionId: string }) => Promise<{ ok: true }>;
+  planningChatDeleteSubmitted: () => Promise<{ ok: true; deletedSessionIds: string[] }>;
+};
+
+type MockInvokerAPI = InvokerAPI & MockPlanningChatDeleteMethods;
 
 
 export function makePlanningSessionSummary(
@@ -148,7 +155,7 @@ export function createMockInvoker(
     channel,
   });
 
-  const api: InvokerAPI = {
+  const api: MockInvokerAPI = {
     // Defer resolution one microtask so the startup snapshot is read after synchronous setTasks()
     // in tests (real IPC resolves later too).
     getTasks: vi.fn(
@@ -220,6 +227,8 @@ export function createMockInvoker(
       workflowId: 'wf-1',
     })),
     planningChatReset: vi.fn(async () => ({ ok: true })),
+    planningChatDelete: vi.fn(async () => ({ ok: true })),
+    planningChatDeleteSubmitted: vi.fn(async () => ({ ok: true, deletedSessionIds: [] })),
     onPlanningChatStream: vi.fn((cb: (event: InAppPlanningStreamEvent) => void) => {
       planningChatStreamCallbacks.add(cb);
       return () => { planningChatStreamCallbacks.delete(cb); };
