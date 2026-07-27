@@ -7,7 +7,8 @@
  * task delta. Each tick therefore re-issued fitInitial + centerSelection and
  * yanked the viewport back to the selection while the user was panning the graph.
  * The effect now keys off stable surface-entry signals, so live updates and
- * selection changes while already on the surface issue no camera command.
+ * background-driven selection changes while already on the surface issue no
+ * camera command. User-initiated selection still recenters the graph.
  *
  * The effect is shared by every non-home browser surface (its guard only excludes
  * `home`), so this drives the Workflows surface — the jsdom harness cannot render
@@ -16,7 +17,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
@@ -60,6 +61,8 @@ const { App } = await import('../App.js');
 const workflows: WorkflowMeta[] = [
   { id: 'wf-a', name: 'Alpha Workflow', status: 'running' },
 ];
+
+const workflowB: WorkflowMeta = { id: 'wf-b', name: 'Beta Workflow', status: 'pending' };
 
 const tasks = [
   makeUITask({ id: 'wf-a/one', description: 'Task One', workflowId: 'wf-a', status: 'running', command: 'echo a' }),
@@ -156,7 +159,7 @@ describe('Browser-surface camera (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   }, 20000);
 
-  it('does not re-center or re-fit when the selected task changes while already on a browser surface', async () => {
+  it('re-centers when the selected task changes from a user click on a browser surface', async () => {
     mock.setTasks(tasks, workflows);
     render(<App />);
 
@@ -171,6 +174,66 @@ describe('Browser-surface camera (component)', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task Two');
+    });
+    await flushFrames(6);
+
+    expect(setCenterMock).toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('a background auto-select reshuffle changes selection but issues no camera command', async () => {
+    mock.setTasks([], [...workflows, workflowB]);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha Workflow');
+    });
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    act(() => {
+      mock.fireWorkflowsChanged([workflowB]);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Beta Workflow');
+    }, { timeout: 3000 });
+    await flushFrames(6);
+
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('a workflow-mutation-failed event selects the failed task but issues no camera command', async () => {
+    mock.setTasks(tasks, workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    await screen.findByTestId('selected-workflow-mini-dag');
+    await settleCamera();
+    fireEvent.click(await screen.findByTestId('rf__node-wf-a/two'));
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task Two');
+    });
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    act(() => {
+      mock.fireWorkflowMutationFailed({
+        intentId: 42,
+        workflowId: 'wf-a',
+        channel: 'invoker:approve',
+        taskId: 'wf-a/one',
+        message: 'approve failed',
+        failedAt: '2026-07-08T10:00:00.000Z',
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task One');
     });
     await flushFrames(6);
 
