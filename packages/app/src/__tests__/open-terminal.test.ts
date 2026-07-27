@@ -11,8 +11,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdirSync, rmSync } from 'node:fs';
+import { accessSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import { execFileSync } from 'node:child_process';
 
 import {
   computeWorkflowRollup,
@@ -149,9 +150,23 @@ function buildCleanEnv(): Record<string, string> {
   return cleanEnv;
 }
 
+function fileExists(path: string): boolean {
+  try {
+    accessSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function openExternalTerminal(spec: TerminalSpec | null): void {
   const defaultCwd = spec?.cwd ?? process.cwd();
-  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args };
+  const meta = {
+    cwd: spec?.cwd,
+    command: spec?.command,
+    args: spec?.args,
+    displayBridgeText: spec?.displayBridgeText,
+  };
 
   if (process.platform === 'linux') {
     const cleanEnv = buildCleanEnv();
@@ -165,7 +180,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
     });
     child.unref();
   } else if (process.platform === 'darwin') {
-    if (spec?.command) {
+    if (spec?.command || spec?.displayBridgeText) {
       const osaArgs = buildMacOSOsascriptArgs(meta, defaultCwd);
       const child = mockSpawn('osascript', osaArgs, { detached: true, stdio: 'ignore' });
       child.unref();
@@ -432,6 +447,42 @@ describe('terminal-external-launch', () => {
     // Should use '\'' (backslash-quote) not '"'"' (double-quote idiom)
     expect(line).toContain("\\'");
     expect(line).not.toMatch(/'"'"'/);
+  });
+
+  it('quotes display bridge text without command injection and preserves command argv', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'terminal-bridge-'));
+    const bridgeMarker = join(dir, 'bridge-injected');
+    const argMarker = join(dir, 'arg-injected');
+    const bridgeText = `Bridge'; touch ${bridgeMarker}; echo '$(touch ${bridgeMarker})`;
+    try {
+      const line = buildTerminalShellCommand(
+        {
+          cwd: dir,
+          displayBridgeText: bridgeText,
+          command: 'bash',
+          args: [
+            '-c',
+            'printf "ARG:%s\\n" "$@"',
+            'argv0',
+            `literal; touch ${argMarker}`,
+            `$(touch ${argMarker})`,
+            "quote'arg",
+          ],
+        },
+        '/fallback',
+      );
+
+      const output = execFileSync('bash', ['-c', line], { encoding: 'utf8' });
+
+      expect(output.startsWith(`${bridgeText}\n`)).toBe(true);
+      expect(output).toContain(`ARG:literal; touch ${argMarker}\n`);
+      expect(output).toContain(`ARG:$(touch ${argMarker})\n`);
+      expect(output).toContain("ARG:quote'arg\n");
+      expect(fileExists(bridgeMarker)).toBe(false);
+      expect(fileExists(argMarker)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('buildMacOSOsascriptArgs includes activate and uses multi-line AppleScript', () => {

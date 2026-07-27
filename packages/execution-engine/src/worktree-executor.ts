@@ -26,6 +26,14 @@ import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { sanitizeBranchForPath } from './git-utils.js';
 
+function displayBridgeSpec(
+  source: { displayBridgeText?: string },
+): Pick<TerminalSpec, 'displayBridgeText'> {
+  return source.displayBridgeText === undefined
+    ? {}
+    : { displayBridgeText: source.displayBridgeText };
+}
+
 // Re-export for backward compatibility
 export { computeContentHash, buildExperimentBranchName } from './branch-utils.js';
 
@@ -576,14 +584,15 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null {
     const entry = this.entries.get(handle.executionId);
     if (!entry) return null;
+    const bridge = displayBridgeSpec(handle);
     if (entry.agentSessionId) {
       const agentName = entry.request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(agentName).buildResumeArgs(entry.agentSessionId)
         : { cmd: 'claude', args: ['--resume', entry.agentSessionId, '--dangerously-skip-permissions'] };
-      return { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir };
+      return { command: resume.cmd, args: resume.args, cwd: entry.worktreeDir, ...bridge };
     }
-    return { cwd: entry.worktreeDir };
+    return { cwd: entry.worktreeDir, ...bridge };
   }
 
   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec {
@@ -604,6 +613,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     if (meta.workspacePath) {
       traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" — worktree path exists: ${meta.workspacePath}`);
     }
+    const bridge = displayBridgeSpec(meta);
     if (meta.agentSessionId) {
       const resume = this.agentRegistry
         ? this.agentRegistry.getOrThrow(meta.executionAgent ?? DEFAULT_EXECUTION_AGENT).buildResumeArgs(meta.agentSessionId)
@@ -612,6 +622,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         command: resume.cmd,
         args: resume.args,
         cwd: meta.workspacePath,
+        ...bridge,
       };
       traceExecution(
         `[agent-session-trace] WorktreeExecutor.getRestoredTerminalSpec: task="${meta.taskId}" resume with agentSessionId=${meta.agentSessionId}`,
@@ -626,12 +637,13 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
         command: sh,
         args: ['-c', `git checkout '${meta.branch}' 2>/dev/null; exec ${sh}`],
         cwd: meta.workspacePath,
+        ...bridge,
       };
       traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → checkout branch spec, branch="${meta.branch}" cwd="${spec.cwd}"`);
       return spec;
     }
     traceExecution(`[WorktreeExecutor] getRestoredTerminalSpec task="${meta.taskId}" → cwd-only spec, cwd="${meta.workspacePath}"`);
-    return { cwd: meta.workspacePath };
+    return { cwd: meta.workspacePath, ...bridge };
   }
 
   /**
