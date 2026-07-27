@@ -49,7 +49,7 @@ import {
   preemptTaskSubgraph,
   preemptWorkflowExecution,
 } from './headless-shared.js';
-import { runStartReady } from './start-ready.js';
+import { isStartReadyFreshBaseRequested, runStartReady } from './start-ready.js';
 type StartReadyRequestExt = StartReadyRequest & {
   recreateFailedAndPending?: boolean;
   recreateFailedPendingAndRunning?: boolean;
@@ -306,7 +306,16 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request) as StartReadyResult & {
+  const taskExecutor = !request.dryRun && isStartReadyFreshBaseRequested(request)
+    ? createHeadlessExecutor(deps)
+    : undefined;
+  const result = await runStartReady(deps.orchestrator, request, {
+    logger: deps.logger,
+    persistence: deps.persistence,
+    commandService: deps.commandService,
+    taskExecutor,
+    mutationTiming: deps.mutationTiming,
+  }) as StartReadyResult & {
     preview: StartReadyPreviewExt;
   };
   const runnable = result.started.filter(isDispatchableLaunch);
@@ -349,9 +358,8 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     if (deps.deferRunnableTasks) {
       deps.deferRunnableTasks(runnable);
     } else {
-      const taskExecutor = createHeadlessExecutor(deps);
       void Promise.resolve()
-        .then(() => taskExecutor.executeTasks(runnable))
+        .then(() => (taskExecutor ?? createHeadlessExecutor(deps)).executeTasks(runnable))
         .catch((err) => {
           deps.logger.error(
             `background no-track start-ready failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
@@ -363,9 +371,9 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     return;
   }
 
-  const taskExecutor = createHeadlessExecutor(deps);
-  wireHeadlessApproveHook(deps, taskExecutor);
-  await taskExecutor.executeTasks(runnable);
+  const executionTaskExecutor = taskExecutor ?? createHeadlessExecutor(deps);
+  wireHeadlessApproveHook(deps, executionTaskExecutor);
+  await executionTaskExecutor.executeTasks(runnable);
 }
 
 export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Promise<void> {
