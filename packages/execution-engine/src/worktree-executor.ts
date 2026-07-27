@@ -16,11 +16,8 @@ import {
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { createExecutionBench } from './execution-bench.js';
 import {
-  syncPlanBaseRemote,
   syncPlanBaseRemoteForRef,
   resolvePlanBaseRevision,
-  resolvePreferredTrackingRemote,
-  shouldResolveViaOriginTracking,
 } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
@@ -165,12 +162,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     } else {
       log(`resolve base ${baseRef} begin`);
       bench('WorktreeExecutor.resolveBase.before', { baseRef });
-      if (remoteFetchForPool.enabled && shouldResolveViaOriginTracking(baseRef)) {
-        const preferredRemote = await resolvePreferredTrackingRemote(runGit, baseRef.trim());
-        bench('WorktreeExecutor.resolvePreferredTrackingRemote.done', { baseRef, preferredRemote });
-        await syncPlanBaseRemote(runGit, baseRef.trim(), preferredRemote);
-        bench('WorktreeExecutor.syncPlanBaseRemote.done', { baseRef, preferredRemote });
-      } else if (remoteFetchForPool.enabled) {
+      if (remoteFetchForPool.enabled) {
         await syncPlanBaseRemoteForRef(runGit, baseRef.trim());
         bench('WorktreeExecutor.syncPlanBaseRemoteForRef.done', { baseRef });
       }
