@@ -18,6 +18,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
   const approveTask = vi.fn(async () => ({ ok: true }));
   const deps = {
     orchestrator: {
+      syncAllFromDb: vi.fn(),
       getAllTasks: () => [makeTask('wf-1/task-1')],
       getWorkflowStatus: () => ({ total: 1, completed: 0, failed: 0, closed: 0, running: 0, pending: 1 }),
       getTask: () => null,
@@ -57,13 +58,31 @@ describe('buildWebInvokerDispatch', () => {
     ]);
   });
 
-  it('get-tasks returns the { tasks, workflows, streamSequence } snapshot', async () => {
-    const { dispatch } = makeDispatch();
+  it('get-tasks syncs before returning the { tasks, workflows, streamSequence } snapshot', async () => {
+    const staleTask = makeTask('wf-1/stale-task');
+    const freshTask = makeTask('wf-1/task-1');
+    let synced = false;
+    const syncAllFromDb = vi.fn(() => {
+      synced = true;
+    });
+    const getAllTasks = vi.fn(() => (synced ? [freshTask] : [staleTask]));
+    const { dispatch } = makeDispatch({
+      orchestrator: {
+        syncAllFromDb,
+        getAllTasks,
+        getWorkflowStatus: () => ({ total: 1, completed: 0, failed: 0, closed: 0, running: 0, pending: 1 }),
+        getTask: () => null,
+      },
+    });
+
     expect(await dispatch('invoker:get-tasks', [])).toEqual({
-      tasks: [makeTask('wf-1/task-1')],
+      tasks: [freshTask],
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
       streamSequence: 7,
     });
+    expect(syncAllFromDb).toHaveBeenCalledOnce();
+    expect(getAllTasks).toHaveBeenCalledOnce();
+    expect(syncAllFromDb.mock.invocationCallOrder[0]).toBeLessThan(getAllTasks.mock.invocationCallOrder[0]);
   });
 
   it('get-execution-harnesses returns harness metadata', async () => {
