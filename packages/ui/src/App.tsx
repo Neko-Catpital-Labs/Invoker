@@ -86,6 +86,8 @@ type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
+type SelectionOptions = { recenter?: boolean };
+type QuietBrowserSurfaceSelection = { sequence: number };
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['planning', 'workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const GRAPH_KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
@@ -830,6 +832,8 @@ export function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const selectedTaskIdRef = useRef<string | null>(selectedTaskId);
   selectedTaskIdRef.current = selectedTaskId;
+  const quietBrowserSurfaceSelectionRef = useRef<QuietBrowserSurfaceSelection | null>(null);
+  const quietBrowserSurfaceSelectionSequenceRef = useRef(0);
   const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
@@ -1633,7 +1637,26 @@ export function App() {
     });
   }, []);
 
-  const selectWorkflowById = useCallback((workflowId: string) => {
+  const isQuietBrowserSurfaceSelection = useCallback((options: SelectionOptions) => (
+    options.recenter === false
+    && viewMode === 'dag'
+    && (sidebarSurface === 'workflows' || sidebarSurface === 'attention')
+    && selectedWorkflowGraphAvailable
+  ), [selectedWorkflowGraphAvailable, sidebarSurface, viewMode]);
+
+  const setQuietBrowserSurfaceSelection = useCallback((quiet: boolean) => {
+    if (!quiet) {
+      quietBrowserSurfaceSelectionRef.current = null;
+      return;
+    }
+    quietBrowserSurfaceSelectionSequenceRef.current += 1;
+    quietBrowserSurfaceSelectionRef.current = {
+      sequence: quietBrowserSurfaceSelectionSequenceRef.current,
+    };
+  }, []);
+
+  const selectWorkflowById = useCallback((workflowId: string, options: SelectionOptions = { recenter: true }) => {
+    setQuietBrowserSurfaceSelection(isQuietBrowserSurfaceSelection(options));
     armSuppressDagSurfaceDismiss();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
@@ -1641,11 +1664,15 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu(null);
     focusKeyboardRegion('workflowGraph');
-  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion]);
+  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion, isQuietBrowserSurfaceSelection, setQuietBrowserSurfaceSelection]);
 
-  const selectTaskById = useCallback((taskId: string) => {
+  const selectTaskById = useCallback((taskId: string, options: SelectionOptions = { recenter: true }) => {
     const task = tasksRef.current.get(taskId);
-    if (!task) return;
+    if (!task) {
+      setQuietBrowserSurfaceSelection(false);
+      return;
+    }
+    setQuietBrowserSurfaceSelection(isQuietBrowserSurfaceSelection(options));
     setSelectedTaskId(task.id);
     setWorkflowSelectionDismissed(false);
     if (task.config.workflowId) {
@@ -1656,19 +1683,39 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu(null);
     focusKeyboardRegion('taskGraph');
-  }, [focusKeyboardRegion]);
+  }, [focusKeyboardRegion, isQuietBrowserSurfaceSelection, setQuietBrowserSurfaceSelection]);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
       const failedTaskId = event.taskId;
       if (failedTaskId) {
         setMutationFailuresByTaskId((prev) => new Map(prev).set(failedTaskId, event));
+        if (sidebarSurface === 'attention') {
+          const task = tasksRef.current.get(failedTaskId);
+          if (task) {
+            selectTaskById(task.id, { recenter: false });
+          } else {
+            setQuietBrowserSurfaceSelection(isQuietBrowserSurfaceSelection({ recenter: false }));
+            // Set selection from the event ids directly so the inspector opens even
+            // if the task map has not hydrated this id yet.
+            setSelectedTaskId(failedTaskId);
+            setWorkflowSelectionDismissed(false);
+            if (event.workflowId) {
+              setSelectedWorkflowId(event.workflowId);
+            }
+            setInspectorCollapsed(false);
+            setInspectorManualOpen(true);
+            setContextMenu(null);
+            setWorkflowContextMenu(null);
+            focusKeyboardRegion('taskGraph');
+          }
+        }
         return;
       }
       notifyMutationError('Mutation failed', event.message);
     });
     return () => { unsubscribe?.(); };
-  }, []);
+  }, [focusKeyboardRegion, isQuietBrowserSurfaceSelection, selectTaskById, setQuietBrowserSurfaceSelection, sidebarSurface]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -2042,7 +2089,7 @@ export function App() {
       if (activeWorkflowId !== null && !selectedWorkflowVanished) {
         return;
       }
-      selectWorkflowById(workflowEntries[0].workflow.id);
+      selectWorkflowById(workflowEntries[0].workflow.id, { recenter: false });
       return;
     }
 
@@ -2058,7 +2105,7 @@ export function App() {
       if (attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
         return;
       }
-      selectTaskById(attentionEntries[0].task.id);
+      selectTaskById(attentionEntries[0].task.id, { recenter: false });
       return;
     }
 
@@ -2090,6 +2137,10 @@ export function App() {
     if (viewMode !== 'dag' || (sidebarSurface !== 'workflows' && sidebarSurface !== 'attention') || !selectedWorkflowGraphAvailable) {
       return;
     }
+    if (quietBrowserSurfaceSelectionRef.current) {
+      quietBrowserSurfaceSelectionRef.current = null;
+      return;
+    }
 
     let cancelled = false;
     const fitFrame = requestAnimationFrame(() => {
@@ -2117,6 +2168,17 @@ export function App() {
     sidebarSurface,
     viewMode,
   ]);
+
+  useEffect(() => {
+    const quietSelection = quietBrowserSurfaceSelectionRef.current;
+    if (!quietSelection) return;
+    const frame = requestAnimationFrame(() => {
+      if (quietBrowserSurfaceSelectionRef.current?.sequence === quietSelection.sequence) {
+        quietBrowserSurfaceSelectionRef.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [selectedTaskId, selectedWorkflowId, sidebarSurface, viewMode]);
 
 
   const handleDagSurfaceClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -3686,6 +3748,7 @@ export function App() {
           statusFilters={new Set<string>()}
           runningTaskIds={runningTaskIds}
           surfaceMode={floating ? 'default' : 'browser'}
+          suppressBrowserAutoCamera={!floating && quietBrowserSurfaceSelectionRef.current !== null}
         />
       </div>
     );

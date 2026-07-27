@@ -55,6 +55,7 @@ interface TaskDAGProps {
   statusFilters?: Set<string>;
   runningTaskIds?: ReadonlySet<string>;
   surfaceMode?: 'default' | 'browser' | 'overlay';
+  suppressBrowserAutoCamera?: boolean;
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
@@ -173,7 +174,20 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds, surfaceMode = 'default' }: TaskDAGProps) {
+function TaskDAGInner({
+  tasks,
+  workflows,
+  selectedTaskId,
+  cameraCommand,
+  onTaskClick,
+  onTaskDoubleClick,
+  onTaskContextMenu,
+  onManualViewport,
+  statusFilters,
+  runningTaskIds,
+  surfaceMode = 'default',
+  suppressBrowserAutoCamera = false,
+}: TaskDAGProps) {
   const { fitView, setCenter, getZoom } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
@@ -184,14 +198,22 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const browserRemountDoneRef = useRef(false);
   const initFitFrameRef = useRef(0);
   const nodesRef = useRef<typeof nodes>([]);
+  const surfaceModeRef = useRef(surfaceMode);
+  const suppressBrowserAutoCameraRef = useRef(suppressBrowserAutoCamera);
+  surfaceModeRef.current = surfaceMode;
+  suppressBrowserAutoCameraRef.current = suppressBrowserAutoCamera;
   const selectedTaskIdRef = useRef<string | null>(selectedTaskId ?? null);
   selectedTaskIdRef.current = selectedTaskId ?? null;
   const [layoutState, setLayoutState] = useState<LayoutState | null>(null);
   const lastLayoutRef = useRef<TaskGraphLayout | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const onInitHandler = useCallback(() => {
-    initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
-  }, [fitView]);
+    if (surfaceMode === 'browser' && suppressBrowserAutoCameraRef.current) return;
+    initFitFrameRef.current = requestAnimationFrame(() => {
+      if (surfaceModeRef.current === 'browser' && suppressBrowserAutoCameraRef.current) return;
+      fitView({ padding: 0.2 });
+    });
+  }, [fitView, surfaceMode]);
 
   // Cancel a pending first-fit frame on unmount so it never fires against a
   // torn-down graph after the component has gone away.
@@ -519,18 +541,18 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
 
   useEffect(() => {
-    if (surfaceMode !== 'browser' || nodesRef.current.length === 0) return;
+    if (surfaceMode !== 'browser' || suppressBrowserAutoCameraRef.current || nodesRef.current.length === 0) return;
 
     let cancelled = false;
     const frame = requestAnimationFrame(() => {
-      if (cancelled) return;
+      if (cancelled || suppressBrowserAutoCameraRef.current) return;
       fitView({ padding: 0.2 });
       const selectedTaskId = selectedTaskIdRef.current;
       if (!selectedTaskId) return;
       const node = nodesRef.current.find((candidate) => candidate.id === selectedTaskId);
       if (!node) return;
       requestAnimationFrame(() => {
-        if (cancelled) return;
+        if (cancelled || suppressBrowserAutoCameraRef.current) return;
         const zoom = Math.max(typeof getZoom === 'function' ? getZoom() : 1, 0.85);
         setCenter(node.position.x + 132, node.position.y + 55, { zoom, duration: 0 });
       });
@@ -543,13 +565,13 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   }, [fitView, getZoom, rawGraph.layoutKey, setCenter, surfaceMode]);
 
   useEffect(() => {
-    if (surfaceMode !== 'browser' || nodesRef.current.length === 0 || browserRemountDoneRef.current) return;
+    if (surfaceMode !== 'browser' || suppressBrowserAutoCameraRef.current || nodesRef.current.length === 0 || browserRemountDoneRef.current) return;
 
     let cancelled = false;
     const frame = requestAnimationFrame(() => {
       if (cancelled) return;
       requestAnimationFrame(() => {
-        if (cancelled || browserRemountDoneRef.current) return;
+        if (cancelled || suppressBrowserAutoCameraRef.current || browserRemountDoneRef.current) return;
         browserRemountDoneRef.current = true;
         setFlowInstanceKey((key) => key + 1);
       });
