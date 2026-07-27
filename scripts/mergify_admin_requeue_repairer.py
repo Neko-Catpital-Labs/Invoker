@@ -317,6 +317,21 @@ class AdminBypassRepairer:
     def push_branch(self, work_root: Path, branch_name: str) -> None:
         self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
 
+    def remote_branch_head(self, work_root: Path, branch_name: str) -> str:
+        out = self.git_output(work_root, "ls-remote", "origin", f"refs/heads/{branch_name}").strip()
+        if not out:
+            return ""
+        return out.split()[0]
+
+    def force_push_branch_with_lease(self, work_root: Path, branch_name: str, expected_head: str) -> None:
+        self.git_output(
+            work_root,
+            "push",
+            f"--force-with-lease=refs/heads/{branch_name}:{expected_head}",
+            "origin",
+            f"HEAD:refs/heads/{branch_name}",
+        )
+
     def terminal_repair_outcome(
         self,
         pr: PrSnapshot,
@@ -547,14 +562,16 @@ class AdminBypassRepairer:
             repair_commits=repair_commits,
         )
 
-    def repair_conflict(self, pr: PrSnapshot, reason: str) -> None:
+    def repair_conflict(self, pr: PrSnapshot, reason: str) -> RepairOutcome:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
+        start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
         prompt = (
             f"Resolve only the merge conflict that keeps this PR from merging. "
             f"Rebase the PR head branch onto its base branch, preserve the PR's intended changes, "
-            f"run the narrow proof for the conflict resolution, then commit and push to the PR head branch. "
+            f"run the narrow proof for the conflict resolution, then commit locally. "
+            f"Do not push; the worker will publish the clean rebased head with a lease after you exit. "
             f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
             f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
             f"Head SHA: {pr.head_ref_oid}\nReason: {reason}\n"
@@ -570,3 +587,44 @@ class AdminBypassRepairer:
             head_sha=pr.head_ref_oid,
         )
         self.run_claude_repair(work_root, prompt)
+        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        terminal = self.terminal_repair_outcome(pr, "conflict", start_head, end_head, work_root)
+        if terminal:
+            return terminal
+        if status_lines:
+            self.hard_reset_work_root(work_root, start_head)
+            return self.blocked_outcome(
+                "blocked_invalid",
+                "conflict",
+                start_head,
+                end_head,
+                errors=("conflict repair left uncommitted changes:\n" + "\n".join(status_lines),),
+            )
+        remote_head = self.remote_branch_head(work_root, pr.head_ref_name)
+        if remote_head == end_head:
+            return self.blocked_outcome("pushed", "conflict", start_head, end_head)
+        if end_head == start_head:
+            return self.blocked_outcome(
+                "blocked_invalid",
+                "conflict",
+                start_head,
+                end_head,
+                errors=("conflict repair produced no local commit and left PR head unchanged",),
+            )
+        if remote_head and remote_head != start_head:
+            return self.blocked_outcome(
+                "noop",
+                "conflict",
+                start_head,
+                end_head,
+            )
+        self.force_push_branch_with_lease(work_root, pr.head_ref_name, start_head)
+        repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
+        return self.blocked_outcome(
+            "pushed",
+            "conflict",
+            start_head,
+            end_head,
+            repair_commits=repair_commits,
+        )
