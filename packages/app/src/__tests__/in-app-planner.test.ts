@@ -295,6 +295,25 @@ describe('planning chat', () => {
     expect(spawnPlanner).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects an unknown continuation id without creating a fresh session', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('should not run');
+    const sessions = createInAppPlanningChatSessions();
+
+    await expect(sendPlanningChatMessage({
+      sessionId: 'missing-session',
+      message: 'continue',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    })).resolves.toEqual({ ok: false, sessionId: 'missing-session', error: 'Planning session not found.' });
+
+    expect(sessions.size).toBe(0);
+    expect(spawnPlanner).not.toHaveBeenCalled();
+  });
+
   it('returns the raw draft reply and keeps a draft plan summary for valid YAML', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
