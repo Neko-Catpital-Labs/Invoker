@@ -867,6 +867,7 @@ export function App() {
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
+  const activePlanningDraftReady = draftPlanAvailable || activePlanningSession.status === 'draft_ready';
   const activePlanningSessionBusy = activePlanningSession.busy;
   const activePlanningSessionSubmitted = activePlanningSession.status === 'submitted';
   const activePlanningMode = activePlanningSession.mode ?? 'chat';
@@ -2706,7 +2707,9 @@ export function App() {
     }
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
-      await handlePlanningSubmitDraft();
+      if (activePlanningDraftReady) {
+        await handlePlanningSubmitDraft();
+      }
       return;
     }
 
@@ -2794,6 +2797,7 @@ export function App() {
   }, [
     activePlanningSessionBusy,
     activePlanningSessionId,
+    activePlanningDraftReady,
     activePlanningReadOnly,
     appendTerminalLine,
     clearPlanningStreamForSessionIds,
