@@ -3,22 +3,9 @@ process.env.TZ = 'UTC';
 
 import '@testing-library/jest-dom/vitest';
 
-if (typeof globalThis.ResizeObserver === 'undefined') {
-  class ResizeObserverPolyfill {
-    observe(): void {}
-    unobserve(): void {}
-    disconnect(): void {}
-  }
-  globalThis.ResizeObserver = ResizeObserverPolyfill as unknown as typeof ResizeObserver;
-}
-
-if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
-  Element.prototype.scrollIntoView = function noopScrollIntoView(): void {};
-}
-
-if (typeof window !== 'undefined' && !window.localStorage) {
+function createMemoryStorage(): Storage {
   const store: Record<string, string> = {};
-  const storage: Storage = {
+  return {
     getItem: (key) => (key in store ? store[key] : null),
     setItem: (key, value) => {
       store[key] = String(value);
@@ -34,9 +21,62 @@ if (typeof window !== 'undefined' && !window.localStorage) {
       return Object.keys(store).length;
     },
   };
+}
+
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class ResizeObserverPolyfill {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  globalThis.ResizeObserver = ResizeObserverPolyfill as unknown as typeof ResizeObserver;
+}
+
+if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = function noopScrollIntoView(): void {};
+}
+
+const testStorage = createMemoryStorage();
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: testStorage,
+});
+
+if (typeof window !== 'undefined') {
   Object.defineProperty(window, 'localStorage', {
     configurable: true,
-    value: storage,
+    value: testStorage,
+  });
+}
+
+if (typeof HTMLCanvasElement !== 'undefined') {
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    configurable: true,
+    value(this: HTMLCanvasElement, contextId: string) {
+      if (contextId !== '2d') return null;
+      return {
+        canvas: this,
+        fillStyle: '#000000',
+        strokeStyle: '#000000',
+        clearRect: () => {},
+        fillRect: () => {},
+        strokeRect: () => {},
+        beginPath: () => {},
+        closePath: () => {},
+        moveTo: () => {},
+        lineTo: () => {},
+        stroke: () => {},
+        fill: () => {},
+        save: () => {},
+        restore: () => {},
+        translate: () => {},
+        scale: () => {},
+        measureText: (text: string) => ({ width: text.length * 8 }),
+        getImageData: () => ({ data: new Uint8ClampedArray(4) }),
+        putImageData: () => {},
+        createLinearGradient: () => ({ addColorStop: () => {} }),
+      } as unknown as CanvasRenderingContext2D;
+    },
   });
 }
 
