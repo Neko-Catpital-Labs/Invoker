@@ -10,6 +10,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
+import { Trash2 } from 'lucide-react';
 import yaml from 'js-yaml';
 import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
@@ -2981,23 +2982,88 @@ export function App() {
     workflows.size,
   ]);
 
-  const handleCreatePlanningSession = useCallback(() => {
+  const makeLocalPlanningSession = useCallback((): PlanningSessionView => {
     const index = nextPlanningSessionLocalIdRef.current;
     nextPlanningSessionLocalIdRef.current += 1;
     const now = new Date().toISOString();
     const localId = `local-planning-session-${index}`;
-    const session: PlanningSessionView = {
+    return {
       ...makeInitialPlanningSession(now, selectedPlanningConfirmationMode),
       id: localId,
       conversationKey: localId,
       presetKey: selectedPlanningPresetKey,
       confirmationMode: selectedPlanningConfirmationMode,
     };
+  }, [selectedPlanningConfirmationMode, selectedPlanningPresetKey]);
+
+  const removePlanningSessions = useCallback((sessionIds: string[]) => {
+    const ids = new Set(sessionIds);
+    if (ids.size === 0) return;
+
+    clearPlanningStreamForSessionIds(sessionIds);
+    forgetPlanningStreamAliasesForSessionIds(sessionIds);
+    for (const sessionId of ids) {
+      pendingPlanningStreamSessionIdsRef.current.delete(sessionId);
+    }
+    setKeptPlanningDraftSessionIds((prev) => {
+      let changed = false;
+      const next = new Set(prev);
+      for (const sessionId of ids) {
+        if (next.delete(sessionId)) changed = true;
+      }
+      return changed ? next : prev;
+    });
+    setReviewDraftSessionId((sessionId) => (sessionId && ids.has(sessionId) ? null : sessionId));
+
+    const previousSessions = planningSessionsRef.current;
+    let nextSessions = previousSessions.filter((session) => !ids.has(session.id));
+    const currentActiveSessionId = activePlanningSessionIdRef.current;
+    let nextActiveSessionId = currentActiveSessionId;
+
+    if (nextSessions.length === 0) {
+      const session = makeLocalPlanningSession();
+      nextSessions = [session];
+      nextActiveSessionId = session.id;
+    } else if (ids.has(currentActiveSessionId) || !nextSessions.some((session) => session.id === currentActiveSessionId)) {
+      const activeIndex = previousSessions.findIndex((session) => session.id === currentActiveSessionId);
+      const nextAfterDeleted = activeIndex === -1
+        ? undefined
+        : previousSessions.slice(activeIndex + 1).find((session) => !ids.has(session.id));
+      nextActiveSessionId = nextAfterDeleted?.id ?? nextSessions.at(-1)?.id ?? nextSessions[0].id;
+    }
+
+    planningSessionsRef.current = nextSessions;
+    activePlanningSessionIdRef.current = nextActiveSessionId;
+    setPlanningSessions(nextSessions);
+    setActivePlanningSessionId(nextActiveSessionId);
+  }, [clearPlanningStreamForSessionIds, forgetPlanningStreamAliasesForSessionIds, makeLocalPlanningSession]);
+
+  const handleDeletePlanningSession = useCallback((sessionId: string) => {
+    if (activePlanningReadOnly) return;
+    if (!sessionId.startsWith('local-')) {
+      void invoker?.planningChatDelete?.({ sessionId });
+    }
+    removePlanningSessions([sessionId]);
+  }, [activePlanningReadOnly, invoker, removePlanningSessions]);
+
+  const handleClearSubmittedPlanningSessions = useCallback(() => {
+    if (activePlanningReadOnly) return;
+    if (!window.confirm('Clear all submitted planning chats? This cannot be undone.')) return;
+    const submittedIds = planningSessionsRef.current
+      .filter((session) => session.status === 'submitted')
+      .map((session) => session.id);
+    if (submittedIds.length === 0) return;
+    void invoker?.planningChatDeleteSubmitted?.();
+    removePlanningSessions(submittedIds);
+  }, [activePlanningReadOnly, invoker, removePlanningSessions]);
+
+  const handleCreatePlanningSession = useCallback(() => {
+    const session = makeLocalPlanningSession();
     setPlanningSessions((prev) => [session, ...prev]);
     setActivePlanningSessionId(session.id);
     setSidebarSurface('home');
     focusKeyboardRegion('planning');
-  }, [focusKeyboardRegion, selectedPlanningConfirmationMode, selectedPlanningPresetKey]);
+  }, [focusKeyboardRegion, makeLocalPlanningSession]);
 
   const handlePlanningModeChange = useCallback(async (mode: PlanningTerminalMode) => {
     const sourceSession = activePlanningSession;
@@ -4262,30 +4328,48 @@ export function App() {
           const selected = session.id === activePlanningSession.id;
           const preview = previewPlanningMessage(session);
           return (
-            <button
+            <div
               key={session.id}
-              type="button"
-              onClick={() => setActivePlanningSessionId(session.id)}
-              className={`flex w-full items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground bg-accent/40 text-accent-foreground' : 'border-l-transparent text-foreground hover:bg-accent/20'}`}
+              data-testid={`planning-session-row-${session.id}`}
+              className={`group flex w-full items-stretch ${selected ? 'bg-accent/40 text-accent-foreground' : 'text-foreground hover:bg-accent/20'}`}
             >
-              <PlanningSessionStatusIcon busy={session.busy} status={session.status} />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium leading-5" title={session.title}>
-                    {session.title}
+              <button
+                type="button"
+                onClick={() => setActivePlanningSessionId(session.id)}
+                className={`flex min-w-0 flex-1 items-start gap-2 border-l-2 px-3 py-2 text-left transition-colors ${selected ? 'border-l-foreground text-accent-foreground' : 'border-l-transparent text-foreground'}`}
+              >
+                <PlanningSessionStatusIcon busy={session.busy} status={session.status} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="line-clamp-2 min-w-0 flex-1 break-words text-sm font-medium leading-5" title={session.title}>
+                      {session.title}
+                    </div>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                      {relativePlanningUpdatedAt(session.updatedAt)}
+                    </span>
                   </div>
-                  <span className="shrink-0 text-[11px] text-muted-foreground">
-                    {relativePlanningUpdatedAt(session.updatedAt)}
-                  </span>
+                  <div
+                    className="mt-1 line-clamp-3 break-words text-[11px] leading-4 text-muted-foreground"
+                    title={preview}
+                  >
+                    {preview}
+                  </div>
                 </div>
-                <div
-                  className="mt-1 line-clamp-3 break-words text-[11px] leading-4 text-muted-foreground"
-                  title={preview}
+              </button>
+              {!activePlanningReadOnly && (
+                <button
+                  type="button"
+                  aria-label="Delete planning chat"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    handleDeletePlanningSession(session.id);
+                  }}
+                  className="flex w-9 shrink-0 items-start justify-center px-2 py-2 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
                 >
-                  {preview}
-                </div>
-              </div>
-            </button>
+                  <Trash2 className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                </button>
+              )}
+            </div>
           );
         })}
       </div>
@@ -4293,6 +4377,7 @@ export function App() {
   );
 
   const planningReadyCount = planningSessions.filter((session) => session.status === 'draft_ready').length;
+  const planningSubmittedCount = planningSessions.filter((session) => session.status === 'submitted').length;
   const connectedAgentLabels = (systemDiagnostics?.tools ?? [])
     .filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed)
     .map((tool) => tool.name.replace(/\s+CLI$/i, ''));
@@ -4459,6 +4544,14 @@ export function App() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleClearSubmittedPlanningSessions}
+                  disabled={activePlanningReadOnly || planningSubmittedCount === 0}
+                >
+                  Clear submitted
+                </Button>
                 <Button variant="outline" size="sm" onClick={handleCreatePlanningSession}>
                   New chat
                 </Button>
