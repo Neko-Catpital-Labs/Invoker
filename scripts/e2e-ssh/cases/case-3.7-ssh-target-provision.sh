@@ -11,7 +11,7 @@ trap invoker_e2e_ssh_full_cleanup EXIT
 cd "$INVOKER_E2E_REPO_ROOT"
 unset ELECTRON_RUN_AS_NODE
 
-expected_provision_cmd="$(invoker_e2e_ssh_provision_command)"
+expected_provision_cmd="$(invoker_e2e_ssh_config_provision_command)"
 actual_provision_cmd="$(jq -r '.remoteTargets["localhost-e2e"].provisionCommand' "$INVOKER_REPO_CONFIG_PATH")"
 if [ "$actual_provision_cmd" != "$expected_provision_cmd" ]; then
   echo "FAIL case 3.7: expected config provisionCommand '$expected_provision_cmd' but got '$actual_provision_cmd'"
