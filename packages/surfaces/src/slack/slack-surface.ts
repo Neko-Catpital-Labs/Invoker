@@ -921,6 +921,46 @@ export class SlackSurface implements Surface {
     });
   }
 
+  /**
+   * Localhost smoke hook. Posts a real parent message to the lobby, then feeds
+   * `text` (default "hi") through the ordinary planning-mention handler so the
+   * normal Slack response path posts the reply in that same thread.
+   *
+   * Slack does not reliably deliver an app's own `app_mention` back to itself,
+   * so the live reply path can only be exercised end-to-end by synthesizing the
+   * event locally. This is invoked exclusively by the opt-in, localhost-only
+   * smoke server in @invoker/slack-manager — never by inbound Slack traffic.
+   */
+  async injectHiSmoke(opts: { text?: string; user?: string } = {}): Promise<{ channel: string; threadTs: string }> {
+    const channel = this.lobbyChannelId;
+    const text = (opts.text ?? 'hi').trim() || 'hi';
+    const user = opts.user ?? this.botUserId ?? 'U_SMOKE';
+    const parent = await this.app.client.chat.postMessage({
+      channel,
+      text: `:test_tube: Slack hi smoke — feeding \`${text}\` through the planning-mention path.`,
+    });
+    const parentTs = parent.ts;
+    if (!parentTs) throw new Error('hi-smoke: failed to post parent message to lobby');
+    const mention = this.botUserId ? `<@${this.botUserId}> ` : '';
+    const event: SlackMentionEvent = {
+      text: `${mention}${text}`,
+      ts: parentTs,
+      channel,
+      user,
+    };
+    const say: SayFn = async (msg) => {
+      const res = await this.app.client.chat.postMessage({
+        channel,
+        text: msg.text,
+        thread_ts: msg.thread_ts ?? parentTs,
+      });
+      return { ts: res.ts };
+    };
+    this.log('slack', 'info', `[HI_SMOKE] instance=${this.instanceId} injecting synthetic app_mention route=planning thread_ts=${parentTs} channel=${channel} preset=${this.defaultHarnessPreset} text="${text}"`);
+    await this.handlePlanningMention(event, say, channel);
+    return { channel, threadTs: parentTs };
+  }
+
   // ── Planning mention (lobby) ───────────────────────────
 
   private async handlePlanningMention(
