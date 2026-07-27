@@ -38,6 +38,8 @@ import type {
   PersistenceAdapter,
   ReviewGateLookup,
   Workflow,
+  WorkflowListOptions,
+  WorkflowReadOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -75,6 +77,7 @@ import {
 } from './sqlite-output-spool.js';
 import { SlowQueryAggregator, type SlowQueryShapeStats } from './slow-query-aggregator.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
+import { appendJournalEntry } from './sync-journal.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
@@ -1054,12 +1057,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, opts?: WorkflowReadOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, opts);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(opts?: WorkflowListOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(opts);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1070,8 +1073,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.workflowRepo.searchWorkflowsAndTasks(query, opts);
   }
 
-  loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
-    return this.workflowRepo.loadWorkflowTaskSnapshot();
+  loadWorkflowTaskSnapshot(opts?: WorkflowListOptions): WorkflowTaskSnapshot {
+    return this.workflowRepo.loadWorkflowTaskSnapshot(opts);
   }
 
   getLastWorkflowTaskSnapshotStats(): Record<string, unknown> | null {
@@ -1557,7 +1560,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteWorkflow(workflowId: string): void {
+    const existing = this.queryOne('SELECT id FROM workflows WHERE id = ? AND deleted_at IS NULL', [workflowId]);
+    if (!existing) return;
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
+    const deletedAt = Date.now();
+    const updatedAt = new Date(deletedAt).toISOString();
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
@@ -1598,7 +1605,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      this.db.run('UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL', [
+        deletedAt,
+        updatedAt,
+        workflowId,
+      ]);
+      const row = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+      if (!row) {
+        throw new Error(`Cannot journal missing workflow tombstone ${workflowId}`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'workflow',
+        entityId: workflowId,
+        op: 'tombstone',
+        payload: row,
+        createdAt: deletedAt,
+      });
     });
     this.removeOutputFiles(taskIds);
   }
