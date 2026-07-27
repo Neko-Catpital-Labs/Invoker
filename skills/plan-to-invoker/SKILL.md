@@ -61,6 +61,7 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 - First produce a Markdown planning artifact at `plans/invoker-handoff.md`.
 - Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 - Prefer the MCP review/submission flow when available: call `invoker_prepare_plan_review`, show its ordered steps plus `confirmationText`, then call `invoker_submit_plan` only after approval unless the review result carries `confirmationMode: auto_submit`.
+- Plain approval stops after workflow handoff: it authorizes `invoker_submit_plan` (or `confirmationMode: auto_submit`) only, not later GitHub PR publication. Publishing or updating PRs/PR stacks remains a separate explicit action.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
 - If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
