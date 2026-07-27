@@ -471,6 +471,8 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
             return "merge-hold-only"
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
+    if not facts.bottom:
+        return "no-current-bottom"
     return "no-action"
 
 
@@ -578,6 +580,8 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return None
     if not facts.bottom:
         first = facts.stack.prs[0]
+        if ledger.count("comment-blocked", first.number, first.head_ref_oid, "no-current-bottom") > 0:
+            return None
         return Action(
             "comment_blocked",
             first.number,

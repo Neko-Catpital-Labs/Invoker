@@ -438,6 +438,34 @@ class PlanStackActions(PlannerTestCase):
         self.assertIn("lowest open stack PR #5885 is based on `pr/babysit-prereq-split`", actions[0].detail)
         self.assertIn("land or retarget that base", actions[0].detail)
 
+    def test_no_current_bottom_comment_waits_after_ledger_row(self):
+        ledger = self._ledger()
+        ledger.record("comment-blocked", 5885, HEAD, "no-current-bottom", 1)
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(
+                    number=5885,
+                    base_ref_name="pr/babysit-prereq-split",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+                pr(
+                    number=5886,
+                    base_ref_name="stack/slack-routing",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            stack,
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={5885, 5886},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "no-current-bottom")
+
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
         # Two prior requeue attempts on this head+key -> the third is capped.
