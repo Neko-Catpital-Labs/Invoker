@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
-import type { GraphCameraCommand } from '../lib/graph-camera.js';
+import type { GraphCameraCommand, GraphCameraViewport } from '../lib/graph-camera.js';
 import * as ReactFlowModule from '@xyflow/react';
 
 // vitest hoists vi.mock above imports and its factory cannot close over
@@ -97,11 +97,11 @@ async function settleCamera(): Promise<void> {
   }
 }
 
-function hasWorkflowFitCommand(reason: string): boolean {
+function hasWorkflowFitCommand(reason?: string): boolean {
   return workflowGraphSpy.commands.some((command) => (
     command?.kind === 'fitInitial'
     && command.scope === 'workflow'
-    && command.reason === reason
+    && (reason === undefined || command.reason === reason)
   ));
 }
 
@@ -110,6 +110,18 @@ function resetCameraSpies(): void {
   setCenterMock.mockClear();
   setViewportMock.mockClear();
   workflowGraphSpy.reset();
+}
+
+function installViewportState(initialViewport: GraphCameraViewport): { current: () => GraphCameraViewport } {
+  let currentViewport = initialViewport;
+  getViewportMock.mockImplementation(() => currentViewport);
+  getZoomMock.mockImplementation(() => currentViewport.zoom);
+  setViewportMock.mockImplementation((viewport: GraphCameraViewport) => {
+    currentViewport = { ...viewport };
+  });
+  return {
+    current: () => currentViewport,
+  };
 }
 
 async function leavePlanGraphWithSavedViewport(
@@ -138,6 +150,7 @@ async function expectSavedViewportRestored(
   expect(fitViewMock).not.toHaveBeenCalled();
   expect(setCenterMock).not.toHaveBeenCalled();
   expect(hasWorkflowFitCommand(blockedFitReason)).toBe(false);
+  expect(hasWorkflowFitCommand()).toBe(false);
 }
 
 describe('Browser-surface camera (component)', () => {
@@ -148,7 +161,7 @@ describe('Browser-surface camera (component)', () => {
     mock.install();
     fitViewMock.mockClear();
     setCenterMock.mockClear();
-    setViewportMock.mockClear();
+    setViewportMock.mockReset();
     getZoomMock.mockReset();
     getZoomMock.mockReturnValue(1);
     getViewportMock.mockReset();
@@ -239,6 +252,35 @@ describe('Browser-surface camera (component)', () => {
     render(<App />);
 
     await leavePlanGraphWithSavedViewport(savedViewport, 'home');
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+
+    await expectSavedViewportRestored(savedViewport, 'sidebar-planning');
+  });
+
+  it('returns from a panned and zoomed workflow graph to the planning-home chat rail without issuing fitInitial', async () => {
+    const startViewport = { x: -120, y: 88, zoom: 0.64 };
+    const savedViewport = { x: -68, y: 61, zoom: 0.64 };
+    mock.setTasks([], workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+    resetCameraSpies();
+
+    const viewportState = installViewportState(startViewport);
+    const pane = screen.getByTestId('rf__pane');
+    fireEvent.mouseDown(pane, { clientX: 100, clientY: 100, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 152, clientY: 73, buttons: 1 });
+    fireEvent.mouseUp(window, { clientX: 152, clientY: 73, button: 0 });
+
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    expect(viewportState.current()).toEqual(savedViewport);
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    await screen.findByTestId('planning-session-rail');
+    resetCameraSpies();
 
     fireEvent.click(screen.getByTestId('sidebar-planning'));
 

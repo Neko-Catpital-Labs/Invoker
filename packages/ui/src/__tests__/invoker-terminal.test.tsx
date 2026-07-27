@@ -1,9 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import type { GraphCameraCommand, GraphCameraViewport } from '../lib/graph-camera.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import * as ReactFlowModule from '@xyflow/react';
+
+const workflowGraphSpy = vi.hoisted(() => ({
+  commands: [] as Array<GraphCameraCommand | null | undefined>,
+  reset() {
+    this.commands.length = 0;
+  },
+}));
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -11,11 +19,77 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+vi.mock('../components/WorkflowGraph.js', async () => {
+  const actual = await vi.importActual<typeof import('../components/WorkflowGraph.js')>('../components/WorkflowGraph.js');
+  return {
+    ...actual,
+    WorkflowGraph(props: Parameters<typeof actual.WorkflowGraph>[0]) {
+      workflowGraphSpy.commands.push(props.cameraCommand);
+      return actual.WorkflowGraph(props);
+    },
+  };
+});
+
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const setViewportMock = (ReactFlowModule as unknown as { __setViewportMock: Mock }).__setViewportMock;
+const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
+const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock }).__getViewportMock;
+
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+
+async function flushFrames(count: number): Promise<void> {
+  for (let i = 0; i < count; i += 1) {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    requestAnimationFrame(() => resolve());
+    await promise;
+  }
+}
+
+async function settleWorkflowCamera(): Promise<void> {
+  let stable = 0;
+  let prev = setCenterMock.mock.calls.length + fitViewMock.mock.calls.length;
+  for (let i = 0; i < 40 && stable < 4; i += 1) {
+    await flushFrames(1);
+    const total = setCenterMock.mock.calls.length + fitViewMock.mock.calls.length;
+    if (total === prev) {
+      stable += 1;
+    } else {
+      stable = 0;
+      prev = total;
+    }
+  }
+}
+
+function resetCameraSpies(): void {
+  fitViewMock.mockClear();
+  setCenterMock.mockClear();
+  setViewportMock.mockClear();
+  workflowGraphSpy.reset();
+}
+
+function hasWorkflowFitCommand(): boolean {
+  return workflowGraphSpy.commands.some((command) => (
+    command?.kind === 'fitInitial'
+    && command.scope === 'workflow'
+  ));
+}
+
+function installViewportState(initialViewport: GraphCameraViewport): { current: () => GraphCameraViewport } {
+  let currentViewport = initialViewport;
+  getViewportMock.mockImplementation(() => currentViewport);
+  getZoomMock.mockImplementation(() => currentViewport.zoom);
+  setViewportMock.mockImplementation((viewport: GraphCameraViewport) => {
+    currentViewport = { ...viewport };
+  });
+  return {
+    current: () => currentViewport,
+  };
+}
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
@@ -23,6 +97,14 @@ describe('Invoker terminal (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockReset();
+    getZoomMock.mockReset();
+    getZoomMock.mockReturnValue(1);
+    getViewportMock.mockReset();
+    getViewportMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+    workflowGraphSpy.reset();
   });
 
   afterEach(() => {
@@ -56,6 +138,55 @@ describe('Invoker terminal (component)', () => {
     });
     expectRailListScrollContract(screen.getByTestId(listTestId));
   }
+
+  it('returns from planning tmux to a panned workflow graph by restoring the saved viewport instead of fitting', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-terminal', name: 'Terminal Workflow', status: 'running' },
+    ];
+    const startViewport = { x: -96, y: 72, zoom: 0.58 };
+    const savedViewport = { x: -54, y: 42, zoom: 0.58 };
+    mock.setTasks([], workflows);
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [makePlanningSessionSummary({
+        id: 'tmux-chat',
+        title: 'Tmux planning chat',
+        status: 'still_discussing',
+        draftPlanAvailable: false,
+        draftPlanSummary: undefined,
+      })],
+    }));
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-terminal');
+    await settleWorkflowCamera();
+    resetCameraSpies();
+
+    const viewportState = installViewportState(startViewport);
+    const pane = screen.getByTestId('rf__pane');
+    fireEvent.mouseDown(pane, { clientX: 100, clientY: 100, button: 0 });
+    fireEvent.mouseMove(window, { clientX: 142, clientY: 70, buttons: 1 });
+    fireEvent.mouseUp(window, { clientX: 142, clientY: 70, button: 0 });
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    expect(viewportState.current()).toEqual(savedViewport);
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    await waitFor(() => expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('Tmux planning chat'));
+    fireEvent.click(within(screen.getByTestId('invoker-terminal-mode-toggle')).getByRole('tab', { name: 'Tmux' }));
+    await waitFor(() => expect(mock.api.planningTerminalOpen).toHaveBeenCalledWith('tmux-chat'));
+    await screen.findByTestId('invoker-terminal-tmux-pane');
+
+    resetCameraSpies();
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(hasWorkflowFitCommand()).toBe(false);
+  });
 
   it('renders an empty flush planning pane before the first message', async () => {
     render(<App />);
