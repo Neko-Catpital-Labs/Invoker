@@ -306,7 +306,13 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request) as StartReadyResult & {
+  const result = await runStartReady(deps.orchestrator, request, {
+    logger: deps.logger,
+    persistence: deps.persistence,
+    commandService: deps.commandService,
+    taskExecutor: deps.ownerTaskRunnerProvider?.() ?? undefined,
+    mutationTiming: deps.mutationTiming,
+  }) as StartReadyResult & {
     preview: StartReadyPreviewExt;
   };
   const runnable = result.started.filter(isDispatchableLaunch);

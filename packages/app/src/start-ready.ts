@@ -1,9 +1,17 @@
 import type {
+  StartReadyFreshBasePreview,
+  StartReadyFreshBaseScope,
+  StartReadyFreshBaseWorkflowStatus,
+  StartReadyPartialOutcome,
   StartReadyPreview,
   StartReadyRequest,
   StartReadyResult,
 } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
+import {
+  recreateWorkflowFromFreshBase,
+  type CommandActionDeps,
+} from './workflow-actions.js';
 
 type StartReadyOrchestrator = Pick<
   Orchestrator,
@@ -14,7 +22,9 @@ type StartReadyOrchestrator = Pick<
   | 'prepareTaskForNewAttempt'
   | 'recreateWorkflow'
   | 'startExecution'
->;
+> & Partial<Pick<Orchestrator, 'getKnownFreshBaseCommit'>>;
+
+type StartReadyFreshBaseDeps = Omit<CommandActionDeps, 'orchestrator'>;
 
 type StartReadyRequestExt = StartReadyRequest & {
   recreateFailedAndPending?: boolean;
@@ -119,6 +129,194 @@ function workflowIdsToRecreate(
   return [];
 }
 
+function freshBaseScopeFromLegacyFlags(
+  request: StartReadyRequestExt,
+): StartReadyFreshBaseScope {
+  if (request.recreateAll) return 'all';
+  if (request.recreateFailedPendingAndRunning) return 'failed_pending_and_running';
+  if (request.recreateFailedAndPending) return 'failed_and_pending';
+  return 'failed';
+}
+
+function isFreshBaseRequest(request: StartReadyRequestExt): boolean {
+  return Boolean(
+    request.freshBase
+    || request.freshBaseScope
+    || (request.freshBaseWorkflowIds && request.freshBaseWorkflowIds.length > 0),
+  );
+}
+
+function explicitFreshBaseWorkflowIds(request: StartReadyRequestExt): string[] {
+  const ids = new Set<string>();
+  for (const workflowId of request.freshBaseWorkflowIds ?? []) {
+    const normalized = workflowId.trim();
+    if (normalized) ids.add(normalized);
+  }
+  return Array.from(ids);
+}
+
+function workflowIdsForFreshBaseScope(
+  scope: StartReadyFreshBaseScope,
+  preview: StartReadyPreviewExt,
+): string[] {
+  if (scope === 'all') {
+    return unionWorkflowIds(
+      preview.failedWorkflowIds,
+      preview.pendingWorkflowIds,
+      preview.runningWorkflowIds,
+      preview.completedWorkflowIds,
+    );
+  }
+  if (scope === 'failed_pending_and_running') {
+    return unionWorkflowIds(
+      preview.failedWorkflowIds,
+      preview.pendingWorkflowIds,
+      preview.runningWorkflowIds,
+    );
+  }
+  if (scope === 'failed_and_pending') {
+    return unionWorkflowIds(preview.failedWorkflowIds, preview.pendingWorkflowIds);
+  }
+  return [...preview.failedWorkflowIds];
+}
+
+function workflowIdsToFreshBase(
+  request: StartReadyRequestExt,
+  preview: StartReadyPreviewExt,
+): string[] {
+  const explicitIds = explicitFreshBaseWorkflowIds(request);
+  if (explicitIds.length > 0) return explicitIds;
+  if (!isFreshBaseRequest(request)) return [];
+  return workflowIdsForFreshBaseScope(
+    request.freshBaseScope ?? freshBaseScopeFromLegacyFlags(request),
+    preview,
+  );
+}
+
+function workflowStatusForFreshBasePreview(
+  workflowId: string,
+  preview: StartReadyPreviewExt,
+): StartReadyFreshBaseWorkflowStatus | undefined {
+  if (preview.failedWorkflowIds.includes(workflowId)) return 'failed';
+  if (preview.pendingWorkflowIds.includes(workflowId)) return 'pending';
+  if (preview.runningWorkflowIds.includes(workflowId)) return 'running';
+  if (preview.completedWorkflowIds.includes(workflowId)) return 'completed';
+  return undefined;
+}
+
+function loadWorkflowBaseBranch(
+  deps: StartReadyFreshBaseDeps | undefined,
+  workflowId: string,
+): string | undefined {
+  try {
+    const workflow = deps?.persistence.loadWorkflow(workflowId);
+    return typeof workflow?.baseBranch === 'string' ? workflow.baseBranch : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function freshBaseCommit(
+  orchestrator: StartReadyOrchestrator,
+  workflowId: string,
+): string | undefined {
+  return orchestrator.getKnownFreshBaseCommit?.(workflowId);
+}
+
+function attachFreshBasePreview(
+  preview: StartReadyPreviewExt,
+  workflowIds: readonly string[],
+  orchestrator: StartReadyOrchestrator,
+  deps: StartReadyFreshBaseDeps | undefined,
+): void {
+  preview.freshBaseWorkflowIds = [...workflowIds];
+  const workflows: StartReadyFreshBasePreview[] = [];
+  for (const workflowId of workflowIds) {
+    const status = workflowStatusForFreshBasePreview(workflowId, preview);
+    if (!status) continue;
+    const baseBranch = loadWorkflowBaseBranch(deps, workflowId);
+    const freshCommit = freshBaseCommit(orchestrator, workflowId);
+    workflows.push({
+      workflowId,
+      status,
+      ...(baseBranch ? { baseBranch } : {}),
+      ...(freshCommit ? { freshBaseCommit: freshCommit } : {}),
+    });
+  }
+  preview.freshBaseWorkflows = workflows;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function successfulFreshBaseOutcome(
+  workflowId: string,
+  started: readonly TaskState[],
+  orchestrator: StartReadyOrchestrator,
+  deps: StartReadyFreshBaseDeps,
+): StartReadyPartialOutcome {
+  const freshBranch = loadWorkflowBaseBranch(deps, workflowId);
+  const freshCommit = freshBaseCommit(orchestrator, workflowId);
+  return {
+    workflowId,
+    ok: true,
+    startedTaskIds: started.map((task) => task.id),
+    ...(freshBranch ? { freshBaseBranch: freshBranch } : {}),
+    ...(freshCommit ? { freshBaseCommit: freshCommit } : {}),
+  };
+}
+
+function failedFreshBaseOutcome(workflowId: string, err: unknown): StartReadyPartialOutcome {
+  return {
+    workflowId,
+    ok: false,
+    error: errorMessage(err),
+  };
+}
+
+async function runFreshBaseRecreates(
+  orchestrator: StartReadyOrchestrator,
+  workflowIds: readonly string[],
+  deps: StartReadyFreshBaseDeps | undefined,
+): Promise<{
+  started: TaskState[];
+  recreatedWorkflowIds: string[];
+  partialOutcomes: StartReadyPartialOutcome[];
+}> {
+  const started: TaskState[] = [];
+  const recreatedWorkflowIds: string[] = [];
+  const partialOutcomes: StartReadyPartialOutcome[] = [];
+
+  for (const workflowId of workflowIds) {
+    if (!deps) {
+      partialOutcomes.push(failedFreshBaseOutcome(
+        workflowId,
+        new Error('Start Ready fresh-base execution requires workflow action dependencies'),
+      ));
+      continue;
+    }
+    try {
+      const recreated = await recreateWorkflowFromFreshBase(workflowId, {
+        ...deps,
+        orchestrator: orchestrator as CommandActionDeps['orchestrator'],
+      });
+      started.push(...recreated);
+      recreatedWorkflowIds.push(workflowId);
+      partialOutcomes.push(successfulFreshBaseOutcome(
+        workflowId,
+        recreated,
+        orchestrator,
+        deps,
+      ));
+    } catch (err) {
+      partialOutcomes.push(failedFreshBaseOutcome(workflowId, err));
+    }
+  }
+
+  return { started, recreatedWorkflowIds, partialOutcomes };
+}
+
 export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): StartReadyPreview {
   const tasks = orchestrator.getAllTasks();
   const readyTasks = orchestrator.getExecutableReadyTasks();
@@ -148,27 +346,46 @@ export function collectStartReadyPreview(orchestrator: StartReadyOrchestrator): 
   return preview;
 }
 
-export function runStartReady(
+export async function runStartReady(
   orchestrator: StartReadyOrchestrator,
   request: StartReadyRequest = {},
-): StartReadyResult {
+  freshBaseDeps?: StartReadyFreshBaseDeps,
+): Promise<StartReadyResult> {
   const extendedRequest = request as StartReadyRequestExt;
   orchestrator.syncAllFromDb();
   const preview = collectStartReadyPreview(orchestrator) as StartReadyPreviewExt;
+  const freshBaseWorkflowIds = workflowIdsToFreshBase(extendedRequest, preview);
+  if (isFreshBaseRequest(extendedRequest)) {
+    attachFreshBasePreview(preview, freshBaseWorkflowIds, orchestrator, freshBaseDeps);
+  }
   if (request.dryRun) {
     return {
       preview,
       started: [],
       recreatedWorkflowIds: [],
+      ...(freshBaseWorkflowIds.length > 0 ? { freshBaseWorkflowIds } : {}),
       dryRun: true,
     };
   }
 
   const started: TaskState[] = [];
   const recreatedWorkflowIds: string[] = [];
-  for (const workflowId of workflowIdsToRecreate(extendedRequest, preview)) {
-    started.push(...orchestrator.recreateWorkflow(workflowId));
-    recreatedWorkflowIds.push(workflowId);
+  const partialOutcomes: StartReadyPartialOutcome[] = [];
+
+  if (isFreshBaseRequest(extendedRequest)) {
+    const freshBaseResult = await runFreshBaseRecreates(
+      orchestrator,
+      freshBaseWorkflowIds,
+      freshBaseDeps,
+    );
+    started.push(...freshBaseResult.started);
+    recreatedWorkflowIds.push(...freshBaseResult.recreatedWorkflowIds);
+    partialOutcomes.push(...freshBaseResult.partialOutcomes);
+  } else {
+    for (const workflowId of workflowIdsToRecreate(extendedRequest, preview)) {
+      started.push(...orchestrator.recreateWorkflow(workflowId));
+      recreatedWorkflowIds.push(workflowId);
+    }
   }
 
   const recoverableTasks = collectRecoverableTasks(orchestrator);
@@ -182,6 +399,9 @@ export function runStartReady(
     preview,
     started: uniqueTasks(started),
     recreatedWorkflowIds,
+    ...(freshBaseWorkflowIds.length > 0 ? { freshBaseWorkflowIds } : {}),
+    ...(partialOutcomes.length > 0 ? { partialOutcomes } : {}),
+    ...(partialOutcomes.some((outcome) => !outcome.ok) ? { partial: true } : {}),
     dryRun: false,
   };
 }

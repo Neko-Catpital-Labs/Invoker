@@ -1452,7 +1452,13 @@ function startHeadlessMode(): void {
         }
         if (!workflowMutationDispatcher.has('invoker:start-ready')) {
           workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
-            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined),
+            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined, {
+              logger,
+              persistence,
+              commandService,
+              taskExecutor: latestTaskExecutor ?? undefined,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            }),
           );
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
@@ -2242,8 +2248,14 @@ startMainProcessBootstrap({
     }
   }
 
-  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
-    const result = runStartReady(orchestrator, request);
+  async function executeStartReady(request: StartReadyRequest = {}): Promise<StartReadyResult> {
+    const result = await runStartReady(orchestrator, request, {
+      logger,
+      persistence,
+      commandService,
+      taskExecutor: latestTaskExecutor ?? undefined,
+      mutationTiming: activeMutationContext?.mutationTiming,
+    });
     if (!result.dryRun) {
       publishOrchestratorSnapshotToRenderer();
     }

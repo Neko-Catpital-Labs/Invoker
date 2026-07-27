@@ -1099,8 +1099,14 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
   }
 
-  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
-    const result = runStartReady(orchestrator, request);
+  async function executeStartReady(request: StartReadyRequest = {}): Promise<StartReadyResult> {
+    const result = await runStartReady(orchestrator, request, {
+      logger,
+      persistence,
+      commandService,
+      taskExecutor: getTaskExecutor() ?? undefined,
+      mutationTiming: activeMutationContext?.mutationTiming,
+    });
     if (!result.dryRun) {
       publishOrchestratorSnapshotToRenderer();
     }
@@ -1382,7 +1388,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       logger.info('resume-workflow: no workflows found', { module: 'ipc' });
       return null;
     }
-    const result = executeStartReady({});
+    const result = await executeStartReady({});
     const tasks = orchestrator.getAllTasks();
     logger.info(`resume-workflow: ${tasks.length} tasks loaded across ${workflows.length} workflows, ${result.started.length} started`, { module: 'ipc' });
     return { workflow: workflows[0], taskCount: tasks.length, startedCount: result.started.length };
