@@ -1,9 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, type Mock } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { GraphCameraCommand, GraphCameraViewport } from '../lib/graph-camera.js';
+import * as ReactFlowModule from '@xyflow/react';
+
+const workflowGraphSpy = vi.hoisted(() => ({
+  commands: [] as Array<GraphCameraCommand | null | undefined>,
+  reset() {
+    this.commands.length = 0;
+  },
+}));
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -11,11 +20,74 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+vi.mock('../components/WorkflowGraph.js', async () => {
+  const actual = await vi.importActual<typeof import('../components/WorkflowGraph.js')>('../components/WorkflowGraph.js');
+  return {
+    ...actual,
+    WorkflowGraph(props: Parameters<typeof actual.WorkflowGraph>[0]) {
+      workflowGraphSpy.commands.push(props.cameraCommand);
+      return actual.WorkflowGraph(props);
+    },
+  };
+});
+
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const setViewportMock = (ReactFlowModule as unknown as { __setViewportMock: Mock }).__setViewportMock;
+const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
+const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock }).__getViewportMock;
+
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+
+function resetReactFlowCameraMocks() {
+  fitViewMock.mockClear();
+  setCenterMock.mockClear();
+  setViewportMock.mockClear();
+  getZoomMock.mockReset();
+  getZoomMock.mockReturnValue(1);
+  getViewportMock.mockReset();
+  getViewportMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  workflowGraphSpy.reset();
+}
+
+async function flushFrames(count: number): Promise<void> {
+  for (let i = 0; i < count; i += 1) {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    requestAnimationFrame(() => resolve());
+    await promise;
+  }
+}
+
+function hasWorkflowFitCommand(reason: string): boolean {
+  return workflowGraphSpy.commands.some((command) => (
+    command?.kind === 'fitInitial'
+    && command.scope === 'workflow'
+    && command.reason === reason
+  ));
+}
+
+async function primeSavedWorkflowViewport(
+  workflowId: string,
+  savedViewport: GraphCameraViewport,
+): Promise<void> {
+  fireEvent.click(await screen.findByTestId('sidebar-planning'));
+  await screen.findByTestId(`workflow-node-${workflowId}`);
+  await waitFor(() => expect(fitViewMock).toHaveBeenCalled());
+
+  getViewportMock.mockReturnValue(savedViewport);
+
+  fireEvent.click(screen.getByTestId('sidebar-home'));
+  await screen.findByTestId('planning-session-rail');
+
+  fitViewMock.mockClear();
+  setCenterMock.mockClear();
+  setViewportMock.mockClear();
+  workflowGraphSpy.reset();
+}
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
@@ -23,6 +95,7 @@ describe('Invoker terminal (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    resetReactFlowCameraMocks();
   });
 
   afterEach(() => {
@@ -1139,6 +1212,7 @@ describe('Invoker terminal submit context (component)', () => {
       [submitContextWorkflow('workflow-a', 'Initial Plan')],
     );
     mock.install();
+    resetReactFlowCameraMocks();
   });
 
   afterEach(() => {
@@ -1168,9 +1242,40 @@ describe('Invoker terminal submit context (component)', () => {
             });
             resolve();
           });
-        }),
+      }),
     );
   }
+
+  it('opens a submitted planning terminal graph by restoring the saved workflow viewport instead of fitting', async () => {
+    const savedViewport = { x: -240, y: 112, zoom: 0.74 };
+    mock.setTasks([], [submitContextWorkflow('workflow-a', 'Initial Plan')]);
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'submitted-planning-session',
+          status: 'submitted',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          submittedWorkflowId: 'workflow-a',
+          submittedPlanName: 'Initial Plan',
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await primeSavedWorkflowViewport('workflow-a', savedViewport);
+    await screen.findByTestId('invoker-terminal-submitted-bar');
+
+    fireEvent.click(screen.getByTestId('invoker-terminal-open-graph'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-workflow-a')).toBeInTheDocument());
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(hasWorkflowFitCommand('planning-open-graph')).toBe(false);
+  });
 
   it('preserves a cleared graph selection when submit-style refresh adds a workflow', async () => {
     render(<App />);
