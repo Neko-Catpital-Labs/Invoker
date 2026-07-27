@@ -34,13 +34,73 @@ const previewResult: StartReadyResult = {
   dryRun: true,
 };
 
+const freshBaseFailedResult: StartReadyResult = {
+  ...previewResult,
+  preview: {
+    ...previewResult.preview,
+    freshBase: {
+      scope: 'failed',
+      workflowIds: ['wf-2'],
+      failedWorkflowIds: ['wf-2'],
+      pendingWorkflowIds: [],
+      runningWorkflowIds: [],
+      completedWorkflowIds: [],
+    },
+  },
+};
+
+const freshBaseFailedAndPendingResult: StartReadyResult = {
+  ...previewResult,
+  preview: {
+    ...previewResult.preview,
+    freshBase: {
+      scope: 'failed-and-pending',
+      workflowIds: ['wf-2', 'wf-1', 'wf-3'],
+      failedWorkflowIds: ['wf-2'],
+      pendingWorkflowIds: ['wf-1', 'wf-3'],
+      runningWorkflowIds: [],
+      completedWorkflowIds: [],
+    },
+  },
+};
+
 describe('Start and recreate failed and pending', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
     mock = createMockInvoker();
     mock.api.startReady = vi.fn(async (request) => {
+      if (request?.dryRun && request.freshBaseScope === 'failed') {
+        return freshBaseFailedResult;
+      }
+      if (request?.dryRun && request.freshBaseScope === 'failed-and-pending') {
+        return freshBaseFailedAndPendingResult;
+      }
       if (request?.dryRun) return previewResult;
+      if (request?.freshBaseScope === 'failed') {
+        return {
+          ...freshBaseFailedResult,
+          dryRun: false,
+          freshBaseRecreatedWorkflowIds: ['wf-2'],
+          workflowOutcomes: [
+            { ok: true, workflowId: 'wf-2', mode: 'fresh-base-recreate', startedTaskIds: [] },
+          ],
+          partial: false,
+        };
+      }
+      if (request?.freshBaseScope === 'failed-and-pending') {
+        return {
+          ...freshBaseFailedAndPendingResult,
+          dryRun: false,
+          freshBaseRecreatedWorkflowIds: ['wf-2', 'wf-1', 'wf-3'],
+          workflowOutcomes: [
+            { ok: true, workflowId: 'wf-2', mode: 'fresh-base-recreate', startedTaskIds: [] },
+            { ok: true, workflowId: 'wf-1', mode: 'fresh-base-recreate', startedTaskIds: [] },
+            { ok: true, workflowId: 'wf-3', mode: 'fresh-base-recreate', startedTaskIds: [] },
+          ],
+          partial: false,
+        };
+      }
       return { ...previewResult, dryRun: false, recreatedWorkflowIds: ['wf-1', 'wf-2', 'wf-3'] };
     });
     mock.install();
@@ -67,6 +127,9 @@ describe('Start and recreate failed and pending', () => {
     });
 
     fireEvent.click(screen.getByTestId('rail-start-ready-menu'));
+    expect(await screen.findByTestId('rail-start-ready-fresh-base-failed')).toBeInTheDocument();
+    expect(screen.getByTestId('rail-start-ready-fresh-base-failed-and-pending')).toBeInTheDocument();
+    expect(screen.queryByTestId('rail-start-ready-fresh-base-failed-pending-and-running')).not.toBeInTheDocument();
     fireEvent.click(await screen.findByTestId('rail-start-ready-recreate-failed-and-pending'));
 
     await waitFor(() => {
@@ -84,6 +147,80 @@ describe('Start and recreate failed and pending', () => {
     fireEvent.click(screen.getByTestId('start-ready-preview-confirm'));
     await waitFor(() => {
       expect(mock.api.startReady).toHaveBeenCalledWith({ recreateFailedAndPending: true });
+    });
+  });
+
+  it('opens the fresh-base preview for failed workflows and confirms with the failed fresh-base scope', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-1', name: 'Alpha', status: 'running' },
+      { id: 'wf-2', name: 'Beta', status: 'failed' },
+    ];
+    const pending = makeUITask({ id: 'wf-1/ready', description: 'Ready', status: 'pending', workflowId: 'wf-1' });
+    const failed = makeUITask({ id: 'wf-2/failed', description: 'Failed', status: 'failed', workflowId: 'wf-2' });
+
+    render(<App />);
+    act(() => mock.setTasks([pending, failed], workflows));
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('rail-start-ready-menu')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rail-start-ready-menu'));
+    fireEvent.click(await screen.findByTestId('rail-start-ready-fresh-base-failed'));
+
+    await waitFor(() => {
+      expect(mock.api.startReady).toHaveBeenCalledWith({
+        dryRun: true,
+        freshBaseScope: 'failed',
+      });
+    });
+
+    expect(await screen.findByTestId('start-ready-preview-dialog')).toBeInTheDocument();
+    expect(screen.getByText('Start and recreate failed from fresh base')).toBeInTheDocument();
+    expect(screen.getByText('Fresh-base workflows')).toBeInTheDocument();
+    expect(screen.queryByText('Fresh-base pending workflows')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('start-ready-preview-confirm'));
+    await waitFor(() => {
+      expect(mock.api.startReady).toHaveBeenCalledWith({ freshBaseScope: 'failed' });
+    });
+  });
+
+  it('opens the fresh-base preview for failed-and-pending and confirms with the fresh-base scope', async () => {
+    const workflows: WorkflowMeta[] = [
+      { id: 'wf-1', name: 'Alpha', status: 'running' },
+      { id: 'wf-2', name: 'Beta', status: 'failed' },
+    ];
+    const pending = makeUITask({ id: 'wf-1/ready', description: 'Ready', status: 'pending', workflowId: 'wf-1' });
+    const failed = makeUITask({ id: 'wf-2/failed', description: 'Failed', status: 'failed', workflowId: 'wf-2' });
+
+    render(<App />);
+    act(() => mock.setTasks([pending, failed], workflows));
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('rail-start-ready-menu')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('rail-start-ready-menu'));
+    fireEvent.click(await screen.findByTestId('rail-start-ready-fresh-base-failed-and-pending'));
+
+    await waitFor(() => {
+      expect(mock.api.startReady).toHaveBeenCalledWith({
+        dryRun: true,
+        freshBaseScope: 'failed-and-pending',
+      });
+    });
+
+    expect(await screen.findByTestId('start-ready-preview-dialog')).toBeInTheDocument();
+    expect(screen.getByText('Start and recreate failed and pending from fresh base')).toBeInTheDocument();
+    expect(screen.getByText('Fresh-base workflows')).toBeInTheDocument();
+    expect(screen.getByText('Fresh-base pending workflows')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('start-ready-preview-confirm'));
+    await waitFor(() => {
+      expect(mock.api.startReady).toHaveBeenCalledWith({ freshBaseScope: 'failed-and-pending' });
     });
   });
 });
