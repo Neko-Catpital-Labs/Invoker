@@ -26,11 +26,15 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   registerBuiltinAgents,
+  parseSpawnRepairWorkflowMutationArgs,
+  SPAWN_REPAIR_WORKFLOW_CHANNEL,
+  submitRepairWorkflowFromCiFailure,
 } from '@invoker/execution-engine';
 import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
+  resolveAutoFixExecutionModel,
   resolveDefaultTaskExecutionSettings,
   type InvokerConfig,
 } from '../config.js';
@@ -251,6 +255,7 @@ export interface GuiMutationTaskActions {
   ) => Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }>;
   executeHeadlessResume: (payload: HeadlessResumeMutationPayload) => Promise<{ workflowId: string; tasks: TaskState[] }>;
   executeHeadlessExec: (payload: HeadlessExecMutationPayload) => Promise<unknown>;
+  executeSpawnRepairWorkflowMutation: (payload: unknown) => Promise<unknown>;
   classifyHeadlessExecMutation: (payload: HeadlessExecMutationPayload) => { workflowId?: string; priority: WorkflowMutationPriority };
   translateGuiMutationToHeadless: (payload: GuiMutationPayload) =>
     | { channel: 'headless.gui-mutation'; request: GuiMutationPayload }
@@ -729,9 +734,43 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     return { workflowId, tasks };
   }
 
+  async function executeSpawnRepairWorkflowMutation(payloadArg: unknown): Promise<unknown> {
+    const payload = parseSpawnRepairWorkflowMutationArgs([payloadArg]);
+    const result = submitRepairWorkflowFromCiFailure({
+      store: persistence,
+      orchestrator,
+      logger,
+      allowGraphMutation: invokerConfig.allowGraphMutation,
+      defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+      getAutoFixAgent: () => invokerConfig.autoFixAgent,
+      getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+    }, payload);
+    if (result.decision === 'spawned' && result.workflowId) {
+      await dispatchStartedTasksWithGlobalTopup({
+        orchestrator,
+        taskExecutor: requireTaskExecutor(),
+        logger,
+        context: 'ipc.spawn-repair-workflow',
+        started: result.started,
+        scopedWorkflowId: result.workflowId,
+        mutationTiming: activeMutationContext?.mutationTiming,
+      });
+      requestWorkflowMetadataPublish('spawn-repair-workflow');
+    }
+    return result;
+  }
+
   function workflowIdForTargetArg(targetArg: unknown): string | undefined {
     if (targetArg === undefined) return undefined;
     return resolveHeadlessTargetWorkflowId(targetArg, persistence);
+  }
+
+  function workflowIdForRepairWorkflowPayload(payloadArg: unknown): string | undefined {
+    try {
+      return parseSpawnRepairWorkflowMutationArgs([payloadArg]).upstreamWorkflowId;
+    } catch {
+      return undefined;
+    }
   }
 
   function workflowIdForTaskArg(taskIdArg: unknown): string | undefined {
@@ -906,6 +945,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         return { channel: 'headless.exec', request: { args: ['rebase-retry', String(arg0)], noTrack: true } };
       case 'invoker:rebase-recreate':
         return { channel: 'headless.exec', request: { args: ['rebase-recreate', String(arg0)], noTrack: true } };
+      case SPAWN_REPAIR_WORKFLOW_CHANNEL:
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:set-merge-branch':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:set-merge-mode':
@@ -999,6 +1040,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     executeHeadlessRun,
     executeHeadlessResume,
     executeHeadlessExec,
+    executeSpawnRepairWorkflowMutation,
     classifyHeadlessExecMutation,
     translateGuiMutationToHeadless,
     runWorkflowMutation,
@@ -2086,6 +2128,20 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       logger.error(`rebase-recreate failed: ${err}`, { module: 'ipc' });
       throw err;
     }
+    },
+  );
+
+  registerWorkflowScopedGuiMutationHandler(
+    SPAWN_REPAIR_WORKFLOW_CHANNEL,
+    (payloadArg: unknown) => workflowIdForRepairWorkflowPayload(payloadArg),
+    'normal',
+    async (payloadArg: unknown) => {
+      const workflowId = workflowIdForRepairWorkflowPayload(payloadArg);
+      if (!workflowId) {
+        throw new Error('Could not resolve workflow for spawn-repair-workflow payload');
+      }
+      logger.info(`spawn-repair-workflow: upstream="${workflowId}"`, { module: 'ipc' });
+      return executeSpawnRepairWorkflowMutation(payloadArg);
     },
   );
 

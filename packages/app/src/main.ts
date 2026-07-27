@@ -91,9 +91,12 @@ import {
   E2E_AUTOFIX_WORKER_KIND,
   registerBuiltinAgents,
   registerBuiltinWorkers,
+  parseSpawnRepairWorkflowMutationArgs,
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
   reconcileTerminalWorkerActionsOnStartup,
+  SPAWN_REPAIR_WORKFLOW_CHANNEL,
+  submitRepairWorkflowFromCiFailure,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -1469,6 +1472,32 @@ function startHeadlessMode(): void {
             return { ok: true };
           });
         }
+        if (!workflowMutationDispatcher.has(SPAWN_REPAIR_WORKFLOW_CHANNEL)) {
+          workflowMutationDispatcher.set(SPAWN_REPAIR_WORKFLOW_CHANNEL, async (payloadArg: unknown) => {
+            const payload = parseSpawnRepairWorkflowMutationArgs([payloadArg]);
+            const result = submitRepairWorkflowFromCiFailure({
+              store: persistence,
+              orchestrator,
+              logger,
+              allowGraphMutation: invokerConfig.allowGraphMutation,
+              defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+              getAutoFixAgent: () => invokerConfig.autoFixAgent,
+              getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+            }, payload);
+            if (result.decision === 'spawned' && result.workflowId) {
+              await dispatchStartedTasksWithGlobalTopup({
+                orchestrator,
+                taskExecutor: createStandaloneTaskExecutor(),
+                logger,
+                context: 'standalone.spawn-repair-workflow',
+                started: result.started,
+                scopedWorkflowId: result.workflowId,
+                mutationTiming: activeMutationContext?.mutationTiming,
+              });
+            }
+            return result;
+          });
+        }
         if (!workflowMutationDispatcher.has('invoker:requeue')) {
           workflowMutationDispatcher.set('invoker:requeue', async (...requeueArgs: unknown[]) => {
             const { taskId } = parseRequeueMutationArgs(requeueArgs);
@@ -2289,6 +2318,10 @@ startMainProcessBootstrap({
         commandService,
         taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
+        allowGraphMutation: invokerConfig.allowGraphMutation,
+        defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+        getAutoFixAgent: () => invokerConfig.autoFixAgent,
+        getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
         killRunningTask,
       });
       apiServer = startApiServer({
