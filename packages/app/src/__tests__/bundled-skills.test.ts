@@ -16,7 +16,7 @@ function makeTempRoot(prefix: string): string {
 function writeSkill(sourceRoot: string, name: string): void {
   const skillDir = join(sourceRoot, 'skills', name);
   mkdirSync(join(skillDir, 'scripts'), { recursive: true });
-  writeFileSync(join(skillDir, 'SKILL.md'), `# ${name}\n`);
+  writeFileSync(join(skillDir, 'SKILL.md'), `---\nname: ${name}\ndescription: test skill\n---\n\n# ${name}\n`);
   writeFileSync(join(skillDir, 'scripts', 'check.sh'), '#!/usr/bin/env bash\necho ok\n');
 }
 
@@ -329,6 +329,38 @@ describe('bundled-skills', () => {
       expect(status.targets[0]?.staleReason).toBe('bundle-updated');
       expect(status.targets[0]?.diagnostic).toContain('bundled source changed');
       expect(status.targets[0]?.diagnostic).toContain('prefix "invoker-"');
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
+
+  it('refuses to install a skill whose SKILL.md lost its YAML frontmatter', () => {
+    const resourcesRoot = makeTempRoot('invoker-bundled-resources-');
+    const invokerHomeRoot = makeTempRoot('invoker-bundled-home-');
+    const repoRoot = makeTempRoot('invoker-bundled-repo-');
+    const codexHome = makeTempRoot('invoker-codex-home-');
+    const originalHome = process.env.HOME;
+    process.env.HOME = codexHome;
+
+    try {
+      writeSkill(resourcesRoot, 'plan-to-invoker');
+      // Simulate a botched conflict resolution that gutted SKILL.md into a git-show blob.
+      const gutted = 'commit 37fa96068caa9b94559d52edf10a677a95178cf5\nAuthor: x\n\ndiff --git a/x b/x\n';
+      writeFileSync(join(resourcesRoot, 'skills', 'plan-to-invoker', 'SKILL.md'), gutted);
+
+      expect(() => installBundledSkills({
+        isPackaged: true,
+        repoRoot,
+        resourcesPath: resourcesRoot,
+        invokerHomeRoot,
+      })).toThrow(/missing YAML frontmatter/);
+
+      // Nothing corrupt reached the agent skill store.
+      expect(existsSync(join(codexHome, '.codex', 'skills', 'invoker-plan-to-invoker', 'SKILL.md'))).toBe(false);
     } finally {
       if (originalHome === undefined) {
         delete process.env.HOME;
