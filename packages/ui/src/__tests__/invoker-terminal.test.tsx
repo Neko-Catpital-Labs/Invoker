@@ -703,6 +703,29 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('does not submit or send typed submit before a draft is ready', async () => {
+    const noDraftError = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('talk through the plan');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        message: 'talk through the plan',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
+    });
+
+    submitPlanningText('submit');
+
+    expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(noDraftError);
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
+  });
+
   it('submits a draft and starts ready work when the user types submit', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
@@ -710,6 +733,7 @@ describe('Invoker terminal (component)', () => {
       reply: 'Here is the plan.',
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
+      draftPlanText: 'name: Mock Plan\ntasks:\n  - id: first\n    description: First\n',
     })) as any;
     render(<App />);
     await openPlanningTerminal();
