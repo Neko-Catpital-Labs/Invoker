@@ -40,6 +40,12 @@ tasks:
     dependencies: []
 `;
 
+const SUBMIT_LINE = 'Reply `submit` to submit it.';
+
+const DRAFT_SUMMARY_WITH_SUBMIT = `Drafted the plan.
+
+${SUBMIT_LINE}`;
+
 const INLINE_PLAN_RESPONSE = `Here is the plan:
 
 \`\`\`yaml
@@ -52,7 +58,7 @@ tasks:
     dependencies: []
 \`\`\`
 
-Reply \`submit\` to submit it.`;
+${SUBMIT_LINE}`;
 
 describe('plan draft file - activation side', () => {
   let workingDir: string;
@@ -96,14 +102,17 @@ describe('plan draft file - activation side', () => {
     if (!path) throw new Error('expected a plan draft path');
 
     mockSpawn.mockReturnValueOnce(fakePlannerChild(
-      'Drafted the plan.\n\nReply `submit` to submit it.',
+      DRAFT_SUMMARY_WITH_SUBMIT,
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Draft it');
+    const draftReply = await conversation.sendMessage('Draft it');
+    expect(draftReply).toBe(DRAFT_SUMMARY_WITH_SUBMIT);
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('What does it do?');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(DRAFT_SUMMARY_WITH_SUBMIT));
+    const summaryReply = await conversation.sendMessage('What does it do?');
 
+    expect(summaryReply).not.toContain(SUBMIT_LINE);
+    expect(conversation.history.at(-1)?.content).not.toContain(SUBMIT_LINE);
     expect(existsSync(path)).toBe(false);
     expect(conversation.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
   });
@@ -111,9 +120,11 @@ describe('plan draft file - activation side', () => {
   it('does not expose a plan when a summary-only turn has no prior draft', async () => {
     const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('Draft it');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(DRAFT_SUMMARY_WITH_SUBMIT));
+    const reply = await conversation.sendMessage('Draft it');
 
+    expect(reply).not.toContain(SUBMIT_LINE);
+    expect(conversation.history.at(-1)?.content).not.toContain(SUBMIT_LINE);
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
@@ -122,10 +133,9 @@ describe('plan draft file - activation side', () => {
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
 
     const prompt = conversation.buildCursorPrompt();
-    const submitLine = 'Reply `submit` to submit it.';
     const lines = prompt.split('\n');
 
-    expect(lines.filter((line) => line === submitLine)).toHaveLength(1);
+    expect(lines.filter((line) => line === SUBMIT_LINE)).toHaveLength(1);
     expect(prompt.match(/Reply `submit` to submit it\./g)).toHaveLength(1);
     expect(prompt).toContain('Do NOT place that line inline in a sentence.');
   });
@@ -136,11 +146,13 @@ describe('plan draft file - activation side', () => {
     if (!path) throw new Error('expected a plan draft path');
 
     mockSpawn.mockReturnValueOnce(fakePlannerChild(
-      'Drafted the plan.\n\nReply `submit` to submit it.',
+      DRAFT_SUMMARY_WITH_SUBMIT,
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Create the plan');
+    const reply = await conversation.sendMessage('Create the plan');
 
+    expect(reply).toBe(DRAFT_SUMMARY_WITH_SUBMIT);
+    expect(conversation.history.at(-1)?.content).toBe(DRAFT_SUMMARY_WITH_SUBMIT);
     expect(isConfirmation('submit')).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(conversation.planSubmitted).toBe(false);
@@ -156,8 +168,9 @@ describe('plan draft file - activation side', () => {
     const conversation = new PlanConversation({ plannerRetryLimit: 0 });
 
     mockSpawn.mockReturnValueOnce(fakePlannerChild(INLINE_PLAN_RESPONSE));
-    await conversation.sendMessage('Create the plan');
+    const reply = await conversation.sendMessage('Create the plan');
 
+    expect(reply).toContain(SUBMIT_LINE);
     const draftedPlan = conversation.getDraftedPlan();
     expect(draftedPlan).not.toBeNull();
     const parsedDraft = parseYaml(draftedPlan!) as Record<string, unknown>;
