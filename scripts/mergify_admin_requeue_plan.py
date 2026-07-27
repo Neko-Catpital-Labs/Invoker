@@ -37,8 +37,10 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
     "required-fast / Submit Workflow Chain",
 })
 ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
+DIRTY_REPAIR_RETRY_PREFIX = "dirty_retry:"
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
+REPAIR_INVALID_BLOCKER_KINDS = frozenset({"failed_check", "bot_review_thread"})
 REPAIR_STOP_PREFIX = "Mergify repair stopped: "
 MANUAL_SPLIT_STOP_MARKERS = (
     "human stack split required",
@@ -123,6 +125,15 @@ def cap_action(pr: PrSnapshot, blocker: Blocker, detail: str) -> Action:
     return Action("comment_blocked", pr.number, "capped", f"{detail}. The retry cap was reached for current head {pr.head_ref_oid}.")
 
 
+def dirty_repair_retry_action(pr: PrSnapshot, check_name: str, detail: str, ledger: Ledger) -> Action | None:
+    dirty_key = f"repair-dirty:{check_name}:{pr.head_ref_oid}"
+    if ledger.latest("comment-blocked", pr.number, pr.head_ref_oid, dirty_key) is None:
+        return None
+    if ledger.latest("repair-dirty-retry", pr.number, pr.head_ref_oid, check_name) is not None:
+        return None
+    return Action("repair_check", pr.number, DIRTY_REPAIR_RETRY_PREFIX + check_name, detail)
+
+
 def mergify_condition_map(event: MergifyQueueEvent | None) -> dict[str, str]:
     return dict(event.condition_states) if event else {}
 
@@ -171,6 +182,9 @@ def mergify_failed_check_actions(
         if name in suppressed:
             continue
         if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= 3:
+            retry = dirty_repair_retry_action(pr, name, f"Mergify queue check failed: {name}", ledger)
+            if retry is not None:
+                return (retry,)
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"), f"Mergify queue check failed: {name}"),)
         return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
     return ()
@@ -269,7 +283,7 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
 
 
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
-    if blocker.kind != "failed_check":
+    if blocker.kind not in REPAIR_INVALID_BLOCKER_KINDS:
         return None
     latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
     if latest is None:
@@ -284,7 +298,7 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
 
 
 def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | None:
-    if blocker.kind != "failed_check":
+    if blocker.kind not in REPAIR_INVALID_BLOCKER_KINDS:
         return None
     ctx = pr.checks.get(blocker.key)
     completed_at = ctx.completed_at if ctx else ""
@@ -465,6 +479,8 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
             return "merge-hold-only"
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
+    if not facts.bottom:
+        return "no-current-bottom"
     return "no-action"
 
 
@@ -482,10 +498,14 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
+def _pr_has_human_decision(facts: StackFacts, pr_number: int) -> bool:
+    return any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr_number])
+
+
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
-        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+        if _pr_has_human_decision(facts, pr.number):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
@@ -497,6 +517,8 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
@@ -506,6 +528,9 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
             if blocker.kind == "failed_check":
                 attempts = ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key)
                 if attempts >= max_repair_attempts and ledger.latest("repair-evaluated", pr.number, pr.head_ref_oid, blocker.key) is not None:
+                    retry = dirty_repair_retry_action(pr, blocker.key, blocker.detail, ledger)
+                    if retry is not None:
+                        return retry
                     return cap_action(pr, blocker, blocker.detail)
                 return Action("repair_check", pr.number, blocker.key, blocker.detail)
     return None
@@ -513,6 +538,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
@@ -528,10 +555,10 @@ def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attemp
 
 def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "pending_check":
-                return None
-            if blocker.kind == "human_decision":
                 return None
             if blocker.kind in HUMAN_BLOCKER_KINDS:
                 if ledger.count("comment-blocked", pr.number, pr.head_ref_oid, blocker.key) > 0:

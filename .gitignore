@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .invoker/
+__pycache__/
+*.py[cod]
 *.db
 .env*
 .DS_Store

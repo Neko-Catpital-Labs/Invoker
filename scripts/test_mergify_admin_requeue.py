@@ -1,5 +1,6 @@
 import io
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -453,6 +454,99 @@ Failing checks
         self.assertIn(("clean", "-fd"), git_commands)
         self.assertIn('"event": "admin-bypass-repair-check-terminal"', stderr.getvalue())
 
+    def test_repair_check_commits_dirty_agent_changes_before_push(self):
+        item = pr(
+            6146,
+            checks={"quality / TypeScript Types": check("quality / TypeScript Types", "failure")},
+            latest=mergify(),
+        )
+        repairer = self.repairer(object(), self.ledger())
+        git_commands = []
+        repaired_head = "b" * 40
+        git_rev_parse = iter([HEAD, HEAD, repaired_head, repaired_head])
+
+        def fake_git_output(_work_root, *args):
+            git_commands.append(args)
+            if args == ("rev-parse", "HEAD"):
+                return next(git_rev_parse)
+            return ""
+
+        def fake_git_lines(_work_root, *args):
+            if args == ("status", "--porcelain"):
+                return (" M packages/app/src/main.ts", "M  packages/workflow-core/src/orchestrator.ts")
+            if args == ("rev-list", "--reverse", f"{HEAD}..{repaired_head}"):
+                return (repaired_head,)
+            return ()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"HOME": tmp}):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                    with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/types.log"):
+                        with mock.patch.object(repairer, "run_claude_repair"):
+                            with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+                                with mock.patch.object(repairer, "git_lines", side_effect=fake_git_lines):
+                                    with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True, "errors": []}):
+                                        result = repairer.repair_check(item, "quality / TypeScript Types")
+
+        self.assertEqual(result.status, "pushed")
+        self.assertEqual(result.end_head, repaired_head)
+        self.assertIn(("add", "-A"), git_commands)
+        self.assertIn(("commit", "-m", "Repair quality / TypeScript Types"), git_commands)
+        self.assertIn(("push", "origin", f"HEAD:{item.head_ref_name}"), git_commands)
+
+    def test_push_branch_rebases_worker_commit_after_remote_advance(self):
+        def git(cwd, *args):
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(cwd),
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            remote = root / "origin.git"
+            seed = root / "seed"
+            work = root / "work"
+            racer = root / "racer"
+            branch = "stack/race"
+
+            git(root, "init", "--bare", str(remote))
+            git(root, "clone", str(remote), str(seed))
+            git(seed, "config", "user.email", "repro@example.test")
+            git(seed, "config", "user.name", "Repro Bot")
+            (seed / "base.txt").write_text("base\n", encoding="utf-8")
+            git(seed, "add", "base.txt")
+            git(seed, "commit", "-m", "base")
+            git(seed, "checkout", "-B", branch)
+            git(seed, "push", "origin", f"HEAD:{branch}")
+
+            git(root, "clone", str(remote), str(work))
+            git(work, "checkout", branch)
+            git(work, "config", "user.email", "repro@example.test")
+            git(work, "config", "user.name", "Repro Bot")
+            git(root, "clone", str(remote), str(racer))
+            git(racer, "checkout", branch)
+            git(racer, "config", "user.email", "repro@example.test")
+            git(racer, "config", "user.name", "Repro Bot")
+
+            (work / "worker.txt").write_text("worker\n", encoding="utf-8")
+            git(work, "add", "worker.txt")
+            git(work, "commit", "-m", "worker repair")
+
+            (racer / "remote.txt").write_text("remote\n", encoding="utf-8")
+            git(racer, "add", "remote.txt")
+            git(racer, "commit", "-m", "remote advance")
+            git(racer, "push", "origin", f"HEAD:{branch}")
+
+            repairer = self.repairer(object(), self.ledger())
+            final_head = repairer.push_branch(work, branch)
+
+            remote_head = git(remote, "rev-parse", f"refs/heads/{branch}")
+            self.assertEqual(final_head, remote_head)
+            self.assertEqual(git(remote, "show", f"refs/heads/{branch}:worker.txt"), "worker")
+            self.assertEqual(git(remote, "show", f"refs/heads/{branch}:remote.txt"), "remote")
 
     def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):
         item = pr(
@@ -620,7 +714,7 @@ Failing checks
         ledger = self.ledger()
         fake = FakeGh()
         repairer = self.repairer(fake, ledger)
-        rev_parse = iter([HEAD, "b" * 40])
+        rev_parse = iter([HEAD, "b" * 40, "b" * 40])
         git_commands = []
 
         def fake_git_output(_work_root, *args):

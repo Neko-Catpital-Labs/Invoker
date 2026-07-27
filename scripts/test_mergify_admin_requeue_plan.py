@@ -291,6 +291,89 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(pr(checks={"build": check("failure")}))
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
 
+    def test_repair_invalid_stops_other_direct_repairs_on_same_pr(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            6163,
+            HEAD,
+            "UI Vitest",
+            1,
+            meta={
+                "errors": [
+                    "Review lane docs cannot ship with product-test files in the same PR. Keep docs and skill updates in their own slice."
+                ],
+            },
+        )
+        snapshot = pr(
+            number=6163,
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={
+                "quality / TypeScript Types": check("failure", "quality / TypeScript Types"),
+                "UI Vitest": check("failure", "UI Vitest"),
+            },
+            latest_mergify=event(failing=("UI Vitest",)),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"quality / TypeScript Types", "UI Vitest"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6163},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+
+    def test_bot_thread_repair_invalid_stops_bot_thread_retries_on_same_pr(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            6158,
+            HEAD,
+            "PRRT_kwDOSFkSDM6T97v9",
+            1,
+            meta={
+                "errors": [
+                    'PR body Review Unit "routing" cannot ship with activation-surface files in the same PR. Split this into one Review Unit per PR.'
+                ],
+            },
+        )
+        snapshot = pr(
+            number=6158,
+            labels=frozenset({"admin-bypass"}),
+            review_threads=(
+                m.ReviewThread("PRRT_kwDOSFkSDM6T97v9", False, ("coderabbitai[bot]",)),
+                m.ReviewThread("PRRT_kwDOSFkSDM6T97wJ", False, ("coderabbitai[bot]",)),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6158},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "human_decision")
+        self.assertIn("activation-surface files", blockers[0]["detail"])
+
+    def test_capped_failed_check_retries_once_after_dirty_repair_stop(self):
+        ledger = self._ledger()
+        for epoch in range(3):
+            ledger.record("repair-check", 1, HEAD, "build", epoch)
+            ledger.record("repair-evaluated", 1, HEAD, "build", epoch)
+        ledger.record("comment-blocked", 1, HEAD, f"repair-dirty:build:{HEAD}", 3)
+
+        snapshot = pr(checks={"build": check("failure")})
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "dirty_retry:build"))
+
+        ledger.record("repair-dirty-retry", 1, HEAD, "build", 4)
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
+
     def test_mergify_dequeue_with_failing_check_repairs_first(self):
         # A Mergify dequeue naming a failing check outranks everything else.
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
@@ -354,6 +437,42 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "no-current-bottom"))
         self.assertIn("lowest open stack PR #5885 is based on `pr/babysit-prereq-split`", actions[0].detail)
         self.assertIn("land or retarget that base", actions[0].detail)
+
+    def test_no_current_bottom_comment_waits_after_exact_stop_comment(self):
+        ledger = self._ledger()
+        ledger.record("comment-blocked", 5885, HEAD, "no-current-bottom", 1)
+        detail = "no current bottom on master: lowest open stack PR #5885 is based on `pr/babysit-prereq-split`, not `master`; land or retarget that base before babysitting can queue this stack"
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(
+                    number=5885,
+                    base_ref_name="pr/babysit-prereq-split",
+                    labels=frozenset({"admin-bypass"}),
+                    repair_stop_comments=(
+                        m.RepairStopComment(
+                            f"Mergify repair stopped: {detail}",
+                            "2026-07-27T00:00:00Z",
+                            "EdbertChan",
+                        ),
+                    ),
+                ),
+                pr(
+                    number=5886,
+                    base_ref_name="stack/slack-routing",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            stack,
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={5885, 5886},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "no-current-bottom")
 
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()

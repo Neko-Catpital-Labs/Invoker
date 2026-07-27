@@ -12,7 +12,7 @@ try:
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, RepairOutcome, load_mergify_rules
-    from .mergify_admin_requeue_plan import plan_stack_execution
+    from .mergify_admin_requeue_plan import DIRTY_REPAIR_RETRY_PREFIX, plan_stack_execution
     from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
 except ImportError:
@@ -20,7 +20,7 @@ except ImportError:
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, RepairOutcome, load_mergify_rules
-    from mergify_admin_requeue_plan import plan_stack_execution
+    from mergify_admin_requeue_plan import DIRTY_REPAIR_RETRY_PREFIX, plan_stack_execution
     from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
 
@@ -187,6 +187,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
                 check_name = action.key.split(":", 1)[-1]
                 kind = "repair-bot-thread" if action.key.startswith("bot_review_thread:") else "repair-check"
                 ledger.record(kind, action.pr_number, pr.head_ref_oid, check_name, now)
+                if action.key.startswith(DIRTY_REPAIR_RETRY_PREFIX):
+                    ledger.record("repair-dirty-retry", action.pr_number, pr.head_ref_oid, check_name, now)
                 outcome = repairer.repair_check(pr, check_name, now)
                 handle_repair_outcome(executor, ledger, logger, args.repo, pr, outcome, now)
             elif action.kind == "repair_conflict":
