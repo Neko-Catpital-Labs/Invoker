@@ -19,6 +19,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
   const deps = {
     orchestrator: {
       getAllTasks: () => [makeTask('wf-1/task-1')],
+      syncAllFromDb: vi.fn(),
       getWorkflowStatus: () => ({ total: 1, completed: 0, failed: 0, closed: 0, running: 0, pending: 1 }),
       getTask: () => null,
     },
@@ -57,13 +58,35 @@ describe('buildWebInvokerDispatch', () => {
     ]);
   });
 
-  it('get-tasks returns the { tasks, workflows, streamSequence } snapshot', async () => {
-    const { dispatch } = makeDispatch();
+  it('get-tasks returns the post-sync { tasks, workflows, streamSequence } snapshot', async () => {
+    const staleTask = makeTask('wf-1/stale-task');
+    const syncedTask = makeTask('wf-1/task-1');
+    const orchestratorCalls: string[] = [];
+    let hasSynced = false;
+    const syncAllFromDb = vi.fn(() => {
+      orchestratorCalls.push('syncAllFromDb');
+      hasSynced = true;
+    });
+    const getAllTasks = vi.fn(() => {
+      orchestratorCalls.push('getAllTasks');
+      return hasSynced ? [syncedTask] : [staleTask];
+    });
+    const { dispatch } = makeDispatch({
+      orchestrator: {
+        getAllTasks,
+        syncAllFromDb,
+        getWorkflowStatus: () => ({ total: 1, completed: 0, failed: 0, closed: 0, running: 0, pending: 1 }),
+        getTask: () => null,
+      },
+    });
+
     expect(await dispatch('invoker:get-tasks', [])).toEqual({
-      tasks: [makeTask('wf-1/task-1')],
+      tasks: [syncedTask],
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
       streamSequence: 7,
     });
+    expect(orchestratorCalls).toEqual(['syncAllFromDb', 'getAllTasks']);
+    expect(syncAllFromDb).toHaveBeenCalledTimes(1);
   });
 
   it('get-execution-harnesses returns harness metadata', async () => {
