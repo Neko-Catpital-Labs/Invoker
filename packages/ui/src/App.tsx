@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const LOST_PLANNING_CONTINUATION_MESSAGE = 'Planning conversation was interrupted before its server session id was saved. Start a new planning chat to continue.';
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -220,6 +221,10 @@ function planningSessionSummaryToView(session: InAppPlanningSessionSummary): Pla
 
 function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
   return status === 'waiting_for_answer' || status === 'draft_ready';
+}
+
+function planningSessionHasTranscript(session: PlanningSessionView): boolean {
+  return session.messages.some((line) => line.role === 'user' || line.role === 'assistant');
 }
 
 function previewPlanningMessage(session: PlanningSessionView): string {
@@ -2673,6 +2678,8 @@ export function App() {
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
     if (!input || activePlanningSessionBusy || activePlanningReadOnly) return;
+    const previousSessionId = activePlanningSessionId;
+    const lostContinuationIdentity = !planningSessionId && planningSessionHasTranscript(activePlanningSession);
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
@@ -2715,13 +2722,20 @@ export function App() {
       return;
     }
 
+    if (lostContinuationIdentity) {
+      clearPlanningStreamForSessionIds([previousSessionId, planningSessionId]);
+      forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
+      appendTerminalLine(LOST_PLANNING_CONTINUATION_MESSAGE, 'system', 'error');
+      setPlanningSubmitError({ title: 'Planner could not respond', message: LOST_PLANNING_CONTINUATION_MESSAGE });
+      return;
+    }
+
     const request = {
       message: input,
       presetKey: selectedPlanningPresetKey || undefined,
       confirmationMode: selectedPlanningConfirmationMode,
       ...(planningSessionId ? { sessionId: planningSessionId } : {}),
     };
-    const previousSessionId = activePlanningSessionId;
     pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
     clearPlanningStreamForSessionIds([previousSessionId, planningSessionId]);
     forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
@@ -2773,12 +2787,27 @@ export function App() {
           }
         }
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        const failureSessionId = !planningSessionId && result.sessionId ? result.sessionId : previousSessionId;
+        const updatedAt = new Date().toISOString();
+        const errorLineId = nextTerminalLineIdRef.current;
+        nextTerminalLineIdRef.current += 1;
+        setPlanningSessions((prev) => prev.map((session) => {
+          if (session.id !== previousSessionId) return session;
+          return {
+            ...session,
+            id: failureSessionId,
+            busy: false,
+            messages: [...session.messages, { id: errorLineId, text: result.error, role: 'system', tone: 'error' }],
+            updatedAt,
+          };
+        }));
+        setActivePlanningSessionId((currentSessionId) => (
+          currentSessionId === previousSessionId ? failureSessionId : currentSessionId
+        ));
         keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
         forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
@@ -2794,6 +2823,7 @@ export function App() {
   }, [
     activePlanningSessionBusy,
     activePlanningSessionId,
+    activePlanningSession,
     activePlanningReadOnly,
     appendTerminalLine,
     clearPlanningStreamForSessionIds,

@@ -232,13 +232,19 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'try again',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
 
     await act(async () => {
       resolveSecondSend?.({
         ok: true,
-        sessionId: 'session-2',
+        sessionId: 'session-1',
         reply: 'Recovered.',
         draftPlanAvailable: false,
       });
@@ -688,6 +694,35 @@ describe('Invoker terminal (component)', () => {
         presetKey: 'codex',
         confirmationMode: 'require',
       });
+    });
+  });
+
+  it('shows an explicit lost-session error instead of restarting a local transcript as a fresh planning chat', async () => {
+    mock.api.planningChatSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: 'Failed to reach the planner.',
+      }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('hello');
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({ message: 'hello', presetKey: 'codex', confirmationMode: 'require' });
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Failed to reach the planner.');
+    });
+
+    submitPlanningText('continue this plan');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+        'Planning conversation was interrupted before its server session id was saved. Start a new planning chat to continue.',
+      );
+      expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
   });
 
