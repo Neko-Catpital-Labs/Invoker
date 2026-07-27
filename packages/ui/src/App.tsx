@@ -2067,7 +2067,8 @@ export function App() {
     setSelectedWorkerKind(workerStatus?.workers[0]?.kind ?? null);
   }, [selectedWorkerKind, sidebarSurface, workerStatus]);
   useEffect(() => {
-    // Camera resnap for browser surfaces only; plan graph handles its own fit on enter.
+    // Camera resnap for browser surfaces only; Plan graph restores its own
+    // viewport on enter and only fits on first mount or explicit commands.
     if (viewMode !== 'dag' || (sidebarSurface !== 'workflows' && sidebarSurface !== 'attention') || !selectedWorkflowGraphAvailable) {
       return;
     }
@@ -2563,6 +2564,7 @@ export function App() {
         setSelectedWorkflowId(result.workflowId);
         setSidebarSurface('home');
         setViewMode('dag');
+        workflowGraphViewportRef.current = null;
         issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'planning-submit' });
         updatePlanningSessionById(planningSessionId, (session) => ({
           ...session,
@@ -2576,7 +2578,6 @@ export function App() {
           updatedAt: new Date().toISOString(),
         }));
         await refreshTaskGraph();
-        workflowGraphViewportRef.current = null;
         const startResult = await handleStartReadyAction();
         const startMessage = startResult
           ? startResult.started.length > 0
@@ -3017,27 +3018,29 @@ export function App() {
     focusKeyboardRegion('planning');
   }, [focusKeyboardRegion]);
 
-  const navigatePlanGraph = useCallback((reason: string, options: { fit: boolean }) => {
+  const navigatePlanGraph = useCallback((_reason: string) => {
     setSidebarSurface('planning');
     setInspectorManualOpen(false);
     setViewMode('dag');
     focusKeyboardRegion('workflowGraph');
 
-    if (options.fit) {
-      workflowGraphViewportRef.current = null;
-      issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
-      return;
-    }
-
-    setCameraCommand(null);
-  }, [focusKeyboardRegion, issueCameraCommand]);
-
-  const navigatePlanGraphAndFit = useCallback((reason: string) => {
-    navigatePlanGraph(reason, { fit: true });
-  }, [navigatePlanGraph]);
+    // Ordinary Plan graph entries restore React Flow's saved viewport. Keep the
+    // post-submit fit only when submit intentionally reset that saved viewport.
+    setCameraCommand((command) => {
+      if (
+        workflowGraphViewportRef.current === null
+        && command?.kind === 'fitInitial'
+        && command.scope === 'workflow'
+        && command.reason === 'planning-submit'
+      ) {
+        return command;
+      }
+      return null;
+    });
+  }, [focusKeyboardRegion]);
 
   const navigatePlanGraphPreservingViewport = useCallback((reason: string) => {
-    navigatePlanGraph(reason, { fit: false });
+    navigatePlanGraph(reason);
   }, [navigatePlanGraph]);
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
@@ -3061,18 +3064,14 @@ export function App() {
       return;
     }
     if (nextSurface === 'planning') {
-      if (sidebarSurface === 'home') {
-        navigatePlanGraphPreservingViewport('sidebar-planning');
-        return;
-      }
-      navigatePlanGraphAndFit('sidebar-planning');
+      navigatePlanGraphPreservingViewport('sidebar-planning');
       return;
     }
     setViewMode('dag');
     setSidebarSurface(nextSurface);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, [navigatePlanGraphAndFit, navigatePlanGraphPreservingViewport, navigatePlanningHome, sidebarSurface, viewMode]);
+  }, [navigatePlanGraphPreservingViewport, navigatePlanningHome, sidebarSurface, viewMode]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
@@ -4087,7 +4086,7 @@ export function App() {
             </Button>
             <button
               type="button"
-              onClick={() => navigatePlanGraphAndFit('planning-draft-review')}
+              onClick={() => navigatePlanGraphPreservingViewport('planning-draft-review')}
               className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
             >
               Open graph
@@ -4121,7 +4120,7 @@ export function App() {
             <button
               type="button"
               data-testid="planning-context-open-graph"
-              onClick={() => navigatePlanGraphAndFit('planning-context')}
+              onClick={() => navigatePlanGraphPreservingViewport('planning-context')}
               className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
             >
               Open graph
@@ -4241,7 +4240,7 @@ export function App() {
             onPresetChange={setSelectedPlanningPresetKey}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
-            onOpenGraph={() => navigatePlanGraphAndFit('planning-open-graph')}
+            onOpenGraph={() => navigatePlanGraphPreservingViewport('planning-open-graph')}
             onReviewDraft={() => {
               setReviewDraftSessionId(activePlanningSession.id);
               setPlanningContextCollapsed(false);
@@ -4577,7 +4576,7 @@ export function App() {
             onCloseExpanded={() => setPlanningTerminalExpanded(false)}
             onOpenGraph={() => {
               setPlanningTerminalExpanded(false);
-              navigatePlanGraphAndFit('planning-expanded-open-graph');
+              navigatePlanGraphPreservingViewport('planning-expanded-open-graph');
             }}
             onReviewDraft={() => {
               setPlanningTerminalExpanded(false);
