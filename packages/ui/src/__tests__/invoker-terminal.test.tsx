@@ -232,13 +232,19 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'try again',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
 
     await act(async () => {
       resolveSecondSend?.({
         ok: true,
-        sessionId: 'session-2',
+        sessionId: 'session-1',
         reply: 'Recovered.',
         draftPlanAvailable: false,
       });
@@ -689,6 +695,36 @@ describe('Invoker terminal (component)', () => {
         confirmationMode: 'require',
       });
     });
+  });
+
+  it('fails visibly instead of starting fresh when a transcript has no continuation id', async () => {
+    const lostContinuationMessage = 'This planning chat can no longer be continued because its server session id is missing. Start a new chat to continue.';
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: false,
+      error: 'planner failed before returning a session id',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan that fails before materializing');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        message: 'draft a plan that fails before materializing',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('planner failed before returning a session id');
+    });
+
+    submitPlanningText('continue the missing planner session');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('continue the missing planner session');
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(lostContinuationMessage);
+    });
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
   });
 
   it('passes the selected planning preset', async () => {

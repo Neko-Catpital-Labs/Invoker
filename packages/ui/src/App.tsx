@@ -114,6 +114,11 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const LOST_PLANNING_CONTINUATION_MESSAGE = 'This planning chat can no longer be continued because its server session id is missing. Start a new chat to continue.';
+
+function isLocalPlanningSessionId(sessionId: string): boolean {
+  return sessionId.startsWith('local-');
+}
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -1029,7 +1034,9 @@ export function App() {
   const activePlanningConversationKey = activePlanningSession.conversationKey;
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
-  const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
+  const activePlanningSessionIsLocal = isLocalPlanningSessionId(activePlanningSession.id);
+  const activePlanningSessionHasTranscript = activePlanningSession.messages.length > 0;
+  const planningSessionId = activePlanningSessionIsLocal ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
@@ -2841,6 +2848,8 @@ export function App() {
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
     if (!input || activePlanningSessionBusy || activePlanningReadOnly) return;
+    const activeSessionWasLocal = activePlanningSessionIsLocal;
+    const hadTranscriptBeforeSubmit = activePlanningSessionHasTranscript;
     appendTerminalLine(input, 'user');
     setPlanningInput('');
     setPlanningSubmitError(null);
@@ -2875,6 +2884,12 @@ export function App() {
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
       await handlePlanningSubmitDraft();
+      return;
+    }
+
+    if (activeSessionWasLocal && hadTranscriptBeforeSubmit) {
+      appendTerminalLine(LOST_PLANNING_CONTINUATION_MESSAGE, 'system', 'error');
+      setPlanningSubmitError({ title: 'Planner could not respond', message: LOST_PLANNING_CONTINUATION_MESSAGE });
       return;
     }
 
@@ -2941,12 +2956,34 @@ export function App() {
           }
         }
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
-        keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
-        forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
+        const resultSessionId = typeof result.sessionId === 'string' && result.sessionId.trim()
+          ? result.sessionId.trim()
+          : null;
+        const materializedSessionId = resultSessionId && isLocalPlanningSessionId(previousSessionId)
+          ? resultSessionId
+          : null;
+        const errorLineId = nextTerminalLineIdRef.current;
+        nextTerminalLineIdRef.current += 1;
+        const updatedAt = new Date().toISOString();
+        setPlanningSessions((prev) => prev.map((session) => {
+          if (session.id !== previousSessionId) return session;
+          return {
+            ...session,
+            busy: false,
+            ...(materializedSessionId ? { id: materializedSessionId, conversationKey: materializedSessionId } : {}),
+            messages: [...session.messages, { id: errorLineId, text: result.error, role: 'system', tone: 'error' }],
+            updatedAt,
+          };
+        }));
+        if (materializedSessionId) {
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === previousSessionId ? materializedSessionId : currentSessionId
+          ));
+        }
+        keepPlanningStreamFailureForSessionIds([previousSessionId, resultSessionId], result.error);
+        forgetPlanningStreamAliasesForSessionIds([previousSessionId, resultSessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
-        if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
+        if (resultSessionId) pendingPlanningStreamSessionIdsRef.current.delete(resultSessionId);
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
@@ -2961,7 +2998,9 @@ export function App() {
     }
   }, [
     activePlanningSessionBusy,
+    activePlanningSessionHasTranscript,
     activePlanningSessionId,
+    activePlanningSessionIsLocal,
     activePlanningReadOnly,
     appendTerminalLine,
     clearPlanningStreamForSessionIds,
