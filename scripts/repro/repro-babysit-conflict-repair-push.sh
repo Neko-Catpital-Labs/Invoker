@@ -39,6 +39,8 @@ cat > "$TMP/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 echo called > "$CLAUDE_CALLED"
+git fetch origin master >/dev/null
+git rebase origin/master >/dev/null
 printf 'resolved by worker\n' > conflict-resolution.txt
 git add conflict-resolution.txt
 git commit -m 'resolve fake conflict' >/dev/null
@@ -102,6 +104,11 @@ git clone . "$SEED" >/dev/null
   git add feature.txt
   git commit -m 'conflicting feature' >/dev/null
   git push publish stack/5207 >/dev/null
+  git switch master >/dev/null
+  printf 'base advanced\n' > base-advance.txt
+  git add base-advance.txt
+  git commit -m 'advance base after PR branch' >/dev/null
+  git push publish master >/dev/null
 )
 git --git-dir="$REMOTE" symbolic-ref HEAD refs/heads/master
 ORIGINAL_HEAD="$(git -C "$SEED" rev-parse stack/5207)"

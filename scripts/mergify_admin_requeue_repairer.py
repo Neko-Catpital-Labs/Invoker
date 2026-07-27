@@ -317,8 +317,41 @@ class AdminBypassRepairer:
             prereq=prereq,
         )
 
-    def push_branch(self, work_root: Path, branch_name: str) -> None:
-        self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
+    def remote_branch_head(self, work_root: Path, branch_name: str) -> str:
+        ref = f"refs/heads/{branch_name}"
+        output = self.git_output(work_root, "ls-remote", "--heads", "origin", ref).strip()
+        if not output:
+            return ""
+        return output.split()[0]
+
+    def push_branch(self, work_root: Path, branch_name: str, *, expected_old_head: str | None = None) -> str:
+        if expected_old_head is None:
+            self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
+            return "pushed"
+
+        ref = f"refs/heads/{branch_name}"
+        local_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        remote_head = self.remote_branch_head(work_root, branch_name)
+        if remote_head and remote_head != expected_old_head:
+            status = "already_published" if remote_head == local_head else "remote_advanced"
+            self.logger.trace(
+                "admin-bypass-push-lease-skipped",
+                repo=self.repo,
+                branch_name=branch_name,
+                expected_head=expected_old_head,
+                local_head=local_head,
+                remote_head=remote_head,
+                status=status,
+            )
+            return status
+        self.git_output(
+            work_root,
+            "push",
+            f"--force-with-lease={ref}:{expected_old_head}",
+            "origin",
+            f"HEAD:{ref}",
+        )
+        return "pushed"
 
     def terminal_repair_outcome(
         self,
@@ -613,7 +646,8 @@ class AdminBypassRepairer:
         prompt = (
             f"Resolve only the merge conflict that keeps this PR from merging. "
             f"Rebase the PR head branch onto its base branch, preserve the PR's intended changes, "
-            f"run the narrow proof for the conflict resolution, then commit and push to the PR head branch. "
+            f"run the narrow proof for the conflict resolution, then commit locally. "
+            f"Do not push; the worker will publish the clean rebased head with a lease after you exit. "
             f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
             f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
             f"Head SHA: {pr.head_ref_oid}\nReason: {reason}\n"
@@ -643,7 +677,19 @@ class AdminBypassRepairer:
                 head_sha=start_head,
             )
             return
-        self.push_branch(work_root, pr.head_ref_name)
+        publish_status = self.push_branch(work_root, pr.head_ref_name, expected_old_head=start_head)
+        if publish_status == "remote_advanced":
+            self.logger.trace(
+                "admin-bypass-repair-conflict-remote-advanced",
+                repo=self.repo,
+                pr_number=pr.number,
+                reason=reason,
+                start_head=start_head,
+                end_head=end_head,
+                remote_head=self.remote_branch_head(work_root, pr.head_ref_name),
+                head_ref=pr.head_ref_name,
+            )
+            return
         self.logger.trace(
             "admin-bypass-repair-conflict-pushed",
             repo=self.repo,
@@ -652,4 +698,5 @@ class AdminBypassRepairer:
             start_head=start_head,
             end_head=end_head,
             head_ref=pr.head_ref_name,
+            publish_status=publish_status,
         )

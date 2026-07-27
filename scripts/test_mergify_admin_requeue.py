@@ -376,7 +376,54 @@ Failing checks
                                 with redirect_stderr(stderr):
                                     repairer.repair_conflict(item, "GitHub reports merge conflict")
         self.assertEqual(push.call_args.args[1], "stack/conflict")
+        self.assertEqual(push.call_args.kwargs, {"expected_old_head": OLD})
         self.assertIn('"event": "admin-bypass-repair-conflict-pushed"', stderr.getvalue())
+
+    def test_push_branch_with_expected_head_uses_force_with_lease(self):
+        repairer = self.repairer(object(), self.ledger(), "Neko-Catpital-Labs/Invoker")
+        calls = []
+
+        def fake_git_output(_work_root, *args):
+            calls.append(args)
+            if args == ("rev-parse", "HEAD"):
+                return HEAD
+            if args == ("ls-remote", "--heads", "origin", "refs/heads/stack/conflict"):
+                return f"{OLD}\trefs/heads/stack/conflict\n"
+            return ""
+
+        with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+            status = repairer.push_branch(Path("/tmp/work"), "stack/conflict", expected_old_head=OLD)
+
+        self.assertEqual(status, "pushed")
+        self.assertIn(
+            ("push", f"--force-with-lease=refs/heads/stack/conflict:{OLD}", "origin", "HEAD:refs/heads/stack/conflict"),
+            calls,
+        )
+
+    def test_push_branch_with_expected_head_skips_remote_advanced(self):
+        repairer = self.repairer(object(), self.ledger(), "Neko-Catpital-Labs/Invoker")
+        remote_head = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        calls = []
+        stderr = io.StringIO()
+
+        def fake_git_output(_work_root, *args):
+            calls.append(args)
+            if args == ("rev-parse", "HEAD"):
+                return HEAD
+            if args == ("ls-remote", "--heads", "origin", "refs/heads/stack/conflict"):
+                return f"{remote_head}\trefs/heads/stack/conflict\n"
+            return ""
+
+        with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+            with redirect_stderr(stderr):
+                status = repairer.push_branch(Path("/tmp/work"), "stack/conflict", expected_old_head=OLD)
+
+        self.assertEqual(status, "remote_advanced")
+        self.assertNotIn(
+            ("push", f"--force-with-lease=refs/heads/stack/conflict:{OLD}", "origin", "HEAD:refs/heads/stack/conflict"),
+            calls,
+        )
+        self.assertIn('"event": "admin-bypass-push-lease-skipped"', stderr.getvalue())
 
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())
