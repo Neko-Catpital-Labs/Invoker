@@ -40,14 +40,14 @@ This table lists every mutating command path and how the owner-boundary contract
 | `invoker:approve` | main.ts:966 | N/A (owner) | `orchestrator.approve()` → persistence writes | |
 | `invoker:reject` | main.ts:984 | N/A (owner) | `rejectTask()` → orchestrator → persistence | |
 | `invoker:select-experiment` | main.ts:988 | N/A (owner) | `sharedSelectExperiments()` → persistence | |
-| `invoker:restart-task` | main.ts:1000 | N/A (owner) | `orchestrator.restartTask()` → persistence | |
+| `invoker:retry-task` | gui-mutation-handlers.ts:1626 | N/A (owner) | `commandService.retryTask()` → orchestrator → persistence | |
 | `invoker:cancel-task` | main.ts:1019 | N/A (owner) | `performCancelTask()` → orchestrator → persistence | |
 | `invoker:cancel-workflow` | main.ts:1029 | N/A (owner) | `performCancelWorkflow()` → orchestrator → persistence | |
 | `invoker:recreate-workflow` | main.ts:1043 | N/A (owner) | `sharedRecreateWorkflow()` → persistence bump + orchestrator | |
 | `invoker:recreate-task` | main.ts:1060 | N/A (owner) | `sharedRecreateTask()` → persistence | |
 | `invoker:retry-workflow` | main.ts:1077 | N/A (owner) | `sharedRetryWorkflow()` → orchestrator | |
-| `invoker:rebase-and-retry` | main.ts:1094 | N/A (owner) | `rebaseAndRetry()` → persistence + orchestrator | Deprecated alias; prefer `recreate-with-rebase` |
-| `invoker:set-merge-mode` | main.ts:1129 | N/A (owner) | `setWorkflowMergeMode()` → persistence.updateWorkflow | |
+| `invoker:rebase-retry` | gui-mutation-handlers.ts:1998 | N/A (owner) | `rebaseRetry()` → base refresh + retry workflow | |
+| `invoker:set-merge-mode` | main.ts:1129 | N/A (owner) | `setWorkflowMergeMode()` → persistence.updateWorkflow | Modes: `manual`, `automatic`, `external_review` |
 | `invoker:approve-merge` | main.ts:1147 | N/A (owner) | `orchestrator.approve()` → persistence | |
 | `invoker:resolve-conflict` | main.ts:1182 | N/A (owner) | `resolveConflictAction()` → persistence + orchestrator | |
 | `invoker:fix-with-agent` | main.ts:1196 | N/A (owner) | `orchestrator.beginConflictResolution()` → persistence | |
@@ -60,10 +60,10 @@ This table lists every mutating command path and how the owner-boundary contract
 | **Headless Commands** (delegate when GUI present, standalone otherwise) |
 | `run` | headless.ts:565 | **Yes** (line 356) | `tryDelegateRun()` → IPC `headless.run` (owner handles) OR standalone opens writable via `initServices({ readOnly: false })` | Delegation timeout = 5s |
 | `resume` | headless.ts:620 | **Yes** (line 361) | `tryDelegateResume()` → IPC `headless.resume` OR standalone writable | |
-| `restart` | headless.ts:707 | **Yes** (line 365) | `tryDelegateExec()` → IPC `headless.exec` OR standalone writable | Workflow-scoped `restart wf-…` delegates with a 60s timeout; task-scoped restart stays at 5s |
+| `retry` / `retry-task` | headless.ts:270-274 | **Yes** (line 365) | `tryDelegateExec()` → IPC `headless.exec` OR standalone writable | Delegation timeout = 5s |
 | `recreate` | headless.ts:769 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `recreate-task` | headless.ts:788 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `rebase` / `recreate-with-rebase` | headless.ts:754 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | Workflow-scoped `recreate-with-rebase wf-…` (first-class) and deprecated `rebase-and-retry wf-…` delegates use a 60s timeout; task-scoped rebase stays at 5s |
+| `rebase-retry` / `rebase-recreate` | headless.ts:296-302 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | Workflow-scoped rebase commands use a 60s timeout; task-scoped rebase stays at 5s |
 | `approve` | headless.ts:666 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `reject` | headless.ts:681 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `input` | headless.ts:688 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
@@ -77,7 +77,7 @@ This table lists every mutating command path and how the owner-boundary contract
 | `set command` | headless.ts:829 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set executor` | headless.ts:841 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set agent` | headless.ts:853 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `set merge-mode` | headless.ts:1011 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
+| `set merge-mode` | headless.ts:1011 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | Modes: `manual`, `automatic`, `external_review` |
 | **Headless Read-Only Commands** | | | | delegate to the owner when present; open `readOnly` only when none |
 | `query workflows` | headless.ts:193 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
 | `query tasks` | headless.ts:206 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
@@ -85,14 +85,15 @@ This table lists every mutating command path and how the owner-boundary contract
 | `query queue` | headless.ts:272 | **Yes** (owner-required) | Owner answers over IPC | Live scheduler state; requires an owner |
 | `query audit` | headless.ts:295 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
 | `query session` | headless.ts:308 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
-| **Workflow Actions** (shared library, always called by owner) |
+| **Owner Mutation Helpers** (shared library or command service, always called by owner) |
 | `rejectTask()` | workflow-actions.ts:54 | N/A | Called by owner (GUI/headless standalone) → orchestrator → persistence | Shared library assumes writable context |
-| `restartTask()` | workflow-actions.ts:75 | N/A | Called by owner → orchestrator → persistence | |
+| `commandService.retryTask()` | CommandService | N/A | Called by owner → orchestrator → persistence | |
 | `retryWorkflow()` | workflow-actions.ts:82 | N/A | Called by owner → orchestrator → persistence | |
 | `recreateWorkflow()` | workflow-actions.ts:89 | N/A | Called by owner → `bumpGenerationAndRecreate()` → persistence | |
 | `recreateTask()` | workflow-actions.ts:96 | N/A | Called by owner → orchestrator → persistence | |
 | `cancelWorkflow()` | workflow-actions.ts:103 | N/A | Called by owner → orchestrator → persistence | |
-| `rebaseAndRetry()` | workflow-actions.ts:117 | N/A | Called by owner → `bumpGenerationAndRecreate()` → persistence | |
+| `rebaseRetry()` | workflow-actions.ts:583 | N/A | Called by owner → base refresh + `retryWorkflow` invalidation | |
+| `rebaseRecreate()` | workflow-actions.ts:610 | N/A | Called by owner → base refresh + `recreateWorkflowFromFreshBase` invalidation | |
 | `editTaskCommand()` | workflow-actions.ts:136 | N/A | Called by owner → orchestrator → persistence | |
 | `editTaskType()` | workflow-actions.ts:144 | N/A | Called by owner → orchestrator → persistence | |
 | `editTaskAgent()` | workflow-actions.ts:153 | N/A | Called by owner → orchestrator → persistence | |
@@ -105,7 +106,7 @@ This table lists every mutating command path and how the owner-boundary contract
 | Component | File | Line(s) | Enforcement Mechanism |
 |-----------|------|---------|----------------------|
 | **GUI main process** | packages/app/src/main.ts | 605-613 | `initServices()` opens writable DB (no `readOnly` flag) |
-| **Headless delegation** | packages/app/src/main.ts, packages/app/src/headless-delegation.ts | 346-381, 14-65 | `tryDelegateRun()`, `tryDelegateResume()`, `tryDelegateExec()` send IPC request to owner; `run`, `resume`, and default `exec` delegation use 5s timeout, while workflow-scoped `rebase` / `recreate-with-rebase` / `rebase-and-retry` / `restart` use 60s before standalone fallback |
+| **Headless delegation** | packages/app/src/main.ts, packages/app/src/headless-delegation.ts | 346-381, 14-65 | `tryDelegateRun()`, `tryDelegateResume()`, `tryDelegateExec()` send IPC request to owner; `run`, `resume`, and default `exec` delegation use 5s timeout, workflow-scoped `rebase-retry` / `rebase-recreate` use 60s, and `start-ready --recreate-all` uses 300s before standalone fallback |
 | **Headless standalone** | packages/app/src/main.ts | 386 | `initServices({ readOnly: isHeadlessReadOnlyCommand(cliArgs) })` — read-only for query commands, writable for standalone mutating commands (when `INVOKER_HEADLESS_STANDALONE=1` or no GUI) |
 | **SQLiteAdapter read-only gate** | packages/persistence/src/sqlite-adapter.ts | 113-117 | `ensureWritable()` throws if `readOnly: true` and a write is attempted |
 | **Delegation handlers (owner)** | packages/app/src/main.ts | 618-674 | `headless.run`, `headless.resume`, `headless.exec` IPC handlers receive delegated commands, execute via owner's writable orchestrator/persistence |
@@ -113,10 +114,10 @@ This table lists every mutating command path and how the owner-boundary contract
 ### Critical Guarantees
 
 1. **GUI always owns DB**: When GUI is running, `initServices()` (main.ts:605) opens writable persistence. All IPC handlers mutate via this owner instance.
-2. **Headless delegates by default**: When GUI is present, headless commands try delegation first. `run`, `resume`, and most `headless.exec` commands use a 5s timeout; workflow-scoped `rebase`, `recreate-with-rebase`, `rebase-and-retry`, and `restart` use 60s. Only if delegation fails (no GUI or timeout) does headless open its own writable DB.
+2. **Headless delegates by default**: When GUI is present, headless commands try delegation first. `run`, `resume`, and most `headless.exec` commands use a 5s timeout; workflow-scoped `rebase-retry` and `rebase-recreate` use 60s, while `start-ready --recreate-all` uses 300s. Only if delegation fails (no GUI or timeout) does headless open its own writable DB.
 3. **Read-only commands never delegate**: `query` subcommands always open `readOnly: true` persistence (main.ts:386), never write.
 4. **Standalone escape hatch**: `INVOKER_HEADLESS_STANDALONE=1` skips delegation, allowing headless to own the DB (main.ts:348-349).
-5. **Delegation timeout prevents deadlock**: IPC delegation is bounded so headless does not hang if GUI is unresponsive. The default is 5s, with a 60s allowance for workflow-scoped `rebase`, `recreate-with-rebase`, `rebase-and-retry`, and `restart` command shapes in `headless.exec`.
+5. **Delegation timeout prevents deadlock**: IPC delegation is bounded so headless does not hang if GUI is unresponsive. The default is 5s, with a 60s allowance for workflow-scoped `rebase-retry` and `rebase-recreate` command shapes in `headless.exec`, plus a 300s allowance for `start-ready --recreate-all`.
 
 ### Test Coverage
 
