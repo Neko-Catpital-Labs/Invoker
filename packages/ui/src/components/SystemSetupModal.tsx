@@ -62,7 +62,7 @@ const setupStepLabels: Record<'choose' | 'review' | 'finish', string> = {
 
 type SlackFieldId = 'botToken' | 'appToken' | 'signingSecret' | 'channelId';
 
-const firstAgentWorkflowTutorialUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/blob/main/docs/tutorial-first-agent-workflow.md';
+const firstAgentWorkflowTutorialUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/blob/master/docs/tutorial-first-agent-workflow.md';
 
 const slackSetupFields: Array<{
   id: SlackFieldId;
