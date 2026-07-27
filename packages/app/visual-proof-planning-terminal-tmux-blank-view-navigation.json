@@ -1,8 +1,8 @@
 {
   "path": "view-navigation",
-  "terminalSessionId": "e0b809a4-5dd6-42e1-81ed-9121b37ef445",
+  "terminalSessionId": "ec1c24ed-acad-4167-97f8-823e48540806",
   "sentinel": "TMUX_BLANK_REPRO_NAVIGATION",
   "visibleText": " ",
   "backendSnapshot": "TMUX_BLANK_REPRO_NAVIGATION\n",
-  "screenshotPath": "/Users/edbertchan/.invoker/worktrees/64a63486912a/experiment-wf-1784944839846-13-implement-tmux-blank-repro-g38.t41.a-ac2de9a2e-841a6641/packages/app/visual-proof-planning-terminal-tmux-blank-view-navigation.png"
+  "screenshotPath": "/Users/edbertchan/.invoker/worktrees/64a63486912a/experiment-wf-1784944839846-13-verify-tmux-blank-repro-g38.t44.a-ae18f4b12-d43744ca/packages/app/visual-proof-planning-terminal-tmux-blank-view-navigation.png"
 }
