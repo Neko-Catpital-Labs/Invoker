@@ -234,6 +234,11 @@ describe('Invoker terminal (component)', () => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
+    expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+      sessionId: 'session-1',
+      message: 'try again',
+      presetKey: 'codex',
+    });
 
     await act(async () => {
       resolveSecondSend?.({
@@ -677,6 +682,7 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
     });
+    expect(mock.api.planningChatSend).toHaveBeenNthCalledWith(1, { message: 'hello', presetKey: 'codex' });
 
     submitPlanningText('make the plan more detailed');
 
@@ -687,6 +693,36 @@ describe('Invoker terminal (component)', () => {
         presetKey: 'codex',
       });
     });
+  });
+
+  it('shows an explicit error instead of restarting a local transcript without a session id', async () => {
+    const firstError = 'Planner stopped before creating a session.';
+    mock.api.planningChatSend = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: firstError })
+      .mockResolvedValueOnce({
+        ok: true,
+        sessionId: 'session-2',
+        reply: 'Fresh planner restart.',
+        draftPlanAvailable: false,
+      }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(firstError);
+    });
+
+    submitPlanningText('continue that plan');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('server session was lost');
+    });
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('Fresh planner restart.');
   });
 
   it('passes the selected planning preset', async () => {
