@@ -368,6 +368,34 @@ describe('EmbeddedTerminalManager', () => {
     expect(snapshot).toBe(`${'a'.repeat(maxSnapshotChars - 'tail'.length)}tail`);
   });
 
+  it('bounds restored spawn session snapshots to the most recent 64 KiB', () => {
+    const maxSnapshotChars = 64 * 1024;
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => spawned),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.restoreSpawnSession({
+      sessionId: 'restored-large-snapshot',
+      taskId: 'task-restored-large-snapshot',
+      targetKey: 'target-restored-large-snapshot',
+      spec: { command: 'bash', args: ['-l'] },
+      cwd: '/tmp/restored',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      outputSnapshot: `${'a'.repeat(maxSnapshotChars)}tail`,
+    });
+
+    expect(session.outputSnapshot).toHaveLength(maxSnapshotChars);
+    expect(session.outputSnapshot).toBe(`${'a'.repeat(maxSnapshotChars - 'tail'.length)}tail`);
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe(session.outputSnapshot);
+  });
+
   it('emits session-updated on open, output, and natural exit', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
