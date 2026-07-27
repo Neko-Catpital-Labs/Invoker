@@ -72,6 +72,9 @@ def is_queue_only_required_check(name: str) -> bool:
 
 def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
+    if pr.state == "MERGED":
+        blockers.append(Blocker("merged", "merged", pr.number, "state=MERGED"))
+        return tuple(blockers)
     if pr.state != "OPEN":
         blockers.append(Blocker("closed", "closed", pr.number, f"state={pr.state}"))
         return tuple(blockers)
@@ -552,7 +555,9 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
     if any(blocker.kind == "merge_hold" for blocker in facts.all_blockers):
         return None
     if not facts.bottom:
-        first = facts.stack.prs[0]
+        first = next((pr for pr in facts.stack.prs if pr.state == "OPEN"), None)
+        if first is None:
+            return None
         return Action(
             "comment_blocked",
             first.number,

@@ -185,8 +185,16 @@ def run_logged(args: Sequence[str], *, cwd: Path | str | None = None, capture: b
             print(exc.stdout, file=sys.stderr, end="" if exc.stdout.endswith("\n") else "\n")
         if exc.stderr:
             print(exc.stderr, file=sys.stderr, end="" if exc.stderr.endswith("\n") else "\n")
+        if is_github_rate_limit_error(exc):
+            raise RuntimeError("GitHub API rate limit exceeded while loading PR snapshots") from exc
         raise
     return completed.stdout or ""
+
+
+def is_github_rate_limit_error(exc: subprocess.CalledProcessError) -> bool:
+    text = "\n".join(str(part or "") for part in (exc.stdout, exc.stderr))
+    lowered = text.lower()
+    return "rate_limit" in text or "rate limit" in lowered
 
 
 def checkout_pr_head(repo: str, pr: PrSnapshot, work_root: Path) -> None:
