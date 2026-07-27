@@ -46,6 +46,8 @@ tasks:
     dependencies: [first]
     command: echo second`;
 
+const NO_DRAFT_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
 const VALID_PLAN_WITHOUT_CLOSING_FENCE = `Here is the plan.
 
 \`\`\`yaml
@@ -416,9 +418,9 @@ describe('planning chat', () => {
       await expect(submitPlanningChatDraft({ sessionId: session.id }, {
         sessions,
         loadGeneratedPlan,
-    })).resolves.toMatchObject({ ok: false });
-    expect(loadGeneratedPlan).not.toHaveBeenCalled();
-    expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
+      })).resolves.toEqual({ ok: false, error: NO_DRAFT_ERROR });
+      expect(loadGeneratedPlan).not.toHaveBeenCalled();
+      expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }
@@ -538,6 +540,7 @@ describe('planning chat', () => {
       planningCommandBuilder,
     });
     if (!sent.ok) throw new Error(sent.error);
+    expect(sessions.get(sent.sessionId)?.status).toBe('draft_ready');
     const loadGeneratedPlan = vi.fn().mockResolvedValue({
       planName: 'Mock Plan',
       workflowId: 'wf-1',
@@ -558,6 +561,7 @@ describe('planning chat', () => {
       workflowCount: 1,
     });
     expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
+    expect(sessions.get(sent.sessionId)?.status).toBe('submitted');
   });
 
   it('submits a valid final draft plan without a closing YAML fence', async () => {
@@ -752,12 +756,67 @@ tasks:
     });
     if (!sent.ok) throw new Error(sent.error);
 
+    const loadGeneratedPlan = vi.fn();
+
     await expect(submitPlanningChatDraft({
       sessionId: sent.sessionId,
     }, {
       sessions,
-      loadGeneratedPlan: vi.fn(),
-    })).resolves.toEqual({ ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' });
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_DRAFT_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+  });
+
+  it('rejects submit when draft text exists without draft-ready status', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('not-ready-draft', {
+      id: 'not-ready-draft',
+      title: 'Not ready draft',
+      presetKey: 'codex',
+      status: 'still_discussing',
+      messages: [],
+      conversation: new PlanConversation({}),
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+      draftPlanText: VALID_PLAN_TEXT,
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+      nextMessageId: 1,
+    });
+    const loadGeneratedPlan = vi.fn();
+
+    await expect(submitPlanningChatDraft({
+      sessionId: 'not-ready-draft',
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_DRAFT_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+  });
+
+  it('rejects submit when a draft-ready session has empty draft text', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('empty-draft', {
+      id: 'empty-draft',
+      title: 'Empty draft',
+      presetKey: 'codex',
+      status: 'draft_ready',
+      messages: [],
+      conversation: new PlanConversation({}),
+      draftPlanSummary: { name: 'Empty Draft', taskCount: 1, steps: ['Empty task'] },
+      draftPlanText: '   ',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+      nextMessageId: 1,
+    });
+    const loadGeneratedPlan = vi.fn();
+
+    await expect(submitPlanningChatDraft({
+      sessionId: 'empty-draft',
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_DRAFT_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
   it('rejects submit when the draft summary cannot be read', async () => {
