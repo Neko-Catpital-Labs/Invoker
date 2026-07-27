@@ -76,12 +76,15 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'action-graph' }, h)).toEqual({ nodes: [] });
   });
 
-  it('refreshes the snapshot only for task-graph-refresh', () => {
-    const h = makeHandlers();
-    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toMatchObject({ refreshed: false });
-    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toMatchObject({ refreshed: true });
-    expect(h.getTasksSnapshot).toHaveBeenNthCalledWith(1, { refresh: false });
-    expect(h.getTasksSnapshot).toHaveBeenNthCalledWith(2, { refresh: true });
+  it('routes both task snapshot entrypoints to the snapshot handler', () => {
+    const snapshot = { tasks: [{ id: 'fresh-task' }], workflows: [{ id: 'wf-1' }] };
+    const h = makeHandlers({
+      getTasksSnapshot: vi.fn(() => snapshot),
+    });
+
+    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toEqual(snapshot);
+    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toEqual(snapshot);
+    expect(h.getTasksSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it('wraps and routes the param-bearing read kinds', () => {
@@ -218,17 +221,34 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(build().getReviewGate('missing')).toBeNull();
   });
 
-  it('getTasksSnapshot refreshes only when asked', () => {
-    const syncAllFromDb = vi.fn();
-    const h = build({ syncAllFromDb });
-    expect(h.getTasksSnapshot({ refresh: false })).toEqual({
-      tasks: [{ id: 't' }],
-      workflows: [{ id: 'wf' }],
+  it('task snapshot entrypoints sync from db before reading the owner snapshot', () => {
+    let syncCount = 0;
+    const syncAllFromDb = vi.fn(() => {
+      syncCount += 1;
+    });
+    const getAllTasks = vi.fn(() => [{ id: `t-sync-${syncCount}` }]);
+    const listWorkflows = vi.fn(() => [{ id: `wf-sync-${syncCount}` }]);
+    const h = build({ syncAllFromDb, getAllTasks }, { listWorkflows });
+
+    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toEqual({
+      tasks: [{ id: 't-sync-1' }],
+      workflows: [{ id: 'wf-sync-1' }],
       streamSequence: 5,
       invokerHomeRoot: '/home',
     });
-    expect(syncAllFromDb).not.toHaveBeenCalled();
-    h.getTasksSnapshot({ refresh: true });
-    expect(syncAllFromDb).toHaveBeenCalledTimes(1);
+    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toEqual({
+      tasks: [{ id: 't-sync-2' }],
+      workflows: [{ id: 'wf-sync-2' }],
+      streamSequence: 5,
+      invokerHomeRoot: '/home',
+    });
+    expect(syncAllFromDb).toHaveBeenCalledTimes(2);
+    expect(getAllTasks).toHaveBeenCalledTimes(2);
+    expect(listWorkflows).toHaveBeenCalledTimes(2);
+
+    expect(syncAllFromDb.mock.invocationCallOrder[0]).toBeLessThan(getAllTasks.mock.invocationCallOrder[0]);
+    expect(syncAllFromDb.mock.invocationCallOrder[0]).toBeLessThan(listWorkflows.mock.invocationCallOrder[0]);
+    expect(syncAllFromDb.mock.invocationCallOrder[1]).toBeLessThan(getAllTasks.mock.invocationCallOrder[1]);
+    expect(syncAllFromDb.mock.invocationCallOrder[1]).toBeLessThan(listWorkflows.mock.invocationCallOrder[1]);
   });
 });
