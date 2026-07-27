@@ -214,7 +214,7 @@ describe('planning chat', () => {
     expect(sessions.size).toBe(0);
   });
 
-  it('creates a first session and returns the assistant reply', async () => {
+  it('creates a first session with no sessionId and returns the assistant reply', async () => {
     const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('I can help.');
     const sessions = createInAppPlanningChatSessions();
 
@@ -238,6 +238,29 @@ describe('planning chat', () => {
     ]);
     expect(session?.messages.some((line) => line.text === 'Ask Invoker what you want to build.')).toBe(false);
     expect(spawnPlanner).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an unknown continuation session without creating a new session', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('fresh reply');
+    const sessions = createInAppPlanningChatSessions();
+
+    await expect(sendPlanningChatMessage({
+      sessionId: 'missing-session',
+      message: 'more detail',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    })).resolves.toEqual({
+      ok: false,
+      sessionId: 'missing-session',
+      error: 'Planning session "missing-session" was not found.',
+    });
+
+    expect(sessions.size).toBe(0);
+    expect(spawnPlanner).not.toHaveBeenCalled();
   });
 
   it('tells the in-app planner to resolve ambiguity before drafting', async () => {
