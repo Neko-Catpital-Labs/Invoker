@@ -1,0 +1,8 @@
+{
+  "path": "session-switch",
+  "terminalSessionId": "2b4b84f6-846f-42ca-a72f-cdd8192f84c4",
+  "sentinel": "TMUX_BLANK_REPRO_SESSION_ALPHA",
+  "visibleText": " ",
+  "backendSnapshot": "TMUX_BLANK_REPRO_SESSION_ALPHA\n",
+  "screenshotPath": "/Users/edbertchan/.invoker/worktrees/64a63486912a/experiment-wf-1784944839846-13-implement-tmux-blank-repro-g38.t41.a-ac2de9a2e-841a6641/packages/app/visual-proof-planning-terminal-tmux-blank-session-switch.png"
+}
