@@ -17,6 +17,7 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -43,6 +44,23 @@ export class SqliteTaskAttemptRepository {
   ) {}
 
   private hasCrashPreservationTableCache: boolean | null = null;
+
+  private appendEntityJournalEntry(
+    entityType: 'task' | 'attempt',
+    table: 'tasks' | 'attempts',
+    entityId: string,
+  ): void {
+    const row = this.exec.queryOne(`SELECT * FROM ${table} WHERE id = ?`, [entityId]);
+    if (!row) {
+      throw new Error(`Cannot journal ${entityType} "${entityId}": row not found after mutation`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType,
+      entityId,
+      op: 'upsert',
+      payload: row,
+    });
+  }
 
   private hasCrashPreservationTable(): boolean {
     if (this.hasCrashPreservationTableCache !== null) return this.hasCrashPreservationTableCache;
@@ -229,6 +247,8 @@ export class SqliteTaskAttemptRepository {
   updateTask(taskId: string, changes: TaskStateChanges): void {
     const beforeTask = this.loadTask(taskId);
     if (!beforeTask) return;
+    const shouldJournalStatusChange =
+      changes.status !== undefined && changes.status !== beforeTask.status;
 
     const setClauses: string[] = [];
     const values: unknown[] = [];
@@ -418,6 +438,9 @@ export class SqliteTaskAttemptRepository {
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }
     this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    if (shouldJournalStatusChange) {
+      this.appendEntityJournalEntry('task', 'tasks', taskId);
+    }
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -459,7 +482,8 @@ export class SqliteTaskAttemptRepository {
              w.name AS workflow_name
       FROM tasks t${this.taskSelectJoin('t')}
       JOIN workflows w ON w.id = t.workflow_id
-      WHERE t.status = 'completed'
+      WHERE w.deleted_at IS NULL
+        AND t.status = 'completed'
       ORDER BY t.completed_at DESC
     `);
     return rows.map((row) => ({
@@ -481,7 +505,8 @@ export class SqliteTaskAttemptRepository {
         FROM events
         GROUP BY task_id
       ) e ON e.task_id = t.id
-      WHERE COALESCE(e.event_count, 0) > 0 OR t.status != 'pending'
+      WHERE w.deleted_at IS NULL
+        AND (COALESCE(e.event_count, 0) > 0 OR t.status != 'pending')
       ORDER BY COALESCE(e.max_created_at, t.completed_at, t.started_at, t.created_at) DESC
     `);
     return rows.map((row) => {
@@ -628,6 +653,7 @@ export class SqliteTaskAttemptRepository {
       attempt.createdAt.toISOString(),
       attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
     ]);
+    this.appendEntityJournalEntry('attempt', 'attempts', attempt.id);
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -689,6 +715,10 @@ export class SqliteTaskAttemptRepository {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    const beforeAttempt = this.loadAttempt(attemptId);
+    if (!beforeAttempt) return;
+    const shouldJournalStatusChange =
+      changes.status !== undefined && changes.status !== beforeAttempt.status;
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -712,6 +742,9 @@ export class SqliteTaskAttemptRepository {
     if (setClauses.length === 0) return;
     values.push(attemptId);
     this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    if (shouldJournalStatusChange) {
+      this.appendEntityJournalEntry('attempt', 'attempts', attemptId);
+    }
   }
 
   claimAttemptForLaunch(
