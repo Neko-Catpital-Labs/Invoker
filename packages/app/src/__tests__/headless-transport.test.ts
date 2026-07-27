@@ -245,10 +245,10 @@ describe('HeadlessTransport', () => {
       const execLocal = vi.fn(async () => 0);
       const transport = new HeadlessTransport(makeDeps({ execLocal }));
 
-      const result = await transport.exec(['list']);
+      const result = await transport.exec(['query', 'workflows']);
 
       expect(result.ok).toBe(true);
-      expect(execLocal).toHaveBeenCalledWith(['list']);
+      expect(execLocal).toHaveBeenCalledWith(['query', 'workflows']);
     });
 
     it('returns ok: false for read-only commands with no local executor', async () => {
@@ -264,7 +264,7 @@ describe('HeadlessTransport', () => {
       const execLocal = vi.fn(async () => 1);
       const transport = new HeadlessTransport(makeDeps({ execLocal }));
 
-      const result = await transport.exec(['status']);
+      const result = await transport.exec(['query', 'workflows']);
 
       expect(result.ok).toBe(false);
       expect(result.response).toEqual({ exitCode: 1 });
@@ -480,9 +480,9 @@ describe('HeadlessTransport', () => {
         execLocal,
       }));
 
-      await transport.exec(['list']);
-      await transport.exec(['status']);
       await transport.exec(['query', 'workflows']);
+      await transport.exec(['query', 'queue']);
+      await transport.exec(['open-terminal', 'wf-1/task-1']);
 
       // read-only commands should go to local executor, not IPC
       expect(execHandler).not.toHaveBeenCalled();
