@@ -95,6 +95,7 @@ import {
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
   reconcileTerminalWorkerActionsOnStartup,
+  resetAutoFixBudgetForTasks,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -811,6 +812,9 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
+    onRecreateTasksReset: (taskIds) => {
+      resetAutoFixBudgetForTasks(persistence, taskIds);
+    },
   });
   commandService = new CommandService(
     orchestrator,
@@ -1108,6 +1112,9 @@ function startHeadlessMode(): void {
               defaultPoolId: invokerConfig.defaultPoolId,
               availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
               deferRunningUntilLaunch: true,
+              onRecreateTasksReset: (taskIds) => {
+                resetAutoFixBudgetForTasks(persistence, taskIds);
+              },
             });
             commandService = new CommandService(
               orchestrator,

@@ -48,7 +48,7 @@ function makeFailedTask(task: TaskState, generation: number): void {
 }
 
 describe('recreate-class auto-fix eligibility', () => {
-  it.fails('recreate and rebase-recreate restore exhausted auto-fix eligibility', async () => {
+  it('recreate and rebase-recreate restore exhausted auto-fix eligibility', async () => {
     const persistence = new InMemoryPersistence();
     const actions = new Map<string, WorkerActionRecord>();
     const store = Object.assign(persistence, {
