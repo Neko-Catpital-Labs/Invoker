@@ -27,6 +27,7 @@ describe('Invoker terminal (component)', () => {
 
   afterEach(() => {
     mock.cleanup();
+    vi.restoreAllMocks();
   });
 
   async function openPlanningTerminal() {
@@ -668,6 +669,165 @@ describe('Invoker terminal (component)', () => {
     await waitFor(() => expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('2 chats'));
     expect(within(screen.getByTestId('sidebar-home')).queryByText('0')).not.toBeInTheDocument();
     expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('2 chats');
+  });
+
+  it('deletes an individual saved planning chat from the rail', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'delete-me',
+          title: 'Delete target chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+        }),
+        makePlanningSessionSummary({
+          id: 'keep-me',
+          title: 'Keep target chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    const targetRow = await screen.findByTestId('planning-session-row-delete-me');
+    fireEvent.click(within(targetRow).getByRole('button', { name: 'Delete planning chat' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Delete target chat')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('planning-session-row-keep-me')).toBeInTheDocument();
+    expect(mock.api.planningChatDelete).toHaveBeenCalledWith({ sessionId: 'delete-me' });
+  });
+
+  it('deletes a local planning chat without calling the backend delete bridge', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('2 chats');
+    });
+
+    const list = screen.getByTestId('planning-session-list');
+    fireEvent.click(within(list).getAllByRole('button', { name: 'Delete planning chat' })[0]);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('1 chat');
+    });
+    expect(within(list).getAllByRole('button', { name: 'Delete planning chat' })).toHaveLength(1);
+    expect(mock.api.planningChatDelete).not.toHaveBeenCalled();
+  });
+
+  it('disables clear submitted without submitted chats and clears submitted chats when confirmed', async () => {
+    const firstRender = render(<App />);
+    await openPlanningTerminal();
+
+    expect(screen.getByRole('button', { name: 'Clear submitted' })).toBeDisabled();
+    firstRender.unmount();
+
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'idle-chat',
+          title: 'Idle chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+        }),
+        makePlanningSessionSummary({
+          id: 'submitted-one',
+          title: 'Submitted one',
+          status: 'submitted',
+          draftPlanAvailable: false,
+        }),
+        makePlanningSessionSummary({
+          id: 'submitted-two',
+          title: 'Submitted two',
+          status: 'submitted',
+          draftPlanAvailable: false,
+        }),
+      ],
+    }));
+    vi.mocked(mock.api.planningChatDeleteSubmitted).mockClear();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<App />);
+    await openPlanningTerminal();
+    const clearSubmitted = await screen.findByRole('button', { name: 'Clear submitted' });
+    expect(clearSubmitted).toBeEnabled();
+
+    fireEvent.click(clearSubmitted);
+
+    await waitFor(() => {
+      expect(screen.queryByText('Submitted one')).not.toBeInTheDocument();
+      expect(screen.queryByText('Submitted two')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('planning-session-row-idle-chat')).toBeInTheDocument();
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(mock.api.planningChatDeleteSubmitted).toHaveBeenCalledTimes(1);
+    confirmSpy.mockRestore();
+  });
+
+  it('recreates a fresh empty planning chat after deleting the last remaining chat', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'only-chat',
+          title: 'Only saved chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    const onlyRow = await screen.findByTestId('planning-session-row-only-chat');
+    fireEvent.click(within(onlyRow).getByRole('button', { name: 'Delete planning chat' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Only saved chat')).not.toBeInTheDocument();
+      expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('1 chat');
+    });
+    expect(screen.getByTestId('invoker-terminal-empty-hero')).toBeInTheDocument();
+    expect(screen.getByTestId('invoker-terminal-input')).toBeEnabled();
+    expect(mock.api.planningChatDelete).toHaveBeenCalledWith({ sessionId: 'only-chat' });
+  });
+
+  it('hides planning chat delete controls and disables clear submitted in read-only mode', async () => {
+    mock.setRuntimeStatus({ ownerMode: false, readOnly: true, mode: 'read-only' });
+    mock.install();
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'readonly-idle-chat',
+          title: 'Readonly idle chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+        }),
+        makePlanningSessionSummary({
+          id: 'readonly-submitted-chat',
+          title: 'Readonly submitted chat',
+          status: 'submitted',
+          draftPlanAvailable: false,
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Clear submitted' })).toBeDisabled();
+    });
+    expect(screen.queryByRole('button', { name: 'Delete planning chat' })).not.toBeInTheDocument();
   });
 
   it('continues the same planning session', async () => {
