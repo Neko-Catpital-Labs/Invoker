@@ -8,15 +8,17 @@
  * transactions. Row mapping keeps coming from sqlite-row-mappers.ts; the
  * adapter retains one-line delegates for every method here.
  */
-import type { TaskState, TaskStateChanges, Attempt, TaskExecution } from '@invoker/workflow-core';
+import type { TaskState, TaskStateChanges, Attempt, TaskExecution, WorkflowDerivedStatus } from '@invoker/workflow-core';
 import {
   assertTaskConsistent,
+  computeWorkflowRollupFromSummaries,
   isDiscardedAttempt,
   normalizeRunnerKind,
 } from '@invoker/workflow-core';
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -229,6 +231,11 @@ export class SqliteTaskAttemptRepository {
   updateTask(taskId: string, changes: TaskStateChanges): void {
     const beforeTask = this.loadTask(taskId);
     if (!beforeTask) return;
+    const statusWillChange = changes.status !== undefined && changes.status !== beforeTask.status;
+    const workflowIdForStatus = statusWillChange ? beforeTask.config.workflowId : undefined;
+    const workflowStatusBefore = workflowIdForStatus
+      ? this.computeWorkflowStatus(workflowIdForStatus)
+      : undefined;
 
     const setClauses: string[] = [];
     const values: unknown[] = [];
@@ -417,7 +424,24 @@ export class SqliteTaskAttemptRepository {
       const cols = setClauses.map((c) => c.split(/\s*=\s*/)[0]!.trim()).join(', ');
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }
-    this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    const writeTaskUpdate = (): void => {
+      this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      if (!statusWillChange) return;
+
+      this.appendTaskJournalEntry(taskId);
+      if (!workflowIdForStatus || workflowStatusBefore === undefined) return;
+      const workflowStatusAfter = this.computeWorkflowStatus(workflowIdForStatus);
+      if (workflowStatusAfter !== workflowStatusBefore) {
+        this.appendWorkflowJournalEntry(workflowIdForStatus);
+      }
+    };
+
+    if (statusWillChange) {
+      this.exec.runTransaction(writeTaskUpdate);
+      return;
+    }
+
+    writeTaskUpdate();
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -594,40 +618,43 @@ export class SqliteTaskAttemptRepository {
   // ── Attempt CRUD ─────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.exec.execRun(`
-      INSERT OR REPLACE INTO attempts (
-        id, node_id, attempt_number, queue_priority, status,
-        snapshot_commit, base_branch, upstream_attempt_ids,
-        command_override, prompt_override,
-        claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
-        branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
-        supersedes_attempt_id, created_at, merge_conflict
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?
-      )
-    `, [
-      attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
-      attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
-      JSON.stringify(attempt.upstreamAttemptIds),
-      attempt.commandOverride ?? null, attempt.promptOverride ?? null,
-      attempt.claimedAt?.toISOString() ?? null,
-      attempt.startedAt?.toISOString() ?? null,
-      attempt.completedAt?.toISOString() ?? null,
-      attempt.exitCode ?? null, attempt.error ?? null,
-      attempt.lastHeartbeatAt?.toISOString() ?? null,
-      attempt.leaseExpiresAt?.toISOString() ?? null,
-      attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
-      attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
-      attempt.containerId ?? null,
-      attempt.supersedesAttemptId ?? null,
-      attempt.createdAt.toISOString(),
-      attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
-    ]);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`
+        INSERT OR REPLACE INTO attempts (
+          id, node_id, attempt_number, queue_priority, status,
+          snapshot_commit, base_branch, upstream_attempt_ids,
+          command_override, prompt_override,
+          claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
+          branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
+          supersedes_attempt_id, created_at, merge_conflict
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?,
+          ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?
+        )
+      `, [
+        attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
+        attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
+        JSON.stringify(attempt.upstreamAttemptIds),
+        attempt.commandOverride ?? null, attempt.promptOverride ?? null,
+        attempt.claimedAt?.toISOString() ?? null,
+        attempt.startedAt?.toISOString() ?? null,
+        attempt.completedAt?.toISOString() ?? null,
+        attempt.exitCode ?? null, attempt.error ?? null,
+        attempt.lastHeartbeatAt?.toISOString() ?? null,
+        attempt.leaseExpiresAt?.toISOString() ?? null,
+        attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
+        attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
+        attempt.containerId ?? null,
+        attempt.supersedesAttemptId ?? null,
+        attempt.createdAt.toISOString(),
+        attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
+      ]);
+      this.appendAttemptJournalEntry(attempt.id);
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -711,7 +738,20 @@ export class SqliteTaskAttemptRepository {
 
     if (setClauses.length === 0) return;
     values.push(attemptId);
-    this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    const shouldJournalCompletion = this.shouldJournalAttemptCompletion(changes);
+    const writeAttemptUpdate = (): void => {
+      this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      if (shouldJournalCompletion) {
+        this.appendAttemptJournalEntry(attemptId);
+      }
+    };
+
+    if (shouldJournalCompletion) {
+      this.exec.runTransaction(writeAttemptUpdate);
+      return;
+    }
+
+    writeAttemptUpdate();
   }
 
   claimAttemptForLaunch(
@@ -888,5 +928,68 @@ export class SqliteTaskAttemptRepository {
       [nodeId, selected.createdAt.toISOString(), cappedLimit],
     );
     return rows.map((row) => mapRowToAttempt(row));
+  }
+
+  private appendTaskJournalEntry(taskId: string): void {
+    const payload = this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    if (!payload) return;
+    appendJournalEntry(this.exec, {
+      entityType: 'task',
+      entityId: taskId,
+      op: 'upsert',
+      payload,
+    });
+  }
+
+  private appendAttemptJournalEntry(attemptId: string): void {
+    const payload = this.exec.queryOne('SELECT * FROM attempts WHERE id = ?', [attemptId]);
+    if (!payload) return;
+    appendJournalEntry(this.exec, {
+      entityType: 'attempt',
+      entityId: attemptId,
+      op: 'upsert',
+      payload,
+    });
+  }
+
+  private appendWorkflowJournalEntry(workflowId: string): void {
+    const payload = this.exec.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+    if (!payload) return;
+    appendJournalEntry(this.exec, {
+      entityType: 'workflow',
+      entityId: workflowId,
+      op: 'upsert',
+      payload,
+    });
+  }
+
+  private computeWorkflowStatus(workflowId: string): WorkflowDerivedStatus {
+    const rows = this.exec.queryAll(
+      `SELECT id, description, status, dependencies
+         FROM tasks
+        WHERE workflow_id = ?`,
+      [workflowId],
+    ) as Array<{
+      id: string;
+      description?: string | null;
+      status: TaskState['status'];
+      dependencies?: string | null;
+    }>;
+
+    return computeWorkflowRollupFromSummaries(rows.map((row) => ({
+      id: String(row.id),
+      description: row.description ?? '',
+      status: row.status,
+      dependencies: JSON.parse(row.dependencies || '[]'),
+    }))).status;
+  }
+
+  private shouldJournalAttemptCompletion(
+    changes: Partial<Pick<Attempt, 'status' | 'completedAt'>>,
+  ): boolean {
+    return changes.completedAt !== undefined
+      || changes.status === 'completed'
+      || changes.status === 'failed'
+      || changes.status === 'needs_input';
   }
 }
