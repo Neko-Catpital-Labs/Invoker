@@ -40,6 +40,7 @@ ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
 DIRTY_REPAIR_RETRY_PREFIX = "dirty_retry:"
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
+REPAIR_INVALID_BLOCKER_KINDS = frozenset({"failed_check", "bot_review_thread"})
 REPAIR_STOP_PREFIX = "Mergify repair stopped: "
 MANUAL_SPLIT_STOP_MARKERS = (
     "human stack split required",
@@ -279,7 +280,7 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
 
 
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
-    if blocker.kind != "failed_check":
+    if blocker.kind not in REPAIR_INVALID_BLOCKER_KINDS:
         return None
     latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
     if latest is None:
@@ -294,7 +295,7 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
 
 
 def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | None:
-    if blocker.kind != "failed_check":
+    if blocker.kind not in REPAIR_INVALID_BLOCKER_KINDS:
         return None
     ctx = pr.checks.get(blocker.key)
     completed_at = ctx.completed_at if ctx else ""

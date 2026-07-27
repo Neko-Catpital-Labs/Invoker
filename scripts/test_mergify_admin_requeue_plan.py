@@ -324,6 +324,41 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(plan.actions, ())
         self.assertEqual(plan.wait_reason, "blocked-needs-human")
 
+    def test_bot_thread_repair_invalid_stops_bot_thread_retries_on_same_pr(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            6158,
+            HEAD,
+            "PRRT_kwDOSFkSDM6T97v9",
+            1,
+            meta={
+                "errors": [
+                    'PR body Review Unit "routing" cannot ship with activation-surface files in the same PR. Split this into one Review Unit per PR.'
+                ],
+            },
+        )
+        snapshot = pr(
+            number=6158,
+            labels=frozenset({"admin-bypass"}),
+            review_threads=(
+                m.ReviewThread("PRRT_kwDOSFkSDM6T97v9", False, ("coderabbitai[bot]",)),
+                m.ReviewThread("PRRT_kwDOSFkSDM6T97wJ", False, ("coderabbitai[bot]",)),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6158},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "human_decision")
+        self.assertIn("activation-surface files", blockers[0]["detail"])
+
     def test_capped_failed_check_retries_once_after_dirty_repair_stop(self):
         ledger = self._ledger()
         for epoch in range(3):
