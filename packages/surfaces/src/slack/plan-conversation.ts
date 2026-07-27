@@ -17,7 +17,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import type { ConversationRepository } from '@invoker/data-store';
 import { formatCodexPlannerStdout } from '@invoker/execution-engine';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
-import { isDraftingAuthorized, summarizePlanText } from '@invoker/planning-core';
+import { buildPlanningHandoffInstructions, isDraftingAuthorized, summarizePlanText } from '@invoker/planning-core';
 import type { LogFn } from '../surface.js';
 import {
   buildUnverifiedNotice,
@@ -270,25 +270,25 @@ function buildDirectPlanSystemPrompt(
   const stackedWorkflowSection = preferStackedWorkflows
     ? `\n${buildStackedWorkflowPrompt(repoUrlLine, defaultBranch)}\n`
     : '';
-  const outputInstruction = planFilePath
-    ? `This is the delivery rule stated at the top. Write the COMPLETE YAML plan to the file at \`${planFilePath}\`, and reply in chat with only a one-or-two-sentence summary. Never paste the YAML into chat.`
-    : 'When ready, output the plan inside a \`\`\`yaml code block.';
-  const deliveryDirective = planFilePath
-    ? `HOW TO DELIVER THE PLAN (read first): write the COMPLETE YAML plan to the file at \`${planFilePath}\` using your file-writing tool, then reply in chat with ONLY a short summary — one or two sentences. NEVER paste the YAML plan into your chat reply; Invoker reads it from the file and shows the user a per-task summary. Every YAML block below is the format for that file, not for your chat reply. A pasted plan gets cut off at your output limit, which is the exact problem the file avoids.\n\n`
-    : '';
+  const handoffInstructions = buildPlanningHandoffInstructions({
+    planFilePath,
+    reviewInstruction: 'After the YAML exists, the Slack orchestrator reads that exact YAML, renders the ordered steps in its review card, and owns the approval flow.',
+    shortReplyInstruction: 'Then reply in chat with only a one-or-two-sentence summary. Never paste the YAML into chat.',
+    submissionInstruction: 'Only the Slack orchestrator may submit the plan after approval from its review flow. This rule overrides the plan-to-invoker skill\'s Harness handoff mode in this Slack thread.',
+  });
   const repoUrlDirective = repoUrl
     ? ''
     : 'NO REPO CONFIGURED (read first): this thread has no target repository configured — not via a `[repo:]` tag and not via a default. Before drafting any YAML, ask the user which repository this plan targets (a `[repo:<alias>]` tag, or a full git clone URL) and wait for their reply. Never invent, guess, or copy the `repoUrl` placeholder shown below literally into a plan.\n\n';
   return `You are an assistant for the Invoker orchestrator. The user explicitly requested an Invoker plan.
 
-${repoUrlDirective}${deliveryDirective}Generate a YAML task plan as described below. Answer simple follow-up questions directly only when they are about the plan being drafted.
+${repoUrlDirective}Generate a YAML task plan as described below. Answer simple follow-up questions directly only when they are about the plan being drafted.
 
 A plan has this structure:
 \`\`\`yaml
 name: "Plan Name"
 ${repoUrlLine}
 onFinish: pull_request  # "pull_request" (default), "merge", or "none"
-mergeMode: external_review  # "external_review" = GitHub-backed review gate for reviewable implementation work; "manual" (default) = verification-only, no review; "automatic" = merge without review
+mergeMode: external_review  # default for pull_request plans; "manual" = verification-only, no review; "automatic" = merge without review
 baseBranch: ${defaultBranch}        # base git branch
 featureBranch: plan/my-feature  # auto-generated from plan name if omitted
 tasks:
@@ -325,13 +325,9 @@ Rules:
    - If Invoker config auto-routes heavyweight commands, keep discovered test/build commands as normal command tasks unless the task must name a specific remote target
    - NEVER invent test file names. Verify the test file exists before referencing it in a command.
 7. Use meaningful task IDs (kebab-case).
-8. ${outputInstruction}
+8. ${handoffInstructions}
 9. Always include \`dependencies\` (even if empty array).
-10. After generating a plan, include a short post-plan summary that tells the user they can confirm execution. The confirmation instruction MUST be exactly this standalone line:
-Reply \`submit\` to submit it.
-Do NOT place that line inline in a sentence.
-11. NEVER submit, validate, or execute this plan yourself. Do NOT invoke \`invoker-cli\` (with any flags), \`invoker_submit_plan\`, \`invoker_validate_plan\`, \`submit-plan.sh\`, or the \`plan-to-invoker\` skill's Harness handoff mode. This rule overrides that skill's handoff instructions in this Slack thread. The Slack orchestrator validates and executes the plan after the user replies \`submit\` and approves it. If the user instead says \`execute\`, \`run it\`, \`yes\`, or \`go\` before submitting, remind them to reply with \`submit\`; never run it yourself.
-12. Choose \`mergeMode\` deliberately. For reviewable implementation plans, set \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Keep \`mergeMode: manual\` (the default) for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
+10. Choose \`mergeMode\` deliberately. \`pull_request\` plans default to \`mergeMode: external_review\` so changes land through the canonical GitHub-backed review gate. Use \`mergeMode: manual\` for verification-only plans that should not open a review, and use \`mergeMode: automatic\` only when the user explicitly wants changes merged without review.`;
 }
 
 function buildConversationalPlanSystemPrompt(
