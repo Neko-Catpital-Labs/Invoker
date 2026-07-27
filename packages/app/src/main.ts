@@ -153,6 +153,7 @@ import {
 import {
   approveTask as sharedApproveTask,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
+  recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
   rejectTask as sharedRejectTask,
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
@@ -1452,7 +1453,11 @@ function startHeadlessMode(): void {
         }
         if (!workflowMutationDispatcher.has('invoker:start-ready')) {
           workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
-            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined),
+            runStartReady(
+              orchestrator,
+              requestArg as StartReadyRequest | undefined,
+              createStartReadyRunOptions(),
+            ),
           );
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
@@ -2242,8 +2247,22 @@ startMainProcessBootstrap({
     }
   }
 
-  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
-    const result = runStartReady(orchestrator, request);
+  function createStartReadyRunOptions() {
+    return {
+      recreateWorkflowFromFreshBase: (workflowId: string) =>
+        sharedRecreateWorkflowFromFreshBase(workflowId, {
+          logger,
+          orchestrator,
+          persistence,
+          commandService,
+          taskExecutor: latestTaskExecutor ?? undefined,
+          mutationTiming: activeMutationContext?.mutationTiming,
+        }),
+    };
+  }
+
+  async function executeStartReady(request: StartReadyRequest = {}): Promise<StartReadyResult> {
+    const result = await runStartReady(orchestrator, request, createStartReadyRunOptions());
     if (!result.dryRun) {
       publishOrchestratorSnapshotToRenderer();
     }

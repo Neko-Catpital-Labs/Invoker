@@ -23,6 +23,7 @@ import {
   fixWithAgentAction,
   rebaseRetry,
   rebaseRecreate,
+  recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
   resolveConflictAction,
   forkWorkflow as sharedForkWorkflow,
 } from './workflow-actions.js';
@@ -87,6 +88,15 @@ function createTrackedHeadlessExecutor(
         taskHandles.delete(taskId);
       },
     },
+  );
+}
+
+function startReadyRequestsFreshBase(request: StartReadyRequest): boolean {
+  if (request.freshBase === false) return false;
+  return Boolean(
+    request.freshBase
+    || request.freshBaseScope
+    || request.freshBaseWorkflowIds?.some((workflowId) => workflowId.trim().length > 0),
   );
 }
 
@@ -306,7 +316,20 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request) as StartReadyResult & {
+  const freshBaseTaskExecutor = startReadyRequestsFreshBase(request)
+    ? createHeadlessExecutor(deps)
+    : undefined;
+  const result = await runStartReady(deps.orchestrator, request, {
+    recreateWorkflowFromFreshBase: (workflowId: string) =>
+      sharedRecreateWorkflowFromFreshBase(workflowId, {
+        logger: deps.logger,
+        orchestrator: deps.orchestrator,
+        persistence: deps.persistence,
+        commandService: deps.commandService,
+        taskExecutor: freshBaseTaskExecutor,
+        mutationTiming: deps.mutationTiming,
+      }),
+  }) as StartReadyResult & {
     preview: StartReadyPreviewExt;
   };
   const runnable = result.started.filter(isDispatchableLaunch);
@@ -349,7 +372,7 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     if (deps.deferRunnableTasks) {
       deps.deferRunnableTasks(runnable);
     } else {
-      const taskExecutor = createHeadlessExecutor(deps);
+      const taskExecutor = freshBaseTaskExecutor ?? createHeadlessExecutor(deps);
       void Promise.resolve()
         .then(() => taskExecutor.executeTasks(runnable))
         .catch((err) => {
@@ -363,7 +386,7 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     return;
   }
 
-  const taskExecutor = createHeadlessExecutor(deps);
+  const taskExecutor = freshBaseTaskExecutor ?? createHeadlessExecutor(deps);
   wireHeadlessApproveHook(deps, taskExecutor);
   await taskExecutor.executeTasks(runnable);
 }
