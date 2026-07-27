@@ -41,6 +41,19 @@ exit 42
 EOF
 chmod +x "$TMP/bin/claude"
 
+cat > "$TMP/bin/node" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$#" -ge 1 && "$1" == *"/scripts/validate-pr-body-local.mjs" ]]; then
+  cat <<'JSON'
+{"valid":true,"errors":[],"warnings":[],"changedFiles":["packages/app/src/owner-endpoint.ts"],"reviewLane":"behavior","reviewUnit":"routing","reviewUnits":["routing"],"scopeKinds":["product"]}
+JSON
+  exit 0
+fi
+exec /usr/bin/env node "$@"
+EOF
+chmod +x "$TMP/bin/node"
+
 REMOTE="$TMP/origin.git"
 SEED="$TMP/seed"
 WORK_ROOT="$WORK_PARENT/5810"
