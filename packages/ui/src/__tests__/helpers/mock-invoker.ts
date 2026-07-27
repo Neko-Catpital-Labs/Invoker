@@ -259,7 +259,7 @@ export function createMockInvoker(
     approve: vi.fn(async () => accepted('invoker:approve')),
     reject: vi.fn(async () => accepted('invoker:reject')),
     selectExperiment: vi.fn(async () => accepted('invoker:select-experiment')),
-    restartTask: vi.fn(async () => accepted('invoker:restart-task')),
+    retryTask: vi.fn(async () => accepted('invoker:retry-task')),
     editTaskCommand: vi.fn(async () => accepted('invoker:edit-task-command')),
     editTaskPrompt: vi.fn(async () => accepted('invoker:edit-task-prompt')),
     editTaskPool: vi.fn(async () => accepted('invoker:edit-task-pool')),
