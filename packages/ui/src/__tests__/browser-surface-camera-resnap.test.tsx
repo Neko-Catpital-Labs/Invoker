@@ -97,6 +97,11 @@ async function settleCamera(): Promise<void> {
   }
 }
 
+function submitPlanningText(text: string): void {
+  fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
+  fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+}
+
 describe('Browser-surface camera (component)', () => {
   let mock: MockInvoker;
 
@@ -178,31 +183,75 @@ describe('Browser-surface camera (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it('clicking the left-nav home icon returns to the workflow graph and issues the Home fit command', async () => {
-    mock.setTasks(tasks, workflows);
+  it('returns to the workflow graph from a browser surface by restoring the saved viewport instead of fitting', async () => {
+    const savedViewport = { x: -240, y: 96, zoom: 0.72 };
+    mock.setTasks([], workflows);
     render(<App />);
 
-    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
-    await screen.findByTestId('selected-workflow-mini-dag');
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
     await settleCamera();
+
+    getViewportMock.mockReturnValue(savedViewport);
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    await screen.findByTestId('workflows-rail-list');
+    await settleCamera();
+
     fitViewMock.mockClear();
     setCenterMock.mockClear();
+    setViewportMock.mockClear();
     workflowGraphSpy.reset();
 
     fireEvent.click(screen.getByTestId('sidebar-planning'));
 
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
-    await waitFor(() => {
-      const matchingCommands = workflowGraphSpy.commands.filter((command): command is GraphCameraCommand => (
-        command?.kind === 'fitInitial'
-        && command.scope === 'workflow'
-        && command.reason === 'sidebar-planning'
-      ));
-      expect(matchingCommands.length).toBeGreaterThan(0);
-    });
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
     await flushFrames(4);
 
-    expect(fitViewMock).toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+      && command.reason === 'sidebar-planning'
+    ))).toBe(false);
+  });
+
+  it('keeps the planning-submit fit command when opening the graph after submitting a draft', async () => {
+    mock.setTasks([], workflows);
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Draft ready.',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 1, steps: ['Ship it'] },
+    })) as any;
+    mock.api.planningChatSubmit = vi.fn(async () => ({
+      ok: true,
+      planName: 'Mock Plan',
+      workflowId: 'wf-a',
+    })) as any;
+    render(<App />);
+
+    await screen.findByTestId('invoker-terminal-input');
+    submitPlanningText('draft the plan');
+    await screen.findByTestId('invoker-terminal-ready-bar');
+    fireEvent.click(screen.getByRole('button', { name: 'Review draft' }));
+    fireEvent.click(await screen.findByTestId('planning-create-workflow'));
+
+    await waitFor(() => expect(mock.api.planningChatSubmit).toHaveBeenCalledWith({ sessionId: 'session-1' }));
+    await screen.findByText('Plan "Mock Plan" submitted to Invoker. No ready work to start.');
+
+    workflowGraphSpy.reset();
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+
+    await waitFor(() => {
+      expect(workflowGraphSpy.commands.some((command) => (
+        command?.kind === 'fitInitial'
+        && command.scope === 'workflow'
+        && command.reason === 'planning-submit'
+      ))).toBe(true);
+    });
   });
 
   it('returns to the workflow graph from the planning-home chat rail by restoring the saved viewport instead of fitting', async () => {
