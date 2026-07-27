@@ -945,6 +945,11 @@ The merge conditions cannot be satisfied due to failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2999, "state=CLOSED")])
 
+    def test_merged_pr_is_terminal_success_not_blocked(self):
+        stack = StackGroup("s", (pr(6108, state="MERGED", latest=mergify(state="merged")),))
+        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
+        self.assertEqual(actions, ())
+
 
 if __name__ == "__main__":
     unittest.main()
