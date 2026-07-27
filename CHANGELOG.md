@@ -43,6 +43,8 @@ All notable changes to Invoker will be documented in this file.
 - Stop manual Fix with Agent from starting when a failed task has no saved workspace. It now fails fast with a recreate-this-task message instead of entering a broken fix session.
 - Make the standalone Slack manager follow `~/.invoker/config.json` for its default harness preset before it falls back to `INVOKER_SLACK_DEFAULT_PRESET`. A stale owner-env preset could silently shadow the documented `defaultSlackHarnessPreset`, so `@Invoker` threads on remote hosts could still launch OMP after the UI and CLI had been switched to Codex. The manager now treats `config.json` as the source of truth, keeping `.slack-owner.env` for credentials and env-only fallback. Guarded by a dedicated slack-manager runtime-config regression test.
 
+
+- Pin every workflow base branch to `master`, including recreated/rebased runs and persisted workflows loaded at startup. The old UI labeled `workflow.baseBranch` as `Target Branch`, which made it easy to miss that a workflow was rebasing onto `main`, `release`, or a stale prereq branch. Plans/metadata writes now normalize to `master`, startup rewrites older persisted workflows to `master`, the inspector now shows a read-only `Base Branch` row plus `Feature Branch`, and merge-gate DAG nodes show their base branch inline.
 ## 0.0.7
 
 - Ship Slack as a separate npm-released SEA binary (`@neko-catpital-labs/invoker-slack` / `invoker-slack`), built and archived like the CLI, published from the release workflow, and always included in `scripts/local-macos-release-build.sh` maintainer cuts. The desktop app no longer embeds Slack; GUI relaunch from the manager resolves `INVOKER_GUI_COMMAND`, `invoker-ui`, macOS `open -a Invoker`, then the monorepo xvfb path.
