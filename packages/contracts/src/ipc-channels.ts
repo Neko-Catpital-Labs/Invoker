@@ -1171,6 +1171,10 @@ export const IpcChannels = {
     request: [target: string];
     response: WorkflowMutationAcceptedResult;
   },
+  'invoker:spawn-repair-workflow': {} as {
+    request: [payload: unknown];
+    response: WorkflowMutationAcceptedResult;
+  },
   'invoker:set-merge-branch': {} as {
     request: [workflowId: string, baseBranch: string];
     response: WorkflowMutationAcceptedResult;
