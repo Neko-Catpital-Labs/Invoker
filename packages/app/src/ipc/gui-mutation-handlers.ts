@@ -7,6 +7,7 @@ import type {
   InAppPlanRequest,
   InAppPlanningChatRequest,
   InAppPlanningCreateSessionRequest,
+  InAppPlanningDiscardDraftRequest,
   InAppPlanningResetRequest,
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningStreamEvent,
@@ -83,6 +84,7 @@ import {
   sendPlanningChatMessage,
   setPlanningChatTerminalMode,
   submitPlanningChatDraft,
+  discardPlanningChatDraft,
 } from '../in-app-planner.js';
 import { seedMainProcessHitchFixture } from '../main-process-hitch-fixture.js';
 import { seedStressFixture, type StressFixtureOptions } from '../stress-fixture.js';
@@ -1277,6 +1279,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         preserveTaskHandles: true,
         logLabel: 'planning-chat-submit',
       }),
+      planningSessionStore: ownerMode ? persistence : undefined,
+    });
+  });
+  registerGuiMutationHandler('invoker:planning-chat-discard-draft', async (request: unknown) => {
+    return discardPlanningChatDraft(request as InAppPlanningDiscardDraftRequest, {
+      sessions: planningChatSessions,
       planningSessionStore: ownerMode ? persistence : undefined,
     });
   });
