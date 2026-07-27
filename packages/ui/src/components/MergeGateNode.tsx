@@ -18,11 +18,11 @@ interface MergeGateNodeData {
   label: string;
   gateKind: MergeGateKind;
   mergeMode?: 'manual' | 'automatic' | 'external_review';
+  baseBranch?: string;
   /** Set when merge gate was fixed with Claude — first approve clears this (orchestrator). */
   pendingFixError?: string;
   dimmed?: boolean;
   selected?: boolean;
-  [key: string]: unknown;
 }
 
 interface MergeGateNodeProps {
@@ -42,6 +42,7 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
     label,
     gateKind,
     mergeMode = 'manual',
+    baseBranch,
     pendingFixError,
     dimmed: dataDimmed,
     selected: dataSelected,
@@ -103,6 +104,14 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
         />
         <span className={`text-[8px] tracking-wide ${colors.text}`}>{statusLabel}</span>
       </div>
+      {baseBranch ? (
+        <div
+          data-testid="merge-gate-base-branch"
+          className="mt-1 pl-2 font-mono text-[8px] tracking-wide text-muted-foreground"
+        >
+          base {baseBranch}
+        </div>
+      ) : null}
 
       <Handle
         type="source"
