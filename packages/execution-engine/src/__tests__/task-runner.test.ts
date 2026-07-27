@@ -4140,6 +4140,88 @@ console.log(JSON.stringify(out));
       expect(orchestrator.handleWorkerResponse).not.toHaveBeenCalled();
     });
 
+    it('completes an empty Invoker external_review branch without publishing a make-pr stack', async () => {
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+        mergeTask,
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'none',
+          mergeMode: 'external_review',
+          baseBranch: 'master',
+          featureBranch: 'plan/empty',
+          name: 'Empty Invoker Workflow',
+          repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn(),
+      };
+      const onComplete = vi.fn();
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        callbacks: { onComplete },
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGitReadonly = async () => '';
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push([...args]);
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'base-sha';
+        if (args[0] === 'rev-parse' && args[1] === '--verify' && args[2] === 'refs/remotes/origin/master^{commit}') {
+          return 'origin-base-sha';
+        }
+        if (args[0] === 'diff' && args[1] === '--name-only') return '';
+        return '';
+      };
+      (executor as any).createMergeWorktree = vi.fn().mockResolvedValue('/tmp/mock-wt');
+      (executor as any).removeMergeWorktree = vi.fn();
+      (executor as any).publishReviewStackWithMakePrSkill = vi.fn();
+      (executor as any).authorPrBodyWithSkill = vi.fn();
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(gitCalls).toContainEqual(['diff', '--name-only', 'refs/remotes/origin/master...plan/empty', '--']);
+      expect((executor as any).publishReviewStackWithMakePrSkill).not.toHaveBeenCalled();
+      expect((executor as any).authorPrBodyWithSkill).not.toHaveBeenCalled();
+      expect(mergeGateProvider.createReview).not.toHaveBeenCalled();
+      expect(orchestrator.setTaskReviewReady).not.toHaveBeenCalled();
+      expect(orchestrator.handleWorkerResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: 'completed',
+          outputs: expect.objectContaining({
+            exitCode: 0,
+            branch: 'plan/empty',
+          }),
+        }),
+      );
+      expect(onComplete).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({ status: 'completed' }),
+      );
+    });
+
     it('executeMergeNode anchors external_review gate worktrees on the origin-backed base branch', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
