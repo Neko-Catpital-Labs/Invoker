@@ -33,7 +33,18 @@ describe('registerReadOnlyIpcHandlers', () => {
         handlers.set(channel, handler);
       }),
     };
-    const task = makeTask('wf-1/task-1');
+    const staleTask = makeTask('wf-1/stale-task');
+    const syncedTask = makeTask('wf-1/task-1');
+    let synced = false;
+    const callOrder: string[] = [];
+    const syncAllFromDb = vi.fn(() => {
+      callOrder.push('syncAllFromDb');
+      synced = true;
+    });
+    const getAllTasks = vi.fn(() => {
+      callOrder.push('getAllTasks');
+      return synced ? [syncedTask] : [staleTask];
+    });
 
     registerReadOnlyIpcHandlers({
       ipcMain: ipcMain as never,
@@ -47,7 +58,8 @@ describe('registerReadOnlyIpcHandlers', () => {
         listWorkflows: vi.fn(() => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }]),
       } as never,
       getOrchestrator: () => ({
-        getAllTasks: () => [task],
+        getAllTasks,
+        syncAllFromDb,
         getWorkflowStatus: () => ({ total: 1, completed: 0, failed: 0, closed: 0, running: 0, pending: 1 }),
       }) as never,
       agentRegistry: {} as never,
@@ -62,10 +74,13 @@ describe('registerReadOnlyIpcHandlers', () => {
     const result = await handlers.get('invoker:get-tasks')?.({});
 
     expect(result).toEqual({
-      tasks: [task],
+      tasks: [syncedTask],
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
       streamSequence: 42,
     });
+    expect(syncAllFromDb).toHaveBeenCalledTimes(1);
+    expect(getAllTasks).toHaveBeenCalledTimes(1);
+    expect(callOrder).toEqual(['syncAllFromDb', 'getAllTasks']);
   });
 
   it('get-review-gate returns the shared review gate shape', async () => {
