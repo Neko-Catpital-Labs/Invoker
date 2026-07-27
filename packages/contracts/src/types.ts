@@ -124,6 +124,8 @@ export interface WorkResponseOutputs {
   agentName?: string;
   /** Branch the executor used — persisted at completion to close the write-once gap. */
   branch?: string;
+  /** Workspace path the executor used — persisted at completion for terminal/folder restore. */
+  workspacePath?: string;
   /** Review URL produced by merge-gate style actions. */
   reviewUrl?: string;
   /** Provider-specific review identifier produced by merge-gate style actions. */
