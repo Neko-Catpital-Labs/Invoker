@@ -301,13 +301,34 @@ describe('Slack plan submission restart repro contracts', () => {
 
     expect(sharedSlack.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
       channel: 'C_LOBBY',
-      ts: 'draft-msg-ts',
-      text: 'Plan review cancelled.',
-      blocks: [],
+      ts: 'plan-turn-reply',
+      text: 'Proof plan\n• Exercise the submission flow\nPlan not submitted. Draft kept.',
+      blocks: expect.any(Array),
     }));
     expect(respond).not.toHaveBeenCalled();
-    expect(slackPlanDrafts.get(draft!.draftId, draft!.version)?.status).toBe('rejected');
+    expect(slackPlanDrafts.get(draft!.draftId, draft!.version)?.status).toBe('ready');
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
+  });
+  it('auto-submits a plan draft when the thread is tagged [auto-submit]', async () => {
+    const commands: SurfaceCommand[] = [];
+    const slack = surface(commands);
+    await start(slack, commands);
+    mockSpawn.mockImplementationOnce(() => processWith('ok'));
+    await mention(slack, '[auto-submit] build this draft', 'thread-auto-start');
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await mention(slack, '/plan', 'plan-turn-auto', 'thread-auto-start');
+
+    expect(commands).toContainEqual(expect.objectContaining({
+      type: 'start_plan',
+      planText: expect.stringContaining('name: Proof plan'),
+      lobbyThreadTs: 'thread-auto-start',
+    }));
+    expect(sharedSlack.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C_LOBBY',
+      ts: 'plan-turn-auto-reply',
+      text: 'Starting plan execution…',
+      blocks: [],
+    }));
   });
 
   it('restores repo, preset, and harness session context for a /plan draft after a SlackSurface restart', async () => {

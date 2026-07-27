@@ -10,6 +10,8 @@ import type {
   InAppPlanningDeleteRequest,
   InAppPlanningDeleteResponse,
   InAppPlanningDeleteSubmittedResponse,
+  InAppPlanningDiscardDraftRequest,
+  InAppPlanningDiscardDraftResponse,
   InAppPlanningListSessionsResponse,
   InAppPlanningPlanSummary,
   InAppPlanningResetRequest,
@@ -21,6 +23,7 @@ import type {
   InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  PlanningConfirmationMode,
   PlanningTerminalMode,
   PlanningPresetOption,
 } from '@invoker/contracts';
@@ -32,10 +35,11 @@ import type {
 } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import {
-  approvePlanningDraft,
   evaluatePlanningTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
+  preparePlanningReview,
+  submitPlanningReview,
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
@@ -71,6 +75,7 @@ export interface InAppPlanningChatSession {
   id: string;
   title: string;
   presetKey: string;
+  confirmationMode: PlanningConfirmationMode;
   status: InAppPlanningSessionStatus;
   messages: InAppPlanningChatLine[];
   conversation: PlanConversation;
@@ -180,6 +185,28 @@ function titleFromMessage(message: string): string {
   if (!firstLine) return 'Untitled plan';
   return firstLine.length > 56 ? `${firstLine.slice(0, 53).trimEnd()}…` : firstLine;
 }
+function normalizePlanningConfirmationMode(
+  value: string | null | undefined,
+  fallback: PlanningConfirmationMode = 'require',
+): PlanningConfirmationMode {
+  return value === 'auto_submit' || value === 'require' ? value : fallback;
+}
+
+function resolveDefaultPlanningConfirmationMode(config: InvokerConfig): PlanningConfirmationMode {
+  return normalizePlanningConfirmationMode(config.defaultPlanningTerminalConfirmationMode, 'require');
+}
+
+function extractPlanningConfirmationOverride(message: string): {
+  message: string;
+  confirmationMode?: PlanningConfirmationMode;
+} {
+  const match = /^\[auto-submit\]\s*/i.exec(message);
+  if (!match) return { message };
+  return {
+    message: message.slice(match[0].length),
+    confirmationMode: 'auto_submit',
+  };
+}
 
 function appendSessionMessage(
   session: InAppPlanningChatSession,
@@ -220,6 +247,7 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     title: session.title,
     presetKey: session.presetKey,
     status: session.status,
+    confirmationMode: session.confirmationMode ?? 'require',
     messages: session.messages,
     draftPlanSummary: session.draftPlanSummary,
     draftPlanText: session.draftPlanText,
@@ -243,6 +271,7 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     title: session.title,
     status: session.status,
     presetKey: session.presetKey,
+    confirmationMode: session.confirmationMode ?? 'require',
     messages: session.messages,
     draftPlanAvailable: hasDraftPlan(session),
     draftPlanSummary: session.draftPlanSummary,
@@ -391,10 +420,15 @@ async function createSession(
   const { PlanConversation } = await loadPlannerSurfaces();
   const createdAt = new Date().toISOString();
   const id = randomUUID();
+  const confirmationMode = normalizePlanningConfirmationMode(
+    request?.confirmationMode,
+    resolveDefaultPlanningConfirmationMode(deps.config),
+  );
   const session: InAppPlanningChatSession = {
     id,
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
     presetKey,
+    confirmationMode,
     status: 'still_discussing',
     messages: [],
     conversation: new PlanConversation(planConversationConfig(preset, deps, id, { conversationalPlanning: true })),
@@ -412,12 +446,14 @@ async function createSession(
 export async function listInAppPlanningPresets(config: InvokerConfig): Promise<PlanningPresetOption[]> {
   const presets = await resolveHarnessPresets(config);
   const defaultPresetKey = await resolveDefaultPresetKey(config);
+  const defaultConfirmationMode = resolveDefaultPlanningConfirmationMode(config);
   return Object.entries(presets).map(([key, preset]) => ({
     key,
     label: labelForPresetKey(key),
     tool: preset.tool,
     model: preset.model,
     isDefault: key === defaultPresetKey,
+    defaultConfirmationMode,
   }));
 }
 
@@ -506,7 +542,13 @@ export async function sendPlanningChatMessage(
   },
 ): Promise<InAppPlanningChatResponse> {
   const rawRequest = request as Partial<InAppPlanningChatRequest> | null | undefined;
-  const message = typeof rawRequest?.message === 'string' ? rawRequest.message.trim() : '';
+  const rawMessage = typeof rawRequest?.message === 'string' ? rawRequest.message.trim() : '';
+  const taggedMessage = extractPlanningConfirmationOverride(rawMessage);
+  const message = taggedMessage.message.trim();
+  const requestedConfirmationMode = normalizePlanningConfirmationMode(
+    taggedMessage.confirmationMode ?? rawRequest?.confirmationMode,
+    resolveDefaultPlanningConfirmationMode(deps.config),
+  );
   if (!message) {
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
@@ -518,6 +560,7 @@ export async function sendPlanningChatMessage(
       const created = await createSession({
         presetKey: rawRequest?.presetKey,
         title: titleFromMessage(message),
+        confirmationMode: requestedConfirmationMode,
       }, deps);
       if ('error' in created) {
         return { ok: false, sessionId, error: created.error };
@@ -530,6 +573,7 @@ export async function sendPlanningChatMessage(
     }
 
     const activeSession = session;
+    activeSession.confirmationMode = requestedConfirmationMode;
     const previousSend = activeSession.pendingSend ?? Promise.resolve();
     const turn = previousSend.then(async (): Promise<InAppPlanningChatResponse> => {
       clearStarterPromptIfUnused(activeSession);
@@ -575,14 +619,38 @@ export async function sendPlanningChatMessage(
             sessionId: activeSession.id,
             reply,
             reasoning,
+            confirmationMode: activeSession.confirmationMode,
             draftPlanAvailable: hasDraftPlan(activeSession),
             draftPlanSummary: activeSession.draftPlanSummary,
             draftPlanText: activeSession.draftPlanText,
           } as InAppPlanningChatResponse;
         }
 
-        activeSession.draftPlanSummary = result.summary;
-        activeSession.draftPlanText = result.planText;
+        const review = preparePlanningReview({
+          plannerOutput: reply,
+          extractDraftPlanText: () => result.planText,
+          confirmationMode: activeSession.confirmationMode,
+        });
+        if ('kind' in review) {
+          activeSession.status = hasDraftPlan(activeSession)
+            ? 'draft_ready'
+            : 'still_discussing';
+          appendSessionMessage(activeSession, 'assistant', review.reply);
+          persistPlanningSession(activeSession, deps.planningSessionStore, false);
+          return {
+            ok: true,
+            sessionId: activeSession.id,
+            reply: review.reply,
+            reasoning,
+            confirmationMode: activeSession.confirmationMode,
+            draftPlanAvailable: hasDraftPlan(activeSession),
+            draftPlanSummary: activeSession.draftPlanSummary,
+            draftPlanText: activeSession.draftPlanText,
+          } as InAppPlanningChatResponse;
+        }
+
+        activeSession.draftPlanSummary = review.summary;
+        activeSession.draftPlanText = review.planText;
         activeSession.status = 'draft_ready';
         appendSessionMessage(activeSession, 'assistant', reply);
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
@@ -591,9 +659,10 @@ export async function sendPlanningChatMessage(
           sessionId: activeSession.id,
           reply,
           reasoning,
+          confirmationMode: activeSession.confirmationMode,
           draftPlanAvailable: true,
-          draftPlanSummary: result.summary,
-          draftPlanText: result.planText,
+          draftPlanSummary: review.summary,
+          draftPlanText: review.planText,
         } as InAppPlanningChatResponse;
       } catch (error) {
         persistPlanningSession(activeSession, deps.planningSessionStore, false);
@@ -638,7 +707,7 @@ export async function submitPlanningChatDraft(
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
     try {
-      const approved = await approvePlanningDraft({
+      const approved = await submitPlanningReview({
         planText: session.draftPlanText,
         loadPlan: deps.loadGeneratedPlan,
       });
@@ -673,6 +742,29 @@ export async function submitPlanningChatDraft(
   })();
   session.pendingSubmit = submitAttempt;
   return submitAttempt;
+}
+
+export function discardPlanningChatDraft(
+  request: InAppPlanningDiscardDraftRequest,
+  deps: { sessions: InAppPlanningChatSessions; planningSessionStore?: InAppPlanningSessionStore },
+): InAppPlanningDiscardDraftResponse {
+  const sessionId = typeof request?.sessionId === 'string' ? request.sessionId.trim() : '';
+  const session = sessionId ? deps.sessions.get(sessionId) : undefined;
+  if (!session) {
+    return { ok: false, error: 'No planning conversation yet.' };
+  }
+  if (!hasDraftPlan(session)) {
+    return { ok: false, error: 'No saved draft to discard.' };
+  }
+  if (session.status === 'submitted') {
+    return { ok: false, error: 'This planning session was already submitted.' };
+  }
+  session.status = 'still_discussing';
+  session.draftPlanSummary = undefined;
+  session.draftPlanText = undefined;
+  appendSessionMessage(session, 'system', 'Draft discarded. Ask Invoker to draft it again.');
+  persistPlanningSession(session, deps.planningSessionStore, false);
+  return { ok: true };
 }
 
 export function resetPlanningChat(
@@ -752,7 +844,6 @@ export function updatePlanningChatTerminalState(
     session.updatedAt = terminalUpdatedAt;
     storePatch.updatedAt = terminalUpdatedAt;
   }
-
   deps.planningSessionStore?.updateInAppPlanningSession(session.id, storePatch);
   return true;
 }
@@ -783,6 +874,7 @@ export async function restorePlanningChatSessions(
       id: record.id,
       title: record.title,
       presetKey: record.presetKey,
+      confirmationMode: normalizePlanningConfirmationMode(record.confirmationMode, resolveDefaultPlanningConfirmationMode(deps.config)),
       status: record.status,
       messages: [...record.messages],
       conversation,
