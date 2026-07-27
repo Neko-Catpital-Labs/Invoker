@@ -223,7 +223,7 @@ cleanup_proof_tmp() {
   fi
   shopt -s nullglob
   local path real
-  for path in "$tmp_root"/invoker-* "$tmp_root"/verify-exec-routing.*; do
+  for path in "$tmp_root"/invoker-e2e-* "$tmp_root"/verify-exec-routing.*; do
     [ -e "$path" ] || continue
     real="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$path")"
     if [ -n "$state_real" ] && [ "$real" = "$state_real" ]; then
