@@ -1,0 +1,60 @@
+name: Slack complaint scout loop
+description: |
+  Build and run one bounded, approval-gated Slack complaint scout loop on the
+  DigitalOcean 1 Invoker runner without changing ~/.invoker/config.json or
+  adding an always-on worker.
+onFinish: pull_request
+baseBranch: master
+featureBranch: plan/slack-complaint-scout-loop
+mergeMode: external_review
+reviewProvider: github
+repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
+tasks:
+  - id: run-slack-complaint-scout-loop
+    description: |
+      Build and run the first bounded Slack complaint scout loop on DigitalOcean 1.
+      Review claim: The scout turns an evidence-backed complaint from Edbert's allowlisted Slack messages into an existing Approve/Cancel plan draft or an exact human-only blocker without silent child-workflow submission.
+      Review lane: behavior
+      Safety invariant: The scout reads only explicit allowlisted channels and author U0ALGQ64HMF, writes only a fingerprint ledger and an existing Slack draft or terminal blocker, never calls start_plan, never auto-submits child work, and never exposes Slack tokens.
+      Slice rationale: One behavior slice owns the bounded loop and only the narrow bridge needed to reuse the existing Slack plan-draft approval flow; a daemon/config subsystem is excluded.
+      Architectural effect: Adds a task-driven Slack evidence loop while preserving slack-manager as the only persistent Slack event receiver and existing approval-flow owner.
+      Goal: Each actionable live complaint target receives an approval-gated draft in its source thread; human-only or insufficient-evidence targets receive one exact terminal reason.
+      Motivation: Slack receiver and other Invoker failures appear as frustrated Slack messages but require manual translation and babysitting before becoming evidence-backed work.
+      Alternative considerations: An always-on worker, ~/.invoker/config.json flag, direct child submission, and custom Slack button handling are rejected; reuse the existing draft approval path.
+      Implementation details: Follow LOOP.md and the committed scout artifacts, rebuild targets every pass, use channelId|threadTs|issueFingerprint as the stable target key, cap attempts at three, and gather thread/log/workflow/code evidence before acting.
+      Non-goals: No config.json change, daemon worker, automatic child submission, DM/all-channel/other-author scan, broad Slack refactor, or generic sentiment-only diagnosis.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/surfaces/src/slack/slack-surface.ts
+      - packages/slack-manager/src/index.ts
+      - packages/surfaces/src/slack/__tests__/
+      - packages/slack-manager/src/__tests__/
+      Change types:
+      - packages/surfaces/src/slack/slack-surface.ts: modify
+      - packages/slack-manager/src/index.ts: modify
+      - packages/surfaces/src/slack/__tests__/: modify
+      - packages/slack-manager/src/__tests__/: modify
+      Acceptance criteria:
+      - The deterministic scout proxy exits 0 and recognizes exactly one fixture Slack receiver complaint.
+      - Live discovery is explicit-channel-only, author-filtered to U0ALGQ64HMF, deduplicated, and capped at three attempts per fingerprint.
+      - Actionable targets use the existing Slack Approve action before child work can start.
+      - Human-only and insufficient-evidence targets receive one exact terminal reason and stop retrying.
+      - Focused affected package tests pass.
+    prompt: |
+      Goal: Build and run one bounded Slack complaint scout loop on DigitalOcean 1 that turns an evidence-backed complaint from Edbert's allowlisted Slack messages into an existing Slack Approve/Cancel plan draft or one exact human-only blocker, never silent child-workflow submission.
+      Review claim: The scout turns an evidence-backed complaint from Edbert's allowlisted Slack messages into an existing Approve/Cancel plan draft or an exact human-only blocker without silent child-workflow submission.
+      Review lane: behavior
+      Safety invariant: Read only explicit allowlisted channels and author U0ALGQ64HMF; write only the fingerprint ledger and an existing Slack draft or terminal blocker; never call start_plan, auto-submit child work, scan DMs/all channels/other authors, or expose a Slack token.
+      Slice rationale: This one behavior slice owns a bounded task-driven loop and only the narrow bridge needed to reuse the existing Slack plan-draft approval flow; do not introduce a daemon or config flag.
+      Architectural effect: Add a task-driven Slack evidence loop while preserving packages/slack-manager/src/index.ts as the persistent Slack event receiver and packages/surfaces/src/slack/slack-surface.ts as approval-flow owner.
+      Motivation: Slack receiver and other Invoker problems appear as frustrated Slack messages but currently require manual translation and babysitting before becoming evidence-backed work.
+      Alternative considerations: Do not build an always-on slack-manager worker or edit ~/.invoker/config.json. Do not directly call start_plan or implement custom buttons; reuse the existing draft approval path. Do not label sentiment alone as a bug.
+      Implementation details: Assume no prior context. Read LOOP.md, plans/slack-complaint-scout-loop.md, scripts/slack-complaint-scout-discover.py, scripts/slack-complaint-scout-driver.sh, packages/surfaces/src/slack/slack-surface.ts, and packages/slack-manager/src/index.ts. Keep the driver flags --skip-local-check, --skip-live, repeatable --target, --state-file, --repo, --author, and repeatable --channel. For a live pass, use only existing DO1 Slack environment values, the lobby channel or explicit --channel allowlist, and author U0ALGQ64HMF. Use channelId|threadTs|issueFingerprint as the stable target key with a three-attempt cap. Before action, inspect the source thread, time-window logs, mapped workflow/task context when available, and relevant source. If actionable, prepare a narrow child YAML and use the existing Slack plan-draft Approve/Cancel path in the source thread. If a narrow bridge is absent, add it while preserving Slack manager as the sole persistent event receiver. If human-only or evidence is insufficient, post one exact reason and mark the fingerprint terminal. Rerun the driver after each action and commit only after the defined acceptance checks are green.
+      Non-goals: No config.json changes, daemon worker, automatic child submission, DMs, other-author scans, broad Slack refactor, or generic sentiment-only plan.
+      Files: packages/surfaces/src/slack/slack-surface.ts; packages/slack-manager/src/index.ts; scripts/slack-complaint-scout-discover.py; scripts/slack-complaint-scout-driver.sh; plans/slack-complaint-scout-loop.md.
+      Change types: Slack approval bridge modify; bounded scout artifacts add or modify; focused package tests modify.
+      Acceptance criteria: The deterministic scout proxy exits 0; live discovery is allowlisted/author-filtered/deduplicated/capped; no child workflow starts without existing Slack Approve; exact blockers stop retries; focused package tests pass.
+    dependencies: []
+    poolId: remote_digital_ocean_1_pool
+    executionAgent: codex

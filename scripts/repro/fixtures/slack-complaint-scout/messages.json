@@ -1,0 +1,37 @@
+{
+  "messages": [
+    {
+      "channel": "C012SCOUT",
+      "ts": "1710000000.000100",
+      "thread_ts": "1710000000.000100",
+      "user": "U0ALGQ64HMF",
+      "text": "Why is the Slack receiver still not working? This is really annoying."
+    },
+    {
+      "channel": "C012SCOUT",
+      "ts": "1710000001.000100",
+      "thread_ts": "1710000000.000100",
+      "user": "UOTHER",
+      "text": "I will investigate."
+    },
+    {
+      "channel": "C012SCOUT",
+      "ts": "1710000002.000100",
+      "user": "U0ALGQ64HMF",
+      "text": "The product demo looks good."
+    },
+    {
+      "channel": "C012SCOUT",
+      "ts": "1710000003.000100",
+      "user": "U0ALGQ64HMF",
+      "text": "Why is the coffee machine broken?"
+    },
+    {
+      "channel": "C012SCOUT",
+      "ts": "1710000004.000100",
+      "user": "U0ALGQ64HMF",
+      "bot_id": "BSCOUT",
+      "text": "Slack receiver issue is broken."
+    }
+  ]
+}
