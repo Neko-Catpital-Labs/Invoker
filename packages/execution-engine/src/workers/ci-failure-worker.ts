@@ -10,12 +10,14 @@ import type {
   ReviewGateCiFailedLifecycleEvent,
   WorkflowLifecycleEvent,
 } from '../lifecycle-events.js';
+import { detectStack, fetchOpenStackPrs } from '../pr-stack-detection.js';
 import {
   ciFailureActionKey,
   queueReviewGateCiRepair,
   type ReviewGateCiRepairPolicyOptions,
   type ReviewGateCiRepairStore,
   type ReviewGateCiRepairSubmitter,
+  type StackRepairCandidate,
 } from '../review-gate-ci-repair.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
@@ -24,6 +26,43 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 export const CI_FAILURE_WORKER_KIND = 'ci-failure';
 export const DEFAULT_CI_FAILURE_WORKER_INTERVAL_MS = 60_000;
 export { ciFailureActionKey };
+
+const CI_REPAIR_STACK_MODE_ENV = 'INVOKER_CI_REPAIR_STACK_MODE';
+const GITHUB_TARGET_REPO_ENV = 'INVOKER_GITHUB_TARGET_REPO';
+
+/** On by default: batches a failing PR's whole Mergify stack into one
+ *  PlanDefinition instead of firing a separate single-PR plan per member.
+ *  Set INVOKER_CI_REPAIR_STACK_MODE=0 (or "false") as a kill switch to fall
+ *  back to the single-PR path if stack mode misbehaves against real traffic. */
+export function isCiRepairStackModeEnabled(): boolean {
+  const raw = process.env[CI_REPAIR_STACK_MODE_ENV]?.trim().toLowerCase();
+  return raw !== '0' && raw !== 'false';
+}
+
+/** Wires pr-stack-detection.ts's live gh-backed stack walk into the
+ *  ReviewGateCiRepairPolicyOptions.detectStackForEvent hook. Returns
+ *  undefined (falling back to the single-PR path) whenever the target repo
+ *  isn't configured, the event's PR can't be resolved as currently open, or
+ *  it isn't part of a multi-PR stack. */
+export function createDetectStackForEvent(options: {
+  cwd: string;
+  repo?: string;
+  trunk?: string;
+}): (event: ReviewGateCiFailedLifecycleEvent) => Promise<StackRepairCandidate | undefined> {
+  return async (event) => {
+    const repo = options.repo ?? process.env[GITHUB_TARGET_REPO_ENV]?.trim();
+    if (!repo) return undefined;
+    const prNumber = Number(event.reviewId);
+    if (!Number.isFinite(prNumber)) return undefined;
+
+    const allOpenPrs = await fetchOpenStackPrs({ repo, cwd: options.cwd });
+    const failingPr = allOpenPrs.find((pr) => pr.number === prNumber);
+    if (!failingPr) return undefined;
+
+    const { stackId, members } = detectStack(failingPr, allOpenPrs, { trunk: options.trunk });
+    return members.length > 1 ? { stackId, members } : undefined;
+  };
+}
 
 export type CiFailureWorkerStore = ReviewGateCiRepairStore;
 
@@ -65,6 +104,10 @@ export function registerCiFailureWorker(
           getAutoFixExecutionModel: deps.autoFix?.getAutoFixExecutionModel,
           fetchFailedCheckLogs: createFailedCheckLogFetcher({
             cwd: deps.prMaintenance?.repoRoot,
+          }),
+          isStackRepairEnabled: isCiRepairStackModeEnabled,
+          detectStackForEvent: createDetectStackForEvent({
+            cwd: deps.prMaintenance?.repoRoot ?? process.cwd(),
           }),
         },
       }),
