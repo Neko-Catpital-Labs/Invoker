@@ -96,7 +96,6 @@ import {
   parseRequeueEscalateMutationArgs,
   parseReviewGateCiRepairWorkflowMutationArgs,
   reconcileTerminalWorkerActionsOnStartup,
-  resetAutoFixBudgetForTasks,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -156,6 +155,7 @@ import {
 import {
   approveTask as sharedApproveTask,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
+  recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
   rejectTask as sharedRejectTask,
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
@@ -813,9 +813,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
-    onRecreateTasksReset: (taskIds) => {
-      resetAutoFixBudgetForTasks(persistence, taskIds);
-    },
   });
   commandService = new CommandService(
     orchestrator,
@@ -1113,9 +1110,6 @@ function startHeadlessMode(): void {
               defaultPoolId: invokerConfig.defaultPoolId,
               availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
               deferRunningUntilLaunch: true,
-              onRecreateTasksReset: (taskIds) => {
-                resetAutoFixBudgetForTasks(persistence, taskIds);
-              },
             });
             commandService = new CommandService(
               orchestrator,
@@ -1469,7 +1463,17 @@ function startHeadlessMode(): void {
         }
         if (!workflowMutationDispatcher.has('invoker:start-ready')) {
           workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
-            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined),
+            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined, {
+              freshBaseRecreateWorkflow: (workflowId) => sharedRecreateWorkflowFromFreshBase(workflowId, {
+                logger,
+                orchestrator,
+                persistence,
+                commandService,
+                repoRoot,
+                taskExecutor: createHeadlessExecutor(headlessDeps),
+                mutationTiming: activeMutationContext?.mutationTiming,
+              }),
+            }),
           );
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
@@ -2270,8 +2274,18 @@ startMainProcessBootstrap({
     }
   }
 
-  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
-    const result = runStartReady(orchestrator, request);
+  async function executeStartReady(request: StartReadyRequest = {}): Promise<StartReadyResult> {
+    const result = await runStartReady(orchestrator, request, {
+      freshBaseRecreateWorkflow: (workflowId) => sharedRecreateWorkflowFromFreshBase(workflowId, {
+        logger,
+        orchestrator,
+        persistence,
+        commandService,
+        repoRoot,
+        taskExecutor: requireTaskExecutor(),
+        mutationTiming: activeMutationContext?.mutationTiming,
+      }),
+    });
     if (!result.dryRun) {
       publishOrchestratorSnapshotToRenderer();
     }
