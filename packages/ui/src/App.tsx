@@ -86,6 +86,7 @@ type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
+const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['planning', 'workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const GRAPH_KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
@@ -2874,6 +2875,11 @@ export function App() {
     }
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
+      if (!draftPlanAvailable && activePlanningSession.status !== 'draft_ready') {
+        setPlanningSubmitError({ title: 'Plan could not be submitted', message: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+        appendTerminalLine(`Plan could not be submitted:\n${NO_COMPLETE_PLAN_DRAFTED_ERROR}`, 'system', 'error');
+        return;
+      }
       await handlePlanningSubmitDraft();
       return;
     }
