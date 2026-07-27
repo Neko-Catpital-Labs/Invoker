@@ -1,5 +1,5 @@
 import type { App, BrowserWindow, IpcMain } from 'electron';
-import { Orchestrator, CommandService, OrchestratorErrorCode } from '@invoker/workflow-core';
+import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { CommandError, IpcChannels, makeEnvelope } from '@invoker/contracts';
 import type {
@@ -2103,8 +2103,9 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     'normal',
     async (workflowIdArg: unknown, baseBranchArg: unknown) => {
     const workflowId = String(workflowIdArg);
-    const baseBranch = String(baseBranchArg);
-    logger.info(`set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`, { module: 'ipc' });
+    const requestedBaseBranch = String(baseBranchArg);
+    const baseBranch = normalizeWorkflowBaseBranch(requestedBaseBranch);
+    logger.info(`set-merge-branch: workflow="${workflowId}" requested="${requestedBaseBranch}" persisted="${baseBranch}"`, { module: 'ipc' });
     try {
       persistence.updateWorkflow(workflowId, { baseBranch });
 

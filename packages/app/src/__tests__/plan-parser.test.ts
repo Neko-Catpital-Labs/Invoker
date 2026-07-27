@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 
 describe('applyPlanDefinitionDefaults', () => {
-  it('fills baseBranch, featureBranch, onFinish when omitted (minimal yaml.load shape)', () => {
+  it('pins the workflow baseBranch to master when omitted', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'My Plan',
       repoUrl: 'git@github.com:test/repo.git',
@@ -27,11 +27,10 @@ describe('applyPlanDefinitionDefaults', () => {
     });
     expect(plan.onFinish).toBe('pull_request');
     expect(plan.featureBranch).toBe('plan/my-plan');
-    expect(plan.baseBranch).toBeDefined();
-    expect(typeof plan.baseBranch).toBe('string');
+    expect(plan.baseBranch).toBe('master');
   });
 
-  it('preserves explicit baseBranch, featureBranch, and onFinish', () => {
+  it('pins the workflow baseBranch to master even when the plan asks for another branch', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'X',
       baseBranch: 'develop',
@@ -39,20 +38,19 @@ describe('applyPlanDefinitionDefaults', () => {
       onFinish: 'merge',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
     });
-    expect(plan.baseBranch).toBe('develop');
+    expect(plan.baseBranch).toBe('master');
     expect(plan.featureBranch).toBe('feat/x');
     expect(plan.onFinish).toBe('merge');
   });
 
-  it('treats empty or whitespace baseBranch like omitted (YAML `baseBranch:`)', () => {
+  it('pins blank baseBranch values to master too', () => {
     const empty = applyPlanDefinitionDefaults({
       name: 'Remote PR Plan',
       repoUrl: 'git@github.com:test/repo.git',
       baseBranch: '',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
     });
-    expect(empty.baseBranch).toBeDefined();
-    expect(empty.baseBranch!.length).toBeGreaterThan(0);
+    expect(empty.baseBranch).toBe('master');
 
     const spaces = applyPlanDefinitionDefaults({
       name: 'Remote PR Plan',
@@ -60,7 +58,7 @@ describe('applyPlanDefinitionDefaults', () => {
       baseBranch: '   ',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
     });
-    expect(spaces.baseBranch).toEqual(empty.baseBranch);
+    expect(spaces.baseBranch).toBe('master');
   });
 });
 
@@ -883,7 +881,7 @@ tasks:
   });
 
   describe('onFinish parsing', () => {
-    it('parses plan with onFinish: merge', () => {
+    it('parses plan with onFinish: merge and still pins baseBranch to master', () => {
       const yaml = `
 name: Merge Plan
 repoUrl: git@github.com:test/repo.git
@@ -896,7 +894,7 @@ tasks:
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('merge');
-      expect(plan.baseBranch).toBe('develop');
+      expect(plan.baseBranch).toBe('master');
       expect(plan.featureBranch).toBe('feat/x');
     });
 
@@ -928,19 +926,9 @@ tasks:
       expect(plan.featureBranch).toBe('plan/simple-plan');
     });
 
-    it('auto-detects baseBranch when omitted', async () => {
-      // Mock loadConfig to return empty config so local ~/.invoker/config.json
-      // doesn't short-circuit the remote branch detection.
+    it('pins baseBranch to master when omitted', async () => {
       const configMod = await import('../config.js');
       const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({});
-
-      const mockExecSync = vi.mocked(execSync);
-      mockExecSync.mockImplementation(((cmd: string) => {
-        if (typeof cmd === 'string' && cmd.includes('ls-remote')) {
-          return 'ref: refs/heads/develop\tHEAD\nabc123\tHEAD\n';
-        }
-        throw new Error('unexpected');
-      }) as any);
 
       const yaml = `
 name: No Base Branch
@@ -952,12 +940,11 @@ tasks:
     description: Build the project
 `;
       const plan = parsePlan(yaml);
-      expect(plan.baseBranch).toBe('develop');
-      mockExecSync.mockRestore();
+      expect(plan.baseBranch).toBe('master');
       loadConfigSpy.mockRestore();
     });
 
-    it('explicit baseBranch overrides auto-detection', () => {
+    it('ignores an explicit baseBranch override and still pins to master', () => {
       const yaml = `
 name: Explicit Base
 repoUrl: git@github.com:test/repo.git
@@ -969,7 +956,7 @@ tasks:
     description: Build the project
 `;
       const plan = parsePlan(yaml);
-      expect(plan.baseBranch).toBe('release');
+      expect(plan.baseBranch).toBe('master');
     });
 
     it('rejects invalid onFinish value', () => {

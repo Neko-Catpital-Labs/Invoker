@@ -1,5 +1,15 @@
 import { execFileSync } from 'node:child_process';
 
+export const PINNED_WORKFLOW_BASE_BRANCH = 'master';
+
+export function normalizeWorkflowBaseBranch(_branch?: string | null): string {
+  return PINNED_WORKFLOW_BASE_BRANCH;
+}
+
+export function workflowBaseBranchNeedsMigration(branch?: string | null): boolean {
+  return (branch?.trim() ?? '') !== PINNED_WORKFLOW_BASE_BRANCH;
+}
+
 
 export function detectDefaultBranchRemote(repoUrl: string): string | undefined {
   const trimmed = repoUrl.trim();

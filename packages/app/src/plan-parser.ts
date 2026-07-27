@@ -10,14 +10,13 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
+import { normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
-/** Empty / whitespace `baseBranch` in YAML (`baseBranch:`) must fall through to config + remote detection like a missing key. */
+/** Workflow base branches are pinned to master, regardless of YAML/config input. */
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
-  const b = plan.baseBranch;
-  if (typeof b === 'string' && b.trim() !== '') return b.trim();
-  return loadConfig().defaultBranch ?? (plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) : 'main');
+  return normalizeWorkflowBaseBranch(plan.baseBranch);
 }
 
 /**

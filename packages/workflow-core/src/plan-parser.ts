@@ -1,6 +1,6 @@
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from './orchestrator.js';
-import { detectDefaultBranchRemote } from './repo-default-branch.js';
+import { normalizeWorkflowBaseBranch } from './repo-default-branch.js';
 
 export class PlanParseError extends Error {
   constructor(message: string) {
@@ -60,9 +60,7 @@ export interface RawPlan {
 
 
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
-  const branch = plan.baseBranch;
-  if (typeof branch === 'string' && branch.trim() !== '') return branch.trim();
-  return plan.repoUrl ? detectDefaultBranchRemote(plan.repoUrl) ?? 'main' : 'main';
+  return normalizeWorkflowBaseBranch(plan.baseBranch);
 }
 
 export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {

@@ -28,7 +28,7 @@ describe('MergeGateNode', () => {
     expect(screen.getByTestId('merge-gate-primary-label')).toHaveTextContent('Review');
   });
 
-  it('does not render branch, merge mode, or summary rows in DAG node', () => {
+  it('renders the base branch badge when DAG data includes it', () => {
     renderNode({
       status: 'awaiting_approval',
       label: 'Plan',
@@ -39,9 +39,7 @@ describe('MergeGateNode', () => {
       featureBranch: 'feature/x',
     });
 
-    expect(screen.queryByTestId('merge-branch-display')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('merge-branch-label')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('merge-mode-display')).not.toBeInTheDocument();
+    expect(screen.getByTestId('merge-gate-base-branch')).toHaveTextContent('base master');
     expect(screen.queryByTestId('merge-summary-preview')).not.toBeInTheDocument();
   });
 

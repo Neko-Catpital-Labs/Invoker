@@ -1,8 +1,8 @@
 /**
- * Component test: Merge gate branch selector in TaskPanel.
+ * Component test: Merge gate branch display in the inspector.
  *
  * Demoted from packages/app/e2e/merge-branch.spec.ts.
- * Tests clicking merge node shows Target Branch input, branch label, and blur persistence.
+ * Tests clicking a merge node shows the pinned base branch clearly.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -50,7 +50,7 @@ describe('workflow advanced metadata (component)', () => {
     mock.cleanup();
   });
 
-  it('shows base branch inside advanced metadata section', async () => {
+  it('shows the pinned base branch in the merge settings section', async () => {
     render(<App />);
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     act(() => mock.setTasks([taskA, mergeNode], workflows));
@@ -60,10 +60,14 @@ describe('workflow advanced metadata (component)', () => {
     });
 
     fireEvent.click(screen.getByTestId('workflow-node-wf-1'));
-    fireEvent.click(screen.getByText(/Advanced metadata/i));
+    await waitFor(() => {
+      expect(screen.getByTestId('rf__node-__merge__wf-1')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('rf__node-__merge__wf-1'));
 
     await waitFor(() => {
-      expect(screen.getByText(/base branch: master/i)).toBeInTheDocument();
+      expect(screen.getByText('Base Branch')).toBeInTheDocument();
+      expect(screen.getByTestId('base-branch-display')).toHaveTextContent('master');
     });
   });
 });

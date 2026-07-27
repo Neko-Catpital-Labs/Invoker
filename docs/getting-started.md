@@ -242,7 +242,7 @@ description: |
   Demonstrates a small AI implementation workflow with parallel code paths,
   an SSH-backed verification task, and a pull request review gate.
 repoUrl: git@github.com:your-org/your-repo.git
-baseBranch: main
+baseBranch: master
 onFinish: pull_request
 mergeMode: external_review
 tasks:
@@ -304,7 +304,7 @@ Package boundaries and runtime invariants live in [ARCHITECTURE.md](../ARCHITECT
 
 ## Core concepts
 
-- **Plan** — YAML: tasks, `dependencies`, defaults like `baseBranch`.
+- **Plan** — YAML: tasks, `dependencies`, and workflow defaults. `baseBranch` is pinned to `master` today.
 - **Workflow** — Persisted instance; generation and DB are source of truth.
 - **Task / attempt** — DAG node plus immutable execution records; **selected attempt** drives downstream validity and staleness.
 - **Executors** — `worktree`, `docker`, `ssh` (isolated workspaces).

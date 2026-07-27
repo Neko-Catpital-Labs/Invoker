@@ -134,7 +134,7 @@ The generated YAML is intentionally small:
 ```yaml
 name: First agent workflow (codex)
 repoUrl: /tmp/invoker-first-agent-workflow
-baseBranch: HEAD
+baseBranch: master
 onFinish: none
 mergeMode: manual
 tasks:
@@ -155,7 +155,7 @@ tasks:
 To adapt it:
 
 - Change `repoUrl` to your repo URL or local repo path.
-- Change `baseBranch` to your target branch, such as `main`.
+- Leave `baseBranch: master`. Invoker pins workflow base branches to `master` today.
 - Replace the prompt with the concrete change you want.
 - Replace `npm test` with your real verification command.
 - Use `executionAgent: codex` or `executionAgent: claude`, depending on the agent you want.
