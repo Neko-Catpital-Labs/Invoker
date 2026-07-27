@@ -77,12 +77,12 @@ describe('start-ready', () => {
     });
   });
 
-  it('dry-run reports the preview without mutating work', () => {
+  it('dry-run reports the preview without mutating work', async () => {
     const ready = makeTask('wf-1/ready', 'pending');
     const recoverable = makeTask('wf-1/recoverable', 'running');
     const orchestrator = harness([ready, recoverable], [ready]);
 
-    const result = runStartReady(orchestrator, { dryRun: true });
+    const result = await runStartReady(orchestrator, { dryRun: true });
 
     expect(result.dryRun).toBe(true);
     expect(result.started).toEqual([]);
@@ -90,12 +90,12 @@ describe('start-ready', () => {
     expect(orchestrator.startExecution).not.toHaveBeenCalled();
   });
 
-  it('recovers interrupted claims and starts executable ready tasks', () => {
+  it('recovers interrupted claims and starts executable ready tasks', async () => {
     const ready = makeTask('wf-1/ready', 'pending');
     const recoverable = makeTask('wf-1/recoverable', 'running');
     const orchestrator = harness([ready, recoverable], [ready]);
 
-    const result = runStartReady(orchestrator);
+    const result = await runStartReady(orchestrator);
 
     expect(orchestrator.syncAllFromDb).toHaveBeenCalledTimes(1);
     expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith('wf-1/recoverable', 'start_ready_recovery');
@@ -103,7 +103,7 @@ describe('start-ready', () => {
     expect(result.started.map((task) => task.id)).toEqual(['wf-1/ready']);
   });
 
-  it('leaves actively executing tasks alone instead of superseding their attempts', () => {
+  it('leaves actively executing tasks alone instead of superseding their attempts', async () => {
     const ready = makeTask('wf-1/ready', 'pending');
     const live = makeTask('wf-1/live', 'running', {
       execution: { selectedAttemptId: 'attempt-live' },
@@ -111,19 +111,19 @@ describe('start-ready', () => {
     const orphaned = makeTask('wf-1/orphaned', 'running');
     const orchestrator = harness([ready, live, orphaned], [ready], ['wf-1/live']);
 
-    const result = runStartReady(orchestrator);
+    const result = await runStartReady(orchestrator);
 
     expect(orchestrator.prepareTaskForNewAttempt).not.toHaveBeenCalledWith('wf-1/live', 'start_ready_recovery');
     expect(orchestrator.prepareTaskForNewAttempt).toHaveBeenCalledWith('wf-1/orphaned', 'start_ready_recovery');
     expect(result.preview.recoverableTaskIds).toEqual(['wf-1/orphaned']);
   });
 
-  it('recreates failed workflows only when requested', () => {
+  it('recreates failed workflows only when requested', async () => {
     const failed = makeTask('wf-1/failed', 'failed');
     const pendingOnly = makeTask('wf-2/pending', 'pending');
     const orchestrator = harness([failed, pendingOnly], []);
 
-    const result = runStartReady(orchestrator, { recreateFailed: true });
+    const result = await runStartReady(orchestrator, { recreateFailed: true });
 
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(orchestrator.recreateWorkflow).not.toHaveBeenCalledWith('wf-2');
@@ -131,13 +131,13 @@ describe('start-ready', () => {
     expect(result.started.map((task) => task.id)).toEqual(['wf-1/recreated']);
   });
 
-  it('recreates failed and pending/queued workflows when requested', () => {
+  it('recreates failed and pending/queued workflows when requested', async () => {
     const failed = makeTask('wf-1/failed', 'failed');
     const pendingOnly = makeTask('wf-2/pending', 'pending');
     const queuedOnly = makeTask('wf-3/queued', 'queued' as TaskState['status']);
     const orchestrator = harness([failed, pendingOnly, queuedOnly], []);
 
-    const result = runStartReady(orchestrator, { recreateFailedAndPending: true });
+    const result = await runStartReady(orchestrator, { recreateFailedAndPending: true });
 
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
@@ -145,12 +145,12 @@ describe('start-ready', () => {
     expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2', 'wf-3']);
   });
 
-  it('prefers failed-and-pending union when both recreate flags are set', () => {
+  it('prefers failed-and-pending union when both recreate flags are set', async () => {
     const failed = makeTask('wf-1/failed', 'failed');
     const pendingOnly = makeTask('wf-2/pending', 'pending');
     const orchestrator = harness([failed, pendingOnly], []);
 
-    const result = runStartReady(orchestrator, {
+    const result = await runStartReady(orchestrator, {
       recreateFailed: true,
       recreateFailedAndPending: true,
     });
@@ -158,14 +158,14 @@ describe('start-ready', () => {
     expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2']);
   });
 
-  it('recreates failed, pending/queued, and running workflows when requested', () => {
+  it('recreates failed, pending/queued, and running workflows when requested', async () => {
     const failed = makeTask('wf-1/failed', 'failed');
     const pendingOnly = makeTask('wf-2/pending', 'pending');
     const runningOnly = makeTask('wf-3/running', 'running');
     const approval = makeTask('wf-4/approval', 'awaiting_approval');
     const orchestrator = harness([failed, pendingOnly, runningOnly, approval], []);
 
-    const result = runStartReady(orchestrator, { recreateFailedPendingAndRunning: true });
+    const result = await runStartReady(orchestrator, { recreateFailedPendingAndRunning: true });
 
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
@@ -174,23 +174,23 @@ describe('start-ready', () => {
     expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2', 'wf-3']);
   });
 
-  it('failed-and-pending does not recreate running-only workflows', () => {
+  it('failed-and-pending does not recreate running-only workflows', async () => {
     const runningOnly = makeTask('wf-1/running', 'running');
     const orchestrator = harness([runningOnly], []);
 
-    const result = runStartReady(orchestrator, { recreateFailedAndPending: true });
+    const result = await runStartReady(orchestrator, { recreateFailedAndPending: true });
 
     expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
     expect(result.recreatedWorkflowIds).toEqual([]);
   });
 
-  it('prefers failed-pending-and-running union when all recreate flags are set', () => {
+  it('prefers failed-pending-and-running union when all recreate flags are set', async () => {
     const failed = makeTask('wf-1/failed', 'failed');
     const pendingOnly = makeTask('wf-2/pending', 'pending');
     const runningOnly = makeTask('wf-3/running', 'running');
     const orchestrator = harness([failed, pendingOnly, runningOnly], []);
 
-    const result = runStartReady(orchestrator, {
+    const result = await runStartReady(orchestrator, {
       recreateFailed: true,
       recreateFailedAndPending: true,
       recreateFailedPendingAndRunning: true,
@@ -199,7 +199,7 @@ describe('start-ready', () => {
     expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2', 'wf-3']);
   });
 
-  it('recreates failed, pending/queued, running, and completed workflows when recreateAll is set', () => {
+  it('recreates failed, pending/queued, running, and completed workflows when recreateAll is set', async () => {
     const failed = makeTask('wf-1/failed', 'failed');
     const pendingOnly = makeTask('wf-2/pending', 'pending');
     const runningOnly = makeTask('wf-3/running', 'running');
@@ -210,7 +210,7 @@ describe('start-ready', () => {
       [],
     );
 
-    const result = runStartReady(orchestrator, { recreateAll: true });
+    const result = await runStartReady(orchestrator, { recreateAll: true });
 
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-1');
     expect(orchestrator.recreateWorkflow).toHaveBeenCalledWith('wf-2');
@@ -221,16 +221,106 @@ describe('start-ready', () => {
     expect(result.preview.completedWorkflowIds).toEqual(['wf-4']);
   });
 
-  it('prefers recreateAll over narrower recreate flags', () => {
+  it('prefers recreateAll over narrower recreate flags', async () => {
     const failed = makeTask('wf-1/failed', 'failed');
     const completedOnly = makeTask('wf-2/completed', 'completed');
     const orchestrator = harness([failed, completedOnly], []);
 
-    const result = runStartReady(orchestrator, {
+    const result = await runStartReady(orchestrator, {
       recreateFailed: true,
       recreateAll: true,
     });
 
     expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-2']);
+  });
+
+  it('dry-run previews fresh-base scope selections without mutating work', async () => {
+    const failed = makeTask('wf-1/failed', 'failed');
+    const pendingOnly = makeTask('wf-2/pending', 'pending');
+    const queuedOnly = makeTask('wf-3/queued', 'queued' as TaskState['status']);
+    const runningOnly = makeTask('wf-4/running', 'running');
+    const completedOnly = makeTask('wf-5/completed', 'completed');
+    const approval = makeTask('wf-6/approval', 'awaiting_approval');
+    const orchestrator = harness(
+      [failed, pendingOnly, queuedOnly, runningOnly, completedOnly, approval],
+      [],
+    );
+
+    const result = await runStartReady(orchestrator, {
+      dryRun: true,
+      freshBaseScope: 'failed-pending-and-running',
+    });
+
+    expect(result.preview.freshBase).toEqual({
+      scope: 'failed-pending-and-running',
+      workflowIds: ['wf-1', 'wf-2', 'wf-3', 'wf-4'],
+      failedWorkflowIds: ['wf-1'],
+      pendingWorkflowIds: ['wf-2', 'wf-3'],
+      runningWorkflowIds: ['wf-4'],
+      completedWorkflowIds: [],
+    });
+    expect(result.started).toEqual([]);
+    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('routes fresh-base scopes through fresh-base recreation and reports partial outcomes', async () => {
+    const failed = makeTask('wf-1/failed', 'failed');
+    const pendingOnly = makeTask('wf-2/pending', 'pending');
+    const runningOnly = makeTask('wf-3/running', 'running');
+    const orchestrator = harness([failed, pendingOnly, runningOnly], []);
+    const freshStarted = makeTask('wf-1/fresh', 'pending');
+    const freshBaseRecreateWorkflow = vi.fn(async (workflowId: string) => {
+      if (workflowId === 'wf-2') throw new Error('base refresh failed');
+      return [freshStarted];
+    });
+
+    const result = await runStartReady(orchestrator, {
+      freshBaseScope: 'failed-and-pending',
+    }, {
+      freshBaseRecreateWorkflow,
+    });
+
+    expect(freshBaseRecreateWorkflow).toHaveBeenCalledTimes(2);
+    expect(freshBaseRecreateWorkflow).toHaveBeenNthCalledWith(1, 'wf-1');
+    expect(freshBaseRecreateWorkflow).toHaveBeenNthCalledWith(2, 'wf-2');
+    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+    expect(result.freshBaseRecreatedWorkflowIds).toEqual(['wf-1']);
+    expect(result.recreatedWorkflowIds).toEqual([]);
+    expect(result.partial).toBe(true);
+    expect(result.workflowOutcomes).toEqual([
+      {
+        ok: true,
+        workflowId: 'wf-1',
+        mode: 'fresh-base-recreate',
+        startedTaskIds: ['wf-1/fresh'],
+      },
+      {
+        ok: false,
+        workflowId: 'wf-2',
+        mode: 'fresh-base-recreate',
+        error: 'base refresh failed',
+      },
+    ]);
+    expect(result.started.map((task) => task.id)).toEqual(['wf-1/fresh']);
+  });
+
+  it('fresh-base all scope includes completed workflows', async () => {
+    const failed = makeTask('wf-1/failed', 'failed');
+    const completedOnly = makeTask('wf-2/completed', 'completed');
+    const orchestrator = harness([failed, completedOnly], []);
+    const freshBaseRecreateWorkflow = vi.fn(async (workflowId: string) => [
+      makeTask(`${workflowId}/fresh`, 'pending'),
+    ]);
+
+    const result = await runStartReady(orchestrator, {
+      freshBaseScope: 'all',
+    }, {
+      freshBaseRecreateWorkflow,
+    });
+
+    expect(result.preview.freshBase?.workflowIds).toEqual(['wf-1', 'wf-2']);
+    expect(result.preview.freshBase?.completedWorkflowIds).toEqual(['wf-2']);
+    expect(result.freshBaseRecreatedWorkflowIds).toEqual(['wf-1', 'wf-2']);
+    expect(result.partial).toBe(false);
   });
 });
