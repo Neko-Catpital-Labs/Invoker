@@ -10,6 +10,7 @@ export interface CreateSlackPlanDraft {
   harnessPreset: string;
   workingDir: string;
   requestedBy: string;
+  confirmationMode: SlackPlanDraft['confirmationMode'];
 }
 
 export class SlackPlanDraftRepository {
@@ -33,6 +34,7 @@ export class SlackPlanDraftRepository {
       harnessPreset: input.harnessPreset,
       workingDir: input.workingDir,
       requestedBy: input.requestedBy,
+      confirmationMode: input.confirmationMode,
       createdAt: now,
     };
     this.adapter.saveSlackPlanDraft(draft);

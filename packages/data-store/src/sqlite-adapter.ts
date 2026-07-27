@@ -31,7 +31,7 @@ import type {
   DetachedExternalDependency,
 } from '@invoker/workflow-core';
 import { DISPATCH_LEASE_MS } from '@invoker/contracts';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type {
   ExecutionResourceLeaseReleaseRow,
   LaunchDispatchInvalidationRow,
@@ -526,6 +526,7 @@ type InAppPlanningSessionRow = {
   title?: unknown;
   preset_key?: unknown;
   status?: unknown;
+  confirmation_mode?: unknown;
   draft_plan_summary_json?: unknown;
   draft_plan_text?: unknown;
   submitted_workflow_id?: unknown;
@@ -577,6 +578,9 @@ function isPlanningTerminalStatus(value: unknown): value is 'running' | 'exited'
 
 function isInAppPlanningMessageRole(value: unknown): value is InAppPlanningChatLine['role'] {
   return value === 'user' || value === 'assistant' || value === 'system';
+}
+function isPlanningConfirmationMode(value: unknown): value is PlanningConfirmationMode {
+  return value === 'require' || value === 'auto_submit';
 }
 
 function isInAppPlanningMessageTone(value: unknown): value is InAppPlanningChatLine['tone'] {
@@ -1210,6 +1214,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           title,
           preset_key,
           status,
+          confirmation_mode,
           draft_plan_summary_json,
           draft_plan_text,
           submitted_workflow_id,
@@ -1223,11 +1228,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
           pending_response,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
           status = excluded.status,
+          confirmation_mode = excluded.confirmation_mode,
           draft_plan_summary_json = excluded.draft_plan_summary_json,
           draft_plan_text = excluded.draft_plan_text,
           submitted_workflow_id = excluded.submitted_workflow_id,
@@ -1246,6 +1252,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.title,
           record.presetKey,
           record.status,
+          record.confirmationMode ?? 'require',
           record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
           record.draftPlanText ?? null,
           record.submittedWorkflowId ?? null,
@@ -1294,6 +1301,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (Object.hasOwn(patch, 'status')) {
         setClauses.push('status = ?');
         values.push(patch.status ?? null);
+      }
+      if (Object.hasOwn(patch, 'confirmationMode')) {
+        setClauses.push('confirmation_mode = ?');
+        values.push(patch.confirmationMode ?? 'require');
       }
       if (Object.hasOwn(patch, 'draftPlanSummary')) {
         setClauses.push('draft_plan_summary_json = ?');
@@ -2148,8 +2159,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   saveSlackLaunchContext(context: SlackLaunchContext): void {
     this.execRun(`
       INSERT OR REPLACE INTO slack_launch_contexts
-        (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id, harness_session_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (thread_ts, repo_url, harness_preset, working_dir, requested_by, lobby_channel_id, confirmation_mode, harness_session_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       context.threadTs,
       context.repoUrl,
@@ -2157,6 +2168,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       context.workingDir,
       context.requestedBy,
       context.lobbyChannelId,
+      context.confirmationMode ?? 'require',
       context.harnessSessionId ?? null,
     ]);
   }
@@ -2174,6 +2186,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       workingDir: row.working_dir as string,
       requestedBy: row.requested_by as string,
       lobbyChannelId: row.lobby_channel_id as string,
+      confirmationMode: isPlanningConfirmationMode(row.confirmation_mode) ? row.confirmation_mode : 'require',
       harnessSessionId: typeof row.harness_session_id === 'string' ? row.harness_session_id : undefined,
     };
   }
@@ -2186,8 +2199,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.execRun(`
       INSERT OR REPLACE INTO slack_plan_drafts
         (draft_id, version, channel_id, thread_ts, message_ts, slack_file_id, plan_text, content_hash, summary_json,
-         status, repo_url, harness_preset, working_dir, requested_by, created_at, decided_at, decided_by, execution_key, workflow_ids_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         status, repo_url, harness_preset, working_dir, requested_by, confirmation_mode, created_at, decided_at, decided_by, execution_key, workflow_ids_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       draft.draftId,
       draft.version,
@@ -2203,6 +2216,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       draft.harnessPreset,
       draft.workingDir,
       draft.requestedBy,
+      draft.confirmationMode ?? 'require',
       draft.createdAt,
       draft.decidedAt ?? null,
       draft.decidedBy ?? null,
@@ -2310,6 +2324,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       harnessPreset: row.harness_preset as string,
       workingDir: row.working_dir as string,
       requestedBy: row.requested_by as string,
+      confirmationMode: isPlanningConfirmationMode(row.confirmation_mode) ? row.confirmation_mode : 'require',
       createdAt: row.created_at as string,
       decidedAt: typeof row.decided_at === 'string' ? row.decided_at : undefined,
       decidedBy: typeof row.decided_by === 'string' ? row.decided_by : undefined,
@@ -2774,12 +2789,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
           message.role,
           message.text,
           message.tone ?? null,
-          message.createdAt ?? fallbackCreatedAt,
+          message.createdAt || fallbackCreatedAt,
         ],
       );
     }
   }
-
 
   private mapInAppPlanningSessionRow(row: InAppPlanningSessionRow): InAppPlanningSessionRecord | undefined {
     try {
@@ -2788,7 +2802,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
       const presetKey = typeof row.preset_key === 'string' ? row.preset_key : '';
       const createdAt = typeof row.created_at === 'string' ? row.created_at : '';
       const updatedAt = typeof row.updated_at === 'string' ? row.updated_at : '';
-      if (!id || !title || !presetKey || !createdAt || !updatedAt || !isInAppPlanningSessionStatus(row.status)) {
+      if (
+        !id
+        || !title
+        || !presetKey
+        || !createdAt
+        || !updatedAt
+        || !isInAppPlanningSessionStatus(row.status)
+        || !isPlanningConfirmationMode(row.confirmation_mode)
+      ) {
         return undefined;
       }
       const terminalMode = row.terminal_mode === undefined || row.terminal_mode === null
@@ -2842,6 +2864,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         title,
         presetKey,
         status: row.status,
+        confirmationMode: row.confirmation_mode,
         messages,
         ...(draftPlanSummary ? { draftPlanSummary } : {}),
         ...(typeof row.draft_plan_text === 'string' ? { draftPlanText: row.draft_plan_text } : {}),
