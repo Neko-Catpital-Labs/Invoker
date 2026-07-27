@@ -251,7 +251,7 @@ describe('SystemSetupModal — Invoker CLI section', () => {
     fireEvent.click(screen.getByRole('button', { name: /System check details/ }));
     expect(screen.getByText('Enable Cursor CLI')).toBeInTheDocument();
   });
-  it('reviews selected setup items before running Slack checked by default', () => {
+  it('reviews selected setup items before running with Slack unchecked by default', () => {
     const onRunSetup = vi.fn();
     render(
       <SystemSetupModal
@@ -261,27 +261,21 @@ describe('SystemSetupModal — Invoker CLI section', () => {
       />,
     );
 
-    expect(screen.getByRole('checkbox', { name: /Set up Slack integration/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Install or update invoker-cli/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Install Invoker helpers/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Install missing tools/ })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Set up Slack integration/ })).not.toBeChecked();
     expect(screen.queryByText(/Next: add Bot token/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Set it up for me' }));
     expect(screen.getByText('Review setup plan')).toBeInTheDocument();
-    expect(screen.getByText(/Next: add Bot token/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText(/Bot token/), { target: { value: 'xoxb-token' } });
-    fireEvent.change(screen.getByLabelText(/App token/), { target: { value: 'xapp-token' } });
-    fireEvent.change(screen.getByLabelText(/Signing secret/), { target: { value: 'secret' } });
-    fireEvent.change(screen.getByLabelText(/Lobby channel ID/), { target: { value: 'C123' } });
+    expect(screen.queryByText(/Next: add Bot token/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve and run setup' }));
     expect(onRunSetup).toHaveBeenCalledWith({
       updateCli: true,
       installHelpers: true,
       fixTools: true,
-      slack: {
-        botToken: 'xoxb-token',
-        appToken: 'xapp-token',
-        signingSecret: 'secret',
-        channelId: 'C123',
-      },
+      slack: false,
     });
   });
 
@@ -295,6 +289,7 @@ describe('SystemSetupModal — Invoker CLI section', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('checkbox', { name: /Set up Slack integration/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Set it up for me' }));
     expect(screen.getByText('Slack waits for Bot token. The rest can run now.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Approve and run setup' }));
@@ -318,5 +313,23 @@ describe('SystemSetupModal — Invoker CLI section', () => {
 
     expect(screen.getByText('Setup completed')).toBeInTheDocument();
     expect(screen.getByText(/Git: git found/)).toBeInTheDocument();
+  });
+
+  it('renders the first agent workflow tutorial link on the finish step', () => {
+    render(
+      <SystemSetupModal
+        diagnostics={makeDiagnostics({ supported: true, bundledVersion: '0.0.3', upToDate: true })}
+        setupResult={{ ok: true, steps: [{ id: 'tools', name: 'Install missing tools', ok: true, output: 'ok  Git: git found' }] }}
+        onRunSetup={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    const tutorialLink = screen.getByRole('link', { name: 'Open the First Agent Workflow Tutorial' });
+    expect(tutorialLink).toHaveAttribute(
+      'href',
+      'https://github.com/Neko-Catpital-Labs/Invoker/blob/main/docs/tutorial-first-agent-workflow.md',
+    );
+    expect(tutorialLink).toHaveAttribute('target', '_blank');
   });
 });
