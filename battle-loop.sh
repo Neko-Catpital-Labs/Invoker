@@ -16,6 +16,7 @@ REPROS=(
   scripts/repro/repro-babysit-bottom-human-decision-blocks-downstream.sh
   scripts/repro/repro-babysit-amended-repair-push.sh
   scripts/repro/repro-babysit-outdated-bot-thread.sh
+  scripts/repro/repro-babysit-upper-stack-needs-acceptance.sh
   scripts/repro/repro-babysit-headless-queued-comment.sh
   scripts/repro/repro-babysit-queue-only-empty-log.sh
   scripts/repro/repro-babysit-queue-only-skipped-check.sh

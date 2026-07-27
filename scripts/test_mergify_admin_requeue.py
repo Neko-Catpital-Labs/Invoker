@@ -236,7 +236,8 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2605, "PR Body")])
 
-    def test_unaccepted_upper_without_blockers_waits_instead_of_requeueing_bottom(self):
+    def test_unaccepted_upper_without_blockers_posts_once_instead_of_requeueing_bottom(self):
+        ledger = self.ledger()
         stack = StackGroup(
             "s",
             (
@@ -244,7 +245,11 @@ Failing checks
                 pr(2605, base="stack/a", labels={"dequeued"}),
             ),
         )
-        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 1)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("comment_blocked", 2604, "upper-stack-needs-acceptance")])
+        self.assertIn("#2605 (`stack/2605`)", actions[0].detail)
+        ledger.record("comment-blocked", 2604, HEAD, "upper-stack-needs-acceptance", 1)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual(actions, ())
 
     def test_missing_admin_bypass_label_on_current_bottom_nudges_human_first(self):
@@ -578,19 +583,21 @@ Failing checks
         self.assertIn('"failed_check"', log)
         self.assertIn('"pr_number": 2606', log)
 
-    def test_run_cycle_logs_wait_reason_for_unaccepted_upper_stack(self):
+    def test_run_cycle_posts_blocker_for_unaccepted_upper_stack(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
         stack = StackGroup("s", (pr(2604, head="stack/a", latest=mergify()), pr(2605, base="stack/a", labels={"dequeued"})))
         stderr = io.StringIO()
+        stdout = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
                 with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
-                    with redirect_stderr(stderr):
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
-        self.assertTrue(should_poll)
+        self.assertFalse(should_poll)
+        self.assertIn("BLOCK PR #2604 upper stack member(s) #2605", stdout.getvalue())
         log = stderr.getvalue()
-        self.assertIn('"event": "admin-bypass-stack-wait"', log)
-        self.assertIn('"reason": "upper-stack-needs-acceptance"', log)
+        self.assertIn('"event": "admin-bypass-stack-actions"', log)
+        self.assertIn('"kind": "comment_blocked"', log)
         self.assertIn('"upper_stack_needs_acceptance": true', log)
 
     def test_repair_check_splits_tooling_policy_prerequisite(self):

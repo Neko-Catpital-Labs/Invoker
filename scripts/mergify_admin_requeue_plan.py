@@ -181,10 +181,26 @@ def current_bottom_pr(stack: StackGroup, trunk: str) -> PrSnapshot | None:
     return None
 
 
+def unaccepted_upper_prs(stack: StackGroup, bottom: PrSnapshot | None) -> tuple[PrSnapshot, ...]:
+    if not bottom:
+        return ()
+    return tuple(
+        pr for pr in stack.prs
+        if pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
+    )
+
+
 def stack_has_unaccepted_upper_pr(stack: StackGroup, bottom: PrSnapshot | None) -> bool:
-    return bool(bottom) and any(
-        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
-        for pr in stack.prs
+    return bool(unaccepted_upper_prs(stack, bottom))
+
+
+def upper_stack_acceptance_detail(facts: StackFacts) -> str:
+    assert facts.bottom is not None, "upper stack acceptance requires a current bottom"
+    upper = unaccepted_upper_prs(facts.stack, facts.bottom)
+    members = ", ".join(f"#{pr.number} (`{pr.head_ref_name}`)" for pr in upper)
+    return (
+        f"upper stack member(s) {members} are open above #{facts.bottom.number} without `admin-bypass`; "
+        "accept them into the admin-bypass stack, land them, close them, or retarget them before babysitting can queue this stack"
     )
 
 
@@ -591,7 +607,10 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
             )
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
-        return None
+        key = "upper-stack-needs-acceptance"
+        if ledger.count("comment-blocked", bottom.number, bottom.head_ref_oid, key) > 0:
+            return None
+        return Action("comment_blocked", bottom.number, key, upper_stack_acceptance_detail(facts))
     if latest and latest.state in ACTIVE_QUEUE_STATES and (latest.head_sha == bottom.head_ref_oid or "queued" in bottom.labels):
         return None
     requeue_reason = "eligible-when-ready"
