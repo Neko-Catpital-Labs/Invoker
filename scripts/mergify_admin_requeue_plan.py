@@ -464,7 +464,7 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
 def wait_reason_for_facts(facts: StackFacts) -> str:
     if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
-    if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
+    if bottom_has_active_queue(facts):
         return "bottom-already-queued"
     for pr in facts.stack.prs:
         blocker_kinds = {blocker.kind for blocker in facts.blockers_by_pr[pr.number]}
@@ -475,6 +475,14 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
     return "no-action"
+
+
+def bottom_has_active_queue(facts: StackFacts) -> bool:
+    bottom = facts.bottom
+    if not bottom or not bottom.latest_mergify:
+        return False
+    latest = bottom.latest_mergify
+    return latest.state in ACTIVE_QUEUE_STATES and (latest.head_sha == bottom.head_ref_oid or "queued" in bottom.labels)
 
 
 def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
@@ -632,6 +640,8 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
+    if bottom_has_active_queue(facts):
+        return ()
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)

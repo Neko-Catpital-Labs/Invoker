@@ -322,6 +322,15 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(snapshot)
         self.assertEqual(actions, ())
 
+    def test_queued_label_with_headless_active_queue_failed_check_waits(self):
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "queued"}),
+            latest_mergify=event(state="queued", head=""),
+            checks={"build": check("failure")},
+        )
+        actions = self._plan(snapshot)
+        self.assertEqual(actions, ())
+
     def test_clean_bottom_queues_without_prior_dequeue(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot)
