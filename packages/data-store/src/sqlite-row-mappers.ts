@@ -27,7 +27,7 @@ import type {
 } from './sqlite-adapter.js';
 
 export function mapRowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
-  return {
+  const workflow: Workflow = {
     id: row.id,
     name: row.name,
     description: row.description ?? undefined,
@@ -50,6 +50,10 @@ export function mapRowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+  if (row.deleted_at !== null && row.deleted_at !== undefined) {
+    workflow.deletedAt = Number(row.deleted_at);
+  }
+  return workflow;
 }
 
 export function mapRowToTask(row: any): TaskState {
