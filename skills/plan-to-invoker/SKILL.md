@@ -63,6 +63,8 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 - Prefer the MCP tools `invoker_validate_plan` and `invoker_submit_plan` when available.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before submission.
 - Outside an Invoker source checkout, `invoker_validate_plan` is the deterministic validation gate.
+- Plain approval stops after workflow handoff: treat approval of the Markdown/YAML plan as authorization to validate and submit the workflow to Invoker only. Plain approval should not be read as PR publication. Stop after `invoker_submit_plan` or the documented `invoker-cli run ... --live` fallback; do not create, update, publish pull requests, or run `mergify stack push` from that approval alone.
+- Later PR publication is a separate explicit action. When the user separately asks to create, update, publish, or split PRs/PR stacks after workflow handoff, follow the PR publication rules below and the `make-pr` skill before taking that action.
 
 - If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
@@ -75,7 +77,7 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 3. Runtime verification (Phase 1b): run the cheapest deterministic command that exercises the behavior, plus Invoker headless when applicable.
 4. Generate implementation YAML from verified facts — prefer rendering a matching formula (`skills/plan-to-invoker/formulas/`) and specializing its slots over authoring the shape from scratch.
 5. Validate with deterministic scripts.
-6. Present plan and submit on confirmation.
+6. Present plan and submit on confirmation. That confirmation authorizes workflow handoff only; later PR publication requires a separate explicit request.
 
 Grep-only checks are Phase 1a only; behavioral claims require executed Phase 1b evidence.
 
