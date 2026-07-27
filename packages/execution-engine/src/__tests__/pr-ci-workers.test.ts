@@ -189,6 +189,7 @@ describe('PR status and CI failure workers', () => {
       defaultAutoFixRetries: 2,
       getAutoFixAgent: () => 'codex',
       getAutoFixExecutionModel: () => 'openai/gpt-5.2',
+      getAutoFixPoolId: () => 'remote_digital_ocean_1',
       drainEvents: () => [event],
     });
 
@@ -216,6 +217,7 @@ describe('PR status and CI failure workers', () => {
       taskStateVersion: 10,
       agentName: 'codex',
       executionModel: 'openai/gpt-5.2',
+      poolId: 'remote_digital_ocean_1',
     })[0]);
     expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
       workerKind: CI_FAILURE_WORKER_KIND,
