@@ -11,9 +11,13 @@ Write the planning artifact to `plans/invoker-handoff.md`.
 
 Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 
+When `invoker_validate_plan` is available, run it on `plans/invoker-handoff.yaml` as a deterministic diagnostic before review.
+
 Call `invoker_prepare_plan_review` on `plans/invoker-handoff.yaml`, show the returned ordered steps and `confirmationText`, and use that review output as the only approval gate.
 
 If the review result says `confirmationMode` is `require`, wait for approval before submission. If it says `auto_submit`, show the same review output and then submit immediately.
+
+Plain approval stops after workflow handoff: submit the reviewed workflow plan, report the submitted workflow status, and stop. That approval does not authorize GitHub PR creation, PR updates, `mergify stack push`, or local branch publication unless the user explicitly asks for PR publication.
 
 Call `invoker_submit_plan` with mode `live` only after that review step, or immediately after it when `confirmationMode` is `auto_submit`.
 
