@@ -83,6 +83,8 @@ export interface AutoFixWorkerConfig {
   getAutoFixAgent?: () => string | undefined;
   /** Resolves the execution model used by worker-submitted auto-fixes. */
   getAutoFixExecutionModel?: () => string | undefined;
+  /** Resolves the execution pool/target used by worker-submitted auto-fixes. */
+  getAutoFixPoolId?: () => string | undefined;
 }
 
 

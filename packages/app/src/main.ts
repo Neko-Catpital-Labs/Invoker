@@ -106,6 +106,7 @@ import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
   resolveAutoFixExecutionModel,
+  resolveAutoFixPoolId,
   resolveConfigFileState,
   resolvePrMaintenanceWorkerConfig,
   type InvokerConfig,
@@ -336,6 +337,7 @@ function buildRegisteredOwnerWorkerDeps(
       attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+      getAutoFixPoolId: () => resolveAutoFixPoolId(invokerConfig),
     },
     requeue: {
       stallRequeueRetries: invokerConfig.stallRequeueRetries,

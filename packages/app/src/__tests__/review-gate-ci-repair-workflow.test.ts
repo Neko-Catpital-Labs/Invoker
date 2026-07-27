@@ -83,6 +83,7 @@ function makeArgs(h: TestHarness, mergeId: string, workflowId: string): ReviewGa
     taskStateVersion: gate.taskStateVersion,
     agentName: 'codex',
     executionModel: 'openai/gpt-5.2',
+    poolId: 'remote_digital_ocean_1',
   };
 }
 
@@ -136,6 +137,7 @@ describe('spawnReviewGateCiRepairWorkflow', () => {
         prompt: expect.stringContaining('git fetch origin feature/review-gate-ci && git checkout feature/review-gate-ci'),
         executionAgent: 'codex',
         executionModel: 'openai/gpt-5.2',
+        poolId: 'remote_digital_ocean_1',
       },
     });
 

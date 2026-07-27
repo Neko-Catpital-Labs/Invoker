@@ -69,6 +69,7 @@ export interface ReviewGateCiRepairPolicyOptions {
   defaultAutoFixRetries?: number;
   getAutoFixAgent?: () => string | undefined;
   getAutoFixExecutionModel?: () => string | undefined;
+  getAutoFixPoolId?: () => string | undefined;
   attemptLedger: AutoFixAttemptLedger;
   getRetryBudget?: (task: TaskState) => number;
   /** Optional failed-check log fetcher used to skip non-fixable infra failures. */
@@ -90,6 +91,7 @@ export interface ReviewGateCiRepairWorkflowMutationArgs {
   readonly taskStateVersion: number;
   readonly agentName?: string;
   readonly executionModel?: string;
+  readonly poolId?: string;
 }
 
 export function buildReviewGateCiRepairWorkflowMutationArgs(
@@ -119,6 +121,7 @@ export function parseReviewGateCiRepairWorkflowMutationArgs(args: unknown[]): Re
     taskStateVersion,
     agentName,
     executionModel,
+    poolId,
   } = candidate;
   if (
     typeof sourceWorkflowId !== 'string'
@@ -149,6 +152,7 @@ export function parseReviewGateCiRepairWorkflowMutationArgs(args: unknown[]): Re
     taskStateVersion,
     ...(typeof agentName === 'string' ? { agentName } : {}),
     ...(typeof executionModel === 'string' ? { executionModel } : {}),
+    ...(typeof poolId === 'string' ? { poolId } : {}),
   };
 }
 
@@ -546,6 +550,8 @@ export async function queueReviewGateCiRepair(
   const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
     ? configuredExecutionModel
     : undefined;
+  const configuredPoolId = options.getAutoFixPoolId?.()?.trim();
+  const poolId = configuredPoolId && configuredPoolId.length > 0 ? configuredPoolId : undefined;
   const args = buildReviewGateCiRepairWorkflowMutationArgs({
     sourceWorkflowId: event.workflowId,
     sourceTaskId: event.taskId,
@@ -561,6 +567,7 @@ export async function queueReviewGateCiRepair(
     taskStateVersion: event.taskStateVersion ?? task.taskStateVersion,
     ...(selectedAgent ? { agentName: selectedAgent } : {}),
     ...(executionModel ? { executionModel } : {}),
+    ...(poolId ? { poolId } : {}),
   });
   const intentId = options.submitter.submit(
     event.workflowId,

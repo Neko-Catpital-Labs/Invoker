@@ -63,6 +63,7 @@ export function registerCiFailureWorker(
           getAutoFixAgent: deps.autoFix?.getAutoFixAgent,
           attemptLedger: deps.autoFix?.attemptLedger,
           getAutoFixExecutionModel: deps.autoFix?.getAutoFixExecutionModel,
+          getAutoFixPoolId: deps.autoFix?.getAutoFixPoolId,
           fetchFailedCheckLogs: createFailedCheckLogFetcher({
             cwd: deps.prMaintenance?.repoRoot,
           }),
