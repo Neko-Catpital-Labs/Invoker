@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdirSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, existsSync, rmSync, mkdtempSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { normalize } from 'node:path';
 import { bashPreserveOrReset, runBashLocal } from './branch-utils.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
@@ -18,7 +18,7 @@ import {
 import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch, resolvePlanBaseRevision } from './plan-base-remote.js';
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
-import { computeRepoCacheHash, computeRepoCacheKey, sanitizeBranchForPath } from './git-utils.js';
+import { computeRepoCacheHash, computeRepoCacheKey, isGitRefLockRace, sanitizeBranchForPath } from './git-utils.js';
 
 export interface RepoPoolConfig {
   cacheDir: string;
@@ -68,6 +68,8 @@ interface RebaseMirrorRefreshResult {
 
 const REBASE_REFRESH_BATCH_WINDOW_MS = 25;
 const REBASE_REFRESH_RECENT_REUSE_MS = 30_000;
+const REPO_FILE_LOCK_STALE_MS = 30 * 60_000;
+const REPO_FILE_LOCK_POLL_MS = 100;
 
 export class ResourceLimitError extends Error {
   constructor(message: string) {
@@ -168,7 +170,9 @@ export class RepoPool {
           durationMs: Date.now() - queuedAtMs,
         });
       }
-      const dir = await this.doRefreshMirrorForRebaseBatch(repoUrl, batch, initialTimings[0]);
+      const dir = await this.withRepoFileLock(repoUrl, 'refresh-mirror-for-rebase', () =>
+        this.doRefreshMirrorForRebaseBatch(repoUrl, batch, initialTimings[0]),
+      );
       const finalBaseBranches = [...batch.syncedBaseBranches];
       const finalTimings = [...new Set(batch.timings)];
       for (const batchTiming of finalTimings) {
@@ -383,7 +387,9 @@ export class RepoPool {
         branchCount: branches.length,
         durationMs: Date.now() - queuedAtMs,
       });
-      return this.doRemoveManagedBranchesInMirror(repoUrl, branches, timing);
+      return this.withRepoFileLock(repoUrl, 'remove-managed-branches', () =>
+        this.doRemoveManagedBranchesInMirror(repoUrl, branches, timing),
+      );
     });
     this.repoChains.set(repoKey, next.catch(() => {}));
     return next;
@@ -436,6 +442,49 @@ export class RepoPool {
     return timing.span(functionName, metadata, fn);
   }
 
+  private async withRepoFileLock<T>(repoUrl: string, label: string, fn: () => Promise<T>): Promise<T> {
+    const release = await this.acquireRepoFileLock(repoUrl, label);
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  private async acquireRepoFileLock(repoUrl: string, label: string): Promise<() => void> {
+    mkdirSync(this.cacheDir, { recursive: true });
+    const lockDir = `${this.cacheDir}/.${computeRepoCacheHash(repoUrl)}.lock`;
+    while (true) {
+      try {
+        mkdirSync(lockDir);
+        writeFileSync(
+          `${lockDir}/owner.json`,
+          JSON.stringify({ pid: process.pid, label, repoUrl, acquiredAt: new Date().toISOString() }),
+        );
+        return () => {
+          try {
+            rmSync(lockDir, { recursive: true, force: true });
+          } catch {
+            /* best-effort */
+          }
+        };
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code !== 'EEXIST') throw err;
+        try {
+          const ageMs = Date.now() - statSync(lockDir).mtimeMs;
+          if (ageMs > REPO_FILE_LOCK_STALE_MS) {
+            rmSync(lockDir, { recursive: true, force: true });
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        await new Promise(resolve => setTimeout(resolve, REPO_FILE_LOCK_POLL_MS));
+      }
+    }
+  }
+
   async ensureCloneThroughRepoQueue(repoUrl: string): Promise<string> {
     const bench = createExecutionBench({
       module: 'repo-pool-bench',
@@ -458,7 +507,7 @@ export class RepoPool {
     const queuedAtMs = Date.now();
     const promise = prev.then(() => {
       bench('RepoPool.ensureCloneThroughRepoQueue.repoChainWait.after', { durationMs: Date.now() - queuedAtMs });
-      return this.ensureCloneUnqueued(repoUrl);
+      return this.withRepoFileLock(repoUrl, 'ensure-clone', () => this.ensureCloneUnqueued(repoUrl));
     });
     this.cloneLocks.set(repoKey, promise);
     this.repoChains.set(repoKey, promise.catch(() => {}));
@@ -481,6 +530,11 @@ export class RepoPool {
       await this.execGit(['worktree', 'remove', '--force', worktreePath], clonePath);
     } catch {
       /* not registered with this clone */
+    }
+    try {
+      await this.execGit(['worktree', 'prune'], clonePath);
+    } catch {
+      /* best-effort; stale metadata will be surfaced by retry */
     }
     if (existsSync(worktreePath)) {
       try {
@@ -543,28 +597,124 @@ export class RepoPool {
       branch,
       base,
     });
-    try {
-      bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.before');
-      await runBashLocal(script, clonePath);
-      bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.after');
-      return;
-    } catch (err) {
-      if (!this.isAlreadyExistsWorktreeError(err, worktreePath)) {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.before', { attempt });
+        await runBashLocal(script, clonePath);
+        bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.after', { attempt });
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (
+          this.isAlreadyCheckedOutAtTargetWorktreeError(err, worktreePath)
+          && await this.isReusableManagedWorktree(worktreePath, branch)
+        ) {
+          bench('RepoPool.runPreserveOrResetWithRecovery.reuseUsableTargetAfterGitError', { attempt });
+          return;
+        }
+        if (attempt >= 3) break;
+        if (this.isAlreadyExistsWorktreeError(err, worktreePath)) {
+          traceExecution(
+            `[RepoPool] runPreserveOrResetWithRecovery: retrying after pre-existing path branch=${branch} path=${worktreePath}`,
+          );
+          bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.before', { attempt });
+          await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+          bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.after', { attempt });
+          continue;
+        }
+        if (await this.reconcileManagedBranchCreationCollision(clonePath, worktreePath, branch, base, err)) {
+          bench('RepoPool.runPreserveOrResetWithRecovery.reconcileManagedBranchCreationCollision.after', { attempt });
+          continue;
+        }
         bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.failed', {
+          attempt,
           error: err instanceof Error ? err.message : String(err),
         });
         throw err;
       }
-      traceExecution(
-        `[RepoPool] runPreserveOrResetWithRecovery: retrying after pre-existing path branch=${branch} path=${worktreePath}`,
-      );
-      bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.before');
-      await this.reconcileStaleWorktreePath(clonePath, worktreePath);
-      bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.after');
     }
-    bench('RepoPool.runPreserveOrResetWithRecovery.retryRunBashLocal.before');
-    await runBashLocal(script, clonePath);
-    bench('RepoPool.runPreserveOrResetWithRecovery.retryRunBashLocal.after');
+    bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.failed', {
+      attempts: 3,
+      error: lastErr instanceof Error ? lastErr.message : String(lastErr),
+    });
+    throw lastErr;
+  }
+
+  private async branchHasCommitsAhead(clonePath: string, branch: string, base: string): Promise<boolean> {
+    const count = Number.parseInt(
+      (await this.execGit(['rev-list', '--count', `${base}..${branch}`], clonePath)).trim(),
+      10,
+    );
+    return Number.isFinite(count) && count > 0;
+  }
+
+  private isAlreadyCheckedOutAtTargetWorktreeError(err: unknown, worktreePath: string): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!/(?:is already checked out at|cannot force update the branch\b.+\bchecked out at)/i.test(message)) return false;
+    if (message.includes(worktreePath)) return true;
+    return message.includes(canonicalPathForComparison(worktreePath));
+  }
+
+  private async reconcileManagedBranchCreationCollision(
+    clonePath: string,
+    worktreePath: string,
+    branch: string,
+    base: string,
+    err: unknown,
+  ): Promise<boolean> {
+    const isRecoverableGitError = isGitRefLockRace(err) || this.isAlreadyCheckedOutAtTargetWorktreeError(err, worktreePath);
+    if (!isRecoverableGitError || !isInvokerManagedPoolBranch(branch)) return false;
+    if (await this.branchHasCommitsAhead(clonePath, branch, base).catch(() => false)) {
+      return false;
+    }
+    traceExecution(
+      `[RepoPool] runPreserveOrResetWithRecovery: retrying after stale managed branch creation collision branch=${branch} path=${worktreePath}`,
+    );
+    await this.reconcileStaleWorktreePath(clonePath, worktreePath);
+    try {
+      await this.execGit(['branch', '-D', branch], clonePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async isUsableClone(dir: string): Promise<boolean> {
+    try {
+      const result = (await this.execGit(['rev-parse', '--is-inside-work-tree'], dir)).trim();
+      return result === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  private async waitForUsableClone(dir: string): Promise<boolean> {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (await this.isUsableClone(dir)) return true;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return false;
+  }
+
+  private async cloneIntoCache(repoUrl: string, dir: string): Promise<void> {
+    const tempDir = mkdtempSync(`${dir}.tmp-`);
+    try {
+      await this.execGit(['clone', repoUrl, tempDir], this.cacheDir);
+      try {
+        renameSync(tempDir, dir);
+      } catch (err) {
+        if (existsSync(dir) && await this.waitForUsableClone(dir)) return;
+        throw err;
+      }
+    } catch (err) {
+      if (existsSync(dir) && await this.waitForUsableClone(dir)) return;
+      throw err;
+    } finally {
+      if (existsSync(tempDir)) {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
   }
 
   private async ensureCloneUnqueued(repoUrl: string): Promise<string> {
@@ -575,6 +725,9 @@ export class RepoPool {
     const dir = this.cloneDir(repoUrl);
     bench('RepoPool.ensureCloneUnqueued.begin', { dir, exists: existsSync(dir) });
     if (existsSync(dir)) {
+      if (!(await this.waitForUsableClone(dir))) {
+        throw new Error(`RepoPool cached clone is not a usable git repository: ${dir}`);
+      }
       if (remoteFetchForPool.enabled) {
         try {
           bench('RepoPool.ensureCloneUnqueued.gitFetchAllPrune.before', { dir });
@@ -612,7 +765,7 @@ export class RepoPool {
     }
     mkdirSync(this.cacheDir, { recursive: true });
     bench('RepoPool.ensureCloneUnqueued.gitClone.before', { dir });
-    await this.execGit(['clone', repoUrl, dir], this.cacheDir);
+    await this.cloneIntoCache(repoUrl, dir);
     bench('RepoPool.ensureCloneUnqueued.gitClone.after', { dir });
     return dir;
   }
@@ -635,7 +788,9 @@ export class RepoPool {
     const queuedAtMs = Date.now();
     const next = prev.then(() => {
       bench('RepoPool.acquireWorktree.repoChainWait.after', { durationMs: Date.now() - queuedAtMs });
-      return this.doAcquireWorktree(repoUrl, branch, base, actionId, opts);
+      return this.withRepoFileLock(repoUrl, 'acquire-worktree', () =>
+        this.doAcquireWorktree(repoUrl, branch, base, actionId, opts),
+      );
     });
     this.repoChains.set(repoKey, next.catch(() => {}));
     const acquired = await next;

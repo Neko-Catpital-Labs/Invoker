@@ -165,7 +165,9 @@ if git -C "$REPO_DIR" rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
   fi
 fi
 if [ "$preserved" -eq 0 ]; then
-  git -C "$REPO_DIR" worktree add --no-track -B "$BRANCH" "$WT_DIR" "$BASE"
+  git -C "$REPO_DIR" worktree prune >/dev/null 2>&1 || true
+  git -C "$REPO_DIR" branch -f "$BRANCH" "$BASE"
+  git -C "$REPO_DIR" worktree add "$WT_DIR" "$BRANCH"
 fi`;
 }
 
