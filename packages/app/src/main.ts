@@ -2311,6 +2311,12 @@ startMainProcessBootstrap({
     setTimeout(() => {
       if (!ownerMode) return;
 
+      const repairSpawnFacadeDefaults = {
+        allowGraphMutation: invokerConfig.allowGraphMutation,
+        defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+        getAutoFixAgent: () => invokerConfig.autoFixAgent,
+        getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+      };
       const webMutations = new WorkflowMutationFacade({
         logger,
         orchestrator,
@@ -2318,6 +2324,7 @@ startMainProcessBootstrap({
         commandService,
         taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
+        ...repairSpawnFacadeDefaults,
         killRunningTask,
       });
       apiServer = startApiServer({
