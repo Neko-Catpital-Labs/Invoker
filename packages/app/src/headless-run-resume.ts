@@ -21,6 +21,7 @@ import { startWebSurfaceForHeadless } from './web/start-web-surface.js';
 import type { TaskHandleMap } from './execution/task-runner-wiring.js';
 import {
   fixWithAgentAction,
+  recreateWorkflowFromFreshBase,
   rebaseRetry,
   rebaseRecreate,
   resolveConflictAction,
@@ -306,7 +307,14 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request) as StartReadyResult & {
+  const result = await runStartReady(deps.orchestrator, request, {
+    freshBaseRecreateWorkflow: (workflowId) => recreateWorkflowFromFreshBase(workflowId, {
+      ...deps,
+      commandService: deps.commandService,
+      taskExecutor: createHeadlessExecutor(deps),
+      mutationTiming: deps.mutationTiming,
+    }),
+  }) as StartReadyResult & {
     preview: StartReadyPreviewExt;
   };
   const runnable = result.started.filter(isDispatchableLaunch);
