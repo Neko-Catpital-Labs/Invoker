@@ -114,6 +114,13 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
+
+function appendTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const next = `${snapshot ?? ''}${chunk}`;
+  if (next.length <= TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS) return next;
+  return next.slice(next.length - TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS);
+}
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -1097,6 +1104,42 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [graphMaximized, planningTerminalExpanded]);
 
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || !event.data) return;
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const terminalSession = session.terminalSession ?? null;
+          const matchesSession = event.planningSessionId
+            ? session.id === event.planningSessionId
+            : terminalSession?.sessionId === event.sessionId;
+          if (!terminalSession || !matchesSession) {
+            return session;
+          }
+
+          const outputSnapshot = appendTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data);
+          if (outputSnapshot === terminalSession.outputSnapshot) {
+            return session;
+          }
+
+          changed = true;
+          return {
+            ...session,
+            terminalSession: {
+              ...terminalSession,
+              kind: 'planning',
+              planningSessionId: terminalSession.planningSessionId ?? event.planningSessionId,
+              outputSnapshot,
+            },
+          };
+        });
+        return changed ? next : prev;
+      });
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onTerminalExit?.((event) => {
