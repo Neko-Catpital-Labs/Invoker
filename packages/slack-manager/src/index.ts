@@ -28,6 +28,7 @@ import { createHarnessSessionDriverFactory, createPlanningCommandBuilder, create
 import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
+import { startHiSmokeServer, HI_SMOKE_DEFAULT_PORT } from './hi-smoke-server.js';
 const VERSION = '0.0.8';
 
 const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
@@ -161,6 +162,19 @@ async function main(): Promise<void> {
   void client.ping();
   log('info', `slack-manager started (store=${managerHome})`);
 
+  // Opt-in, localhost-only hi-smoke hook. Slack does not reliably redeliver the
+  // app's own app_mention, so this loopback endpoint injects a `hi` mention
+  // through the ordinary planning-mention route to prove the live reply path.
+  const hiSmoke = await startHiSmokeServer({
+    enabled: !!process.env.INVOKER_SLACK_HI_SMOKE,
+    port: process.env.INVOKER_SLACK_HI_SMOKE_PORT ? Number(process.env.INVOKER_SLACK_HI_SMOKE_PORT) : HI_SMOKE_DEFAULT_PORT,
+    runHiSmoke: (opts) => slack.runHiSmoke(opts),
+    log,
+  }).catch((err) => {
+    log('error', `hi-smoke server failed to start: ${errMessage(err)}`);
+    return undefined;
+  });
+
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
@@ -169,6 +183,7 @@ async function main(): Promise<void> {
     watchdog.stop();
     stopEvents();
     await slack.stop().catch((err) => log('warn', `slack.stop failed: ${errMessage(err)}`));
+    await hiSmoke?.stop().catch((err) => log('warn', `hi-smoke stop failed: ${errMessage(err)}`));
     client.disconnect();
     adapter.close();
     consumerLock.release();
