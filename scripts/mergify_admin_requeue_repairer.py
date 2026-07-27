@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import tempfile
@@ -389,9 +391,60 @@ class AdminBypassRepairer:
         return {"prNumber": prereq_number, "branch": branch_name, "title": title}
 
     def run_claude_repair(self, work_root: Path, prompt: str) -> None:
+        host = os.environ.get("INVOKER_ADMIN_BYPASS_REPAIR_HOST", "").strip()
+        user = os.environ.get("INVOKER_ADMIN_BYPASS_REPAIR_USER", "").strip()
+        ssh_key = os.environ.get("INVOKER_ADMIN_BYPASS_REPAIR_SSH_KEY", "").strip()
+        if host and user and ssh_key:
+            self.run_remote_repair(work_root, prompt, host=host, user=user, ssh_key=ssh_key)
+            return
         subprocess.run(
             ["claude", "-p", prompt, "--dangerously-skip-permissions"],
             cwd=str(work_root),
+            check=True,
+            text=True,
+        )
+
+    def run_remote_repair(
+        self,
+        work_root: Path,
+        prompt: str,
+        *,
+        host: str,
+        user: str,
+        ssh_key: str,
+    ) -> None:
+        agent = os.environ.get("INVOKER_ADMIN_BYPASS_REPAIR_AGENT", "cursor").strip() or "cursor"
+        if agent != "cursor":
+            raise ValueError(f"Unsupported remote repair agent: {agent!r} (only 'cursor' is implemented)")
+        model = os.environ.get("INVOKER_ADMIN_BYPASS_REPAIR_MODEL", "grok-4.5").strip() or "grok-4.5"
+        if not work_root.name.isdigit():
+            raise ValueError(f"Unexpected work_root name for remote repair: {work_root.name!r}")
+
+        # `~` (not $HOME) is used deliberately: it is expanded both by rsync's
+        # documented remote-path handling and by the remote login shell ssh
+        # invokes, so the same literal path string works in both contexts.
+        # Never shlex.quote it — quoting would suppress that expansion.
+        remote_work_root = f"~/.invoker/mergify-admin-requeue-work/{work_root.name}"
+        remote_prompt_path = f"{remote_work_root}/.repair-prompt.b64"
+        ssh_opts = ["-i", ssh_key, "-o", "StrictHostKeyChecking=accept-new", "-o", "BatchMode=yes"]
+        rsync_ssh = "ssh " + " ".join(shlex.quote(part) for part in ssh_opts)
+
+        subprocess.run(["ssh", *ssh_opts, f"{user}@{host}", f"mkdir -p {remote_work_root}"], check=True, text=True)
+        subprocess.run(
+            ["rsync", "-az", "-e", rsync_ssh, f"{work_root}/", f"{user}@{host}:{remote_work_root}/"],
+            check=True,
+            text=True,
+        )
+        encoded_prompt = base64.b64encode(prompt.encode("utf-8")).decode("ascii")
+        remote_cmd = (
+            f"printf '%s' {shlex.quote(encoded_prompt)} | base64 -d > {remote_prompt_path} && "
+            f"cd {remote_work_root} && "
+            f"cursor agent --print --trust --model {shlex.quote(model)} \"$(cat {remote_prompt_path})\"; "
+            f"rc=$?; rm -f {remote_prompt_path}; exit $rc"
+        )
+        subprocess.run(["ssh", *ssh_opts, f"{user}@{host}", remote_cmd], check=True, text=True)
+        subprocess.run(
+            ["rsync", "-az", "-e", rsync_ssh, f"{user}@{host}:{remote_work_root}/", f"{work_root}/"],
             check=True,
             text=True,
         )

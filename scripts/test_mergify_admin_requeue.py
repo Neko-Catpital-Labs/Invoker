@@ -361,6 +361,54 @@ Failing checks
             text=True,
         )
 
+    def test_claude_repair_routes_to_cursor_over_ssh_when_remote_configured(self):
+        repairer = self.repairer(object(), self.ledger())
+        env = {
+            "INVOKER_ADMIN_BYPASS_REPAIR_HOST": "157.245.231.246",
+            "INVOKER_ADMIN_BYPASS_REPAIR_USER": "invoker",
+            "INVOKER_ADMIN_BYPASS_REPAIR_SSH_KEY": "/home/user/.ssh/id_ed25519",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run") as run:
+                repairer.run_claude_repair(Path("/tmp/work/5803"), "repair this")
+
+        self.assertEqual(run.call_count, 4)
+        mkdir_call, push_call, ssh_call, pull_call = (call.args[0] for call in run.call_args_list)
+
+        self.assertEqual(
+            mkdir_call,
+            ["ssh", "-i", env["INVOKER_ADMIN_BYPASS_REPAIR_SSH_KEY"], "-o", "StrictHostKeyChecking=accept-new",
+             "-o", "BatchMode=yes", "invoker@157.245.231.246",
+             "mkdir -p ~/.invoker/mergify-admin-requeue-work/5803"],
+        )
+        self.assertEqual(push_call[0], "rsync")
+        self.assertEqual(push_call[-2:], ["/tmp/work/5803/", "invoker@157.245.231.246:~/.invoker/mergify-admin-requeue-work/5803/"])
+
+        self.assertEqual(ssh_call[0], "ssh")
+        self.assertEqual(ssh_call[-2], "invoker@157.245.231.246")
+        remote_cmd = ssh_call[-1]
+        self.assertIn("cursor agent --print --trust --model grok-4.5", remote_cmd)
+        self.assertIn("~/.invoker/mergify-admin-requeue-work/5803/.repair-prompt.b64", remote_cmd)
+
+        self.assertEqual(pull_call[0], "rsync")
+        self.assertEqual(
+            pull_call[-2:],
+            ["invoker@157.245.231.246:~/.invoker/mergify-admin-requeue-work/5803/", "/tmp/work/5803/"],
+        )
+
+    def test_claude_repair_rejects_unsupported_remote_agent(self):
+        repairer = self.repairer(object(), self.ledger())
+        env = {
+            "INVOKER_ADMIN_BYPASS_REPAIR_HOST": "157.245.231.246",
+            "INVOKER_ADMIN_BYPASS_REPAIR_USER": "invoker",
+            "INVOKER_ADMIN_BYPASS_REPAIR_SSH_KEY": "/home/user/.ssh/id_ed25519",
+            "INVOKER_ADMIN_BYPASS_REPAIR_AGENT": "not-cursor",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run"):
+                with self.assertRaises(ValueError):
+                    repairer.run_claude_repair(Path("/tmp/work/5803"), "repair this")
+
     def test_candidate_stack_includes_unlabeled_upper_prs(self):
         def raw(number, base, head, labels):
             return {
