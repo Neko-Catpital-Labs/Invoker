@@ -32,6 +32,7 @@ except ImportError:
 TRUNK = "master"
 
 QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
+    "build-artifacts",
     "required-fast / Guardrails",
     "required-fast / Vitest Workspace",
     "required-fast / Submit Workflow Chain",

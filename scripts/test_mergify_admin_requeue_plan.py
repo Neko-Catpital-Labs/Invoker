@@ -25,6 +25,7 @@ import mergify_admin_requeue_plan as p
 HEAD = "a" * 40
 REQUIRED = {"build"}
 QUEUE_ONLY_CHECK = "required-fast / Guardrails"
+QUEUE_ONLY_SKIPPED_CHECK = "build-artifacts"
 
 
 def check(state, name="build"):
@@ -124,6 +125,17 @@ class EffectiveBlockers(unittest.TestCase):
             b.kind for b in p.effective_blockers(
                 snapshot,
                 {QUEUE_ONLY_CHECK},
+                trunk="master",
+            )
+        }
+        self.assertNotIn("missing_check", kinds)
+
+    def test_build_artifacts_missing_check_is_not_pr_head_blocker(self):
+        snapshot = pr(checks={})
+        kinds = {
+            b.kind for b in p.effective_blockers(
+                snapshot,
+                {QUEUE_ONLY_SKIPPED_CHECK},
                 trunk="master",
             )
         }

@@ -17,6 +17,7 @@ REPROS=(
   scripts/repro/repro-babysit-outdated-bot-thread.sh
   scripts/repro/repro-babysit-headless-queued-comment.sh
   scripts/repro/repro-babysit-queue-only-empty-log.sh
+  scripts/repro/repro-babysit-queue-only-skipped-check.sh
   scripts/repro/repro-babysit-queue-only-missing-requeues.sh
   scripts/repro/repro-babysit-targeted-scan-light.sh
   scripts/repro/repro-babysit-queue-repair-invalid-stop.sh

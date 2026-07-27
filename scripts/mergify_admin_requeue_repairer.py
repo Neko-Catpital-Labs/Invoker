@@ -392,9 +392,12 @@ class AdminBypassRepairer:
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
-        queue_only = ctx is None and is_queue_only_required_check(check_name)
+        queue_only = is_queue_only_required_check(check_name) and (ctx is None or ctx.state == "skipped")
         mergify_urls = mergify_check_urls(latest, check_name)
-        details_url = (ctx.details_url if ctx and ctx.details_url else "") or (mergify_urls[0] if mergify_urls else "")
+        if queue_only and mergify_urls:
+            details_url = mergify_urls[0]
+        else:
+            details_url = (ctx.details_url if ctx and ctx.details_url else "") or (mergify_urls[0] if mergify_urls else "")
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)

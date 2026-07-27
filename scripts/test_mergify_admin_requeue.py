@@ -513,6 +513,39 @@ Failing checks
         repair.assert_not_called()
         self.assertEqual(result.status, "queue_only_noop")
 
+    def test_queue_only_skipped_pr_head_check_uses_mergify_log_without_claude(self):
+        queue_url = "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/10/job/20"
+        skipped_url = "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/11/job/21"
+        latest = MergifyQueueEvent(
+            "m5967",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-26T21:13:00Z",
+            HEAD,
+            (),
+            ("build-artifacts",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/5967#issuecomment-1",
+            5968,
+            (("build-artifacts", (queue_url,)),),
+        )
+        item = pr(
+            5967,
+            labels={"admin-bypass", "dequeued"},
+            checks={"build-artifacts": CheckContext("build-artifacts", "skipped", skipped_url, HEAD, "2026-07-26T21:12:53Z")},
+            latest=latest,
+        )
+        repairer = self.repairer(object(), self.ledger())
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/build-artifacts.log") as download:
+                with mock.patch.object(repairer, "job_log_has_evidence", return_value=False):
+                    with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                        with mock.patch.object(repairer, "run_claude_repair") as repair:
+                            result = repairer.repair_check(item, "build-artifacts")
+        checkout.assert_called_once()
+        download.assert_called_once_with("owner/repo", queue_url, 5967, "build-artifacts")
+        repair.assert_not_called()
+        self.assertEqual(result.status, "queue_only_noop")
+
     def test_pr_body_valid_local_repair_returns_noop_without_claude(self):
         item = pr(5810, checks={"PR Body": check("PR Body", "failure")}, body=PROOF_BODY)
         repairer = self.repairer(object(), self.ledger())
