@@ -232,13 +232,18 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'try again',
+        presetKey: 'codex',
+      });
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
 
     await act(async () => {
       resolveSecondSend?.({
         ok: true,
-        sessionId: 'session-2',
+        sessionId: 'session-1',
         reply: 'Recovered.',
         draftPlanAvailable: false,
       });
@@ -687,6 +692,66 @@ describe('Invoker terminal (component)', () => {
         presetKey: 'codex',
       });
     });
+  });
+
+  it('shows an explicit error when a transcript has lost its planning session id', async () => {
+    const plannerError = 'planner failed before creating a session';
+    mock.api.planningChatSend = vi.fn(async () => ({ ok: false, error: plannerError })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the first plan');
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(plannerError);
+    });
+
+    submitPlanningText('continue that plan');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+        'This planning conversation lost its session id. Start a new chat to continue safely.',
+      );
+    });
+  });
+
+  it('does not accept a different session id for a continuation reply', async () => {
+    mock.api.planningChatSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        sessionId: 'session-1',
+        reply: 'I can help draft that.',
+        draftPlanAvailable: false,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        sessionId: 'session-2',
+        reply: 'Hello. What should we plan?',
+        draftPlanAvailable: false,
+      }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('hello');
+    await waitFor(() => expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1));
+
+    submitPlanningText('continue the same chat');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'continue the same chat',
+        presetKey: 'codex',
+      });
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+        'This planning conversation could not continue because the planner returned a different session. Start a new chat to continue safely.',
+      );
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('Hello. What should we plan?');
   });
 
   it('passes the selected planning preset', async () => {
