@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ReviewGateLookup } from '@invoker/data-store';
-import { createAutoFixAttemptLedger, type MergeGateApprovalStatus } from '@invoker/execution-engine';
-import type { TaskState } from '@invoker/workflow-core';
+import type { ReviewGateLookup, WorkflowMutationPriority } from '@invoker/data-store';
+import {
+  createAutoFixAttemptLedger,
+  parseReviewGateCiRepairWorkflowMutationArgs,
+  SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
+  type MergeGateApprovalStatus,
+} from '@invoker/execution-engine';
 
 import { repairReviewGateCiByPr } from '../review-gate-ci-repair-command.js';
 
@@ -103,8 +107,8 @@ describe('repairReviewGateCiByPr', () => {
     expect(checkApproval).not.toHaveBeenCalled();
   });
 
-  it('queues a CI repair when the mapped PR is red', async () => {
-    const submit = vi.fn(() => 42);
+  it('queues a CI repair workflow when the mapped PR is red', async () => {
+    const submit = vi.fn((_workflowId: string, _priority: WorkflowMutationPriority, _channel: string, _args: unknown[]) => 42);
     const checkApproval = vi.fn(async () => makeCheckStatus());
     const result = await repairReviewGateCiByPr('123', {
       persistence: {
@@ -131,9 +135,23 @@ describe('repairReviewGateCiByPr', () => {
 
     expect(checkApproval).toHaveBeenCalledWith({ identifier: '123', cwd: '/repo' });
     expect(submit).toHaveBeenCalledTimes(1);
+    const [workflowId, priority, channel, args] = submit.mock.calls[0];
+    expect(workflowId).toBe('wf-1');
+    expect(priority).toBe('normal');
+    expect(channel).toBe(SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL);
+    expect(parseReviewGateCiRepairWorkflowMutationArgs(args)).toMatchObject({
+      sourceWorkflowId: 'wf-1',
+      sourceTaskId: 'wf-1/merge',
+      reviewId: '123',
+      branch: 'feature/ci',
+      headSha: 'sha-1',
+      headRef: 'feature/ci',
+      statusText: 'CI failed',
+    });
     expect(result).toMatchObject({
       status: 'queued',
       reason: 'queued',
+      message: 'Queued CI repair workflow for PR 123 on wf-1/merge.',
       prNumber: '123',
       workflowId: 'wf-1',
       taskId: 'wf-1/merge',

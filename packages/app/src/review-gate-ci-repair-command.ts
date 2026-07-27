@@ -128,7 +128,7 @@ export async function repairReviewGateCiByPr(
     ? {
       status: 'queued',
       reason: result.reason,
-      message: `Queued CI repair for PR ${prNumber} on ${mergeTask.id}.`,
+      message: `Queued CI repair workflow for PR ${prNumber} on ${mergeTask.id}.`,
       prNumber,
       workflowId: lookup.workflowId,
       taskId: mergeTask.id,

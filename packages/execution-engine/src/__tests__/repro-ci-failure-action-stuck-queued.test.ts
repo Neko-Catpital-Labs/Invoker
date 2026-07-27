@@ -1,10 +1,10 @@
 /**
- * Repro: a review-gate CI repair stays "queued" forever after its fix intent
- * fails.
+ * Repro: a review-gate CI repair stays "queued" forever after its workflow
+ * spawn intent fails.
  *
  * Production failure (workflow "Prove Review Gate Fix No-op Root Cause"):
  * the ci-failure worker recorded its dedupe action as `queued` when it
- * submitted fix intent 27908. The intent failed 50ms later, but nothing wrote
+ * submitted repair intent 27908. The intent failed 50ms later, but nothing wrote
  * that outcome back to the worker action. From then on every tick logged
  *
  *   worker-ci-failure-skip reason=already-recorded existingStatus=queued
@@ -126,8 +126,8 @@ function makeIntent(id: number, status: WorkflowMutationIntentStatus, error?: st
   return {
     id,
     workflowId: 'wf-1',
-    channel: 'invoker:fix-with-agent',
-    args: ['wf-1/merge', 'codex', { autoFix: true }],
+    channel: 'invoker:spawn-review-gate-ci-repair',
+    args: [{ sourceWorkflowId: 'wf-1', sourceTaskId: 'wf-1/merge' }],
     priority: 'normal',
     status,
     error,
@@ -152,7 +152,7 @@ function makeHarness(opts: { intents: WorkflowMutationIntent[]; existingActionSt
     status: opts.existingActionStatus as WorkerActionRecord['status'],
     attemptCount: 1,
     intentId: opts.existingIntentId,
-    summary: 'Queued CI repair with agent',
+    summary: 'Queued CI repair workflow',
   }));
   const submit = vi.fn((_workflowId: string, _priority: WorkflowMutationPriority, _channel: string, _args: unknown[]) => 42);
   const store = {

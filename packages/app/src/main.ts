@@ -94,7 +94,9 @@ import {
   registerBuiltinWorkers,
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
+  parseReviewGateCiRepairWorkflowMutationArgs,
   reconcileTerminalWorkerActionsOnStartup,
+  resetAutoFixBudgetForTasks,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -154,7 +156,6 @@ import {
 import {
   approveTask as sharedApproveTask,
   deleteAllWorkflows as sharedDeleteAllWorkflows,
-  recreateWorkflowFromFreshBase as sharedRecreateWorkflowFromFreshBase,
   rejectTask as sharedRejectTask,
   selectExperiments as sharedSelectExperiments,
 } from './workflow-actions.js';
@@ -193,6 +194,7 @@ import {
   buildHeadlessFixArgs,
   parseFixWithAgentMutationArgs,
 } from './auto-fix-intents.js';
+import { spawnReviewGateCiRepairWorkflow } from './review-gate-ci-repair-workflow.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
@@ -811,6 +813,9 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
+    onRecreateTasksReset: (taskIds) => {
+      resetAutoFixBudgetForTasks(persistence, taskIds);
+    },
   });
   commandService = new CommandService(
     orchestrator,
@@ -1108,6 +1113,9 @@ function startHeadlessMode(): void {
               defaultPoolId: invokerConfig.defaultPoolId,
               availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
               deferRunningUntilLaunch: true,
+              onRecreateTasksReset: (taskIds) => {
+                resetAutoFixBudgetForTasks(persistence, taskIds);
+              },
             });
             commandService = new CommandService(
               orchestrator,
@@ -1461,17 +1469,7 @@ function startHeadlessMode(): void {
         }
         if (!workflowMutationDispatcher.has('invoker:start-ready')) {
           workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
-            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined, {
-              freshBaseRecreateWorkflow: (workflowId) => sharedRecreateWorkflowFromFreshBase(workflowId, {
-                logger,
-                orchestrator,
-                persistence,
-                commandService,
-                repoRoot,
-                taskExecutor: createHeadlessExecutor(headlessDeps),
-                mutationTiming: activeMutationContext?.mutationTiming,
-              }),
-            }),
+            runStartReady(orchestrator, requestArg as StartReadyRequest | undefined),
           );
         }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
@@ -1486,6 +1484,17 @@ function startHeadlessMode(): void {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
             return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:spawn-review-gate-ci-repair')) {
+          workflowMutationDispatcher.set('invoker:spawn-review-gate-ci-repair', async (...repairArgs: unknown[]) => {
+            const args = parseReviewGateCiRepairWorkflowMutationArgs(repairArgs);
+            return spawnReviewGateCiRepairWorkflow(args, {
+              orchestrator,
+              persistence,
+              logger,
+              allowGraphMutation: invokerConfig.allowGraphMutation,
+            });
           });
         }
         if (!workflowMutationDispatcher.has('invoker:requeue')) {
@@ -2261,18 +2270,8 @@ startMainProcessBootstrap({
     }
   }
 
-  async function executeStartReady(request: StartReadyRequest = {}): Promise<StartReadyResult> {
-    const result = await runStartReady(orchestrator, request, {
-      freshBaseRecreateWorkflow: (workflowId) => sharedRecreateWorkflowFromFreshBase(workflowId, {
-        logger,
-        orchestrator,
-        persistence,
-        commandService,
-        repoRoot,
-        taskExecutor: requireTaskExecutor(),
-        mutationTiming: activeMutationContext?.mutationTiming,
-      }),
-    });
+  function executeStartReady(request: StartReadyRequest = {}): StartReadyResult {
+    const result = runStartReady(orchestrator, request);
     if (!result.dryRun) {
       publishOrchestratorSnapshotToRenderer();
     }

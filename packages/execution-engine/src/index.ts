@@ -77,6 +77,7 @@ export * from './reconcile-terminal-worker-actions.js';
 export * from './requeue-attempt-ledger.js';
 export * from './auto-fix-gating.js';
 export * from './auto-fix-attempt-ledger.js';
+export * from './auto-fix-retry-cap.js';
 export * from './worker-decision-ledger.js';
 export * from './auto-fix-intents.js';
 export * from './lifecycle-events.js';

@@ -4,6 +4,11 @@ import type { WorkerActionRecord, WorkerActionWrite, WorkflowMutationPriority } 
 import type { TaskState } from '@invoker/workflow-core';
 
 import {
+  buildReviewGateCiRepairWorkflowMutationArgs,
+  parseReviewGateCiRepairWorkflowMutationArgs,
+  SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
+} from '../review-gate-ci-repair.js';
+import {
   autoFixAttemptLedgerKeyFromLifecycleEvent,
   createAutoFixAttemptLedger,
 } from '../auto-fix-attempt-ledger.js';
@@ -118,9 +123,10 @@ function toRecord(write: WorkerActionWrite): WorkerActionRecord {
 function makeHarness(task = makeTask()) {
   const tasks = new Map<string, TaskState>([[task.id, task]]);
   const actions = new Map<string, WorkerActionRecord>();
-  const submit = vi.fn((workflowId: string, priority: WorkflowMutationPriority, _channel: string, args: unknown[]) => {
+  const submit = vi.fn((workflowId: string, priority: WorkflowMutationPriority, channel: string, args: unknown[]) => {
     expect(workflowId).toBe('wf-1');
     expect(priority).toBe('normal');
+    expect(channel).toBe(SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL);
     expect(args).toBeDefined();
     return 42;
   });
@@ -164,7 +170,7 @@ describe('PR status and CI failure workers', () => {
     await worker.stop();
   });
 
-  it.fails('queues a head-SHA guarded CI repair workflow intent and records its dedupe action', async () => {
+  it('queues a head-SHA guarded CI repair workflow intent and records its dedupe action', async () => {
     const event = makeEvent({
       failedChecks: [
         { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' },
@@ -190,9 +196,9 @@ describe('PR status and CI failure workers', () => {
 
     expect(ciFailureActionKey(sameChecksDifferentOrder)).toBe(ciFailureActionKey(event));
     expect(harness.submit).toHaveBeenCalledTimes(1);
-    const [, , channel, args] = harness.submit.mock.calls[0];
-    expect(channel).toBe('invoker:spawn-review-gate-ci-repair');
-    expect(args[0]).toMatchObject({
+    const [, , , args] = harness.submit.mock.calls[0];
+    const parsed = parseReviewGateCiRepairWorkflowMutationArgs(args);
+    expect(parsed).toEqual(buildReviewGateCiRepairWorkflowMutationArgs({
       sourceWorkflowId: 'wf-1',
       sourceTaskId: 'wf-1/merge',
       reviewId: '123',
@@ -210,7 +216,7 @@ describe('PR status and CI failure workers', () => {
       taskStateVersion: 10,
       agentName: 'codex',
       executionModel: 'openai/gpt-5.2',
-    });
+    })[0]);
     expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
       workerKind: CI_FAILURE_WORKER_KIND,
       actionType: 'fix-ci-failure',
@@ -219,7 +225,7 @@ describe('PR status and CI failure workers', () => {
       intentId: '42',
       externalKey: ciFailureActionKey(event),
       payload: expect.objectContaining({
-        channel: 'invoker:spawn-review-gate-ci-repair',
+        channel: SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
       }),
     });
   });
