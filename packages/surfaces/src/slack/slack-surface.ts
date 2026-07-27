@@ -633,6 +633,29 @@ export class SlackSurface implements Surface {
     }
   }
 
+  /**
+   * Localhost-only smoke hook. Posts a real parent message to the lobby, then
+   * feeds `text` (default "hi") through the ordinary app_mention route so the
+   * normal Slack response path posts the LLM reply in that same thread. Only
+   * ever reached via the opt-in hi-smoke server bound to 127.0.0.1.
+   */
+  async runHiSmoke(opts: { text?: string; channel?: string } = {}): Promise<{ channel: string; parentTs: string }> {
+    const channel = opts.channel ?? this.lobbyChannelId;
+    const text = (opts.text ?? 'hi').trim() || 'hi';
+    const mention = this.botUserId ? `<@${this.botUserId}> ${text}` : text;
+    const parent = await this.app.client.chat.postMessage({ channel, text });
+    const parentTs = parent.ts;
+    if (!parentTs) throw new Error('hi-smoke parent post returned no ts');
+    this.log('slack', 'info', `[HI_SMOKE] injected parent channel=${channel} parent_ts=${parentTs} text="${text}"`);
+    const event: SlackMentionEvent = { text: mention, ts: parentTs, channel, user: 'hi-smoke' };
+    const say: SayFn = async (msg) => {
+      const ts = await this.postMessage({ text: msg.text, blocks: (msg.blocks ?? []) as SlackMessage['blocks'] }, channel, msg.thread_ts);
+      return { ts };
+    };
+    await this.dispatchAppMention(event, say);
+    return { channel, parentTs };
+  }
+
   async handleEvent(event: SurfaceEvent): Promise<void> {
     if (event.type === 'workflow_created') {
       await this.createWorkflowChannel(event);
@@ -905,20 +928,31 @@ export class SlackSurface implements Surface {
 
   private registerMentionHandler(): void {
     this.app.event('app_mention', async ({ event, say }) => {
-      const channel: string | undefined = event.channel;
-      const threadTs = event.thread_ts ?? event.ts;
-      this.log('slack', 'info', `[MENTION_RECEIVED] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} channel=${channel ?? 'unknown'} user=${event.user ?? 'unknown'}`);
-
-      const mapping = channel ? this.workflowChannelRepo?.getByChannelId(channel) : null;
-      if (mapping) {
-        this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=workflow workflow=${mapping.workflowId}`);
-        await this.handleWorkflowAssistantMention(mapping, event, say);
-        return;
-      }
-
-      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=planning`);
-      await this.handlePlanningMention(event, say, channel ?? this.lobbyChannelId);
+      await this.dispatchAppMention(event, say);
     });
+  }
+
+  /**
+   * Route one `app_mention`-shaped event through the workflow/planning split.
+   * Factored out of the Bolt handler so the localhost-only hi-smoke hook can
+   * drive the exact same route — and emit the same [MENTION_RECEIVED] /
+   * [MENTION_ROUTE] journal evidence — as a real Slack mention. Slack does not
+   * reliably redeliver an app's own mention, so the smoke path injects here.
+   */
+  async dispatchAppMention(event: SlackMentionEvent, say: SayFn): Promise<void> {
+    const channel: string | undefined = event.channel;
+    const threadTs = event.thread_ts ?? event.ts;
+    this.log('slack', 'info', `[MENTION_RECEIVED] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} channel=${channel ?? 'unknown'} user=${event.user ?? 'unknown'}`);
+
+    const mapping = channel ? this.workflowChannelRepo?.getByChannelId(channel) : null;
+    if (mapping) {
+      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=workflow workflow=${mapping.workflowId}`);
+      await this.handleWorkflowAssistantMention(mapping, event, say);
+      return;
+    }
+
+    this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=planning`);
+    await this.handlePlanningMention(event, say, channel ?? this.lobbyChannelId);
   }
 
   // ── Planning mention (lobby) ───────────────────────────
