@@ -307,7 +307,10 @@ export async function headlessRun(
   }
 
   if (started.length > 0) {
-    await taskExecutor.executeTasks(started);
+    deps.logger?.debug?.(
+      `[headless] run: launch outbox owns ${started.length} started task(s); skipping direct executeTasks`,
+      { module: 'headless' },
+    );
   }
 
   if (currentWorkflowId) {
@@ -383,7 +386,10 @@ export async function headlessResume(
     return;
   }
 
-  await taskExecutor.executeTasks(allStarted);
+  deps.logger?.debug?.(
+    `[headless] resume: launch outbox owns ${allStarted.length} started task(s); skipping direct executeTasks`,
+    { module: 'headless' },
+  );
 
   await trackHeadlessWorkflow(workflowId, deps, {
     waitForApproval,

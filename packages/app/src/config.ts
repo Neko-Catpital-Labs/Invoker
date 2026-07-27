@@ -246,6 +246,11 @@ export interface InvokerConfig {
     /** SSH port. Default: 22. */
     port?: number;
     /**
+     * Optional known_hosts file for this target. Defaults to OpenSSH's standard
+     * known-hosts lookup when unset.
+     */
+    userKnownHostsFile?: string;
+    /**
      * When true, use managed workspace mode: clone/fetch repo, create/reset worktrees,
      * and provision per-task workspaces. When false (default), BYO mode: user provides
      * pre-cloned repo path and handles all git/setup operations.

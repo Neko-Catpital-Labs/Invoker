@@ -34,6 +34,7 @@ export interface RemoteTargetConfig {
   user: string;
   sshKeyPath: string;
   port?: number;
+  userKnownHostsFile?: string;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
   use_api_key?: boolean;
@@ -413,6 +414,7 @@ fi
       port: target.port,
       user: target.user,
       host: target.host,
+      userKnownHostsFile: target.userKnownHostsFile,
     }, { batchMode: true }),
     ...remoteAgentShellInvocation(),
   ];
@@ -715,6 +717,7 @@ bash "$AGENT_CMD_FILE"
       port: target.port,
       user: target.user,
       host: target.host,
+      userKnownHostsFile: target.userKnownHostsFile,
     }, { batchMode: true }),
     ...remoteAgentShellInvocation(),
   ];
@@ -823,6 +826,7 @@ function execRemoteSsh(target: RemoteTargetConfig, script: string, phase?: strin
       port: target.port,
       user: target.user,
       host: target.host,
+      userKnownHostsFile: target.userKnownHostsFile,
     }, { batchMode: true }),
     ...remoteAgentShellInvocation(),
   ];

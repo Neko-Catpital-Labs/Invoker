@@ -3,6 +3,7 @@ export interface SshTargetConnection {
   port?: number;
   user: string;
   host: string;
+  userKnownHostsFile?: string;
 }
 
 const DEFAULT_CONNECT_TIMEOUT_SECONDS = 15;
@@ -48,6 +49,7 @@ export function buildSshConnectionArgs(
     '-i', target.sshKeyPath,
     '-p', String(target.port ?? 22),
     ...buildSshTransportOptions({ batchMode: opts.batchMode }),
+    ...(target.userKnownHostsFile ? ['-o', `UserKnownHostsFile=${target.userKnownHostsFile}`] : []),
     `${target.user}@${target.host}`,
   ];
 }

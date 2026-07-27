@@ -961,6 +961,7 @@ describe('SshExecutor entry lifecycle', () => {
       host: 'localhost',
       user: 'testuser',
       sshKeyPath: '/dev/null',
+      userKnownHostsFile: '/tmp/invoker-known-hosts',
       managedWorkspaces: true,
     });
 
@@ -1000,6 +1001,7 @@ describe('SshExecutor entry lifecycle', () => {
     const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
     const spawnArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
     expect(spawnArgs.slice(-2)).toEqual(['bash', '-s']);
+    expect(spawnArgs).toContain('UserKnownHostsFile=/tmp/invoker-known-hosts');
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
     const writeMock = (sshProcess.stdin as any).write as ReturnType<typeof vi.fn>;
     const script = writeMock.mock.calls[0]![0] as string;

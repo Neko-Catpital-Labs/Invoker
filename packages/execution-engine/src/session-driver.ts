@@ -13,6 +13,7 @@ export interface RemoteTarget {
   user: string;
   sshKeyPath: string;
   port?: number;
+  userKnownHostsFile?: string;
 }
 
 export type AgentSessionState = 'running' | 'finished' | 'error';

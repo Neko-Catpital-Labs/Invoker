@@ -8,6 +8,8 @@ const FILES = [
   path.resolve(__dirname, '..', 'headless.ts'),
 ];
 
+const HEADLESS_RUN_RESUME = path.resolve(__dirname, '..', 'headless-run-resume.ts');
+
 const AUTO_START_CALLS = [
   'retryTask',
   'retryWorkflow',
@@ -31,5 +33,12 @@ describe('manual executeTasks guardrail', () => {
         ).toBe(false);
       }
     }
+  });
+
+  it('keeps tracked headless run/resume on the launch outbox path', () => {
+    const source = readFileSync(HEADLESS_RUN_RESUME, 'utf8');
+
+    expect(source).not.toContain('await taskExecutor.executeTasks(started);');
+    expect(source).not.toContain('await taskExecutor.executeTasks(allStarted);');
   });
 });

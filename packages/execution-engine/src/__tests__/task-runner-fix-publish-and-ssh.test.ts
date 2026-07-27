@@ -2648,6 +2648,7 @@ describe('TaskRunner', () => {
             host: '1.2.3.4',
             user: 'root',
             sshKeyPath: '/old/key',
+            userKnownHostsFile: '/tmp/known-hosts-a',
             managedWorkspaces: true,
             remoteInvokerHome: '/srv/invoker-a',
             provisionCommand: 'old provision',
@@ -2658,6 +2659,7 @@ describe('TaskRunner', () => {
             host: '1.2.3.4',
             user: 'root',
             sshKeyPath: '/old/key',
+            userKnownHostsFile: '/tmp/known-hosts-b',
             managedWorkspaces: true,
             remoteInvokerHome: '/srv/invoker-b',
             provisionCommand: 'new provision',
@@ -2679,10 +2681,12 @@ describe('TaskRunner', () => {
 
       const executor1 = executor.selectExecutor(task);
       expect(executor1.executor.type).toBe('ssh');
+      expect(Reflect.get(executor1.executor, 'userKnownHostsFile')).toBe('/tmp/known-hosts-a');
       expect(Reflect.get(executor1.executor, 'remoteInvokerHome')).toBe('/srv/invoker-a');
       expect(Reflect.get(executor1.executor, 'provisionCommand')).toBe('old provision');
 
       const executor2 = executor.selectExecutor(task);
+      expect(Reflect.get(executor2.executor, 'userKnownHostsFile')).toBe('/tmp/known-hosts-b');
       expect(Reflect.get(executor2.executor, 'remoteInvokerHome')).toBe('/srv/invoker-b');
       expect(Reflect.get(executor2.executor, 'provisionCommand')).toBe('new provision');
 

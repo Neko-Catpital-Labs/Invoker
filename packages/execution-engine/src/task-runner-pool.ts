@@ -76,6 +76,7 @@ export type RemoteTargetDisplay = {
   user: string;
   sshKeyPath: string;
   port?: number;
+  userKnownHostsFile?: string;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
   provisionCommand?: string;
@@ -752,6 +753,7 @@ export function selectExecutor(
         user: target.user,
         sshKeyPath: target.sshKeyPath,
         port: target.port,
+        userKnownHostsFile: target.userKnownHostsFile,
         managedWorkspaces: target.managedWorkspaces,
         remoteInvokerHome: target.remoteInvokerHome,
         provisionCommand: target.provisionCommand?.trim() || '',
@@ -778,6 +780,7 @@ export function selectExecutor(
         user: target.user,
         sshKeyPath: target.sshKeyPath,
         port: target.port,
+        userKnownHostsFile: target.userKnownHostsFile,
         agentRegistry: host.executionAgentRegistry,
         managedWorkspaces: target.managedWorkspaces,
         remoteInvokerHome: target.remoteInvokerHome,

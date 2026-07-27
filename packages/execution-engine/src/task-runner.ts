@@ -178,6 +178,7 @@ export interface TaskRunnerConfig {
     user: string;
     sshKeyPath: string;
     port?: number;
+    userKnownHostsFile?: string;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
     provisionCommand?: string;
@@ -1725,6 +1726,7 @@ export class TaskRunner {
     user: string;
     sshKeyPath: string;
     port?: number;
+    userKnownHostsFile?: string;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
     provisionCommand?: string;
@@ -1876,10 +1878,11 @@ export class TaskRunner {
   ): Promise<Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}>> {
     const context: Array<{taskId: string; description: string; summary?: string; commitHash?: string; commitMessage?: string}> = [];
     const seenTaskIds = new Set<string>();
+    const hasDependencyRefs = task.dependencies.length > 0 || (task.config.externalDependencies?.length ?? 0) > 0;
 
     // Resolve pool mirror for gitLogMessage so commits are found in the right repo
     let mirrorCwd: string | undefined;
-    if (task.config.workflowId) {
+    if (hasDependencyRefs && task.config.workflowId) {
       const wf = this.persistence.loadWorkflow?.(task.config.workflowId);
       if (wf?.repoUrl) {
         mirrorCwd = await this.ensureRepoMirrorPath(wf.repoUrl) ?? undefined;

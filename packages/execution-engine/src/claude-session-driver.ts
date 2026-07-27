@@ -172,6 +172,7 @@ export class ClaudeSessionDriver implements SessionDriver {
           port: target.port,
           user: target.user,
           host: target.host,
+          userKnownHostsFile: target.userKnownHostsFile,
         }, { batchMode: true }),
         script,
       ];

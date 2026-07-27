@@ -39,6 +39,8 @@ export interface SshExecutorConfig {
   sshKeyPath: string;
   /** SSH port. Default: 22. */
   port?: number;
+  /** Optional known_hosts file for this target. Defaults to OpenSSH's standard files. */
+  userKnownHostsFile?: string;
   /** Agent registry for pluggable agent command building. */
   agentRegistry?: AgentRegistry;
   /**
@@ -87,6 +89,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly user: string;
   private readonly sshKeyPath: string;
   private readonly port: number;
+  private readonly userKnownHostsFile?: string;
   private readonly agentRegistry?: AgentRegistry;
   private readonly managedWorkspaces: boolean;
   private readonly remoteInvokerHome: string;
@@ -100,6 +103,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.user = config.user;
     this.sshKeyPath = config.sshKeyPath;
     this.port = config.port ?? 22;
+    this.userKnownHostsFile = config.userKnownHostsFile;
     this.agentRegistry = config.agentRegistry;
     this.managedWorkspaces = config.managedWorkspaces ?? false;
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
@@ -121,6 +125,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
       port: this.port,
       user: this.user,
       host: this.host,
+      userKnownHostsFile: this.userKnownHostsFile,
     }, { batchMode: true });
   }
 
@@ -131,6 +136,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
       port: this.port,
       user: this.user,
       host: this.host,
+      userKnownHostsFile: this.userKnownHostsFile,
     }, { batchMode: false });
   }
 

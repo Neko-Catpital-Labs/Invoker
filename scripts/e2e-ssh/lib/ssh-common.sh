@@ -29,6 +29,29 @@ _INVOKER_E2E_SSH_TMPDIR=""
 # SSH login user and passwd-backed home directory used by sshd.
 _INVOKER_E2E_SSH_USER=""
 _INVOKER_E2E_SSH_HOME=""
+_INVOKER_E2E_SSH_REMOTE_HOME=""
+_INVOKER_E2E_SSH_KNOWN_HOSTS_FILE=""
+_INVOKER_E2E_SSH_LOCAL_HOME=""
+_INVOKER_E2E_SSH_ORIGINAL_HOME=""
+
+invoker_e2e_ssh_setup_local_home() {
+  if [ -z "$_INVOKER_E2E_SSH_LOCAL_HOME" ]; then
+    _INVOKER_E2E_SSH_ORIGINAL_HOME="$HOME"
+    _INVOKER_E2E_SSH_LOCAL_HOME="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-ssh-home.XXXXXX")"
+    export HOME="$_INVOKER_E2E_SSH_LOCAL_HOME"
+    git config --global user.name "Invoker"
+    git config --global user.email "invoker@example.invalid"
+  fi
+}
+
+invoker_e2e_ssh_cleanup_local_home() {
+  if [ -n "$_INVOKER_E2E_SSH_ORIGINAL_HOME" ]; then
+    export HOME="$_INVOKER_E2E_SSH_ORIGINAL_HOME"
+  fi
+  rm -rf "${_INVOKER_E2E_SSH_LOCAL_HOME:-}" 2>/dev/null || true
+  _INVOKER_E2E_SSH_LOCAL_HOME=""
+  _INVOKER_E2E_SSH_ORIGINAL_HOME=""
+}
 
 # --------------------------------------------------------------------------- #
 # Test if sshd is listening on localhost port 22 (3s timeout).
@@ -57,6 +80,8 @@ invoker_e2e_ssh_resolve_home() {
 invoker_e2e_ssh_setup_keys() {
   _INVOKER_E2E_SSH_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-ssh.XXXXXX")"
   local keyfile="$_INVOKER_E2E_SSH_TMPDIR/id_ed25519"
+  _INVOKER_E2E_SSH_REMOTE_HOME="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
+  _INVOKER_E2E_SSH_KNOWN_HOSTS_FILE="$_INVOKER_E2E_SSH_TMPDIR/known_hosts"
   _INVOKER_E2E_SSH_USER="$(whoami)"
   _INVOKER_E2E_SSH_HOME="$(invoker_e2e_ssh_resolve_home "$_INVOKER_E2E_SSH_USER")"
 
@@ -79,6 +104,16 @@ invoker_e2e_ssh_setup_keys() {
   cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
 
   export INVOKER_E2E_SSH_KEY="$keyfile"
+}
+
+invoker_e2e_ssh_client_args() {
+  printf '%s\0' \
+    -o BatchMode=yes \
+    -o ConnectTimeout=5 \
+    -o StrictHostKeyChecking=accept-new \
+    -o "UserKnownHostsFile=$_INVOKER_E2E_SSH_KNOWN_HOSTS_FILE" \
+    -i "$INVOKER_E2E_SSH_KEY" \
+    "$_INVOKER_E2E_SSH_USER@localhost"
 }
 
 # --------------------------------------------------------------------------- #
@@ -114,38 +149,99 @@ invoker_e2e_ssh_provision_command() {
   )
 }
 
+invoker_e2e_ssh_repo_cache_hash() {
+  python3 - <<'PY' "$INVOKER_E2E_REPO_ROOT"
+import hashlib
+import pathlib
+import sys
+
+repo_url = pathlib.Path(sys.argv[1]).resolve().as_uri()
+print(hashlib.sha256(repo_url.encode("utf-8")).hexdigest()[:12])
+PY
+}
+
+invoker_e2e_ssh_prune_local_repo_cache() {
+  local repo_hash repo_cache worktree_cache worktree_path
+  repo_hash="$(invoker_e2e_ssh_repo_cache_hash)"
+  repo_cache="$HOME/.invoker/repos/$repo_hash"
+  worktree_cache="$HOME/.invoker/worktrees/$repo_hash"
+
+  if [ -d "$repo_cache/.git" ]; then
+    git -C "$repo_cache" worktree prune 2>/dev/null || true
+  fi
+
+  if [ -d "$worktree_cache" ]; then
+    if [ -d "$repo_cache/.git" ]; then
+      while IFS= read -r -d '' worktree_path; do
+        git -C "$repo_cache" worktree remove --force "$worktree_path" 2>/dev/null || true
+        rm -rf "$worktree_path"
+      done < <(find "$worktree_cache" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)
+      git -C "$repo_cache" worktree prune 2>/dev/null || true
+    else
+      rm -rf "$worktree_cache"
+    fi
+  fi
+
+  rm -rf "$repo_cache"
+}
+
+invoker_e2e_ssh_prune_source_e2e_refs() {
+  (
+    cd "$INVOKER_E2E_REPO_ROOT"
+    local ref
+    while IFS= read -r ref; do
+      case "$ref" in
+        refs/heads/experiment/wf-*/e2e-g33[1-7]-*)
+          git update-ref -d "$ref" 2>/dev/null || true
+          ;;
+      esac
+    done < <(git for-each-ref --format='%(refname)' 'refs/heads/experiment/wf-*' 2>/dev/null || true)
+  )
+}
+
 # --------------------------------------------------------------------------- #
 # Write temp JSON config with a localhost-e2e execution pool.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_write_config() {
   local config_file="$_INVOKER_E2E_SSH_TMPDIR/invoker-config.json"
-  local remote_home
   local provision_cmd
-  remote_home="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
   provision_cmd="$(invoker_e2e_ssh_provision_command)"
 
-  cat > "$config_file" <<EOJSON
-{
-  "executionPools": {
-    "localhost-e2e": {
-      "members": [
-        { "type": "ssh", "id": "localhost-e2e" }
-      ]
-    }
-  },
-  "remoteTargets": {
-    "localhost-e2e": {
-      "host": "localhost",
-      "user": "$_INVOKER_E2E_SSH_USER",
-      "sshKeyPath": "$INVOKER_E2E_SSH_KEY",
-      "port": 22,
-      "managedWorkspaces": true,
-      "remoteInvokerHome": "$remote_home",
-      "provisionCommand": "$provision_cmd"
-    }
-  }
+  CONFIG_FILE="$config_file" \
+  INVOKER_E2E_CONFIG_SSH_USER="$_INVOKER_E2E_SSH_USER" \
+  INVOKER_E2E_CONFIG_SSH_KEY="$INVOKER_E2E_SSH_KEY" \
+  INVOKER_E2E_CONFIG_REMOTE_HOME="$_INVOKER_E2E_SSH_REMOTE_HOME" \
+  INVOKER_E2E_CONFIG_PROVISION_COMMAND="$provision_cmd" \
+  INVOKER_E2E_CONFIG_KNOWN_HOSTS="$_INVOKER_E2E_SSH_KNOWN_HOSTS_FILE" \
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+config = {
+    "executionPools": {
+        "localhost-e2e": {
+            "members": [
+                {"type": "ssh", "id": "localhost-e2e"},
+            ],
+        },
+    },
+    "remoteTargets": {
+        "localhost-e2e": {
+            "host": "localhost",
+            "user": os.environ["INVOKER_E2E_CONFIG_SSH_USER"],
+            "sshKeyPath": os.environ["INVOKER_E2E_CONFIG_SSH_KEY"],
+            "port": 22,
+            "managedWorkspaces": True,
+            "remoteInvokerHome": os.environ["INVOKER_E2E_CONFIG_REMOTE_HOME"],
+            "provisionCommand": os.environ["INVOKER_E2E_CONFIG_PROVISION_COMMAND"],
+            "userKnownHostsFile": os.environ["INVOKER_E2E_CONFIG_KNOWN_HOSTS"],
+        },
+    },
 }
-EOJSON
+
+Path(os.environ["CONFIG_FILE"]).write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+PY
 
   export INVOKER_REPO_CONFIG_PATH="$config_file"
 }
@@ -154,16 +250,19 @@ EOJSON
 # Combined: setup keys + path + config + verify connection + verify pnpm.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_init() {
+  invoker_e2e_ssh_setup_local_home
   invoker_e2e_init
+  invoker_e2e_ssh_prune_source_e2e_refs
+  invoker_e2e_ssh_prune_local_repo_cache
   invoker_e2e_ssh_setup_keys
   invoker_e2e_ssh_write_config
 
   # Verify SSH works with the generated key.
-  if ! ssh -o BatchMode=yes \
-           -o ConnectTimeout=5 \
-           -o StrictHostKeyChecking=no \
-           -i "$INVOKER_E2E_SSH_KEY" \
-           "$_INVOKER_E2E_SSH_USER@localhost" true 2>/dev/null; then
+  local ssh_args=()
+  while IFS= read -r -d '' arg; do
+    ssh_args+=( "$arg" )
+  done < <(invoker_e2e_ssh_client_args)
+  if ! ssh "${ssh_args[@]}" true 2>/dev/null; then
     echo "ERROR: SSH to localhost with generated key failed. Aborting." >&2
     invoker_e2e_ssh_cleanup_keys
     return 1
@@ -181,6 +280,7 @@ invoker_e2e_ssh_init() {
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_install_login_path() {
   local pnpm_bin node_bin pnpm_dir node_dir
+  local ssh_args=()
   pnpm_bin="$(command -v pnpm || true)"
   node_bin="$(command -v node || true)"
   if [ -z "$pnpm_bin" ] || [ -z "$node_bin" ]; then
@@ -189,37 +289,32 @@ invoker_e2e_ssh_install_login_path() {
   fi
   pnpm_dir="$(cd "$(dirname "$pnpm_bin")" && pwd)"
   node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
+  while IFS= read -r -d '' arg; do
+    ssh_args+=( "$arg" )
+  done < <(invoker_e2e_ssh_client_args)
 
-  ssh -o BatchMode=yes \
-      -o ConnectTimeout=5 \
-      -o StrictHostKeyChecking=no \
-      -i "$INVOKER_E2E_SSH_KEY" \
-      "$_INVOKER_E2E_SSH_USER@localhost" \
-      "bash -s" <<EOF
+  ssh "${ssh_args[@]}" "bash -s" <<EOF
 set -euo pipefail
 marker='# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}'
-mkdir -p "\$HOME/.invoker"
-touch "\$HOME/.invoker/env.sh"
-if ! grep -Fq "\$marker" "\$HOME/.invoker/env.sh" 2>/dev/null; then
-  {
-    printf '%s\n' "\$marker"
-    printf 'export PATH="%s:%s:\$PATH"\n' '${node_dir}' '${pnpm_dir}'
-  } >> "\$HOME/.invoker/env.sh"
-fi
+for env_file in "\$HOME/.invoker/env.sh" '${_INVOKER_E2E_SSH_REMOTE_HOME}/env.sh'; do
+  mkdir -p "\$(dirname "\$env_file")"
+  touch "\$env_file"
+  if ! grep -Fq "\$marker" "\$env_file" 2>/dev/null; then
+    {
+      printf '%s\n' "\$marker"
+      printf 'export PATH="%s:%s:\$PATH"\n' '${node_dir}' '${pnpm_dir}'
+    } >> "\$env_file"
+  fi
+done
 EOF
 
   # Verify via non-login bash — matches the executor sourcing ~/.invoker/env.sh explicitly.
-  if ! ssh -o BatchMode=yes \
-           -o ConnectTimeout=5 \
-           -o StrictHostKeyChecking=no \
-           -i "$INVOKER_E2E_SSH_KEY" \
-           "$_INVOKER_E2E_SSH_USER@localhost" \
-           "bash -s" <<'EOF' >/dev/null 2>&1; then
-. "$HOME/.invoker/env.sh"
+  if ! ssh "${ssh_args[@]}" "bash -s" <<EOF >/dev/null 2>&1; then
+. "${_INVOKER_E2E_SSH_REMOTE_HOME}/env.sh"
 command -v pnpm >/dev/null
 pnpm --version
 EOF
-    echo "ERROR: 'pnpm' not found after sourcing ~/.invoker/env.sh." >&2
+    echo "ERROR: 'pnpm' not found after sourcing SSH e2e env.sh." >&2
     return 1
   fi
 }
@@ -228,10 +323,13 @@ EOF
 # Combined: prune worktrees + cleanup path + cleanup keys + base cleanup.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_full_cleanup() {
-  # Prune worktrees (both local and those created by SSH executor on localhost).
+  # Stop headless owners before removing shared repo caches they may still hold.
+  invoker_e2e_cleanup
+  # Prune worktrees and refs created by these localhost SSH cases.
   git -C "$INVOKER_E2E_REPO_ROOT" worktree prune 2>/dev/null || true
+  invoker_e2e_ssh_prune_source_e2e_refs
+  invoker_e2e_ssh_prune_local_repo_cache
   # Clean up SSH keys and config.
   invoker_e2e_ssh_cleanup_keys
-  # Run base cleanup (kill Electron, clean temp dirs).
-  invoker_e2e_cleanup
+  invoker_e2e_ssh_cleanup_local_home
 }

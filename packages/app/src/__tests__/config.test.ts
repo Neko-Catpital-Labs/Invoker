@@ -335,6 +335,7 @@ describe('loadConfig', () => {
             host: '203.0.113.10',
             user: 'invoker',
             sshKeyPath: '/home/you/.ssh/id_ed25519',
+            userKnownHostsFile: '/tmp/invoker-known-hosts',
             provisionCommand: 'bash scripts/provision-ssh-worker.sh ensure-repo-ready',
           },
         },
@@ -348,6 +349,7 @@ describe('loadConfig', () => {
     );
     const config = loadConfig();
     expect(config.remoteTargets?.ssh?.provisionCommand).toBe('bash scripts/provision-ssh-worker.sh ensure-repo-ready');
+    expect(config.remoteTargets?.ssh?.userKnownHostsFile).toBe('/tmp/invoker-known-hosts');
     expect(config.worktreeTargets).toEqual({
       local: {
         provisionCommand: 'pnpm install --frozen-lockfile',
@@ -443,4 +445,3 @@ describe('resolveEmbeddedTerminalBackendConfig', () => {
     )).toThrow(/Invalid embedded terminal backend/);
   });
 });
-

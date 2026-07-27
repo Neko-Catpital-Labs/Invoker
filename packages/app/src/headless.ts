@@ -461,6 +461,7 @@ export function resolveHeadlessDiskHeadroomConfig(
         user: target.user,
         sshKeyPath: target.sshKeyPath,
         port: target.port,
+        userKnownHostsFile: target.userKnownHostsFile,
       },
       remotePath: '~/.invoker',
     })),
