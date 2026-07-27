@@ -126,7 +126,10 @@ function loadTaskForEvent(
 function currentReviewGateLineage(
   task: TaskState,
   reviewId: string,
-): ReviewGateLineageFields {
+): ReviewGateLineageFields & {
+  checksState?: 'pending' | 'success' | 'failure';
+  failedChecksHash?: string;
+} {
   const gate = task.execution.reviewGate;
   const artifact = gate?.artifacts.find((candidate) =>
     candidate.generation === gate.activeGeneration
@@ -140,6 +143,10 @@ function currentReviewGateLineage(
     selectedAttemptId: task.execution.selectedAttemptId,
     branch: task.execution.branch,
     headSha: artifact?.headSha,
+    checksState: artifact?.checksState,
+    failedChecksHash: artifact?.failedChecks
+      ? ciFailureChecksHash(artifact.failedChecks)
+      : undefined,
   };
 }
 
@@ -176,6 +183,24 @@ function staleReasonForEvent(
   const context = reviewGateContextFromEvent(event);
   const current = currentReviewGateLineage(task, event.reviewId);
   if (!isReviewGateCiContextStale(context, current)) {
+    if (current.checksState && current.checksState !== 'failure') {
+      return {
+        stale: true,
+        reason: 'checks-resolved',
+        details: { currentChecksState: current.checksState },
+      };
+    }
+    const eventFailedChecksHash = ciFailureChecksHash(event.failedChecks);
+    if (current.failedChecksHash && current.failedChecksHash !== eventFailedChecksHash) {
+      return {
+        stale: true,
+        reason: 'failed-checks-changed',
+        details: {
+          currentFailedChecksHash: current.failedChecksHash,
+          eventFailedChecksHash,
+        },
+      };
+    }
     return { stale: false };
   }
 

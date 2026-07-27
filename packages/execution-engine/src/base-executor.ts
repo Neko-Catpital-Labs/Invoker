@@ -10,6 +10,7 @@ import { checkStaleness } from './git-staleness-detector.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
 import { childProcessHasExited, cleanElectronEnv, killProcessGroup, SIGKILL_TIMEOUT_MS, terminateChildProcessGroup } from './process-utils.js';
 import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
+import { isGitRefLockRace } from './git-utils.js';
 
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
@@ -999,6 +1000,17 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         const message = err instanceof Error ? err.message : String(err);
         const missingLocalRef = message.includes('src refspec ')
           && message.includes(' does not match any');
+        if (isGitRefLockRace(err)) {
+          await this.execGitSimpleWithNetworkTimeout(
+            ['fetch', remoteName, `+refs/heads/${branch}:refs/remotes/${remoteName}/${branch}`],
+            cwd,
+          );
+          await this.execGitSimpleWithNetworkTimeout(
+            ['push', '--force-with-lease', remoteName, branchRef],
+            cwd,
+          );
+          return undefined;
+        }
         const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
         if (!missingLocalRef || currentBranch.length > 0) {
           throw err;

@@ -295,6 +295,95 @@ describe('PR status and CI failure workers', () => {
     expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toBeUndefined();
     expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
   });
+
+  it('rejects stale CI failure events when the current review artifact has green checks', async () => {
+    const event = makeEvent({
+      failedChecks: [
+        {
+          name: 'PR Body',
+          conclusion: 'CANCELLED',
+          detailsUrl: 'https://github.com/owner/repo/actions/runs/1/job/1',
+        },
+      ],
+    });
+    const task = makeTask({
+      execution: {
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            required: true,
+            status: 'open',
+            generation: 2,
+            headSha: 'sha-1',
+            checksState: 'success',
+            failedChecks: [],
+          }],
+        },
+      },
+    });
+    const harness = makeHarness(task);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      defaultAutoFixRetries: 2,
+      attemptLedger: harness.attemptLedger,
+      drainEvents: () => [event],
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toBeUndefined();
+    expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
+  });
+
+  it('rejects stale CI failure events when the current failed check set changed', async () => {
+    const event = makeEvent({
+      failedChecks: [
+        { name: 'PR Body', conclusion: 'CANCELLED', detailsUrl: 'https://github.com/owner/repo/actions/old' },
+      ],
+    });
+    const task = makeTask({
+      execution: {
+        reviewGate: {
+          activeGeneration: 2,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            required: true,
+            status: 'open',
+            generation: 2,
+            headSha: 'sha-1',
+            checksState: 'failure',
+            failedChecks: [
+              { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/new' },
+            ],
+          }],
+        },
+      },
+    });
+    const harness = makeHarness(task);
+    const tick = createCiFailureTick({
+      store: harness.store,
+      submitter: { submit: harness.submit },
+      logger,
+      defaultAutoFixRetries: 2,
+      attemptLedger: harness.attemptLedger,
+      drainEvents: () => [event],
+    });
+
+    await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
+
+    expect(harness.submit).not.toHaveBeenCalled();
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toBeUndefined();
+    expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
+  });
+
   it('does not publish a CI repair intent for pending checks or merge-conflict-only polls', async () => {
     const publish = vi.fn();
     const host = {

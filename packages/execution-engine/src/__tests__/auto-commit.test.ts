@@ -21,6 +21,8 @@ function makeRequest(actionId: string, inputs: Partial<WorkRequestInputs> = {}):
 // Concrete implementation for testing
 class TestExecutor extends BaseExecutor<BaseEntry> {
   readonly type = 'test';
+  readonly networkGitCalls: string[][] = [];
+  private readonly networkGitFailures = new Map<string, Error[]>();
 
   async start(_request: WorkRequest): Promise<ExecutorHandle> {
     throw new Error('Not implemented');
@@ -30,6 +32,24 @@ class TestExecutor extends BaseExecutor<BaseEntry> {
   getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
   getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
   async destroyAll(): Promise<void> { this.entries.clear(); }
+
+  failNextNetworkGit(args: string[], error: Error): void {
+    const key = args.join('\0');
+    const failures = this.networkGitFailures.get(key) ?? [];
+    failures.push(error);
+    this.networkGitFailures.set(key, failures);
+  }
+
+  protected override async execGitSimpleWithNetworkTimeout(args: string[], cwd: string): Promise<string> {
+    this.networkGitCalls.push(args);
+    const key = args.join('\0');
+    const failures = this.networkGitFailures.get(key);
+    const failure = failures?.shift();
+    if (failure) {
+      return Promise.reject(failure);
+    }
+    return super.execGitSimpleWithNetworkTimeout(args, cwd);
+  }
 
   async testAutoCommit(cwd: string, request: WorkRequest): Promise<string | null> {
     return this.autoCommit(cwd, request);
@@ -2118,6 +2138,38 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     const remoteBranches = execSync('git branch', { cwd: intermediateDir }).toString();
     expect(remoteBranches).toContain('invoker/task-intermediate');
   });
+
+  it('retries a branch push after a ref-lock already-exists race', async () => {
+    const branch = 'invoker/task-ref-lock';
+    execSync(`git checkout -b ${branch}`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'task.txt'), 'task result');
+    execSync('git add -A && git commit -m "task commit"', { cwd: cloneDir });
+    execSync(`git push origin ${branch}:refs/heads/${branch}`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'task.txt'), 'task result updated');
+    execSync('git add -A && git commit -m "task commit updated"', { cwd: cloneDir });
+
+    const pushArgs = ['push', '--force-with-lease', 'origin', `${branch}:refs/heads/${branch}`];
+    executor.failNextNetworkGit(
+      pushArgs,
+      new Error(
+        `git ${pushArgs.join(' ')} failed (code 1): remote: error: cannot lock ref ` +
+        `'refs/heads/${branch}': reference already exists`,
+      ),
+    );
+
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, branch);
+
+    expect(pushErr).toBeUndefined();
+    expect(executor.networkGitCalls).toContainEqual([
+      'fetch',
+      'origin',
+      `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+    ]);
+    expect(execSync(`git rev-parse ${branch}`, { cwd: originDir }).toString().trim()).toBe(
+      execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim(),
+    );
+  });
+
   it('pushes HEAD when the branch ref is missing locally', async () => {
     execSync('git checkout -b invoker/task-detached', { cwd: cloneDir });
     writeFileSync(join(cloneDir, 'detached.txt'), 'task result');
