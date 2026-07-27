@@ -246,6 +246,14 @@ def main() -> None:
             save_state(state)
             print(json.dumps(created))
             return
+        retarget_base_match = re.fullmatch(r"repos/[^/]+/[^/]+/pulls/(\d+)", path)
+        if retarget_base_match and flag_value("--method") == "PATCH":
+            pr = find_pr(state, int(retarget_base_match.group(1)))
+            base = (flag_value("-f") or "").split("=", 1)[-1]
+            if pr is not None and base:
+                pr["baseRefName"] = base
+                save_state(state)
+            return
         add_label_match = re.fullmatch(r"repos/[^/]+/[^/]+/issues/(\d+)/labels", path)
         if add_label_match and flag_value("--method") == "POST":
             pr = find_pr(state, int(add_label_match.group(1)))
