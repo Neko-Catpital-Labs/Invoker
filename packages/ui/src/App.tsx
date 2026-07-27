@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const PLANNING_CONTINUATION_LOST_MESSAGE = 'This planning chat lost its session. Start a new chat to keep planning.';
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -2883,6 +2884,14 @@ export function App() {
       return;
     }
 
+    const localContinuationWithoutServerSession = !planningSessionId
+      && activePlanningSession.messages.some((line) => line.role === 'assistant');
+    if (localContinuationWithoutServerSession) {
+      setPlanningSubmitError({ title: 'Planner could not respond', message: PLANNING_CONTINUATION_LOST_MESSAGE });
+      appendTerminalLine(PLANNING_CONTINUATION_LOST_MESSAGE, 'system', 'error');
+      return;
+    }
+
     const request = {
       message: input,
       presetKey: selectedPlanningPresetKey || undefined,
@@ -2941,12 +2950,29 @@ export function App() {
           }
         }
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
-        keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
-        forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
+        const materializedSessionId = result.sessionId;
+        const errorLineId = nextTerminalLineIdRef.current;
+        nextTerminalLineIdRef.current += 1;
+        const updatedAt = new Date().toISOString();
+        setPlanningSessions((prev) => prev.map((session) => {
+          if (session.id !== previousSessionId) return session;
+          return {
+            ...session,
+            busy: false,
+            id: materializedSessionId ?? session.id,
+            messages: [...session.messages, { id: errorLineId, text: result.error, role: 'system', tone: 'error' }],
+            updatedAt,
+          };
+        }));
+        if (materializedSessionId) {
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === previousSessionId ? materializedSessionId : currentSessionId
+          ));
+        }
+        keepPlanningStreamFailureForSessionIds([previousSessionId, materializedSessionId], result.error);
+        forgetPlanningStreamAliasesForSessionIds([previousSessionId, materializedSessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
-        if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
+        if (materializedSessionId) pendingPlanningStreamSessionIdsRef.current.delete(materializedSessionId);
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {

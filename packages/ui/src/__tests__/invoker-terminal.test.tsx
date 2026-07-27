@@ -232,6 +232,12 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'try again',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
 
@@ -689,6 +695,50 @@ describe('Invoker terminal (component)', () => {
         confirmationMode: 'require',
       });
     });
+  });
+
+  it('shows an explicit error instead of restarting a transcripted local planning chat', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'local-planning-session-stale',
+          title: 'Stale local chat',
+          status: 'still_discussing',
+          messages: [
+            {
+              id: 1,
+              role: 'user',
+              text: 'Draft the stale plan',
+              createdAt: '2026-07-07T00:00:01.000Z',
+            },
+            {
+              id: 2,
+              role: 'assistant',
+              text: 'I need one more detail before drafting.',
+              createdAt: '2026-07-07T00:00:02.000Z',
+            },
+          ],
+          draftPlanAvailable: false,
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I need one more detail before drafting.');
+    });
+
+    submitPlanningText('please continue');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+        'This planning chat lost its session. Start a new chat to keep planning.',
+      );
+    });
+    expect(mock.api.planningChatSend).not.toHaveBeenCalled();
   });
 
   it('passes the selected planning preset', async () => {
