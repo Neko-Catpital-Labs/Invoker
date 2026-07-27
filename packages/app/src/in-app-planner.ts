@@ -545,18 +545,24 @@ export async function sendPlanningChatMessage(
   const rawMessage = typeof rawRequest?.message === 'string' ? rawRequest.message.trim() : '';
   const taggedMessage = extractPlanningConfirmationOverride(rawMessage);
   const message = taggedMessage.message.trim();
+  const requestedSessionId = typeof rawRequest?.sessionId === 'string' ? rawRequest.sessionId.trim() : undefined;
   const requestedConfirmationMode = normalizePlanningConfirmationMode(
     taggedMessage.confirmationMode ?? rawRequest?.confirmationMode,
     resolveDefaultPlanningConfirmationMode(deps.config),
   );
   if (!message) {
-    return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
+    return { ok: false, sessionId: requestedSessionId ?? rawRequest?.sessionId, error: 'Type a message first.' };
   }
 
-  let sessionId = rawRequest?.sessionId;
+  let sessionId = requestedSessionId;
   try {
-    let session = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
-    if (!session) {
+    let session: InAppPlanningChatSession | undefined;
+    if (requestedSessionId) {
+      session = deps.sessions.get(requestedSessionId);
+      if (!session) {
+        return { ok: false, sessionId: requestedSessionId, error: `Planning session "${requestedSessionId}" was not found.` };
+      }
+    } else {
       const created = await createSession({
         presetKey: rawRequest?.presetKey,
         title: titleFromMessage(message),
