@@ -19,6 +19,7 @@ vi.mock('@slack/bolt', () => {
     client = {
       auth: { test: vi.fn().mockResolvedValue({ user_id: 'U_BOT' }) },
       chat: { postMessage: vi.fn().mockResolvedValue({ ts: '1.1' }), update: vi.fn().mockResolvedValue({}) },
+      files: { uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F1' }] }) },
     };
   }
   return { App: MockApp };
@@ -106,5 +107,55 @@ describe('approveSlackPlanDraft', () => {
     const stored = repo.get(draft.draftId, draft.version);
     expect(stored?.status).toBe('submitted');
     expect(JSON.parse(stored?.workflowIdsJson ?? '[]')).toEqual([]);
+  });
+
+  it('stages a ready plan review without submitting the child workflow', async () => {
+    const surface = new SlackSurface({
+      botToken: 'xoxb', appToken: 'xapp', signingSecret: 's', channelId: 'CLOBBY',
+      slackPlanDraftRepo: repo, log: () => {},
+    });
+    const planText = [
+      'name: Scout draft',
+      'repoUrl: https://github.com/acme/repo.git',
+      'onFinish: none',
+      'tasks:',
+      '  - id: investigate',
+      '    description: Investigate the Slack complaint',
+      '    command: printf scout',
+      '    dependencies: []',
+      '',
+    ].join('\n');
+
+    const result = await surface.stageSlackPlanDraftForReview({
+      channelId: 'C1',
+      threadTs: 'T1',
+      planText,
+      repoUrl: 'https://github.com/acme/repo.git',
+      harnessPreset: 'codex',
+      workingDir: '/tmp/repo',
+      requestedBy: 'U1',
+    });
+
+    const app = surface.getApp() as any;
+    const stored = repo.get(result.draftId, result.version);
+    expect(stored?.status).toBe('ready');
+    expect(stored?.confirmationMode).toBe('require');
+    expect(stored?.planText).toBe(planText);
+    expect(result.status).toBe('ready');
+    expect(app.client.files.uploadV2).toHaveBeenCalledWith(expect.objectContaining({
+      channel_id: 'C1',
+      thread_ts: 'T1',
+    }));
+    expect(app.client.chat.update).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'C1',
+      blocks: expect.arrayContaining([
+        expect.objectContaining({
+          elements: expect.arrayContaining([
+            expect.objectContaining({ action_id: 'plan_draft_approve' }),
+            expect.objectContaining({ action_id: 'plan_draft_cancel' }),
+          ]),
+        }),
+      ]),
+    }));
   });
 });
