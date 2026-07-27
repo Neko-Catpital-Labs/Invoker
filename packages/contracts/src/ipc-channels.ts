@@ -596,12 +596,44 @@ export interface WorkflowMutationAcceptedResult {
   channel: string;
 }
 
+export type StartReadyFreshBaseScope =
+  | 'failed'
+  | 'failed_and_pending'
+  | 'failed_pending_and_running'
+  | 'all';
+
+export type StartReadyFreshBaseWorkflowStatus =
+  | 'failed'
+  | 'pending'
+  | 'running'
+  | 'completed';
+
+export interface StartReadyFreshBasePreview {
+  workflowId: string;
+  status: StartReadyFreshBaseWorkflowStatus;
+  baseBranch?: string;
+  freshBaseBranch?: string;
+  freshBaseCommit?: string;
+}
+
+export interface StartReadyPartialOutcome {
+  workflowId: string;
+  ok: boolean;
+  startedTaskIds?: string[];
+  freshBaseBranch?: string;
+  freshBaseCommit?: string;
+  error?: string;
+}
+
 export interface StartReadyRequest {
   recreateFailed?: boolean;
   recreateFailedAndPending?: boolean;
   recreateFailedPendingAndRunning?: boolean;
   /** Recreate failed + pending/queued + running + completed (finished) workflows. */
   recreateAll?: boolean;
+  freshBase?: boolean;
+  freshBaseScope?: StartReadyFreshBaseScope;
+  freshBaseWorkflowIds?: string[];
   dryRun?: boolean;
 }
 
@@ -612,6 +644,8 @@ export interface StartReadyPreview {
   pendingWorkflowIds: string[];
   runningWorkflowIds: string[];
   completedWorkflowIds?: string[];
+  freshBaseWorkflowIds?: string[];
+  freshBaseWorkflows?: StartReadyFreshBasePreview[];
   skipped: {
     awaitingApproval: number;
     reviewReady: number;
@@ -627,6 +661,9 @@ export interface StartReadyResult {
   preview: StartReadyPreview;
   started: TaskState[];
   recreatedWorkflowIds: string[];
+  freshBaseWorkflowIds?: string[];
+  partialOutcomes?: StartReadyPartialOutcome[];
+  partial?: boolean;
   dryRun: boolean;
 }
 
