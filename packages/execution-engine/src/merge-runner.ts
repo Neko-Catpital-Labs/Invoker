@@ -66,12 +66,83 @@ function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 
   return 'manual';
 }
 
+type ResolvedBaseRef = {
+  branchName: string;
+  gitRef: string;
+};
+
+function alternateDefaultBranchName(branchName: string): string | undefined {
+  if (branchName === 'main') return 'master';
+  if (branchName === 'master') return 'main';
+  return undefined;
+}
+
+function candidateBranchNames(baseBranch: string): string[] {
+  const normalized = normalizeBranchForGithubCli(baseBranch);
+  const names = [normalized];
+  const alternate = alternateDefaultBranchName(normalized);
+  if (alternate) {
+    names.push(alternate);
+  }
+  return Array.from(new Set(names.filter(Boolean)));
+}
+
+function candidateGitRefs(baseBranch: string, branchName: string): string[] {
+  const candidates = [
+    `refs/remotes/origin/${branchName}`,
+    `origin/${branchName}`,
+    branchName,
+    `refs/heads/${branchName}`,
+  ];
+  if (branchName === normalizeBranchForGithubCli(baseBranch)) {
+    candidates.push(baseBranch);
+  }
+  return Array.from(new Set(candidates));
+}
+
+async function resolveBaseRefFromGit(
+  baseBranch: string,
+  resolveGit: (args: string[]) => Promise<string>,
+): Promise<ResolvedBaseRef | undefined> {
+  for (const branchName of candidateBranchNames(baseBranch)) {
+    for (const gitRef of candidateGitRefs(baseBranch, branchName)) {
+      try {
+        const resolved = (await resolveGit(['rev-parse', '--verify', `${gitRef}^{commit}`])).trim();
+        if (resolved) {
+          return { branchName, gitRef };
+        }
+      } catch {
+        // Try the next spelling, including main/master alternates.
+      }
+    }
+  }
+  return undefined;
+}
+
 async function resolveBaseCheckoutRef(
   host: MergeRunnerHost,
   baseBranch: string,
-  _preferOriginTracking: boolean,
+  preferOriginTracking: boolean,
 ): Promise<string> {
-  return normalizeBranchForGithubCli(baseBranch);
+  const normalizedBase = normalizeBranchForGithubCli(baseBranch);
+  if (!preferOriginTracking) {
+    return normalizedBase;
+  }
+
+  const resolved = await resolveBaseRefFromGit(baseBranch, (args) => host.execGitReadonly(args, host.cwd));
+  return resolved?.branchName ?? normalizedBase;
+}
+
+async function resolveReviewBaseRef(
+  host: MergeRunnerHost,
+  dir: string,
+  baseBranch: string,
+): Promise<ResolvedBaseRef> {
+  const resolved = await resolveBaseRefFromGit(baseBranch, (args) => execGitInMergeSafe(host, args, dir));
+  return resolved ?? {
+    branchName: normalizeBranchForGithubCli(baseBranch),
+    gitRef: baseBranch,
+  };
 }
 
 /**
@@ -261,33 +332,12 @@ async function syncGateWorkspaceToFeatureBranch(
 async function listReviewableChangedFiles(
   host: MergeRunnerHost,
   dir: string,
-  baseBranch: string,
+  baseRef: string,
   featureBranch: string,
 ): Promise<string[]> {
-  const normalizedBase = normalizeBranchForGithubCli(baseBranch);
-  let diffBaseRef = baseBranch;
-  for (const candidate of [
-    `refs/remotes/origin/${normalizedBase}`,
-    `origin/${normalizedBase}`,
-    baseBranch,
-  ]) {
-    try {
-      const resolved = (await execGitInMergeSafe(
-        host,
-        ['rev-parse', '--verify', `${candidate}^{commit}`],
-        dir,
-      )).trim();
-      if (resolved) {
-        diffBaseRef = candidate;
-        break;
-      }
-    } catch {
-      // Try the next base spelling.
-    }
-  }
   const out = await execGitInMergeSafe(
     host,
-    ['diff', '--name-only', `${diffBaseRef}...${featureBranch}`, '--'],
+    ['diff', '--name-only', `${baseRef}...${featureBranch}`, '--'],
     dir,
   );
   return out
@@ -885,23 +935,24 @@ export async function runMergeGateActionImpl(
           featureBranch,
         });
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
+        const reviewBase = await resolveReviewBaseRef(host, gateWorkspacePath!, baseBranch);
 
         if (isInvokerRepoUrl(workflow?.repoUrl)) {
           const changedFiles = await listReviewableChangedFiles(
             host,
             gateWorkspacePath!,
-            baseBranch,
+            reviewBase.gitRef,
             featureBranch,
           );
           if (changedFiles.length === 0) {
             logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty Invoker branch', {
-              baseBranch,
+              baseBranch: reviewBase.branchName,
               featureBranch,
             });
             mergeTrace('GATE_WS_PATH_REVIEW_PUBLISH_NOOP', {
               taskId: task.id,
               gateWorkspacePath: gateWorkspacePath ?? null,
-              baseBranch,
+              baseBranch: reviewBase.branchName,
               featureBranch,
               onFinish,
               mergeMode,
@@ -934,7 +985,7 @@ export async function runMergeGateActionImpl(
         let fullSummary = summary;
         if (visualProof && host.runVisualProofCapture) {
           const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
-          const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow?.repoUrl);
+          const vpMarkdown = await host.runVisualProofCapture(reviewBase.branchName, featureBranch!, slug, workflow?.repoUrl);
           if (vpMarkdown) {
             fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
           }
@@ -944,7 +995,7 @@ export async function runMergeGateActionImpl(
           workflowId,
           mergeNodeTaskId: task.id,
           workflowName: workflow?.name ?? 'Workflow',
-          baseBranch,
+          baseBranch: reviewBase.branchName,
           featureBranch,
           workflowSummary: fullSummary ?? '',
           cwd: gateWorkspacePath!,
@@ -1437,21 +1488,26 @@ export async function publishAfterFixImpl(
     });
     await pushFeatureBranchWithRefLockRetry(host, consolidateDir, featureBranch);
 
+    const shouldPublishReview = mergeMode === 'external_review' || onFinish === 'pull_request';
+    const reviewBase = shouldPublishReview
+      ? await resolveReviewBaseRef(host, consolidateDir, baseBranch)
+      : undefined;
+
     let fullSummary = summary;
     if (visualProof && host.runVisualProofCapture) {
       const slug = featureBranch.replace(/\//g, '-');
-      const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch, slug, workflow?.repoUrl);
+      const vpMarkdown = await host.runVisualProofCapture(reviewBase?.branchName ?? baseBranch, featureBranch, slug, workflow?.repoUrl);
       if (vpMarkdown) {
         fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
       }
     }
 
-    if (mergeMode === 'external_review' || onFinish === 'pull_request') {
+    if (shouldPublishReview) {
       const published = await publishReviewArtifactsForMerge(host, {
         workflowId,
         mergeNodeTaskId: task.id,
         workflowName: workflow?.name ?? 'Workflow',
-        baseBranch,
+        baseBranch: reviewBase?.branchName ?? baseBranch,
         featureBranch,
         workflowSummary: fullSummary ?? '',
         cwd: consolidateDir,
