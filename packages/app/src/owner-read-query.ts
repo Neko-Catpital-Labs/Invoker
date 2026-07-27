@@ -236,8 +236,8 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     listWorkerActionHistory: (request: WorkerActionHistoryRequest) => listWorkerActionHistory(persistence, request),
     listWorkerDecisions: (request: WorkerDecisionsRequest) => listWorkerDecisions(persistence, request),
     getWorkflowStatus: (workflowId?: string) => orchestrator.getWorkflowStatus(workflowId) as unknown as Record<string, unknown>,
-    getTasksSnapshot: ({ refresh }) => {
-      if (refresh) orchestrator.syncAllFromDb();
+    getTasksSnapshot: () => {
+      orchestrator.syncAllFromDb();
       return {
         tasks: orchestrator.getAllTasks(),
         workflows: persistence.listWorkflows(),
