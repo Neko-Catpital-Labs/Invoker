@@ -691,6 +691,63 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('continues with the materialized session id after a planner error', async () => {
+    const plannerError = 'planner failed after creating the conversation';
+    mock.api.planningChatSend = vi.fn(async (request: any) => {
+      if (request.message === 'draft a fragile plan') {
+        return { ok: false, sessionId: 'session-1', error: plannerError };
+      }
+      return {
+        ok: true,
+        sessionId: request.sessionId,
+        reply: 'Recovered on the same session.',
+        draftPlanAvailable: false,
+      };
+    }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a fragile plan');
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(plannerError);
+    });
+
+    submitPlanningText('continue after the failure');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'continue after the failure',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Recovered on the same session.');
+  });
+
+  it('shows an explicit error instead of starting fresh when a local transcript loses its session id', async () => {
+    const plannerError = 'planner failed before creating the conversation';
+    mock.api.planningChatSend = vi.fn(async () => ({ ok: false, error: plannerError })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan without a saved session');
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(plannerError);
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+    });
+
+    submitPlanningText('continue this local transcript');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('This planning chat lost its session link.');
+    });
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+  });
+
   it('passes the selected planning preset', async () => {
     render(<App />);
     await openPlanningTerminal();
