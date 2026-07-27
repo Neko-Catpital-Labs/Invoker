@@ -11,10 +11,10 @@ import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
 import {
   buildRepairWorkflowSpec,
   parseSpawnRepairWorkflowMutationArgs,
+  repairWorkflowActionKey,
 } from '../repair-workflow-spec.js';
 import {
   CI_FAILURE_WORKER_KIND,
-  ciFailureActionKey,
   createCiFailureTick,
 } from '../workers/ci-failure-worker.js';
 import { maybePublishReviewGateCiFailure } from '../task-runner-review-gate.js';
@@ -193,7 +193,7 @@ describe('PR status and CI failure workers', () => {
 
     await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
 
-    expect(ciFailureActionKey(sameChecksDifferentOrder)).toBe(ciFailureActionKey(event));
+    expect(repairWorkflowActionKey(sameChecksDifferentOrder)).toBe(repairWorkflowActionKey(event));
     expect(harness.submit).toHaveBeenCalledTimes(1);
     const [, , , args] = harness.submit.mock.calls[0];
     const parsed = parseSpawnRepairWorkflowMutationArgs(args);
@@ -212,12 +212,12 @@ describe('PR status and CI failure workers', () => {
         headSha: 'sha-1',
       },
     });
-    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${repairWorkflowActionKey(event)}`)).toMatchObject({
       workerKind: CI_FAILURE_WORKER_KIND,
       actionType: 'spawn-repair-workflow',
       status: 'queued',
       intentId: '42',
-      externalKey: ciFailureActionKey(event),
+      externalKey: repairWorkflowActionKey(event),
       payload: expect.objectContaining({
         channel: 'invoker:spawn-repair-workflow',
       }),
@@ -261,7 +261,7 @@ describe('PR status and CI failure workers', () => {
     await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
 
     expect(harness.submit).toHaveBeenCalledTimes(1);
-    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(nextEvent)}`)).toMatchObject({
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${repairWorkflowActionKey(nextEvent)}`)).toMatchObject({
       status: 'skipped',
       payload: expect.objectContaining({
         reason: 'worker-retry-budget-exhausted',
@@ -302,7 +302,7 @@ describe('PR status and CI failure workers', () => {
     await tick({ identity: { kind: CI_FAILURE_WORKER_KIND, instanceId: 'test' }, reason: 'wake', tickNumber: 1, signal: new AbortController().signal });
 
     expect(harness.submit).not.toHaveBeenCalled();
-    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${repairWorkflowActionKey(event)}`)).toMatchObject({
       actionType: 'spawn-repair-workflow',
       status: 'skipped',
       payload: expect.objectContaining({
@@ -376,10 +376,10 @@ describe('PR status and CI failure workers', () => {
     expect(harness.submit).not.toHaveBeenCalled();
     // Stale events are routine scan noise: logged, but NOT recorded as a durable
     // decision row. Only meaningful skips (e.g. retry-budget-exhausted) persist.
-    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toBeUndefined();
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${repairWorkflowActionKey(event)}`)).toBeUndefined();
     expect(harness.store.upsertWorkerAction).not.toHaveBeenCalled();
   });
-  it('does not publish a CI repair intent for pending checks or merge-conflict-only polls', async () => {
+  it('does not publish a CI repair workflow spawn for pending checks or merge-conflict-only polls', async () => {
     const publish = vi.fn();
     const host = {
       reviewGateCiFailurePublisher: { publish },
@@ -448,7 +448,7 @@ describe('PR status and CI failure workers', () => {
 
     expect(harness.submit).not.toHaveBeenCalled();
     expect(harness.attemptLedger.get(ledgerKey)).toBe(0);
-    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${ciFailureActionKey(event)}`)).toMatchObject({
+    expect(harness.actions.get(`${CI_FAILURE_WORKER_KIND}:${repairWorkflowActionKey(event)}`)).toMatchObject({
       status: 'skipped',
       payload: expect.objectContaining({
         reason: 'infra-failure',

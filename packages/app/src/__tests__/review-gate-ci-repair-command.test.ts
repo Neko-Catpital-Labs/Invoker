@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ReviewGateLookup } from '@invoker/data-store';
-import { createAutoFixAttemptLedger, type MergeGateApprovalStatus } from '@invoker/execution-engine';
+import {
+  parseSpawnRepairWorkflowMutationArgs,
+  type MergeGateApprovalStatus,
+} from '@invoker/execution-engine';
 import type { TaskState } from '@invoker/workflow-core';
 
 import { repairReviewGateCiByPr } from '../review-gate-ci-repair-command.js';
@@ -94,7 +97,6 @@ describe('repairReviewGateCiByPr', () => {
         store: { loadTasks: () => [] },
         submitter: { submit: vi.fn(() => 42) },
         logger,
-        attemptLedger: createAutoFixAttemptLedger(),
       },
       mergeGateProvider: { checkApproval },
     });
@@ -121,9 +123,8 @@ describe('repairReviewGateCiByPr', () => {
         },
         submitter: { submit },
         logger,
-        defaultAutoFixRetries: 2,
+        defaultAutoFixRetries: 0,
         getAutoFixAgent: () => 'codex',
-        attemptLedger: createAutoFixAttemptLedger(),
       },
       mergeGateProvider: { checkApproval },
       now: () => '2026-01-01T00:00:00.000Z',
@@ -131,6 +132,12 @@ describe('repairReviewGateCiByPr', () => {
 
     expect(checkApproval).toHaveBeenCalledWith({ identifier: '123', cwd: '/repo' });
     expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0]?.[2]).toBe('invoker:spawn-repair-workflow');
+    expect(parseSpawnRepairWorkflowMutationArgs(submit.mock.calls[0]?.[3] ?? [])).toMatchObject({
+      source: 'human',
+      queuedByRepairWorkflowGuard: true,
+      prHeadSha: 'sha-1',
+    });
     expect(result).toMatchObject({
       status: 'queued',
       reason: 'queued',
@@ -156,7 +163,6 @@ describe('repairReviewGateCiByPr', () => {
         submitter: { submit },
         logger,
         defaultAutoFixRetries: 2,
-        attemptLedger: createAutoFixAttemptLedger(),
       },
       mergeGateProvider: {
         checkApproval: async () => makeCheckStatus({

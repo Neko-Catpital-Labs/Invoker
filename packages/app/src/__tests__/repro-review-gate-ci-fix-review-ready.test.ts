@@ -1,5 +1,5 @@
 /**
- * Repro: review-gate CI auto-fix intents die at dispatch because the fix
+ * Repro: review-gate manual Fix with Agent dies at dispatch because the fix
  * entry path only accepted `failed` tasks.
  *
  * Production failure (workflow "Prove Review Gate Fix No-op Root Cause",
@@ -10,18 +10,16 @@
  *       at fixWithAgentAction
  *       at executeFixWithAgentMutation
  *
- * A merge gate whose review PR has a red CI check stays `review_ready` — the
- * gate task itself never failed. The ci-failure worker intentionally targets
- * gates in `review_ready` / `awaiting_approval` (see `staleReasonForEvent` in
- * ci-failure-worker.ts), but the fix action entered the lifecycle through a
- * failed-only guard. Every review-gate CI repair intent therefore failed
- * within milliseconds of being queued.
+ * A merge gate whose review PR still exists stays `review_ready` — the gate
+ * task itself never failed. Manual Fix with Agent can still target those gates,
+ * but the fix action entered the lifecycle through a failed-only guard. Every
+ * review-gate fix therefore failed within milliseconds of being queued.
  *
  * Fixed behavior, proven here against a REAL orchestrator: fix sessions have
  * an explicit entry-state allow-list (`failed`, `review_ready`,
  * `awaiting_approval`) recorded at begin time, and every exit restores the
  * recorded entry:
- *   1. A review-gate CI fix starts from `review_ready` and parks in
+ *   1. A review-gate fix starts from `review_ready` and parks in
  *      `awaiting_approval`.
  *   2. A failing agent fix restores the gate to `review_ready` — not `failed`,
  *      which would eject an open review gate from the review-polling loop.
@@ -90,7 +88,7 @@ function makeDeps(h: TestHarness, taskExecutor: Record<string, unknown>) {
   };
 }
 
-describe('review-gate CI auto-fix from review_ready (repro)', () => {
+describe('review-gate Fix with Agent from review_ready (repro)', () => {
   let h: TestHarness;
 
   beforeEach(() => {
@@ -111,7 +109,7 @@ describe('review-gate CI auto-fix from review_ready (repro)', () => {
     );
   });
 
-  it('fixed: a review-gate CI fix starts from review_ready and parks in awaiting_approval', async () => {
+  it('fixed: a review-gate fix starts from review_ready and parks in awaiting_approval', async () => {
     const mergeId = await driveGateToReviewReady(h);
     const fixWithAgent = vi.fn(async () => {
       // The agent must run while the gate is in the fix lifecycle.

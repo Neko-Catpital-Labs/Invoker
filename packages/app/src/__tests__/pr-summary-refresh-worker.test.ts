@@ -73,7 +73,7 @@ function makeAction(overrides: Partial<WorkerActionRecord> = {}): WorkerActionRe
   return {
     id: 'ci-failure:key',
     workerKind: 'ci-failure',
-    actionType: 'fix-ci-failure',
+    actionType: 'spawn-repair-workflow',
     workflowId: 'wf-1',
     taskId: 'wf-1/build',
     subjectType: 'review',
@@ -81,7 +81,7 @@ function makeAction(overrides: Partial<WorkerActionRecord> = {}): WorkerActionRe
     externalKey: 'ci-failure:key',
     status: 'completed',
     attemptCount: 1,
-    summary: 'Submitted CI repair.',
+    summary: 'Spawned CI repair workflow.',
     payload: {},
     createdAt: '2026-01-01T00:01:00.000Z',
     updatedAt: '2026-01-01T00:01:00.000Z',
@@ -163,7 +163,7 @@ describe('pr-summary-refresh worker', () => {
     expect(provider.updateReviewBody).toHaveBeenCalledTimes(1);
     const body = provider.updateReviewBody.mock.calls[0]?.[0]?.body ?? '';
     expect(body).toContain('## Pipeline');
-    expect(body).toContain('| 2026-01-01T00:01:00.000Z | ci-failure | fix-ci-failure | completed | wf-1/build | Submitted CI repair. |');
+    expect(body).toContain('| 2026-01-01T00:01:00.000Z | ci-failure | spawn-repair-workflow | completed | wf-1/build | Spawned CI repair workflow. |');
     expect(body).toContain('- [x] `pnpm test` — Build project');
 
     const refreshAction = [...savedActions.values()].find((action) =>

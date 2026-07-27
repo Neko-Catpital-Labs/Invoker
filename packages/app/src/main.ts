@@ -987,7 +987,6 @@ function startHeadlessMode(): void {
             defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
             getAutoFixAgent: () => invokerConfig.autoFixAgent,
             getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
-            attemptLedger: autoFixAttemptLedger,
           },
         }),
         runtimeServices,

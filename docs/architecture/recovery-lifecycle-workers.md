@@ -111,6 +111,38 @@ On wake, a worker should:
 
 Registered workers may subscribe to the same lifecycle event stream. Contention is controlled by persisted state checks and command-route validation, not by assuming one subscriber receives a unique event.
 
+## CI Repair Workflows
+
+Review-gate CI failures are owned by the built-in `ci-failure` worker. The task
+runner publishes `review_gate.ci_failed` after a PR gate reports failing checks;
+the worker re-loads the merge task, rejects stale lineage, and submits the
+normal `invoker:spawn-repair-workflow` command instead of running Fix with Agent
+inside the upstream merge worktree.
+
+The spawned repair workflow is isolated from the upstream workflow:
+
+1. Its plan starts from the captured PR head SHA and declares an external
+   dependency on the upstream merge task with `gatePolicy: ci_failed`, so the
+   repair is explicitly tied to a red gate rather than to a failed task state.
+2. The worker records a `ci-failure` / `spawn-repair-workflow` action keyed by
+   task, review, captured head SHA, and a stable hash of the failed checks.
+   Open or completed rows dedupe repeated wakeups for the same PR/head/check
+   set. The same durable `autoFixRetries` cap used by automatic recovery also
+   bounds worker-submitted repair workflow spawns.
+3. If the active review-gate artifact is dirty, the `ci-failure` worker records
+   a skipped action and leaves ownership to `review-gate-merge-conflict`; the
+   conflict worker wins until it advances the gate generation and clears the
+   merge conflict.
+4. The repair workflow writes fixes on a repair branch. Its final publish step
+   fetches the upstream PR branch, verifies that it still points at the captured
+   head SHA and that the repair head descends from that SHA, then fast-forwards
+   the PR branch. If the branch moved, the writeback refuses to publish and the
+   upstream gate can produce a fresh repair event for the new head.
+
+This keeps CI repair out of the upstream worktree while preserving the same
+operator-visible worker decision ledger and retry-budget controls as other
+recovery workers.
+
 ## Auto-Fix Worker
 
 Automatic fix attempts are owned by the built-in auto-fix worker registered as kind `autofix` in `@invoker/execution-engine`. The worker's underlying runtime identity remains `recovery` for existing recovery audit events. It subscribes to lifecycle wakeups, scans persisted state, keys consumed attempts in worker runtime memory by task lineage, and decides whether an auto-fix command should be submitted. `./run.sh --headless worker autofix` is only a manual one-shot scan through the same registered definition.

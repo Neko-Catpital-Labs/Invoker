@@ -17,7 +17,7 @@ function buildQueuedAction(id: string, intentId: string): WorkerActionWrite {
   return {
     id,
     workerKind: 'ci-failure',
-    actionType: 'fix-ci-failure',
+    actionType: 'spawn-repair-workflow',
     workflowId: 'wf-1',
     taskId: 'wf-1/t',
     subjectType: 'review',
@@ -57,7 +57,7 @@ describe('repro: deferred startup reconcile method binding', () => {
       return [{
         id: 9,
         workflowId: 'wf-1',
-        channel: 'invoker:fix-with-agent',
+        channel: 'invoker:spawn-repair-workflow',
         args: [],
         priority: 'normal' as const,
         status: 'completed' as const,

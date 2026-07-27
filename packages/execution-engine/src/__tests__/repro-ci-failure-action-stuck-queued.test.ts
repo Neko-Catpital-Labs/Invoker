@@ -1,11 +1,11 @@
 /**
- * Repro: a review-gate CI repair stays "queued" forever after its fix intent
- * fails.
+ * Repro: a review-gate CI repair stays "queued" forever after its repair
+ * workflow spawn intent fails.
  *
  * Production failure (workflow "Prove Review Gate Fix No-op Root Cause"):
  * the ci-failure worker recorded its dedupe action as `queued` when it
- * submitted fix intent 27908. The intent failed 50ms later, but nothing wrote
- * that outcome back to the worker action. From then on every tick logged
+ * submitted spawn intent 27908. The intent failed 50ms later, but nothing
+ * wrote that outcome back to the worker action. From then on every tick logged
  *
  *   worker-ci-failure-skip reason=already-recorded existingStatus=queued
  *
@@ -14,10 +14,11 @@
  * retried the same failed check.
  *
  * Fixed behavior, proven here: before the dedupe check, the worker folds a
- * terminal intent outcome back into the action row. A failed intent marks the
- * action `failed` and the same tick requeues a fresh repair (bounded by the
- * attempt ledger); a completed intent marks the action `completed` and stays
- * deduped; an intent that is still open keeps the action queued untouched.
+ * terminal spawn intent outcome back into the action row. A failed intent marks
+ * the action `failed` and the same tick requeues a fresh repair workflow spawn
+ * (bounded by the durable cap); a completed intent marks the action `completed`
+ * and stays deduped; an intent that is still open keeps the action queued
+ * untouched.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,9 +33,9 @@ import type { TaskState } from '@invoker/workflow-core';
 
 import { createAutoFixAttemptLedger } from '../auto-fix-attempt-ledger.js';
 import type { ReviewGateCiFailedLifecycleEvent } from '../lifecycle-events.js';
+import { repairWorkflowActionKey } from '../repair-workflow-spec.js';
 import {
   CI_FAILURE_WORKER_KIND,
-  ciFailureActionKey,
   createCiFailureTick,
 } from '../workers/ci-failure-worker.js';
 
@@ -126,8 +127,8 @@ function makeIntent(id: number, status: WorkflowMutationIntentStatus, error?: st
   return {
     id,
     workflowId: 'wf-1',
-    channel: 'invoker:fix-with-agent',
-    args: ['wf-1/merge', 'codex', { autoFix: true }],
+    channel: 'invoker:spawn-repair-workflow',
+    args: [{ event: makeEvent(), upstreamWorkflowId: 'wf-1', upstreamFeatureBranch: 'feature/ci', prHeadSha: 'sha-1', failedCheckNames: ['PR Body'] }],
     priority: 'normal',
     status,
     error,
@@ -138,12 +139,12 @@ function makeIntent(id: number, status: WorkflowMutationIntentStatus, error?: st
 function makeHarness(opts: { intents: WorkflowMutationIntent[]; existingActionStatus: string; existingIntentId: string }) {
   const task = makeTask();
   const event = makeEvent();
-  const externalKey = ciFailureActionKey(event);
+  const externalKey = repairWorkflowActionKey(event);
   const actions = new Map<string, WorkerActionRecord>();
   actions.set(`${CI_FAILURE_WORKER_KIND}:${externalKey}`, toRecord({
     id: `${CI_FAILURE_WORKER_KIND}:${externalKey}`,
     workerKind: CI_FAILURE_WORKER_KIND,
-    actionType: 'fix-ci-failure',
+    actionType: 'spawn-repair-workflow',
     workflowId: 'wf-1',
     taskId: 'wf-1/merge',
     subjectType: 'review',
@@ -152,7 +153,8 @@ function makeHarness(opts: { intents: WorkflowMutationIntent[]; existingActionSt
     status: opts.existingActionStatus as WorkerActionRecord['status'],
     attemptCount: 1,
     intentId: opts.existingIntentId,
-    summary: 'Queued CI repair with agent',
+    summary: 'Queued CI repair workflow spawn',
+    payload: { channel: 'invoker:spawn-repair-workflow' },
   }));
   const submit = vi.fn((_workflowId: string, _priority: WorkflowMutationPriority, _channel: string, _args: unknown[]) => 42);
   const store = {
@@ -188,9 +190,9 @@ describe('ci-failure worker stale queued action (repro)', () => {
     vi.clearAllMocks();
   });
 
-  it('fixed: a failed intent flips the queued action to failed and requeues the repair', async () => {
+  it('fixed: a failed spawn intent flips the queued action to failed and requeues the repair workflow spawn', async () => {
     const h = makeHarness({
-      intents: [makeIntent(27908, 'failed', 'Error: Task wf-1/merge is not failed (status: review_ready)\n    at beginConflictResolutionImpl')],
+      intents: [makeIntent(27908, 'failed', 'Error: spawn-repair-workflow could not load upstream workflow\n    at submitRepairWorkflowFromCiFailure')],
       existingActionStatus: 'queued',
       existingIntentId: '27908',
     });
@@ -203,18 +205,19 @@ describe('ci-failure worker stale queued action (repro)', () => {
       .find((write) => write.status === 'failed');
     expect(failedWrite).toMatchObject({
       status: 'failed',
-      summary: 'CI repair intent failed: Error: Task wf-1/merge is not failed (status: review_ready)',
+      summary: 'CI repair workflow spawn intent failed: Error: spawn-repair-workflow could not load upstream workflow',
       attemptCount: 1,
     });
 
-    // ...and the same tick requeued a fresh repair instead of skipping with
-    // reason=already-recorded forever.
+    // ...and the same tick requeued a fresh repair workflow spawn instead of
+    // skipping with reason=already-recorded forever.
     expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submit.mock.calls[0]?.[2]).toBe('invoker:spawn-repair-workflow');
     const final = h.actions.get(`${CI_FAILURE_WORKER_KIND}:${h.externalKey}`);
     expect(final).toMatchObject({ status: 'queued', intentId: '42', attemptCount: 2 });
   });
 
-  it('fixed: a completed intent flips the queued action to completed without requeueing', async () => {
+  it('fixed: a completed spawn intent flips the queued action to completed without requeueing', async () => {
     const h = makeHarness({
       intents: [makeIntent(27908, 'completed')],
       existingActionStatus: 'queued',
@@ -225,10 +228,10 @@ describe('ci-failure worker stale queued action (repro)', () => {
 
     expect(h.submit).not.toHaveBeenCalled();
     const final = h.actions.get(`${CI_FAILURE_WORKER_KIND}:${h.externalKey}`);
-    expect(final).toMatchObject({ status: 'completed', summary: 'CI repair intent completed' });
+    expect(final).toMatchObject({ status: 'completed', summary: 'CI repair workflow spawn intent completed' });
   });
 
-  it('an open intent leaves the queued action deduped and does not resubmit', async () => {
+  it('an open spawn intent leaves the queued action deduped and does not resubmit', async () => {
     const h = makeHarness({
       intents: [makeIntent(27908, 'running')],
       existingActionStatus: 'queued',

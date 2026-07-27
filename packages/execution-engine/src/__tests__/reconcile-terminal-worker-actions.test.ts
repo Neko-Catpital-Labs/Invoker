@@ -19,7 +19,7 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
     actions.set('a', toRecord({
       id: 'a',
       workerKind: 'ci-failure',
-      actionType: 'fix-ci-failure',
+      actionType: 'spawn-repair-workflow',
       workflowId: 'wf-1',
       taskId: 'wf-1/t',
       subjectType: 'review',
@@ -31,7 +31,7 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
     actions.set('b', toRecord({
       id: 'b',
       workerKind: 'ci-failure',
-      actionType: 'fix-ci-failure',
+      actionType: 'spawn-repair-workflow',
       workflowId: 'wf-1',
       taskId: 'wf-1/t2',
       subjectType: 'review',
@@ -45,7 +45,7 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
       {
         id: 1,
         workflowId: 'wf-1',
-        channel: 'invoker:fix-with-agent',
+        channel: 'invoker:spawn-repair-workflow',
         args: [],
         priority: 'normal',
         status: 'running',
@@ -54,7 +54,7 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
       {
         id: 2,
         workflowId: 'wf-1',
-        channel: 'invoker:fix-with-agent',
+        channel: 'invoker:spawn-repair-workflow',
         args: [],
         priority: 'normal',
         status: 'failed',
@@ -88,7 +88,7 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
       ['a', toRecord({
         id: 'a',
         workerKind: 'ci-failure',
-        actionType: 'fix-ci-failure',
+        actionType: 'spawn-repair-workflow',
         workflowId: 'wf-1',
         taskId: 'wf-1/t',
         subjectType: 'review',
@@ -106,7 +106,7 @@ describe('reconcileTerminalWorkerActionsOnStartup', () => {
         return [{
           id: 9,
           workflowId: 'wf-1',
-          channel: 'invoker:fix-with-agent',
+          channel: 'invoker:spawn-repair-workflow',
           args: [],
           priority: 'normal' as const,
           status: 'completed' as const,

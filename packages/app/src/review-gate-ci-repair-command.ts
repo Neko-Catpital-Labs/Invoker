@@ -1,10 +1,9 @@
 import type { SQLiteAdapter } from '@invoker/data-store';
 import {
-  createFailedCheckLogFetcher,
   GitHubMergeGateProvider,
-  queueReviewGateCiRepair,
+  queueRepairWorkflowSpawn,
   type MergeGateApprovalStatus,
-  type ReviewGateCiRepairPolicyOptions,
+  type QueueRepairWorkflowSpawnOptions,
 } from '@invoker/execution-engine';
 
 export interface ReviewGateCiRepairCommandResult {
@@ -19,7 +18,7 @@ export interface ReviewGateCiRepairCommandResult {
 export interface ReviewGateCiRepairCommandDeps {
   persistence: Pick<SQLiteAdapter, 'findReviewGateByPr' | 'loadTask'>;
   repoRoot: string;
-  policy: ReviewGateCiRepairPolicyOptions;
+  policy: QueueRepairWorkflowSpawnOptions;
   mergeGateProvider?: Pick<GitHubMergeGateProvider, 'checkApproval'>;
   now?: () => string;
 }
@@ -88,12 +87,7 @@ export async function repairReviewGateCiByPr(
   const createdAt = deps.now?.() ?? new Date().toISOString();
   const generation = mergeTask.execution.generation ?? lookup.workflowGeneration ?? 0;
   const attemptId = mergeTask.execution.selectedAttemptId ?? lookup.selectedAttemptId;
-  const policy: ReviewGateCiRepairPolicyOptions = {
-    ...deps.policy,
-    fetchFailedCheckLogs: deps.policy.fetchFailedCheckLogs
-      ?? createFailedCheckLogFetcher({ cwd: deps.repoRoot }),
-  };
-  const result = await queueReviewGateCiRepair(policy, {
+  const result = queueRepairWorkflowSpawn(deps.policy, {
     eventKey: `review_gate.ci_failed|workflow:${lookup.workflowId}|task:${mergeTask.id}|scan:${prNumber}`,
     kind: 'review_gate.ci_failed',
     workflowId: lookup.workflowId,
@@ -122,7 +116,7 @@ export async function repairReviewGateCiByPr(
     branch: mergeTask.execution.branch ?? lookup.branch,
     failedChecks: status.checks.failed,
     statusText: reviewGateStatusText(status),
-  });
+  }, 'human');
 
   return result.decision === 'queued'
     ? {

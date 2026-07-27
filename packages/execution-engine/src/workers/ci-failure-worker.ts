@@ -25,9 +25,6 @@ import type {
 } from '../lifecycle-events.js';
 import {
   ciFailureChecksHash,
-  ciFailureActionKey,
-} from '../review-gate-ci-repair.js';
-import {
   queueRepairWorkflowSpawn,
   repairWorkflowActionKey,
   SPAWN_REPAIR_WORKFLOW_CHANNEL,
@@ -42,7 +39,6 @@ import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../wor
 
 export const CI_FAILURE_WORKER_KIND = 'ci-failure';
 export const DEFAULT_CI_FAILURE_WORKER_INTERVAL_MS = 60_000;
-export { ciFailureActionKey };
 
 export interface CiFailureWorkerStore extends RepairWorkflowSpawnStore {
   listWorkflowMutationIntents?(
@@ -80,7 +76,7 @@ export function registerCiFailureWorker(
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: CI_FAILURE_WORKER_KIND,
-    note: 'Submits head-SHA guarded CI repair intents for failed review-gate checks.',
+    note: 'Submits head-SHA guarded CI repair workflow spawns for failed review-gate checks.',
     source: 'built-in',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createCiFailureWorker({
@@ -107,7 +103,7 @@ export function createCiFailureTick(options: CiFailureWorkerPolicyOptions): Work
     const events = options.drainEvents?.() ?? [];
     const seen = new Set<string>();
     for (const event of events) {
-      const externalKey = ciFailureActionKey(event);
+      const externalKey = repairWorkflowActionKey(event);
       if (seen.has(externalKey)) continue;
       seen.add(externalKey);
       try {
@@ -316,8 +312,8 @@ function reconcileFinishedIntentAction(
   const now = new Date().toISOString();
   const status: WorkerActionStatus = intent.status === 'completed' ? 'completed' : 'failed';
   const summary = status === 'completed'
-    ? 'CI repair intent completed'
-    : `CI repair intent failed: ${firstLine(intent.error) ?? 'unknown error'}`;
+    ? 'CI repair workflow spawn intent completed'
+    : `CI repair workflow spawn intent failed: ${firstLine(intent.error) ?? 'unknown error'}`;
   const payload = existing.payload && typeof existing.payload === 'object'
     ? { ...(existing.payload as Record<string, unknown>) }
     : {};

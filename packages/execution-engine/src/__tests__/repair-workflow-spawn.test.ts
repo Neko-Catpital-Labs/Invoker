@@ -338,6 +338,52 @@ describe('repair workflow spawn', () => {
     });
   });
 
+  it('derives the captured PR head SHA from the active review-gate artifact when the event omits it', () => {
+    const artifactHeadSha = 'fedcba9876543210fedcba9876543210fedcba98';
+    const harness = makeHarness(makeTask({
+      execution: {
+        generation: 3,
+        selectedAttemptId: 'attempt-merge',
+        branch: 'feature/ci',
+        reviewGate: {
+          activeGeneration: 3,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{
+            id: 'pr-123',
+            providerId: '123',
+            provider: 'github',
+            required: true,
+            status: 'open',
+            generation: 3,
+            headSha: artifactHeadSha,
+          }],
+        },
+      },
+    }));
+    const event = makeEvent({ headSha: undefined });
+    const submitted: unknown[][] = [];
+    const submitter = {
+      submit: vi.fn((_workflowId: string, _priority: string, _channel: string, args: unknown[]) => {
+        submitted.push(args);
+        return 17;
+      }),
+    };
+
+    const queued = queueRepairWorkflowSpawn({
+      store: harness.store,
+      submitter,
+      logger,
+      defaultAutoFixRetries: 1,
+    }, event);
+
+    const payload = parseSpawnRepairWorkflowMutationArgs(submitted[0] ?? []);
+    expect(queued).toMatchObject({ decision: 'queued', intentId: 17 });
+    expect(payload.prHeadSha).toBe(artifactHeadSha);
+    expect(harness.actions.get(`ci-failure:${repairWorkflowActionKey({ ...event, headSha: artifactHeadSha })}`)).toMatchObject({
+      payload: expect.objectContaining({ headSha: artifactHeadSha }),
+    });
+  });
+
   it('wires fast-forward refusal into the final publish step', () => {
     const event = makeEvent();
     const spec = buildRepairWorkflowSpec({

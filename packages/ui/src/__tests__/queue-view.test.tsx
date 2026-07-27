@@ -169,14 +169,14 @@ describe('QueueView', () => {
             makeWorkerAction({
               id: 'ci-a',
               workerKind: 'ci-failure',
-              actionType: 'fix-ci-failure',
+              actionType: 'spawn-repair-workflow',
               taskId: taskA.id,
               subjectId: taskA.id,
             }),
             makeWorkerAction({
               id: 'ci-b',
               workerKind: 'ci-failure',
-              actionType: 'fix-ci-failure',
+              actionType: 'spawn-repair-workflow',
               taskId: taskB.id,
               subjectId: taskB.id,
             }),
@@ -187,7 +187,7 @@ describe('QueueView', () => {
 
     expect(screen.getByText('Review gate A')).toBeInTheDocument();
     expect(screen.getByText('Review gate B')).toBeInTheDocument();
-    expect(screen.getAllByText('CI failure repair · Fix Ci Failure · My Workflow')).toHaveLength(2);
+    expect(screen.getAllByText('CI failure repair · Spawn Repair Workflow · My Workflow')).toHaveLength(2);
   });
 
   it('keeps worker actions and worker processes in independent scroll panes', () => {

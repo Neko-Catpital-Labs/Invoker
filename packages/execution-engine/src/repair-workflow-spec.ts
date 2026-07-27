@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { Logger } from '@invoker/contracts';
 import type {
   WorkerActionRecord,
@@ -13,7 +15,6 @@ import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
 } from './lifecycle-events.js';
-import { ciFailureChecksHash } from './review-gate-ci-repair.js';
 import { recordWorkerDecisionRow } from './worker-decision-ledger.js';
 
 export const SPAWN_REPAIR_WORKFLOW_CHANNEL = 'invoker:spawn-repair-workflow';
@@ -128,6 +129,23 @@ export function failedCheckNamesFromCiFailureEvent(
   return event.failedChecks.map((check) => check.name);
 }
 
+export function ciFailureChecksHash(failedChecks: readonly ReviewGateFailedCheck[]): string {
+  const normalized = failedChecks
+    .map((check) => ({
+      name: check.name,
+      conclusion: check.conclusion ?? '',
+      detailsUrl: check.detailsUrl ?? '',
+    }))
+    .sort((a, b) =>
+      a.name.localeCompare(b.name)
+      || a.conclusion.localeCompare(b.conclusion)
+      || a.detailsUrl.localeCompare(b.detailsUrl),
+    );
+  return createHash('sha256')
+    .update(JSON.stringify(normalized))
+    .digest('hex');
+}
+
 export function repairWorkflowActionKey(event: Pick<
   ReviewGateCiFailedLifecycleEvent,
   'taskId' | 'reviewId' | 'headSha' | 'failedChecks'
@@ -139,6 +157,20 @@ export function repairWorkflowActionKey(event: Pick<
     event.headSha ?? NO_HEAD_SHA,
     ciFailureChecksHash(event.failedChecks),
   ].join(':');
+}
+
+export function extractReviewGateHeadSha(
+  task: TaskState,
+  reviewId: string,
+): string | undefined {
+  const gate = task.execution.reviewGate;
+  const artifact = gate?.artifacts.find((candidate) =>
+    candidate.generation === gate.activeGeneration
+    && candidate.status !== 'discarded'
+    && !candidate.discardedAt
+    && candidate.providerId === reviewId,
+  );
+  return artifact?.headSha;
 }
 
 export function buildSpawnRepairWorkflowCommandPayload(
@@ -395,34 +427,48 @@ export function submitRepairWorkflowFromCiFailure(
 export function queueRepairWorkflowSpawn(
   options: QueueRepairWorkflowSpawnOptions,
   event: ReviewGateCiFailedLifecycleEvent,
+  source: 'worker' | 'human' = 'worker',
 ): QueueRepairWorkflowSpawnResult {
-  const actionKey = repairWorkflowActionKey(event);
   const task = loadTaskForEvent(options.store, event);
   if (!task) {
     logRepairWorkflowEvent(options, event, 'repair-workflow-queue-skip', { reason: 'task-missing' });
     return { decision: 'skipped', reason: 'task-missing' };
   }
+  const prHeadSha = nonEmpty(event.headSha) ?? nonEmpty(extractReviewGateHeadSha(task, event.reviewId));
+  const actionEvent = prHeadSha ? { ...event, headSha: prHeadSha } : event;
+  const actionKey = repairWorkflowActionKey(actionEvent);
   if (shouldSkipExistingAction(getExistingRepairWorkflowAction(options.store, actionKey))) {
     logRepairWorkflowEvent(options, event, 'repair-workflow-queue-skip', { reason: 'already-recorded' });
     return { decision: 'skipped', reason: 'already-recorded' };
   }
+  if (!prHeadSha) {
+    recordRepairWorkflowAction(options.store, event, actionKey, 'skipped', 'Skipped repair workflow because PR head SHA is missing', {
+      reason: 'head-sha-missing',
+    });
+    logRepairWorkflowEvent(options, event, 'repair-workflow-queue-skip', { reason: 'head-sha-missing' });
+    return { decision: 'skipped', reason: 'head-sha-missing' };
+  }
 
-  const retryBudget = retryBudgetForTask(task, options);
-  const retryCap = checkAutoFixRetryCap(options.store, event.taskId, retryBudget);
-  if (!retryCap.allowed) {
-    recordRepairWorkflowAction(options.store, event, actionKey, 'skipped', 'Skipped repair workflow because retry budget is exhausted', {
-      reason: 'worker-retry-budget-exhausted',
-      workerRetryBudget: retryBudgetLabel(retryCap.budget),
-    });
-    logRepairWorkflowEvent(options, event, 'repair-workflow-queue-skip', {
-      reason: 'worker-retry-budget-exhausted',
-      workerRetryBudget: retryBudgetLabel(retryCap.budget),
-    });
-    return { decision: 'skipped', reason: 'worker-retry-budget-exhausted' };
+  if (source !== 'human') {
+    const retryBudget = retryBudgetForTask(task, options);
+    const retryCap = checkAutoFixRetryCap(options.store, event.taskId, retryBudget);
+    if (!retryCap.allowed) {
+      recordRepairWorkflowAction(options.store, event, actionKey, 'skipped', 'Skipped repair workflow because retry budget is exhausted', {
+        headSha: prHeadSha,
+        reason: 'worker-retry-budget-exhausted',
+        workerRetryBudget: retryBudgetLabel(retryCap.budget),
+      });
+      logRepairWorkflowEvent(options, event, 'repair-workflow-queue-skip', {
+        reason: 'worker-retry-budget-exhausted',
+        workerRetryBudget: retryBudgetLabel(retryCap.budget),
+      });
+      return { decision: 'skipped', reason: 'worker-retry-budget-exhausted' };
+    }
   }
 
   const payload = buildSpawnRepairWorkflowCommandPayload(event, {
-    source: 'worker',
+    prHeadSha,
+    source,
     queuedByRepairWorkflowGuard: true,
   });
   const intentId = options.submitter.submit(
@@ -433,12 +479,16 @@ export function queueRepairWorkflowSpawn(
   );
   recordRepairWorkflowAction(options.store, event, actionKey, 'queued', 'Queued CI repair workflow spawn', {
     channel: SPAWN_REPAIR_WORKFLOW_CHANNEL,
+    headSha: prHeadSha,
     failedChecksHash: ciFailureChecksHash(event.failedChecks),
+    source,
   }, intentId);
-  recordAutoFixRetryConsumed(options.store, event.taskId, {
-    workflowId: event.workflowId,
-    summary: 'Durable per-task CI repair workflow spawn counter',
-  });
+  if (source !== 'human') {
+    recordAutoFixRetryConsumed(options.store, event.taskId, {
+      workflowId: event.workflowId,
+      summary: 'Durable per-task CI repair workflow spawn counter',
+    });
+  }
   logRepairWorkflowEvent(options, event, 'repair-workflow-queued', { intentId });
   return { decision: 'queued', reason: 'queued', intentId };
 }

@@ -4,7 +4,7 @@
 #   poll publishes review_gate.merge_conflict -> the auto-started
 #   review-gate-merge-conflict worker submits invoker:rebase-recreate and the
 #   workflow GENERATION ADVANCES -> flip PR to CI-FAILED -> the ci-failure
-#   worker records a repair decision (invoker:fix-with-agent intent).
+#   worker records a spawned repair-workflow decision.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -237,17 +237,16 @@ for action in actions:
         continue
     if action.get("workerKind") != "ci-failure":
         continue
-    if action.get("actionType") != "fix-ci-failure":
+    if action.get("actionType") != "spawn-repair-workflow":
         continue
     if not action.get("intentId"):
         continue
     payload = action.get("payload")
     if not isinstance(payload, dict):
         continue
-    # Require the invoker:fix-with-agent repair channel recorded with the
-    # submitted intent, so a no-op or unrelated decision cannot satisfy the
-    # scenario.
-    if payload.get("channel") == "invoker:fix-with-agent":
+    # Require the spawned repair-workflow channel recorded with the submitted
+    # intent, so a no-op or unrelated decision cannot satisfy the scenario.
+    if payload.get("channel") == "invoker:spawn-repair-workflow":
         raise SystemExit(0)
 
 raise SystemExit(1)
@@ -258,12 +257,12 @@ PY
   fi
   sleep 3
 done
-[ "$CI_DECIDED" -eq 1 ] || fail "no ci-failure invoker:fix-with-agent repair decision after CI failure"
-echo "==> pr-babysit: ci-failure worker recorded an invoker:fix-with-agent repair decision"
+[ "$CI_DECIDED" -eq 1 ] || fail "no ci-failure spawn-repair-workflow decision after CI failure"
+echo "==> pr-babysit: ci-failure worker recorded a spawn-repair-workflow decision"
 
-# The repair intent is deliberately in flight; let the PR read green again so
-# the fix path can finish, then wait for open intents to drain before the
-# liveness gate (retrying rides out transient sqlite lock contention too).
+# The repair-workflow spawn intent is deliberately in flight; let the PR read
+# green again so the fix path can finish, then wait for open intents to drain
+# before the liveness gate (retrying rides out transient sqlite lock contention too).
 rm -f "$MARKER_ROOT/pr-ci-failed"
 LIVENESS_OK=0
 for _ in $(seq 1 60); do

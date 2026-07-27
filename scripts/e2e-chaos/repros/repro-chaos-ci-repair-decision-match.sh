@@ -3,7 +3,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
-echo "Repro: ci-failure decision check must reject unrelated or non-fix-with-agent decisions"
+echo "Repro: ci-failure decision check must reject unrelated or non-spawn-repair decisions"
 TARGET="scripts/e2e-chaos/cases/case-pr-babysit-conflict.sh"
 python3 - "$TARGET" <<'PY'
 from pathlib import Path
@@ -43,9 +43,9 @@ def action(**overrides):
         'workflowId': workflow_id,
         'taskId': task_id,
         'workerKind': 'ci-failure',
-        'actionType': 'fix-ci-failure',
+        'actionType': 'spawn-repair-workflow',
         'intentId': '42',
-        'payload': {'channel': 'invoker:fix-with-agent'},
+        'payload': {'channel': 'invoker:spawn-repair-workflow'},
     }
     base.update(overrides)
     return base
@@ -58,7 +58,7 @@ if run([unrelated]).returncode == 0:
 
 wrong_channel = action(payload={'channel': 'invoker:rebase-recreate'}, intentId='41')
 if run([wrong_channel]).returncode == 0:
-    print('FAIL: a matching decision whose intent is not invoker:fix-with-agent still satisfies the assertion')
+    print('FAIL: a matching decision whose intent is not invoker:spawn-repair-workflow still satisfies the assertion')
     raise SystemExit(1)
 
 skipped = action(status='skipped', decision='skip', intentId=None)
@@ -68,10 +68,10 @@ if run([skipped]).returncode == 0:
 
 good = run([unrelated, wrong_channel, skipped, action()])
 if good.returncode != 0:
-    print('FAIL: matching invoker:fix-with-agent repair decision does not satisfy the assertion')
+    print('FAIL: matching invoker:spawn-repair-workflow repair decision does not satisfy the assertion')
     if good.stderr:
         print(good.stderr.strip())
     raise SystemExit(1)
 
-print("PASS: ci-failure assertion requires this workflow's invoker:fix-with-agent repair decision")
+print("PASS: ci-failure assertion requires this workflow's invoker:spawn-repair-workflow repair decision")
 PY

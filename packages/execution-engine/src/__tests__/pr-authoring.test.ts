@@ -119,10 +119,10 @@ describe('buildCanonicalPrBody', () => {
         workerActions: [
           {
             workerKind: 'ci-failure',
-            actionType: 'fix-ci-failure',
+            actionType: 'spawn-repair-workflow',
             status: 'completed',
             taskId: 'wf-1/repair',
-            summary: 'Submitted CI repair.',
+            summary: 'Spawned CI repair workflow.',
             createdAt: '2026-01-01T00:02:00.000Z',
           },
           {
@@ -139,7 +139,7 @@ describe('buildCanonicalPrBody', () => {
 
     expect(body).toContain('## Pipeline');
     const first = body.indexOf('| 2026-01-01T00:01:00.000Z | autofix | auto-fix | skipped | wf-1/build | (retry-budget-exhausted) |');
-    const second = body.indexOf('| 2026-01-01T00:02:00.000Z | ci-failure | fix-ci-failure | completed | wf-1/repair | Submitted CI repair. |');
+    const second = body.indexOf('| 2026-01-01T00:02:00.000Z | ci-failure | spawn-repair-workflow | completed | wf-1/repair | Spawned CI repair workflow. |');
     expect(first).toBeGreaterThan(-1);
     expect(second).toBeGreaterThan(first);
   });

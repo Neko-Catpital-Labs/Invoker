@@ -5,7 +5,7 @@
  * with no wake event leaves the UI showing a forever-queued repair.
  *
  * Fixed behavior: `reconcileTerminalWorkerActionsOnStartup` folds terminal
- * intents into open action rows before workers tick.
+ * spawned repair intents into open action rows before workers tick.
  */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -17,7 +17,8 @@ import type {
 } from '@invoker/data-store';
 
 import { reconcileTerminalWorkerActionsOnStartup } from '../reconcile-terminal-worker-actions.js';
-import { CI_FAILURE_WORKER_KIND, ciFailureActionKey } from '../workers/ci-failure-worker.js';
+import { repairWorkflowActionKey } from '../repair-workflow-spec.js';
+import { CI_FAILURE_WORKER_KIND } from '../workers/ci-failure-worker.js';
 
 function toRecord(write: WorkerActionWrite): WorkerActionRecord {
   const now = '2026-01-01T00:00:00.000Z';
@@ -31,7 +32,7 @@ function toRecord(write: WorkerActionWrite): WorkerActionRecord {
 
 describe('worker action stuck queued after terminal intent (startup gap)', () => {
   it('fixed: startup sweep marks queued actions completed when their intent is terminal', () => {
-    const externalKey = ciFailureActionKey({
+    const externalKey = repairWorkflowActionKey({
       taskId: 'wf-1/merge',
       reviewId: '123',
       headSha: 'sha-1',
@@ -42,7 +43,7 @@ describe('worker action stuck queued after terminal intent (startup gap)', () =>
     actions.set(`${CI_FAILURE_WORKER_KIND}:${externalKey}`, toRecord({
       id: `${CI_FAILURE_WORKER_KIND}:${externalKey}`,
       workerKind: CI_FAILURE_WORKER_KIND,
-      actionType: 'fix-ci-failure',
+      actionType: 'spawn-repair-workflow',
       workflowId: 'wf-1',
       taskId: 'wf-1/merge',
       subjectType: 'review',
@@ -51,13 +52,14 @@ describe('worker action stuck queued after terminal intent (startup gap)', () =>
       status: 'queued',
       attemptCount: 1,
       intentId: '27908',
-      summary: 'Queued CI repair with agent',
+      summary: 'Queued CI repair workflow spawn',
+      payload: { channel: 'invoker:spawn-repair-workflow' },
     }));
 
     const intents: WorkflowMutationIntent[] = [{
       id: 27908,
       workflowId: 'wf-1',
-      channel: 'invoker:fix-with-agent',
+      channel: 'invoker:spawn-repair-workflow',
       args: [],
       priority: 'normal',
       status: 'completed',
