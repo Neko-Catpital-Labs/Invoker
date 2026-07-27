@@ -419,6 +419,38 @@ Failing checks
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
 
+    def test_repair_check_noop_skips_validation_when_pr_merges_during_repair(self):
+        class FakeGh:
+            def pr_detail(self, repo, number):
+                return {"number": number, "state": "MERGED"}
+
+        stderr = io.StringIO()
+        item = pr(6111, latest=mergify(state="queued"))
+        repairer = self.repairer(FakeGh(), self.ledger())
+        git_rev_parse = iter([HEAD, HEAD])
+        git_commands = []
+
+        def fake_git_output(_work_root, *args):
+            git_commands.append(args)
+            if args == ("rev-parse", "HEAD"):
+                return next(git_rev_parse)
+            return ""
+
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+                with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                        with mock.patch.object(repairer, "run_claude_repair"):
+                            with mock.patch.object(repairer, "validate_current_pr_body") as validate:
+                                with redirect_stderr(stderr):
+                                    result = repairer.repair_check(item, "PR Body")
+
+        validate.assert_not_called()
+        self.assertEqual(result.status, "noop")
+        self.assertIn(("reset", "--hard", HEAD), git_commands)
+        self.assertIn(("clean", "-fd"), git_commands)
+        self.assertIn('"event": "admin-bypass-repair-check-terminal"', stderr.getvalue())
+
 
     def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):
         item = pr(
