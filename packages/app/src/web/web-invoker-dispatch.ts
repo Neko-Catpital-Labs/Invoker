@@ -90,7 +90,10 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       // ── Reads ─────────────────────────────────────────────
       case 'invoker:get-tasks':
         return buildTaskGraphSnapshot({
-          orchestrator,
+          orchestrator: {
+            syncAllFromDb: () => orchestrator.syncAllFromDb(),
+            getAllTasks: () => orchestrator.getAllTasks(),
+          },
           persistence,
           getStreamSequence: deps.getStreamSequence,
         });
