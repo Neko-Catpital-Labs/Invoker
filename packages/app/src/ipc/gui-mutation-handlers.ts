@@ -27,6 +27,7 @@ import {
   RESTART_TO_BRANCH_TRACE,
   remoteFetchForPool,
   registerBuiltinAgents,
+  resetAutoFixBudgetForTasks,
 } from '@invoker/execution-engine';
 import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import {
@@ -1449,6 +1450,9 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       defaultPoolId: invokerConfig.defaultPoolId,
       availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
       deferRunningUntilLaunch: true,
+      onRecreateTasksReset: (taskIds) => {
+        resetAutoFixBudgetForTasks(persistence, taskIds);
+      },
     });
     commandService = new CommandService(
       orchestrator,
