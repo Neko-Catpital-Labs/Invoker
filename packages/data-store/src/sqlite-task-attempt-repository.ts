@@ -17,6 +17,7 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -230,194 +231,199 @@ export class SqliteTaskAttemptRepository {
     const beforeTask = this.loadTask(taskId);
     if (!beforeTask) return;
 
-    const setClauses: string[] = [];
-    const values: unknown[] = [];
+    this.exec.runTransaction(() => {
+      const setClauses: string[] = [];
+      const values: unknown[] = [];
 
-    if (changes.description !== undefined) {
-      setClauses.push('description = ?');
-      values.push(changes.description);
-    }
-    if (changes.status !== undefined) {
-      setClauses.push('status = ?');
-      values.push(changes.status);
-    }
-    if (changes.dependencies !== undefined) {
-      setClauses.push('dependencies = ?');
-      values.push(JSON.stringify(changes.dependencies));
-    }
+      if (changes.description !== undefined) {
+        setClauses.push('description = ?');
+        values.push(changes.description);
+      }
+      if (changes.status !== undefined) {
+        setClauses.push('status = ?');
+        values.push(changes.status);
+      }
+      if (changes.dependencies !== undefined) {
+        setClauses.push('dependencies = ?');
+        values.push(JSON.stringify(changes.dependencies));
+      }
 
-    if (changes.config) {
-      const config = changes.config as Record<string, unknown>;
-      const configMap: Record<string, string> = {
-        workflowId: 'workflow_id',
-        parentTask: 'parent_task',
-        command: 'command',
-        prompt: 'prompt',
-        experimentPrompt: 'experiment_prompt',
-        summary: 'summary',
-        problem: 'problem',
-        approach: 'approach',
-        testPlan: 'test_plan',
-        reproCommand: 'repro_command',
-        featureBranch: 'feature_branch',
-        runnerKind: 'runner_kind',
-        poolId: 'pool_id',
-        poolMemberId: 'pool_member_id',
-        dockerImage: 'docker_image',
-        executionAgent: 'execution_agent',
-        executionModel: 'execution_model',
-        fixPrompt: 'fix_prompt',
-        fixContext: 'fix_context',
-      };
-      const configBoolMap: Record<string, string> = {
-        pivot: 'pivot',
-        isReconciliation: 'is_reconciliation',
-        requiresManualApproval: 'requires_manual_approval',
-        isMergeNode: 'is_merge_node',
-      };
+      if (changes.config) {
+        const config = changes.config as Record<string, unknown>;
+        const configMap: Record<string, string> = {
+          workflowId: 'workflow_id',
+          parentTask: 'parent_task',
+          command: 'command',
+          prompt: 'prompt',
+          experimentPrompt: 'experiment_prompt',
+          summary: 'summary',
+          problem: 'problem',
+          approach: 'approach',
+          testPlan: 'test_plan',
+          reproCommand: 'repro_command',
+          featureBranch: 'feature_branch',
+          runnerKind: 'runner_kind',
+          poolId: 'pool_id',
+          poolMemberId: 'pool_member_id',
+          dockerImage: 'docker_image',
+          executionAgent: 'execution_agent',
+          executionModel: 'execution_model',
+          fixPrompt: 'fix_prompt',
+          fixContext: 'fix_context',
+        };
+        const configBoolMap: Record<string, string> = {
+          pivot: 'pivot',
+          isReconciliation: 'is_reconciliation',
+          requiresManualApproval: 'requires_manual_approval',
+          isMergeNode: 'is_merge_node',
+        };
 
-      for (const [key, col] of Object.entries(configMap)) {
-        if (key in config) {
-          setClauses.push(`${col} = ?`);
-          values.push(config[key] ?? null);
+        for (const [key, col] of Object.entries(configMap)) {
+          if (key in config) {
+            setClauses.push(`${col} = ?`);
+            values.push(config[key] ?? null);
+          }
+        }
+        for (const [key, col] of Object.entries(configBoolMap)) {
+          if (key in config) {
+            setClauses.push(`${col} = ?`);
+            values.push(config[key] ? 1 : 0);
+          }
+        }
+        if ('experimentVariants' in changes.config) {
+          setClauses.push('experiment_variants = ?');
+          values.push(changes.config.experimentVariants ? JSON.stringify(changes.config.experimentVariants) : null);
+        }
+        if ('externalDependencies' in changes.config) {
+          setClauses.push('external_dependencies = ?');
+          values.push(changes.config.externalDependencies ? JSON.stringify(changes.config.externalDependencies) : null);
         }
       }
-      for (const [key, col] of Object.entries(configBoolMap)) {
-        if (key in config) {
-          setClauses.push(`${col} = ?`);
-          values.push(config[key] ? 1 : 0);
-        }
-      }
-      if ('experimentVariants' in changes.config) {
-        setClauses.push('experiment_variants = ?');
-        values.push(changes.config.experimentVariants ? JSON.stringify(changes.config.experimentVariants) : null);
-      }
-      if ('externalDependencies' in changes.config) {
-        setClauses.push('external_dependencies = ?');
-        values.push(changes.config.externalDependencies ? JSON.stringify(changes.config.externalDependencies) : null);
-      }
-    }
 
-    if (changes.execution) {
-      this.syncCrashPreservationState(taskId, beforeTask, changes.execution);
-      const execution = changes.execution as Record<string, unknown>;
-      const execMap: Record<string, string> = {
-        blockedBy: 'blocked_by',
-        inputPrompt: 'input_prompt',
-        exitCode: 'exit_code',
-        error: 'error',
-        protocolErrorCode: 'protocol_error_code',
-        protocolErrorMessage: 'protocol_error_message',
-        actionRequestId: 'action_request_id',
-        branch: 'branch',
-        commit: 'commit_hash',
-        fixedIntegrationSha: 'fixed_integration_sha',
-        fixedIntegrationSource: 'fixed_integration_source',
-        agentSessionId: 'agent_session_id',
-        lastAgentSessionId: 'last_agent_session_id',
-        workspacePath: 'workspace_path',
-        containerId: 'container_id',
-        selectedExperiment: 'selected_experiment',
-        fixSessionEntryStatus: 'fix_session_entry_status',
-        pendingFixError: 'pending_fix_error',
-        failureClass: 'failure_class',
-        reviewUrl: 'review_url',
-        reviewId: 'review_id',
-        reviewStatus: 'review_status',
-        reviewProviderId: 'review_provider_id',
-        phase: 'launch_phase',
-        generation: 'execution_generation',
-        selectedAttemptId: 'selected_attempt_id',
-        agentName: 'agent_name',
-        lastAgentName: 'last_agent_name',
-      };
-      const execDateMap: Record<string, string> = {
-        startedAt: 'started_at',
-        completedAt: 'completed_at',
-        lastHeartbeatAt: 'last_heartbeat_at',
-        launchStartedAt: 'launch_started_at',
-        launchCompletedAt: 'launch_completed_at',
-        fixedIntegrationRecordedAt: 'fixed_integration_recorded_at',
-      };
-      const execJsonFields: Record<string, string> = {
-        experiments: 'experiments',
-        selectedExperiments: 'selected_experiments',
-        experimentResults: 'experiment_results',
-        reviewGate: 'review_gate',
-      };
+      if (changes.execution) {
+        this.syncCrashPreservationState(taskId, beforeTask, changes.execution);
+        const execution = changes.execution as Record<string, unknown>;
+        const execMap: Record<string, string> = {
+          blockedBy: 'blocked_by',
+          inputPrompt: 'input_prompt',
+          exitCode: 'exit_code',
+          error: 'error',
+          protocolErrorCode: 'protocol_error_code',
+          protocolErrorMessage: 'protocol_error_message',
+          actionRequestId: 'action_request_id',
+          branch: 'branch',
+          commit: 'commit_hash',
+          fixedIntegrationSha: 'fixed_integration_sha',
+          fixedIntegrationSource: 'fixed_integration_source',
+          agentSessionId: 'agent_session_id',
+          lastAgentSessionId: 'last_agent_session_id',
+          workspacePath: 'workspace_path',
+          containerId: 'container_id',
+          selectedExperiment: 'selected_experiment',
+          fixSessionEntryStatus: 'fix_session_entry_status',
+          pendingFixError: 'pending_fix_error',
+          failureClass: 'failure_class',
+          reviewUrl: 'review_url',
+          reviewId: 'review_id',
+          reviewStatus: 'review_status',
+          reviewProviderId: 'review_provider_id',
+          phase: 'launch_phase',
+          generation: 'execution_generation',
+          selectedAttemptId: 'selected_attempt_id',
+          agentName: 'agent_name',
+          lastAgentName: 'last_agent_name',
+        };
+        const execDateMap: Record<string, string> = {
+          startedAt: 'started_at',
+          completedAt: 'completed_at',
+          lastHeartbeatAt: 'last_heartbeat_at',
+          launchStartedAt: 'launch_started_at',
+          launchCompletedAt: 'launch_completed_at',
+          fixedIntegrationRecordedAt: 'fixed_integration_recorded_at',
+        };
+        const execJsonFields: Record<string, string> = {
+          experiments: 'experiments',
+          selectedExperiments: 'selected_experiments',
+          experimentResults: 'experiment_results',
+          reviewGate: 'review_gate',
+        };
 
-      for (const [key, col] of Object.entries(execMap)) {
-        if (key in execution) {
-          setClauses.push(`${col} = ?`);
-          values.push(execution[key] ?? null);
+        for (const [key, col] of Object.entries(execMap)) {
+          if (key in execution) {
+            setClauses.push(`${col} = ?`);
+            values.push(execution[key] ?? null);
+          }
+        }
+        for (const [key, col] of Object.entries(execDateMap)) {
+          if (key in execution) {
+            setClauses.push(`${col} = ?`);
+            const val = execution[key];
+            values.push(val instanceof Date ? val.toISOString() : val ?? null);
+          }
+        }
+        for (const [key, col] of Object.entries(execJsonFields)) {
+          if (key in execution) {
+            setClauses.push(`${col} = ?`);
+            const val = execution[key];
+            values.push(val ? JSON.stringify(val) : null);
+          }
+        }
+        const execBoolMap: Record<string, string> = {
+          isFixingWithAI: 'is_fixing_with_ai',
+        };
+        for (const [key, col] of Object.entries(execBoolMap)) {
+          if (key in execution) {
+            setClauses.push(`${col} = ?`);
+            values.push(execution[key] ? 1 : 0);
+          }
         }
       }
-      for (const [key, col] of Object.entries(execDateMap)) {
-        if (key in execution) {
-          setClauses.push(`${col} = ?`);
-          const val = execution[key];
-          values.push(val instanceof Date ? val.toISOString() : val ?? null);
-        }
-      }
-      for (const [key, col] of Object.entries(execJsonFields)) {
-        if (key in execution) {
-          setClauses.push(`${col} = ?`);
-          const val = execution[key];
-          values.push(val ? JSON.stringify(val) : null);
-        }
-      }
-      const execBoolMap: Record<string, string> = {
-        isFixingWithAI: 'is_fixing_with_ai',
-      };
-      for (const [key, col] of Object.entries(execBoolMap)) {
-        if (key in execution) {
-          setClauses.push(`${col} = ?`);
-          values.push(execution[key] ? 1 : 0);
-        }
-      }
-    }
 
 
-    assertTaskConsistent({
-      ...beforeTask,
-      ...changes,
-      config: changes.config ? ({ ...beforeTask.config, ...changes.config } as TaskState['config']) : beforeTask.config,
-      execution: changes.execution ? { ...beforeTask.execution, ...changes.execution } : beforeTask.execution,
+      assertTaskConsistent({
+        ...beforeTask,
+        ...changes,
+        config: changes.config ? ({ ...beforeTask.config, ...changes.config } as TaskState['config']) : beforeTask.config,
+        execution: changes.execution ? { ...beforeTask.execution, ...changes.execution } : beforeTask.execution,
+      });
+
+      if (setClauses.length === 0) return;
+
+      // Atomically bump task-state version with every mutation
+      setClauses.push('task_state_version = task_state_version + 1');
+
+      if (changes.execution && 'workspacePath' in changes.execution) {
+        try {
+          const row = this.exec.queryOne(
+            'SELECT is_merge_node AS isMerge, workspace_path AS prevPath FROM tasks WHERE id = ?',
+            [taskId],
+          ) as { isMerge?: number; prevPath?: string | null } | undefined;
+          if (row?.isMerge === 1) {
+            const nextWs = (changes.execution as { workspacePath?: string }).workspacePath;
+            console.log(
+              `[merge-gate-workspace] sqlite.updateTask mergeNode task=${taskId} ` +
+                `workspace_path ${row.prevPath ?? 'NULL'} → ${nextWs ?? 'NULL'} ` +
+                '(caller sets executor worktree path and/or gate clone path)',
+            );
+          }
+        } catch {
+          /* best-effort diagnostics only */
+        }
+      }
+
+      values.push(taskId);
+      const heartbeatOnly =
+        setClauses.length === 1 && setClauses[0].trimStart().startsWith('last_heartbeat_at =');
+
+      if (!heartbeatOnly && process.env.NODE_ENV !== 'test' && process.env.INVOKER_TRACE_PERSIST_SQL === '1') {
+        const cols = setClauses.map((c) => c.split(/\s*=\s*/)[0]!.trim()).join(', ');
+        console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
+      }
+      this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      if (changes.status !== undefined) {
+        this.appendTaskJournalEntry(taskId);
+      }
     });
-
-    if (setClauses.length === 0) return;
-
-    // Atomically bump task-state version with every mutation
-    setClauses.push('task_state_version = task_state_version + 1');
-
-    if (changes.execution && 'workspacePath' in changes.execution) {
-      try {
-        const row = this.exec.queryOne(
-          'SELECT is_merge_node AS isMerge, workspace_path AS prevPath FROM tasks WHERE id = ?',
-          [taskId],
-        ) as { isMerge?: number; prevPath?: string | null } | undefined;
-        if (row?.isMerge === 1) {
-          const nextWs = (changes.execution as { workspacePath?: string }).workspacePath;
-          console.log(
-            `[merge-gate-workspace] sqlite.updateTask mergeNode task=${taskId} ` +
-              `workspace_path ${row.prevPath ?? 'NULL'} → ${nextWs ?? 'NULL'} ` +
-              '(caller sets executor worktree path and/or gate clone path)',
-          );
-        }
-      } catch {
-        /* best-effort diagnostics only */
-      }
-    }
-
-    values.push(taskId);
-    const heartbeatOnly =
-      setClauses.length === 1 && setClauses[0].trimStart().startsWith('last_heartbeat_at =');
-
-    if (!heartbeatOnly && process.env.NODE_ENV !== 'test' && process.env.INVOKER_TRACE_PERSIST_SQL === '1') {
-      const cols = setClauses.map((c) => c.split(/\s*=\s*/)[0]!.trim()).join(', ');
-      console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
-    }
-    this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -594,40 +600,43 @@ export class SqliteTaskAttemptRepository {
   // ── Attempt CRUD ─────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.exec.execRun(`
-      INSERT OR REPLACE INTO attempts (
-        id, node_id, attempt_number, queue_priority, status,
-        snapshot_commit, base_branch, upstream_attempt_ids,
-        command_override, prompt_override,
-        claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
-        branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
-        supersedes_attempt_id, created_at, merge_conflict
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?
-      )
-    `, [
-      attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
-      attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
-      JSON.stringify(attempt.upstreamAttemptIds),
-      attempt.commandOverride ?? null, attempt.promptOverride ?? null,
-      attempt.claimedAt?.toISOString() ?? null,
-      attempt.startedAt?.toISOString() ?? null,
-      attempt.completedAt?.toISOString() ?? null,
-      attempt.exitCode ?? null, attempt.error ?? null,
-      attempt.lastHeartbeatAt?.toISOString() ?? null,
-      attempt.leaseExpiresAt?.toISOString() ?? null,
-      attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
-      attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
-      attempt.containerId ?? null,
-      attempt.supersedesAttemptId ?? null,
-      attempt.createdAt.toISOString(),
-      attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
-    ]);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`
+        INSERT OR REPLACE INTO attempts (
+          id, node_id, attempt_number, queue_priority, status,
+          snapshot_commit, base_branch, upstream_attempt_ids,
+          command_override, prompt_override,
+          claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
+          branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
+          supersedes_attempt_id, created_at, merge_conflict
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?,
+          ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?
+        )
+      `, [
+        attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
+        attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
+        JSON.stringify(attempt.upstreamAttemptIds),
+        attempt.commandOverride ?? null, attempt.promptOverride ?? null,
+        attempt.claimedAt?.toISOString() ?? null,
+        attempt.startedAt?.toISOString() ?? null,
+        attempt.completedAt?.toISOString() ?? null,
+        attempt.exitCode ?? null, attempt.error ?? null,
+        attempt.lastHeartbeatAt?.toISOString() ?? null,
+        attempt.leaseExpiresAt?.toISOString() ?? null,
+        attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
+        attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
+        attempt.containerId ?? null,
+        attempt.supersedesAttemptId ?? null,
+        attempt.createdAt.toISOString(),
+        attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
+      ]);
+      this.appendAttemptJournalEntry(attempt.id);
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -711,7 +720,12 @@ export class SqliteTaskAttemptRepository {
 
     if (setClauses.length === 0) return;
     values.push(attemptId);
-    this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      if (changes.status !== undefined || changes.completedAt !== undefined) {
+        this.appendAttemptJournalEntry(attemptId);
+      }
+    });
   }
 
   claimAttemptForLaunch(
@@ -888,5 +902,31 @@ export class SqliteTaskAttemptRepository {
       [nodeId, selected.createdAt.toISOString(), cappedLimit],
     );
     return rows.map((row) => mapRowToAttempt(row));
+  }
+
+  private appendTaskJournalEntry(taskId: string): void {
+    const row = this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    if (!row) {
+      throw new Error(`Cannot journal missing task row: ${taskId}`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType: 'task',
+      entityId: taskId,
+      op: 'upsert',
+      payload: row,
+    });
+  }
+
+  private appendAttemptJournalEntry(attemptId: string): void {
+    const row = this.exec.queryOne('SELECT * FROM attempts WHERE id = ?', [attemptId]);
+    if (!row) {
+      throw new Error(`Cannot journal missing attempt row: ${attemptId}`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType: 'attempt',
+      entityId: attemptId,
+      op: 'upsert',
+      payload: row,
+    });
   }
 }
