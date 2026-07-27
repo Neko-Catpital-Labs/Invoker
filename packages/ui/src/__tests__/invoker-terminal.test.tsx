@@ -882,6 +882,43 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getAllByText(/submitted/i).length).toBeGreaterThan(0);
   });
 
+  it('opens the Plan graph from a submitted planning terminal session', async () => {
+    const submittedWorkflow: WorkflowMeta = {
+      id: 'submitted-wf',
+      name: 'Submitted Workflow',
+      status: 'running',
+    };
+    mock.setTasks([], [submittedWorkflow]);
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'submitted-terminal-session',
+          title: 'Submitted terminal session',
+          status: 'submitted',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          submittedWorkflowId: submittedWorkflow.id,
+          submittedPlanName: 'Submitted Terminal Plan',
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-submitted-bar')).toHaveTextContent('Submitted Terminal Plan');
+    });
+
+    fireEvent.click(screen.getByTestId('invoker-terminal-open-graph'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
+    });
+    expect(await screen.findByTestId('workflow-node-submitted-wf')).toBeInTheDocument();
+  });
+
   it('opens the expanded planning chat and Escape closes it without clearing transcript', async () => {
     render(<App />);
     await openPlanningTerminal();
