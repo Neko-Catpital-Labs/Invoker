@@ -459,7 +459,8 @@ export class SqliteTaskAttemptRepository {
              w.name AS workflow_name
       FROM tasks t${this.taskSelectJoin('t')}
       JOIN workflows w ON w.id = t.workflow_id
-      WHERE t.status = 'completed'
+      WHERE w.deleted_at IS NULL
+        AND t.status = 'completed'
       ORDER BY t.completed_at DESC
     `);
     return rows.map((row) => ({
@@ -481,7 +482,8 @@ export class SqliteTaskAttemptRepository {
         FROM events
         GROUP BY task_id
       ) e ON e.task_id = t.id
-      WHERE COALESCE(e.event_count, 0) > 0 OR t.status != 'pending'
+      WHERE w.deleted_at IS NULL
+        AND (COALESCE(e.event_count, 0) > 0 OR t.status != 'pending')
       ORDER BY COALESCE(e.max_created_at, t.completed_at, t.started_at, t.created_at) DESC
     `);
     return rows.map((row) => {
