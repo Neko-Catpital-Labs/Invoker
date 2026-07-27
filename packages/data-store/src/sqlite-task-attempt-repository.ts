@@ -17,8 +17,10 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
+const TERMINAL_ATTEMPT_STATUSES = new Set<Attempt['status']>(['completed', 'failed', 'superseded']);
 
 /**
  * Adapter-side task/attempt mutators that {@link SqliteTaskAttemptRepository.failTaskAndAttempt}
@@ -43,6 +45,8 @@ export class SqliteTaskAttemptRepository {
   ) {}
 
   private hasCrashPreservationTableCache: boolean | null = null;
+  private journalWrappedTaskStatusUpdate = false;
+  private journalWrappedAttemptCompletionUpdate = false;
 
   private hasCrashPreservationTable(): boolean {
     if (this.hasCrashPreservationTableCache !== null) return this.hasCrashPreservationTableCache;
@@ -111,6 +115,7 @@ export class SqliteTaskAttemptRepository {
 
   saveTask(workflowId: string, task: TaskState): void {
     assertTaskConsistent(task);
+    this.exec.runTransaction(() => {
     const cfg = task.config;
     const exec = task.execution;
     this.exec.execRun(`
@@ -224,9 +229,20 @@ export class SqliteTaskAttemptRepository {
       task.taskStateVersion ?? 1,
     ]);
     this.syncCrashPreservationState(task.id, undefined, task.execution);
+    this.appendTaskJournalEntry(task.id);
+    });
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
+    if (changes.status !== undefined && !this.journalWrappedTaskStatusUpdate) {
+      this.journalWrappedTaskStatusUpdate = true;
+      try {
+        return this.exec.runTransaction(() => this.updateTask(taskId, changes));
+      } finally {
+        this.journalWrappedTaskStatusUpdate = false;
+      }
+    }
+
     const beforeTask = this.loadTask(taskId);
     if (!beforeTask) return;
 
@@ -418,6 +434,9 @@ export class SqliteTaskAttemptRepository {
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }
     this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    if (changes.status !== undefined) {
+      this.appendTaskJournalEntry(taskId);
+    }
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -594,6 +613,7 @@ export class SqliteTaskAttemptRepository {
   // ── Attempt CRUD ─────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
+    this.exec.runTransaction(() => {
     this.exec.execRun(`
       INSERT OR REPLACE INTO attempts (
         id, node_id, attempt_number, queue_priority, status,
@@ -628,6 +648,8 @@ export class SqliteTaskAttemptRepository {
       attempt.createdAt.toISOString(),
       attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
     ]);
+    this.appendAttemptJournalEntry(attempt.id);
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -689,6 +711,16 @@ export class SqliteTaskAttemptRepository {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    const shouldJournal = this.shouldJournalAttemptCompletion(changes);
+    if (shouldJournal && !this.journalWrappedAttemptCompletionUpdate) {
+      this.journalWrappedAttemptCompletionUpdate = true;
+      try {
+        return this.exec.runTransaction(() => this.updateAttempt(attemptId, changes));
+      } finally {
+        this.journalWrappedAttemptCompletionUpdate = false;
+      }
+    }
+
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -712,6 +744,9 @@ export class SqliteTaskAttemptRepository {
     if (setClauses.length === 0) return;
     values.push(attemptId);
     this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    if (shouldJournal) {
+      this.appendAttemptJournalEntry(attemptId);
+    }
   }
 
   claimAttemptForLaunch(
@@ -888,5 +923,33 @@ export class SqliteTaskAttemptRepository {
       [nodeId, selected.createdAt.toISOString(), cappedLimit],
     );
     return rows.map((row) => mapRowToAttempt(row));
+  }
+
+  private shouldJournalAttemptCompletion(
+    changes: Partial<Pick<Attempt, 'status' | 'completedAt'>>,
+  ): boolean {
+    return changes.status !== undefined && TERMINAL_ATTEMPT_STATUSES.has(changes.status);
+  }
+
+  private appendTaskJournalEntry(taskId: string): void {
+    const row = this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    if (!row) return;
+    appendJournalEntry(this.exec, {
+      entityType: 'task',
+      entityId: taskId,
+      op: 'upsert',
+      payload: row,
+    });
+  }
+
+  private appendAttemptJournalEntry(attemptId: string): void {
+    const row = this.exec.queryOne('SELECT * FROM attempts WHERE id = ?', [attemptId]);
+    if (!row) return;
+    appendJournalEntry(this.exec, {
+      entityType: 'attempt',
+      entityId: attemptId,
+      op: 'upsert',
+      payload: row,
+    });
   }
 }
