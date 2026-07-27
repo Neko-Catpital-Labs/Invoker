@@ -175,6 +175,73 @@ describe('sync journal', () => {
     expect(deleted?.deletedAt).toEqual(expect.any(Number));
   });
 
+  it('removes workflow-channel mappings when soft-deleting a workflow', () => {
+    adapter.saveWorkflow(makeWorkflow('wf-channel'));
+    adapter.saveWorkflowChannel({
+      workflowId: 'wf-channel',
+      channelId: 'C123',
+      createdAt: '2026-07-01T00:00:00.000Z',
+    });
+
+    expect(adapter.loadWorkflowChannelByWorkflowId('wf-channel')).toMatchObject({
+      workflowId: 'wf-channel',
+      channelId: 'C123',
+    });
+
+    adapter.deleteWorkflow('wf-channel');
+
+    expect(adapter.loadWorkflowChannelByWorkflowId('wf-channel')).toBeUndefined();
+  });
+
+  it('journals non-status task updates', () => {
+    adapter.saveWorkflow(makeWorkflow('wf-task-journal'));
+    adapter.saveTask('wf-task-journal', makeTask('task-journal', 'wf-task-journal'));
+    const lastSeedSeq = readJournalSince(journalDb(), 0, 10).at(-1)?.seq ?? 0;
+
+    adapter.updateTask('task-journal', {
+      description: 'Task journal updated',
+      config: { summary: 'Updated summary' },
+      execution: { reviewStatus: 'Awaiting review' },
+    });
+
+    expect(readJournalSince(journalDb(), lastSeedSeq, 10)).toEqual([
+      expect.objectContaining({
+        entityType: 'task',
+        entityId: 'task-journal',
+        op: 'upsert',
+        payload: expect.objectContaining({
+          description: 'Task journal updated',
+          summary: 'Updated summary',
+          review_status: 'Awaiting review',
+        }),
+      }),
+    ]);
+  });
+
+  it('journals workflow rollup changes when moving a task between workflows', () => {
+    adapter.saveWorkflow(makeWorkflow('wf-source'));
+    adapter.saveWorkflow(makeWorkflow('wf-target'));
+    adapter.saveTask('wf-source', makeTask('task-move', 'wf-source', 'completed'));
+    adapter.saveTask('wf-target', makeTask('task-anchor', 'wf-target', 'pending'));
+    const lastSeedSeq = readJournalSince(journalDb(), 0, 10).at(-1)?.seq ?? 0;
+
+    adapter.updateTask('task-move', {
+      config: { workflowId: 'wf-target' },
+    });
+
+    expect(readJournalSince(journalDb(), lastSeedSeq, 10).map((entry) => ({
+      entityType: entry.entityType,
+      entityId: entry.entityId,
+      op: entry.op,
+    }))).toEqual([
+      { entityType: 'task', entityId: 'task-move', op: 'upsert' },
+      { entityType: 'workflow', entityId: 'wf-source', op: 'upsert' },
+      { entityType: 'workflow', entityId: 'wf-target', op: 'upsert' },
+    ]);
+    expect(adapter.loadWorkflow('wf-source')?.status).toBe('pending');
+    expect(adapter.loadWorkflow('wf-target')?.status).toBe('running');
+  });
+
   it('writes a tombstone journal entry when deleting a workflow', () => {
     adapter.saveWorkflow(makeWorkflow('wf-tombstone'));
     adapter.saveTask('wf-tombstone', makeTask('task-tombstone', 'wf-tombstone'));

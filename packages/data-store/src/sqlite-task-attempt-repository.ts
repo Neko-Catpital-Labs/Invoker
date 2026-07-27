@@ -231,11 +231,25 @@ export class SqliteTaskAttemptRepository {
   updateTask(taskId: string, changes: TaskStateChanges): void {
     const beforeTask = this.loadTask(taskId);
     if (!beforeTask) return;
-    const statusWillChange = changes.status !== undefined && changes.status !== beforeTask.status;
-    const workflowIdForStatus = statusWillChange ? beforeTask.config.workflowId : undefined;
-    const workflowStatusBefore = workflowIdForStatus
-      ? this.computeWorkflowStatus(workflowIdForStatus)
-      : undefined;
+    const afterTask = {
+      ...beforeTask,
+      ...changes,
+      config: changes.config ? ({ ...beforeTask.config, ...changes.config } as TaskState['config']) : beforeTask.config,
+      execution: changes.execution ? { ...beforeTask.execution, ...changes.execution } : beforeTask.execution,
+    };
+    const workflowIdsNeedingRollupCheck = new Set<string>();
+    if (
+      afterTask.status !== beforeTask.status
+      || changes.dependencies !== undefined
+      || afterTask.config.workflowId !== beforeTask.config.workflowId
+    ) {
+      workflowIdsNeedingRollupCheck.add(beforeTask.config.workflowId);
+      workflowIdsNeedingRollupCheck.add(afterTask.config.workflowId);
+    }
+    const workflowStatusesBefore = new Map<string, WorkflowDerivedStatus>();
+    for (const workflowId of workflowIdsNeedingRollupCheck) {
+      workflowStatusesBefore.set(workflowId, this.computeWorkflowStatus(workflowId));
+    }
 
     const setClauses: string[] = [];
     const values: unknown[] = [];
@@ -384,13 +398,7 @@ export class SqliteTaskAttemptRepository {
       }
     }
 
-
-    assertTaskConsistent({
-      ...beforeTask,
-      ...changes,
-      config: changes.config ? ({ ...beforeTask.config, ...changes.config } as TaskState['config']) : beforeTask.config,
-      execution: changes.execution ? { ...beforeTask.execution, ...changes.execution } : beforeTask.execution,
-    });
+    assertTaskConsistent(afterTask);
 
     if (setClauses.length === 0) return;
 
@@ -426,22 +434,17 @@ export class SqliteTaskAttemptRepository {
     }
     const writeTaskUpdate = (): void => {
       this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
-      if (!statusWillChange) return;
-
       this.appendTaskJournalEntry(taskId);
-      if (!workflowIdForStatus || workflowStatusBefore === undefined) return;
-      const workflowStatusAfter = this.computeWorkflowStatus(workflowIdForStatus);
-      if (workflowStatusAfter !== workflowStatusBefore) {
-        this.appendWorkflowJournalEntry(workflowIdForStatus);
+
+      for (const [workflowId, workflowStatusBefore] of workflowStatusesBefore) {
+        const workflowStatusAfter = this.computeWorkflowStatus(workflowId);
+        if (workflowStatusAfter !== workflowStatusBefore) {
+          this.appendWorkflowJournalEntry(workflowId);
+        }
       }
     };
 
-    if (statusWillChange) {
-      this.exec.runTransaction(writeTaskUpdate);
-      return;
-    }
-
-    writeTaskUpdate();
+    this.exec.runTransaction(writeTaskUpdate);
   }
 
   loadTasks(workflowId: string): TaskState[] {

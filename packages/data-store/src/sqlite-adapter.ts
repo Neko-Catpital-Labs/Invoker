@@ -1607,6 +1607,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
+      this.db.run('DELETE FROM workflow_channels WHERE workflow_id = ?', [workflowId]);
       this.db.run(
         'UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
         [deletedAt, updatedAt, workflowId],
