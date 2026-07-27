@@ -301,4 +301,24 @@ describe('buildAgentExitFailureDetail', () => {
     expect(detail.length).toBe(2000);
     expect(detail).toBe(huge.slice(-2000));
   });
+
+  it('surfaces failure lines and drops surrounding build/progress noise', async () => {
+    const { processUtils } = await loadProcessUtils();
+    const noisyLog = [
+      'ERROR codex_core::session::session: failed to load skill /home/u/.codex/skills/x/SKILL.md: missing YAML frontmatter delimited by ---',
+      'vite v6.4.1 building for production...',
+      '✓ 2326 modules transformed.',
+      'dist/assets/index-Bza8qXJb.js 340.96 kB │ gzip: 91.85 kB',
+      'CLI ⚡️ Build success in 190ms',
+      "No workflow named 'In-App Planning Chat Draft Gate Step 3' found.",
+      '[worktree] Process exited: actionId=wf-123/discover-delete-scope exitCode=1',
+    ].join('\n');
+    const detail = processUtils.buildAgentExitFailureDetail(noisyLog, '', undefined);
+    expect(detail).toContain('missing YAML frontmatter delimited by ---');
+    expect(detail).toContain("No workflow named 'In-App Planning Chat Draft Gate Step 3' found.");
+    expect(detail).toContain('exitCode=1');
+    expect(detail).not.toContain('modules transformed');
+    expect(detail).not.toContain('Build success');
+    expect(detail).not.toContain('gzip');
+  });
 });

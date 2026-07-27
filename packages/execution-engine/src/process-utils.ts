@@ -266,6 +266,20 @@ const AGENT_OUTPUT_DETAIL_MAX_CHARS = 2000;
 
 const CODEX_STDIN_NOISE = /^Reading additional input from stdin\.\.\.$/;
 
+/** Lines that actually explain a non-zero exit, as opposed to build progress,
+ * download spinners, or delegation traces that happen to print alongside them.
+ * Position-tailing the raw output buries the real cause under whatever printed
+ * last (e.g. a successful vite/tsup build log), so these lines are surfaced first. */
+const AGENT_ERROR_SIGNAL =
+  /\b(?:errors?|failed|failure|fatal|panic|exception|traceback|refused|denied|rejected|unable|cannot|missing)\b|\bexit(?:ed)?\b[^\n]*\bcode\b|exitcode|\btimed out\b|not found|\bno\b[^\n]+\bfound\b/i;
+
+/** Keep only the lines that read as failure signal. Returns '' when nothing
+ * matches, so callers can fall back to the raw (tail-limited) output. */
+function extractErrorSignal(text: string): string {
+  const signalLines = text.split('\n').filter((line) => AGENT_ERROR_SIGNAL.test(line));
+  return signalLines.join('\n');
+}
+
 function nonEmptyTrimmedLines(text: string): string[] {
   return text.split('\n').map((line) => line.trim()).filter(Boolean);
 }
@@ -294,7 +308,7 @@ export function buildAgentExitFailureDetail(
   const meaningfulDisplay = stripCodexStdinNoise(displayStdout ?? '');
   const meaningfulStdout = stripCodexStdinNoise(rawStdout);
   const candidate = meaningfulStderr || meaningfulDisplay || meaningfulStdout;
-  if (candidate) return tailChars(candidate);
+  if (candidate) return tailChars(extractErrorSignal(candidate) || candidate);
 
   // Nothing meaningful survived. If the only thing either stream emitted was the
   // benign codex stdin/TTY noise, return an actionable hint instead of echoing it
