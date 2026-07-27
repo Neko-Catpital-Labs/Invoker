@@ -4222,6 +4222,113 @@ console.log(JSON.stringify(out));
       );
     });
 
+    it('publishes Invoker review stacks against origin HEAD when the requested base is stale', async () => {
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+        mergeTask,
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'none',
+          mergeMode: 'external_review',
+          baseBranch: 'main',
+          featureBranch: 'plan/feature',
+          name: 'Camera Quiet Background Selection',
+          repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+        }),
+        updateTask: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: { createReview: vi.fn() } as any,
+      });
+
+      const gitCalls: string[][] = [];
+      (executor as any).execGitReadonly = async () => '';
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push([...args]);
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'feature-sha';
+        if (args[0] === 'rev-parse' && args[1] === '--verify') {
+          if (args[2] === 'refs/remotes/origin/master^{commit}') return 'origin-master-sha';
+          throw new Error(`bad revision ${args[2]}`);
+        }
+        if (args[0] === 'symbolic-ref' && args[1] === 'refs/remotes/origin/HEAD') {
+          return 'refs/remotes/origin/master';
+        }
+        if (args[0] === 'diff' && args[1] === '--name-only') {
+          return 'packages/ui/src/App.tsx\n';
+        }
+        return '';
+      };
+      (executor as any).createMergeWorktree = vi.fn().mockResolvedValue('/tmp/mock-wt');
+      (executor as any).removeMergeWorktree = vi.fn();
+      (executor as any).consolidateAndMerge = vi.fn().mockResolvedValue(undefined);
+      (executor as any).publishReviewStackWithMakePrSkill = vi.fn().mockResolvedValue({
+        agentName: 'codex',
+        artifacts: [{
+          id: 'review-1',
+          title: 'Camera Quiet Background Selection',
+          url: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/1',
+          providerId: 'Neko-Catpital-Labs/Invoker#1',
+          provider: 'github',
+          branch: 'plan/feature',
+        }],
+      });
+      (executor as any).authorPrBodyWithSkill = vi.fn();
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(gitCalls).toContainEqual([
+        'diff',
+        '--name-only',
+        'refs/remotes/origin/master...plan/feature',
+        '--',
+      ]);
+      expect(gitCalls).not.toContainEqual([
+        'diff',
+        '--name-only',
+        'main...plan/feature',
+        '--',
+      ]);
+      expect((executor as any).publishReviewStackWithMakePrSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseBranch: 'master',
+          featureBranch: 'plan/feature',
+          cwd: '/tmp/mock-wt',
+        }),
+      );
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          execution: expect.objectContaining({
+            branch: 'plan/feature',
+            reviewGate: expect.objectContaining({
+              artifacts: [expect.objectContaining({ baseBranch: 'master' })],
+            }),
+          }),
+        }),
+        expect.objectContaining({ generation: 0 }),
+      );
+    });
+
     it('executeMergeNode anchors external_review gate worktrees on the origin-backed base branch', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
