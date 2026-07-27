@@ -17,6 +17,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
@@ -56,6 +58,8 @@ const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock
 
 // App must be imported AFTER vi.mock registers so it binds the mocked react-flow.
 const { App } = await import('../App.js');
+
+const appSource = readFileSync(resolve(__dirname, '..', 'App.tsx'), 'utf-8');
 
 const workflows: WorkflowMeta[] = [
   { id: 'wf-a', name: 'Alpha Workflow', status: 'running' },
@@ -178,7 +182,7 @@ describe('Browser-surface camera (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it('clicking the left-nav home icon returns to the workflow graph and issues the Home fit command', async () => {
+  it('opens the workflow graph from a browser surface without issuing a sidebar fit command', async () => {
     mock.setTasks(tasks, workflows);
     render(<App />);
 
@@ -192,17 +196,52 @@ describe('Browser-surface camera (component)', () => {
     fireEvent.click(screen.getByTestId('sidebar-planning'));
 
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
-    await waitFor(() => {
-      const matchingCommands = workflowGraphSpy.commands.filter((command): command is GraphCameraCommand => (
-        command?.kind === 'fitInitial'
-        && command.scope === 'workflow'
-        && command.reason === 'sidebar-planning'
-      ));
-      expect(matchingCommands.length).toBeGreaterThan(0);
-    });
     await flushFrames(4);
 
+    // No saved workflow viewport exists yet, so the graph's first non-empty
+    // mount may fit. The sidebar navigation itself must not issue a fit command.
     expect(fitViewMock).toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+      && command.reason === 'sidebar-planning'
+    ))).toBe(false);
+  });
+
+  it('returns to the workflow graph from a browser surface by restoring the saved viewport instead of fitting', async () => {
+    const savedViewport = { x: -420, y: 96, zoom: 0.62 };
+    mock.setTasks([], workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+
+    // Simulate the operator's current graph location before leaving the graph.
+    getViewportMock.mockReturnValue(savedViewport);
+
+    fireEvent.click(screen.getByTestId('sidebar-workflows'));
+    await screen.findByTestId('browser-rail');
+    await settleCamera();
+
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+    workflowGraphSpy.reset();
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+      && command.reason === 'sidebar-planning'
+    ))).toBe(false);
   });
 
   it('returns to the workflow graph from the planning-home chat rail by restoring the saved viewport instead of fitting', async () => {
@@ -240,5 +279,20 @@ describe('Browser-surface camera (component)', () => {
       && command.scope === 'workflow'
       && command.reason === 'sidebar-planning'
     ))).toBe(false);
+  });
+
+  it('routes planning graph return entry points through viewport-preserving navigation', () => {
+    for (const reason of [
+      'sidebar-planning',
+      'planning-open-graph',
+      'planning-expanded-open-graph',
+      'planning-context',
+      'planning-draft-review',
+    ]) {
+      expect(appSource).toContain(`navigatePlanGraphPreservingViewport('${reason}')`);
+      expect(appSource).not.toContain(`navigatePlanGraphAndFit('${reason}')`);
+    }
+
+    expect(appSource).toContain("issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'planning-submit' })");
   });
 });
