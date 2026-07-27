@@ -263,14 +263,28 @@ async function listReviewableChangedFiles(
   dir: string,
   baseBranch: string,
   featureBranch: string,
-): Promise<string[]> {
+): Promise<{ changedFiles: string[]; baseBranch: string }> {
   const normalizedBase = normalizeBranchForGithubCli(baseBranch);
-  let diffBaseRef = baseBranch;
-  for (const candidate of [
+  const alternateDefaultBranch = normalizedBase === 'main'
+    ? 'master'
+    : normalizedBase === 'master'
+      ? 'main'
+      : undefined;
+  const candidates = Array.from(new Set([
     `refs/remotes/origin/${normalizedBase}`,
     `origin/${normalizedBase}`,
     baseBranch,
-  ]) {
+    ...(alternateDefaultBranch
+      ? [
+          `refs/remotes/origin/${alternateDefaultBranch}`,
+          `origin/${alternateDefaultBranch}`,
+          alternateDefaultBranch,
+        ]
+      : []),
+  ]));
+  let diffBaseRef = baseBranch;
+  let resolvedBase = false;
+  for (const candidate of candidates) {
     try {
       const resolved = (await execGitInMergeSafe(
         host,
@@ -279,21 +293,31 @@ async function listReviewableChangedFiles(
       )).trim();
       if (resolved) {
         diffBaseRef = candidate;
+        resolvedBase = true;
         break;
       }
     } catch {
       // Try the next base spelling.
     }
   }
+  if (!resolvedBase) {
+    throw new Error(
+      `Unable to resolve review diff base "${baseBranch}" in merge gate workspace. ` +
+      `Tried: ${candidates.join(', ')}`,
+    );
+  }
   const out = await execGitInMergeSafe(
     host,
     ['diff', '--name-only', `${diffBaseRef}...${featureBranch}`, '--'],
     dir,
   );
-  return out
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return {
+    changedFiles: out
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean),
+    baseBranch: normalizeBranchForGithubCli(diffBaseRef),
+  };
 }
 
 // ── Host interface ───────────────────────────────────────
@@ -886,22 +910,25 @@ export async function runMergeGateActionImpl(
         });
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
 
+        let reviewBaseBranch = baseBranch;
         if (isInvokerRepoUrl(workflow?.repoUrl)) {
-          const changedFiles = await listReviewableChangedFiles(
+          const reviewableChanges = await listReviewableChangedFiles(
             host,
             gateWorkspacePath!,
             baseBranch,
             featureBranch,
           );
+          reviewBaseBranch = reviewableChanges.baseBranch;
+          const changedFiles = reviewableChanges.changedFiles;
           if (changedFiles.length === 0) {
             logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty Invoker branch', {
-              baseBranch,
+              baseBranch: reviewBaseBranch,
               featureBranch,
             });
             mergeTrace('GATE_WS_PATH_REVIEW_PUBLISH_NOOP', {
               taskId: task.id,
               gateWorkspacePath: gateWorkspacePath ?? null,
-              baseBranch,
+              baseBranch: reviewBaseBranch,
               featureBranch,
               onFinish,
               mergeMode,
@@ -934,7 +961,7 @@ export async function runMergeGateActionImpl(
         let fullSummary = summary;
         if (visualProof && host.runVisualProofCapture) {
           const slug = (featureBranch ?? 'workflow').replace(/\//g, '-');
-          const vpMarkdown = await host.runVisualProofCapture(baseBranch, featureBranch!, slug, workflow?.repoUrl);
+          const vpMarkdown = await host.runVisualProofCapture(reviewBaseBranch, featureBranch!, slug, workflow?.repoUrl);
           if (vpMarkdown) {
             fullSummary = (summary ?? '') + '\n\n' + vpMarkdown;
           }
@@ -944,7 +971,7 @@ export async function runMergeGateActionImpl(
           workflowId,
           mergeNodeTaskId: task.id,
           workflowName: workflow?.name ?? 'Workflow',
-          baseBranch,
+          baseBranch: reviewBaseBranch,
           featureBranch,
           workflowSummary: fullSummary ?? '',
           cwd: gateWorkspacePath!,
