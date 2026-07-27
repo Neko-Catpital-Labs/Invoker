@@ -62,6 +62,7 @@ interface InvokerTerminalProps {
   expanded?: boolean;
   mode?: PlanningTerminalMode;
   terminalSession?: TerminalSessionDescriptor | null;
+  terminalActive?: boolean;
   terminalBusy?: boolean;
   terminalError?: string | null;
   onValueChange: (value: string) => void;
@@ -175,12 +176,13 @@ function seedTerminalOutputSnapshot(
 
 interface PlanningTmuxPaneProps {
   session: TerminalSessionDescriptor | null;
+  active: boolean;
   busy: boolean;
   error?: string | null;
   readOnly?: boolean;
 }
 
-function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTmuxPaneProps): JSX.Element {
+function PlanningTmuxPane({ session, active, busy, error, readOnly = false }: PlanningTmuxPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -188,7 +190,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
 
   useEffect(() => {
     const host = containerRef.current;
-    if (!host || !session) return;
+    if (!active || !host || !session) return;
 
     let term: XTermTerminal;
     let fit: FitAddon;
@@ -267,15 +269,17 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [readOnly, session?.sessionId]);
+  }, [active, readOnly, session?.sessionId]);
 
   useEffect(() => {
+    if (!active) return;
     const term = termRef.current;
     if (!term || !session) return;
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
-  }, [session?.outputSnapshot, session?.sessionId]);
+  }, [active, session?.outputSnapshot, session?.sessionId]);
 
   useEffect(() => {
+    if (!active) return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit || !session) return;
@@ -286,7 +290,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
     } catch {
       /* fit failed (e.g., hidden) */
     }
-  }, [session?.sessionId]);
+  }, [active, session?.sessionId]);
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
@@ -298,7 +302,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
           {error || (busy ? 'Starting tmux session…' : 'No tmux session attached.')}
         </div>
       )}
-      {session && (
+      {session && active && (
         <div
           ref={containerRef}
           data-testid="invoker-terminal-tmux-pane"
@@ -337,6 +341,7 @@ export function InvokerTerminal({
   expanded = false,
   mode = 'chat',
   terminalSession = null,
+  terminalActive = true,
   terminalBusy = false,
   terminalError = null,
   onValueChange,
@@ -613,7 +618,13 @@ export function InvokerTerminal({
       </div>
 
       {mode === 'tmux' ? (
-        <PlanningTmuxPane session={terminalSession} busy={terminalBusy} error={terminalError} readOnly={readOnly} />
+        <PlanningTmuxPane
+          session={terminalSession}
+          active={terminalActive}
+          busy={terminalBusy}
+          error={terminalError}
+          readOnly={readOnly}
+        />
       ) : (
         <>
           <div
