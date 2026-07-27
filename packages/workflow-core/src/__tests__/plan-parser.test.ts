@@ -19,6 +19,19 @@ tasks:
     expect(plan.tasks.map((t) => t.id)).toEqual(['build', 'deploy']);
   });
 
+  it('preserves explicit remote-qualified base refs', () => {
+    const yaml = `
+name: Base Branch Policy
+repoUrl: git@github.com:test/repo.git
+baseBranch: upstream/release
+tasks:
+  - id: build
+    description: Build it
+    command: echo "build"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.baseBranch).toBe('upstream/release');
+  });
   it('rejects plans with duplicate task ids', () => {
     const yaml = `
 name: Dup Plan

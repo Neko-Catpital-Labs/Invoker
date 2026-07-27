@@ -8,7 +8,6 @@ import {
   syncPlanBaseRemoteForRef,
   resolvePlanBaseRevision,
   resolvePreferredTrackingRemote,
-  shouldResolveViaOriginTracking,
 } from '../plan-base-remote.js';
 
 function runGitFactory(cwd: string) {
@@ -17,42 +16,59 @@ function runGitFactory(cwd: string) {
 }
 
 describe('plan-base-remote', () => {
-  let upstream: string;
+  let originRepo: string;
   let mirror: string;
   let mirrorParent: string;
+  let extraRepos: string[];
 
   beforeEach(() => {
-    upstream = mkdtempSync(join(tmpdir(), 'plan-base-up-'));
+    originRepo = mkdtempSync(join(tmpdir(), 'plan-base-origin-'));
     mirrorParent = mkdtempSync(join(tmpdir(), 'plan-base-mirror-'));
-    execSync('git init', { cwd: upstream });
-    execSync('git config user.email "t@t.com"', { cwd: upstream });
-    execSync('git config user.name "T"', { cwd: upstream });
-    writeFileSync(join(upstream, 'a.txt'), 'a');
-    execSync('git add -A && git commit -m "first"', { cwd: upstream });
-    execSync('git branch -M master', { cwd: upstream });
+    extraRepos = [];
+    execSync('git init', { cwd: originRepo });
+    execSync('git config user.email "t@t.com"', { cwd: originRepo });
+    execSync('git config user.name "T"', { cwd: originRepo });
+    writeFileSync(join(originRepo, 'a.txt'), 'a');
+    execSync('git add -A && git commit -m "first"', { cwd: originRepo });
+    execSync('git branch -M master', { cwd: originRepo });
 
-    execSync(`git clone "${upstream}" mirror-work`, { cwd: mirrorParent });
+    execSync(`git clone "${originRepo}" mirror-work`, { cwd: mirrorParent });
     mirror = join(mirrorParent, 'mirror-work');
   });
 
   afterEach(() => {
     rmSync(mirrorParent, { recursive: true, force: true });
-    rmSync(upstream, { recursive: true, force: true });
+    rmSync(originRepo, { recursive: true, force: true });
+    for (const repo of extraRepos) {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
+
+  function addDivergedUpstreamRemote(): string {
+    const upstreamRemote = mkdtempSync(join(tmpdir(), 'plan-base-upstream-'));
+    extraRepos.push(upstreamRemote);
+    execSync(`git clone "${originRepo}" .`, { cwd: upstreamRemote });
+    execSync('git config user.email "t@t.com"', { cwd: upstreamRemote });
+    execSync('git config user.name "T"', { cwd: upstreamRemote });
+    writeFileSync(join(upstreamRemote, 'upstream.txt'), 'upstream');
+    execSync('git add -A && git commit -m "upstream advance"', { cwd: upstreamRemote });
+    execSync(`git remote add upstream "${upstreamRemote}"`, { cwd: mirror });
+    return upstreamRemote;
+  }
 
   it('resolvePlanBaseRevision uses origin/master after syncPlanBaseRemote', async () => {
     const runGit = runGitFactory(mirror);
 
-    writeFileSync(join(upstream, 'b.txt'), 'b');
-    execSync('git add -A && git commit -m "second on upstream"', { cwd: upstream });
+    writeFileSync(join(originRepo, 'b.txt'), 'b');
+    execSync('git add -A && git commit -m "second on origin"', { cwd: originRepo });
 
     const staleLocal = (await runGit(['rev-parse', 'master'])).trim();
-    const upstreamTip = execSync('git rev-parse master', { cwd: upstream }).toString().trim();
-    expect(staleLocal).not.toBe(upstreamTip);
+    const originTip = execSync('git rev-parse master', { cwd: originRepo }).toString().trim();
+    expect(staleLocal).not.toBe(originTip);
 
     await syncPlanBaseRemote(runGit, 'master');
     const resolved = (await resolvePlanBaseRevision(runGit, 'master')).trim();
-    expect(resolved).toBe(upstreamTip);
+    expect(resolved).toBe(originTip);
   });
 
   it('resolvePlanBaseRevision passes through full SHAs present in the mirror', async () => {
@@ -62,7 +78,7 @@ describe('plan-base-remote', () => {
     expect(resolved).toBe(sha);
   });
 
-  it('resolvePlanBaseRevision falls back to local refs/heads/<branch> when origin tracking is missing', async () => {
+  it('resolvePlanBaseRevision falls back to local refs/heads/<branch> when remote tracking is missing', async () => {
     const runGit = runGitFactory(mirror);
     await runGit(['checkout', '-b', 'feature/local-only']);
     writeFileSync(join(mirror, 'local.txt'), 'local');
@@ -77,13 +93,13 @@ describe('plan-base-remote', () => {
   it('resolvePlanBaseRevision can self-sync missing origin tracking refs for new remote branches', async () => {
     const runGit = runGitFactory(mirror);
 
-    execSync('git checkout -b feature/new-remote', { cwd: upstream });
-    writeFileSync(join(upstream, 'remote.txt'), 'remote');
-    execSync('git add -A && git commit -m "new remote branch"', { cwd: upstream });
-    const upstreamHead = execSync('git rev-parse feature/new-remote', { cwd: upstream }).toString().trim();
+    execSync('git checkout -b feature/new-remote', { cwd: originRepo });
+    writeFileSync(join(originRepo, 'remote.txt'), 'remote');
+    execSync('git add -A && git commit -m "new remote branch"', { cwd: originRepo });
+    const originHead = execSync('git rev-parse feature/new-remote', { cwd: originRepo }).toString().trim();
 
     const resolved = (await resolvePlanBaseRevision(runGit, 'feature/new-remote')).trim();
-    expect(resolved).toBe(upstreamHead);
+    expect(resolved).toBe(originHead);
   });
 
   it('resolvePlanBaseRevision falls back to origin/HEAD when the requested branch is missing', async () => {
@@ -94,22 +110,38 @@ describe('plan-base-remote', () => {
     expect(resolved).toBe(headCommit);
   });
 
-  it('resolvePreferredTrackingRemote always returns origin', async () => {
+  it('resolvePreferredTrackingRemote keeps origin as the default remote', async () => {
     const runGit = runGitFactory(mirror);
     const preferred = await resolvePreferredTrackingRemote(runGit, 'master');
     expect(preferred).toBe('origin');
   });
 
-  it('syncPlanBaseRemoteForRef treats legacy upstream-qualified refs as origin-backed', async () => {
+  it('resolvePreferredTrackingRemote preserves an explicit remote selection', async () => {
     const runGit = runGitFactory(mirror);
+    addDivergedUpstreamRemote();
+
+    const preferred = await resolvePreferredTrackingRemote(runGit, 'upstream/master');
+    expect(preferred).toBe('upstream');
+  });
+
+  it('syncPlanBaseRemoteForRef fetches explicit upstream-qualified refs into that remote namespace', async () => {
+    const runGit = runGitFactory(mirror);
+    const upstreamRemote = addDivergedUpstreamRemote();
+    const upstreamTip = execSync('git rev-parse master', { cwd: upstreamRemote }).toString().trim();
+
     await syncPlanBaseRemoteForRef(runGit, 'upstream/master');
-    const resolved = await runGit(['rev-parse', '--verify', 'origin/master^{commit}']);
-    const upstreamTip = execSync('git rev-parse master', { cwd: upstream }).toString().trim();
+    const resolved = await runGit(['rev-parse', '--verify', 'upstream/master^{commit}']);
     expect(resolved).toBe(upstreamTip);
   });
 
-  it('shouldResolveViaOriginTracking treats legacy remote-qualified refs as origin-backed', () => {
-    expect(shouldResolveViaOriginTracking('master')).toBe(true);
-    expect(shouldResolveViaOriginTracking('upstream/master')).toBe(true);
+  it('resolvePlanBaseRevision honors explicit upstream-qualified refs when remotes diverge', async () => {
+    const runGit = runGitFactory(mirror);
+    const upstreamRemote = addDivergedUpstreamRemote();
+    const originTip = execSync('git rev-parse master', { cwd: originRepo }).toString().trim();
+    const upstreamTip = execSync('git rev-parse master', { cwd: upstreamRemote }).toString().trim();
+    expect(upstreamTip).not.toBe(originTip);
+
+    const resolved = (await resolvePlanBaseRevision(runGit, 'upstream/master')).trim();
+    expect(resolved).toBe(upstreamTip);
   });
 });
