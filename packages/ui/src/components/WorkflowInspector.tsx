@@ -311,7 +311,6 @@ export function WorkflowInspector({
   onReject,
   onRestartTask,
   onRecreateTask,
-  onSetMergeBranch,
   onSetMergeMode,
   onToggleCollapsed,
   onToggleAdvanced,
@@ -320,7 +319,6 @@ export function WorkflowInspector({
   const [editPromptValue, setEditPromptValue] = useState('');
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
-  const [branchValue, setBranchValue] = useState('');
   const [taskLogEvents, setTaskLogEvents] = useState<TaskAuditEvent[]>([]);
   const [taskLogError, setTaskLogError] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(true);
@@ -332,10 +330,6 @@ export function WorkflowInspector({
     setIsEditingCommand(false);
     setEditCommandValue(task?.config.command ?? '');
   }, [task?.id, task?.config.prompt, task?.config.command]);
-
-  useEffect(() => {
-    setBranchValue(workflow?.baseBranch ?? task?.config.featureBranch ?? '');
-  }, [workflow?.baseBranch, task?.config.featureBranch, task?.id]);
 
   useEffect(() => {
     if (!task) {
@@ -484,12 +478,6 @@ export function WorkflowInspector({
     }
   };
 
-  const saveBranch = () => {
-    const trimmed = branchValue.trim();
-    if (workflow?.id && trimmed && trimmed !== (workflow.baseBranch ?? '')) {
-      void onSetMergeBranch?.(workflow.id, trimmed);
-    }
-  };
 
   if (collapsed) {
     return (
@@ -761,27 +749,30 @@ export function WorkflowInspector({
           </section>
         )}
 
-        {isMergeNode && (onSetMergeBranch || onSetMergeMode) && (
+        {isMergeNode && (
           <section className="rounded border border-border bg-secondary/70 p-3 space-y-3">
-            {onSetMergeBranch && (
-              <label className="flex items-center justify-between gap-3">
-                <span className="text-xs uppercase tracking-wide text-muted-foreground">Target Branch</span>
-                <input
-                  data-testid="target-branch-input"
-                  value={branchValue}
-                  onChange={(event) => setBranchValue(event.target.value)}
-                  onBlur={saveBranch}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      (event.target as HTMLInputElement).blur();
-                    }
-                    if (event.key === 'Escape') {
-                      setBranchValue(workflow?.baseBranch ?? '');
-                    }
-                  }}
-                  className="min-w-0 max-w-[190px] rounded border border-border-strong bg-muted px-2 py-1 text-right font-mono text-xs text-foreground focus:border-border-strong focus:outline-none"
-                />
-              </label>
+            <div className="flex items-start justify-between gap-3">
+              <span className="text-xs uppercase tracking-wide text-muted-foreground">Base Branch</span>
+              <div className="max-w-[210px] text-right">
+                <div
+                  data-testid="base-branch-display"
+                  className="font-mono text-xs text-foreground"
+                >
+                  {workflow?.baseBranch ?? 'n/a'}
+                </div>
+                <div className="text-[11px] text-muted-foreground">Task branches start from here.</div>
+              </div>
+            </div>
+            {(workflow?.featureBranch ?? task?.config.featureBranch) && (
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">Feature Branch</span>
+                <span
+                  data-testid="feature-branch-display"
+                  className="max-w-[210px] break-all text-right font-mono text-xs text-foreground"
+                >
+                  {workflow?.featureBranch ?? task?.config.featureBranch}
+                </span>
+              </div>
             )}
             {onSetMergeMode && workflow?.id && (
               <label className="flex items-center justify-between gap-3">
@@ -1001,7 +992,7 @@ export function WorkflowInspector({
             <div className="border-t border-border px-3 py-2 space-y-1 text-xs text-muted-foreground">
               <div>workflow id: {workflow?.id ?? 'n/a'}</div>
               <div>task id: {task?.id ?? 'n/a'}</div>
-              <div>target branch: {workflow?.featureBranch ?? task?.config.featureBranch ?? 'n/a'}</div>
+              <div>feature branch: {workflow?.featureBranch ?? task?.config.featureBranch ?? 'n/a'}</div>
               <div>base branch: {workflow?.baseBranch ?? 'n/a'}</div>
               <div>heartbeat: {String(task?.execution.lastHeartbeatAt ?? 'n/a')}</div>
               <div>pool id: {task?.config.poolId ?? 'n/a'}</div>
