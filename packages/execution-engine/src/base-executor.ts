@@ -1278,6 +1278,22 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     await terminateChildProcessGroup(entry.process, () => entry.completed);
   }
 
+  protected writeProcessInput(entry: TEntry | undefined, input: string): void {
+    if (!entry || entry.completed) return;
+    const stdin = entry.process?.stdin;
+    if (!stdin) return;
+
+    const eofIndex = input.indexOf('\x04');
+    if (eofIndex === -1) {
+      stdin.write(input);
+      return;
+    }
+
+    const beforeEof = input.slice(0, eofIndex);
+    if (beforeEof) stdin.write(beforeEof);
+    stdin.end();
+  }
+
   // Abstract methods that subclasses must implement
   abstract start(request: WorkRequest): Promise<ExecutorHandle>;
   abstract sendInput(handle: ExecutorHandle, input: string): void;
