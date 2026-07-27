@@ -1,9 +1,18 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, type Mock } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { GraphCameraCommand, GraphCameraViewport } from '../lib/graph-camera.js';
+import * as ReactFlowModule from '@xyflow/react';
+
+const workflowGraphSpy = vi.hoisted(() => ({
+  commands: [] as Array<GraphCameraCommand | null | undefined>,
+  reset() {
+    this.commands.length = 0;
+  },
+}));
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -11,11 +20,76 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+vi.mock('../components/WorkflowGraph.js', async () => {
+  const actual = await vi.importActual<typeof import('../components/WorkflowGraph.js')>('../components/WorkflowGraph.js');
+  return {
+    ...actual,
+    WorkflowGraph(props: Parameters<typeof actual.WorkflowGraph>[0]) {
+      workflowGraphSpy.commands.push(props.cameraCommand);
+      return actual.WorkflowGraph(props);
+    },
+  };
+});
+
+const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
+const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
+const setViewportMock = (ReactFlowModule as unknown as { __setViewportMock: Mock }).__setViewportMock;
+const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
+const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock }).__getViewportMock;
+
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+
+function resetReactFlowCameraMocks() {
+  fitViewMock.mockClear();
+  setCenterMock.mockClear();
+  setViewportMock.mockClear();
+  getZoomMock.mockReset();
+  getZoomMock.mockReturnValue(1);
+  getViewportMock.mockReset();
+  getViewportMock.mockReturnValue({ x: 0, y: 0, zoom: 1 });
+  workflowGraphSpy.reset();
+}
+
+async function flushFrames(count: number): Promise<void> {
+  for (let i = 0; i < count; i += 1) {
+    await act(async () => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      requestAnimationFrame(() => resolve());
+      await promise;
+    });
+  }
+}
+
+async function settleCamera(): Promise<void> {
+  let stable = 0;
+  let prev = fitViewMock.mock.calls.length + setCenterMock.mock.calls.length + setViewportMock.mock.calls.length;
+  for (let i = 0; i < 40 && stable < 4; i += 1) {
+    await flushFrames(1);
+    const total = fitViewMock.mock.calls.length + setCenterMock.mock.calls.length + setViewportMock.mock.calls.length;
+    if (total === prev) {
+      stable += 1;
+    } else {
+      stable = 0;
+      prev = total;
+    }
+  }
+}
+
+async function expectWorkflowViewportRestored(savedViewport: GraphCameraViewport): Promise<void> {
+  await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+  await flushFrames(4);
+
+  expect(fitViewMock).not.toHaveBeenCalled();
+  expect(setCenterMock).not.toHaveBeenCalled();
+  expect(workflowGraphSpy.commands.some((command) => (
+    command?.kind === 'fitInitial'
+    && command.scope === 'workflow'
+  ))).toBe(false);
+}
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
@@ -23,6 +97,7 @@ describe('Invoker terminal (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
+    resetReactFlowCameraMocks();
   });
 
   afterEach(() => {
@@ -884,6 +959,48 @@ describe('Invoker terminal (component)', () => {
     expect(screen.getAllByText(/submitted/i).length).toBeGreaterThan(0);
   });
 
+  it('opens a submitted planning terminal back to the graph without refitting the workflow viewport', async () => {
+    const savedViewport: GraphCameraViewport = { x: -520, y: 212, zoom: 0.56 };
+    const submittedWorkflow: WorkflowMeta = {
+      id: 'workflow-terminal',
+      name: 'Submitted Terminal Plan',
+      status: 'running',
+    };
+    mock.setTasks([], [submittedWorkflow]);
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [makePlanningSessionSummary({
+        id: 'submitted-terminal-session',
+        title: 'Submitted terminal session',
+        status: 'submitted',
+        draftPlanAvailable: false,
+        draftPlanSummary: undefined,
+        submittedWorkflowId: submittedWorkflow.id,
+        submittedPlanName: submittedWorkflow.name,
+      })],
+    }));
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    expect(await screen.findByTestId('workflow-node-workflow-terminal')).toBeInTheDocument();
+    await settleCamera();
+
+    getViewportMock.mockReturnValue(savedViewport);
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    await screen.findByTestId('invoker-terminal-open-graph');
+
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+    workflowGraphSpy.reset();
+
+    fireEvent.click(screen.getByTestId('invoker-terminal-open-graph'));
+
+    expect(await screen.findByTestId('workflow-node-workflow-terminal')).toBeInTheDocument();
+    await expectWorkflowViewportRestored(savedViewport);
+  });
+
   it('opens the expanded planning chat and Escape closes it without clearing transcript', async () => {
     render(<App />);
     await openPlanningTerminal();
@@ -1141,6 +1258,7 @@ describe('Invoker terminal submit context (component)', () => {
       [submitContextWorkflow('workflow-a', 'Initial Plan')],
     );
     mock.install();
+    resetReactFlowCameraMocks();
   });
 
   afterEach(() => {
