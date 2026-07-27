@@ -99,6 +99,13 @@ class AdminBypassRepairer:
         self.git_output(work_root, "commit", "-m", f"Repair {check_name}")
         return self.git_output(work_root, "rev-parse", "HEAD").strip()
 
+    def status_has_unmerged_paths(self, status_lines: Sequence[str]) -> bool:
+        for line in status_lines:
+            index = line[:2]
+            if "U" in index or index in {"AA", "DD"}:
+                return True
+        return False
+
     def validate_local_pr_body(self, work_root: Path, body: str, base_branch: str) -> dict[str, object]:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write(body)
@@ -471,14 +478,26 @@ class AdminBypassRepairer:
                 end_head,
             )
         if status_lines:
-            self.hard_reset_work_root(work_root, start_head)
-            return self.blocked_outcome(
-                "blocked_dirty",
-                check_name,
-                start_head,
-                end_head,
-                status_lines=status_lines,
+            if self.status_has_unmerged_paths(status_lines):
+                self.hard_reset_work_root(work_root, start_head)
+                return self.blocked_outcome(
+                    "blocked_dirty",
+                    check_name,
+                    start_head,
+                    end_head,
+                    status_lines=status_lines,
+                )
+            self.logger.trace(
+                "admin-bypass-repair-check-autocommit-dirty",
+                repo=self.repo,
+                pr_number=pr.number,
+                check_name=check_name,
+                head_sha=pr.head_ref_oid,
+                status_lines=list(status_lines),
             )
+            self.git_output(work_root, "add", "-A")
+            self.git_output(work_root, "commit", "-m", f"Repair {check_name}")
+            end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
         end_head = self.normalize_repair_commit(work_root, start_head, end_head, check_name)
         repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
         validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)

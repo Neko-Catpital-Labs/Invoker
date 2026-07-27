@@ -419,6 +419,46 @@ Failing checks
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
 
+    def test_repair_check_commits_dirty_agent_changes_before_push(self):
+        item = pr(
+            6146,
+            checks={"quality / TypeScript Types": check("quality / TypeScript Types", "failure")},
+            latest=mergify(),
+        )
+        repairer = self.repairer(object(), self.ledger())
+        git_commands = []
+        repaired_head = "b" * 40
+        git_rev_parse = iter([HEAD, HEAD, repaired_head])
+
+        def fake_git_output(_work_root, *args):
+            git_commands.append(args)
+            if args == ("rev-parse", "HEAD"):
+                return next(git_rev_parse)
+            return ""
+
+        def fake_git_lines(_work_root, *args):
+            if args == ("status", "--porcelain"):
+                return (" M packages/app/src/main.ts", "M  packages/workflow-core/src/orchestrator.ts")
+            if args == ("rev-list", "--reverse", f"{HEAD}..{repaired_head}"):
+                return (repaired_head,)
+            return ()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"HOME": tmp}):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                    with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/types.log"):
+                        with mock.patch.object(repairer, "run_claude_repair"):
+                            with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+                                with mock.patch.object(repairer, "git_lines", side_effect=fake_git_lines):
+                                    with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True, "errors": []}):
+                                        result = repairer.repair_check(item, "quality / TypeScript Types")
+
+        self.assertEqual(result.status, "pushed")
+        self.assertEqual(result.end_head, repaired_head)
+        self.assertIn(("add", "-A"), git_commands)
+        self.assertIn(("commit", "-m", "Repair quality / TypeScript Types"), git_commands)
+        self.assertIn(("push", "origin", f"HEAD:{item.head_ref_name}"), git_commands)
+
 
     def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):
         item = pr(

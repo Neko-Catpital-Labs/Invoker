@@ -291,6 +291,21 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(pr(checks={"build": check("failure")}))
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
 
+    def test_capped_failed_check_retries_once_after_dirty_repair_stop(self):
+        ledger = self._ledger()
+        for epoch in range(3):
+            ledger.record("repair-check", 1, HEAD, "build", epoch)
+            ledger.record("repair-evaluated", 1, HEAD, "build", epoch)
+        ledger.record("comment-blocked", 1, HEAD, f"repair-dirty:build:{HEAD}", 3)
+
+        snapshot = pr(checks={"build": check("failure")})
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "dirty_retry:build"))
+
+        ledger.record("repair-dirty-retry", 1, HEAD, "build", 4)
+        actions = self._plan(snapshot, ledger)
+        self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "capped"))
+
     def test_mergify_dequeue_with_failing_check_repairs_first(self):
         # A Mergify dequeue naming a failing check outranks everything else.
         actions = self._plan(pr(latest_mergify=event(failing=("build",))))
