@@ -178,6 +178,7 @@ export async function spawnReviewGateCiRepairWorkflow(
         prompt: buildRepairPrompt(args, branch, baseBranch),
         ...(args.agentName ? { executionAgent: args.agentName } : {}),
         ...(args.executionModel ? { executionModel: args.executionModel } : {}),
+        ...(args.poolId ? { poolId: args.poolId } : {}),
       },
     ],
   };

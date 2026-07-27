@@ -7,6 +7,7 @@ export { CodexExecutionAgent, type CodexExecutionAgentConfig } from './codex-exe
 export { OmpExecutionAgent, type OmpExecutionAgentConfig } from './omp-execution-agent.js';
 export { KimiExecutionAgent, type KimiExecutionAgentConfig } from './kimi-execution-agent.js';
 export { QwenExecutionAgent, type QwenExecutionAgentConfig } from './qwen-execution-agent.js';
+export { CursorExecutionAgent, type CursorExecutionAgentConfig } from './cursor-execution-agent.js';
 export { CursorPlanningAgent, type CursorPlanningAgentConfig } from './cursor-planning-agent.js';
 export { OmpPlanningAgent, type OmpPlanningAgentConfig } from './omp-planning-agent.js';
 export { CodexPlanningAgent, type CodexPlanningAgentConfig } from './codex-planning-agent.js';
@@ -17,6 +18,7 @@ import { CodexExecutionAgent, type CodexExecutionAgentConfig } from './codex-exe
 import { OmpExecutionAgent, type OmpExecutionAgentConfig } from './omp-execution-agent.js';
 import { KimiExecutionAgent, type KimiExecutionAgentConfig } from './kimi-execution-agent.js';
 import { QwenExecutionAgent, type QwenExecutionAgentConfig } from './qwen-execution-agent.js';
+import { CursorExecutionAgent, type CursorExecutionAgentConfig } from './cursor-execution-agent.js';
 import { CursorPlanningAgent, type CursorPlanningAgentConfig } from './cursor-planning-agent.js';
 import { OmpPlanningAgent, type OmpPlanningAgentConfig } from './omp-planning-agent.js';
 import { CodexPlanningAgent, type CodexPlanningAgentConfig } from './codex-planning-agent.js';
@@ -33,6 +35,7 @@ export function registerBuiltinAgents(opts?: {
   omp?: OmpExecutionAgentConfig;
   kimi?: KimiExecutionAgentConfig;
   qwen?: QwenExecutionAgentConfig;
+  cursorExecution?: CursorExecutionAgentConfig;
   cursor?: CursorPlanningAgentConfig;
   ompPlanning?: OmpPlanningAgentConfig;
   codexPlanning?: CodexPlanningAgentConfig;
@@ -43,6 +46,7 @@ export function registerBuiltinAgents(opts?: {
   registry.registerExecution(new OmpExecutionAgent(opts?.omp), new OmpSessionDriver());
   registry.registerExecution(new KimiExecutionAgent(opts?.kimi));
   registry.registerExecution(new QwenExecutionAgent(opts?.qwen));
+  registry.registerExecution(new CursorExecutionAgent(opts?.cursorExecution));
   registry.registerPlanning(new CursorPlanningAgent(opts?.cursor));
   registry.registerPlanning(new OmpPlanningAgent(opts?.ompPlanning));
   registry.registerPlanning(new CodexPlanningAgent(opts?.codexPlanning));
