@@ -26,6 +26,8 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const MIN_PLANNING_TERMINAL_COLS = 20;
+const MIN_PLANNING_TERMINAL_ROWS = 5;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -187,6 +189,77 @@ function PlanningTmuxPane({ session, active, busy, error, readOnly = false }: Pl
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const fitFrameRef = useRef<number | null>(null);
+  const secondFitFrameRef = useRef<number | null>(null);
+
+  const clearScheduledFit = useCallback(() => {
+    if (fitFrameRef.current !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(fitFrameRef.current);
+      }
+      fitFrameRef.current = null;
+    }
+    if (secondFitFrameRef.current !== null) {
+      if (typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(secondFitFrameRef.current);
+      }
+      secondFitFrameRef.current = null;
+    }
+  }, []);
+
+  const fitVisiblePlanningTerminal = useCallback(() => {
+    if (!active || !session) return;
+    const host = containerRef.current;
+    const fit = fitRef.current;
+    if (!host || !termRef.current || !fit) return;
+    if (!host.isConnected) return;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    const bounds = host.getBoundingClientRect();
+    if (!(bounds.width > 0) || !(bounds.height > 0)) return;
+
+    let proposed: { cols: number; rows: number } | undefined;
+    try {
+      proposed = fit.proposeDimensions();
+    } catch {
+      proposed = undefined;
+    }
+    if (
+      !proposed ||
+      !Number.isFinite(proposed.cols) ||
+      !Number.isFinite(proposed.rows) ||
+      proposed.cols < MIN_PLANNING_TERMINAL_COLS ||
+      proposed.rows < MIN_PLANNING_TERMINAL_ROWS
+    ) {
+      return;
+    }
+
+    try {
+      fit.fit();
+      const nextSize = { cols: proposed.cols, rows: proposed.rows };
+      const lastSize = lastSentSizeRef.current;
+      if (lastSize?.cols === nextSize.cols && lastSize.rows === nextSize.rows) return;
+      lastSentSizeRef.current = nextSize;
+      void window.invoker?.planningTerminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+    } catch {
+      /* host has zero size, terminal disposed, or fit unsupported */
+    }
+  }, [active, session?.sessionId]);
+
+  const scheduleFit = useCallback(() => {
+    clearScheduledFit();
+    fitVisiblePlanningTerminal();
+    if (typeof requestAnimationFrame !== 'function') return;
+
+    fitFrameRef.current = requestAnimationFrame(() => {
+      fitFrameRef.current = null;
+      fitVisiblePlanningTerminal();
+      secondFitFrameRef.current = requestAnimationFrame(() => {
+        secondFitFrameRef.current = null;
+        fitVisiblePlanningTerminal();
+      });
+    });
+  }, [clearScheduledFit, fitVisiblePlanningTerminal]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -211,6 +284,7 @@ function PlanningTmuxPane({ session, active, busy, error, readOnly = false }: Pl
     }
     termRef.current = term;
     fitRef.current = fit;
+    lastSentSizeRef.current = null;
 
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
 
@@ -229,24 +303,11 @@ function PlanningTmuxPane({ session, active, busy, error, readOnly = false }: Pl
       }
     });
 
-    const tryFit = () => {
-      try {
-        fit.fit();
-        void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
-      } catch {
-        /* host has zero size or fit unsupported */
-      }
-    };
-
-    const raf = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(tryFit)
-      : null;
-
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
         resizeObserver = new ResizeObserver(() => {
-          tryFit();
+          scheduleFit();
         });
         resizeObserver.observe(host);
       } catch {
@@ -254,9 +315,28 @@ function PlanningTmuxPane({ session, active, busy, error, readOnly = false }: Pl
       }
     }
 
+    const handleVisibilityChange = (): void => {
+      scheduleFit();
+    };
+    const handleWindowFocus = (): void => {
+      scheduleFit();
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', handleWindowFocus);
+    }
+
+    scheduleFit();
+
     return () => {
-      if (raf !== null && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(raf);
+      clearScheduledFit();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', handleWindowFocus);
       }
       resizeObserver?.disconnect();
       inputDisposable.dispose();
@@ -268,8 +348,9 @@ function PlanningTmuxPane({ session, active, busy, error, readOnly = false }: Pl
       }
       termRef.current = null;
       fitRef.current = null;
+      lastSentSizeRef.current = null;
     };
-  }, [active, readOnly, session?.sessionId]);
+  }, [active, clearScheduledFit, readOnly, scheduleFit, session?.sessionId]);
 
   useEffect(() => {
     if (!active) return;
@@ -281,16 +362,14 @@ function PlanningTmuxPane({ session, active, busy, error, readOnly = false }: Pl
   useEffect(() => {
     if (!active) return;
     const term = termRef.current;
-    const fit = fitRef.current;
-    if (!term || !fit || !session) return;
+    if (!term || !session) return;
     try {
-      fit.fit();
-      void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
+      scheduleFit();
       term.focus();
     } catch {
-      /* fit failed (e.g., hidden) */
+      /* focus unsupported */
     }
-  }, [active, session?.sessionId]);
+  }, [active, scheduleFit, session?.sessionId]);
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden bg-black">

@@ -14,16 +14,20 @@ vi.mock('@xyflow/react', async () => {
 
 const xtermMock = vi.hoisted(() => {
   type DataHandler = (data: string) => void;
+  type TerminalDimensions = { cols: number; rows: number };
 
   const instances: MockTerminal[] = [];
   const fitInstances: MockFitAddon[] = [];
   const writeLog: string[] = [];
+  let nextDimensions: TerminalDimensions | undefined = { cols: 80, rows: 24 };
 
   class MockTerminal {
     cols = 80;
     rows = 24;
     dataHandler: DataHandler | null = null;
-    loadAddon = vi.fn();
+    loadAddon = vi.fn((addon: { activate?: (terminal: MockTerminal) => void }) => {
+      addon.activate?.(this);
+    });
     open = vi.fn((host: HTMLElement) => {
       const terminalElement = document.createElement('div');
       terminalElement.className = 'xterm';
@@ -46,7 +50,17 @@ const xtermMock = vi.hoisted(() => {
   }
 
   class MockFitAddon {
-    fit = vi.fn();
+    terminal: MockTerminal | null = null;
+    dimensions: TerminalDimensions | undefined = nextDimensions ? { ...nextDimensions } : undefined;
+    activate = vi.fn((terminal: MockTerminal) => {
+      this.terminal = terminal;
+    });
+    proposeDimensions = vi.fn(() => this.dimensions);
+    fit = vi.fn(() => {
+      if (!this.terminal || !this.dimensions) return;
+      this.terminal.cols = this.dimensions.cols;
+      this.terminal.rows = this.dimensions.rows;
+    });
 
     constructor() {
       fitInstances.push(this);
@@ -59,10 +73,14 @@ const xtermMock = vi.hoisted(() => {
     instances,
     fitInstances,
     writeLog,
+    setNextDimensions: (dimensions: TerminalDimensions | undefined) => {
+      nextDimensions = dimensions ? { ...dimensions } : undefined;
+    },
     reset: () => {
       instances.length = 0;
       fitInstances.length = 0;
       writeLog.length = 0;
+      nextDimensions = { cols: 80, rows: 24 };
     },
   };
 });
@@ -207,8 +225,8 @@ describe('Invoker terminal (component)', () => {
     };
   }
 
-  it('keeps inactive planning tmux from mounting xterm or resizing the PTY', () => {
-    const session: TerminalSessionDescriptor = {
+  function makePlanningTerminalSession(overrides: Partial<TerminalSessionDescriptor> = {}): TerminalSessionDescriptor {
+    return {
       sessionId: 'planning-terminal-chat-1',
       taskId: 'planning:chat-1',
       kind: 'planning',
@@ -218,7 +236,47 @@ describe('Invoker terminal (component)', () => {
       attached: false,
       createdAt: '2026-01-01T00:00:00.000Z',
       outputSnapshot: 'planning tmux ready\n',
+      ...overrides,
     };
+  }
+
+  function setElementRect(element: HTMLElement, width: number, height: number): void {
+    Object.defineProperty(element, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        width,
+        height,
+        top: 0,
+        left: 0,
+        right: width,
+        bottom: height,
+        toJSON: () => ({}),
+      }),
+    });
+  }
+
+  async function nextAnimationFrame(): Promise<void> {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => resolve());
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
+    });
+  }
+
+  async function drainPlanningTerminalFrames(): Promise<void> {
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+  }
+
+  it('keeps inactive planning tmux from mounting xterm or resizing the PTY', () => {
+    const session = makePlanningTerminalSession();
 
     render(<InvokerTerminal
       {...terminalProps({
@@ -234,6 +292,67 @@ describe('Invoker terminal (component)', () => {
     expect(xtermMock.writeLog).toHaveLength(0);
     expect(mock.api.onTerminalOutput).not.toHaveBeenCalled();
     expect(mock.api.planningTerminalResize).not.toHaveBeenCalled();
+  });
+
+  it('skips planning tmux resize when proposed dimensions are tiny', async () => {
+    const session = makePlanningTerminalSession();
+    xtermMock.setNextDimensions({ cols: 19, rows: 4 });
+
+    render(<InvokerTerminal
+      {...terminalProps({
+        mode: 'tmux',
+        terminalSession: session,
+        terminalActive: true,
+      })}
+    />);
+    setElementRect(screen.getByTestId('invoker-terminal-tmux-pane'), 640, 360);
+
+    await drainPlanningTerminalFrames();
+
+    expect(xtermMock.fitInstances[0]?.proposeDimensions).toHaveBeenCalled();
+    expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+    expect(mock.api.planningTerminalResize).not.toHaveBeenCalled();
+  });
+
+  it('sends planning tmux resize when proposed dimensions are sane', async () => {
+    const session = makePlanningTerminalSession();
+    xtermMock.setNextDimensions({ cols: 100, rows: 30 });
+
+    render(<InvokerTerminal
+      {...terminalProps({
+        mode: 'tmux',
+        terminalSession: session,
+        terminalActive: true,
+      })}
+    />);
+    setElementRect(screen.getByTestId('invoker-terminal-tmux-pane'), 900, 500);
+
+    await drainPlanningTerminalFrames();
+
+    expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
+    expect(mock.api.planningTerminalResize).toHaveBeenCalledWith(session.sessionId, 100, 30);
+  });
+
+  it('suppresses duplicate planning tmux resizes for unchanged dimensions', async () => {
+    const session = makePlanningTerminalSession();
+    xtermMock.setNextDimensions({ cols: 100, rows: 30 });
+
+    render(<InvokerTerminal
+      {...terminalProps({
+        mode: 'tmux',
+        terminalSession: session,
+        terminalActive: true,
+      })}
+    />);
+    setElementRect(screen.getByTestId('invoker-terminal-tmux-pane'), 900, 500);
+
+    await drainPlanningTerminalFrames();
+    window.dispatchEvent(new Event('focus'));
+    await drainPlanningTerminalFrames();
+
+    expect(xtermMock.fitInstances[0]?.fit.mock.calls.length).toBeGreaterThan(1);
+    expect(mock.api.planningTerminalResize).toHaveBeenCalledTimes(1);
+    expect(mock.api.planningTerminalResize).toHaveBeenCalledWith(session.sessionId, 100, 30);
   });
 
   it('generates a planning reply from plain language', async () => {
