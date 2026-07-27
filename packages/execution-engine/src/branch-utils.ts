@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { cleanGitRepositoryEnv } from './process-utils.js';
 
 /**
  * Pure content fingerprint of a task's execution spec.
@@ -394,6 +395,7 @@ export function runBashLocal(script: string, cwd?: string): Promise<string> {
     const child = spawn('bash', ['-c', script], {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: cleanGitRepositoryEnv(),
     });
 
     let stdout = '';

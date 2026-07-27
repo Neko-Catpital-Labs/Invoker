@@ -59,6 +59,7 @@ invoker_e2e_ssh_setup_keys() {
   _INVOKER_E2E_SSH_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-ssh.XXXXXX")"
   _INVOKER_E2E_SSH_REMOTE_HOME="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
   local keyfile="$_INVOKER_E2E_SSH_TMPDIR/id_ed25519"
+  local known_hosts_file="$_INVOKER_E2E_SSH_TMPDIR/known_hosts"
   _INVOKER_E2E_SSH_USER="$(whoami)"
   _INVOKER_E2E_SSH_HOME="$(invoker_e2e_ssh_resolve_home "$_INVOKER_E2E_SSH_USER")"
 
@@ -69,6 +70,8 @@ invoker_e2e_ssh_setup_keys() {
 
   # -C sets the comment field to our PID-tagged identifier for cleanup.
   ssh-keygen -t ed25519 -f "$keyfile" -N "" -C "$_INVOKER_E2E_SSH_TAG" -q
+  touch "$known_hosts_file"
+  chmod 600 "$known_hosts_file"
 
   # sshd reads authorized_keys from the account's passwd home, which may differ
   # from $HOME inside CI containers.
@@ -81,6 +84,7 @@ invoker_e2e_ssh_setup_keys() {
   cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
 
   export INVOKER_E2E_SSH_KEY="$keyfile"
+  export INVOKER_SSH_USER_KNOWN_HOSTS_FILE="$known_hosts_file"
 }
 
 # --------------------------------------------------------------------------- #
@@ -104,6 +108,7 @@ invoker_e2e_ssh_cleanup_keys() {
     mv "${env_path}.tmp" "$env_path"
   fi
   rm -rf "${_INVOKER_E2E_SSH_TMPDIR:-}" 2>/dev/null || true
+  unset INVOKER_SSH_USER_KNOWN_HOSTS_FILE
 }
 
 # --------------------------------------------------------------------------- #
