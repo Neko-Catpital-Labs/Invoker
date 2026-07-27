@@ -12,7 +12,7 @@ trap 'rm -f "$LOG_FILE"' EXIT
 echo "[repro] Running focused planning stream visibility regression."
 
 if pnpm -C "$REPO_ROOT" --filter @invoker/ui exec vitest run \
-  src/__tests__/planning-draft-submit-new-turn-stream-repro.test.tsx \
+  src/__tests__/planning-thinking-after-submit-repro.test.tsx \
   >"$LOG_FILE" 2>&1; then
   echo "[repro] PASS: live planner output stays visible during the pending new turn and clears after the final reply."
 else
