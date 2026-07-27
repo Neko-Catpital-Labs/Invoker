@@ -32,6 +32,7 @@ except ImportError:
 TRUNK = "master"
 
 QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
+    "build-artifacts",
     "required-fast / Guardrails",
     "required-fast / Vitest Workspace",
     "required-fast / Submit Workflow Chain",
@@ -180,10 +181,26 @@ def current_bottom_pr(stack: StackGroup, trunk: str) -> PrSnapshot | None:
     return None
 
 
+def unaccepted_upper_prs(stack: StackGroup, bottom: PrSnapshot | None) -> tuple[PrSnapshot, ...]:
+    if not bottom:
+        return ()
+    return tuple(
+        pr for pr in stack.prs
+        if pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
+    )
+
+
 def stack_has_unaccepted_upper_pr(stack: StackGroup, bottom: PrSnapshot | None) -> bool:
-    return bool(bottom) and any(
-        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
-        for pr in stack.prs
+    return bool(unaccepted_upper_prs(stack, bottom))
+
+
+def upper_stack_acceptance_detail(facts: StackFacts) -> str:
+    assert facts.bottom is not None, "upper stack acceptance requires a current bottom"
+    upper = unaccepted_upper_prs(facts.stack, facts.bottom)
+    members = ", ".join(f"#{pr.number} (`{pr.head_ref_name}`)" for pr in upper)
+    return (
+        f"upper stack member(s) {members} are open above #{facts.bottom.number} without `admin-bypass`; "
+        "accept them into the admin-bypass stack, land them, close them, or retarget them before babysitting can queue this stack"
     )
 
 
@@ -447,7 +464,7 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
 def wait_reason_for_facts(facts: StackFacts) -> str:
     if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
-    if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
+    if bottom_has_active_queue(facts):
         return "bottom-already-queued"
     for pr in facts.stack.prs:
         blocker_kinds = {blocker.kind for blocker in facts.blockers_by_pr[pr.number]}
@@ -458,6 +475,14 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
     return "no-action"
+
+
+def bottom_has_active_queue(facts: StackFacts) -> bool:
+    bottom = facts.bottom
+    if not bottom or not bottom.latest_mergify:
+        return False
+    latest = bottom.latest_mergify
+    return latest.state in ACTIVE_QUEUE_STATES and (latest.head_sha == bottom.head_ref_oid or "queued" in bottom.labels)
 
 
 def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
@@ -474,10 +499,19 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
+def _has_human_decision_at_or_below(facts: StackFacts, pr_number: int) -> bool:
+    for pr in facts.stack.prs:
+        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+            return True
+        if pr.number == pr_number:
+            return False
+    return False
+
+
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
-        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+        if _has_human_decision_at_or_below(facts, pr.number):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
@@ -489,6 +523,8 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _has_human_decision_at_or_below(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
@@ -505,6 +541,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _has_human_decision_at_or_below(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
@@ -553,10 +591,13 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return None
     if not facts.bottom:
         first = facts.stack.prs[0]
+        key = "no-current-bottom"
+        if ledger.count("comment-blocked", first.number, first.head_ref_oid, key) > 0:
+            return None
         return Action(
             "comment_blocked",
             first.number,
-            "no-current-bottom",
+            key,
             f"no current bottom on {facts.trunk}: lowest open stack PR #{first.number} is based on `{first.base_ref_name}`, not `{facts.trunk}`; land or retarget that base before babysitting can queue this stack",
         )
 
@@ -577,7 +618,10 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
             )
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
-        return None
+        key = "upper-stack-needs-acceptance"
+        if ledger.count("comment-blocked", bottom.number, bottom.head_ref_oid, key) > 0:
+            return None
+        return Action("comment_blocked", bottom.number, key, upper_stack_acceptance_detail(facts))
     if latest and latest.state in ACTIVE_QUEUE_STATES and (latest.head_sha == bottom.head_ref_oid or "queued" in bottom.labels):
         return None
     requeue_reason = "eligible-when-ready"
@@ -599,6 +643,8 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
+    if bottom_has_active_queue(facts):
+        return ()
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)

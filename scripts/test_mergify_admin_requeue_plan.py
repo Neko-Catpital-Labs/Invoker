@@ -25,6 +25,7 @@ import mergify_admin_requeue_plan as p
 HEAD = "a" * 40
 REQUIRED = {"build"}
 QUEUE_ONLY_CHECK = "required-fast / Guardrails"
+QUEUE_ONLY_SKIPPED_CHECK = "build-artifacts"
 
 
 def check(state, name="build"):
@@ -124,6 +125,17 @@ class EffectiveBlockers(unittest.TestCase):
             b.kind for b in p.effective_blockers(
                 snapshot,
                 {QUEUE_ONLY_CHECK},
+                trunk="master",
+            )
+        }
+        self.assertNotIn("missing_check", kinds)
+
+    def test_build_artifacts_missing_check_is_not_pr_head_blocker(self):
+        snapshot = pr(checks={})
+        kinds = {
+            b.kind for b in p.effective_blockers(
+                snapshot,
+                {QUEUE_ONLY_SKIPPED_CHECK},
                 trunk="master",
             )
         }
@@ -310,6 +322,15 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(snapshot)
         self.assertEqual(actions, ())
 
+    def test_queued_label_with_headless_active_queue_failed_check_waits(self):
+        snapshot = pr(
+            labels=frozenset({"admin-bypass", "queued"}),
+            latest_mergify=event(state="queued", head=""),
+            checks={"build": check("failure")},
+        )
+        actions = self._plan(snapshot)
+        self.assertEqual(actions, ())
+
     def test_clean_bottom_queues_without_prior_dequeue(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot)
@@ -333,6 +354,24 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(m.StackGroup("s", (bottom, upper)))
         self.assertEqual((actions[0].kind, actions[0].pr_number), ("requeue", 10))
 
+    def test_lower_human_decision_blocks_downstream_repairs(self):
+        ledger = self._ledger()
+        ledger.record("repair-invalid", 10, HEAD, "build", 1, meta={"errors": ["human split required"]})
+        bottom = pr(
+            number=10,
+            head_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={"build": check("failure")},
+        )
+        upper = pr(
+            number=11,
+            base_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+        )
+        actions = self._plan(m.StackGroup("s", (bottom, upper)), ledger)
+        self.assertEqual(actions, ())
+
     def test_no_current_bottom_blocker_names_base_branch(self):
         actions = self._plan(
             m.StackGroup(
@@ -354,6 +393,29 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "no-current-bottom"))
         self.assertIn("lowest open stack PR #5885 is based on `pr/babysit-prereq-split`", actions[0].detail)
         self.assertIn("land or retarget that base", actions[0].detail)
+
+    def test_no_current_bottom_comment_waits_after_ledger_row(self):
+        ledger = self._ledger()
+        ledger.record("comment-blocked", 5885, HEAD, "no-current-bottom", 1)
+        actions = self._plan(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=5885,
+                        base_ref_name="pr/babysit-prereq-split",
+                        labels=frozenset({"admin-bypass"}),
+                    ),
+                    pr(
+                        number=5886,
+                        base_ref_name="stack/slack-routing",
+                        labels=frozenset({"admin-bypass"}),
+                    ),
+                ),
+            ),
+            ledger,
+        )
+        self.assertEqual(actions, ())
 
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
