@@ -26,14 +26,20 @@ function expectReadContextWriteToolsAreAbsent(): void {
 
 
 describe('registerReadOnlyIpcHandlers', () => {
-  it('get-tasks returns a snapshot', async () => {
+  it('get-tasks syncs before returning a snapshot', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const ipcMain = {
       handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
         handlers.set(channel, handler);
       }),
     };
+    const staleTask = makeTask('wf-1/stale-task');
     const task = makeTask('wf-1/task-1');
+    let synced = false;
+    const syncAllFromDb = vi.fn(() => {
+      synced = true;
+    });
+    const getAllTasks = vi.fn(() => (synced ? [task] : [staleTask]));
 
     registerReadOnlyIpcHandlers({
       ipcMain: ipcMain as never,
@@ -47,7 +53,8 @@ describe('registerReadOnlyIpcHandlers', () => {
         listWorkflows: vi.fn(() => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }]),
       } as never,
       getOrchestrator: () => ({
-        getAllTasks: () => [task],
+        getAllTasks,
+        syncAllFromDb,
         getWorkflowStatus: () => ({ total: 1, completed: 0, failed: 0, closed: 0, running: 0, pending: 1 }),
       }) as never,
       agentRegistry: {} as never,
@@ -66,6 +73,11 @@ describe('registerReadOnlyIpcHandlers', () => {
       workflows: [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
       streamSequence: 42,
     });
+    expect(syncAllFromDb).toHaveBeenCalledTimes(1);
+    expect(getAllTasks).toHaveBeenCalledTimes(1);
+    expect(syncAllFromDb.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY).toBeLessThan(
+      getAllTasks.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it('get-review-gate returns the shared review gate shape', async () => {
