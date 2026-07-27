@@ -203,8 +203,26 @@ describe('TaskRunner launch-dispatch wiring', () => {
 
     resolveStart?.();
     await vi.waitFor(() => expect(env.executor.onComplete).toHaveBeenCalled());
+    expect(launchOutbox.completeCalls).toHaveLength(0);
     env.triggerComplete();
     await run;
+    expect(launchOutbox.completeCalls).toEqual([99]);
+  });
+
+  it('keeps the dispatch row leased until executor completion', async () => {
+    const task = makeTask();
+    const env = buildRunnerEnv(task);
+    const launchOutbox = makeLaunchOutbox();
+
+    const run = env.runner.executeTask(task, { dispatchId: 100, launchOutbox });
+    await vi.waitFor(() => expect(env.executor.onComplete).toHaveBeenCalled());
+
+    expect(launchOutbox.completeCalls).toHaveLength(0);
+
+    env.triggerComplete();
+    await run;
+
+    expect(launchOutbox.completeCalls).toEqual([100]);
   });
 
   it('fails the dispatch when markTaskRunningAfterLaunch rejects the launch', async () => {
