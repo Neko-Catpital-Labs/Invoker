@@ -475,10 +475,19 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
+def _has_human_decision_at_or_below(facts: StackFacts, pr_number: int) -> bool:
+    for pr in facts.stack.prs:
+        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+            return True
+        if pr.number == pr_number:
+            return False
+    return False
+
+
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
-        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+        if _has_human_decision_at_or_below(facts, pr.number):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
@@ -490,6 +499,8 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _has_human_decision_at_or_below(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
@@ -506,6 +517,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _has_human_decision_at_or_below(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)

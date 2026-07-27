@@ -345,6 +345,24 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(m.StackGroup("s", (bottom, upper)))
         self.assertEqual((actions[0].kind, actions[0].pr_number), ("requeue", 10))
 
+    def test_lower_human_decision_blocks_downstream_repairs(self):
+        ledger = self._ledger()
+        ledger.record("repair-invalid", 10, HEAD, "build", 1, meta={"errors": ["human split required"]})
+        bottom = pr(
+            number=10,
+            head_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={"build": check("failure")},
+        )
+        upper = pr(
+            number=11,
+            base_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+        )
+        actions = self._plan(m.StackGroup("s", (bottom, upper)), ledger)
+        self.assertEqual(actions, ())
+
     def test_no_current_bottom_blocker_names_base_branch(self):
         actions = self._plan(
             m.StackGroup(
