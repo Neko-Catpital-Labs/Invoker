@@ -83,6 +83,8 @@ type ModalState =
 
 type KeyboardRegion = 'workflowGraph' | 'taskGraph' | 'inspector' | 'bottomBar' | 'planning';
 type GraphKeyboardRegion = Extract<KeyboardRegion, 'workflowGraph' | 'taskGraph'>;
+type SelectionOptions = { recenter?: boolean };
+type QuietBrowserSelection = { scope: GraphScope; target: string };
 type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
@@ -998,6 +1000,8 @@ export function App() {
   selectedTaskIdRef.current = selectedTaskId;
   const [selectedWorkerKind, setSelectedWorkerKind] = useState<string | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const selectedWorkflowIdRef = useRef<string | null>(selectedWorkflowId);
+  selectedWorkflowIdRef.current = selectedWorkflowId;
   const [reviewGateByWorkflowId, setReviewGateByWorkflowId] = useState<Record<string, ReviewGateQueryResponse | null>>({});
   const [stickySelectedWorkflow, setStickySelectedWorkflow] = useState<WorkflowMeta | null>(null);
   const [workflowSelectionDismissed, setWorkflowSelectionDismissed] = useState(false);
@@ -1101,6 +1105,7 @@ export function App() {
     cameraIssuerRef.current = createGraphCameraCommandIssuer();
   }
   const [cameraCommand, setCameraCommand] = useState<GraphCameraCommand | null>(null);
+  const quietBrowserSelectionRef = useRef<QuietBrowserSelection | null>(null);
   const workflowGraphViewportRef = useRef<GraphCameraViewport | null>(null);
   const [bottomStatusIndex, setBottomStatusIndex] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1797,7 +1802,10 @@ export function App() {
     });
   }, []);
 
-  const selectWorkflowById = useCallback((workflowId: string) => {
+  const selectWorkflowById = useCallback((workflowId: string, options: SelectionOptions = {}) => {
+    quietBrowserSelectionRef.current = options.recenter === false
+      ? { scope: 'workflow', target: workflowId }
+      : null;
     armSuppressDagSurfaceDismiss();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
@@ -1807,9 +1815,12 @@ export function App() {
     focusKeyboardRegion('workflowGraph');
   }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion]);
 
-  const selectTaskById = useCallback((taskId: string) => {
+  const selectTaskById = useCallback((taskId: string, options: SelectionOptions = {}) => {
     const task = tasksRef.current.get(taskId);
     if (!task) return;
+    quietBrowserSelectionRef.current = options.recenter === false
+      ? { scope: 'task', target: task.id }
+      : null;
     setSelectedTaskId(task.id);
     setWorkflowSelectionDismissed(false);
     if (task.config.workflowId) {
@@ -1827,12 +1838,13 @@ export function App() {
       const failedTaskId = event.taskId;
       if (failedTaskId) {
         setMutationFailuresByTaskId((prev) => new Map(prev).set(failedTaskId, event));
+        selectTaskById(failedTaskId, { recenter: false });
         return;
       }
       notifyMutationError('Mutation failed', event.message);
     });
     return () => { unsubscribe?.(); };
-  }, []);
+  }, [selectTaskById]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -2206,7 +2218,7 @@ export function App() {
       if (activeWorkflowId !== null && !selectedWorkflowVanished) {
         return;
       }
-      selectWorkflowById(workflowEntries[0].workflow.id);
+      selectWorkflowById(workflowEntries[0].workflow.id, { recenter: false });
       return;
     }
 
@@ -2222,7 +2234,7 @@ export function App() {
       if (attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
         return;
       }
-      selectTaskById(attentionEntries[0].task.id);
+      selectTaskById(attentionEntries[0].task.id, { recenter: false });
       return;
     }
 
@@ -2255,6 +2267,18 @@ export function App() {
       return;
     }
 
+    const quietSelection = quietBrowserSelectionRef.current;
+    if (
+      quietSelection
+      && (
+        (quietSelection.scope === 'task' && selectedTaskIdRef.current === quietSelection.target)
+        || (quietSelection.scope === 'workflow' && selectedTaskIdRef.current === null && selectedWorkflowIdRef.current === quietSelection.target)
+      )
+    ) {
+      quietBrowserSelectionRef.current = null;
+      return;
+    }
+
     let cancelled = false;
     const fitFrame = requestAnimationFrame(() => {
       if (cancelled) return;
@@ -2281,6 +2305,14 @@ export function App() {
     sidebarSurface,
     viewMode,
   ]);
+
+  useEffect(() => {
+    if (!quietBrowserSelectionRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      quietBrowserSelectionRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  });
 
 
   const handleDagSurfaceClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {

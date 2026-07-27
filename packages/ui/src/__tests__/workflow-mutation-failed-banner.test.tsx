@@ -1,11 +1,10 @@
 /**
  * Integration test: workflow-mutation-failed handling in <App />.
  *
- * A mutation failure never moves the operator. It does not change the sidebar
- * surface, the selection, or the camera. Task-scoped failures are recorded so
- * Needs Attention counts them and the inspector shows the failure detail once
- * the operator navigates there themselves. Failures with no task context are
- * transient toast errors. No global top banner is rendered.
+ * A mutation failure does not change the sidebar surface or camera.
+ * Task-scoped failures select the failed task, are recorded so Needs Attention
+ * counts them, and surface the failure detail in the inspector. Failures with
+ * no task context are transient toast errors. No global top banner is rendered.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -120,7 +119,7 @@ describe('Workflow mutation failed handling', () => {
     expect(screen.getByTestId('sidebar-workflows')).not.toHaveAttribute('aria-current', 'page');
   });
 
-  it('does not steal the selection while the operator is working elsewhere', async () => {
+  it('selects the failed task while leaving the operator on the current surface', async () => {
     render(<App />);
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await settleTasks();
@@ -137,7 +136,8 @@ describe('Workflow mutation failed handling', () => {
       expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('1');
     });
     expect(screen.getByTestId('sidebar-workflows')).toHaveAttribute('aria-current', 'page');
-    expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Verify worker summary surface');
+    expect(screen.getByTestId('task-mutation-failure-detail')).toBeInTheDocument();
   });
 
   it('surfaces failure details in the inspector once the operator opens Needs Attention', async () => {
