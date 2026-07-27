@@ -12,7 +12,6 @@ import type {
 import type { TaskState } from '@invoker/workflow-core';
 
 import {
-  buildFixWithAgentMutationArgs,
   isReviewGateCiContextStale,
   listOpenFixIntentsForTask,
   type ReviewGateCiContext,
@@ -35,7 +34,7 @@ import {
 import { recordWorkerDecisionRow } from './worker-decision-ledger.js';
 
 const CI_FAILURE_WORKER_KIND = 'ci-failure';
-const FIX_WITH_AGENT_CHANNEL = 'invoker:fix-with-agent';
+export const SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL = 'invoker:spawn-review-gate-ci-repair';
 const CI_FAILURE_ACTION_TYPE = 'fix-ci-failure';
 const NO_HEAD_SHA = 'no-head';
 
@@ -57,7 +56,7 @@ export interface ReviewGateCiRepairSubmitter {
   submit(
     workflowId: string,
     priority: WorkflowMutationPriority,
-    channel: typeof FIX_WITH_AGENT_CHANNEL,
+    channel: typeof SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
@@ -74,6 +73,83 @@ export interface ReviewGateCiRepairPolicyOptions {
   getRetryBudget?: (task: TaskState) => number;
   /** Optional failed-check log fetcher used to skip non-fixable infra failures. */
   fetchFailedCheckLogs?: FailedCheckLogFetcher;
+}
+
+export interface ReviewGateCiRepairWorkflowMutationArgs {
+  readonly sourceWorkflowId: string;
+  readonly sourceTaskId: string;
+  readonly reviewId: string;
+  readonly reviewUrl: string;
+  readonly headSha?: string;
+  readonly headRef?: string;
+  readonly branch?: string;
+  readonly generation: number;
+  readonly selectedAttemptId?: string;
+  readonly failedChecks: readonly ReviewGateFailedCheck[];
+  readonly statusText: string;
+  readonly taskStateVersion: number;
+  readonly agentName?: string;
+  readonly executionModel?: string;
+}
+
+export function buildReviewGateCiRepairWorkflowMutationArgs(
+  payload: ReviewGateCiRepairWorkflowMutationArgs,
+): unknown[] {
+  return [payload];
+}
+
+export function parseReviewGateCiRepairWorkflowMutationArgs(args: unknown[]): ReviewGateCiRepairWorkflowMutationArgs {
+  const [raw] = args;
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('invoker:spawn-review-gate-ci-repair mutation requires an argument object');
+  }
+  const candidate = raw as Record<string, unknown>;
+  const {
+    sourceWorkflowId,
+    sourceTaskId,
+    reviewId,
+    reviewUrl,
+    headSha,
+    headRef,
+    branch,
+    generation,
+    selectedAttemptId,
+    failedChecks,
+    statusText,
+    taskStateVersion,
+    agentName,
+    executionModel,
+  } = candidate;
+  if (
+    typeof sourceWorkflowId !== 'string'
+    || typeof sourceTaskId !== 'string'
+    || typeof reviewId !== 'string'
+    || typeof reviewUrl !== 'string'
+    || typeof generation !== 'number'
+    || !Array.isArray(failedChecks)
+    || typeof statusText !== 'string'
+    || typeof taskStateVersion !== 'number'
+  ) {
+    throw new Error(
+      'invoker:spawn-review-gate-ci-repair mutation requires { sourceWorkflowId, sourceTaskId, reviewId, reviewUrl, generation, failedChecks, statusText, taskStateVersion }',
+    );
+  }
+  return {
+    sourceWorkflowId,
+    sourceTaskId,
+    reviewId,
+    reviewUrl,
+    ...(typeof headSha === 'string' ? { headSha } : {}),
+    ...(typeof headRef === 'string' ? { headRef } : {}),
+    ...(typeof branch === 'string' ? { branch } : {}),
+    generation,
+    ...(typeof selectedAttemptId === 'string' ? { selectedAttemptId } : {}),
+    failedChecks: failedChecks.map((check) => ({ ...(check as ReviewGateFailedCheck) })),
+    statusText,
+    taskStateVersion,
+    ...(typeof agentName === 'string' ? { agentName } : {}),
+    ...(typeof executionModel === 'string' ? { executionModel } : {}),
+  };
 }
 
 export function ciFailureChecksHash(failedChecks: readonly ReviewGateFailedCheck[]): string {
@@ -150,7 +226,6 @@ function reviewGateContextFromEvent(event: ReviewGateCiFailedLifecycleEvent): Re
     selectedAttemptId: event.attemptId,
     branch: event.branch,
     headSha: event.headSha,
-    fixContext: buildCiFailureFixContext(event),
   };
 }
 
@@ -288,22 +363,6 @@ function logCiFailureWorkerEvent(
 }
 
 
-function buildCiFailureFixContext(event: ReviewGateCiFailedLifecycleEvent): string {
-  const checks = event.failedChecks
-    .map((check) => {
-      const conclusion = check.conclusion ? ` (${check.conclusion})` : '';
-      const details = check.detailsUrl ? ` - ${check.detailsUrl}` : '';
-      return `- ${check.name}${conclusion}${details}`;
-    })
-    .join('\n');
-  return [
-    `Review-gate CI failed for ${event.reviewUrl}.`,
-    `Head SHA: ${event.headSha ?? 'unknown'}.`,
-    `Status: ${event.statusText}.`,
-    'Failed checks:',
-    checks,
-  ].join('\n');
-}
 
 function shouldSkipExistingAction(
   options: ReviewGateCiRepairPolicyOptions,
@@ -487,26 +546,35 @@ export async function queueReviewGateCiRepair(
   const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
     ? configuredExecutionModel
     : undefined;
-  const args = buildFixWithAgentMutationArgs(event.taskId, selectedAgent, {
-    autoFix: true,
-    reviewGateContext: {
-      reviewId: event.reviewId,
-      generation: event.generation,
-      selectedAttemptId: event.attemptId,
-      branch: event.branch,
-      headSha: event.headSha,
-      fixContext: buildCiFailureFixContext(event),
-    },
-    executionModel,
+  const args = buildReviewGateCiRepairWorkflowMutationArgs({
+    sourceWorkflowId: event.workflowId,
+    sourceTaskId: event.taskId,
+    reviewId: event.reviewId,
+    reviewUrl: event.reviewUrl,
+    ...(event.headSha ? { headSha: event.headSha } : {}),
+    ...(event.headRef ? { headRef: event.headRef } : {}),
+    ...(event.branch ? { branch: event.branch } : {}),
+    generation: event.generation,
+    ...(event.attemptId ? { selectedAttemptId: event.attemptId } : {}),
+    failedChecks: event.failedChecks.map((check) => ({ ...check })),
+    statusText: event.statusText,
+    taskStateVersion: event.taskStateVersion ?? task.taskStateVersion,
+    ...(selectedAgent ? { agentName: selectedAgent } : {}),
+    ...(executionModel ? { executionModel } : {}),
   });
-  const intentId = options.submitter.submit(event.workflowId, 'normal', FIX_WITH_AGENT_CHANNEL, args);
+  const intentId = options.submitter.submit(
+    event.workflowId,
+    'normal',
+    SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
+    args,
+  );
   recordCiFailureAction(
     options,
     event,
     'queued',
-    'Queued CI repair with agent',
+    'Queued CI repair workflow',
     {
-      channel: FIX_WITH_AGENT_CHANNEL,
+      channel: SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
       workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
     },
     intentId,
@@ -515,7 +583,7 @@ export async function queueReviewGateCiRepair(
   );
   logCiFailureWorkerEvent(options, event, 'worker-ci-failure-submitted', {
     intentId,
-    channel: FIX_WITH_AGENT_CHANNEL,
+    channel: SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
     agent: selectedAgent ?? null,
     executionModel: executionModel ?? null,
     workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
