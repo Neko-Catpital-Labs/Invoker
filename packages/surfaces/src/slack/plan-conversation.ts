@@ -189,6 +189,17 @@ export function isNegation(text: string): boolean {
   return NEGATION_PATTERNS.some((re) => re.test(trimmed));
 }
 
+const SUBMIT_INSTRUCTION_LINE = 'Reply `submit` to submit it.';
+
+function stripStandaloneSubmitInstruction(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== SUBMIT_INSTRUCTION_LINE)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function isDraftingAuthorizedForPrompt(messages: ConversationMessage[]): boolean {
   const latest = messages[messages.length - 1];
   if (!latest || latest.role !== 'user') return false;
@@ -552,6 +563,7 @@ export class PlanConversation {
       : inlineDraft;
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
+    if (!nextDraft) message = stripStandaloneSubmitInstruction(message);
     this._lastTurnReasoning = formatted.reasoning;
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
