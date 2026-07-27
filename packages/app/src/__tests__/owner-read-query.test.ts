@@ -76,7 +76,7 @@ describe('answerOwnerReadQuery', () => {
     expect(answerOwnerReadQuery({ kind: 'action-graph' }, h)).toEqual({ nodes: [] });
   });
 
-  it('refreshes the snapshot only for task-graph-refresh', () => {
+  it('routes both task snapshot entrypoints to the snapshot handler', () => {
     const h = makeHandlers();
     expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toMatchObject({ refreshed: false });
     expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toMatchObject({ refreshed: true });
@@ -218,17 +218,27 @@ describe('buildOwnerReadQueryHandlers', () => {
     expect(build().getReviewGate('missing')).toBeNull();
   });
 
-  it('getTasksSnapshot refreshes only when asked', () => {
+  it('both task snapshot entrypoints sync from db before reading the owner snapshot', () => {
     const syncAllFromDb = vi.fn();
-    const h = build({ syncAllFromDb });
-    expect(h.getTasksSnapshot({ refresh: false })).toEqual({
+    const getAllTasks = vi.fn(() => [{ id: 't' }]);
+    const listWorkflows = vi.fn(() => [{ id: 'wf' }]);
+    const h = build({ syncAllFromDb, getAllTasks }, { listWorkflows });
+    expect(answerOwnerReadQuery({ kind: 'tasks' }, h)).toEqual({
       tasks: [{ id: 't' }],
       workflows: [{ id: 'wf' }],
       streamSequence: 5,
       invokerHomeRoot: '/home',
     });
-    expect(syncAllFromDb).not.toHaveBeenCalled();
-    h.getTasksSnapshot({ refresh: true });
-    expect(syncAllFromDb).toHaveBeenCalledTimes(1);
+    expect(answerOwnerReadQuery({ kind: 'task-graph-refresh' }, h)).toEqual({
+      tasks: [{ id: 't' }],
+      workflows: [{ id: 'wf' }],
+      streamSequence: 5,
+      invokerHomeRoot: '/home',
+    });
+    expect(syncAllFromDb).toHaveBeenCalledTimes(2);
+    expect(syncAllFromDb.mock.invocationCallOrder[0]).toBeLessThan(getAllTasks.mock.invocationCallOrder[0]);
+    expect(syncAllFromDb.mock.invocationCallOrder[0]).toBeLessThan(listWorkflows.mock.invocationCallOrder[0]);
+    expect(syncAllFromDb.mock.invocationCallOrder[1]).toBeLessThan(getAllTasks.mock.invocationCallOrder[1]);
+    expect(syncAllFromDb.mock.invocationCallOrder[1]).toBeLessThan(listWorkflows.mock.invocationCallOrder[1]);
   });
 });
