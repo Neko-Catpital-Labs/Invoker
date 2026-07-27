@@ -7,7 +7,8 @@
  * task delta. Each tick therefore re-issued fitInitial + centerSelection and
  * yanked the viewport back to the selection while the user was panning the graph.
  * The effect now keys off stable surface-entry signals, so live updates and
- * selection changes while already on the surface issue no camera command.
+ * background selection reshuffles while already on the surface issue no camera
+ * command. User-initiated selection still recenters the selected node.
  *
  * The effect is shared by every non-home browser surface (its guard only excludes
  * `home`), so this drives the Workflows surface — the jsdom harness cannot render
@@ -16,7 +17,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
@@ -53,12 +54,18 @@ const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).
 const setViewportMock = (ReactFlowModule as unknown as { __setViewportMock: Mock }).__setViewportMock;
 const getZoomMock = (ReactFlowModule as unknown as { __getZoomMock: Mock }).__getZoomMock;
 const getViewportMock = (ReactFlowModule as unknown as { __getViewportMock: Mock }).__getViewportMock;
+let mock: MockInvoker;
 
 // App must be imported AFTER vi.mock registers so it binds the mocked react-flow.
-const { App } = await import('../App.js');
+const { App, SELECTED_WORKFLOW_VANISH_GRACE_MS } = await import('../App.js');
 
 const workflows: WorkflowMeta[] = [
   { id: 'wf-a', name: 'Alpha Workflow', status: 'running' },
+];
+
+const reshuffleWorkflows: WorkflowMeta[] = [
+  { id: 'wf-a', name: 'Alpha Workflow', status: 'running' },
+  { id: 'wf-b', name: 'Beta Workflow', status: 'running' },
 ];
 
 const tasks = [
@@ -69,9 +76,11 @@ const tasks = [
 /** Yield past `count` animation frames so scheduled camera moves can run. */
 async function flushFrames(count: number): Promise<void> {
   for (let i = 0; i < count; i += 1) {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    requestAnimationFrame(() => resolve());
-    await promise;
+    await act(async () => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      requestAnimationFrame(() => resolve());
+      await promise;
+    });
   }
 }
 
@@ -97,9 +106,33 @@ async function settleCamera(): Promise<void> {
   }
 }
 
-describe('Browser-surface camera (component)', () => {
-  let mock: MockInvoker;
+function renderAppWithSnapshot(
+  initialTasks: Parameters<MockInvoker['setTasks']>[0],
+  initialWorkflows: WorkflowMeta[],
+): void {
+  mock.cleanup();
+  mock = createMockInvoker(initialTasks, initialWorkflows);
+  mock.install();
+  render(<App />);
+}
 
+async function openWorkflowsSurface(): Promise<void> {
+  fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+  await screen.findByTestId('selected-workflow-mini-dag');
+  await waitFor(() => {
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Alpha Workflow');
+  });
+  await settleCamera();
+}
+
+async function selectTaskNode(taskId: string, title: string): Promise<void> {
+  fireEvent.click(await screen.findByTestId(`rf__node-${taskId}`));
+  await waitFor(() => {
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent(title);
+  });
+}
+
+describe('Browser-surface camera (component)', () => {
   beforeEach(() => {
     mock = createMockInvoker();
     mock.install();
@@ -118,16 +151,14 @@ describe('Browser-surface camera (component)', () => {
   });
 
   it('does not re-center or re-fit on a live task update that leaves selection and topology unchanged', async () => {
-    mock.setTasks(tasks, workflows);
-    render(<App />);
+    renderAppWithSnapshot(tasks, workflows);
 
     // Open the Workflows browser surface and select a task node. The initial
     // framing is intentionally drained below instead of asserted as a setup
     // requirement; jsdom can coalesce that camera move differently under the
     // full parallel Vitest run.
-    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
-    await screen.findByTestId('selected-workflow-mini-dag');
-    fireEvent.click(await screen.findByTestId('rf__node-wf-a/one'));
+    await openWorkflowsSurface();
+    await selectTaskNode('wf-a/one', 'Task One');
 
     // Wait for every initial framing frame to drain, then measure from a clean
     // baseline so only update-triggered camera moves count.
@@ -156,18 +187,69 @@ describe('Browser-surface camera (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   }, 20000);
 
-  it('does not re-center or re-fit when the selected task changes while already on a browser surface', async () => {
-    mock.setTasks(tasks, workflows);
-    render(<App />);
+  it('re-centers when a user selects a different task while already on a browser surface', async () => {
+    renderAppWithSnapshot(tasks, workflows);
 
-    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
-    await screen.findByTestId('selected-workflow-mini-dag');
-    fireEvent.click(await screen.findByTestId('rf__node-wf-a/one'));
+    await openWorkflowsSurface();
+    await selectTaskNode('wf-a/one', 'Task One');
     await settleCamera();
     fitViewMock.mockClear();
     setCenterMock.mockClear();
 
-    fireEvent.click(screen.getByTestId('rf__node-wf-a/two'));
+    await selectTaskNode('wf-a/two', 'Task Two');
+    await flushFrames(6);
+
+    expect(setCenterMock).toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('a background auto-select reshuffle changes selection but issues no camera command', async () => {
+    renderAppWithSnapshot([], reshuffleWorkflows);
+
+    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
+    fireEvent.click(await screen.findByRole('button', { name: /Beta Workflow/ }));
+    await waitFor(() => {
+      expect(screen.getByTitle('Beta Workflow')).toBeInTheDocument();
+    });
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    act(() => {
+      mock.fireWorkflowsChanged([reshuffleWorkflows[0]]);
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, SELECTED_WORKFLOW_VANISH_GRACE_MS + 50));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTitle('Alpha Workflow')).toBeInTheDocument();
+    });
+    await flushFrames(6);
+
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(fitViewMock).not.toHaveBeenCalled();
+  });
+
+  it('a workflow-mutation-failed event selects the failed task but issues no camera command', async () => {
+    renderAppWithSnapshot(tasks, workflows);
+
+    await openWorkflowsSurface();
+    await selectTaskNode('wf-a/one', 'Task One');
+    await settleCamera();
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+
+    act(() => {
+      mock.fireWorkflowMutationFailed({
+        intentId: 47,
+        workflowId: 'wf-a',
+        taskId: 'wf-a/two',
+        channel: 'invoker:approve',
+        message: 'Approve failed',
+        failedAt: '2026-07-27T10:00:00.000Z',
+      });
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Task Two');
@@ -179,12 +261,9 @@ describe('Browser-surface camera (component)', () => {
   });
 
   it('clicking the left-nav home icon returns to the workflow graph and issues the Home fit command', async () => {
-    mock.setTasks(tasks, workflows);
-    render(<App />);
+    renderAppWithSnapshot(tasks, workflows);
 
-    fireEvent.click(await screen.findByTestId('sidebar-workflows'));
-    await screen.findByTestId('selected-workflow-mini-dag');
-    await settleCamera();
+    await openWorkflowsSurface();
     fitViewMock.mockClear();
     setCenterMock.mockClear();
     workflowGraphSpy.reset();
@@ -207,8 +286,7 @@ describe('Browser-surface camera (component)', () => {
 
   it('returns to the workflow graph from the planning-home chat rail by restoring the saved viewport instead of fitting', async () => {
     const savedViewport = { x: -360, y: 144, zoom: 0.68 };
-    mock.setTasks([], workflows);
-    render(<App />);
+    renderAppWithSnapshot([], workflows);
 
     // The workflow graph lives on the `planning` surface; App boots on `home`
     // (the planning chat rail), so open the graph and let the first-fit settle.

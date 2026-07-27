@@ -120,7 +120,7 @@ describe('Workflow mutation failed handling', () => {
     expect(screen.getByTestId('sidebar-workflows')).not.toHaveAttribute('aria-current', 'page');
   });
 
-  it('does not steal the selection while the operator is working elsewhere', async () => {
+  it('selects the failed task while leaving the operator on the current sidebar surface', async () => {
     render(<App />);
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await settleTasks();
@@ -137,7 +137,8 @@ describe('Workflow mutation failed handling', () => {
       expect(screen.getByTestId('sidebar-attention')).toHaveTextContent('1');
     });
     expect(screen.getByTestId('sidebar-workflows')).toHaveAttribute('aria-current', 'page');
-    expect(screen.queryByTestId('task-mutation-failure-detail')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-inspector-title')).toHaveTextContent('Verify worker summary surface');
+    expect(screen.getByTestId('task-mutation-failure-detail')).toBeInTheDocument();
   });
 
   it('surfaces failure details in the inspector once the operator opens Needs Attention', async () => {
