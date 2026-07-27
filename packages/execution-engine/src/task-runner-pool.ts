@@ -53,6 +53,12 @@ export type SelectedExecutor = {
   selectedPoolMemberId?: string;
 };
 
+function resolveLocalInvokerHome(): string {
+  return process.env.INVOKER_DB_DIR
+    ? resolve(process.env.INVOKER_DB_DIR)
+    : resolve(homedir(), '.invoker');
+}
+
 export type PoolSelection = {
   poolId: string;
   member: ExecutionPoolMember;
@@ -686,7 +692,7 @@ export function selectExecutor(
     }
 
     if (effectiveType === 'worktree') {
-      const invokerHome = resolve(homedir(), '.invoker');
+      const invokerHome = resolveLocalInvokerHome();
       const worktreeTargets = host.getWorktreeTargets();
       const selectedWorktreeTarget = selectedWorktreeTargetId
         ? worktreeTargets[selectedWorktreeTargetId]

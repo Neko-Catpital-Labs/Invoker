@@ -13,6 +13,9 @@
  * exists on the original machine.
  */
 import { describe, it, expect, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { TaskRunner } from '../task-runner.js';
 import type { TaskState } from '@invoker/workflow-core';
 
@@ -139,5 +142,32 @@ describe('selectExecutor pool member pinning across types', () => {
     expect(selectPoolMemberSpy).not.toHaveBeenCalled();
     expect(selected.executor.type).toBe('worktree');
     expect(selected.selectedPoolMemberId).toBe('member-local');
+  });
+
+  it('uses INVOKER_DB_DIR for lazily-created worktree executor cache paths', () => {
+    const previousDbDir = process.env.INVOKER_DB_DIR;
+    const invokerHome = mkdtempSync(join(tmpdir(), 'invoker-worktree-pool-home-'));
+    process.env.INVOKER_DB_DIR = invokerHome;
+    try {
+      const runner = makeRunner();
+      const task = makeTask({
+        id: 'wf-1/task-1',
+        config: { poolId: 'mixed-pool', poolMemberId: 'member-local' },
+      });
+
+      const selected = runner.selectExecutor(task);
+      const pool = (selected.executor as any).getRepoPool();
+
+      expect(selected.executor.type).toBe('worktree');
+      expect(Reflect.get(selected.executor, 'worktreeBaseDir')).toBe(join(invokerHome, 'worktrees'));
+      expect(Reflect.get(pool, 'cacheDir')).toBe(join(invokerHome, 'repos'));
+    } finally {
+      if (previousDbDir === undefined) {
+        delete process.env.INVOKER_DB_DIR;
+      } else {
+        process.env.INVOKER_DB_DIR = previousDbDir;
+      }
+      rmSync(invokerHome, { recursive: true, force: true });
+    }
   });
 });

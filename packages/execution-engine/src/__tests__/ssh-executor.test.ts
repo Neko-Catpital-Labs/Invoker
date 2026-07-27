@@ -1220,6 +1220,40 @@ describe('SshExecutor entry lifecycle', () => {
     expect(firstCallArgs.slice(-2)).toEqual(['bash', '-s']);
   });
 
+  it('uses an isolated known_hosts file when configured by the environment', async () => {
+    const previousKnownHosts = process.env.INVOKER_SSH_USER_KNOWN_HOSTS_FILE;
+    process.env.INVOKER_SSH_USER_KNOWN_HOSTS_FILE = '/tmp/invoker-e2e-known-hosts';
+    try {
+      const ssh2 = new SshExecutor({
+        host: 'localhost',
+        user: 'testuser',
+        sshKeyPath: '/dev/null',
+      }) as any;
+
+      const pending = ssh2.runBash('echo ready', '/tmp');
+      await new Promise((r) => setImmediate(r));
+      const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+      (sshProcess.stdout as any).emit('data', Buffer.from('ready\n'));
+      sshProcess.emit('close', 0, null);
+      await pending;
+
+      const childProcessMod = await import('node:child_process');
+      const spawnMock = childProcessMod.spawn as unknown as ReturnType<typeof vi.fn>;
+      const firstCallArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1]?.[1] as string[];
+      expect(firstCallArgs).toEqual(expect.arrayContaining([
+        '-o', 'UserKnownHostsFile=/tmp/invoker-e2e-known-hosts',
+        '-o', 'GlobalKnownHostsFile=/dev/null',
+      ]));
+      expect(firstCallArgs.slice(-2)).toEqual(['bash', '-s']);
+    } finally {
+      if (previousKnownHosts === undefined) {
+        delete process.env.INVOKER_SSH_USER_KNOWN_HOSTS_FILE;
+      } else {
+        process.env.INVOKER_SSH_USER_KNOWN_HOSTS_FILE = previousKnownHosts;
+      }
+    }
+  });
+
   it('uses configured remote heartbeat interval from SSH target config', async () => {
     const ssh2 = new SshExecutor({
       host: 'localhost',

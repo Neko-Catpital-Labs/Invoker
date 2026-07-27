@@ -26,6 +26,9 @@ _INVOKER_E2E_SSH_TAG="invoker-e2e-ssh-$$"
 # Temp directory for SSH key pair and config.
 _INVOKER_E2E_SSH_TMPDIR=""
 
+# Isolated known_hosts file for localhost SSH during this case.
+_INVOKER_E2E_SSH_KNOWN_HOSTS=""
+
 # SSH login user and passwd-backed home directory used by sshd.
 _INVOKER_E2E_SSH_USER=""
 _INVOKER_E2E_SSH_HOME=""
@@ -56,6 +59,11 @@ invoker_e2e_ssh_resolve_home() {
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_setup_keys() {
   _INVOKER_E2E_SSH_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-ssh.XXXXXX")"
+  _INVOKER_E2E_SSH_KNOWN_HOSTS="$_INVOKER_E2E_SSH_TMPDIR/known_hosts"
+  : > "$_INVOKER_E2E_SSH_KNOWN_HOSTS"
+  chmod 600 "$_INVOKER_E2E_SSH_KNOWN_HOSTS"
+  export INVOKER_SSH_USER_KNOWN_HOSTS_FILE="$_INVOKER_E2E_SSH_KNOWN_HOSTS"
+
   local keyfile="$_INVOKER_E2E_SSH_TMPDIR/id_ed25519"
   _INVOKER_E2E_SSH_USER="$(whoami)"
   _INVOKER_E2E_SSH_HOME="$(invoker_e2e_ssh_resolve_home "$_INVOKER_E2E_SSH_USER")"
@@ -81,6 +89,47 @@ invoker_e2e_ssh_setup_keys() {
   export INVOKER_E2E_SSH_KEY="$keyfile"
 }
 
+invoker_e2e_ssh_run() {
+  ssh -o BatchMode=yes \
+      -o ConnectTimeout=5 \
+      -o StrictHostKeyChecking=accept-new \
+      -o "UserKnownHostsFile=$INVOKER_SSH_USER_KNOWN_HOSTS_FILE" \
+      -o GlobalKnownHostsFile=/dev/null \
+      -i "$INVOKER_E2E_SSH_KEY" \
+      "$_INVOKER_E2E_SSH_USER@localhost" \
+      "$@"
+}
+
+invoker_e2e_ssh_remove_login_path_markers() {
+  local env_path="$1"
+  local marker="${2:-}"
+  [ -f "$env_path" ] || return 0
+  awk -v marker="$marker" '
+    function marker_pos(line) {
+      if (marker != "") return index(line, marker)
+      return index(line, "# invoker-e2e-ssh-pnpm-path ")
+    }
+    {
+      pos = marker_pos($0)
+      if (pos > 0) {
+        prefix = substr($0, 1, pos - 1)
+        sub(/[[:space:]]+$/, "", prefix)
+        if (prefix != "") print prefix
+        skip = 1
+        next
+      }
+      if (skip && /^export PATH=/) {
+        skip = 0
+        next
+      }
+      skip = 0
+      print
+    }
+  ' "$env_path" > "${env_path}.tmp" || true
+  mv "${env_path}.tmp" "$env_path"
+  chmod 600 "$env_path"
+}
+
 # --------------------------------------------------------------------------- #
 # Remove temp key from authorized_keys, delete temp dir.
 # --------------------------------------------------------------------------- #
@@ -93,15 +142,10 @@ invoker_e2e_ssh_cleanup_keys() {
     chmod 600 "$authorized_keys"
   fi
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$env_path" ]; then
-    # Remove the marker line and the following PATH export we appended.
-    awk -v marker="# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" '
-      $0 == marker { skip=1; next }
-      skip && /^export PATH=/ { skip=0; next }
-      { skip=0; print }
-    ' "$env_path" > "${env_path}.tmp" || true
-    mv "${env_path}.tmp" "$env_path"
+    invoker_e2e_ssh_remove_login_path_markers "$env_path" "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
   fi
   rm -rf "${_INVOKER_E2E_SSH_TMPDIR:-}" 2>/dev/null || true
+  unset INVOKER_SSH_USER_KNOWN_HOSTS_FILE
 }
 
 # --------------------------------------------------------------------------- #
@@ -124,28 +168,35 @@ invoker_e2e_ssh_write_config() {
   remote_home="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
   provision_cmd="$(invoker_e2e_ssh_provision_command)"
 
-  cat > "$config_file" <<EOJSON
-{
-  "executionPools": {
-    "localhost-e2e": {
-      "members": [
-        { "type": "ssh", "id": "localhost-e2e" }
-      ]
-    }
-  },
-  "remoteTargets": {
-    "localhost-e2e": {
-      "host": "localhost",
-      "user": "$_INVOKER_E2E_SSH_USER",
-      "sshKeyPath": "$INVOKER_E2E_SSH_KEY",
-      "port": 22,
-      "managedWorkspaces": true,
-      "remoteInvokerHome": "$remote_home",
-      "provisionCommand": "$provision_cmd"
-    }
-  }
+  python3 - "$config_file" "$_INVOKER_E2E_SSH_USER" "$INVOKER_E2E_SSH_KEY" "$remote_home" "$provision_cmd" <<'PY'
+import json
+import sys
+
+config_file, user, ssh_key_path, remote_home, provision_cmd = sys.argv[1:6]
+config = {
+    "executionPools": {
+        "localhost-e2e": {
+            "members": [
+                {"type": "ssh", "id": "localhost-e2e"},
+            ],
+        },
+    },
+    "remoteTargets": {
+        "localhost-e2e": {
+            "host": "localhost",
+            "user": user,
+            "sshKeyPath": ssh_key_path,
+            "port": 22,
+            "managedWorkspaces": True,
+            "remoteInvokerHome": remote_home,
+            "provisionCommand": provision_cmd,
+        },
+    },
 }
-EOJSON
+with open(config_file, "w", encoding="utf-8") as fh:
+    json.dump(config, fh, indent=2)
+    fh.write("\n")
+PY
 
   export INVOKER_REPO_CONFIG_PATH="$config_file"
 }
@@ -159,11 +210,7 @@ invoker_e2e_ssh_init() {
   invoker_e2e_ssh_write_config
 
   # Verify SSH works with the generated key.
-  if ! ssh -o BatchMode=yes \
-           -o ConnectTimeout=5 \
-           -o StrictHostKeyChecking=no \
-           -i "$INVOKER_E2E_SSH_KEY" \
-           "$_INVOKER_E2E_SSH_USER@localhost" true 2>/dev/null; then
+  if ! invoker_e2e_ssh_run true 2>/dev/null; then
     echo "ERROR: SSH to localhost with generated key failed. Aborting." >&2
     invoker_e2e_ssh_cleanup_keys
     return 1
@@ -190,31 +237,23 @@ invoker_e2e_ssh_install_login_path() {
   pnpm_dir="$(cd "$(dirname "$pnpm_bin")" && pwd)"
   node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
 
-  ssh -o BatchMode=yes \
-      -o ConnectTimeout=5 \
-      -o StrictHostKeyChecking=no \
-      -i "$INVOKER_E2E_SSH_KEY" \
-      "$_INVOKER_E2E_SSH_USER@localhost" \
-      "bash -s" <<EOF
+  invoker_e2e_ssh_remove_login_path_markers "$_INVOKER_E2E_SSH_HOME/.invoker/env.sh"
+
+  invoker_e2e_ssh_run "bash -s" <<EOF
 set -euo pipefail
 marker='# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}'
 mkdir -p "\$HOME/.invoker"
 touch "\$HOME/.invoker/env.sh"
 if ! grep -Fq "\$marker" "\$HOME/.invoker/env.sh" 2>/dev/null; then
   {
-    printf '%s\n' "\$marker"
+    printf '\n%s\n' "\$marker"
     printf 'export PATH="%s:%s:\$PATH"\n' '${node_dir}' '${pnpm_dir}'
   } >> "\$HOME/.invoker/env.sh"
 fi
 EOF
 
   # Verify via non-login bash — matches the executor sourcing ~/.invoker/env.sh explicitly.
-  if ! ssh -o BatchMode=yes \
-           -o ConnectTimeout=5 \
-           -o StrictHostKeyChecking=no \
-           -i "$INVOKER_E2E_SSH_KEY" \
-           "$_INVOKER_E2E_SSH_USER@localhost" \
-           "bash -s" <<'EOF' >/dev/null 2>&1; then
+  if ! invoker_e2e_ssh_run "bash -s" <<'EOF' >/dev/null 2>&1; then
 . "$HOME/.invoker/env.sh"
 command -v pnpm >/dev/null
 pnpm --version

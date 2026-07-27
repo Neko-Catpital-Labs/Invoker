@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { headlessStartReady, headlessRetryTask } from '../headless-run-resume.js';
+import {
+  headlessStartReady,
+  headlessRetryTask,
+  shouldDirectlyExecuteTrackedStarts,
+} from '../headless-run-resume.js';
 import type { HeadlessDeps } from '../headless-shared.js';
 
 function makeRunningTask(id: string, workflowId: string): any {
@@ -94,5 +98,22 @@ describe('--no-track microtask dispatch (no deferRunnableTasks)', () => {
 
     expect(executeTasks).toHaveBeenCalledTimes(1);
     expect(executeTasks).toHaveBeenCalledWith([task]);
+  });
+});
+
+describe('tracked headless launch dispatch ownership', () => {
+  it('lets the owner launch dispatcher execute tracked starts when an owner runner is present', () => {
+    const ownerRunner = { executeTask: vi.fn() };
+
+    expect(shouldDirectlyExecuteTrackedStarts({
+      ownerTaskRunnerProvider: () => ownerRunner as any,
+    })).toBe(false);
+  });
+
+  it('uses the direct path when no owner runner exists or no-track is requested', () => {
+    expect(shouldDirectlyExecuteTrackedStarts({})).toBe(true);
+    expect(shouldDirectlyExecuteTrackedStarts({
+      ownerTaskRunnerProvider: () => ({ executeTask: vi.fn() } as any),
+    }, true)).toBe(true);
   });
 });

@@ -235,6 +235,91 @@ describe('RepoPool', () => {
     }
   });
 
+  it('acquireWorktree: retries once when a partial add registers the branch at the target path', async () => {
+    const branch = 'experiment/race-target-owned';
+    const actionId = 'wf-race/task-owned';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          await originalRunBashLocal(script, cwd);
+          const error = new Error(
+            `bash exited with code 128: fatal: cannot force update the branch '${branch}' ` +
+              `used by worktree at '${targetPath}'`,
+          );
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
+  it('acquireWorktree: retries once when a failed add leaves a non-worktree target directory', async () => {
+    const branch = 'experiment/race-not-worktree';
+    const actionId = 'wf-race/task-not-worktree';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          mkdirSync(targetPath, { recursive: true });
+          const error = new Error('bash exited with code 128: fatal: this operation must be run in a work tree');
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
   it('softRelease: frees slot without removing worktree from disk', async () => {
     const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1 });
     const wt1 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-soft');

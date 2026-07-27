@@ -519,11 +519,49 @@ export class RepoPool {
   }
 
   private isAlreadyExistsWorktreeError(err: unknown, worktreePath: string): boolean {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = this.errorMessage(err);
     if (!message.includes('already exists')) return false;
     if (message.includes(worktreePath)) return true;
     const normalizedPath = canonicalPathForComparison(worktreePath);
     return message.includes(normalizedPath);
+  }
+
+  private errorMessage(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  private parseUsedByWorktreePath(err: unknown): string | undefined {
+    const match = this.errorMessage(err).match(/used by worktree at ['"]([^'"]+)['"]/);
+    return match?.[1];
+  }
+
+  private isTargetOwnedWorktreeError(err: unknown, worktreePath: string): boolean {
+    const ownerPath = this.parseUsedByWorktreePath(err);
+    return ownerPath !== undefined
+      && canonicalPathForComparison(ownerPath) === canonicalPathForComparison(worktreePath);
+  }
+
+  private async isRegisteredTargetPath(clonePath: string, worktreePath: string): Promise<boolean> {
+    try {
+      const porcelain = await this.execGit(['worktree', 'list', '--porcelain'], clonePath);
+      return this.isPathRegisteredInPorcelain(porcelain, worktreePath);
+    } catch {
+      return false;
+    }
+  }
+
+  private async isRecoverableWorktreeCreateFailure(
+    clonePath: string,
+    worktreePath: string,
+    err: unknown,
+  ): Promise<boolean> {
+    if (this.isAlreadyExistsWorktreeError(err, worktreePath)) return true;
+    if (this.isTargetOwnedWorktreeError(err, worktreePath)) return true;
+
+    const message = this.errorMessage(err);
+    if (!message.includes('this operation must be run in a work tree')) return false;
+
+    return existsSync(worktreePath) || await this.isRegisteredTargetPath(clonePath, worktreePath);
   }
 
   private async runPreserveOrResetWithRecovery(
@@ -549,14 +587,14 @@ export class RepoPool {
       bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.after');
       return;
     } catch (err) {
-      if (!this.isAlreadyExistsWorktreeError(err, worktreePath)) {
+      if (!await this.isRecoverableWorktreeCreateFailure(clonePath, worktreePath, err)) {
         bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.failed', {
           error: err instanceof Error ? err.message : String(err),
         });
         throw err;
       }
       traceExecution(
-        `[RepoPool] runPreserveOrResetWithRecovery: retrying after pre-existing path branch=${branch} path=${worktreePath}`,
+        `[RepoPool] runPreserveOrResetWithRecovery: retrying after recoverable worktree create failure branch=${branch} path=${worktreePath}`,
       );
       bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.before');
       await this.reconcileStaleWorktreePath(clonePath, worktreePath);

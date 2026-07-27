@@ -90,6 +90,14 @@ function createTrackedHeadlessExecutor(
   );
 }
 
+export function shouldDirectlyExecuteTrackedStarts(
+  deps: Pick<HeadlessDeps, 'ownerTaskRunnerProvider'>,
+  noTrack?: boolean,
+): boolean {
+  if (noTrack) return true;
+  return (deps.ownerTaskRunnerProvider?.() ?? null) === null;
+}
+
 export async function headlessWatch(workflowId: string | undefined, deps: HeadlessDeps): Promise<void> {
   const workflows = deps.persistence.listWorkflows();
   if (workflows.length === 0) {
@@ -162,6 +170,7 @@ export async function headlessRun(
   if (currentWorkflowId) process.stdout.write(`Workflow ID: ${currentWorkflowId}\n`);
 
   const started = orchestrator.startExecution();
+  const executeStartedDirectly = shouldDirectlyExecuteTrackedStarts(deps, noTrack);
 
   if (noTrack) {
     if (started.length > 0) {
@@ -180,8 +189,15 @@ export async function headlessRun(
     return;
   }
 
-  if (started.length > 0) {
+  if (started.length > 0 && executeStartedDirectly) {
     await taskExecutor.executeTasks(started);
+  } else if (started.length > 0) {
+    deps.logger.debug?.('[headless] run: owner launch dispatcher will execute started tasks', {
+      module: 'headless',
+      workflowId: currentWorkflowId,
+      started: started.length,
+      taskIds: started.map((task) => task.id),
+    });
   }
 
   if (currentWorkflowId) {
@@ -233,6 +249,7 @@ export async function headlessResume(
 
   orchestrator.syncFromDb(workflowId);
   const allStarted = orchestrator.startExecution();
+  const executeStartedDirectly = shouldDirectlyExecuteTrackedStarts(deps, noTrack);
 
   if (noTrack) {
     if (allStarted.length > 0) {
@@ -257,7 +274,16 @@ export async function headlessResume(
     return;
   }
 
-  await taskExecutor.executeTasks(allStarted);
+  if (executeStartedDirectly) {
+    await taskExecutor.executeTasks(allStarted);
+  } else {
+    deps.logger.debug?.('[headless] resume: owner launch dispatcher will execute started tasks', {
+      module: 'headless',
+      workflowId,
+      started: allStarted.length,
+      taskIds: allStarted.map((task) => task.id),
+    });
+  }
 
   await trackHeadlessWorkflow(workflowId, deps, {
     waitForApproval,

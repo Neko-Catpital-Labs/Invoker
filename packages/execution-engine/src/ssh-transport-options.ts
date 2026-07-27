@@ -17,6 +17,11 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+function readNonEmptyEnv(name: string): string | undefined {
+  const raw = process.env[name]?.trim();
+  return raw ? raw : undefined;
+}
+
 export function buildSshTransportOptions(opts: { batchMode: boolean }): string[] {
   const connectTimeout = readPositiveIntEnv(
     'INVOKER_SSH_CONNECT_TIMEOUT_SECONDS',
@@ -30,9 +35,13 @@ export function buildSshTransportOptions(opts: { batchMode: boolean }): string[]
     'INVOKER_SSH_SERVER_ALIVE_COUNT_MAX',
     DEFAULT_SERVER_ALIVE_COUNT_MAX,
   );
+  const userKnownHostsFile = readNonEmptyEnv('INVOKER_SSH_USER_KNOWN_HOSTS_FILE');
 
   return [
     '-o', 'StrictHostKeyChecking=accept-new',
+    ...(userKnownHostsFile
+      ? ['-o', `UserKnownHostsFile=${userKnownHostsFile}`, '-o', 'GlobalKnownHostsFile=/dev/null']
+      : []),
     '-o', `ConnectTimeout=${connectTimeout}`,
     '-o', `ServerAliveInterval=${serverAliveInterval}`,
     '-o', `ServerAliveCountMax=${serverAliveCountMax}`,

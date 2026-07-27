@@ -176,7 +176,7 @@ export PATH="$INVOKER_NODE_INSTALL_DIR/bin:$INVOKER_NPM_GLOBAL_PREFIX/bin:$HOME/
 export npm_config_prefix="$INVOKER_NPM_GLOBAL_PREFIX"
 EOF
 )
-  write_file "$INVOKER_ENV_FILE" "$content"
+  write_file "$INVOKER_ENV_FILE" "${content}"$'\n'
   if [[ "$DRY_RUN" != "1" ]]; then
     chmod 600 "$INVOKER_ENV_FILE"
   fi
