@@ -701,6 +701,34 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('does not submit or chat when the user types submit before a draft is ready', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'I need one more detail first.',
+      draftPlanAvailable: false,
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('help me plan the work');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I need one more detail first.');
+    });
+
+    submitPlanningText('submit');
+
+    expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+      'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.',
+    );
+    expect(mock.api.startReady).not.toHaveBeenCalled();
+    expect(mock.api.start).not.toHaveBeenCalled();
+  });
+
   it('submits a draft and starts ready work when the user types submit', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
