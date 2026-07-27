@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -135,6 +135,15 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   terminalBusy?: boolean;
   terminalError?: string | null;
 };
+
+const PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
+
+function appendPlanningTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  if (!chunk) return snapshot ?? '';
+  const next = `${snapshot ?? ''}${chunk}`;
+  if (next.length <= PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS) return next;
+  return next.slice(next.length - PLANNING_TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS);
+}
 
 function planningSessionFromSummary(
   summary: InAppPlanningSessionSummary,
@@ -1121,6 +1130,53 @@ export function App() {
             : session
         )),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event: TerminalOutputEvent) => {
+      if (event.kind !== 'planning' || !event.data) return;
+      const eventPlanningSessionId = typeof event.planningSessionId === 'string' && event.planningSessionId.length > 0
+        ? event.planningSessionId
+        : null;
+
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const matches = eventPlanningSessionId
+            ? session.id === eventPlanningSessionId
+            : session.terminalSession?.sessionId === event.sessionId;
+          if (!matches) return session;
+
+          const currentTerminalSession = session.terminalSession;
+          const terminalSession: TerminalSessionDescriptor = currentTerminalSession
+            ? {
+                ...currentTerminalSession,
+                kind: 'planning',
+                planningSessionId: currentTerminalSession.planningSessionId ?? eventPlanningSessionId ?? session.id,
+                outputSnapshot: appendPlanningTerminalOutputSnapshot(currentTerminalSession.outputSnapshot, event.data),
+              }
+            : {
+                sessionId: event.sessionId,
+                taskId: event.taskId,
+                kind: 'planning',
+                planningSessionId: eventPlanningSessionId ?? session.id,
+                status: 'running',
+                mode: 'spawn',
+                attached: false,
+                createdAt: new Date().toISOString(),
+                outputSnapshot: appendPlanningTerminalOutputSnapshot('', event.data),
+              };
+
+          changed = true;
+          return {
+            ...session,
+            terminalSession,
+          };
+        });
+        return changed ? next : prev;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -2857,7 +2913,12 @@ export function App() {
         updatePlanningSessionById(targetSessionId, (session) => ({
           ...session,
           mode: 'tmux',
-          terminalSession: result.session,
+          terminalSession: {
+            ...result.session,
+            outputSnapshot: result.session.outputSnapshot && result.session.outputSnapshot.length > 0
+              ? result.session.outputSnapshot
+              : session.terminalSession?.outputSnapshot ?? result.session.outputSnapshot,
+          },
           terminalBusy: false,
           terminalError: null,
           updatedAt: new Date().toISOString(),
