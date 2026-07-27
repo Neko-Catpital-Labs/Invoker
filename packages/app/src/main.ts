@@ -42,6 +42,7 @@ import {
   OrchestratorError,
   OrchestratorErrorCode,
   buildWorkflowInvalidationDeps,
+  normalizeWorkflowBaseBranch,
 } from '@invoker/workflow-core';
 import type {
   TaskDelta,
@@ -1281,7 +1282,7 @@ function startHeadlessMode(): void {
           }
           case 'invoker:set-merge-branch': {
             const workflowId = String(payload.args[0]);
-            const baseBranch = String(payload.args[1]);
+            const baseBranch = normalizeWorkflowBaseBranch(String(payload.args[1]), 'master');
             persistence.updateWorkflow(workflowId, { baseBranch });
             const tasks = persistence.loadTasks(workflowId);
             const mergeTask = tasks.find((task) => task.config.isMergeNode);
