@@ -274,6 +274,7 @@ export interface CommandRunnerResult {
   status: number | null;
   stdout: string;
   stderr: string;
+  error?: unknown;
 }
 
 export type CommandRunner = (command: string, args: readonly string[]) => CommandRunnerResult;
@@ -284,6 +285,7 @@ export function defaultCommandRunner(command: string, args: readonly string[]): 
     status: result.status,
     stdout: typeof result.stdout === 'string' ? result.stdout : '',
     stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    error: result.error,
   };
 }
 
@@ -299,7 +301,20 @@ export function skippedGithubAuthCheck(): PrerequisiteCheck {
 
 /** Probe `gh auth status`. Injectable `runner` keeps tests offline. */
 export function checkGithubAuth(runner: CommandRunner = defaultCommandRunner): PrerequisiteCheck {
-  const result = runner('gh', ['auth', 'status']);
+  let result: CommandRunnerResult;
+  try {
+    result = runner('gh', ['auth', 'status']);
+  } catch (error) {
+    if (isMissingCommandError(error)) return skippedGithubAuthCheck();
+    return {
+      id: 'github-auth',
+      name: 'GitHub auth',
+      status: 'error',
+      detail: formatCaughtException(error),
+      remediation: 'Run `gh auth login` and re-run `invoker-cli setup`',
+    };
+  }
+  if (commandRunnerResultIsMissing(result)) return skippedGithubAuthCheck();
   if (result.status === 0) {
     return {
       id: 'github-auth',
@@ -319,6 +334,20 @@ export function checkGithubAuth(runner: CommandRunner = defaultCommandRunner): P
   };
 }
 
+function isMissingCommandError(error: unknown): boolean {
+  const code = isJsonRecord(error) && typeof error.code === 'string' ? error.code : undefined;
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return code === 'ENOENT'
+    || /\bENOENT\b|command not found|\bgh(?::|\b).*not found|no such file or directory/i.test(message);
+}
+
+function commandRunnerResultIsMissing(result: CommandRunnerResult): boolean {
+  if (isMissingCommandError(result.error)) return true;
+  const output = `${result.stderr}\n${result.stdout}`;
+  return (result.status === null || result.status === 127)
+    && /command not found|\bgh(?::|\b).*not found|no such file or directory|\bENOENT\b/i.test(output);
+}
+
 const SETUP_SMOKE_PLAN = `name: Setup Smoke
 description: Tiny offline plan used by invoker-cli setup.
 repoUrl: .
@@ -328,6 +357,7 @@ tasks:
     description: Validate plan parsing during setup.
     command: echo setup-smoke
 `;
+const SETUP_SMOKE_CHECK_NAME = 'smoke: plan validation';
 
 /** Parse a one-task temp plan with no network. Confirms the local plan pipeline works. */
 export async function runPlanValidationSmoke(): Promise<PrerequisiteCheck> {
@@ -339,7 +369,7 @@ export async function runPlanValidationSmoke(): Promise<PrerequisiteCheck> {
     if (!plan.tasks.length) {
       return {
         id: 'smoke-plan',
-        name: 'Smoke plan validation',
+        name: SETUP_SMOKE_CHECK_NAME,
         status: 'error',
         detail: 'Parsed plan has no tasks',
         remediation: 'Reinstall invoker-cli; plan parsing returned an empty task list',
@@ -347,14 +377,14 @@ export async function runPlanValidationSmoke(): Promise<PrerequisiteCheck> {
     }
     return {
       id: 'smoke-plan',
-      name: 'Smoke plan validation',
+      name: SETUP_SMOKE_CHECK_NAME,
       status: 'ok',
       detail: `Parsed ${plan.tasks.length} task(s) from a local smoke plan`,
     };
   } catch (error) {
     return {
       id: 'smoke-plan',
-      name: 'Smoke plan validation',
+      name: SETUP_SMOKE_CHECK_NAME,
       status: 'error',
       detail: formatCaughtException(error),
       remediation: 'Reinstall invoker-cli or report a plan-parser regression',
