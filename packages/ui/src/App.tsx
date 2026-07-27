@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -124,6 +124,172 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+type StartReadyRailModeId =
+  | 'recreateFailed'
+  | 'recreateFailedAndPending'
+  | 'recreateFailedPendingAndRunning'
+  | 'freshBaseFailed'
+  | 'freshBaseFailedAndPending'
+  | 'freshBaseFailedPendingAndRunning';
+
+type StartReadyRailMode = {
+  id: StartReadyRailModeId;
+  kind: 'recreate' | 'freshBase';
+  testId: string;
+  label: string;
+  title: string;
+  confirmLabel: string;
+  request: StartReadyRequest;
+  includesPending: boolean;
+  includesRunning: boolean;
+  freshBaseScope?: StartReadyFreshBaseScope;
+};
+
+const START_READY_RAIL_MODES: readonly StartReadyRailMode[] = [
+  {
+    id: 'recreateFailed',
+    kind: 'recreate',
+    testId: 'rail-start-ready-recreate-failed',
+    label: 'Start and recreate failed…',
+    title: 'Start and recreate failed',
+    confirmLabel: 'Start and recreate',
+    request: { recreateFailed: true },
+    includesPending: false,
+    includesRunning: false,
+  },
+  {
+    id: 'recreateFailedAndPending',
+    kind: 'recreate',
+    testId: 'rail-start-ready-recreate-failed-and-pending',
+    label: 'Start and recreate failed and pending…',
+    title: 'Start and recreate failed and pending',
+    confirmLabel: 'Start and recreate',
+    request: { recreateFailedAndPending: true },
+    includesPending: true,
+    includesRunning: false,
+  },
+  {
+    id: 'recreateFailedPendingAndRunning',
+    kind: 'recreate',
+    testId: 'rail-start-ready-recreate-failed-pending-and-running',
+    label: 'Start and recreate failed, pending, and running…',
+    title: 'Start and recreate failed, pending, and running',
+    confirmLabel: 'Start and recreate',
+    request: { recreateFailedPendingAndRunning: true },
+    includesPending: true,
+    includesRunning: true,
+  },
+  {
+    id: 'freshBaseFailed',
+    kind: 'freshBase',
+    testId: 'rail-start-ready-fresh-base-failed',
+    label: 'Recreate failed from fresh base…',
+    title: 'Start and recreate failed from fresh base',
+    confirmLabel: 'Start and recreate from fresh base',
+    request: { freshBaseScope: 'failed' },
+    includesPending: false,
+    includesRunning: false,
+    freshBaseScope: 'failed',
+  },
+  {
+    id: 'freshBaseFailedAndPending',
+    kind: 'freshBase',
+    testId: 'rail-start-ready-fresh-base-failed-and-pending',
+    label: 'Recreate failed and pending from fresh base…',
+    title: 'Start and recreate failed and pending from fresh base',
+    confirmLabel: 'Start and recreate from fresh base',
+    request: { freshBaseScope: 'failed-and-pending' },
+    includesPending: true,
+    includesRunning: false,
+    freshBaseScope: 'failed-and-pending',
+  },
+  {
+    id: 'freshBaseFailedPendingAndRunning',
+    kind: 'freshBase',
+    testId: 'rail-start-ready-fresh-base-failed-pending-and-running',
+    label: 'Recreate failed, pending, and running from fresh base…',
+    title: 'Start and recreate failed, pending, and running from fresh base',
+    confirmLabel: 'Start and recreate from fresh base',
+    request: { freshBaseScope: 'failed-pending-and-running' },
+    includesPending: true,
+    includesRunning: true,
+    freshBaseScope: 'failed-pending-and-running',
+  },
+];
+
+const START_READY_RAIL_MODE_BY_ID = new Map(
+  START_READY_RAIL_MODES.map((mode) => [mode.id, mode]),
+);
+
+function getStartReadyRailMode(id: StartReadyRailModeId): StartReadyRailMode {
+  return START_READY_RAIL_MODE_BY_ID.get(id) ?? START_READY_RAIL_MODES[0];
+}
+
+function startReadyRequestForMode(mode: StartReadyRailMode, dryRun = false): StartReadyRequest {
+  return dryRun ? { dryRun: true, ...mode.request } : { ...mode.request };
+}
+
+function isPendingOrQueuedStatus(status: TaskState['status']): boolean {
+  return status === 'pending' || (status as string) === 'queued';
+}
+
+function freshBaseModeHasVisibleTargets(
+  mode: StartReadyRailMode,
+  targetCounts: { failed: number; pending: number; running: number },
+): boolean {
+  if (mode.kind !== 'freshBase') return true;
+  switch (mode.freshBaseScope) {
+    case 'failed':
+      return targetCounts.failed > 0;
+    case 'failed-and-pending':
+      return targetCounts.pending > 0;
+    case 'failed-pending-and-running':
+      return targetCounts.running > 0;
+    default:
+      return false;
+  }
+}
+
+function startReadyPreviewRows(mode: StartReadyRailMode, result: StartReadyResult): Array<[string, number]> {
+  const rows: Array<[string, number]> = [
+    ['Ready tasks', result.preview.readyTaskIds.length],
+    ['Recoverable tasks', result.preview.recoverableTaskIds.length],
+    ['Failed workflows', result.preview.failedWorkflowIds.length],
+  ];
+
+  if (mode.includesPending) {
+    rows.push(
+      ['Pending workflows', result.preview.pendingWorkflowIds.length],
+      ['Pending tasks', result.preview.skipped.pendingTasks],
+    );
+  }
+  if (mode.includesRunning) {
+    rows.push(
+      ['Running workflows', result.preview.runningWorkflowIds.length],
+      ['Running tasks', result.preview.skipped.runningTasks],
+    );
+  }
+  if (mode.kind === 'freshBase' && result.preview.freshBase) {
+    rows.push(
+      ['Fresh-base workflows', result.preview.freshBase.workflowIds.length],
+      ['Fresh-base failed workflows', result.preview.freshBase.failedWorkflowIds.length],
+    );
+    if (mode.includesPending) {
+      rows.push(['Fresh-base pending workflows', result.preview.freshBase.pendingWorkflowIds.length]);
+    }
+    if (mode.includesRunning) {
+      rows.push(['Fresh-base running workflows', result.preview.freshBase.runningWorkflowIds.length]);
+    }
+  }
+
+  rows.push(
+    ['Awaiting approval', result.preview.skipped.awaitingApproval],
+    ['Review ready', result.preview.skipped.reviewReady],
+    ['Blocked', result.preview.skipped.blocked],
+  );
+  return rows;
 }
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
@@ -920,9 +1086,7 @@ export function App() {
   const [startReadyMenuOpen, setStartReadyMenuOpen] = useState(false);
   const [startReadyBusy, setStartReadyBusy] = useState(false);
   const [startReadyPreview, setStartReadyPreview] = useState<StartReadyResult | null>(null);
-  const [startReadyPreviewMode, setStartReadyPreviewMode] = useState<
-    'failed' | 'failedAndPending' | 'failedPendingAndRunning'
-  >('failed');
+  const [startReadyPreviewMode, setStartReadyPreviewMode] = useState<StartReadyRailModeId>('recreateFailed');
   // Transient, user-visible outcome line for a confirmed workflow detach.
   const [detachNotice, setDetachNotice] = useState<string | null>(null);
   const [keyboardRegion, setKeyboardRegion] = useState<KeyboardRegion>('planning');
@@ -2495,17 +2659,32 @@ export function App() {
       if (!result.dryRun) {
         await refreshTaskGraph();
         void refreshActionGraph();
-        if (result.started.length > 0 || result.recreatedWorkflowIds.length > 0) {
+        const freshBaseRecreatedCount = result.freshBaseRecreatedWorkflowIds?.length ?? 0;
+        const failedOutcomeCount = result.workflowOutcomes?.filter((outcome) => !outcome.ok).length ?? 0;
+        if (
+          result.started.length > 0
+          || result.recreatedWorkflowIds.length > 0
+          || freshBaseRecreatedCount > 0
+          || failedOutcomeCount > 0
+        ) {
           const descriptionParts = [
             result.recreatedWorkflowIds.length > 0
               ? formatCount(result.recreatedWorkflowIds.length, 'workflow')
               : null,
+            freshBaseRecreatedCount > 0
+              ? `${formatCount(freshBaseRecreatedCount, 'workflow')} from fresh base`
+              : null,
             result.preview.recoverableTaskIds.length > 0
               ? formatCount(result.preview.recoverableTaskIds.length, 'recovered task')
               : null,
+            failedOutcomeCount > 0
+              ? `${formatCount(failedOutcomeCount, 'workflow')} failed`
+              : null,
           ].filter(Boolean);
           toast.success(
-            `Started ${formatCount(result.started.length, 'task')}`,
+            result.partial
+              ? 'Start Ready finished with partial fresh-base results'
+              : `Started ${formatCount(result.started.length, 'task')}`,
             descriptionParts.length > 0 ? { description: descriptionParts.join(' · ') } : undefined,
           );
         } else {
@@ -2522,20 +2701,15 @@ export function App() {
   }, [invoker, refreshActionGraph, refreshTaskGraph]);
 
   const handleStartReadyPreview = useCallback(async (
-    mode: 'failed' | 'failedAndPending' | 'failedPendingAndRunning',
+    modeId: StartReadyRailModeId,
   ) => {
     if (!invoker?.startReady) return;
+    const mode = getStartReadyRailMode(modeId);
     setStartReadyBusy(true);
     setStartReadyMenuOpen(false);
-    setStartReadyPreviewMode(mode);
+    setStartReadyPreviewMode(modeId);
     try {
-      const result = await invoker.startReady(
-        mode === 'failedPendingAndRunning'
-          ? { dryRun: true, recreateFailedPendingAndRunning: true }
-          : mode === 'failedAndPending'
-            ? { dryRun: true, recreateFailedAndPending: true }
-            : { dryRun: true, recreateFailed: true },
-      );
+      const result = await invoker.startReady(startReadyRequestForMode(mode, true));
       setStartReadyPreview(result);
     } catch (err) {
       notifyMutationError('Failed to preview ready work:', err);
@@ -2553,14 +2727,8 @@ export function App() {
     updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, confirmationMode }));
   }, [activePlanningSessionId, updatePlanningSessionById]);
 
-  const handleConfirmStartAndRecreateFailed = useCallback(async () => {
-    const result = await handleStartReadyAction(
-      startReadyPreviewMode === 'failedPendingAndRunning'
-        ? { recreateFailedPendingAndRunning: true }
-        : startReadyPreviewMode === 'failedAndPending'
-          ? { recreateFailedAndPending: true }
-          : { recreateFailed: true },
-    );
+  const handleConfirmStartReadyPreview = useCallback(async () => {
+    const result = await handleStartReadyAction(startReadyRequestForMode(getStartReadyRailMode(startReadyPreviewMode)));
     if (result) setStartReadyPreview(null);
   }, [handleStartReadyAction, startReadyPreviewMode]);
 
@@ -3016,6 +3184,29 @@ export function App() {
     }
   }, [clearTasks, invoker]);
   const showStartReadyControl = hasLoadedPlan || tasks.size > 0 || workflows.size > 0;
+  const freshBaseTargetCounts = useMemo(() => {
+    const failedWorkflowIds = new Set<string>();
+    const pendingWorkflowIds = new Set<string>();
+    const runningWorkflowIds = new Set<string>();
+
+    for (const task of tasks.values()) {
+      const workflowId = task.config.workflowId;
+      if (!workflowId) continue;
+      if (task.status === 'failed') failedWorkflowIds.add(workflowId);
+      if (isPendingOrQueuedStatus(task.status)) pendingWorkflowIds.add(workflowId);
+      if (task.status === 'running') runningWorkflowIds.add(workflowId);
+    }
+    return {
+      failed: failedWorkflowIds.size,
+      pending: pendingWorkflowIds.size,
+      running: runningWorkflowIds.size,
+    };
+  }, [tasks]);
+  const visibleStartReadyRailModes = useMemo(
+    () => START_READY_RAIL_MODES.filter((mode) => freshBaseModeHasVisibleTargets(mode, freshBaseTargetCounts)),
+    [freshBaseTargetCounts],
+  );
+  const selectedStartReadyPreviewMode = getStartReadyRailMode(startReadyPreviewMode);
   const showEmptyPlanGraphCta = sidebarSurface === 'planning' && !hasLoadedPlan && tasks.size === 0 && workflows.size === 0;
   const setupIncomplete = Boolean(
     systemDiagnostics
@@ -3505,32 +3696,19 @@ export function App() {
           {startReadyMenuOpen && (
             <div
               data-testid="rail-start-ready-options"
-              className="absolute right-0 top-10 z-30 w-56 rounded-lg border border-border bg-card p-1 shadow-xl"
+              className="absolute right-0 top-10 z-30 w-72 rounded-lg border border-border bg-card p-1 shadow-xl"
             >
-              <button
-                type="button"
-                data-testid="rail-start-ready-recreate-failed"
-                onClick={() => void handleStartReadyPreview('failed')}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
-              >
-                Start and recreate failed…
-              </button>
-              <button
-                type="button"
-                data-testid="rail-start-ready-recreate-failed-and-pending"
-                onClick={() => void handleStartReadyPreview('failedAndPending')}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
-              >
-                Start and recreate failed and pending…
-              </button>
-              <button
-                type="button"
-                data-testid="rail-start-ready-recreate-failed-pending-and-running"
-                onClick={() => void handleStartReadyPreview('failedPendingAndRunning')}
-                className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
-              >
-                Start and recreate failed, pending, and running…
-              </button>
+              {visibleStartReadyRailModes.map((mode) => (
+                <button
+                  key={mode.id}
+                  type="button"
+                  data-testid={mode.testId}
+                  onClick={() => void handleStartReadyPreview(mode.id)}
+                  className="block w-full rounded px-3 py-2 text-left text-xs text-foreground hover:bg-secondary"
+                >
+                  {mode.label}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -4821,35 +4999,11 @@ export function App() {
           >
             <div className="border-b border-border px-4 py-3">
               <h2 id="start-ready-preview-title" className="text-sm font-semibold text-foreground">
-                {startReadyPreviewMode === 'failedPendingAndRunning'
-                  ? 'Start and recreate failed, pending, and running'
-                  : startReadyPreviewMode === 'failedAndPending'
-                    ? 'Start and recreate failed and pending'
-                    : 'Start and recreate failed'}
+                {selectedStartReadyPreviewMode.title}
               </h2>
             </div>
             <div className="space-y-2 px-4 py-4 text-sm">
-              {([
-                ['Ready tasks', startReadyPreview.preview.readyTaskIds.length],
-                ['Recoverable tasks', startReadyPreview.preview.recoverableTaskIds.length],
-                ['Failed workflows', startReadyPreview.preview.failedWorkflowIds.length],
-                ...(startReadyPreviewMode === 'failedAndPending'
-                  || startReadyPreviewMode === 'failedPendingAndRunning'
-                  ? [
-                      ['Pending workflows', startReadyPreview.preview.pendingWorkflowIds.length] as [string, number],
-                      ['Pending tasks', startReadyPreview.preview.skipped.pendingTasks] as [string, number],
-                    ]
-                  : []),
-                ...(startReadyPreviewMode === 'failedPendingAndRunning'
-                  ? [
-                      ['Running workflows', startReadyPreview.preview.runningWorkflowIds.length] as [string, number],
-                      ['Running tasks', startReadyPreview.preview.skipped.runningTasks] as [string, number],
-                    ]
-                  : []),
-                ['Awaiting approval', startReadyPreview.preview.skipped.awaitingApproval],
-                ['Review ready', startReadyPreview.preview.skipped.reviewReady],
-                ['Blocked', startReadyPreview.preview.skipped.blocked],
-              ] as Array<[string, number]>).map(([label, value]) => (
+              {startReadyPreviewRows(selectedStartReadyPreviewMode, startReadyPreview).map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between gap-4">
                   <span className="text-muted-foreground">{label}</span>
                   <span className="font-medium text-foreground">{value}</span>
@@ -4869,9 +5023,9 @@ export function App() {
                 data-testid="start-ready-preview-confirm"
                 disabled={startReadyBusy}
                 className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => void handleConfirmStartAndRecreateFailed()}
+                onClick={() => void handleConfirmStartReadyPreview()}
               >
-                {startReadyBusy ? 'Starting…' : 'Start and recreate'}
+                {startReadyBusy ? 'Starting…' : selectedStartReadyPreviewMode.confirmLabel}
               </button>
             </div>
           </div>
