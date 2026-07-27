@@ -669,6 +669,23 @@ describe('WorktreeExecutor', () => {
     taskProcess.emit('close', 0, null);
   });
 
+  it('getTerminalSpec preserves a display bridge supplied on the live handle', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const handle = await executor.start(makeRequest());
+    handle.displayBridge = 'Task context\n';
+
+    const spec = executor.getTerminalSpec(handle);
+
+    expect(spec).toEqual(expect.objectContaining({
+      cwd: expect.stringMatching(/^\/fake\/worktrees\//),
+      displayBridge: 'Task context\n',
+    }));
+    expect(spec!.command).toBeUndefined();
+
+    taskProcess.emit('close', 0, null);
+  });
+
   it('handle.workspacePath is set to worktree directory', async () => {
     const { taskProcess } = setupSpawnMock();
 
@@ -1398,6 +1415,42 @@ describe('WorktreeExecutor', () => {
     it('returns spec with undefined cwd when no workspace path', () => {
       const spec = executor.getRestoredTerminalSpec(baseMeta);
       expect(spec).toEqual({ cwd: undefined });
+    });
+
+    it('preserves display bridge on restored cwd, checkout, and resume specs', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const displayBridge = 'Restored task context\n';
+
+      expect(executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge,
+      })).toEqual({
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge,
+      });
+
+      const checkoutSpec = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/fake/worktrees/wt-abc',
+        branch: 'plan/my-workflow',
+        displayBridge,
+      });
+      expect(checkoutSpec.displayBridge).toBe(displayBridge);
+      expect(checkoutSpec.command).toBe(process.platform === 'darwin' ? 'zsh' : 'bash');
+      expect(checkoutSpec.args![1]).toContain("git checkout 'plan/my-workflow'");
+
+      expect(executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        agentSessionId: 'session-wt-1',
+        displayBridge,
+      })).toEqual({
+        command: 'claude',
+        args: ['--resume', 'session-wt-1', '--dangerously-skip-permissions'],
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayBridge,
+      });
     });
   });
 

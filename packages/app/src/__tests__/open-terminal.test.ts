@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdirSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import { spawnSync } from 'node:child_process';
 
 import {
   computeWorkflowRollup,
@@ -151,7 +152,13 @@ function buildCleanEnv(): Record<string, string> {
 
 function openExternalTerminal(spec: TerminalSpec | null): void {
   const defaultCwd = spec?.cwd ?? process.cwd();
-  const meta = { cwd: spec?.cwd, command: spec?.command, args: spec?.args };
+  const meta = {
+    cwd: spec?.cwd,
+    command: spec?.command,
+    args: spec?.args,
+    linuxTerminalTail: spec?.linuxTerminalTail,
+    displayBridge: spec?.displayBridge,
+  };
 
   if (process.platform === 'linux') {
     const cleanEnv = buildCleanEnv();
@@ -165,7 +172,7 @@ function openExternalTerminal(spec: TerminalSpec | null): void {
     });
     child.unref();
   } else if (process.platform === 'darwin') {
-    if (spec?.command) {
+    if (spec?.command || spec?.displayBridge) {
       const osaArgs = buildMacOSOsascriptArgs(meta, defaultCwd);
       const child = mockSpawn('osascript', osaArgs, { detached: true, stdio: 'ignore' });
       child.unref();
@@ -447,6 +454,32 @@ describe('terminal-external-launch', () => {
     const doScriptArg = args.find(a => a.startsWith('do script'));
     expect(doScriptArg).toBeDefined();
     expect(doScriptArg).toContain('\\"');
+  });
+
+  it('prints display bridge literally before preserving the original command argv', () => {
+    const bridge = "Bridge before'; printf SHELL_INJECTION >&2; #\n$(printf SUBSHELL_INJECTION >&2)\n";
+    const argvPayload = "arg'; printf ARG_INJECTION >&2; #";
+    const argvPrinter = 'process.stdout.write(JSON.stringify(process.argv.slice(1)))';
+    const line = buildTerminalShellCommand(
+      {
+        cwd: process.cwd(),
+        command: process.execPath,
+        args: ['-e', argvPrinter, argvPayload, 'arg with spaces'],
+        displayBridge: bridge,
+      },
+      '/fallback',
+    );
+
+    expect(line).toContain("printf '%s' ");
+    const result = spawnSync('bash', ['-c', line], { encoding: 'utf8' });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout.startsWith(bridge)).toBe(true);
+    expect(JSON.parse(result.stdout.slice(bridge.length))).toEqual([
+      argvPayload,
+      'arg with spaces',
+    ]);
   });
 });
 

@@ -9,6 +9,16 @@ export interface ExecutorHandle {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  displayBridge?: string;
+}
+
+export const MAX_TERMINAL_DISPLAY_BRIDGE_CHARS = 4096;
+
+export function normalizeTerminalDisplayBridge(displayBridge?: string): string | undefined {
+  if (!displayBridge) return undefined;
+  return displayBridge.length > MAX_TERMINAL_DISPLAY_BRIDGE_CHARS
+    ? displayBridge.slice(0, MAX_TERMINAL_DISPLAY_BRIDGE_CHARS)
+    : displayBridge;
 }
 
 export interface TerminalSpec {
@@ -20,6 +30,8 @@ export interface TerminalSpec {
   args?: string[];
   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
   linuxTerminalTail?: 'exec_bash' | 'pause';
+  /** Display-only context rendered before terminal output. Never pass to the command or agent prompt. */
+  displayBridge?: string;
 }
 
 export interface PersistedTaskMeta {
@@ -31,6 +43,7 @@ export interface PersistedTaskMeta {
   containerId?: string;
   workspacePath?: string;
   branch?: string;
+  displayBridge?: string;
 }
 
 export interface Executor {
