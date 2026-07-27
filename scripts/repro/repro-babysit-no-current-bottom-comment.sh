@@ -131,5 +131,9 @@ if len(matches) != 1:
     raise SystemExit(f"expected 1 matching row, saw {len(matches)}")
 PY
 echo "$out1$out2" | grep -q 'no current bottom on master' || fail 'worker output did not name the blocker' "$out1$out2"
+echo "$out1" | grep -q 'BLOCK PR #5885 no current bottom on master' || fail 'tick 1 did not post blocker action' "$out1"
+if echo "$out2" | grep -q 'BLOCK PR #5885 no current bottom on master'; then
+  fail 'tick 2 retried no-current-bottom blocker action' "$out2"
+fi
 
 echo '[repro] passed'
