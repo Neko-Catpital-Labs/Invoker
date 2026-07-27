@@ -47,6 +47,15 @@ must_contain_count() {
   fi
 }
 
+must_not_contain() {
+  local file="$1"
+  local needle="$2"
+  local hint="$3"
+  if grep -qF -- "$needle" "$file"; then
+    fail "$hint — unexpected in $file: $needle"
+  fi
+}
+
 must_not_exist() {
   local path="$1"
   local hint="$2"
@@ -72,6 +81,8 @@ must_not_exist "$REPO_ROOT/.cursor/commands/plan-to-invoker.md" "legacy Cursor h
 [[ -f "$TUTORIAL" ]] || fail "expected $TUTORIAL"
 must_contain "$CANONICAL_COMMAND" "description: Plan a change and submit it through Invoker" "Invoker handoff command must keep host command description frontmatter"
 must_contain "$CANONICAL_COMMAND" 'argument-hint: "help me plan <change>"' "Invoker handoff command must keep host argument hint frontmatter"
+must_contain "$CANONICAL_COMMAND" "Use this host's native planning mode when the host supports entering it from this command." "Invoker handoff command must keep handoff-only planning wording"
+must_contain "$CANONICAL_COMMAND" "do a read-only planning pass and do not edit product code before the plan is approved." "Invoker handoff command must keep read-only fallback wording"
 must_contain "$CANONICAL_COMMAND" "invoker_validate_plan" "Invoker handoff command must validate through MCP"
 must_contain "$CANONICAL_COMMAND" "invoker_submit_plan" "Invoker handoff command must submit through MCP"
 must_contain "$CANONICAL_COMMAND" "mode \`live\`" "Invoker handoff command must submit in live mode"
@@ -84,6 +95,7 @@ must_contain "$CANONICAL_COMMAND" "before PR authoring or publication" "Invoker 
 must_contain "$CANONICAL_COMMAND" "skill://review-compression/SKILL.md" "Invoker handoff command must trigger review compression for stack work"
 must_contain "$CANONICAL_COMMAND" "multiple review slices" "Invoker handoff command must define review-compression trigger scope"
 must_contain "$CANONICAL_COMMAND" "before writing workflow YAML" "Invoker handoff command must require review compression before workflow YAML"
+must_not_contain "$CANONICAL_COMMAND" "mergify stack push" "Invoker handoff command must keep later PR-publication out of the handoff-only command"
 must_contain "$LOOP_COMMAND" "description: Interview for a loop and prepare Invoker artifacts" "Loop generator command must keep host command description frontmatter"
 must_contain "$LOOP_COMMAND" 'argument-hint: "build me a <loop>"' "Loop generator command must keep host argument hint frontmatter"
 must_contain "$LOOP_COMMAND" "Use this host's native planning mode" "Loop generator command must enter host-native planning mode when available"
@@ -161,6 +173,7 @@ must_contain "$SKILL_MD" "\"invoker-plan-to-invoker\"" "SKILL frontmatter must t
 must_contain "$SKILL_MD" "\"/invoker-plan-to-invoker\"" "SKILL frontmatter must trigger on the slash handoff command"
 must_contain "$SKILL_MD" "## Harness handoff mode" "SKILL must document harness handoff mode"
 must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt." "SKILL must define when handoff mode applies"
+must_contain "$SKILL_MD" "Use this mode when invoked by the installed command or MCP prompt. Do not use this mode from a Slack \`plan:\` or agent thread." "SKILL must keep handoff-only mode boundary wording"
 must_contain "$SKILL_MD" "Do not use this mode from a Slack \`plan:\` or agent thread." "SKILL must defer Slack threads to the orchestrator"
 must_contain "$SKILL_MD" "do not invoke CLI or MCP handoff tools yourself." "SKILL must forbid Slack-thread CLI and MCP submission"
 must_contain "$SKILL_MD" "First produce a Markdown planning artifact at \`plans/invoker-handoff.md\`." "SKILL handoff mode must require a Markdown plan"
@@ -176,6 +189,9 @@ must_contain "$SKILL_MD" "multiple review slices" "SKILL handoff mode must defin
 must_contain "$SKILL_MD" "skills/review-compression/SKILL.md" "SKILL handoff mode must trigger review compression for stack work"
 must_contain "$SKILL_MD" "skill://review-compression/SKILL.md" "SKILL handoff mode must include skill URI fallback for review compression"
 must_contain "$SKILL_MD" "before writing workflow YAML" "SKILL handoff mode must require review compression before workflow YAML"
+must_contain "$SKILL_MD" "GitHub PR publishing should use **Mergify Stacks** after the work is ready" "SKILL must keep later PR-publication wording separate from handoff mode"
+must_contain "$SKILL_MD" "If the target repo is Invoker itself, finish the PR publication step with \`mergify stack push\` from the working branch after the stack of commits is ready." "SKILL must keep stacked submit PR-publication wording"
+must_contain "$SKILL_MD" "For Invoker-on-Invoker work only, publish the resulting GitHub PR stack with \`mergify stack push\` once the chain's commits are prepared." "SKILL must keep chained submit PR-publication wording"
 must_contain "$SKILL_MD" "never version or metadata wrappers" "SKILL frontmatter must reject legacy benchmark YAML wrappers"
 must_contain "$SKILL_MD" "## Benchmark/direct-output mode" "SKILL must document benchmark/direct-output mode"
 must_contain "$SKILL_MD" "Treat the literal absolute output path" "SKILL must require literal output path handling"
