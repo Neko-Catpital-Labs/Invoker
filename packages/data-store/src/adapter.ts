@@ -6,7 +6,7 @@
  */
 
 import type { TaskState, TaskStateChanges, PlanDefinition, Attempt, WorkflowDerivedStatus, WorkflowRollup, ExternalDependency, ExternalDependencyChange, DetachedExternalDependency } from '@invoker/workflow-core';
-import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
+import type { InAppPlanningChatLine, InAppPlanningPlanSummary, InAppPlanningSessionStatus, PlanningConfirmationMode, PlanningTerminalMode, SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 
@@ -40,6 +40,7 @@ export interface SlackLaunchContext {
   workingDir: string;
   requestedBy: string;
   lobbyChannelId: string;
+  confirmationMode: PlanningConfirmationMode;
   harnessSessionId?: string;
 }
 
@@ -67,6 +68,7 @@ export interface SlackPlanDraft {
   harnessPreset: string;
   workingDir: string;
   requestedBy: string;
+  confirmationMode: PlanningConfirmationMode;
   createdAt: string;
   decidedAt?: string;
   decidedBy?: string;
@@ -290,6 +292,7 @@ export interface InAppPlanningSessionRecord {
   title: string;
   presetKey: string;
   status: InAppPlanningSessionStatus;
+  confirmationMode: PlanningConfirmationMode;
   messages: InAppPlanningChatLine[];
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
@@ -310,6 +313,7 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   InAppPlanningSessionRecord,
   | 'title'
   | 'status'
+  | 'confirmationMode'
   | 'messages'
   | 'draftPlanSummary'
   | 'draftPlanText'

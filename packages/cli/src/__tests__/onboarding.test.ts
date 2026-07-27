@@ -19,7 +19,6 @@ import {
   REQUIRED_BOT_SCOPES,
   runPlanValidationSmoke,
   slackCredsFromEnv,
-  skippedGithubAuthCheck,
   runSetup,
   setExperimentalPlannerFlag,
   upsertEnvLines,
@@ -45,7 +44,7 @@ function readySetupDeps(overrides: SetupDeps = {}): SetupDeps {
   return {
     isInstalled: () => true,
     githubAuthCheck: async () => okCheck('github-auth', 'GitHub auth', 'gh is authenticated'),
-    smokePlanValidation: async () => okCheck('smoke-plan', 'Smoke plan validation', 'Parsed 1 task(s)'),
+    smokePlanValidation: async () => okCheck('smoke-plan', 'smoke: plan validation', 'Parsed 1 task(s)'),
     ...overrides,
   };
 }
@@ -544,8 +543,23 @@ describe('GitHub auth check', () => {
     expect(check.remediation).toContain('gh auth login');
   });
 
-  it('warns and skips when gh is missing', () => {
-    expect(skippedGithubAuthCheck()).toMatchObject({ id: 'github-auth', status: 'warn' });
+  it('warns and skips when the injected runner cannot spawn gh', () => {
+    const missing = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
+    const check = checkGithubAuth(() => {
+      throw missing;
+    });
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
+    expect(check.remediation).toContain('gh auth login');
+  });
+
+  it('warns and skips when the injected runner reports gh is missing', () => {
+    const check = checkGithubAuth(() => ({
+      status: 127,
+      stdout: '',
+      stderr: 'sh: gh: command not found',
+    }));
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
+    expect(check.remediation).toContain('gh auth login');
   });
 });
 
@@ -554,7 +568,7 @@ describe('setup oneshot ending', () => {
     const checks: Check[] = [
       okCheck('a', 'A'),
       errorCheck('github-auth', 'GitHub auth', 'not logged in', 'Run `gh auth login`'),
-      errorCheck('smoke-plan', 'Smoke plan validation', 'boom'),
+      errorCheck('smoke-plan', 'smoke: plan validation', 'boom'),
     ];
     expect(firstSetupFailure(checks)?.id).toBe('github-auth');
     expect(formatSetupEnding(checks)).toContain('Fix this first: GitHub auth: not logged in.');
@@ -574,14 +588,14 @@ describe('setup oneshot ending', () => {
       }, readySetupDeps({
         smokePlanValidation: async () => errorCheck(
           'smoke-plan',
-          'Smoke plan validation',
+          'smoke: plan validation',
           'parse failed',
           'Reinstall invoker-cli',
         ),
       }));
 
       expect(code).toBe(1);
-      expect(lines.join('\n')).toContain('Fix this first: Smoke plan validation: parse failed.');
+      expect(lines.join('\n')).toContain('Fix this first: smoke: plan validation: parse failed.');
       expect(lines.join('\n')).not.toContain("You're ready.");
     } finally {
       if (savedHome === undefined) delete process.env.HOME;
