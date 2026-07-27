@@ -1780,6 +1780,10 @@ export function App() {
     return command;
   }, []);
 
+  const recenterForSelection = useCallback((scope: GraphScope, target: string) => {
+    issueCameraCommand({ kind: 'centerSelection', scope, target, reason: 'selection' });
+  }, [issueCameraCommand]);
+
   const handleWorkflowGraphViewportSnapshot = useCallback((viewport: GraphCameraViewport) => {
     workflowGraphViewportRef.current = viewport;
   }, []);
@@ -1797,7 +1801,7 @@ export function App() {
     });
   }, []);
 
-  const selectWorkflowById = useCallback((workflowId: string) => {
+  const selectWorkflowById = useCallback((workflowId: string, options: { recenter?: boolean } = {}) => {
     armSuppressDagSurfaceDismiss();
     setWorkflowSelectionDismissed(false);
     setSelectedWorkflowId(workflowId);
@@ -1805,9 +1809,12 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu(null);
     focusKeyboardRegion('workflowGraph');
-  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion]);
+    if (options.recenter ?? true) {
+      recenterForSelection('workflow', workflowId);
+    }
+  }, [armSuppressDagSurfaceDismiss, focusKeyboardRegion, recenterForSelection]);
 
-  const selectTaskById = useCallback((taskId: string) => {
+  const selectTaskById = useCallback((taskId: string, options: { recenter?: boolean } = {}) => {
     const task = tasksRef.current.get(taskId);
     if (!task) return;
     setSelectedTaskId(task.id);
@@ -1820,19 +1827,35 @@ export function App() {
     setContextMenu(null);
     setWorkflowContextMenu(null);
     focusKeyboardRegion('taskGraph');
-  }, [focusKeyboardRegion]);
+    if (options.recenter ?? true) {
+      recenterForSelection('task', task.id);
+    }
+  }, [focusKeyboardRegion, recenterForSelection]);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onWorkflowMutationFailed?.((event) => {
       const failedTaskId = event.taskId;
       if (failedTaskId) {
         setMutationFailuresByTaskId((prev) => new Map(prev).set(failedTaskId, event));
+        const task = tasksRef.current.get(failedTaskId);
+        if (task) {
+          selectTaskById(task.id, { recenter: false });
+        } else {
+          setSelectedTaskId(failedTaskId);
+          setWorkflowSelectionDismissed(false);
+          setSelectedWorkflowId(event.workflowId);
+          setInspectorCollapsed(false);
+          setInspectorManualOpen(true);
+          setContextMenu(null);
+          setWorkflowContextMenu(null);
+          focusKeyboardRegion('taskGraph');
+        }
         return;
       }
       notifyMutationError('Mutation failed', event.message);
     });
     return () => { unsubscribe?.(); };
-  }, []);
+  }, [focusKeyboardRegion, selectTaskById]);
 
   const selectRelativeNode = useCallback((direction: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight') => {
     const inTaskGraph = keyboardRegion === 'taskGraph';
@@ -2173,13 +2196,8 @@ export function App() {
   }, []);
 
   const handleWorkflowClick = useCallback((workflowId: string) => {
-    armSuppressDagSurfaceDismiss();
-    setWorkflowSelectionDismissed(false);
-    setSelectedWorkflowId(workflowId);
-    setSelectedTaskId(null);
-    setContextMenu(null);
-    setWorkflowContextMenu(null);
-  }, [armSuppressDagSurfaceDismiss]);
+    selectWorkflowById(workflowId);
+  }, [selectWorkflowById]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<Element>, workflowId: string) => {
     event.preventDefault();
@@ -2206,7 +2224,7 @@ export function App() {
       if (activeWorkflowId !== null && !selectedWorkflowVanished) {
         return;
       }
-      selectWorkflowById(workflowEntries[0].workflow.id);
+      selectWorkflowById(workflowEntries[0].workflow.id, { recenter: false });
       return;
     }
 
@@ -2222,7 +2240,7 @@ export function App() {
       if (attentionEntries.some((entry) => entry.task.id === selectedTaskId)) {
         return;
       }
-      selectTaskById(attentionEntries[0].task.id);
+      selectTaskById(attentionEntries[0].task.id, { recenter: false });
       return;
     }
 
