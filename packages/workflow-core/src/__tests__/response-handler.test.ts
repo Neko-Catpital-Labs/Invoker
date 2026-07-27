@@ -111,12 +111,14 @@ describe('ResponseHandler (pure parser)', () => {
           outputs: {
             exitCode: 0,
             reviewGate,
+            workspacePath: '/tmp/gate-workspace',
           },
         }),
       );
       expect('type' in result).toBe(true);
       if (!('type' in result)) return;
       expect(result.type).toBe('review_ready');
+      expect(result.workspacePath).toBe('/tmp/gate-workspace');
       expect(result.reviewGate).toEqual(reviewGate);
     });
   });

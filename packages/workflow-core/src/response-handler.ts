@@ -38,6 +38,7 @@ export type ParsedResponse =
       agentSessionId?: string;
       agentName?: string;
       branch?: string;
+      workspacePath?: string;
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
@@ -49,6 +50,7 @@ export type ParsedResponse =
       exitCode: number;
       summary?: string;
       branch?: string;
+      workspacePath?: string;
       reviewUrl?: string;
       reviewId?: string;
       reviewStatus?: string;
@@ -104,6 +106,7 @@ export class ResponseHandler {
           agentSessionId: outputs.agentSessionId,
           agentName: outputs.agentName,
           branch: outputs.branch,
+          workspacePath: outputs.workspacePath,
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
           reviewStatus: outputs.reviewStatus,
@@ -117,6 +120,7 @@ export class ResponseHandler {
           exitCode: outputs.exitCode ?? 0,
           summary: outputs.summary,
           branch: outputs.branch,
+          workspacePath: outputs.workspacePath,
           reviewUrl: outputs.reviewUrl,
           reviewId: outputs.reviewId,
           reviewStatus: outputs.reviewStatus,

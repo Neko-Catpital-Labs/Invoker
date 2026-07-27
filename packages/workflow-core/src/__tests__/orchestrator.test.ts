@@ -428,6 +428,7 @@ describe('Orchestrator', () => {
           exitCode: 0,
           summary: 'ready',
           branch: 'feature/review-ready',
+          workspacePath: '/tmp/review-ready-gate',
           reviewUrl: 'https://github.com/owner/repo/pull/1',
           reviewId: 'owner/repo#1',
           reviewStatus: 'Awaiting review',
@@ -438,6 +439,7 @@ describe('Orchestrator', () => {
       expect(task.status).toBe('review_ready');
       expect(task.config.summary).toBe('ready');
       expect(task.execution.branch).toBe('feature/review-ready');
+      expect(task.execution.workspacePath).toBe('/tmp/review-ready-gate');
       expect(task.execution.reviewUrl).toBe('https://github.com/owner/repo/pull/1');
       expect(task.execution.reviewId).toBe('owner/repo#1');
       expect(task.execution.reviewStatus).toBe('Awaiting review');
