@@ -4,9 +4,8 @@ Documentation-by-test for the loader. This layer takes the *raw* shapes GitHub's
 `gh` CLI returns — issue comments, GraphQL PR detail, status-check rollups,
 review threads — and folds them into the typed ``PrSnapshot`` the planner reads.
 
-Each test feeds one realistic raw shape and pins what gets parsed out of it and
-why. The subprocess/`gh`-calling helpers are intentionally not exercised here;
-only the pure parse/transform functions are.
+Most tests feed one realistic raw shape and pin what gets parsed out of it and
+why. Subprocess coverage stays limited to GitHub CLI error classification.
 
 Run:  python3 scripts/test_mergify_admin_requeue_snapshot.py
 """
@@ -14,6 +13,7 @@ Run:  python3 scripts/test_mergify_admin_requeue_snapshot.py
 from __future__ import annotations
 
 import sys
+import subprocess
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -80,6 +80,18 @@ class ParseMergifyQueueEvent(unittest.TestCase):
         self.assertEqual(event.failing_checks, ("build (ubuntu-latest)",))
         self.assertEqual(event.comment_id, "c-9001")
         self.assertEqual(event.queued_at, "2026-07-07T05:00:00Z")
+
+
+class GhCommandFailures(unittest.TestCase):
+    def test_graphql_rate_limit_becomes_controlled_runtime_error(self):
+        error = subprocess.CalledProcessError(
+            1,
+            ["gh", "api", "graphql"],
+            stderr='{"errors":[{"type":"RATE_LIMIT","code":"graphql_rate_limit","message":"API rate limit already exceeded"}]}',
+        )
+        with mock.patch("mergify_admin_requeue_snapshot.subprocess.run", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "GitHub API rate limit exceeded"):
+                s.run_logged(["gh", "api", "graphql"])
 
 
 class ParseStackMetadata(unittest.TestCase):
