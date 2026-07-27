@@ -214,7 +214,7 @@ describe('planning chat', () => {
     expect(sessions.size).toBe(0);
   });
 
-  it('creates a first session and returns the assistant reply', async () => {
+  it('creates a first session when no session id is supplied', async () => {
     const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('I can help.');
     const sessions = createInAppPlanningChatSessions();
 
@@ -230,6 +230,7 @@ describe('planning chat', () => {
 
     expect(result).toMatchObject({ ok: true, reply: 'I can help.', draftPlanAvailable: false });
     expect(result.ok && result.sessionId).toBeTruthy();
+    expect(result.ok && sessions.has(result.sessionId)).toBe(true);
     expect(sessions.size).toBe(1);
     const session = [...sessions.values()][0];
     expect(session?.messages).toEqual([
@@ -262,7 +263,7 @@ describe('planning chat', () => {
     expect(prompt).toContain('Draft YAML only after the human asks you to draft/proceed');
   });
 
-  it('reuses an existing session and keeps its original preset', async () => {
+  it('reuses a valid continuation session and keeps its original preset', async () => {
     const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner')
       .mockResolvedValueOnce('first')
       .mockResolvedValueOnce('second');
@@ -291,8 +292,32 @@ describe('planning chat', () => {
     });
 
     expect(second).toMatchObject({ ok: true, sessionId: first.sessionId, reply: 'second' });
+    expect(sessions.size).toBe(1);
     expect(sessions.get(first.sessionId)?.presetKey).toBe('codex');
     expect(spawnPlanner).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an unknown continuation session without creating a new session', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('should not run');
+    const sessions = createInAppPlanningChatSessions();
+
+    await expect(sendPlanningChatMessage({
+      sessionId: 'missing-session',
+      message: 'keep going',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    })).resolves.toEqual({
+      ok: false,
+      sessionId: 'missing-session',
+      error: 'Planning conversation was not found.',
+    });
+
+    expect(sessions.size).toBe(0);
+    expect(spawnPlanner).not.toHaveBeenCalled();
   });
 
   it('returns the raw draft reply and keeps a draft plan summary for valid YAML', async () => {
