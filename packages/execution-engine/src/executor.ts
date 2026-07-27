@@ -5,6 +5,8 @@ export type Unsubscribe = () => void;
 export interface ExecutorHandle {
   executionId: string;
   taskId: string;
+  /** Optional display-only text to show before terminal process output. */
+  displayOnlyBridgeText?: string;
   agentSessionId?: string;
   containerId?: string;
   workspacePath?: string;
@@ -20,11 +22,15 @@ export interface TerminalSpec {
   args?: string[];
   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
   linuxTerminalTail?: 'exec_bash' | 'pause';
+  /** Optional bounded text rendered before terminal output; never passed to the process argv or stdin. */
+  displayOnlyBridgeText?: string;
 }
 
 export interface PersistedTaskMeta {
   taskId: string;
   runnerKind: string;
+  /** Optional display-only text to show before terminal process output. */
+  displayOnlyBridgeText?: string;
   agentSessionId?: string;
   /** Configured execution agent name (e.g. 'claude', 'codex'). Used for session resume. */
   executionAgent?: string;
