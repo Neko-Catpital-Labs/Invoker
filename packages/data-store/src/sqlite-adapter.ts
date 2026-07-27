@@ -53,6 +53,7 @@ import type {
   WorkerActionRecord,
   WorkerActionWrite,
   WorkerDesiredStateRecord,
+  WorkflowListOptions,
   TerminalSessionPatch,
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
@@ -78,6 +79,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendJournalEntry, type SyncEntityType, type SyncJournalOperation } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -947,6 +949,40 @@ export class SQLiteAdapter implements PersistenceAdapter {
     };
   }
 
+  private loadSyncJournalPayload(
+    entityType: Exclude<SyncEntityType, 'output'>,
+    entityId: string,
+  ): Record<string, unknown> | undefined {
+    switch (entityType) {
+      case 'workflow':
+        return this.queryOne('SELECT * FROM workflows WHERE id = ?', [entityId]);
+      case 'task':
+        return this.queryOne('SELECT * FROM tasks WHERE id = ?', [entityId]);
+      case 'attempt':
+        return this.queryOne('SELECT * FROM attempts WHERE id = ?', [entityId]);
+      case 'event':
+        return this.queryOne('SELECT * FROM events WHERE id = ?', [entityId]);
+    }
+  }
+
+  private appendRowJournalEntry(
+    entityType: Exclude<SyncEntityType, 'output'>,
+    entityId: string,
+    op: SyncJournalOperation,
+  ): void {
+    const payload = this.loadSyncJournalPayload(entityType, entityId);
+    if (!payload) {
+      throw new Error(`Cannot append sync journal entry for missing ${entityType} "${entityId}"`);
+    }
+    appendJournalEntry(this.executor, {
+      entityType,
+      entityId,
+      op,
+      payload,
+      origin: 'home',
+    });
+  }
+
   runCompatibilityMigration(): {
     migratedFixingWithAiStatuses: number;
     normalizedMergeModes: number;
@@ -1043,19 +1079,28 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Workflows ─────────────────────────────────────────
 
   saveWorkflow(workflow: WorkflowSaveInput): void {
-    this.workflowRepo.saveWorkflow(workflow);
+    this.runTransaction(() => {
+      this.workflowRepo.saveWorkflow(workflow);
+      this.appendRowJournalEntry('workflow', workflow.id, 'upsert');
+    });
   }
 
   updateWorkflow(workflowId: string, changes: WorkflowMetadataChanges): void {
-    this.workflowRepo.updateWorkflow(workflowId, changes);
+    if (!this.queryOne('SELECT 1 FROM workflows WHERE id = ? AND deleted_at IS NULL', [workflowId])) {
+      return;
+    }
+    this.runTransaction(() => {
+      this.workflowRepo.updateWorkflow(workflowId, changes);
+      this.appendRowJournalEntry('workflow', workflowId, 'upsert');
+    });
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, opts?: WorkflowListOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, opts);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(opts?: WorkflowListOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(opts);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1066,8 +1111,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.workflowRepo.searchWorkflowsAndTasks(query, opts);
   }
 
-  loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
-    return this.workflowRepo.loadWorkflowTaskSnapshot();
+  loadWorkflowTaskSnapshot(opts?: WorkflowListOptions): WorkflowTaskSnapshot {
+    return this.workflowRepo.loadWorkflowTaskSnapshot(opts);
   }
 
   getLastWorkflowTaskSnapshotStats(): Record<string, unknown> | null {
@@ -1077,11 +1122,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Tasks ─────────────────────────────────────────────
 
   saveTask(workflowId: string, task: TaskState): void {
-    this.taskAttemptRepo.saveTask(workflowId, task);
+    this.runTransaction(() => {
+      this.taskAttemptRepo.saveTask(workflowId, task);
+      this.appendRowJournalEntry('task', task.id, 'upsert');
+    });
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
-    this.taskAttemptRepo.updateTask(taskId, changes);
+    if (changes.status === undefined) {
+      this.taskAttemptRepo.updateTask(taskId, changes);
+      return;
+    }
+    if (!this.queryOne('SELECT 1 FROM tasks WHERE id = ?', [taskId])) {
+      return;
+    }
+    this.runTransaction(() => {
+      this.taskAttemptRepo.updateTask(taskId, changes);
+      this.appendRowJournalEntry('task', taskId, 'upsert');
+    });
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -1547,6 +1605,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteWorkflow(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
+    let removedTasks = false;
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
@@ -1587,18 +1646,37 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      removedTasks = taskIds.length > 0;
+      const deletedAt = Date.now();
+      this.db.run(
+        `UPDATE workflows
+            SET deleted_at = ?,
+                updated_at = ?
+          WHERE id = ?
+            AND deleted_at IS NULL`,
+        [deletedAt, new Date(deletedAt).toISOString(), workflowId],
+      );
+      if (this.db.getRowsModified() > 0) {
+        this.appendRowJournalEntry('workflow', workflowId, 'tombstone');
+      }
     });
-    this.removeOutputFiles(taskIds);
+    if (removedTasks) this.removeOutputFiles(taskIds);
   }
 
   // ── Events ────────────────────────────────────────────
 
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
-    this.execRun(`
-      INSERT INTO events (task_id, event_type, payload)
-      VALUES (?, ?, ?)
-    `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+    this.runTransaction(() => {
+      this.execRun(`
+        INSERT INTO events (task_id, event_type, payload)
+        VALUES (?, ?, ?)
+      `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+      const row = this.queryOne('SELECT last_insert_rowid() AS id') as { id?: number | bigint } | undefined;
+      if (row?.id === undefined) {
+        throw new Error('Could not resolve inserted event id for sync journal');
+      }
+      this.appendRowJournalEntry('event', String(row.id), 'upsert');
+    });
   }
 
   getEvents(taskId: string): TaskEvent[];
@@ -2615,7 +2693,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Attempts ────────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.taskAttemptRepo.saveAttempt(attempt);
+    this.runTransaction(() => {
+      this.taskAttemptRepo.saveAttempt(attempt);
+      this.appendRowJournalEntry('attempt', attempt.id, 'upsert');
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -2639,7 +2720,21 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
-    this.taskAttemptRepo.updateAttempt(attemptId, changes);
+    const shouldJournal =
+      changes.status === 'completed' ||
+      changes.status === 'failed' ||
+      Object.hasOwn(changes, 'completedAt');
+    if (!shouldJournal) {
+      this.taskAttemptRepo.updateAttempt(attemptId, changes);
+      return;
+    }
+    if (!this.queryOne('SELECT 1 FROM attempts WHERE id = ?', [attemptId])) {
+      return;
+    }
+    this.runTransaction(() => {
+      this.taskAttemptRepo.updateAttempt(attemptId, changes);
+      this.appendRowJournalEntry('attempt', attemptId, 'upsert');
+    });
   }
 
   claimAttemptForLaunch(
