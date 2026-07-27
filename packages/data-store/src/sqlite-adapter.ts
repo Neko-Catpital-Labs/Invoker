@@ -38,6 +38,7 @@ import type {
   PersistenceAdapter,
   ReviewGateLookup,
   Workflow,
+  WorkflowReadOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -78,6 +79,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -1050,12 +1052,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, opts?: WorkflowReadOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, opts);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(opts?: WorkflowReadOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(opts);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1547,7 +1549,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteWorkflow(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
+    let deleted = false;
     this.runTransaction(() => {
+      const existing = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+      if (!existing) return;
+      const alreadyDeleted = existing.deleted_at !== null && existing.deleted_at !== undefined;
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
@@ -1587,18 +1593,50 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      if (!alreadyDeleted) {
+        const deletedAt = Date.now();
+        const updatedAt = new Date(deletedAt).toISOString();
+        this.db.run(
+          'UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ?',
+          [deletedAt, updatedAt, workflowId],
+        );
+        const payload = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+        if (!payload) {
+          throw new Error(`Cannot journal missing workflow tombstone "${workflowId}"`);
+        }
+        appendJournalEntry(this.executor, {
+          entityType: 'workflow',
+          entityId: workflowId,
+          op: 'tombstone',
+          payload,
+        });
+      }
+      deleted = true;
     });
-    this.removeOutputFiles(taskIds);
+    if (deleted) {
+      this.removeOutputFiles(taskIds);
+    }
   }
 
   // ── Events ────────────────────────────────────────────
 
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
-    this.execRun(`
-      INSERT INTO events (task_id, event_type, payload)
-      VALUES (?, ?, ?)
-    `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+    this.runTransaction(() => {
+      this.execRun(`
+        INSERT INTO events (task_id, event_type, payload)
+        VALUES (?, ?, ?)
+      `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+      const row = this.queryOne('SELECT * FROM events WHERE id = last_insert_rowid()');
+      if (!row) {
+        throw new Error(`Cannot journal missing event for task "${taskId}"`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'event',
+        entityId: String(row.id),
+        op: 'upsert',
+        payload: row,
+      });
+    });
   }
 
   getEvents(taskId: string): TaskEvent[];
