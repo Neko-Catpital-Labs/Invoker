@@ -81,6 +81,7 @@ export function makePlanningSessionSummary(
     title: 'Saved planning chat',
     status: 'draft_ready',
     presetKey: 'codex',
+    confirmationMode: 'require',
     messages: [
       {
         id: 1,
@@ -201,6 +202,7 @@ export function createMockInvoker(
         title: 'Untitled plan',
         status: 'still_discussing',
         presetKey: 'codex',
+        confirmationMode: 'require',
         messages: [],
         draftPlanAvailable: false,
         createdAt: '2026-01-01T00:00:00.000Z',
@@ -212,6 +214,7 @@ export function createMockInvoker(
       ok: true,
       sessionId: 'session-1',
       reply: 'I can help draft that.',
+      confirmationMode: 'require',
       draftPlanAvailable: false,
     })),
     planningChatSubmit: vi.fn(async () => ({
@@ -219,6 +222,7 @@ export function createMockInvoker(
       planName: 'Mock Plan',
       workflowId: 'wf-1',
     })),
+    planningChatDiscardDraft: vi.fn(async () => ({ ok: true })),
     planningChatReset: vi.fn(async () => ({ ok: true })),
     onPlanningChatStream: vi.fn((cb: (event: InAppPlanningStreamEvent) => void) => {
       planningChatStreamCallbacks.add(cb);
@@ -243,9 +247,9 @@ export function createMockInvoker(
     planningTerminalResize: vi.fn(async () => ({ ok: true })),
     planningTerminalClose: vi.fn(async () => ({ ok: true })),
     getPlanningPresets: vi.fn(async () => [
-      { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true },
-      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: false },
-      { key: 'omp', label: 'OMP', tool: 'omp', isDefault: false },
+      { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' },
+      { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: false, defaultConfirmationMode: 'require' },
+      { key: 'omp', label: 'OMP', tool: 'omp', isDefault: false, defaultConfirmationMode: 'require' },
     ]),
     start: vi.fn(async () => taskSnapshot),
     stop: vi.fn(async () => {}),

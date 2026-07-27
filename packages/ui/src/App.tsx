@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -179,12 +179,16 @@ type PlanningStreamState = {
   status: 'streaming' | 'failed';
 };
 
-function makeInitialPlanningSession(now: string = new Date().toISOString()): PlanningSessionView {
+function makeInitialPlanningSession(
+  now: string = new Date().toISOString(),
+  confirmationMode: PlanningConfirmationMode = 'require',
+): PlanningSessionView {
   return {
     id: 'local-planning-session-1',
     title: 'Untitled plan',
     status: 'still_discussing',
     presetKey: '',
+    confirmationMode,
     messages: [],
     input: '',
     draftPlanAvailable: false,
@@ -844,8 +848,10 @@ export function App() {
   const nextPlanningSessionLocalIdRef = useRef(2);
   const nextTerminalLineIdRef = useRef(1);
   const [planningStreamBySessionId, setPlanningStreamBySessionId] = useState<Record<string, PlanningStreamState>>({});
-  const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean }>>([]);
+  const [planningPresetOptions, setPlanningPresetOptions] = useState<Array<{ key: string; label: string; isDefault?: boolean; defaultConfirmationMode?: PlanningConfirmationMode }>>([]);
   const [selectedPlanningPresetKey, setSelectedPlanningPresetKey] = useState('');
+  const [selectedPlanningConfirmationMode, setSelectedPlanningConfirmationMode] = useState<PlanningConfirmationMode>('require');
+  const [keptPlanningDraftSessionIds, setKeptPlanningDraftSessionIds] = useState<Set<string>>(new Set());
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
   const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
   const [reviewDraftSessionId, setReviewDraftSessionId] = useState<string | null>(null);
@@ -996,17 +1002,31 @@ export function App() {
     window.invoker?.getPlanningPresets?.()
       .then((options) => {
         const resolved = Array.isArray(options) && options.length > 0
-          ? options.map((option) => ({ key: option.key, label: option.label, isDefault: option.isDefault }))
-          : [{ key: 'codex', label: 'Codex', isDefault: true }];
+          ? options.map((option) => ({
+              key: option.key,
+              label: option.label,
+              isDefault: option.isDefault,
+              defaultConfirmationMode: option.defaultConfirmationMode,
+            }))
+          : [{ key: 'codex', label: 'Codex', isDefault: true, defaultConfirmationMode: 'require' as const }];
         setPlanningPresetOptions(resolved);
         setSelectedPlanningPresetKey(resolved.find((option) => option.isDefault)?.key ?? resolved[0]?.key ?? 'codex');
+        setSelectedPlanningConfirmationMode(resolved.find((option) => option.isDefault)?.defaultConfirmationMode ?? resolved[0]?.defaultConfirmationMode ?? 'require');
       })
       .catch(() => {
-        setPlanningPresetOptions([{ key: 'codex', label: 'Codex', isDefault: true }]);
+        setPlanningPresetOptions([{ key: 'codex', label: 'Codex', isDefault: true, defaultConfirmationMode: 'require' }]);
         setSelectedPlanningPresetKey('codex');
-    });
+        setSelectedPlanningConfirmationMode('require');
+      });
     refreshSystemDiagnostics();
   }, [refreshSystemDiagnostics]);
+
+  useEffect(() => {
+    if (activePlanningSession.presetKey) {
+      setSelectedPlanningPresetKey(activePlanningSession.presetKey);
+    }
+    setSelectedPlanningConfirmationMode(activePlanningSession.confirmationMode ?? 'require');
+  }, [activePlanningSession.id, activePlanningSession.presetKey, activePlanningSession.confirmationMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1021,13 +1041,12 @@ export function App() {
           && first.messages.every((line) => line.role === 'system');
         if (!onlyInitialPlaceholder) return;
         const restored = response.sessions.map(planningSessionSummaryToView);
-        const maxLineId = restored.reduce((max, session) => (
-          Math.max(max, ...session.messages.map((line) => line.id))
-        ), 1);
+        const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
         nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
         setPlanningSessions(restored);
         setActivePlanningSessionId(restored[0]?.id ?? 'local-planning-session-1');
         setSelectedPlanningPresetKey((current) => current || restored[0]?.presetKey || current);
+        setSelectedPlanningConfirmationMode(restored[0]?.confirmationMode ?? 'require');
       })
       .catch(() => {});
     return () => {
@@ -2524,6 +2543,15 @@ export function App() {
       setStartReadyBusy(false);
     }
   }, [invoker]);
+  const handlePlanningPresetChange = useCallback((presetKey: string) => {
+    setSelectedPlanningPresetKey(presetKey);
+    updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, presetKey }));
+  }, [activePlanningSessionId, updatePlanningSessionById]);
+
+  const handlePlanningConfirmationModeChange = useCallback((confirmationMode: PlanningConfirmationMode) => {
+    setSelectedPlanningConfirmationMode(confirmationMode);
+    updatePlanningSessionById(activePlanningSessionId, (session) => ({ ...session, confirmationMode }));
+  }, [activePlanningSessionId, updatePlanningSessionById]);
 
   const handleConfirmStartAndRecreateFailed = useCallback(async () => {
     const result = await handleStartReadyAction(
@@ -2536,11 +2564,11 @@ export function App() {
     if (result) setStartReadyPreview(null);
   }, [handleStartReadyAction, startReadyPreviewMode]);
 
-  const handlePlanningSubmitDraft = useCallback(async () => {
+  const handlePlanningSubmitDraft = useCallback(async (targetSessionId: string | null = planningSessionId) => {
     if (activePlanningReadOnly) {
       return;
     }
-    if (!planningSessionId) {
+    if (!targetSessionId) {
       setPlanningSubmitError({ title: 'Plan could not be submitted', message: 'No planning conversation yet.' });
       appendTerminalLine('Plan could not be submitted:\nNo planning conversation yet.', 'system', 'error');
       return;
@@ -2550,21 +2578,26 @@ export function App() {
       appendTerminalLine('Plan could not be submitted:\nPlanner is not available.', 'system', 'error');
       return;
     }
-    updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: true }));
+    updatePlanningSessionById(targetSessionId, (session) => ({ ...session, busy: true }));
     try {
-      const result = await invoker.planningChatSubmit({ sessionId: planningSessionId });
+      const result = await invoker.planningChatSubmit({ sessionId: targetSessionId });
       if (result.ok) {
         setPlanningSubmitError(null);
         setHasLoadedPlan(true);
         setWorkflowSelectionDismissed(false);
         setGraphActionsMenuOpen(false);
+        setKeptPlanningDraftSessionIds((prev) => {
+          const next = new Set(prev);
+          next.delete(targetSessionId);
+          return next;
+        });
         setReviewDraftSessionId(null);
         setPlanName(result.planName);
         setSelectedWorkflowId(result.workflowId);
         setSidebarSurface('home');
         setViewMode('dag');
         issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason: 'planning-submit' });
-        updatePlanningSessionById(planningSessionId, (session) => ({
+        updatePlanningSessionById(targetSessionId, (session) => ({
           ...session,
           busy: false,
           status: 'submitted',
@@ -2591,17 +2624,51 @@ export function App() {
           'success',
         );
       } else {
-        updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
+        updatePlanningSessionById(targetSessionId, (session) => ({ ...session, busy: false }));
         setPlanningSubmitError({ title: 'Plan could not be submitted', message: result.error });
         appendTerminalLine(`Plan could not be submitted:\n${result.error}`, 'system', 'error');
       }
     } catch (err) {
-      updatePlanningSessionById(planningSessionId, (session) => ({ ...session, busy: false }));
+      updatePlanningSessionById(targetSessionId, (session) => ({ ...session, busy: false }));
       const message = err instanceof Error ? err.message : 'Failed to submit the plan.';
       setPlanningSubmitError({ title: 'Plan could not be submitted', message });
       appendTerminalLine(`Plan could not be submitted:\n${message}`, 'system', 'error');
     }
   }, [activePlanningReadOnly, appendTerminalLine, handleStartReadyAction, invoker, issueCameraCommand, planningSessionId, refreshTaskGraph, updatePlanningSessionById]);
+  const handlePlanningCancelReview = useCallback(() => {
+    appendTerminalLine('Submission cancelled. Draft kept.', 'system');
+    setKeptPlanningDraftSessionIds((prev) => new Set(prev).add(activePlanningSessionId));
+    setReviewDraftSessionId(null);
+  }, [activePlanningSessionId, appendTerminalLine]);
+
+  const handlePlanningDiscardDraft = useCallback(async () => {
+    const targetSessionId = planningSessionId;
+    if (!targetSessionId) return;
+    if (!invoker?.planningChatDiscardDraft) {
+      setPlanningSubmitError({ title: 'Draft could not be discarded', message: 'Planner is not available.' });
+      return;
+    }
+    const result = await invoker.planningChatDiscardDraft({ sessionId: targetSessionId });
+    if (!result.ok) {
+      setPlanningSubmitError({ title: 'Draft could not be discarded', message: result.error });
+      appendTerminalLine(result.error, 'system', 'error');
+      return;
+    }
+    setKeptPlanningDraftSessionIds((prev) => {
+      const next = new Set(prev);
+      next.delete(targetSessionId);
+      return next;
+    });
+    setReviewDraftSessionId(null);
+    updatePlanningSessionById(targetSessionId, (session) => ({
+      ...session,
+      status: 'still_discussing',
+      draftPlanAvailable: false,
+      draftPlanSummary: undefined,
+      draftPlanText: undefined,
+      updatedAt: new Date().toISOString(),
+    }));
+  }, [appendTerminalLine, invoker, planningSessionId, updatePlanningSessionById]);
 
   const handlePlanningSubmit = useCallback(async () => {
     const input = planningInput.trim();
@@ -2648,17 +2715,18 @@ export function App() {
       return;
     }
 
+    const request = {
+      message: input,
+      presetKey: selectedPlanningPresetKey || undefined,
+      confirmationMode: selectedPlanningConfirmationMode,
+      ...(planningSessionId ? { sessionId: planningSessionId } : {}),
+    };
     const previousSessionId = activePlanningSessionId;
     pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
     clearPlanningStreamForSessionIds([previousSessionId, planningSessionId]);
     forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
     updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: true }));
     try {
-      const request = {
-        message: input,
-        presetKey: selectedPlanningPresetKey || undefined,
-        ...(planningSessionId ? { sessionId: planningSessionId } : {}),
-      };
       const result = await invoker.planningChatSend(request);
       if (result.ok) {
         const updatedAt = new Date().toISOString();
@@ -2673,6 +2741,8 @@ export function App() {
             title: session.title === 'Untitled plan'
               ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
               : session.title,
+            presetKey: request.presetKey ?? session.presetKey,
+            confirmationMode: result.confirmationMode ?? session.confirmationMode ?? 'require',
             status: result.draftPlanAvailable ? 'draft_ready' : result.reply.includes('?') ? 'waiting_for_answer' : 'still_discussing',
             messages: [...session.messages, { id: replyLineId, text: result.reply, role: 'assistant', ...((result as { reasoning?: string }).reasoning ? { reasoning: (result as { reasoning?: string }).reasoning } : {}) }],
             draftPlanAvailable: result.draftPlanAvailable,
@@ -2689,6 +2759,19 @@ export function App() {
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
         setHasLoadedPlan(false);
+        setKeptPlanningDraftSessionIds((prev) => {
+          const next = new Set(prev);
+          next.delete(previousSessionId);
+          next.delete(result.sessionId);
+          return next;
+        });
+        if (result.draftPlanAvailable) {
+          setReviewDraftSessionId(result.sessionId);
+          setPlanningContextCollapsed(false);
+          if ((result.confirmationMode ?? 'require') === 'auto_submit') {
+            void handlePlanningSubmitDraft(result.sessionId);
+          }
+        }
       } else {
         updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
         keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
@@ -2722,6 +2805,7 @@ export function App() {
     invoker,
     planningInput,
     planningSessionId,
+    selectedPlanningConfirmationMode,
     selectedPlanningPresetKey,
     setPlanningInput,
     tasks.size,
@@ -2735,16 +2819,17 @@ export function App() {
     const now = new Date().toISOString();
     const localId = `local-planning-session-${index}`;
     const session: PlanningSessionView = {
-      ...makeInitialPlanningSession(now),
+      ...makeInitialPlanningSession(now, selectedPlanningConfirmationMode),
       id: localId,
       conversationKey: localId,
       presetKey: selectedPlanningPresetKey,
+      confirmationMode: selectedPlanningConfirmationMode,
     };
     setPlanningSessions((prev) => [session, ...prev]);
     setActivePlanningSessionId(session.id);
     setSidebarSurface('home');
     focusKeyboardRegion('planning');
-  }, [focusKeyboardRegion, selectedPlanningPresetKey]);
+  }, [focusKeyboardRegion, selectedPlanningConfirmationMode, selectedPlanningPresetKey]);
 
   const handlePlanningModeChange = useCallback(async (mode: PlanningTerminalMode) => {
     const sourceSession = activePlanningSession;
@@ -2792,6 +2877,7 @@ export function App() {
         const result = await invoker.planningChatCreate({
           presetKey: sourceSession.presetKey || selectedPlanningPresetKey || undefined,
           title: sourceSession.title,
+          confirmationMode: sourceSession.confirmationMode ?? selectedPlanningConfirmationMode,
         });
         if (!result.ok) {
           updatePlanningSessionById(sourceSession.id, (session) => ({
@@ -4038,99 +4124,123 @@ export function App() {
     const draftTaskGroups = draftPlanSummary?.taskGroups ?? (
       draftPlanSummary ? [{ workflow: null, tasks: draftPlanSummary.steps }] : []
     );
+    const keptDraft = keptPlanningDraftSessionIds.has(activePlanningSession.id);
     return (
       <aside
-      data-testid="planning-context-panel"
-      className={`${planningContextCollapsed ? 'w-16' : 'w-72'} shrink-0 border-l border-border bg-card/60 transition-all duration-150`}
-    >
-      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+        data-testid="planning-context-panel"
+        className={`${planningContextCollapsed ? 'w-16' : 'w-72'} shrink-0 border-l border-border bg-card/60 transition-all duration-150`}
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+          {!planningContextCollapsed && (
+            <h2 className="text-sm font-semibold text-foreground">{reviewingDraft ? 'Review draft' : 'Current plan'}</h2>
+          )}
+          <button
+            type="button"
+            data-testid="planning-context-toggle"
+            aria-label={planningContextCollapsed ? 'Expand current plan' : 'Collapse current plan'}
+            onClick={() => setPlanningContextCollapsed((value) => !value)}
+            className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary"
+          >
+            {planningContextCollapsed ? '›' : '‹'}
+          </button>
+        </div>
         {!planningContextCollapsed && (
-          <h2 className="text-sm font-semibold text-foreground">{reviewingDraft ? 'Review draft' : 'Current plan'}</h2>
+          reviewingDraft ? (
+            <div className="space-y-4 p-4 text-sm">
+              {draftTaskGroups.map((group, groupIndex) => (
+                <section key={`${group.workflow ?? 'plan'}-${groupIndex}`} data-testid="draft-task-group">
+                  {group.workflow && <h3 className="text-xs font-medium text-foreground">{group.workflow}</h3>}
+                  <ul className={group.workflow ? 'mt-2 space-y-1.5' : 'space-y-1.5'}>
+                    {group.tasks.map((task, taskIndex) => (
+                      <li key={`${task}-${taskIndex}`} data-testid="draft-step-summary" className="text-xs leading-5 text-muted-foreground">
+                        {task}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+              {draftPlanText && (
+                <pre data-testid="draft-raw-yaml" className="max-h-56 overflow-auto rounded-md border border-border bg-background p-3 text-[11px] leading-5 text-muted-foreground">
+                  {draftPlanText}
+                </pre>
+              )}
+              {activePlanningSession.confirmationMode === 'require' && (
+                <div className="grid gap-2">
+                  <Button
+                    type="button"
+                    data-testid="planning-create-workflow"
+                    onClick={() => void handlePlanningSubmitDraft()}
+                    className="w-full"
+                  >
+                    Create workflow
+                  </Button>
+                  {keptDraft ? (
+                    <button
+                      type="button"
+                      data-testid="planning-discard-draft"
+                      onClick={() => void handlePlanningDiscardDraft()}
+                      className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
+                    >
+                      Discard draft
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid="planning-cancel-review"
+                      onClick={handlePlanningCancelReview}
+                      className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => navigatePlanGraphAndFit('planning-draft-review')}
+                className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
+              >
+                Open graph
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4 p-4 text-sm">
+              <div>
+                <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Goal</div>
+                <p className="mt-1 text-foreground">
+                  {activePlanningSession.title === 'Untitled plan'
+                    ? 'Describe a goal in the chat to begin drafting.'
+                    : activePlanningSession.title}
+                </p>
+              </div>
+              {draftPlanSummary && (
+                <div>
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Draft</div>
+                  <p className="mt-1 text-foreground">
+                    {draftPlanSummary.name} · {draftPlanSummary.taskCount} task{draftPlanSummary.taskCount === 1 ? '' : 's'}
+                  </p>
+                </div>
+              )}
+              {activePlanningSession.submittedPlanName && (
+                <div>
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Submitted</div>
+                  <p className="mt-1 text-foreground">{activePlanningSession.submittedPlanName}</p>
+                </div>
+              )}
+              {(draftPlanAvailable || activePlanningSession.status === 'submitted') && (
+                <button
+                  type="button"
+                  data-testid="planning-context-open-graph"
+                  onClick={() => navigatePlanGraphAndFit('planning-context')}
+                  className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
+                >
+                  Open graph
+                </button>
+              )}
+            </div>
+          )
         )}
-        <button
-          type="button"
-          data-testid="planning-context-toggle"
-          aria-label={planningContextCollapsed ? 'Expand current plan' : 'Collapse current plan'}
-          onClick={() => setPlanningContextCollapsed((value) => !value)}
-          className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary"
-        >
-          {planningContextCollapsed ? '›' : '‹'}
-        </button>
-      </div>
-      {!planningContextCollapsed && (
-        reviewingDraft ? (
-          <div className="space-y-4 p-4 text-sm">
-            {draftTaskGroups.map((group, groupIndex) => (
-              <section key={`${group.workflow ?? 'plan'}-${groupIndex}`} data-testid="draft-task-group">
-                {group.workflow && <h3 className="text-xs font-medium text-foreground">{group.workflow}</h3>}
-                <ul className={group.workflow ? 'mt-2 space-y-1.5' : 'space-y-1.5'}>
-                  {group.tasks.map((task, taskIndex) => (
-                    <li key={`${task}-${taskIndex}`} data-testid="draft-step-summary" className="text-xs leading-5 text-muted-foreground">
-                      {task}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))}
-            {draftPlanText && (
-              <pre data-testid="draft-raw-yaml" className="max-h-56 overflow-auto rounded-md border border-border bg-background p-3 text-[11px] leading-5 text-muted-foreground">
-                {draftPlanText}
-              </pre>
-            )}
-            <Button
-              type="button"
-              data-testid="planning-create-workflow"
-              onClick={() => void handlePlanningSubmitDraft()}
-              className="w-full"
-            >
-              Create workflow
-            </Button>
-            <button
-              type="button"
-              onClick={() => navigatePlanGraphAndFit('planning-draft-review')}
-              className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
-            >
-              Open graph
-            </button>
-          </div>
-        ) : (
-          <div className="space-y-4 p-4 text-sm">
-          <div>
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Goal</div>
-            <p className="mt-1 text-foreground">
-              {activePlanningSession.title === 'Untitled plan'
-                ? 'Describe a goal in the chat to begin drafting.'
-                : activePlanningSession.title}
-            </p>
-          </div>
-          {draftPlanSummary && (
-            <div>
-              <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Draft</div>
-              <p className="mt-1 text-foreground">
-                {draftPlanSummary.name} · {draftPlanSummary.taskCount} task{draftPlanSummary.taskCount === 1 ? '' : 's'}
-              </p>
-            </div>
-          )}
-          {activePlanningSession.submittedPlanName && (
-            <div>
-              <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Submitted</div>
-              <p className="mt-1 text-foreground">{activePlanningSession.submittedPlanName}</p>
-            </div>
-          )}
-          {(draftPlanAvailable || activePlanningSession.status === 'submitted') && (
-            <button
-              type="button"
-              data-testid="planning-context-open-graph"
-              onClick={() => navigatePlanGraphAndFit('planning-context')}
-              className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
-            >
-              Open graph
-            </button>
-          )}
-          </div>
-        )
-      )}
-    </aside>
+      </aside>
     );
   };
 
@@ -4227,6 +4337,7 @@ export function App() {
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
+            selectedConfirmationMode={selectedPlanningConfirmationMode}
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
@@ -4238,7 +4349,8 @@ export function App() {
             submittedPlanName={activePlanningSession.submittedPlanName}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
-            onPresetChange={setSelectedPlanningPresetKey}
+            onPresetChange={handlePlanningPresetChange}
+            onConfirmationModeChange={handlePlanningConfirmationModeChange}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
             onOpenGraph={() => navigatePlanGraphAndFit('planning-open-graph')}
@@ -4559,6 +4671,7 @@ export function App() {
             value={planningInput}
             selectedPresetKey={selectedPlanningPresetKey}
             presetOptions={planningPresetOptions}
+            selectedConfirmationMode={selectedPlanningConfirmationMode}
             draftPlanAvailable={draftPlanAvailable}
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
@@ -4571,7 +4684,8 @@ export function App() {
             onValueChange={setPlanningInput}
             readOnly={activePlanningReadOnly}
             onSubmit={() => void handlePlanningSubmit()}
-            onPresetChange={setSelectedPlanningPresetKey}
+            onPresetChange={handlePlanningPresetChange}
+            onConfirmationModeChange={handlePlanningConfirmationModeChange}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
             onCloseExpanded={() => setPlanningTerminalExpanded(false)}
