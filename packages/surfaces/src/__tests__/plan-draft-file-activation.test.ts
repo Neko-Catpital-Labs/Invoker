@@ -113,6 +113,47 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
+  it('removes the standalone submit line from a no-draft reply before saving it', async () => {
+    const repo = {
+      loadConversation: vi.fn(() => null),
+      saveConversation: vi.fn(),
+      deleteConversation: vi.fn(),
+    };
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'no-draft-submit-line',
+      conversationRepo: repo as any,
+      plannerRetryLimit: 0,
+    });
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan.\n\nReply `submit` to submit it.'));
+    const reply = await conversation.sendMessage('Draft it');
+
+    expect(reply).toBe('Drafted the plan.');
+    expect(reply).not.toContain('Reply `submit` to submit it.');
+    expect(conversation.lastTurnDraftPlanText).toBeNull();
+    expect(conversation.history[1]).toEqual({ role: 'assistant', content: 'Drafted the plan.' });
+    expect(repo.saveConversation).toHaveBeenCalled();
+    const savedMessages = repo.saveConversation.mock.calls.at(-1)?.[1];
+    expect(savedMessages[1]).toEqual({ role: 'assistant', content: 'Drafted the plan.' });
+  });
+
+  it('keeps the standalone submit line when the current turn produced a real draft', async () => {
+    const conversation = new PlanConversation({ workingDir, threadTs: 'real-draft-submit-line', plannerRetryLimit: 0 });
+    const path = conversation.planDraftFilePath();
+    if (!path) throw new Error('expected a plan draft path');
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(
+      'Drafted the plan.\n\nReply `submit` to submit it.',
+      () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
+    ));
+    const reply = await conversation.sendMessage('Draft it');
+
+    expect(reply).toContain('Reply `submit` to submit it.');
+    expect(conversation.history[1].content).toContain('Reply `submit` to submit it.');
+    expect(conversation.lastTurnDraftPlanText).toBe(VALID_PLAN_YAML.trim());
+  });
+
   it('routes approval through the review flow instead of a submit reply', () => {
     const conversation = new PlanConversation({});
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
