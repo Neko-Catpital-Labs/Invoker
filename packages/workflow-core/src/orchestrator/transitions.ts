@@ -275,6 +275,7 @@ export function handleReviewReadyImpl(
     execution: {
       exitCode: parsed.exitCode,
       branch: parsed.branch,
+      workspacePath: parsed.workspacePath,
       reviewUrl: parsed.reviewUrl,
       reviewId: parsed.reviewId,
       reviewStatus: parsed.reviewStatus,

@@ -870,7 +870,7 @@ export async function runMergeGateActionImpl(
           actionId: task.id,
           executionGeneration: task.execution.generation ?? 0,
           status: 'review_ready',
-          outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
+          outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
         };
         return {
           response,
@@ -977,6 +977,7 @@ export async function runMergeGateActionImpl(
             exitCode: 0,
             summary,
             branch: featureBranch,
+            workspacePath: gateWorkspacePath,
             reviewUrl,
             reviewId,
             reviewStatus,
@@ -1003,7 +1004,7 @@ export async function runMergeGateActionImpl(
         actionId: task.id,
         executionGeneration: task.execution.generation ?? 0,
         status: 'completed',
-        outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
+        outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
       };
     } catch (err) {
       logTaskProgress(host, task.id, 'error', 'Merge gate failed', {
@@ -1042,7 +1043,7 @@ export async function runMergeGateActionImpl(
         actionId: task.id,
         executionGeneration: task.execution.generation ?? 0,
         status: 'review_ready',
-        outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
+        outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
       };
       return {
         response,
@@ -1057,7 +1058,7 @@ export async function runMergeGateActionImpl(
       actionId: task.id,
       executionGeneration: task.execution.generation ?? 0,
       status: 'completed',
-      outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined },
+      outputs: { exitCode: 0, summary, branch: featureBranch ?? undefined, workspacePath: gateWorkspacePath },
     };
   }
 
