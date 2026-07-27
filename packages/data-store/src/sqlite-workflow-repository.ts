@@ -27,6 +27,7 @@ import type { SearchResultItem, SearchOptions } from '@invoker/contracts';
 import type {
   ReviewGateLookup,
   Workflow,
+  WorkflowListOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
 } from './adapter.js';
@@ -174,16 +175,23 @@ export class SqliteWorkflowRepository {
     this.exec.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    const row = this.exec.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+  loadWorkflow(workflowId: string, opts?: WorkflowListOptions): Workflow | undefined {
+    const row = this.exec.queryOne(
+      opts?.includeDeleted
+        ? 'SELECT * FROM workflows WHERE id = ?'
+        : 'SELECT * FROM workflows WHERE id = ? AND deleted_at IS NULL',
+      [workflowId],
+    );
     if (!row) return undefined;
     const rollup = this.loadWorkflowRollups([workflowId]).get(workflowId);
     return this.rowToWorkflow(row, rollup);
   }
 
-  listWorkflows(): Workflow[] {
+  listWorkflows(opts?: WorkflowListOptions): Workflow[] {
     const rows = this.exec.queryAll(
-      'SELECT * FROM workflows ORDER BY created_at DESC',
+      opts?.includeDeleted
+        ? 'SELECT * FROM workflows ORDER BY created_at DESC'
+        : 'SELECT * FROM workflows WHERE deleted_at IS NULL ORDER BY created_at DESC',
     );
     const workflowIds = rows.map((row) => String(row.id));
     const rollups = this.loadWorkflowRollups(workflowIds);
@@ -205,7 +213,9 @@ export class SqliteWorkflowRepository {
               w.base_branch AS baseBranch
          FROM tasks t
          JOIN workflows w ON w.id = t.workflow_id
-        WHERE t.is_merge_node = 1 AND (t.review_id = ? OR t.review_url LIKE ?)`,
+        WHERE w.deleted_at IS NULL
+          AND t.is_merge_node = 1
+          AND (t.review_id = ? OR t.review_url LIKE ?)`,
       [pr, `%/pull/${pr}`],
     );
     if (rows.length === 0) return undefined;
@@ -257,7 +267,8 @@ export class SqliteWorkflowRepository {
     if (type === 'workflows' || type === 'all') {
       const workflows = this.exec.queryAll(
         `SELECT id, name, description, plan_file, repo_url, branch, created_at FROM workflows 
-         WHERE name LIKE ? OR description LIKE ? OR plan_file LIKE ? OR repo_url LIKE ? OR branch LIKE ? 
+         WHERE deleted_at IS NULL
+           AND (name LIKE ? OR description LIKE ? OR plan_file LIKE ? OR repo_url LIKE ? OR branch LIKE ?)
          LIMIT ? OFFSET ?`,
         [safeQuery, safeQuery, safeQuery, safeQuery, safeQuery, limit, offset]
       ) as Array<{ id: string; name?: string | null; created_at: string }>;
@@ -299,7 +310,7 @@ export class SqliteWorkflowRepository {
         const placeholders = workflowIds.map(() => '?').join(',');
         const workflowRows = this.exec.queryAll(
           `SELECT id, name FROM workflows WHERE id IN (${placeholders})`,
-          workflowIds
+          workflowIds,
         ) as Array<{ id: string; name?: string | null }>;
         for (const wf of workflowRows) {
           workflowNameMap.set(wf.id, wf.name || 'Unnamed workflow');
@@ -323,16 +334,27 @@ export class SqliteWorkflowRepository {
     return results;
   }
 
-  loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
+  loadWorkflowTaskSnapshot(opts?: WorkflowListOptions): WorkflowTaskSnapshot {
     const totalStartedAt = Date.now();
     const workflowQueryStartedAt = Date.now();
-    const workflowRows = this.exec.queryAll('SELECT * FROM workflows ORDER BY created_at DESC');
+    const workflowRows = this.exec.queryAll(
+      opts?.includeDeleted
+        ? 'SELECT * FROM workflows ORDER BY created_at DESC'
+        : 'SELECT * FROM workflows WHERE deleted_at IS NULL ORDER BY created_at DESC',
+    );
     const workflowMetadataQueryMs = Date.now() - workflowQueryStartedAt;
     const taskQueryStartedAt = Date.now();
-    const taskRows = this.exec.queryAll('SELECT * FROM tasks ORDER BY workflow_id ASC, id ASC');
+    const workflowIds = workflowRows.map((row) => String(row.id));
+    const taskRows = workflowIds.length > 0
+      ? this.exec.queryAll(
+        `SELECT * FROM tasks
+         WHERE workflow_id IN (${workflowIds.map(() => '?').join(', ')})
+         ORDER BY workflow_id ASC, id ASC`,
+        workflowIds,
+      )
+      : [];
     const taskQueryMs = Date.now() - taskQueryStartedAt;
     const tasksByWorkflowId = new Map<string, TaskState[]>();
-    const workflowIds = workflowRows.map((row) => String(row.id));
     const rollupStartedAt = Date.now();
     const rollups = this.computeWorkflowRollupsFromRows(workflowIds, taskRows);
     const rollupComputationMs = Date.now() - rollupStartedAt;

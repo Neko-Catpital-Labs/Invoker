@@ -126,8 +126,12 @@ export interface Workflow {
   generation?: number;
   createdAt: string;
   updatedAt: string;
+  deletedAt?: number;
 }
 export type WorkflowSaveInput = Omit<Workflow, 'status' | 'rollup'>;
+export interface WorkflowListOptions {
+  includeDeleted?: boolean;
+}
 
 /**
  * Result of resolving a published PR back to its Invoker workflow via the merge
@@ -333,8 +337,8 @@ export interface PersistenceAdapter {
   // Workflows
   saveWorkflow(workflow: WorkflowSaveInput): void;
   updateWorkflow(workflowId: string, changes: Partial<Pick<Workflow, 'name' | 'description' | 'visualProof' | 'planFile' | 'repoUrl' | 'intermediateRepoUrl' | 'branch' | 'onFinish' | 'baseBranch' | 'featureBranch' | 'mergeMode' | 'reviewProvider' | 'externalDependencies' | 'externalDependencyChanges' | 'detachedExternalDependencies' | 'generation' | 'updatedAt'>>): void;
-  loadWorkflow(workflowId: string): Workflow | undefined;
-  listWorkflows(): Workflow[];
+  loadWorkflow(workflowId: string, opts?: WorkflowListOptions): Workflow | undefined;
+  listWorkflows(opts?: WorkflowListOptions): Workflow[];
   searchWorkflowsAndTasks(query: string, opts?: SearchOptions): SearchResultItem[];
   /** Resolve a GitHub PR number back to its Invoker workflow via the merge node. */
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined;
@@ -343,7 +347,7 @@ export interface PersistenceAdapter {
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   loadTasks(workflowId: string): TaskState[];
-  loadWorkflowTaskSnapshot?(): WorkflowTaskSnapshot;
+  loadWorkflowTaskSnapshot?(opts?: WorkflowListOptions): WorkflowTaskSnapshot;
   /** Authoritative single-task read by ID, suitable for recovery workflows. */
   loadTask(taskId: string): TaskState | undefined;
   /** Delete one task and its task-owned rows. */

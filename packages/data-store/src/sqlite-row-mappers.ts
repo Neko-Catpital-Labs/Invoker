@@ -49,6 +49,7 @@ export function mapRowToWorkflow(row: any, rollup?: WorkflowRollup): Workflow {
     generation: row.generation ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    deletedAt: row.deleted_at === null || row.deleted_at === undefined ? undefined : Number(row.deleted_at),
   };
 }
 
