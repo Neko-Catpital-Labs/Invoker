@@ -519,7 +519,7 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
       await preemptTaskSubgraph(taskId, deps);
     }
 
-    const envelope = makeEnvelope('restart-task', 'headless', 'task', { taskId });
+    const envelope = makeEnvelope('retry-task', 'headless', 'task', { taskId });
     const result = deps.mutationTiming
       ? await deps.mutationTiming.span(
         'headless.retry-task.commandService.retryTask',
@@ -566,7 +566,7 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
       orchestrator: deps.orchestrator,
       taskExecutor,
       logger: deps.logger,
-      context: 'headless.restart-task',
+      context: 'headless.retry-task',
       started: result.data,
       scopedTaskIds: [taskId],
       mutationTiming: deps.mutationTiming,
