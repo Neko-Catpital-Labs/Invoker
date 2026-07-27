@@ -12,6 +12,7 @@ REPROS=(
   scripts/repro/repro-babysit-pr-body-human-split.sh
   scripts/repro/repro-babysit-human-review-thread-block.sh
   scripts/repro/repro-babysit-pr-body-proof-human-split.sh
+  scripts/repro/repro-babysit-pr-body-log-invalid-stop.sh
   scripts/repro/repro-babysit-pr-body-valid-noop.sh
   scripts/repro/repro-babysit-amended-repair-push.sh
   scripts/repro/repro-babysit-outdated-bot-thread.sh

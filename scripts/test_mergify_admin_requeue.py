@@ -421,6 +421,42 @@ Failing checks
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
 
+    def test_pr_body_log_validation_blocks_without_claude(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        log_path = Path(tmp.name) / "pr-body.log"
+        log_path.write_text(
+            "\n".join([
+                "PR Body\tValidate PR body\t2026-07-27T17:18:35.1841482Z PR body validation failed:",
+                "PR Body\tValidate PR body\t2026-07-27T17:18:35.1852714Z - Review lane policy cannot ship with product files in the same PR. Keep tooling/runtime policy separate from behavior and proof changes.",
+                'PR Body\tValidate PR body\t2026-07-27T17:18:35.1857321Z - PR body Review Unit "tooling-policy" cannot ship with routing, docs files in the same PR. Split this into one Review Unit per PR.',
+                "PR Body\tValidate PR body\t2026-07-27T17:18:35.2062176Z ##[error]Process completed with exit code 1.",
+            ]),
+            encoding="utf-8",
+        )
+        item = pr(
+            6048,
+            body="## Summary\n\nPolicy slice.\n",
+            checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")},
+        )
+        repairer = self.repairer(object(), self.ledger())
+        stderr = io.StringIO()
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value=str(log_path)):
+                with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                    with mock.patch.object(repairer, "run_claude_repair") as repair:
+                        with mock.patch.object(repairer, "validate_current_pr_body") as validate:
+                            with redirect_stderr(stderr):
+                                result = repairer.repair_check(item, "PR Body")
+        self.assertEqual(result.status, "blocked_invalid")
+        self.assertEqual(result.errors, (
+            "Review lane policy cannot ship with product files in the same PR. Keep tooling/runtime policy separate from behavior and proof changes.",
+            'PR body Review Unit "tooling-policy" cannot ship with routing, docs files in the same PR. Split this into one Review Unit per PR.',
+        ))
+        repair.assert_not_called()
+        validate.assert_not_called()
+        self.assertIn('"event": "admin-bypass-pr-body-log-invalid"', stderr.getvalue())
+
     def test_repair_check_noop_skips_validation_when_pr_merges_during_repair(self):
         class FakeGh:
             def pr_detail(self, repo, number):

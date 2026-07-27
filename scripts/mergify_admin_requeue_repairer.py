@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 from typing import Mapping, Sequence
@@ -32,6 +33,8 @@ PROOF_TOOLING_POLICY_UNIT_ERROR = (
 )
 NON_TRUNK_PREREQ_ERROR = "automatic tooling-policy split is only supported for base master"
 NON_TRUNK_MANUAL_SPLIT_ERROR = "worker cannot auto-split this PR on a non-trunk base; human stack split required"
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+GITHUB_LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d\d-\d\dT\S+\s+")
 
 
 def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tuple[str, ...]:
@@ -415,6 +418,38 @@ class AdminBypassRepairer:
         except OSError:
             return False
 
+    def job_log_line_message(self, line: str) -> str:
+        clean = ANSI_ESCAPE_RE.sub("", line).strip()
+        if "\t" in clean:
+            clean = clean.split("\t")[-1].strip()
+        return GITHUB_LOG_TIMESTAMP_RE.sub("", clean).strip()
+
+    def pr_body_validation_errors_from_job_log(self, log_path: str) -> tuple[str, ...]:
+        if not log_path:
+            return ()
+        try:
+            lines = Path(log_path).read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ()
+        errors: list[str] = []
+        collecting = False
+        for raw_line in lines:
+            line = self.job_log_line_message(raw_line)
+            if "PR body validation failed:" in line:
+                collecting = True
+                continue
+            if not collecting:
+                continue
+            if not line:
+                continue
+            if line.startswith("##[error]") or "Process completed with exit code" in line:
+                break
+            if line.startswith("- "):
+                error = line[2:].strip()
+                if error:
+                    errors.append(error)
+        return tuple(errors)
+
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
@@ -434,6 +469,29 @@ class AdminBypassRepairer:
                 errors=(f"queue-only check {check_name} is missing a Mergify job URL",),
             )
         log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
+        if check_name == "PR Body":
+            log_errors = self.pr_body_validation_errors_from_job_log(log_path)
+            if log_errors:
+                terminal = self.terminal_repair_outcome(pr, check_name, start_head, start_head, work_root)
+                if terminal:
+                    return terminal
+                self.logger.trace(
+                    "admin-bypass-pr-body-log-invalid",
+                    repo=self.repo,
+                    pr_number=pr.number,
+                    check_name=check_name,
+                    head_sha=pr.head_ref_oid,
+                    details_url=details_url,
+                    log_path=log_path,
+                    errors=list(log_errors),
+                )
+                return self.blocked_outcome(
+                    "blocked_invalid",
+                    check_name,
+                    start_head,
+                    start_head,
+                    errors=log_errors,
+                )
         if check_name == "PR Body" and self.job_log_is_empty(log_path):
             terminal = self.terminal_repair_outcome(pr, check_name, start_head, start_head, work_root)
             if terminal:
