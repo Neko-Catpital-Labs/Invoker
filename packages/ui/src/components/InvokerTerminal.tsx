@@ -141,6 +141,15 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+const TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS = 64 * 1024;
+
+function appendSeededOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  if (!chunk) return snapshot ?? '';
+  const next = `${snapshot ?? ''}${chunk}`;
+  if (next.length <= TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS) return next;
+  return next.slice(next.length - TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS);
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
@@ -222,6 +231,15 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
       if (event.sessionId !== session.sessionId) return;
       try {
         term.write(event.data);
+        const seededSnapshot = seededSnapshotRef.current;
+        const previousSnapshot = seededSnapshot?.sessionId === session.sessionId && seededSnapshot.term === term
+          ? seededSnapshot.snapshot
+          : session.outputSnapshot ?? '';
+        seededSnapshotRef.current = {
+          sessionId: session.sessionId,
+          snapshot: appendSeededOutputSnapshot(previousSnapshot, event.data),
+          term,
+        };
       } catch {
         /* terminal disposed */
       }

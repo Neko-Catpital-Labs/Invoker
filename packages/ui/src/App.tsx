@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -399,6 +399,15 @@ function planningSessionStatusLabel(session: PlanningSessionView): string {
   if (session.status === 'waiting_for_answer') return 'Waiting for answer';
   if (session.status === 'submitted') return 'Submitted';
   return 'Still discussing';
+}
+
+const TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS = 64 * 1024;
+
+function appendTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  if (!chunk) return snapshot ?? '';
+  const next = `${snapshot ?? ''}${chunk}`;
+  if (next.length <= TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS) return next;
+  return next.slice(next.length - TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS);
 }
 
 function relativePlanningUpdatedAt(value: string): string {
@@ -1279,6 +1288,45 @@ export function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [graphMaximized, planningTerminalExpanded]);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event: TerminalOutputEvent) => {
+      if (event.kind !== 'planning' || typeof event.data !== 'string' || event.data.length === 0) return;
+
+      const eventPlanningSessionId = typeof event.planningSessionId === 'string'
+        ? event.planningSessionId.trim()
+        : '';
+
+      setPlanningSessions((prev) => {
+        const planningSessionIndex = eventPlanningSessionId
+          ? prev.findIndex((session) => session.id === eventPlanningSessionId)
+          : -1;
+        const targetIndex = planningSessionIndex >= 0
+          ? planningSessionIndex
+          : prev.findIndex((session) => session.terminalSession?.sessionId === event.sessionId);
+
+        if (targetIndex < 0) return prev;
+
+        const targetSession = prev[targetIndex];
+        if (!targetSession?.terminalSession) return prev;
+
+        const outputSnapshot = appendTerminalOutputSnapshot(targetSession.terminalSession.outputSnapshot, event.data);
+        if (outputSnapshot === (targetSession.terminalSession.outputSnapshot ?? '')) return prev;
+
+        const next = [...prev];
+        next[targetIndex] = {
+          ...targetSession,
+          terminalSession: {
+            ...targetSession.terminalSession,
+            status: targetSession.terminalSession.status === 'exited' ? 'exited' : 'running',
+            outputSnapshot,
+          },
+        };
+        return next;
+      });
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
 
 
   useEffect(() => {
