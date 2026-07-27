@@ -550,6 +550,62 @@ describe('GitHub auth check', () => {
 });
 
 describe('setup oneshot ending', () => {
+  it('runs GitHub auth through the injected command runner', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-gh-ok-'));
+    const lines: string[] = [];
+    const savedHome = process.env.HOME;
+    const calls: Array<{ command: string; args: readonly string[] }> = [];
+    try {
+      process.env.HOME = home;
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, {
+        isInstalled: () => true,
+        commandRunner: (command, args) => {
+          calls.push({ command, args });
+          return { status: 0, stdout: 'Logged in', stderr: '' };
+        },
+        smokePlanValidation: async () => okCheck('smoke-plan', 'Smoke plan validation', 'Parsed 1 task(s)'),
+      });
+
+      expect(code).toBe(0);
+      expect(calls).toEqual([{ command: 'gh', args: ['auth', 'status'] }]);
+      expect(lines.join('\n')).toContain('GitHub auth: gh is authenticated');
+      expect(lines.join('\n')).toContain("You're ready.");
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('surfaces injected GitHub auth failure in the final summary', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-gh-fail-'));
+    const lines: string[] = [];
+    const savedHome = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, {
+        isInstalled: () => true,
+        commandRunner: () => ({ status: 1, stdout: '', stderr: 'not logged in to any GitHub hosts' }),
+        smokePlanValidation: async () => okCheck('smoke-plan', 'Smoke plan validation', 'Parsed 1 task(s)'),
+      });
+
+      expect(code).toBe(1);
+      expect(lines.join('\n')).toContain('GitHub auth: not logged in to any GitHub hosts');
+      expect(lines.join('\n')).toContain('Fix this first: GitHub auth: not logged in to any GitHub hosts.');
+      expect(lines.join('\n')).toContain('gh auth login');
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('selects the first error for Fix this first', () => {
     const checks: Check[] = [
       okCheck('a', 'A'),
