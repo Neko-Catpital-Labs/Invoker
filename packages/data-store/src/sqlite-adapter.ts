@@ -38,6 +38,7 @@ import type {
   PersistenceAdapter,
   ReviewGateLookup,
   Workflow,
+  WorkflowListOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -78,6 +79,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendEntitySnapshotJournalEntry } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -1054,12 +1056,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, options?: WorkflowListOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, options);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(options?: WorkflowListOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(options);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1085,7 +1087,29 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
-    this.taskAttemptRepo.updateTask(taskId, changes);
+    if (changes.status === undefined) {
+      this.taskAttemptRepo.updateTask(taskId, changes);
+      return;
+    }
+
+    this.runTransaction(() => {
+      const beforeTask = this.taskAttemptRepo.loadTask(taskId);
+      if (!beforeTask) return;
+      const workflowId = beforeTask.config.workflowId;
+      const beforeWorkflowStatus = workflowId
+        ? this.workflowRepo.loadWorkflow(workflowId)?.status
+        : undefined;
+
+      this.taskAttemptRepo.updateTask(taskId, changes);
+
+      if (!workflowId || changes.status === beforeTask.status || beforeWorkflowStatus === undefined) {
+        return;
+      }
+      const afterWorkflowStatus = this.workflowRepo.loadWorkflow(workflowId)?.status;
+      if (afterWorkflowStatus !== undefined && afterWorkflowStatus !== beforeWorkflowStatus) {
+        appendEntitySnapshotJournalEntry(this.executor, 'workflow', workflowId, 'upsert');
+      }
+    });
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -1558,7 +1582,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
 
   deleteWorkflow(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
+    let deleted = false;
     this.runTransaction(() => {
+      const existing = this.queryOne('SELECT id FROM workflows WHERE id = ? AND deleted_at IS NULL', [workflowId]);
+      if (!existing) return;
+
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
@@ -1598,9 +1626,16 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      this.db.run(
+        'UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ?',
+        [Date.now(), new Date().toISOString(), workflowId],
+      );
+      appendEntitySnapshotJournalEntry(this.executor, 'workflow', workflowId, 'tombstone');
+      deleted = true;
     });
-    this.removeOutputFiles(taskIds);
+    if (deleted) {
+      this.removeOutputFiles(taskIds);
+    }
   }
 
   // ── Events ────────────────────────────────────────────
