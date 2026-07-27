@@ -86,6 +86,8 @@ import {
   ExecutorRegistry,
   TaskRunner,
   WorktreeExecutor,
+  INFRA_REPAIR_RECREATE_TASK_CHANNEL,
+  INFRA_REPAIR_RETRY_TASK_CHANNEL,
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
@@ -95,6 +97,8 @@ import {
   registerBuiltinAgents,
   registerBuiltinWorkers,
   parseSpawnRepairWorkflowMutationArgs,
+  parseInfraRepairRecreateTaskMutationArgs,
+  parseInfraRepairRetryTaskMutationArgs,
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
   parseReviewGateCiRepairWorkflowMutationArgs,
@@ -1590,9 +1594,9 @@ function startHeadlessMode(): void {
             return result;
           });
         }
-        if (!workflowMutationDispatcher.has('invoker:requeue')) {
-          workflowMutationDispatcher.set('invoker:requeue', async (...requeueArgs: unknown[]) => {
-            const { taskId } = parseRequeueMutationArgs(requeueArgs);
+        if (!workflowMutationDispatcher.has(INFRA_REPAIR_RETRY_TASK_CHANNEL)) {
+          workflowMutationDispatcher.set(INFRA_REPAIR_RETRY_TASK_CHANNEL, async (...retryArgs: unknown[]) => {
+            const { taskId } = parseInfraRepairRetryTaskMutationArgs(retryArgs);
             await runHeadless(['retry-task', taskId], {
               ...headlessDeps,
               waitForApproval: false,
@@ -1603,12 +1607,29 @@ function startHeadlessMode(): void {
             return { ok: true };
           });
         }
-        if (!workflowMutationDispatcher.has('invoker:requeue-escalate')) {
-          workflowMutationDispatcher.set('invoker:requeue-escalate', async (...escalateArgs: unknown[]) => {
-            const { taskId, prompt } = parseRequeueEscalateMutationArgs(escalateArgs);
-            const envelope = makeEnvelope('escalate-stalled', 'headless', 'task', { taskId, prompt });
-            const result = await commandService.escalateStalledToNeedsInput(envelope);
-            if (!result.ok) throw new Error(result.error.message);
+        if (!workflowMutationDispatcher.has(INFRA_REPAIR_RECREATE_TASK_CHANNEL)) {
+          workflowMutationDispatcher.set(INFRA_REPAIR_RECREATE_TASK_CHANNEL, async (...recreateArgs: unknown[]) => {
+            const { taskId } = parseInfraRepairRecreateTaskMutationArgs(recreateArgs);
+            await runHeadless(['recreate-task', taskId], {
+              ...headlessDeps,
+              waitForApproval: false,
+              noTrack: true,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:requeue')) {
+          workflowMutationDispatcher.set('invoker:requeue', async (...requeueArgs: unknown[]) => {
+            const { taskId } = parseRequeueMutationArgs(requeueArgs);
+            await runHeadless(['retry-task', taskId], {
+              ...headlessDeps,
+              waitForApproval: false,
+              noTrack: true,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
             return { ok: true };
           });
         }
