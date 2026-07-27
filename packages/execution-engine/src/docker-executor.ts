@@ -9,6 +9,7 @@ import { computeContentHash, buildExperimentBranchName } from './branch-utils.js
 import type { AgentRegistry } from './agent-registry.js';
 import { DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { traceExecution } from './exec-trace.js';
+import { syncPlanBaseRemoteForRef } from './plan-base-remote.js';
 
 const CONTAINER_STOP_TIMEOUT_S = 5;
 const TAG = '[DockerExecutor]';
@@ -376,12 +377,11 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     emit(`${TAG} Container started`);
 
     return await this.containerContext.run(container.id, async () => {
-      // -- Git setup (reuses BaseExecutor methods via overridden execGitSimple + runBash) --
       await this.syncFromRemote(CONTAINER_CWD, executionId);
 
       const baseRef = request.inputs.baseBranch ?? 'HEAD';
+      await syncPlanBaseRemoteForRef((args) => this.execGitSimple(args, CONTAINER_CWD), baseRef);
       const baseHead = (await this.execGitSimple(['rev-parse', baseRef], CONTAINER_CWD)).trim();
-      const startupBaseHead = request.inputs.upstreamBase?.commitHash?.trim() || baseHead;
       const upstreamCommits = (request.inputs.upstreamContext ?? [])
         .map(c => c.commitHash)
         .filter((h): h is string => !!h);
@@ -390,7 +390,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
         request.inputs.command,
         request.inputs.prompt,
         upstreamCommits,
-        startupBaseHead,
+        baseHead,
       );
       const branchName = buildExperimentBranchName(
         request.actionId,
@@ -407,9 +407,13 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
         // Best-effort early persistence; the post-start path persists the
         // same value again.
       }
+      const baseBranch = request.inputs.upstreamBranches?.[0]
+        ?? request.inputs.baseBranch
+        ?? 'HEAD';
+
       await this.setupTaskBranch(CONTAINER_CWD, request, handle, {
         branchName,
-        base: startupBaseHead,
+        base: baseBranch,
       });
       entry.branch = handle.branch;
 

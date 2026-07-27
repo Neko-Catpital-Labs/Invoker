@@ -27,6 +27,22 @@ function getGitHubCliTimeoutMs(): number {
   return parsed;
 }
 
+async function listRemoteNamesForGithubCli(
+  exec: (cmd: string, args: string[], cwd: string) => Promise<string>,
+  cwd: string,
+): Promise<string[]> {
+  try {
+    const output = await exec('git', ['remote'], cwd);
+    const names = output
+      .split('\n')
+      .map((name) => name.trim())
+      .filter(Boolean);
+    return names.length > 0 ? names : ['origin'];
+  } catch {
+    return ['origin'];
+  }
+}
+
 export class GitHubMergeGateProvider implements MergeGateProvider {
   readonly name = 'github';
 
@@ -44,8 +60,9 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       `${RESTART_TO_BRANCH_TRACE} GitHubMergeGateProvider.createReview ` +
       `baseBranch=${baseBranch} featureBranch=${featureBranch} title=${title} cwd=${cwd} body=${body}`,
     );
-    const ghBase = normalizeBranchForGithubCli(baseBranch);
-    const ghHead = normalizeBranchForGithubCli(featureBranch);
+    const remoteNames = await listRemoteNamesForGithubCli(this.exec.bind(this), cwd);
+    const ghBase = normalizeBranchForGithubCli(baseBranch, remoteNames);
+    const ghHead = normalizeBranchForGithubCli(featureBranch, remoteNames);
     const targetRepo = await this.resolveTargetRepo(cwd);
     console.log(`[merge-gate] createReview: ghBase=${ghBase} apiHead=${ghHead} cwd=${cwd}`);
 

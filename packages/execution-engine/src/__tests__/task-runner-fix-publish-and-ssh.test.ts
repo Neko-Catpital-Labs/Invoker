@@ -1255,6 +1255,10 @@ describe('TaskRunner', () => {
       });
 
       const ghCalls: string[][] = [];
+      (executor as any).execGitIn = async (args: string[]) => {
+        if (args[0] === 'remote') return 'origin\nupstream\n';
+        return '';
+      };
       (executor as any).execGh = async (args: string[]) => {
         ghCalls.push(args);
         if (args[0] === 'pr' && args[1] === 'list') throw new Error('gh pr list should not be used');
@@ -1272,6 +1276,40 @@ describe('TaskRunner', () => {
 
       const listCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('GET'));
       expect(listCall).toContain('head=owner:plan/experiment');
+
+      const createCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('POST'));
+      expect(createCall).toContain('base=fix/my-work');
+      expect(createCall).toContain('head=plan/experiment');
+    });
+
+    it('execPr strips explicit upstream/ prefixes when the repo advertises that remote', async () => {
+      process.env.INVOKER_GITHUB_TARGET_REPO = 'owner/repo';
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => null } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+      });
+
+      const ghCalls: string[][] = [];
+      (executor as any).execGitIn = async (args: string[]) => {
+        if (args[0] === 'remote') return 'origin\nupstream\n';
+        return '';
+      };
+      (executor as any).execGh = async (args: string[]) => {
+        ghCalls.push(args);
+        if (args[0] === 'pr' && args[1] === 'list') throw new Error('gh pr list should not be used');
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('GET')) return '[]';
+        if (args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('POST')) return '{"html_url":"https://github.com/owner/repo/pull/201","number":201}';
+        return '';
+      };
+
+      await (executor as any).execPr(
+        'upstream/fix/my-work',
+        'upstream/plan/experiment',
+        'Title',
+        'Body',
+      );
 
       const createCall = ghCalls.find(c => c[0] === 'api' && c[1] === 'repos/owner/repo/pulls' && c.includes('POST'));
       expect(createCall).toContain('base=fix/my-work');
