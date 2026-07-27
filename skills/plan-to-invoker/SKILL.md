@@ -63,8 +63,8 @@ Use this mode when invoked by the installed command or MCP prompt. Do not use th
 - Prefer the MCP review/submission flow when available: call `invoker_prepare_plan_review`, show its ordered steps plus `confirmationText`, then call `invoker_submit_plan` only after approval unless the review result carries `confirmationMode: auto_submit`.
 - In an Invoker source checkout, still run `bash skills/plan-to-invoker/scripts/skill-doctor.sh <plan-file>` before the final submission step.
 - Outside an Invoker source checkout, `invoker_prepare_plan_review` is the canonical review surface and `invoker_validate_plan` remains an optional diagnostic, not the approval gate.
-- Plain approval stops after workflow handoff: submit the reviewed workflow plan, report the submitted workflow status, and stop. That approval does not authorize GitHub PR creation, PR updates, or `mergify stack push`.
-- Later PR publication is a separate explicit action. If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
+- Plain approval means workflow handoff only: submit the reviewed workflow plan, report the submitted workflow status, and stop. Do not publish a local branch or create, update, or publish a PR from that approval, including with `mergify stack push`.
+- Later PR publication requires a separate explicit request. If a later request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skills/make-pr/SKILL.md` (or `skill://make-pr/SKILL.md` when available) before PR authoring or publication.
 - If the request involves multiple review slices, first read and follow `skills/review-compression/SKILL.md` (or `skill://review-compression/SKILL.md` when available) before writing workflow YAML.
 
 ## Intended flow (do not skip steps)
