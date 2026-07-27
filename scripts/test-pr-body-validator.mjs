@@ -1085,6 +1085,16 @@ try {
     { cwd: localWrapperTmp, encoding: 'utf8' },
   );
   assert(validLocalWrapper.status === 0, `local wrapper should pass a matching body: ${validLocalWrapper.stderr}`);
+  rmSync(join(localWrapperTmp, 'node_modules'), { recursive: true, force: true });
+  const validLocalWrapperWithoutWorktreeDeps = spawnSync(
+    process.execPath,
+    [join(repoRoot, 'scripts', 'validate-pr-body-local.mjs'), '--body-file', bodyPath, '--base', 'master'],
+    { cwd: localWrapperTmp, encoding: 'utf8' },
+  );
+  assert(
+    validLocalWrapperWithoutWorktreeDeps.status === 0,
+    `local wrapper should use runtime dependencies when the PR worktree has no node_modules: ${validLocalWrapperWithoutWorktreeDeps.stderr}`,
+  );
 
   writeFileSync(bodyPath, validMinimal.replace('- behavior', '- refactor'));
   const refactorNonGoalLocalWrapper = spawnSync(

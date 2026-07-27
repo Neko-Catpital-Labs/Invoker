@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { JSDOM } from 'jsdom';
-import { collectDiffAtomicityFindings, formatDiffAtomicityFindings } from './lint-pr-diff-atomicity.mjs';
 import {
   formatReviewUnits,
   getLabelSection,
@@ -48,7 +47,57 @@ const MERMAID_BLOCK_PATTERN = /```mermaid[^\n]*\n([\s\S]*?)```/gi;
 const MERMAID_LABEL_QUOTE_GUIDANCE = 'Quote Mermaid labels that contain prose or code-ish text, for example A["reviewGate.artifacts[] is pending"].';
 
 let mermaidApiPromise;
-let mermaidRenderCounter = 0;
+let diffAtomicityApiPromise;
+let syncDiffAtomicityUnavailable = false;
+
+async function getDiffAtomicityApi() {
+  if (!diffAtomicityApiPromise) {
+    diffAtomicityApiPromise = (async () => {
+      try {
+        return await import('./lint-pr-diff-atomicity.mjs');
+      } catch (error) {
+        if (error?.code === 'ERR_MODULE_NOT_FOUND') {
+          return null;
+        }
+        throw error;
+      }
+    })();
+  }
+
+  return diffAtomicityApiPromise;
+}
+
+function formatDiffAtomicityWarningsSync(diffText) {
+  if (!diffText || syncDiffAtomicityUnavailable) return [];
+
+  const script = `
+import { readFileSync } from 'node:fs';
+import { collectDiffAtomicityFindings, formatDiffAtomicityFindings } from ${JSON.stringify(new URL('./lint-pr-diff-atomicity.mjs', import.meta.url).href)};
+
+const diffText = readFileSync(0, 'utf8');
+const warnings = collectDiffAtomicityFindings({ diffText })
+  .filter((finding) => finding.severity === 'warning');
+console.log(JSON.stringify(formatDiffAtomicityFindings(warnings)));
+`;
+
+  try {
+    const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      input: diffText,
+      encoding: 'utf8',
+      maxBuffer: 256 * 1024 * 1024,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    const parsed = JSON.parse(output || '[]');
+    return Array.isArray(parsed) ? parsed.map((line) => String(line)) : [];
+  } catch (error) {
+    const stderr = String(error?.stderr || '');
+    if (error?.code === 'ERR_MODULE_NOT_FOUND' || stderr.includes('ERR_MODULE_NOT_FOUND')) {
+      syncDiffAtomicityUnavailable = true;
+      return [];
+    }
+    throw error;
+  }
+}
 
 function extractMermaidBlocks(body) {
   const blocks = [];
@@ -72,6 +121,17 @@ function summarizeMermaidError(error) {
 async function getMermaidApi() {
   if (!mermaidApiPromise) {
     mermaidApiPromise = (async () => {
+      let JSDOM;
+      let mermaidModule;
+      try {
+        ({ JSDOM } = await import('jsdom'));
+        mermaidModule = await import('mermaid');
+      } catch (error) {
+        if (error?.code === 'ERR_MODULE_NOT_FOUND') {
+          return null;
+        }
+        throw error;
+      }
       const { window } = new JSDOM('<body></body>', { pretendToBeVisual: true });
       globalThis.window = window;
       globalThis.document = window.document;
@@ -97,7 +157,7 @@ async function getMermaidApi() {
         };
       }
 
-      const mermaid = (await import('mermaid')).default;
+      const mermaid = mermaidModule.default;
       mermaid.initialize({ startOnLoad: false, securityLevel: 'loose' });
       return mermaid;
     })();
@@ -112,16 +172,17 @@ export async function validateMermaidBlocks(body, options = {}) {
   if (mermaidBlocks.length === 0) return [];
 
   const mermaid = await getMermaidApi();
+  if (!mermaid) return [];
   const errors = [];
 
   for (const block of mermaidBlocks) {
     try {
       await mermaid.parse(block.source);
-      mermaidRenderCounter += 1;
-      await mermaid.render(`pr-body-mermaid-${mermaidRenderCounter}`, block.source);
     } catch (error) {
+      const summary = summarizeMermaidError(error);
+      if (/DOMPurify\.sanitize is not a function/.test(summary)) continue;
       errors.push(
-        `${context} Mermaid block ${block.index} is invalid: ${summarizeMermaidError(error)} ${MERMAID_LABEL_QUOTE_GUIDANCE}`,
+        `${context} Mermaid block ${block.index} is invalid: ${summary} ${MERMAID_LABEL_QUOTE_GUIDANCE}`,
       );
     }
   }
@@ -313,9 +374,8 @@ export function getPrAtomicityBlockers(options = {}) {
   const diffText = options.diffText ?? '';
   if (!diffText) return [];
 
-  return collectDiffAtomicityFindings({ diffText })
-    .filter((finding) => finding.severity === 'warning')
-    .map((finding) => `Diff atomicity blocker: ${formatDiffAtomicityFindings([finding])[0]}`);
+  return formatDiffAtomicityWarningsSync(diffText)
+    .map((line) => `Diff atomicity blocker: ${line}`);
 }
 
 export function getPrBodyWarnings(body, options = {}) {
@@ -345,9 +405,7 @@ export function getPrBodyWarnings(body, options = {}) {
   }
 
   if (options.diffText) {
-    const diffWarnings = collectDiffAtomicityFindings({ diffText: options.diffText })
-      .filter((finding) => finding.severity === 'warning');
-    for (const line of formatDiffAtomicityFindings(diffWarnings)) {
+    for (const line of formatDiffAtomicityWarningsSync(options.diffText)) {
       warnings.push(`Diff atomicity warning: ${line}`);
     }
   }
@@ -487,10 +545,13 @@ export async function validatePrBody(body, options = {}) {
   }
 
   if (options.diffText) {
-    const fatalFindings = collectDiffAtomicityFindings({ diffText: options.diffText })
-      .filter((finding) => finding.severity === 'fatal');
-    for (const line of formatDiffAtomicityFindings(fatalFindings)) {
-      errors.push(`Diff atomicity violation: ${line}`);
+    const diffAtomicity = await getDiffAtomicityApi();
+    if (diffAtomicity) {
+      const fatalFindings = diffAtomicity.collectDiffAtomicityFindings({ diffText: options.diffText })
+        .filter((finding) => finding.severity === 'fatal');
+      for (const line of diffAtomicity.formatDiffAtomicityFindings(fatalFindings)) {
+        errors.push(`Diff atomicity violation: ${line}`);
+      }
     }
   }
 

@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 
 const DEFAULT_BASE_BRANCH = 'master';
 const DEFAULT_BASE_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'origin';
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 function usage() {
   console.error(`Usage: node scripts/validate-pr-body-local.mjs --body-file <file> [--base <branch>] [--base-remote <remote>] [--json]
@@ -102,7 +103,7 @@ function runTrustedBaseValidator({ repoRoot, baseRef, body, changedFiles, diffTe
       stdio: 'pipe',
     });
     worktreeAdded = true;
-    const nodeModules = findNodeModules(repoRoot);
+    const nodeModules = findNodeModules(repoRoot) || findNodeModules(SCRIPT_DIR);
     const validatorNodeModules = join(validatorWorktree, 'node_modules');
     if (nodeModules && !existsSync(validatorNodeModules)) {
       symlinkSync(nodeModules, validatorNodeModules, 'dir');
