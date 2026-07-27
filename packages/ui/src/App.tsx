@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -125,6 +126,14 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
+
+function appendTerminalOutputSnapshot(outputSnapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${outputSnapshot ?? ''}${chunk}`;
+  return nextSnapshot.length <= TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS
+    ? nextSnapshot
+    : nextSnapshot.slice(nextSnapshot.length - TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS);
+}
+
 type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   messages: InvokerTerminalLine[];
   input: string;
@@ -1121,6 +1130,36 @@ export function App() {
             : session
         )),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || event.data.length === 0) return;
+
+      setPlanningSessions((prev) => {
+        let updated = false;
+        const next = prev.map((session) => {
+          const terminalSession = session.terminalSession;
+          if (!terminalSession) return session;
+
+          const matchesSession = event.planningSessionId
+            ? session.id === event.planningSessionId || terminalSession.planningSessionId === event.planningSessionId
+            : terminalSession.sessionId === event.sessionId;
+          if (!matchesSession) return session;
+
+          updated = true;
+          return {
+            ...session,
+            terminalSession: {
+              ...terminalSession,
+              outputSnapshot: appendTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data),
+            },
+          };
+        });
+        return updated ? next : prev;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
