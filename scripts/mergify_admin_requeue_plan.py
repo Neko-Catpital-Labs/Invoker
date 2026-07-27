@@ -269,8 +269,6 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
 
 
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
-    if blocker.kind != "failed_check":
-        return None
     latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
     if latest is None:
         return None
@@ -482,10 +480,14 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
+def _pr_has_human_decision(facts: StackFacts, pr_number: int) -> bool:
+    return any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr_number])
+
+
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
-        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+        if _pr_has_human_decision(facts, pr.number):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
@@ -497,6 +499,8 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
@@ -513,6 +517,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
@@ -528,6 +534,8 @@ def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attemp
 
 def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "pending_check":
                 return None
