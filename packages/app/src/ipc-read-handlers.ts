@@ -159,7 +159,10 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
     }
 
     const { tasks, workflows, streamSequence } = buildTaskGraphSnapshot({
-      orchestrator,
+      orchestrator: {
+        syncAllFromDb: () => orchestrator.syncAllFromDb(),
+        getAllTasks: () => orchestrator.getAllTasks(),
+      },
       persistence,
       getStreamSequence: getTaskDeltaStreamSequence,
     });
