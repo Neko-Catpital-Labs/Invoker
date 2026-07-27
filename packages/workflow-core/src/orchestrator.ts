@@ -629,6 +629,8 @@ export interface OrchestratorConfig {
   deferRunningUntilLaunch?: boolean;
   /** Resolve the repo default branch. Must throw when no safe branch is known. */
   resolveRepoDefaultBranch?: (repoUrl: string) => string;
+  /** Invoked after recreate-class mutations reset the supplied task IDs. */
+  onRecreateTasksReset?: (taskIds: readonly string[]) => void;
   /**
    * Backoff (ms) before a task deferred for a resource limit (no execution-pool
    * member capacity) is re-dispatched by the periodic scheduler. Default is an
@@ -672,6 +674,7 @@ export class Orchestrator {
   private readonly deferRunningUntilLaunch: boolean;
   private readonly launchDeferralBackoffMs?: number;
   private readonly resolveRepoDefaultBranch: (repoUrl: string) => string;
+  private readonly onRecreateTasksReset?: (taskIds: readonly string[]) => void;
 
   private activeWorkflowIds = new Set<string>();
   private deferredTaskIds = new Set<string>();
@@ -730,6 +733,7 @@ export class Orchestrator {
     this.deferRunningUntilLaunch = config.deferRunningUntilLaunch ?? false;
     this.launchDeferralBackoffMs = config.launchDeferralBackoffMs;
     this.resolveRepoDefaultBranch = config.resolveRepoDefaultBranch ?? requireDefaultBranchRemote;
+    this.onRecreateTasksReset = config.onRecreateTasksReset;
 
     this.stateMachine = new TaskStateMachine(new ActionGraph());
     this.responseHandler = new ResponseHandler();
