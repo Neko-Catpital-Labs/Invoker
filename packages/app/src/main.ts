@@ -1725,24 +1725,6 @@ function startHeadlessMode(): void {
           );
         }
         workerRuntimeController.startAutoStartedWorkers();
-        if (command === 'owner-serve') {
-          const ownerServeTaskExecutor = createStandaloneTaskExecutor();
-          const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
-          headlessWebBridge = startWebSurfaceForHeadless(
-            {
-              logger,
-              orchestrator,
-              persistence,
-              messageBus,
-              executionAgentRegistry: agentRegistry,
-              invokerConfig,
-              repoRoot,
-              executorRegistry,
-              appRootDir: __dirname,
-            },
-            apiServerDeps,
-          );
-        }
 
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
@@ -1764,6 +1746,8 @@ function startHeadlessMode(): void {
               messageBus,
               executionAgentRegistry: agentRegistry,
               invokerConfig,
+              repoRoot,
+              executorRegistry,
               appRootDir: __dirname,
             },
             apiServerDeps,
