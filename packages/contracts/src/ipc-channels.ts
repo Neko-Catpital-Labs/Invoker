@@ -609,12 +609,42 @@ export interface WorkflowMutationAcceptedResult {
   channel: string;
 }
 
+export type StartReadyFreshBaseScope =
+  | 'failed'
+  | 'failed-and-pending'
+  | 'failed-pending-and-running'
+  | 'all';
+
+export interface StartReadyFreshBasePreview {
+  scope: StartReadyFreshBaseScope;
+  workflowIds: string[];
+  failedWorkflowIds: string[];
+  pendingWorkflowIds: string[];
+  runningWorkflowIds: string[];
+  completedWorkflowIds?: string[];
+}
+
+export type StartReadyWorkflowOutcome =
+  | {
+      ok: true;
+      workflowId: string;
+      mode: 'recreate' | 'fresh-base-recreate';
+      startedTaskIds: string[];
+    }
+  | {
+      ok: false;
+      workflowId: string;
+      mode: 'recreate' | 'fresh-base-recreate';
+      error: string;
+    };
+
 export interface StartReadyRequest {
   recreateFailed?: boolean;
   recreateFailedAndPending?: boolean;
   recreateFailedPendingAndRunning?: boolean;
   /** Recreate failed + pending/queued + running + completed (finished) workflows. */
   recreateAll?: boolean;
+  freshBaseScope?: StartReadyFreshBaseScope;
   dryRun?: boolean;
 }
 
@@ -625,6 +655,7 @@ export interface StartReadyPreview {
   pendingWorkflowIds: string[];
   runningWorkflowIds: string[];
   completedWorkflowIds?: string[];
+  freshBase?: StartReadyFreshBasePreview;
   skipped: {
     awaitingApproval: number;
     reviewReady: number;
@@ -640,6 +671,9 @@ export interface StartReadyResult {
   preview: StartReadyPreview;
   started: TaskState[];
   recreatedWorkflowIds: string[];
+  freshBaseRecreatedWorkflowIds?: string[];
+  workflowOutcomes?: StartReadyWorkflowOutcome[];
+  partial?: boolean;
   dryRun: boolean;
 }
 
