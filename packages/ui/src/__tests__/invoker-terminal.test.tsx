@@ -14,16 +14,20 @@ vi.mock('@xyflow/react', async () => {
 
 const xtermMock = vi.hoisted(() => {
   type DataHandler = (data: string) => void;
+  type FitDimensions = { cols: number; rows: number };
 
   const instances: MockTerminal[] = [];
   const fitInstances: MockFitAddon[] = [];
   const writeLog: string[] = [];
+  let defaultProposedDimensions: FitDimensions | undefined = { cols: 80, rows: 24 };
 
   class MockTerminal {
     cols = 80;
     rows = 24;
     dataHandler: DataHandler | null = null;
-    loadAddon = vi.fn();
+    loadAddon = vi.fn((addon: { terminal?: MockTerminal | null }) => {
+      addon.terminal = this;
+    });
     open = vi.fn((host: HTMLElement) => {
       const terminalElement = document.createElement('div');
       terminalElement.className = 'xterm';
@@ -46,7 +50,19 @@ const xtermMock = vi.hoisted(() => {
   }
 
   class MockFitAddon {
-    fit = vi.fn();
+    terminal: MockTerminal | null = null;
+    proposedDimensions: FitDimensions | undefined = defaultProposedDimensions;
+    private lastProposedDimensions: FitDimensions | undefined = undefined;
+    proposeDimensions = vi.fn(() => {
+      this.lastProposedDimensions = this.proposedDimensions;
+      return this.proposedDimensions;
+    });
+    fit = vi.fn(() => {
+      const dimensions = this.lastProposedDimensions ?? this.proposedDimensions;
+      if (!dimensions || !this.terminal) return;
+      this.terminal.cols = dimensions.cols;
+      this.terminal.rows = dimensions.rows;
+    });
 
     constructor() {
       fitInstances.push(this);
@@ -59,10 +75,14 @@ const xtermMock = vi.hoisted(() => {
     instances,
     fitInstances,
     writeLog,
+    setDefaultProposedDimensions: (dimensions: FitDimensions | undefined) => {
+      defaultProposedDimensions = dimensions;
+    },
     reset: () => {
       instances.length = 0;
       fitInstances.length = 0;
       writeLog.length = 0;
+      defaultProposedDimensions = { cols: 80, rows: 24 };
     },
   };
 });
@@ -78,6 +98,7 @@ const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
+  let boundsSpy: ReturnType<typeof vi.spyOn> | null = null;
 
   beforeEach(() => {
     xtermMock.reset();
@@ -86,10 +107,57 @@ describe('Invoker terminal (component)', () => {
   });
 
   afterEach(() => {
+    boundsSpy?.mockRestore();
+    boundsSpy = null;
     delete (window as unknown as { __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: unknown }).__INVOKER_TEST_ON_TERMINAL_OUTPUT__;
     xtermMock.reset();
     mock.cleanup();
   });
+
+  function makeRect(width: number, height: number): DOMRect {
+    return {
+      x: 0,
+      y: 0,
+      width,
+      height,
+      top: 0,
+      left: 0,
+      right: width,
+      bottom: height,
+      toJSON: () => ({}),
+    } as DOMRect;
+  }
+
+  function mockPlanningTerminalBounds(width: number, height: number) {
+    boundsSpy?.mockRestore();
+    boundsSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function getBounds(this: HTMLElement) {
+      if (this.dataset.testid === 'invoker-terminal-tmux-pane') {
+        return makeRect(width, height);
+      }
+      return makeRect(0, 0);
+    });
+  }
+
+  async function drainPlanningTerminalFitFrames() {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => resolve());
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => resolve());
+        } else {
+          setTimeout(resolve, 0);
+        }
+      });
+    });
+  }
 
   async function openPlanningTerminal() {
     fireEvent.click(await screen.findByTestId('sidebar-home'));
@@ -226,6 +294,7 @@ describe('Invoker terminal (component)', () => {
   it('mounts planning tmux xterm by default for the active view', async () => {
     const subscribeToOutput = vi.fn(() => vi.fn());
     window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ = subscribeToOutput;
+    mockPlanningTerminalBounds(960, 480);
 
     render(<InvokerTerminal {...terminalProps({
       mode: 'tmux',
@@ -233,12 +302,65 @@ describe('Invoker terminal (component)', () => {
     })} />);
 
     await waitFor(() => expect(xtermMock.instances).toHaveLength(1));
+    await drainPlanningTerminalFitFrames();
     expect(screen.getByTestId('invoker-terminal-tmux-pane').querySelector('.xterm')).not.toBeNull();
     expect(xtermMock.writeLog).toEqual(['restored planning output\n']);
     expect(subscribeToOutput).toHaveBeenCalledTimes(1);
+    expect(xtermMock.fitInstances[0]?.proposeDimensions).toHaveBeenCalled();
     expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
     expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
     expect(mock.api.planningTerminalResize).toHaveBeenCalledWith('planning-terminal-1', 80, 24);
+  });
+
+  it('skips planning tmux resize when proposed dimensions are tiny', async () => {
+    xtermMock.setDefaultProposedDimensions({ cols: 19, rows: 4 });
+    mockPlanningTerminalBounds(960, 480);
+
+    render(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalSession: planningTerminalSession(),
+    })} />);
+
+    await waitFor(() => expect(xtermMock.fitInstances).toHaveLength(1));
+    await drainPlanningTerminalFitFrames();
+    expect(xtermMock.fitInstances[0]?.proposeDimensions).toHaveBeenCalled();
+    expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+    expect(mock.api.planningTerminalResize).not.toHaveBeenCalled();
+  });
+
+  it('sends planning tmux resize after sane dimensions fit', async () => {
+    xtermMock.setDefaultProposedDimensions({ cols: 100, rows: 30 });
+    mockPlanningTerminalBounds(960, 480);
+
+    render(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalSession: planningTerminalSession(),
+    })} />);
+
+    await waitFor(() => expect(xtermMock.fitInstances).toHaveLength(1));
+    await drainPlanningTerminalFitFrames();
+    expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalledTimes(1);
+    expect(mock.api.planningTerminalResize).toHaveBeenCalledTimes(1);
+    expect(mock.api.planningTerminalResize).toHaveBeenCalledWith('planning-terminal-1', 100, 30);
+  });
+
+  it('suppresses duplicate planning tmux resize dimensions', async () => {
+    xtermMock.setDefaultProposedDimensions({ cols: 100, rows: 30 });
+    mockPlanningTerminalBounds(960, 480);
+
+    render(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalSession: planningTerminalSession(),
+    })} />);
+
+    await waitFor(() => expect(xtermMock.fitInstances).toHaveLength(1));
+    await drainPlanningTerminalFitFrames();
+    expect(mock.api.planningTerminalResize).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new Event('focus'));
+    await drainPlanningTerminalFitFrames();
+
+    expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalledTimes(2);
+    expect(mock.api.planningTerminalResize).toHaveBeenCalledTimes(1);
   });
 
   it('does not mount planning tmux xterm or resize while inactive', () => {
