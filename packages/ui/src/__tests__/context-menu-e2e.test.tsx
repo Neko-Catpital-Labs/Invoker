@@ -515,7 +515,7 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
     await expectHighlightedMenuItem('Restart Task');
     pressMenuKey('Enter');
 
-    await waitFor(() => expect(mock.api.restartTask).toHaveBeenCalledWith('task-disabled-terminal'));
+    await waitFor(() => expect(mock.api.retryTask).toHaveBeenCalledWith('task-disabled-terminal'));
     expect(mock.api.openTerminal).not.toHaveBeenCalled();
   });
 });
