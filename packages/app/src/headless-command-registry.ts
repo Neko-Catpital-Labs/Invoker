@@ -65,6 +65,14 @@ export function findHeadlessCommandDefinition(command: string | undefined): Head
   return HEADLESS_COMMANDS.find((definition) => definition.name === command);
 }
 
+export function isHeadlessHelpCommand(command: string | undefined): boolean {
+  return command === undefined || command === '--help' || command === '-h';
+}
+
+export function isRemovedHeadlessCommandAlias(command: string | undefined): boolean {
+  return command === 'set-merge-mode';
+}
+
 export function isMutatingSetSubcommand(subcommand: string | undefined): boolean {
   return HEADLESS_SET_SUBCOMMANDS.includes(subcommand as (typeof HEADLESS_SET_SUBCOMMANDS)[number]);
 }
