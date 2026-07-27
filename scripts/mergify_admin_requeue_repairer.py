@@ -609,6 +609,7 @@ class AdminBypassRepairer:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
+        start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
         prompt = (
             f"Resolve only the merge conflict that keeps this PR from merging. "
             f"Rebase the PR head branch onto its base branch, preserve the PR's intended changes, "
@@ -628,3 +629,27 @@ class AdminBypassRepairer:
             head_sha=pr.head_ref_oid,
         )
         self.run_claude_repair(work_root, prompt)
+        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        if status_lines:
+            self.hard_reset_work_root(work_root, start_head)
+            raise RuntimeError("conflict repair left uncommitted changes:\n" + "\n".join(status_lines))
+        if end_head == start_head:
+            self.logger.trace(
+                "admin-bypass-repair-conflict-noop",
+                repo=self.repo,
+                pr_number=pr.number,
+                reason=reason,
+                head_sha=start_head,
+            )
+            return
+        self.push_branch(work_root, pr.head_ref_name)
+        self.logger.trace(
+            "admin-bypass-repair-conflict-pushed",
+            repo=self.repo,
+            pr_number=pr.number,
+            reason=reason,
+            start_head=start_head,
+            end_head=end_head,
+            head_ref=pr.head_ref_name,
+        )

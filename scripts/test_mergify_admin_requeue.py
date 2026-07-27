@@ -342,14 +342,41 @@ Failing checks
         repairs = []
         repairer = self.repairer(FakeGh(), ledger, "Neko-Catpital-Labs/Invoker")
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, _prompt: repairs.append(item.number)):
-                for epoch in range(3):
-                    ledger.record("conflict-repair", item.number, item.head_ref_oid, "conflict:2647", epoch)
-                    repairer.repair_conflict(item, "GitHub reports merge conflict")
+            with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                with mock.patch.object(repairer, "git_lines", return_value=()):
+                    with mock.patch.object(repairer, "push_branch"):
+                        with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, _prompt: repairs.append(item.number)):
+                            for epoch in range(3):
+                                ledger.record("conflict-repair", item.number, item.head_ref_oid, "conflict:2647", epoch)
+                                repairer.repair_conflict(item, "GitHub reports merge conflict")
         self.assertEqual(ledger.count("conflict-repair", 2647, HEAD, "conflict:2647"), 3)
         self.assertEqual(repairs, [2647, 2647, 2647])
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
+
+    def test_conflict_repair_pushes_clean_local_head_after_claude(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        item = pr(5207, head="stack/conflict", merge_state="DIRTY")
+        repairer = self.repairer(object(), self.ledger())
+        revs = iter([OLD, HEAD])
+        stderr = io.StringIO()
+
+        def fake_git_output(_work_root, *args):
+            if args == ("rev-parse", "HEAD"):
+                return next(revs)
+            return ""
+
+        with mock.patch.dict(os.environ, {"HOME": tmp.name}):
+            with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                        with mock.patch.object(repairer, "run_claude_repair"):
+                            with mock.patch.object(repairer, "push_branch") as push:
+                                with redirect_stderr(stderr):
+                                    repairer.repair_conflict(item, "GitHub reports merge conflict")
+        self.assertEqual(push.call_args.args[1], "stack/conflict")
+        self.assertIn('"event": "admin-bypass-repair-conflict-pushed"', stderr.getvalue())
 
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())
