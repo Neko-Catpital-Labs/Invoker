@@ -57,6 +57,7 @@ import type {
   ForkMutationResult,
   MutationResult,
   ResolveConflictMutationResult,
+  SpawnRepairWorkflowMutationResult,
 } from './workflow-mutation-facade.js';
 import { resolveHeadlessTargetWorkflowId } from './headless-command-classification.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
@@ -96,6 +97,7 @@ export interface ApiMutationFacade {
   retryWorkflow(workflowId: string): Promise<MutationResult>;
   rebaseRetry(target: string): Promise<MutationResult>;
   rebaseRecreate(target: string): Promise<MutationResult>;
+  spawnRepairWorkflow(request: unknown): Promise<SpawnRepairWorkflowMutationResult>;
   forkWorkflow(workflowId: string): Promise<ForkMutationResult>;
   cancelWorkflow(workflowId: string): Promise<CancelMutationResult>;
   setWorkflowMergeMode(workflowId: string, mergeMode: string): Promise<void>;

@@ -59,6 +59,7 @@ export * from './worker-lock.js';
 export * from './builtin-workers.js';
 export * from './auto-fix-recovery.js';
 export * from './review-gate-ci-repair.js';
+export * from './repair-workflow-spec.js';
 export * from './ci-failure-infra-classifier.js';
 export * from './workers/pr-status-worker.js';
 export * from './workers/pr-summary-refresh-worker.js';

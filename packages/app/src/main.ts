@@ -2288,6 +2288,7 @@ startMainProcessBootstrap({
         persistence,
         commandService,
         taskExecutor: requireTaskExecutor(),
+        allowGraphMutation: invokerConfig.allowGraphMutation,
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
         killRunningTask,
       });

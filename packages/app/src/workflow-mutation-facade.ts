@@ -22,6 +22,10 @@ import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState 
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import {
+  buildRepairWorkflowSpec,
+  parseRepairWorkflowSpawnMutationArgs,
+} from '@invoker/execution-engine';
+import {
   approveTask as sharedApproveTask,
   rejectTask as sharedRejectTask,
   provideInput as sharedProvideInput,
@@ -95,6 +99,10 @@ export interface ResolveConflictMutationResult extends MutationResult {
   autoApproved: boolean;
 }
 
+export interface SpawnRepairWorkflowMutationResult extends MutationResult {
+  workflowId: string;
+}
+
 type DispatchScope = {
   scopedWorkflowId?: string;
   scopedTaskIds?: string[];
@@ -109,6 +117,7 @@ export interface WorkflowMutationFacadeDeps {
   commandService: CommandService;
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
+  allowGraphMutation?: boolean;
   autoApproveAIFixes?: boolean;
   /** Optional pre-kill hook for active task executions. */
   killRunningTask?: (taskId: string) => Promise<void>;
@@ -472,6 +481,24 @@ export class WorkflowMutationFacade {
         : { scopedTaskIds: [taskId] },
     );
     return { detail, started, runnable, topup };
+  }
+
+  async spawnRepairWorkflow(requestArg: unknown): Promise<SpawnRepairWorkflowMutationResult> {
+    const request = parseRepairWorkflowSpawnMutationArgs([requestArg]);
+    const spec = buildRepairWorkflowSpec(request);
+    const existingWorkflowIds = new Set(this.deps.orchestrator.getWorkflowIds());
+    this.deps.orchestrator.loadPlan(spec, { allowGraphMutation: this.deps.allowGraphMutation });
+    const workflowId = this.deps.orchestrator.getWorkflowIds().find((id) => !existingWorkflowIds.has(id));
+    if (!workflowId) {
+      throw new Error('Repair workflow spawn did not create a workflow.');
+    }
+    const started = this.deps.orchestrator.startExecution();
+    const { runnable, topup } = await this.dispatchWithTopup(
+      started,
+      'facade.spawn-repair-workflow',
+      { scopedWorkflowId: workflowId },
+    );
+    return { workflowId, started, runnable, topup };
   }
 
   // ── Internal helpers ─────────────────────────────────────

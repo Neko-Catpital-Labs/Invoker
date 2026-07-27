@@ -24,8 +24,12 @@ import {
   DEFAULT_EXECUTION_AGENT,
   ExecutorRegistry,
   RESTART_TO_BRANCH_TRACE,
+  SPAWN_REPAIR_WORKFLOW_CHANNEL,
+  buildRepairWorkflowSpec,
+  parseRepairWorkflowSpawnMutationArgs,
   remoteFetchForPool,
   registerBuiltinAgents,
+  repairWorkflowSpawnWorkflowIdFromArgs,
 } from '@invoker/execution-engine';
 import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import {
@@ -246,6 +250,9 @@ export interface GuiMutationTaskActions {
     source?: 'ipc' | 'auto-fix',
     reviewGateContext?: ReviewGateCiContext,
   ) => Promise<TaskState[]>;
+  executeSpawnRepairWorkflowMutation: (
+    request: unknown,
+  ) => Promise<{ workflowId: string; started: TaskState[] }>;
   executeHeadlessRun: (
     payload: HeadlessRunMutationPayload,
   ) => Promise<{ workflowId: string; tasks: TaskState[]; workflowIds: string[]; workflowCount: number; planName: string }>;
@@ -482,6 +489,27 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       },
     );
     return result.started;
+  };
+
+  const executeSpawnRepairWorkflowMutation = async (
+    requestArg: unknown,
+  ): Promise<{ workflowId: string; started: TaskState[] }> => {
+    const request = parseRepairWorkflowSpawnMutationArgs([requestArg]);
+    const spec = buildRepairWorkflowSpec(request);
+    const existingWorkflowIds = new Set(orchestrator.getWorkflowIds());
+    logger.info(
+      `spawn-repair-workflow: upstream="${request.upstreamWorkflowId}" branch="${spec.featureBranch}" head=${request.prHeadSha}`,
+      { module: 'ipc' },
+    );
+    backupPlan(spec, undefined, logger);
+    orchestrator.loadPlan(spec, { allowGraphMutation: invokerConfig.allowGraphMutation });
+    const workflowId = orchestrator.getWorkflowIds().find((id) => !existingWorkflowIds.has(id));
+    if (!workflowId) {
+      throw new Error('Repair workflow spawn did not create a workflow.');
+    }
+    const started = orchestrator.startExecution();
+    requestWorkflowMetadataPublish('spawn-repair-workflow');
+    return { workflowId, started };
   };
 
   const scheduleAutoFix = (_taskId: string): void => {};
@@ -928,6 +956,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
         const { taskId, agentName, context } = parseFixWithAgentMutationArgs(payload.args);
         return { channel: 'headless.exec', request: { args: buildHeadlessFixArgs(taskId, agentName, context), noTrack: true } };
       }
+      case SPAWN_REPAIR_WORKFLOW_CHANNEL:
+        return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:edit-task-command':
         return { channel: 'headless.exec', request: { args: ['set', 'command', String(arg0), String(arg1)], noTrack: true } };
       case 'invoker:edit-task-prompt':
@@ -996,6 +1026,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
     preemptWorkflowExecution,
     performSharedApproveTask,
     executeFixWithAgentMutation,
+    executeSpawnRepairWorkflowMutation,
     executeHeadlessRun,
     executeHeadlessResume,
     executeHeadlessExec,
@@ -1076,6 +1107,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   const performDetachWorkflow = actions.performDetachWorkflow;
   const performSharedApproveTask = actions.performSharedApproveTask;
   const executeFixWithAgentMutation = actions.executeFixWithAgentMutation;
+  const executeSpawnRepairWorkflowMutation = actions.executeSpawnRepairWorkflowMutation;
 
   function publishOrchestratorSnapshotToRenderer(): void {
     const workflows = persistence.listWorkflows();
@@ -2269,6 +2301,37 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         mutationTiming: activeMutationContext?.mutationTiming,
       });
       logger.error(`fix-with-agent failed: ${err}`, { module: 'ipc' });
+      throw err;
+    }
+    },
+  );
+
+  registerWorkflowScopedGuiMutationHandler(
+    SPAWN_REPAIR_WORKFLOW_CHANNEL,
+    (...spawnArgs: unknown[]) => repairWorkflowSpawnWorkflowIdFromArgs(spawnArgs),
+    'normal',
+    async (requestArg: unknown) => {
+    try {
+      const result = await executeSpawnRepairWorkflowMutation(requestArg);
+      await finalizeMutationWithGlobalTopup({
+        orchestrator,
+        taskExecutor: requireTaskExecutor(),
+        logger,
+        context: 'ipc.spawn-repair-workflow',
+        started: result.started,
+        mutationTiming: activeMutationContext?.mutationTiming,
+        scopedWorkflowId: result.workflowId,
+      });
+      return { workflowId: result.workflowId };
+    } catch (err) {
+      await finalizeMutationWithGlobalTopup({
+        orchestrator,
+        taskExecutor: requireTaskExecutor(),
+        logger,
+        context: 'ipc.spawn-repair-workflow.failure',
+        mutationTiming: activeMutationContext?.mutationTiming,
+      });
+      logger.error(`spawn-repair-workflow failed: ${err}`, { module: 'ipc' });
       throw err;
     }
     },

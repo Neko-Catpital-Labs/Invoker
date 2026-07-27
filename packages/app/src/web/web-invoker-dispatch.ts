@@ -20,7 +20,7 @@ import type {
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import { SPAWN_REPAIR_WORKFLOW_CHANNEL, type AgentRegistry } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
 import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
 import { listInAppPlanningPresets } from '../in-app-planner.js';
@@ -212,6 +212,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.rebaseRetry(String(args[0]));
       case 'invoker:rebase-recreate':
         return mutations.rebaseRecreate(String(args[0]));
+      case SPAWN_REPAIR_WORKFLOW_CHANNEL:
+        return mutations.spawnRepairWorkflow(args[0]);
       case 'invoker:edit-task-command':
         return mutations.editTaskCommand(String(args[0]), String(args[1]));
       case 'invoker:edit-task-prompt':

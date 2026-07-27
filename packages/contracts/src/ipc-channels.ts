@@ -1155,6 +1155,10 @@ export const IpcChannels = {
     request: [taskId: string, agentName?: string];
     response: WorkflowMutationAcceptedResult;
   },
+  'invoker:spawn-repair-workflow': {} as {
+    request: [request: unknown];
+    response: WorkflowMutationAcceptedResult;
+  },
 
   // Queue & Configuration
   'invoker:get-queue-status': {} as {
