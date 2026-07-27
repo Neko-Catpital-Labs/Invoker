@@ -116,11 +116,11 @@ export function wireCompletion(
       };
 
       await host.runSerializedCompletion(work);
+      if (dispatchOpts) {
+        dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
+      }
       resolvePromise();
     });
   });
-  if (dispatchOpts) {
-    dispatchOpts.launchOutbox.completeDispatch(dispatchOpts.dispatchId);
-  }
   return completionPromise;
 }

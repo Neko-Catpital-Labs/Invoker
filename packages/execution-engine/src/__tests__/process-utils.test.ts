@@ -121,6 +121,32 @@ describe('process-utils shell environment resolution', () => {
     expect(mockedSpawn).toHaveBeenCalledTimes(1);
   });
 
+  it('removes Git repository-scoping variables while preserving transport env', async () => {
+    const { processUtils } = await loadProcessUtils();
+
+    const clean = processUtils.cleanGitRepositoryEnv({
+      PATH: '/usr/bin',
+      GIT_DIR: '/tmp/source/.git',
+      GIT_WORK_TREE: '/tmp/source',
+      GIT_INDEX_FILE: '/tmp/source/.git/index',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.bare',
+      GIT_CONFIG_VALUE_0: 'true',
+      GIT_SSH_COMMAND: 'ssh -i /tmp/key',
+    });
+
+    expect(clean).toMatchObject({
+      PATH: '/usr/bin',
+      GIT_SSH_COMMAND: 'ssh -i /tmp/key',
+    });
+    expect(clean).not.toHaveProperty('GIT_DIR');
+    expect(clean).not.toHaveProperty('GIT_WORK_TREE');
+    expect(clean).not.toHaveProperty('GIT_INDEX_FILE');
+    expect(clean).not.toHaveProperty('GIT_CONFIG_COUNT');
+    expect(clean).not.toHaveProperty('GIT_CONFIG_KEY_0');
+    expect(clean).not.toHaveProperty('GIT_CONFIG_VALUE_0');
+  });
+
   it('falls back cleanly when shell resolution times out', async () => {
     setPlatform('darwin');
     process.env.PATH = '/usr/bin:/bin';
