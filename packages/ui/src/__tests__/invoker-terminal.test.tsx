@@ -232,13 +232,19 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'try again',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
 
     await act(async () => {
       resolveSecondSend?.({
         ok: true,
-        sessionId: 'session-2',
+        sessionId: 'session-1',
         reply: 'Recovered.',
         draftPlanAvailable: false,
       });
@@ -689,6 +695,45 @@ describe('Invoker terminal (component)', () => {
         confirmationMode: 'require',
       });
     });
+  });
+
+  it('shows an explicit error instead of restarting when continuation identity is missing', async () => {
+    mock.api.planningChatSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        error: 'Planner failed before creating a session.',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        sessionId: 'unexpected-fresh-session',
+        reply: 'Hello again. What do you want to build?',
+        draftPlanAvailable: false,
+      }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the missing identity plan');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        message: 'draft the missing identity plan',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Planner failed before creating a session.');
+    });
+
+    submitPlanningText('continue anyway');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+        'This planning conversation cannot continue because its session id is missing. Start a new planning chat and resend your message.',
+      );
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('Hello again. What do you want to build?');
   });
 
   it('passes the selected planning preset', async () => {
