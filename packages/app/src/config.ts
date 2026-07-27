@@ -236,6 +236,8 @@ export interface InvokerConfig {
     user: string;
     /** Path to SSH identity file (private key). */
     sshKeyPath: string;
+    /** Optional SSH known_hosts file. */
+    knownHostsFile?: string;
     /** SSH port. Default: 22. */
     port?: number;
     /**

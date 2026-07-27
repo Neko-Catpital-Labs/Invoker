@@ -94,6 +94,7 @@ type CliRuntimeConfig = {
     host: string;
     user: string;
     sshKeyPath: string;
+    knownHostsFile?: string;
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;

@@ -29,6 +29,7 @@ _INVOKER_E2E_SSH_TMPDIR=""
 # SSH login user and passwd-backed home directory used by sshd.
 _INVOKER_E2E_SSH_USER=""
 _INVOKER_E2E_SSH_HOME=""
+_INVOKER_E2E_SSH_KNOWN_HOSTS=""
 
 # --------------------------------------------------------------------------- #
 # Test if sshd is listening on localhost port 22 (3s timeout).
@@ -57,6 +58,8 @@ invoker_e2e_ssh_resolve_home() {
 invoker_e2e_ssh_setup_keys() {
   _INVOKER_E2E_SSH_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-ssh.XXXXXX")"
   local keyfile="$_INVOKER_E2E_SSH_TMPDIR/id_ed25519"
+  _INVOKER_E2E_SSH_KNOWN_HOSTS="$_INVOKER_E2E_SSH_TMPDIR/known_hosts"
+  : > "$_INVOKER_E2E_SSH_KNOWN_HOSTS"
   _INVOKER_E2E_SSH_USER="$(whoami)"
   _INVOKER_E2E_SSH_HOME="$(invoker_e2e_ssh_resolve_home "$_INVOKER_E2E_SSH_USER")"
 
@@ -124,28 +127,36 @@ invoker_e2e_ssh_write_config() {
   remote_home="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
   provision_cmd="$(invoker_e2e_ssh_provision_command)"
 
-  cat > "$config_file" <<EOJSON
-{
-  "executionPools": {
-    "localhost-e2e": {
-      "members": [
-        { "type": "ssh", "id": "localhost-e2e" }
-      ]
-    }
-  },
-  "remoteTargets": {
-    "localhost-e2e": {
-      "host": "localhost",
-      "user": "$_INVOKER_E2E_SSH_USER",
-      "sshKeyPath": "$INVOKER_E2E_SSH_KEY",
-      "port": 22,
-      "managedWorkspaces": true,
-      "remoteInvokerHome": "$remote_home",
-      "provisionCommand": "$provision_cmd"
-    }
-  }
+  python3 - <<'PY' "$config_file" "$_INVOKER_E2E_SSH_USER" "$INVOKER_E2E_SSH_KEY" "$remote_home" "$provision_cmd" "$_INVOKER_E2E_SSH_KNOWN_HOSTS"
+import json
+import sys
+
+config_file, user, key_path, remote_home, provision_cmd, known_hosts = sys.argv[1:]
+config = {
+    "executionPools": {
+        "localhost-e2e": {
+            "members": [
+                {"type": "ssh", "id": "localhost-e2e"},
+            ],
+        },
+    },
+    "remoteTargets": {
+        "localhost-e2e": {
+            "host": "localhost",
+            "user": user,
+            "sshKeyPath": key_path,
+            "port": 22,
+            "managedWorkspaces": True,
+            "remoteInvokerHome": remote_home,
+            "provisionCommand": provision_cmd,
+            "knownHostsFile": known_hosts,
+        },
+    },
 }
-EOJSON
+with open(config_file, "w", encoding="utf-8") as fh:
+    json.dump(config, fh, indent=2)
+    fh.write("\n")
+PY
 
   export INVOKER_REPO_CONFIG_PATH="$config_file"
 }
@@ -162,6 +173,8 @@ invoker_e2e_ssh_init() {
   if ! ssh -o BatchMode=yes \
            -o ConnectTimeout=5 \
            -o StrictHostKeyChecking=no \
+           -o UserKnownHostsFile="$_INVOKER_E2E_SSH_KNOWN_HOSTS" \
+           -o GlobalKnownHostsFile=/dev/null \
            -i "$INVOKER_E2E_SSH_KEY" \
            "$_INVOKER_E2E_SSH_USER@localhost" true 2>/dev/null; then
     echo "ERROR: SSH to localhost with generated key failed. Aborting." >&2
@@ -193,6 +206,8 @@ invoker_e2e_ssh_install_login_path() {
   ssh -o BatchMode=yes \
       -o ConnectTimeout=5 \
       -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile="$_INVOKER_E2E_SSH_KNOWN_HOSTS" \
+      -o GlobalKnownHostsFile=/dev/null \
       -i "$INVOKER_E2E_SSH_KEY" \
       "$_INVOKER_E2E_SSH_USER@localhost" \
       "bash -s" <<EOF
@@ -212,6 +227,8 @@ EOF
   if ! ssh -o BatchMode=yes \
            -o ConnectTimeout=5 \
            -o StrictHostKeyChecking=no \
+           -o UserKnownHostsFile="$_INVOKER_E2E_SSH_KNOWN_HOSTS" \
+           -o GlobalKnownHostsFile=/dev/null \
            -i "$INVOKER_E2E_SSH_KEY" \
            "$_INVOKER_E2E_SSH_USER@localhost" \
            "bash -s" <<'EOF' >/dev/null 2>&1; then

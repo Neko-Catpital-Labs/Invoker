@@ -37,6 +37,8 @@ export interface SshExecutorConfig {
   user: string;
   /** Path to SSH identity file (private key). */
   sshKeyPath: string;
+  /** Optional SSH known_hosts file. */
+  knownHostsFile?: string;
   /** SSH port. Default: 22. */
   port?: number;
   /** Agent registry for pluggable agent command building. */
@@ -86,6 +88,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly host: string;
   private readonly user: string;
   private readonly sshKeyPath: string;
+  private readonly knownHostsFile: string | undefined;
   private readonly port: number;
   private readonly agentRegistry?: AgentRegistry;
   private readonly managedWorkspaces: boolean;
@@ -99,6 +102,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.host = config.host;
     this.user = config.user;
     this.sshKeyPath = config.sshKeyPath;
+    this.knownHostsFile = config.knownHostsFile;
     this.port = config.port ?? 22;
     this.agentRegistry = config.agentRegistry;
     this.managedWorkspaces = config.managedWorkspaces ?? false;
@@ -118,6 +122,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private buildSshArgs(): string[] {
     return buildSshConnectionArgs({
       sshKeyPath: this.sshKeyPath,
+      knownHostsFile: this.knownHostsFile,
       port: this.port,
       user: this.user,
       host: this.host,
@@ -128,6 +133,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private buildSshArgsInteractive(): string[] {
     return buildSshConnectionArgs({
       sshKeyPath: this.sshKeyPath,
+      knownHostsFile: this.knownHostsFile,
       port: this.port,
       user: this.user,
       host: this.host,

@@ -12,6 +12,7 @@ export interface RemoteTarget {
   host: string;
   user: string;
   sshKeyPath: string;
+  knownHostsFile?: string;
   port?: number;
 }
 

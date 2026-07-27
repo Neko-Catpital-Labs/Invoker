@@ -177,6 +177,7 @@ export interface TaskRunnerConfig {
     host: string;
     user: string;
     sshKeyPath: string;
+    knownHostsFile?: string;
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;
@@ -1724,6 +1725,7 @@ export class TaskRunner {
     host: string;
     user: string;
     sshKeyPath: string;
+    knownHostsFile?: string;
     port?: number;
     managedWorkspaces?: boolean;
     remoteInvokerHome?: string;

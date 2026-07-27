@@ -33,6 +33,7 @@ export interface RemoteTargetConfig {
   host: string;
   user: string;
   sshKeyPath: string;
+  knownHostsFile?: string;
   port?: number;
   managedWorkspaces?: boolean;
   remoteInvokerHome?: string;
@@ -410,6 +411,7 @@ fi
   const sshArgs = [
     ...buildSshConnectionArgs({
       sshKeyPath: target.sshKeyPath,
+      knownHostsFile: target.knownHostsFile,
       port: target.port,
       user: target.user,
       host: target.host,
@@ -712,6 +714,7 @@ bash "$AGENT_CMD_FILE"
   const sshArgs = [
     ...buildSshConnectionArgs({
       sshKeyPath: target.sshKeyPath,
+      knownHostsFile: target.knownHostsFile,
       port: target.port,
       user: target.user,
       host: target.host,
@@ -820,6 +823,7 @@ function execRemoteSsh(target: RemoteTargetConfig, script: string, phase?: strin
   const sshArgs = [
     ...buildSshConnectionArgs({
       sshKeyPath: target.sshKeyPath,
+      knownHostsFile: target.knownHostsFile,
       port: target.port,
       user: target.user,
       host: target.host,

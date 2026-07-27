@@ -89,6 +89,7 @@ function collectRemoteTargetIds(collector: DiagnosticCollector, config: UnknownR
     checkRequiredString(collector, `${base}.host`, target.host);
     checkRequiredString(collector, `${base}.user`, target.user);
     checkRequiredString(collector, `${base}.sshKeyPath`, target.sshKeyPath);
+    checkOptionalString(collector, `${base}.knownHostsFile`, target.knownHostsFile);
     checkOptionalString(collector, `${base}.provisionCommand`, target.provisionCommand);
     checkOptionalPositiveInteger(collector, `${base}.maxConcurrentTasks`, target.maxConcurrentTasks);
     checkOptionalPositiveInteger(collector, `${base}.remoteHeartbeatIntervalSeconds`, target.remoteHeartbeatIntervalSeconds);

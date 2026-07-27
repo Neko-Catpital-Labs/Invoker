@@ -1,5 +1,6 @@
 export interface SshTargetConnection {
   sshKeyPath: string;
+  knownHostsFile?: string;
   port?: number;
   user: string;
   host: string;
@@ -47,6 +48,10 @@ export function buildSshConnectionArgs(
   return [
     '-i', target.sshKeyPath,
     '-p', String(target.port ?? 22),
+    ...(target.knownHostsFile ? [
+      '-o', `UserKnownHostsFile=${target.knownHostsFile}`,
+      '-o', 'GlobalKnownHostsFile=/dev/null',
+    ] : []),
     ...buildSshTransportOptions({ batchMode: opts.batchMode }),
     `${target.user}@${target.host}`,
   ];

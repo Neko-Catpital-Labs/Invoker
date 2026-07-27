@@ -169,6 +169,7 @@ export class ClaudeSessionDriver implements SessionDriver {
       const sshArgs = [
         ...buildSshConnectionArgs({
           sshKeyPath: target.sshKeyPath,
+          knownHostsFile: target.knownHostsFile,
           port: target.port,
           user: target.user,
           host: target.host,
