@@ -13,6 +13,8 @@ Convert the approved Markdown plan to `plans/invoker-handoff.yaml`.
 
 Call `invoker_prepare_plan_review` on `plans/invoker-handoff.yaml`, show the returned ordered steps and `confirmationText`, and use that review output as the only approval gate.
 
+Plain approval means workflow handoff only: stop after Invoker submission; do not publish a local branch or create, update, or publish a PR unless the user explicitly asks for PR publication.
+
 If the review result says `confirmationMode` is `require`, wait for approval before submission. If it says `auto_submit`, show the same review output and then submit immediately.
 
 Call `invoker_submit_plan` with mode `live` only after that review step, or immediately after it when `confirmationMode` is `auto_submit`.
