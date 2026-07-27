@@ -1,0 +1,18 @@
+{
+  "scenario": "navigate-away-back",
+  "expectedBug": "planning tmux pane is visibly blank after the switch even though the persisted terminal snapshot still contains the sentinel",
+  "planningSessionId": "13cffe16-7b52-4428-a275-e4b400bf2190",
+  "terminalSessionId": "638c5e72-c8ef-46ba-829e-32d17f47948f",
+  "sentinel": "TMUX_BLANK_REPRO_NAVIGATION_SENTINEL",
+  "visibleText": "",
+  "visibleTextLength": 0,
+  "terminalStatus": "running",
+  "terminalMode": "spawn",
+  "planningTerminalMode": "tmux",
+  "planningTerminalStatus": "running",
+  "terminalSnapshotHasSentinel": true,
+  "planningSnapshotHasSentinel": true,
+  "terminalSnapshotTail": "TMUX_BLANK_REPRO_FIRST_SENTINEL\nTMUX_BLANK_REPRO_NAVIGATION_SENTINEL\n",
+  "planningTerminalSnapshotTail": "TMUX_BLANK_REPRO_FIRST_SENTINEL\nTMUX_BLANK_REPRO_NAVIGATION_SENTINEL\n",
+  "screenshotPath": "/Users/edbertchan/.invoker/worktrees/64a63486912a/experiment-wf-1784944839846-13-verify-tmux-blank-repro-g34.t40.a-ad8b0e7aa-8ed2dc60/packages/app/visual-proof-planning-terminal-tmux-blank-navigate-away-back.png"
+}
