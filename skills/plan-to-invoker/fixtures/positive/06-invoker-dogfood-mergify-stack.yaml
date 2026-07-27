@@ -6,8 +6,11 @@ description: |
   Updates Invoker's own contributor guidance for merge automation.
 
   This plan still uses the normal Invoker PR gate shape: `onFinish: pull_request`
-  with `mergeMode: external_review`. Because the target repo is Invoker itself, the
-  branch publication workflow after the commits are ready should use
+  with `mergeMode: external_review`. That plain approval only hands off the
+  completed branch; it does not publish the GitHub PR stack.
+
+  Because the target repo is Invoker itself, later PR publication is a separate
+  explicit action: after approval hands off the ready commit stack, use
   `mergify stack push` so stacked PRs stay synchronized.
 onFinish: pull_request
 mergeMode: external_review
@@ -22,14 +25,21 @@ tasks:
       Update the Invoker skills and examples so they are explicit about the
       repo-specific dogfood rule:
 
-      1. When the target repo is Invoker itself, keep `mergeMode: external_review`
-         and publish/update the resulting commit stack with `mergify stack push`.
-      2. When the target repo is an external repo, keep normal PR flow unless
+      1. When the target repo is Invoker itself, keep `onFinish: pull_request`
+         and `mergeMode: external_review` for the plain approval/handoff boundary.
+      2. State that plain approval hands off the ready branch; it does not
+         publish the GitHub PR stack.
+      3. Show later PR publication as a separate explicit action: after approval
+         hands off the ready commit stack, publish/update it with
+         `mergify stack push`.
+      4. When the target repo is an external repo, keep normal PR flow unless
          that repo independently uses Mergify Stacks.
 
       Acceptance criteria:
       - Relevant skills mention the Invoker-only scope.
       - Examples include an Invoker positive case and an external-repo counterexample.
+      - The Invoker positive case shows `mergify stack push` as post-approval
+        publication, not part of approval or `mergeMode`.
     dependencies: []
 
   - id: verify-skill-fixtures
