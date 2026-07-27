@@ -1,0 +1,7 @@
+{
+  "name": "@invoker/mergify-admin-requeue",
+  "private": true,
+  "scripts": {
+    "test": "cd ../.. && PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/mergify-admin-requeue python3 -m unittest discover -s packages/mergify-admin-requeue/tests"
+  }
+}
