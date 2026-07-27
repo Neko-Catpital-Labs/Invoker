@@ -8,3 +8,5 @@ bash scripts/repro/repro-mergify-admin-requeue-stack-expansion.sh
 bash scripts/repro/repro-mergify-rejected-pr.sh
 bash scripts/repro/repro-mergify-closed-pr-guard.sh
 bash scripts/repro/repro-babysit-pr-body-human-split.sh
+bash scripts/repro/repro-babysit-no-current-bottom-comment.sh
+bash scripts/repro/repro-babysit-retarget-stale-bottom-base.sh
