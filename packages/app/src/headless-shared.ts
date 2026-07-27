@@ -24,7 +24,8 @@ import {
   type AgentRegistry,
   type TaskHeartbeatEvent,
 } from '@invoker/execution-engine';
-import { loadConfig, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import { loadConfig, resolveAutoFixExecutionModel, resolveSecretsFilePath, type InvokerConfig } from './config.js';
+import { resolveAutoFixRetries } from './autofix-defaults.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import { trackWorkflow } from './headless-watch.js';
 import {
@@ -107,6 +108,10 @@ export function buildHeadlessApiServerDeps(
       taskExecutor,
       dispatchMode: deps.mutationTiming ? 'fire-and-forget' : 'await',
       autoApproveAIFixes: deps.invokerConfig?.autoApproveAIFixes,
+      allowGraphMutation: deps.invokerConfig?.allowGraphMutation,
+      defaultAutoFixRetries: deps.invokerConfig ? resolveAutoFixRetries(deps.invokerConfig) : undefined,
+      getAutoFixAgent: () => deps.invokerConfig?.autoFixAgent,
+      getAutoFixExecutionModel: () => deps.invokerConfig ? resolveAutoFixExecutionModel(deps.invokerConfig) : undefined,
       killRunningTask: async (taskId: string) => {
         await taskExecutor.killActiveExecution(taskId);
       },

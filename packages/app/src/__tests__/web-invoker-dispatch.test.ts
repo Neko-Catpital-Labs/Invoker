@@ -16,6 +16,7 @@ function makeTask(id: string) {
 
 function makeDispatch(overrides: Record<string, unknown> = {}) {
   const approveTask = vi.fn(async () => ({ ok: true }));
+  const spawnRepairWorkflow = vi.fn(async () => ({ ok: true }));
   const deps = {
     orchestrator: {
       getAllTasks: () => [makeTask('wf-1/task-1')],
@@ -25,7 +26,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     persistence: {
       listWorkflows: () => [{ id: 'wf-1', name: 'Workflow 1', status: 'pending' }],
     },
-    mutations: { approveTask },
+    mutations: { approveTask, spawnRepairWorkflow },
     agentRegistry: { listExecutionHarnesses: () => [] },
     loadConfig: () => ({}),
     getStreamSequence: () => 7,
@@ -34,7 +35,7 @@ function makeDispatch(overrides: Record<string, unknown> = {}) {
     detachWorkflow: vi.fn(async () => {}),
     ...overrides,
   };
-  return { dispatch: buildWebInvokerDispatch(deps as never), approveTask };
+  return { dispatch: buildWebInvokerDispatch(deps as never), approveTask, spawnRepairWorkflow };
 }
 function makeTaskTerminalAdapter() {
   return {
@@ -150,6 +151,13 @@ describe('buildWebInvokerDispatch', () => {
     const { dispatch, approveTask } = makeDispatch();
     await dispatch('invoker:approve', ['wf/x']);
     expect(approveTask).toHaveBeenCalledWith('wf/x');
+  });
+
+  it('spawn-repair-workflow routes to the mutation facade', async () => {
+    const payload = { upstreamWorkflowId: 'wf-upstream' };
+    const { dispatch, spawnRepairWorkflow } = makeDispatch();
+    await dispatch('invoker:spawn-repair-workflow', [payload]);
+    expect(spawnRepairWorkflow).toHaveBeenCalledWith(payload);
   });
 
   it('open-terminal degrades gracefully when task terminal support is absent', async () => {

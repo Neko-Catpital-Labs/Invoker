@@ -22,6 +22,11 @@ import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState 
 import type { SQLiteAdapter } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import {
+  parseSpawnRepairWorkflowMutationArgs,
+  submitRepairWorkflowFromCiFailure,
+  type RepairWorkflowSpawnResult,
+} from '@invoker/execution-engine';
+import {
   approveTask as sharedApproveTask,
   rejectTask as sharedRejectTask,
   provideInput as sharedProvideInput,
@@ -95,6 +100,11 @@ export interface ResolveConflictMutationResult extends MutationResult {
   autoApproved: boolean;
 }
 
+export interface SpawnRepairWorkflowMutationResult extends MutationResult {
+  detail: RepairWorkflowSpawnResult;
+  workflowId?: string;
+}
+
 type DispatchScope = {
   scopedWorkflowId?: string;
   scopedTaskIds?: string[];
@@ -110,6 +120,10 @@ export interface WorkflowMutationFacadeDeps {
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
   autoApproveAIFixes?: boolean;
+  allowGraphMutation?: boolean;
+  defaultAutoFixRetries?: number;
+  getAutoFixAgent?: () => string | undefined;
+  getAutoFixExecutionModel?: () => string | undefined;
   /** Optional pre-kill hook for active task executions. */
   killRunningTask?: (taskId: string) => Promise<void>;
 }
@@ -328,6 +342,39 @@ export class WorkflowMutationFacade {
     await this.closeReviewForWorkflow(workflowId);
     const started = await sharedRebaseRecreate(target, this.actionDeps());
     return this.finalizeWithTopup(started, 'facade.rebase-recreate', { scopedWorkflowId: workflowId });
+  }
+
+  async spawnRepairWorkflow(payloadArg: unknown): Promise<SpawnRepairWorkflowMutationResult> {
+    const payload = parseSpawnRepairWorkflowMutationArgs([payloadArg]);
+    const detail = submitRepairWorkflowFromCiFailure({
+      store: this.deps.persistence,
+      orchestrator: this.deps.orchestrator,
+      logger: this.deps.logger,
+      allowGraphMutation: this.deps.allowGraphMutation,
+      defaultAutoFixRetries: this.deps.defaultAutoFixRetries,
+      getAutoFixAgent: this.deps.getAutoFixAgent,
+      getAutoFixExecutionModel: this.deps.getAutoFixExecutionModel,
+    }, payload);
+    if (detail.decision !== 'spawned' || !detail.workflowId) {
+      return {
+        detail,
+        started: [],
+        runnable: [],
+        topup: [],
+      };
+    }
+    const { runnable, topup } = await this.dispatchWithTopup(
+      detail.started,
+      'facade.spawn-repair-workflow',
+      { scopedWorkflowId: detail.workflowId },
+    );
+    return {
+      detail,
+      workflowId: detail.workflowId,
+      started: detail.started,
+      runnable,
+      topup,
+    };
   }
 
   async cancelWorkflow(workflowId: string): Promise<CancelMutationResult> {

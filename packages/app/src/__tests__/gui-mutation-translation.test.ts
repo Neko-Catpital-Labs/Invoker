@@ -61,6 +61,14 @@ describe('GUI mutation translation', () => {
       ),
     );
   });
+
+  it('routes spawn-repair-workflow to the owner GUI mutation handler', () => {
+    const translatorSource = getTranslatorSource();
+    expect(translatorSource).toMatch(
+      /case SPAWN_REPAIR_WORKFLOW_CHANNEL:\s*return \{ channel: 'headless\.gui-mutation', request: payload \};/,
+    );
+  });
+
   it.each([
     ['invoker:restart-task', 'retry-task'],
     ['invoker:cancel-task', 'cancel'],
