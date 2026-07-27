@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -124,6 +125,12 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function appendTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const next = `${snapshot ?? ''}${chunk}`;
+  if (next.length <= TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS) return next;
+  return next.slice(next.length - TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS);
 }
 
 type StartReadyRailModeId =
@@ -1305,6 +1312,64 @@ export function App() {
         )),
       );
     });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const updatePlanningTerminalSnapshot = (event: TerminalOutputEvent): void => {
+      if (event.kind !== 'planning' || event.data.length === 0) return;
+      const terminalUpdatedAt = new Date().toISOString();
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const matchesPlanningSession = event.planningSessionId
+            ? session.id === event.planningSessionId
+            : false;
+          const matchesTerminalSession = !event.planningSessionId
+            && session.terminalSession?.sessionId === event.sessionId;
+          if (!matchesPlanningSession && !matchesTerminalSession) return session;
+
+          const currentTerminalSession = session.terminalSession;
+          const outputSnapshot = appendTerminalOutputSnapshot(
+            currentTerminalSession?.outputSnapshot ?? session.terminalOutputSnapshot,
+            event.data,
+          );
+          const terminalSession: TerminalSessionDescriptor = currentTerminalSession
+            ? {
+                ...currentTerminalSession,
+                sessionId: event.sessionId,
+                taskId: event.taskId,
+                kind: 'planning',
+                planningSessionId: event.planningSessionId ?? currentTerminalSession.planningSessionId,
+                outputSnapshot,
+              }
+            : {
+                sessionId: event.sessionId,
+                taskId: event.taskId,
+                kind: 'planning',
+                planningSessionId: event.planningSessionId,
+                status: 'running',
+                mode: 'spawn',
+                attached: false,
+                createdAt: terminalUpdatedAt,
+                outputSnapshot,
+              };
+          changed = true;
+          return {
+            ...session,
+            terminalSession,
+            terminalSessionId: terminalSession.sessionId,
+            terminalStatus: terminalSession.status,
+            terminalExitCode: terminalSession.exitCode,
+            terminalOutputSnapshot: outputSnapshot,
+            terminalUpdatedAt,
+          };
+        });
+        return changed ? next : prev;
+      });
+    };
+
+    const unsubscribe = window.invoker?.onTerminalOutput?.(updatePlanningTerminalSnapshot);
     return () => { unsubscribe?.(); };
   }, []);
 
