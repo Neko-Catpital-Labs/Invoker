@@ -1,4 +1,4 @@
-# Invoker-on-Invoker dogfood example with explicit Mergify Stacks publication.
+# Invoker-on-Invoker dogfood example with separate Mergify Stacks publication.
 # Source: examples.md Section 7
 
 name: "Dogfood Invoker CI docs update"
@@ -6,9 +6,11 @@ description: |
   Updates Invoker's own contributor guidance for merge automation.
 
   This plan still uses the normal Invoker PR gate shape: `onFinish: pull_request`
-  with `mergeMode: external_review`. Because the target repo is Invoker itself, the
-  branch publication workflow after the commits are ready should use
-  `mergify stack push` so stacked PRs stay synchronized.
+  with `mergeMode: external_review`. Plain approval only authorizes workflow
+  handoff and submission. If a later explicit request asks to publish or update
+  GitHub PRs for this Invoker-on-Invoker work after the commits are ready, that
+  separate publication action should use `mergify stack push` so stacked PRs stay
+  synchronized.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: git@github.com:EdbertChan/Invoker.git
@@ -22,13 +24,18 @@ tasks:
       Update the Invoker skills and examples so they are explicit about the
       repo-specific dogfood rule:
 
-      1. When the target repo is Invoker itself, keep `mergeMode: external_review`
-         and publish/update the resulting commit stack with `mergify stack push`.
-      2. When the target repo is an external repo, keep normal PR flow unless
+      1. Plain approval stops after workflow handoff and submission. It does not
+         authorize GitHub PR creation, PR updates, or `mergify stack push`.
+      2. When a later explicit request asks to publish/update GitHub PRs for
+         Invoker-on-Invoker work, keep `mergeMode: external_review` for workflow
+         handoff and then publish/update the resulting commit stack with
+         `mergify stack push`.
+      3. When the target repo is an external repo, keep normal PR flow unless
          that repo independently uses Mergify Stacks.
 
       Acceptance criteria:
-      - Relevant skills mention the Invoker-only scope.
+      - Relevant skills mention that plain approval stops after workflow handoff.
+      - Invoker-on-Invoker PR publication is presented as a later explicit action.
       - Examples include an Invoker positive case and an external-repo counterexample.
     dependencies: []
 
