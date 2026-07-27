@@ -2313,7 +2313,7 @@ export function App() {
     if (!invoker) return;
     setContextMenu(null);
     try {
-      const result = await invoker.restartTask(taskId);
+      const result = await invoker.retryTask(taskId);
       trackAcceptedMutation(result);
     } catch (err) {
       notifyMutationError('Failed to restart task', err);

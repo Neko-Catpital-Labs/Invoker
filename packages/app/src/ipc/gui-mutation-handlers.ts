@@ -892,7 +892,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'invoker:select-experiment':
         if (Array.isArray(arg1)) return null;
         return { channel: 'headless.exec', request: { args: ['select', String(arg0), String(arg1)], noTrack: true } };
-      case 'invoker:restart-task':
+      case 'invoker:retry-task':
         return { channel: 'headless.exec', request: { args: ['retry-task', String(arg0)], noTrack: true } };
       case 'invoker:cancel-task':
         return { channel: 'headless.exec', request: { args: ['cancel', String(arg0)], noTrack: true } };
@@ -1645,21 +1645,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
   });
 
-  // `invoker:restart-task` IPC channel — the channel name is kept
-  // for UI compatibility (renaming would require coordinated UI
-  // changes, deferred to a follow-up). The handler now routes
-  // through `commandService.retryTask` per Step 13's vocabulary
-  // cleanup so the UI's "Restart" context-menu action keeps its
-  // historical retry-class semantics (preserves
-  // branch/workspacePath lineage). The channel itself carries an
-  // `@deprecated` marker in `packages/contracts/src/ipc-channels.ts`.
   registerWorkflowScopedGuiMutationHandler(
-    'invoker:restart-task',
+    'invoker:retry-task',
     (taskIdArg: unknown) => workflowIdForTaskArg(taskIdArg),
     'high',
     async (taskIdArg: unknown) => {
     const taskId = String(taskIdArg);
-    logger.info(`restart-task → retry-task (Step 13 vocabulary): "${taskId}"`, { module: 'ipc' });
+    logger.info(`retry-task: "${taskId}"`, { module: 'ipc' });
     try {
       await preemptTaskSubgraph(taskId);
       const envelope = makeEnvelope('retry-task', 'ui', 'task', { taskId });
@@ -1667,24 +1659,24 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       if (!result.ok) throw new Error(result.error.message);
       const started = result.data;
       logger.info(
-        `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task after commandService.retryTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
+        `${RESTART_TO_BRANCH_TRACE} ipc invoker:retry-task after commandService.retryTask: count=${started.length} [${started.map((t) => `${t.id}(${t.status})`).join(', ')}]`,
         { module: 'ipc' },
       );
       const runnable = started.filter(isDispatchableLaunch);
       logger.info(
-        `${RESTART_TO_BRANCH_TRACE} ipc invoker:restart-task runnable=${runnable.length} [${runnable.map((t) => t.id).join(', ') || '(none)'}] → taskExecutor.executeTasks`,
+        `${RESTART_TO_BRANCH_TRACE} ipc invoker:retry-task runnable=${runnable.length} [${runnable.map((t) => t.id).join(', ') || '(none)'}] → taskExecutor.executeTasks`,
         { module: 'ipc' },
       );
       await dispatchStartedTasksWithGlobalTopup({
         orchestrator,
         taskExecutor: requireTaskExecutor(),
         logger,
-        context: 'ipc.restart-task',
+        context: 'ipc.retry-task',
         started,
         scopedTaskIds: [taskId],
       });
     } catch (err) {
-      logger.error(`restart-task failed: ${err}`, { module: 'ipc' });
+      logger.error(`retry-task failed: ${err}`, { module: 'ipc' });
       throw err;
     }
     },
