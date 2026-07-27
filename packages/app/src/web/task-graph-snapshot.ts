@@ -17,15 +17,19 @@ export interface TaskGraphSnapshot {
 }
 
 export interface BuildTaskGraphSnapshotDeps {
-  orchestrator: Pick<Orchestrator, 'getAllTasks'>;
-  persistence: Pick<SQLiteAdapter, 'listWorkflows'>;
+  orchestrator: Pick<Orchestrator, 'syncAllFromDb' | 'getAllTasks'>;
+  persistence: Pick<SQLiteAdapter, 'listWorkflows'> & {
+    loadWorkflowTaskSnapshot?: SQLiteAdapter['loadWorkflowTaskSnapshot'];
+  };
   getStreamSequence: () => number;
 }
 
 export function buildTaskGraphSnapshot(deps: BuildTaskGraphSnapshotDeps): TaskGraphSnapshot {
+  deps.orchestrator.syncAllFromDb();
+  const snapshot = deps.persistence.loadWorkflowTaskSnapshot?.();
   return {
-    tasks: deps.orchestrator.getAllTasks(),
-    workflows: deps.persistence.listWorkflows() as WorkflowMeta[],
+    tasks: (snapshot?.tasks ?? deps.orchestrator.getAllTasks()) as TaskState[],
+    workflows: (snapshot?.workflows ?? deps.persistence.listWorkflows()) as WorkflowMeta[],
     streamSequence: deps.getStreamSequence(),
   };
 }
