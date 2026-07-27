@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -301,6 +301,15 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   terminalBusy?: boolean;
   terminalError?: string | null;
 };
+
+const MAX_TERMINAL_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+
+function appendTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${snapshot ?? ''}${chunk}`;
+  return nextSnapshot.length <= MAX_TERMINAL_OUTPUT_SNAPSHOT_CHARS
+    ? nextSnapshot
+    : nextSnapshot.slice(nextSnapshot.length - MAX_TERMINAL_OUTPUT_SNAPSHOT_CHARS);
+}
 
 function planningSessionFromSummary(
   summary: InAppPlanningSessionSummary,
@@ -1280,6 +1289,35 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [graphMaximized, planningTerminalExpanded]);
 
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event: TerminalOutputEvent) => {
+      if (event.kind !== 'planning') return;
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const terminalSession = session.terminalSession;
+          if (!terminalSession) return session;
+          const matches = event.planningSessionId
+            ? session.id === event.planningSessionId || terminalSession.planningSessionId === event.planningSessionId
+            : terminalSession.sessionId === event.sessionId;
+          if (!matches) return session;
+
+          const outputSnapshot = appendTerminalOutputSnapshot(terminalSession.outputSnapshot, event.data);
+          if (outputSnapshot === terminalSession.outputSnapshot) return session;
+          changed = true;
+          return {
+            ...session,
+            terminalSession: {
+              ...terminalSession,
+              outputSnapshot,
+            },
+          };
+        });
+        return changed ? next : prev;
+      });
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = window.invoker?.onTerminalExit?.((event) => {

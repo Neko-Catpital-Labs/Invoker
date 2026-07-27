@@ -148,14 +148,36 @@ function seedTerminalOutputSnapshot(
 ): void {
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
+  const sameMountedTerminal = Boolean(
+    seededSnapshot &&
+    seededSnapshot.sessionId === session.sessionId &&
+    seededSnapshot.term === term,
+  );
+  if (!outputSnapshot) {
+    if (!sameMountedTerminal || seededSnapshot?.snapshot !== '') {
+      seededSnapshotRef.current = {
+        sessionId: session.sessionId,
+        snapshot: '',
+        term,
+      };
+    }
+    return;
+  }
+  if (sameMountedTerminal) {
+    if (seededSnapshot?.snapshot !== outputSnapshot) {
+      seededSnapshotRef.current = {
+        sessionId: session.sessionId,
+        snapshot: outputSnapshot,
+        term,
+      };
+    }
+    return;
+  }
   if (
-    outputSnapshot &&
-    (
-      !seededSnapshot ||
-      seededSnapshot.sessionId !== session.sessionId ||
-      seededSnapshot.snapshot !== outputSnapshot ||
-      seededSnapshot.term !== term
-    )
+    !seededSnapshot ||
+    seededSnapshot.sessionId !== session.sessionId ||
+    seededSnapshot.snapshot !== outputSnapshot ||
+    seededSnapshot.term !== term
   ) {
     try {
       term.write(outputSnapshot);
