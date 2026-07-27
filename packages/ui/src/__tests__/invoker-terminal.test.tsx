@@ -232,13 +232,18 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'try again',
+        presetKey: 'codex',
+      });
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
 
     await act(async () => {
       resolveSecondSend?.({
         ok: true,
-        sessionId: 'session-2',
+        sessionId: 'session-1',
         reply: 'Recovered.',
         draftPlanAvailable: false,
       });
@@ -608,6 +613,53 @@ describe('Invoker terminal (component)', () => {
         presetKey: 'codex',
       });
     });
+  });
+
+  it('surfaces a lost local planning continuation instead of starting a new planner chat', async () => {
+    const lostSessionError = 'This planning chat lost its session. Start a new chat and resend your request.';
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'local-planning-session-stale',
+          title: 'Stale local chat',
+          status: 'still_discussing',
+          presetKey: 'codex',
+          messages: [
+            {
+              id: 1,
+              role: 'user',
+              text: 'Preserved stale request',
+              createdAt: '2026-07-07T00:00:01.000Z',
+            },
+            {
+              id: 2,
+              role: 'assistant',
+              text: 'Preserved stale reply.',
+              createdAt: '2026-07-07T00:00:02.000Z',
+            },
+          ],
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          draftPlanText: undefined,
+        }),
+      ],
+    }));
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Preserved stale reply.');
+    });
+
+    submitPlanningText('continue from stale local transcript');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(lostSessionError);
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('continue from stale local transcript');
+    expect(mock.api.planningChatSend).not.toHaveBeenCalled();
   });
 
   it('counts only attention-worthy planning sessions in the sidebar badge', async () => {
