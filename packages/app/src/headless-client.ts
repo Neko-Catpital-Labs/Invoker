@@ -64,11 +64,7 @@ export function electronCommandArgs(args: string[], platform: NodeJS.Platform = 
 async function runElectronHeadless(args: string[]): Promise<number> {
   const electronLauncher = resolve(repoRoot, 'scripts', 'electron.cjs');
   const nodeArgs = [electronLauncher, ...electronCommandArgs(args)];
-  const command = process.platform === 'linux' && !process.env.DISPLAY ? 'xvfb-run' : process.execPath;
-  const commandArgs = command === 'xvfb-run'
-    ? ['--auto-servernum', process.execPath, ...nodeArgs]
-    : nodeArgs;
-  const child = spawn(command, commandArgs, {
+  const child = spawn(process.execPath, nodeArgs, {
     cwd: repoRoot,
     stdio: 'inherit',
     env: {
