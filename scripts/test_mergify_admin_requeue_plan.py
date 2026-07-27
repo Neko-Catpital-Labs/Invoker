@@ -291,6 +291,39 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(pr(checks={"build": check("failure")}))
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
 
+    def test_repair_invalid_stops_other_direct_repairs_on_same_pr(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            6163,
+            HEAD,
+            "UI Vitest",
+            1,
+            meta={
+                "errors": [
+                    "Review lane docs cannot ship with product-test files in the same PR. Keep docs and skill updates in their own slice."
+                ],
+            },
+        )
+        snapshot = pr(
+            number=6163,
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={
+                "quality / TypeScript Types": check("failure", "quality / TypeScript Types"),
+                "UI Vitest": check("failure", "UI Vitest"),
+            },
+            latest_mergify=event(failing=("UI Vitest",)),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"quality / TypeScript Types", "UI Vitest"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6163},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+
     def test_capped_failed_check_retries_once_after_dirty_repair_stop(self):
         ledger = self._ledger()
         for epoch in range(3):
