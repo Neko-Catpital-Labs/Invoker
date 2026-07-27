@@ -4,6 +4,7 @@ argument-hint: "help me plan <change>"
 ---
 
 Use this host's native planning mode when the host supports entering it from this command. If the host cannot be switched by this command, do a read-only planning pass and do not edit product code before the plan is approved.
+Plain approval stops after workflow handoff: submit the approved workflow and do not publish local branches, create PRs, or update PR stacks unless the user explicitly asks for PR publication.
 If the request involves creating, updating, publishing, or splitting pull requests or PR stacks, first read and follow `skill://make-pr/SKILL.md` before PR authoring or publication. If it involves multiple review slices, first read and follow `skill://review-compression/SKILL.md` before writing workflow YAML.
 
 
