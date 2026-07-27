@@ -989,6 +989,48 @@ function testStackedBaseRequiresStackHead() {
 }
 
 
+function testMergifyStackRejectsPlanBase() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    gitQuiet(work, 'branch', 'plan/upstream', 'origin/master');
+    gitQuiet(work, 'push', 'origin', 'plan/upstream');
+    createTrackedBranch(work, 'stack/plan-base', 'origin/plan/upstream');
+    commitFile(work, 'stacked.txt', 'stacked\n', 'stacked diff');
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs('plan/upstream'), '--dry-run']);
+
+    assert(result.status === 1, `Mergify stack PR should reject plan/ base\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('Refusing to create or update a Mergify stack PR with a plan/ base branch.'), 'plan-base guard should explain the refusal');
+    assert(result.stderr.includes('Requested base: plan/upstream'), 'plan-base guard should name the requested base');
+    expectNoPush(harness, 'Mergify stack plan-base rejection');
+    expectNoGhCalls(harness, 'Mergify stack plan-base rejection');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNonMergifyPrAllowsPlanBase() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    gitQuiet(work, 'branch', 'plan/upstream', 'origin/master');
+    gitQuiet(work, 'push', 'origin', 'plan/upstream');
+    createTrackedBranch(work, 'feature/plan-base', 'origin/plan/upstream');
+    commitFile(work, 'feature.txt', 'feature\n', 'feature change');
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs('plan/upstream'), '--dry-run']);
+
+    assert(result.status === 1, `non-Mergify plan/ base fixture should reach the existing stack-comment path\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('[dry-run] Would create PR'), 'non-Mergify plan-base PR should reach creation');
+    assert(!result.stderr.includes('Refusing to create or update a Mergify stack PR with a plan/ base branch.'), 'non-Mergify plan-base PR should bypass the Mergify-only guard');
+    expectNoPush(harness, 'non-Mergify plan-base dry run');
+    expectNoGhCalls(harness, 'non-Mergify plan-base dry run');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testDiffAtomicityBlocksMixedDiff() {
   const harness = createHarness();
   try {
@@ -1099,6 +1141,8 @@ const tests = [
   testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,
   testStackedBaseRequiresStackHead,
+  testMergifyStackRejectsPlanBase,
+  testNonMergifyPrAllowsPlanBase,
   testDiffAtomicityBlocksMixedDiff,
   testCreatePrDryRunMatchesCiBodyValidation,
   testDiffComputationFailureBlocksPrCreation,

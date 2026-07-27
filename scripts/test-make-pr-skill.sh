@@ -117,12 +117,14 @@ must_contain "$SKILL_MD" "auto-switch to a stale leftover branch and publish an 
 must_contain "$SKILL_MD" "\`--dry-run\` refuses on a generated branch; the real push does not" "make-pr skill must require dry-run as the safety check"
 must_contain "$SKILL_MD" "git push --force-with-lease origin HEAD" "make-pr skill must offer the deterministic single-branch update path"
 must_contain "$SKILL_MD" "node scripts/safe-stack-push.mjs" "make-pr skill must route pushes through the safe-stack-push guard"
+must_contain "$SKILL_MD" "Never publish a Mergify stack with a \`plan/\` base" "make-pr skill must forbid plan bases for Mergify stacks"
+must_contain "$SKILL_MD" "does not prohibit non-Mergify Invoker workflows from using \`plan/\` integration branches" "make-pr skill must scope the plan-base restriction to Mergify"
 
 # The guard itself must exist and classify branches correctly (refuse generated, allow working).
 GUARD="$REPO_ROOT/scripts/safe-stack-push.mjs"
 [[ -f "$GUARD" ]] || fail "expected guard script $GUARD"
 node --input-type=module -e "
-import { isGeneratedStackBranch, evaluatePush } from '$GUARD';
+import { extractPlannedPrNumbers, isGeneratedStackBranch, evaluatePlanBases, evaluatePush } from '$GUARD';
 const gen = 'stack/EdbertChan/pr/app-tsconfig-noemit/stop-tsc-clobbering-tsup-built-dist--c0651a20';
 const work = 'pr/app-tsconfig-noemit';
 if (!isGeneratedStackBranch(gen)) process.exit(1);
@@ -130,6 +132,11 @@ if (isGeneratedStackBranch(work)) process.exit(1);
 if (evaluatePush({ branch: gen, mergifyRefusesAsGenerated: false }).allowed) process.exit(1);
 if (!evaluatePush({ branch: work, mergifyRefusesAsGenerated: false }).allowed) process.exit(1);
 if (evaluatePush({ branch: work, mergifyRefusesAsGenerated: true }).allowed) process.exit(1);
+const plan = 'created https://github.com/Neko-Catpital-Labs/Invoker/pull/42\\nupdated https://github.com/Neko-Catpital-Labs/Invoker/pull/42\\n';
+if (JSON.stringify(extractPlannedPrNumbers(plan)) !== '[42]') process.exit(1);
+if (evaluatePlanBases(['master', 'stack/EdbertChan/example']).allowed !== true) process.exit(1);
+const blocked = evaluatePlanBases(['master', 'plan/upstream', 'plan/upstream']);
+if (blocked.allowed || JSON.stringify(blocked.planBases) !== '[\"plan/upstream\"]') process.exit(1);
 " || fail "safe-stack-push guard must refuse generated branches and allow working branches"
 
 # One-refactor-at-a-time decomposition: one PR moves exactly one top-level symbol.

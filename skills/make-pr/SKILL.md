@@ -254,6 +254,8 @@ Do not generalize this to unrelated repos.
 Never run `mergify stack push` (including the `-k` update variant) while checked out on a Mergify-generated stack branch (`stack/<user>/<working-branch>/<slug>--<change-id>`). The real push does not fail safe there: instead of refusing, it can auto-switch to a stale leftover branch and publish an unrelated stack. This happened once — PR #3407 published accidental PRs #3408–#3411 from a leftover `tmp-rebase-fixsessions` branch.
 
 - Push only from the working branch (for example `pr/<name>`), where the stack resolves as `<trunk>..HEAD`.
+- Mergify stack bases must be the trunk branch or a live `stack/` branch. Never publish a Mergify stack with a `plan/` base: a separately landed stack PR does not retarget PRs based on that integration branch.
+- This rule applies to Invoker dogfood and target repositories that independently use Mergify Stacks. It does not prohibit non-Mergify Invoker workflows from using `plan/` integration branches.
 - Always preview with `mergify stack push --dry-run` first and confirm the plan pushes ONLY your intended commits. `--dry-run` refuses on a generated branch; the real push does not, so the dry-run is your safety check.
 - To update ONE already-published branch, prefer `git push --force-with-lease origin HEAD` — it is deterministic and does no stack resolution.
 - Use the guard `node scripts/safe-stack-push.mjs` (add `--execute` to push). It refuses on a generated branch and forces the dry-run preview before any real push.
