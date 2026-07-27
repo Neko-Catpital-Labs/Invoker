@@ -60,7 +60,6 @@ import {
   type QueryFlags,
   BOLD,
   RESET,
-  YELLOW,
   createHeadlessExecutor,
   wireHeadlessApproveHook,
   parseQueryFlags,
@@ -143,14 +142,6 @@ async function dispatchHeadlessRunnableTasks(
   const timer = setInterval(poll, 250);
   timer.unref?.();
   await new Promise<void>((resolve) => setImmediate(resolve));
-}
-
-// ── Deprecation Warning ─────────────────────────────────────
-
-function warnDeprecated(oldCmd: string, newCmd: string): void {
-  process.stderr.write(
-    `${YELLOW}[deprecated]${RESET} "${oldCmd}" is deprecated. Use "${newCmd}" instead.\n`,
-  );
 }
 
 function assertDeleteAllEnabled(): void {
@@ -343,7 +334,6 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       await headlessDeleteTask(args[1], deps);
       break;
     case 'delete':
-    case 'delete-workflow':
       await headlessDeleteWorkflow(args[1], deps);
       break;
     case 'delete-all':
@@ -369,51 +359,6 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'worker':
       await headlessWorker(args.slice(1), deps);
-      break;
-
-    // ── Deprecated aliases → query ──
-    case 'list':
-      warnDeprecated('list', 'query workflows');
-      await headlessQuery(['workflows', ...args.slice(1)], deps);
-      break;
-    case 'status':
-      warnDeprecated('status', 'query tasks');
-      await headlessQuery(['tasks', ...args.slice(1)], deps);
-      break;
-    case 'task-status':
-      warnDeprecated('task-status', 'query task');
-      await headlessQuery(['task', ...args.slice(1)], deps);
-      break;
-    case 'queue':
-      warnDeprecated('queue', 'query queue');
-      await headlessQuery(['queue', ...args.slice(1)], deps);
-      break;
-    case 'audit':
-      warnDeprecated('audit', 'query audit');
-      await headlessQuery(['audit', ...args.slice(1)], deps);
-      break;
-    case 'session':
-      warnDeprecated('session', 'query session');
-      await headlessQuery(['session', ...args.slice(1)], deps);
-      break;
-
-    // ── Deprecated aliases → set ──
-    case 'edit':
-      warnDeprecated('edit', 'set command');
-      await headlessSet(['command', ...args.slice(1)], deps);
-      break;
-    case 'edit-executor':
-    case 'edit-type':
-      warnDeprecated(command, 'set pool');
-      await headlessSet(['pool', ...args.slice(1)], deps);
-      break;
-    case 'edit-agent':
-      warnDeprecated('edit-agent', 'set agent');
-      await headlessSet(['agent', ...args.slice(1)], deps);
-      break;
-    case 'set-merge-mode':
-      warnDeprecated('set-merge-mode', 'set merge-mode');
-      await headlessSet(['merge-mode', ...args.slice(1)], deps);
       break;
 
     case '--help':
@@ -609,13 +554,6 @@ ${BOLD}Lifecycle:${RESET}
   slack                                               Start Slack bot (long-running)
   worker [kind|list|status]                           Run/list registry worker kinds (autofix scans failed tasks)
 
-${BOLD}Deprecated${RESET} (use new names above):
-  list → query workflows       status → query tasks       task-status → query task
-  queue → query queue           audit → query audit         session → query session
-  edit → set command            edit-executor → set pool
-  edit-agent → set agent        set-merge-mode → set merge-mode
-  delete-workflow → delete
-
 ${BOLD}Options:${RESET}
   --wait-for-approval    Keep running until PR approval (use with 'run' or 'resume')
   --no-track             Submit and return immediately after printing Workflow ID
@@ -624,7 +562,7 @@ ${BOLD}Options:${RESET}
 }
 
 async function headlessEdit(taskId: string, newCommand: string, deps: HeadlessDeps): Promise<void> {
-  if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless edit <taskId> <newCommand>');
+  if (!taskId || !newCommand) throw new Error('Missing arguments. Usage: --headless set command <taskId> <newCommand>');
   const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set command');
   if (!restored) return;
   taskId = restored.resolvedTaskId;
@@ -766,9 +704,7 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
  * `retryTask` compatibility wire — see `MUTATION_POLICIES.mergeMode`
  * and `buildInvalidationDeps`).
  *
- * The CLI argument is still a workflow id (matches the legacy
- * `set-merge-mode <workflowId> <mode>` surface and the
- * `invoker:set-merge-mode` IPC). `mergeMode` is normalized at the
+ * The CLI argument is a workflow id. `mergeMode` is normalized at the
  * app boundary because that concerns UI/CLI input parsing, not the
  * chart's invalidation routing. The merge-task-id translation
  * (`workflowId → __merge__<workflowId>`) happens here because the
@@ -784,7 +720,7 @@ async function headlessSetMergeMode(
 ): Promise<void> {
   if (!workflowId || !mergeMode) {
     throw new Error(
-      'Missing arguments. Usage: --headless set-merge-mode <workflowId> <manual|automatic|external_review>',
+      'Missing arguments. Usage: --headless set merge-mode <workflowId> <manual|automatic|external_review>',
     );
   }
   const normalized = normalizeMergeModeForPersistence(mergeMode);
