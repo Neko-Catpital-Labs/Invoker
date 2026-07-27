@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { delegationTimeoutMs, tryDelegateExec, tryDelegateRun, tryDelegateResume } from '../headless.js';
+import {
+  delegationTimeoutMs,
+  resolveDelegationTimeoutMs,
+  tryDelegateExec,
+  tryDelegateRun,
+  tryDelegateResume,
+} from '../headless.js';
 import { LocalBus } from '@invoker/transport';
 import type { MessageBus } from '@invoker/transport';
 import type { HeadlessTargetLookup } from '../headless-command-classification.js';
@@ -86,10 +92,26 @@ describe('headless→owner delegation', () => {
       expect(delegationTimeoutMs(['approve', 'wf-123/task-1'], targetLookup)).toBe(5_000);
     });
 
-    it('uses 60s timeout for global start-ready', () => {
-      expect(delegationTimeoutMs(['start-ready'], targetLookup)).toBe(60_000);
-      expect(delegationTimeoutMs(['start-ready', '--recreate-failed-and-pending'], targetLookup)).toBe(60_000);
-      expect(delegationTimeoutMs(['start-ready', '--recreate-all'], targetLookup)).toBe(300_000);
+    it.each([
+      ['default', []],
+      ['failed recreate', ['--recreate-failed']],
+      ['failed and pending recreate', ['--recreate-failed-and-pending']],
+      ['failed, pending, and running recreate', ['--recreate-failed-pending-and-running']],
+      ['failed fresh-base', ['--fresh-base-failed']],
+      ['failed and pending fresh-base', ['--fresh-base-failed-and-pending']],
+      ['failed, pending, and running fresh-base', ['--fresh-base-failed-pending-and-running']],
+    ])('uses 60s timeout for global start-ready %s scope', async (_label, flags) => {
+      const args = ['start-ready', ...flags];
+
+      expect(delegationTimeoutMs(args, targetLookup)).toBe(60_000);
+      await expect(resolveDelegationTimeoutMs(args)).resolves.toBe(60_000);
+    });
+
+    it('keeps the broader timeout for global start-ready recreate-all', async () => {
+      const args = ['start-ready', '--recreate-all'];
+
+      expect(delegationTimeoutMs(args, targetLookup)).toBe(300_000);
+      await expect(resolveDelegationTimeoutMs(args)).resolves.toBe(300_000);
     });
   });
 
