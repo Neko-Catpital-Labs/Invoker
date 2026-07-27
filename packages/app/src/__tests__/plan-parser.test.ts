@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 
 describe('applyPlanDefinitionDefaults', () => {
-  it('defaults the workflow baseBranch to master when omitted', () => {
+  it('pins the workflow baseBranch to master when omitted', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'My Plan',
       repoUrl: 'git@github.com:test/repo.git',
@@ -30,7 +30,7 @@ describe('applyPlanDefinitionDefaults', () => {
     expect(plan.baseBranch).toBe('master');
   });
 
-  it('preserves an explicit workflow base ref', () => {
+  it('pins the workflow baseBranch to master even when the plan asks for another branch', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'X',
       baseBranch: 'upstream/develop',
@@ -38,30 +38,12 @@ describe('applyPlanDefinitionDefaults', () => {
       onFinish: 'merge',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
     });
-    expect(plan.baseBranch).toBe('upstream/develop');
+    expect(plan.baseBranch).toBe('master');
     expect(plan.featureBranch).toBe('feat/x');
     expect(plan.onFinish).toBe('merge');
   });
 
-  it('normalizes git ref prefixes before saving workflow base refs', () => {
-    const plan = applyPlanDefinitionDefaults({
-      name: 'Remote PR Plan',
-      repoUrl: 'git@github.com:test/repo.git',
-      baseBranch: 'refs/remotes/upstream/release',
-      tasks: [{ id: 'a', description: 'd', command: 'echo' }],
-    });
-    expect(plan.baseBranch).toBe('upstream/release');
-
-    const localRef = applyPlanDefinitionDefaults({
-      name: 'Remote PR Plan',
-      repoUrl: 'git@github.com:test/repo.git',
-      baseBranch: 'refs/heads/release',
-      tasks: [{ id: 'a', description: 'd', command: 'echo' }],
-    });
-    expect(localRef.baseBranch).toBe('release');
-  });
-
-  it('defaults blank baseBranch values to master', () => {
+  it('pins blank baseBranch values to master too', () => {
     const empty = applyPlanDefinitionDefaults({
       name: 'Remote PR Plan',
       repoUrl: 'git@github.com:test/repo.git',
@@ -899,7 +881,7 @@ tasks:
   });
 
   describe('onFinish parsing', () => {
-    it('parses plan with onFinish: merge and preserves the explicit base ref', () => {
+    it('parses plan with onFinish: merge and still pins baseBranch to master', () => {
       const yaml = `
 name: Merge Plan
 repoUrl: git@github.com:test/repo.git
@@ -912,7 +894,7 @@ tasks:
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('merge');
-      expect(plan.baseBranch).toBe('upstream/develop');
+      expect(plan.baseBranch).toBe('master');
       expect(plan.featureBranch).toBe('feat/x');
     });
 
@@ -943,7 +925,10 @@ tasks:
       expect(plan.featureBranch).toBe('plan/simple-plan');
     });
 
-    it('defaults baseBranch to master when omitted', () => {
+    it('pins baseBranch to master when omitted', async () => {
+      const configMod = await import('../config.js');
+      const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({});
+
       const yaml = `
 name: No Base Branch
 repoUrl: git@github.com:test/repo.git
@@ -955,9 +940,10 @@ tasks:
 `;
       const plan = parsePlan(yaml);
       expect(plan.baseBranch).toBe('master');
+      loadConfigSpy.mockRestore();
     });
 
-    it('keeps an explicit baseBranch override', () => {
+    it('ignores an explicit baseBranch override and still pins to master', () => {
       const yaml = `
 name: Explicit Base
 repoUrl: git@github.com:test/repo.git
@@ -969,7 +955,7 @@ tasks:
     description: Build the project
 `;
       const plan = parsePlan(yaml);
-      expect(plan.baseBranch).toBe('origin/release');
+      expect(plan.baseBranch).toBe('master');
     });
 
     it('rejects invalid onFinish value', () => {

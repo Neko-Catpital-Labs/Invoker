@@ -9,13 +9,14 @@ import { execFileSync, execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import { normalizeWorkflowBaseBranch, type PlanDefinition } from '@invoker/workflow-core';
+import type { PlanDefinition } from '@invoker/workflow-core';
+import { normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
-/** Workflow base branches default to master, but explicit refs like upstream/main are preserved. */
+/** Workflow base branches are pinned to master, regardless of YAML/config input. */
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
-  return normalizeWorkflowBaseBranch(plan.baseBranch, 'master');
+  return normalizeWorkflowBaseBranch(plan.baseBranch);
 }
 
 /**
