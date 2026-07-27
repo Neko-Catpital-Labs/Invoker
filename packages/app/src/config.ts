@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { resolveInvokerConfigPath } from '@invoker/contracts';
+import type { PlanningConfirmationMode } from '@invoker/contracts';
 import { validateInvokerConfig } from './config-validation.js';
 import type { PrMaintenanceWorkerConfig } from '@invoker/execution-engine';
 
@@ -70,6 +71,12 @@ export interface PrMaintenanceConfig {
 
 export interface InvokerConfig {
   defaultBranch?: string;
+  /**
+   * Default review/confirmation mode for in-app planning terminal sessions.
+   * 'require' asks before submitting a generated plan; 'auto_submit' submits
+   * automatically. Unset falls back to 'require'.
+   */
+  defaultPlanningTerminalConfirmationMode?: PlanningConfirmationMode;
   /**
    * Web surface (browser mirror of the desktop app) shared-secret token.
    * When set (or via INVOKER_WEB_TOKEN), the owner process serves the UI at
