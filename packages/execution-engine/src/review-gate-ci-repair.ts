@@ -32,11 +32,23 @@ import {
   type FailedCheckLogFetcher,
 } from './ci-failure-infra-classifier.js';
 import { recordWorkerDecisionRow } from './worker-decision-ledger.js';
+import type { StackPrRecord } from './pr-stack-detection.js';
 
 const CI_FAILURE_WORKER_KIND = 'ci-failure';
 export const SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL = 'invoker:spawn-review-gate-ci-repair';
+export const SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL = 'invoker:spawn-review-gate-stack-ci-repair';
 const CI_FAILURE_ACTION_TYPE = 'fix-ci-failure';
+const CI_FAILURE_STACK_ACTION_TYPE = 'fix-ci-failure-stack';
 const NO_HEAD_SHA = 'no-head';
+
+/** A stack detection result scoped to one lifecycle event's PR. Kept as its
+ *  own shape here (rather than importing pr-stack-detection.ts's detectStack
+ *  function) so this policy module only depends on the data shape, not the
+ *  live-gh-fetch half of stack detection. */
+export interface StackRepairCandidate {
+  readonly stackId: string;
+  readonly members: readonly StackPrRecord[];
+}
 
 type CiFailureActionStatus = WorkerActionStatus;
 
@@ -56,7 +68,7 @@ export interface ReviewGateCiRepairSubmitter {
   submit(
     workflowId: string,
     priority: WorkflowMutationPriority,
-    channel: typeof SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
+    channel: typeof SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL | typeof SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL,
     args: unknown[],
     options?: { deferDrain?: boolean },
   ): number;
@@ -73,6 +85,17 @@ export interface ReviewGateCiRepairPolicyOptions {
   getRetryBudget?: (task: TaskState) => number;
   /** Optional failed-check log fetcher used to skip non-fixable infra failures. */
   fetchFailedCheckLogs?: FailedCheckLogFetcher;
+  /** Stack-batched CI repair (default off). When enabled and the failing PR
+   *  turns out to have stack-mates, the whole stack is repaired as one batch
+   *  instead of firing a single-PR plan. See detectStackForEvent below. */
+  isStackRepairEnabled?: () => boolean;
+  /** Resolves the failing PR's stack membership, if any. Returning undefined
+   *  or a single-member stack falls back to today's single-PR behavior. Kept
+   *  injectable (rather than calling pr-stack-detection.ts's live fetch
+   *  directly) so this stays unit-testable with no `gh` calls. */
+  detectStackForEvent?: (
+    event: ReviewGateCiFailedLifecycleEvent,
+  ) => Promise<StackRepairCandidate | undefined>;
 }
 
 export interface ReviewGateCiRepairWorkflowMutationArgs {
@@ -152,6 +175,56 @@ export function parseReviewGateCiRepairWorkflowMutationArgs(args: unknown[]): Re
   };
 }
 
+export interface ReviewGateStackCiRepairWorkflowMutationArgs {
+  readonly stackId: string;
+  readonly members: readonly StackPrRecord[];
+  readonly triggering: ReviewGateCiRepairWorkflowMutationArgs;
+}
+
+export function buildReviewGateStackCiRepairWorkflowMutationArgs(
+  payload: ReviewGateStackCiRepairWorkflowMutationArgs,
+): unknown[] {
+  return [payload];
+}
+
+function isStackPrRecord(value: unknown): value is StackPrRecord {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.number === 'number'
+    && typeof candidate.state === 'string'
+    && typeof candidate.baseRefName === 'string'
+    && typeof candidate.headRefName === 'string'
+    && typeof candidate.headRefOid === 'string';
+}
+
+export function parseReviewGateStackCiRepairWorkflowMutationArgs(
+  args: unknown[],
+): ReviewGateStackCiRepairWorkflowMutationArgs {
+  const [raw] = args;
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`${SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL} mutation requires an argument object`);
+  }
+  const candidate = raw as Record<string, unknown>;
+  const { stackId, members, triggering } = candidate;
+  if (
+    typeof stackId !== 'string'
+    || !Array.isArray(members)
+    || members.length === 0
+    || !members.every(isStackPrRecord)
+    || !triggering
+    || typeof triggering !== 'object'
+  ) {
+    throw new Error(
+      `${SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL} mutation requires { stackId, members: StackPrRecord[], triggering }`,
+    );
+  }
+  return {
+    stackId,
+    members: members.map((member) => ({ ...(member as StackPrRecord) })),
+    triggering: parseReviewGateCiRepairWorkflowMutationArgs([triggering]),
+  };
+}
+
 export function ciFailureChecksHash(failedChecks: readonly ReviewGateFailedCheck[]): string {
   const normalized = failedChecks
     .map((check) => ({
@@ -180,6 +253,18 @@ export function ciFailureActionKey(event: Pick<
     event.headSha ?? NO_HEAD_SHA,
     ciFailureChecksHash(event.failedChecks),
   ].join(':');
+}
+
+/** Dedup key for a whole stack's in-flight repair, not a single PR/check —
+ *  sorted PR-number+headSha pairs so ANY member's later CI-failure event
+ *  (not just the one that originally triggered the batch) resolves to the
+ *  same key and correctly finds the in-flight record. */
+export function stackCiFailureActionKey(candidate: StackRepairCandidate): string {
+  const memberKey = [...candidate.members]
+    .sort((a, b) => a.number - b.number)
+    .map((member) => `${member.number}@${member.headRefOid}`)
+    .join(',');
+  return ['ci-failure-stack', candidate.stackId, memberKey].join(':');
 }
 
 function retryBudgetForTask(task: TaskState, options: ReviewGateCiRepairPolicyOptions): number {
@@ -546,7 +631,7 @@ export async function queueReviewGateCiRepair(
   const executionModel = configuredExecutionModel && configuredExecutionModel.length > 0
     ? configuredExecutionModel
     : undefined;
-  const args = buildReviewGateCiRepairWorkflowMutationArgs({
+  const singlePrPayload: ReviewGateCiRepairWorkflowMutationArgs = {
     sourceWorkflowId: event.workflowId,
     sourceTaskId: event.taskId,
     reviewId: event.reviewId,
@@ -561,7 +646,67 @@ export async function queueReviewGateCiRepair(
     taskStateVersion: event.taskStateVersion ?? task.taskStateVersion,
     ...(selectedAgent ? { agentName: selectedAgent } : {}),
     ...(executionModel ? { executionModel } : {}),
-  });
+  };
+
+  if (options.isStackRepairEnabled?.() && options.detectStackForEvent) {
+    const candidate = await options.detectStackForEvent(event);
+    if (candidate && candidate.members.length > 1) {
+      const stackKey = stackCiFailureActionKey(candidate);
+      const existingStackAction = options.store.getWorkerAction?.(CI_FAILURE_WORKER_KIND, stackKey);
+      if (existingStackAction && isOpenOrCompletedActionStatus(existingStackAction.status)) {
+        logCiFailureWorkerEvent(options, event, 'worker-ci-failure-skip', {
+          reason: 'stack-repair-in-flight',
+          stackId: candidate.stackId,
+          existingStatus: existingStackAction.status,
+        });
+        return { decision: 'skipped', reason: 'stack-repair-in-flight' };
+      }
+
+      const stackArgs = buildReviewGateStackCiRepairWorkflowMutationArgs({
+        stackId: candidate.stackId,
+        members: candidate.members,
+        triggering: singlePrPayload,
+      });
+      const stackIntentId = options.submitter.submit(
+        event.workflowId,
+        'normal',
+        SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL,
+        stackArgs,
+      );
+      recordWorkerDecisionRow(options.store, {
+        workerKind: CI_FAILURE_WORKER_KIND,
+        actionType: CI_FAILURE_STACK_ACTION_TYPE,
+        externalKey: stackKey,
+        subjectType: 'pr-stack',
+        subjectId: candidate.stackId,
+        workflowId: event.workflowId,
+        taskId: event.taskId,
+        status: 'queued',
+        summary: `Queued stack CI repair for ${candidate.members.length} PR(s)`,
+        incrementAttempt: true,
+        intentId: stackIntentId,
+        ...(selectedAgent ? { agentName: selectedAgent } : {}),
+        ...(executionModel ? { executionModel } : {}),
+        payload: {
+          channel: SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL,
+          members: candidate.members.map((member) => member.number),
+          workerRetryBudget: retryBudgetLabel(attemptDecision.workerRetryBudget),
+        },
+      });
+      logCiFailureWorkerEvent(options, event, 'worker-ci-failure-submitted', {
+        intentId: stackIntentId,
+        channel: SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL,
+        stackId: candidate.stackId,
+        members: candidate.members.map((member) => member.number),
+        agent: selectedAgent ?? null,
+        executionModel: executionModel ?? null,
+      });
+      recordAutoFixRetryConsumed(options.store, event.taskId, { workflowId: event.workflowId });
+      return { decision: 'queued', reason: 'queued', intentId: stackIntentId };
+    }
+  }
+
+  const args = buildReviewGateCiRepairWorkflowMutationArgs(singlePrPayload);
   const intentId = options.submitter.submit(
     event.workflowId,
     'normal',

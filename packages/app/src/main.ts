@@ -96,6 +96,8 @@ import {
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
   parseReviewGateCiRepairWorkflowMutationArgs,
+  parseReviewGateStackCiRepairWorkflowMutationArgs,
+  fetchOpenStackPrs,
   reconcileTerminalWorkerActionsOnStartup,
   type AgentRegistry,
   type WorkerRegistry,
@@ -201,6 +203,7 @@ import {
   parseFixWithAgentMutationArgs,
 } from './auto-fix-intents.js';
 import { spawnReviewGateCiRepairWorkflow } from './review-gate-ci-repair-workflow.js';
+import { spawnReviewGateStackCiRepairWorkflow } from './review-gate-stack-repair-workflow.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
@@ -1516,6 +1519,26 @@ function startHeadlessMode(): void {
               persistence,
               logger,
               allowGraphMutation: invokerConfig.allowGraphMutation,
+            });
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:spawn-review-gate-stack-ci-repair')) {
+          workflowMutationDispatcher.set('invoker:spawn-review-gate-stack-ci-repair', async (...repairArgs: unknown[]) => {
+            const args = parseReviewGateStackCiRepairWorkflowMutationArgs(repairArgs);
+            return spawnReviewGateStackCiRepairWorkflow(args, {
+              orchestrator,
+              persistence,
+              logger,
+              allowGraphMutation: invokerConfig.allowGraphMutation,
+              fetchOpenStackPrs: () => {
+                const repo = process.env.INVOKER_GITHUB_TARGET_REPO?.trim();
+                if (!repo) {
+                  throw new Error(
+                    'invoker:spawn-review-gate-stack-ci-repair requires INVOKER_GITHUB_TARGET_REPO to be set.',
+                  );
+                }
+                return fetchOpenStackPrs({ repo, cwd: repoRoot });
+              },
             });
           });
         }
