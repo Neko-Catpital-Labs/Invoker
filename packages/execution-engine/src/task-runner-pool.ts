@@ -688,15 +688,11 @@ export function selectExecutor(
     if (effectiveType === 'worktree') {
       const invokerHome = resolve(homedir(), '.invoker');
       const worktreeTargets = host.getWorktreeTargets();
+      // Pool worktree members may be only capacity/routing IDs; worktreeTargets
+      // is an optional per-member provisioning override.
       const selectedWorktreeTarget = selectedWorktreeTargetId
         ? worktreeTargets[selectedWorktreeTargetId]
         : undefined;
-      if (selectedWorktreeTargetId && !selectedWorktreeTarget) {
-        throw new Error(
-          `Task ${task.id} references poolMemberId="${selectedWorktreeTargetId}" but no matching ` +
-          `entry exists in worktreeTargets config. Available: [${Object.keys(worktreeTargets).join(', ')}]`,
-        );
-      }
       const configFingerprint = JSON.stringify({
         ...(selectedWorktreeTarget ?? {}),
         provisionCommand: selectedWorktreeTarget?.provisionCommand?.trim() || '',

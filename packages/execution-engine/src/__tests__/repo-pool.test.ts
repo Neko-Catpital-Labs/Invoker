@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { RepoPool, ResourceLimitError } from '../repo-pool.js';
 import { remoteFetchForPool } from '../remote-fetch-policy.js';
 import * as branchUtils from '../branch-utils.js';
@@ -62,6 +62,32 @@ describe('RepoPool', () => {
     expect(p1).toBe(p2);
   });
 
+  it('ensureCloneThroughRepoQueue: reuses a clone created by a competing process', async () => {
+    const racingPool = new RepoPool({ cacheDir: tmpDir });
+    const clonePath = racingPool.getClonePath(localRepoUrl);
+    const originalExecGit = (racingPool as any).execGit.bind(racingPool);
+    let seededCompetingClone = false;
+    vi.spyOn(racingPool as any, 'execGit').mockImplementation(
+      async (...params: unknown[]) => {
+        const args = params[0] as string[];
+        const cwd = params[1] as string;
+        if (!seededCompetingClone && args[0] === 'clone') {
+          seededCompetingClone = true;
+          execFileSync('git', ['clone', localRepoUrl, clonePath], {
+            stdio: ['ignore', 'ignore', 'ignore'],
+          });
+        }
+        return originalExecGit(args, cwd);
+      },
+    );
+
+    const path = await racingPool.ensureCloneThroughRepoQueue(localRepoUrl);
+
+    expect(path).toBe(clonePath);
+    expect(execSync('git rev-parse --is-inside-work-tree', { cwd: path }).toString().trim()).toBe('true');
+    await racingPool.destroyAll();
+  });
+
   it('uses one cache path for equivalent GitHub SSH and HTTPS URLs', () => {
     const githubPool = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir: join(tmpDir, 'worktrees') });
     const httpsUrl = 'https://github.com/Neko-Catpital-Labs/Invoker';
@@ -92,6 +118,26 @@ describe('RepoPool', () => {
     expect(ensureCloneUnqueued).toHaveBeenCalledTimes(1);
     expect(ensureCloneUnqueued).toHaveBeenCalledWith(httpsUrl);
     await githubPool.destroyAll();
+  });
+
+  it('serializes worktree acquisition across separate pools sharing one cache', async () => {
+    const worktreeBaseDir = join(tmpDir, 'managed-worktrees');
+    const poolA = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir });
+    const poolB = new RepoPool({ cacheDir: tmpDir, worktreeBaseDir });
+    const branch = 'experiment/shared-cache/task/g0.t0.aaaa-deadbeef';
+
+    try {
+      const [a, b] = await Promise.all([
+        poolA.acquireWorktree(localRepoUrl, branch, undefined, 'shared-cache/task'),
+        poolB.acquireWorktree(localRepoUrl, branch, undefined, 'shared-cache/task'),
+      ]);
+
+      expect(a.worktreePath).toBe(b.worktreePath);
+      expect(execSync('git branch --show-current', { cwd: a.worktreePath }).toString().trim()).toBe(branch);
+    } finally {
+      await poolA.destroyAll();
+      await poolB.destroyAll();
+    }
   });
 
   it('acquireWorktree: creates worktree with feature branch', async () => {
@@ -229,6 +275,191 @@ describe('RepoPool', () => {
       expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
       expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
       expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
+  it('acquireWorktree: retries stale managed branch ref-lock by deleting an empty managed branch', async () => {
+    const branch = 'experiment/wf-ref-lock/task/g0.t0.aaaa-deadbeef';
+    const actionId = 'wf-ref-lock/task';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const clonePath = await poolWithExternalBase.ensureCloneThroughRepoQueue(localRepoUrl);
+    execFileSync('git', ['branch', branch], {
+      cwd: clonePath,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          const error = new Error(
+            `bash exited with code 128: Preparing worktree (new branch '${branch}')\n` +
+              `fatal: cannot lock ref 'refs/heads/${branch}': reference already exists`,
+          );
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
+      expect(execSync('git branch --show-current', { cwd: acquired.worktreePath }).toString().trim()).toBe(branch);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
+  it('acquireWorktree: retries stale managed branch checkout metadata at the target path', async () => {
+    const branch = 'experiment/wf-checked-out/task/g0.t0.aaaa-deadbeef';
+    const actionId = 'wf-checked-out/task';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const clonePath = await poolWithExternalBase.ensureCloneThroughRepoQueue(localRepoUrl);
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+    execFileSync('git', ['branch', branch], {
+      cwd: clonePath,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          const error = new Error(
+            `bash exited with code 128: fatal: '${branch}' is already checked out at '${targetPath}'`,
+          );
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(execSync('git branch --show-current', { cwd: acquired.worktreePath }).toString().trim()).toBe(branch);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
+  it('acquireWorktree: retries stale managed force-update checkout collision at the target path', async () => {
+    const branch = 'experiment/wf-force-update/task/g0.t0.aaaa-deadbeef';
+    const actionId = 'wf-force-update/task';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const clonePath = await poolWithExternalBase.ensureCloneThroughRepoQueue(localRepoUrl);
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+    execFileSync('git', ['branch', branch], {
+      cwd: clonePath,
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          const error = new Error(
+            `bash exited with code 255: Preparing worktree (resetting branch '${branch}'; was at c23c9f350)\n` +
+              `fatal: cannot force update the branch '${branch}' checked out at '${targetPath}'`,
+          );
+          (error as Error & { exitCode?: number }).exitCode = 255;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(execSync('git branch --show-current', { cwd: acquired.worktreePath }).toString().trim()).toBe(branch);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
+  it('acquireWorktree: accepts a usable target worktree when git reports a checkout collision', async () => {
+    const branch = 'experiment/wf-usable-target/task/g0.t0.aaaa-deadbeef';
+    const actionId = 'wf-usable-target/task';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          await originalRunBashLocal(script, cwd);
+          const error = new Error(
+            `bash exited with code 128: fatal: '${branch}' is already checked out at '${targetPath}'`,
+          );
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(execSync('git branch --show-current', { cwd: acquired.worktreePath }).toString().trim()).toBe(branch);
+      expect(runBashSpy).toHaveBeenCalledTimes(1);
     } finally {
       runBashSpy.mockRestore();
       await poolWithExternalBase.destroyAll();

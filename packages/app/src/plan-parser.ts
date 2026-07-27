@@ -25,14 +25,17 @@ function resolveDefaultBaseBranch(plan: PlanDefinition): string {
  * Use when a {@link PlanDefinition} is built outside the YAML parser — e.g. GUI `yaml.load` + IPC.
  */
 export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {
+  const normalizedPlan = typeof plan.repoUrl === 'string'
+    ? { ...plan, repoUrl: normalizeRepoUrlCloneTarget(plan.repoUrl) }
+    : plan;
   const slug = plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  const fb = plan.featureBranch;
+  const fb = normalizedPlan.featureBranch;
   const featureBranch = typeof fb === 'string' && fb.trim() !== '' ? fb.trim() : `plan/${slug}`;
 
   return {
-    ...plan,
-    onFinish: plan.onFinish ?? 'pull_request',
-    baseBranch: resolveDefaultBaseBranch(plan),
+    ...normalizedPlan,
+    onFinish: normalizedPlan.onFinish ?? 'pull_request',
+    baseBranch: resolveDefaultBaseBranch(normalizedPlan),
     featureBranch,
   };
 }
@@ -121,6 +124,13 @@ export interface PlanSubmissionBundle {
   isStack: boolean;
 }
 
+export class PlanParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlanParseError';
+  }
+}
+
 /**
  * Auto-detect the repo's default branch via git.
  * Tries origin/HEAD first, then checks if 'main' exists locally, falls back to 'master'.
@@ -149,7 +159,7 @@ export function detectDefaultBranch(cwd?: string): string {
  */
 export function detectDefaultBranchRemote(repoUrl: string): string {
   try {
-    const output = execSync(`git ls-remote --symref ${repoUrl} HEAD`, {
+    const output = execFileSync('git', ['ls-remote', '--symref', '--', normalizeRepoUrlCloneTarget(repoUrl), 'HEAD'], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000,
     }).trim();
     // Output format: "ref: refs/heads/main\tHEAD"
@@ -159,6 +169,22 @@ export function detectDefaultBranchRemote(repoUrl: string): string {
     // Network error or timeout
   }
   return 'main';
+}
+
+export function normalizeRepoUrlCloneTarget(repoUrl: string): string {
+  const trimmed = repoUrl.trim();
+  if (!isFileRepoUrl(trimmed)) return trimmed;
+  try {
+    return fileURLToPath(trimmed);
+  } catch {
+    throw new PlanParseError(
+      `repoUrl "${repoUrl}" is not a valid git repository. Use a full clone URL or a configured Slack alias.`,
+    );
+  }
+}
+
+function isFileRepoUrl(repoUrl: string): boolean {
+  return repoUrl.toLowerCase().startsWith('file://');
 }
 
 function assertLocalGitRepoReadable(localPath: string): void {
@@ -172,7 +198,7 @@ function assertLocalGitRepoReadable(localPath: string): void {
 export function assertRepoUrlCloneable(repoUrl: string): void {
   const trimmed = repoUrl.trim();
   const isLocalPath = trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../');
-  const isFileUrl = trimmed.startsWith('file://');
+  const isFileUrl = isFileRepoUrl(trimmed);
   const isRemoteUrl = /^(?:git@|https?:\/\/|ssh:\/\/)/.test(trimmed);
 
   if (!isLocalPath && !isFileUrl && !isRemoteUrl) {
@@ -187,7 +213,7 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
       return;
     }
     if (isFileUrl) {
-      assertLocalGitRepoReadable(fileURLToPath(trimmed));
+      assertLocalGitRepoReadable(normalizeRepoUrlCloneTarget(trimmed));
       return;
     }
     execFileSync('git', ['ls-remote', '--exit-code', '--', trimmed, 'HEAD'], {
@@ -198,13 +224,6 @@ export function assertRepoUrlCloneable(repoUrl: string): void {
     throw new PlanParseError(
       `repoUrl "${repoUrl}" is not a readable git repository. Check its clone URL and credentials.`,
     );
-  }
-}
-
-export class PlanParseError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'PlanParseError';
   }
 }
 
@@ -355,11 +374,12 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     raw.featureBranch = `plan/${slug}`;
   }
 
-  if (!raw.repoUrl || typeof raw.repoUrl !== 'string') {
+  if (!raw.repoUrl || typeof raw.repoUrl !== 'string' || raw.repoUrl.trim() === '') {
     throw new PlanParseError(
       `${ownerLabel} must have a "repoUrl" field (e.g. repoUrl: git@github.com:user/repo.git).`,
     );
   }
+  const repoUrl = normalizeRepoUrlCloneTarget(raw.repoUrl);
   if (raw.intermediateRepoUrl !== undefined) {
     if (typeof raw.intermediateRepoUrl !== 'string' || raw.intermediateRepoUrl.trim() === '') {
       throw new PlanParseError(
@@ -453,7 +473,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     featureBranch: raw.featureBranch,
     mergeMode,
     reviewProvider,
-    repoUrl: raw.repoUrl,
+    repoUrl,
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
