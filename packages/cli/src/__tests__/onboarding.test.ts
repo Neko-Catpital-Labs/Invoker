@@ -544,6 +544,15 @@ describe('GitHub auth check', () => {
     expect(check.remediation).toContain('gh auth login');
   });
 
+  it('warns and skips when the injected runner cannot find gh', () => {
+    const error = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
+    const check = checkGithubAuth(() => {
+      throw error;
+    });
+    expect(check).toMatchObject({ id: 'github-auth', status: 'warn' });
+    expect(check.remediation).toContain('Install GitHub CLI');
+  });
+
   it('warns and skips when gh is missing', () => {
     expect(skippedGithubAuthCheck()).toMatchObject({ id: 'github-auth', status: 'warn' });
   });
