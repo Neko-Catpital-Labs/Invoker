@@ -5,6 +5,7 @@ import { resolveInvokerConfigPath } from '@invoker/contracts';
 import {
   loadConfig,
   resolveAutoFixExecutionModel,
+  resolveAutoFixPoolId,
   resolveConfigFilePath,
   resolveDefaultExecutionAgent,
   resolveDefaultTaskExecutionSettings,
@@ -185,6 +186,24 @@ describe('loadConfig', () => {
       defaultExecutionAgent: 'omp',
       defaultExecutionModel: 'chatgpt-5.4',
     })).toBeUndefined();
+  });
+  it('prefers an explicit autoFixExecutionModel over the fleet default, scoped to auto-fix only', () => {
+    expect(resolveAutoFixExecutionModel({
+      autoFixAgent: 'cursor',
+      autoFixExecutionModel: 'grok-4.5',
+      defaultExecutionAgent: 'codex',
+      defaultExecutionModel: 'gpt-5.5',
+    })).toBe('grok-4.5');
+    // Fleet defaults are untouched — a task without autoFixAgent still resolves to codex/gpt-5.5.
+    expect(resolveDefaultTaskExecutionSettings({
+      defaultExecutionAgent: 'codex',
+      defaultExecutionModel: 'gpt-5.5',
+    })).toEqual({ executionAgent: 'codex', executionModel: 'gpt-5.5' });
+  });
+  it('resolves autoFixPoolId independently of defaultPoolId', () => {
+    expect(resolveAutoFixPoolId({ autoFixPoolId: 'remote_digital_ocean_1' })).toBe('remote_digital_ocean_1');
+    expect(resolveAutoFixPoolId({ autoFixPoolId: '  ' })).toBeUndefined();
+    expect(resolveAutoFixPoolId({})).toBeUndefined();
   });
 
   it('reads conflict resolution settings from user config', () => {

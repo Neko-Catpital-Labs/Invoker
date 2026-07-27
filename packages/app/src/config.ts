@@ -144,6 +144,17 @@ export interface InvokerConfig {
    */
   autoFixAgent?: string;
   /**
+   * Explicit execution model for automatic fix retries, independent of
+   * defaultExecutionModel. Takes precedence over the equality-based
+   * derivation in resolveAutoFixExecutionModel.
+   */
+  autoFixExecutionModel?: string;
+  /**
+   * Execution pool or remote target used for automatic fix retries.
+   * When unset, auto-fix tasks fall back to defaultPoolId.
+   */
+  autoFixPoolId?: string;
+  /**
    * Preferred execution agent for resolve-conflict (git merge conflicts).
    * When unset, resolve-conflict uses the entry-point path default
    * (explicit CLI/UI agent, then defaultExecutionAgent / autoFixAgent).
@@ -429,10 +440,16 @@ export function resolveDefaultTaskExecutionSettings(config: InvokerConfig): Defa
   };
 }
 export function resolveAutoFixExecutionModel(config: InvokerConfig): string | undefined {
+  const explicit = config.autoFixExecutionModel?.trim();
+  if (explicit) return explicit;
   const autoFixAgent = config.autoFixAgent?.trim();
   if (!autoFixAgent) return undefined;
   const defaults = resolveDefaultTaskExecutionSettings(config);
   return autoFixAgent === defaults.executionAgent ? defaults.executionModel : undefined;
+}
+
+export function resolveAutoFixPoolId(config: InvokerConfig): string | undefined {
+  return config.autoFixPoolId?.trim() || undefined;
 }
 
 
