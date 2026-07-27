@@ -38,6 +38,19 @@ export type GitExecGh = (args: string[], cwd?: string) => Promise<string>;
 /** Instance-bound `git` exec (explicit dir) so higher-level helpers route through overrides. */
 export type GitExecIn = (args: string[], dir: string) => Promise<string>;
 
+async function listRemoteNamesForGithubCli(execGitIn: GitExecIn, cwd: string): Promise<string[]> {
+  try {
+    const output = await execGitIn(['remote'], cwd);
+    const names = output
+      .split('\n')
+      .map((name) => name.trim())
+      .filter(Boolean);
+    return names.length > 0 ? names : ['origin'];
+  } catch {
+    return ['origin'];
+  }
+}
+
 /** Dependencies `createMergeWorktree` needs from the owning runner. */
 export interface CreateMergeWorktreeContext {
   cwd: string;
@@ -353,8 +366,9 @@ export async function execPr(
   execGh: GitExecGh,
   execGitIn: GitExecIn,
 ): Promise<string> {
-  const ghBase = normalizeBranchForGithubCli(baseBranch);
-  const ghHead = normalizeBranchForGithubCli(featureBranch);
+  const remoteNames = await listRemoteNamesForGithubCli(execGitIn, cwd);
+  const ghBase = normalizeBranchForGithubCli(baseBranch, remoteNames);
+  const ghHead = normalizeBranchForGithubCli(featureBranch, remoteNames);
   const effectiveCwd = cwd;
   const targetRepo = await resolveGithubTargetRepo(effectiveCwd, execGitIn);
   const repoOwner = targetRepo.split('/')[0];

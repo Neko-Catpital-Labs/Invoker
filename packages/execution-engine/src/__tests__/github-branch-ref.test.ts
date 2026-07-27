@@ -11,6 +11,11 @@ describe('normalizeBranchForGithubCli', () => {
     expect(normalizeBranchForGithubCli('upstream/develop')).toBe('upstream/develop');
   });
 
+  it('strips known non-origin remote prefixes when the repo advertises them', () => {
+    expect(normalizeBranchForGithubCli('upstream/develop', ['origin', 'upstream'])).toBe('develop');
+    expect(normalizeBranchForGithubCli('refs/remotes/upstream/fix/x', ['origin', 'upstream'])).toBe('fix/x');
+  });
+
   it('strips refs/heads/', () => {
     expect(normalizeBranchForGithubCli('refs/heads/main')).toBe('main');
   });

@@ -170,6 +170,48 @@ describe('GitHubMergeGateProvider', () => {
       );
     });
 
+    it('strips explicit upstream/ prefixes before calling GitHub', async () => {
+      const { spawn } = await import('node:child_process');
+      const spawnMock = vi.mocked(spawn);
+
+      spawnMock.mockImplementation(((cmd: string, _args: string[]) => {
+        const args = _args;
+        if (cmd === 'git' && args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
+          return mockSpawnResult('https://github.com/owner/repo.git', 0);
+        }
+        if (cmd === 'git' && args[0] === 'remote') {
+          return mockSpawnResult('origin\nupstream\n', 0);
+        }
+        if (cmd === 'git') return mockSpawnResult('', 0);
+        if (cmd === 'gh' && args[0] === 'pr' && args[1] === 'list') {
+          throw new Error('gh pr list should not be used');
+        }
+        if (cmd === 'gh' && args[0] === 'api' && args[1] === 'repos/owner/repo/pulls' && args.includes('--method') && args.includes('GET')) return mockSpawnResult('[]', 0);
+        return mockSpawnResult('{"html_url":"https://github.com/owner/repo/pull/77","number":77}', 0);
+      }) as any);
+
+      const result = await provider.createReview({
+        baseBranch: 'upstream/main',
+        featureBranch: 'feature/test',
+        title: 'Test PR',
+        cwd: '/tmp/repo',
+      });
+
+      expect(result.url).toBe('https://github.com/owner/repo/pull/77');
+      expect(spawnMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'api', 'repos/owner/repo/pulls',
+          '--method', 'POST',
+          '-f', 'base=main',
+          '-f', 'head=feature/test',
+          '-f', 'title=Test PR',
+          '-f', 'body=',
+        ],
+        expect.anything(),
+      );
+    });
+
     it('retries branch push after GitHub reports a ref lock already-exists race', async () => {
       const { spawn } = await import('node:child_process');
       const spawnMock = vi.mocked(spawn);
