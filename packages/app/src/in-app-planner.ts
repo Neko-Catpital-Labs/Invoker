@@ -39,7 +39,6 @@ import {
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
-import { selectHarnessSessionDriver } from '@invoker/surfaces';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
@@ -108,12 +107,14 @@ function isModuleResolutionError(error: unknown): boolean {
 }
 
 type PlanConversationConstructor = new (config: PlanConversationConfig) => PlanConversation;
+type SelectHarnessSessionDriver = typeof import('@invoker/surfaces')['selectHarnessSessionDriver'];
 
 interface PlannerSurfacesModule {
   BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset>;
   DEFAULT_HARNESS_PRESET: string;
   PlanConversation: PlanConversationConstructor;
   extractYamlPlan: (output: string) => string | null;
+  selectHarnessSessionDriver: SelectHarnessSessionDriver;
 }
 
 async function loadPlannerSurfaces(): Promise<PlannerSurfacesModule> {
@@ -340,6 +341,7 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
 }
 
 function planConversationConfig(
+  plannerSurfaces: Pick<PlannerSurfacesModule, 'selectHarnessSessionDriver'>,
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'onRawPlannerOutput'>,
   threadTs: string,
@@ -358,7 +360,7 @@ function planConversationConfig(
     conversationalPlanning: options.conversationalPlanning ?? false,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
-    harnessSessionDriver: selectHarnessSessionDriver(preset, {
+    harnessSessionDriver: plannerSurfaces.selectHarnessSessionDriver(preset, {
       executionAgentRegistry: deps.executionAgentRegistry,
       planningCommandBuilder: deps.planningCommandBuilder,
     }),
@@ -388,7 +390,8 @@ async function createSession(
     return { error: `Unknown planner preset "${presetKey}".` };
   }
 
-  const { PlanConversation } = await loadPlannerSurfaces();
+  const plannerSurfaces = await loadPlannerSurfaces();
+  const { PlanConversation } = plannerSurfaces;
   const createdAt = new Date().toISOString();
   const id = randomUUID();
   const session: InAppPlanningChatSession = {
@@ -397,7 +400,7 @@ async function createSession(
     presetKey,
     status: 'still_discussing',
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id, { conversationalPlanning: true })),
+    conversation: new PlanConversation(planConversationConfig(plannerSurfaces, preset, deps, id, { conversationalPlanning: true })),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
@@ -445,8 +448,9 @@ export async function planFromGoal(
   }
 
   try {
-    const { PlanConversation, extractYamlPlan } = await loadPlannerSurfaces();
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID()));
+    const plannerSurfaces = await loadPlannerSurfaces();
+    const { PlanConversation, extractYamlPlan } = plannerSurfaces;
+    const conversation = new PlanConversation(planConversationConfig(plannerSurfaces, preset, deps, randomUUID()));
     const plannerOutput = await conversation.sendMessage(goal);
     const planText = extractYamlPlan(plannerOutput);
     if (!planText) {
@@ -769,13 +773,14 @@ export async function restorePlanningChatSessions(
   // boots without surfaces/dist, so an eager load here would crash startup with no sessions.
   if (records.length === 0) return;
   const presets = await resolveHarnessPresets(deps.config);
-  const { PlanConversation } = await loadPlannerSurfaces();
+  const plannerSurfaces = await loadPlannerSurfaces();
+  const { PlanConversation } = plannerSurfaces;
 
   for (const record of records) {
     const preset = presets[record.presetKey];
     if (!preset) continue;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id));
+    const conversation = new PlanConversation(planConversationConfig(plannerSurfaces, preset, deps, record.id));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
