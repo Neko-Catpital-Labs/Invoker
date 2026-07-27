@@ -8,7 +8,12 @@
  * command-family modules — keeping the import graph acyclic.
  */
 
-import { makeEnvelope, type StartReadyRequest, type StartReadyResult } from '@invoker/contracts';
+import {
+  makeEnvelope,
+  type StartReadyFreshBaseScope,
+  type StartReadyRequest,
+  type StartReadyResult,
+} from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import {
   remoteFetchForPool,
@@ -50,26 +55,144 @@ import {
   preemptWorkflowExecution,
 } from './headless-shared.js';
 import { runStartReady } from './start-ready.js';
-type StartReadyRequestExt = StartReadyRequest & {
-  recreateFailedAndPending?: boolean;
-  recreateFailedPendingAndRunning?: boolean;
+
+const START_READY_USAGE = [
+  '--headless start-ready',
+  '[--dry-run]',
+  '[--recreate-failed]',
+  '[--recreate-failed-and-pending]',
+  '[--recreate-failed-pending-and-running]',
+  '[--recreate-all]',
+  '[--fresh-base-failed]',
+  '[--fresh-base-failed-and-pending]',
+  '[--fresh-base-failed-pending-and-running]',
+  '[--no-track]',
+].join(' ');
+
+const FRESH_BASE_SCOPE_RANK: Record<StartReadyFreshBaseScope, number> = {
+  failed: 1,
+  failed_and_pending: 2,
+  failed_pending_and_running: 3,
+  all: 4,
 };
 
-type StartReadyPreviewExt = {
-  readyTaskIds: string[];
-  recoverableTaskIds: string[];
-  failedWorkflowIds: string[];
-  pendingWorkflowIds: string[];
-  runningWorkflowIds: string[];
-  skipped: {
-    awaitingApproval: number;
-    reviewReady: number;
-    blocked: number;
-    failedTasks: number;
-    pendingTasks: number;
-    runningTasks: number;
-  };
-};
+type FreshBasePreviewWorkflow = NonNullable<StartReadyResult['preview']['freshBaseWorkflows']>[number];
+
+function setFreshBaseScope(request: StartReadyRequest, scope: StartReadyFreshBaseScope): void {
+  request.freshBase = true;
+  if (
+    !request.freshBaseScope
+    || FRESH_BASE_SCOPE_RANK[scope] > FRESH_BASE_SCOPE_RANK[request.freshBaseScope]
+  ) {
+    request.freshBaseScope = scope;
+  }
+}
+
+function freshBaseScopeIncludesPending(scope: StartReadyFreshBaseScope | undefined): boolean {
+  return scope === 'failed_and_pending'
+    || scope === 'failed_pending_and_running'
+    || scope === 'all';
+}
+
+function freshBaseScopeIncludesRunning(scope: StartReadyFreshBaseScope | undefined): boolean {
+  return scope === 'failed_pending_and_running' || scope === 'all';
+}
+
+function freshBaseScopeIncludesCompleted(scope: StartReadyFreshBaseScope | undefined): boolean {
+  return scope === 'all';
+}
+
+function recreateScopeForRequest(request: StartReadyRequest): StartReadyFreshBaseScope | undefined {
+  if (request.recreateAll) return 'all';
+  if (request.recreateFailedPendingAndRunning) return 'failed_pending_and_running';
+  if (request.recreateFailedAndPending) return 'failed_and_pending';
+  if (request.recreateFailed) return 'failed';
+  return undefined;
+}
+
+function freshBaseScopeForOutput(request: StartReadyRequest): StartReadyFreshBaseScope | undefined {
+  return request.freshBaseScope ?? recreateScopeForRequest(request);
+}
+
+function startReadyScopeIncludesPending(request: StartReadyRequest): boolean {
+  if (request.freshBase) {
+    return freshBaseScopeIncludesPending(freshBaseScopeForOutput(request));
+  }
+  return request.recreateAll === true
+    || request.recreateFailedAndPending === true
+    || request.recreateFailedPendingAndRunning === true
+    || freshBaseScopeIncludesPending(request.freshBaseScope);
+}
+
+function startReadyScopeIncludesRunning(request: StartReadyRequest): boolean {
+  if (request.freshBase) {
+    return freshBaseScopeIncludesRunning(freshBaseScopeForOutput(request));
+  }
+  return request.recreateAll === true
+    || request.recreateFailedPendingAndRunning === true
+    || freshBaseScopeIncludesRunning(request.freshBaseScope);
+}
+
+function startReadyScopeIncludesCompleted(request: StartReadyRequest): boolean {
+  if (request.freshBase) {
+    return freshBaseScopeIncludesCompleted(freshBaseScopeForOutput(request));
+  }
+  return request.recreateAll === true || freshBaseScopeIncludesCompleted(request.freshBaseScope);
+}
+
+function startReadyFreshBaseModeLabel(scope: StartReadyFreshBaseScope | undefined): string {
+  switch (scope) {
+    case 'all':
+      return 'Start and recreate all from fresh base (including finished)';
+    case 'failed_pending_and_running':
+      return 'Start and recreate failed, pending, and running from fresh base';
+    case 'failed_and_pending':
+      return 'Start and recreate failed and pending from fresh base';
+    case 'failed':
+      return 'Start and recreate failed from fresh base';
+    default:
+      return 'Start ready work from fresh base';
+  }
+}
+
+function startReadyModeLabel(request: StartReadyRequest): string {
+  if (request.freshBase) {
+    return startReadyFreshBaseModeLabel(freshBaseScopeForOutput(request));
+  }
+  return request.recreateAll
+    ? 'Start and recreate all (including finished)'
+    : request.recreateFailedPendingAndRunning
+      ? 'Start and recreate failed, pending, and running'
+      : request.recreateFailedAndPending
+        ? 'Start and recreate failed and pending'
+        : request.recreateFailed
+          ? 'Start and recreate failed'
+          : 'Start ready work';
+}
+
+function freshBasePreviewCount(result: StartReadyResult): number {
+  if (result.preview.freshBaseWorkflows) return result.preview.freshBaseWorkflows.length;
+  if (result.preview.freshBaseWorkflowIds) return result.preview.freshBaseWorkflowIds.length;
+  return result.freshBaseWorkflowIds?.length ?? 0;
+}
+
+function hasFreshBaseOutput(request: StartReadyRequest, result: StartReadyResult): boolean {
+  return request.freshBase === true
+    || result.preview.freshBaseWorkflows !== undefined
+    || result.preview.freshBaseWorkflowIds !== undefined
+    || result.freshBaseWorkflowIds !== undefined;
+}
+
+function freshBasePreviewDetails(workflow: FreshBasePreviewWorkflow): string {
+  const details = [
+    workflow.status,
+    workflow.baseBranch ? `base=${workflow.baseBranch}` : undefined,
+    workflow.freshBaseBranch ? `freshBaseBranch=${workflow.freshBaseBranch}` : undefined,
+    workflow.freshBaseCommit ? `freshBaseCommit=${workflow.freshBaseCommit}` : undefined,
+  ].filter(Boolean);
+  return details.join(' ');
+}
+
 function createTrackedHeadlessExecutor(
   deps: HeadlessDeps,
   taskHandles: TaskHandleMap,
@@ -272,10 +395,10 @@ export async function headlessResume(
 }
 
 function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefined): {
-  request: StartReadyRequestExt;
+  request: StartReadyRequest;
   noTrack: boolean;
 } {
-  const request: StartReadyRequestExt = {};
+  const request: StartReadyRequest = {};
   let noTrack = inheritedNoTrack ?? false;
   for (const arg of args) {
     switch (arg) {
@@ -294,11 +417,20 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
       case '--recreate-all':
         request.recreateAll = true;
         break;
+      case '--fresh-base-failed':
+        setFreshBaseScope(request, 'failed');
+        break;
+      case '--fresh-base-failed-and-pending':
+        setFreshBaseScope(request, 'failed_and_pending');
+        break;
+      case '--fresh-base-failed-pending-and-running':
+        setFreshBaseScope(request, 'failed_pending_and_running');
+        break;
       case '--no-track':
         noTrack = true;
         break;
       default:
-        throw new Error(`Unknown start-ready option "${arg}". Usage: --headless start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--recreate-failed-pending-and-running] [--recreate-all] [--no-track]`);
+        throw new Error(`Unknown start-ready option "${arg}". Usage: ${START_READY_USAGE}`);
     }
   }
   return { request, noTrack };
@@ -306,39 +438,37 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 
 export async function headlessStartReady(args: string[], deps: HeadlessDeps): Promise<void> {
   const { request, noTrack } = parseStartReadyArgs(args, deps.noTrack);
-  const result = runStartReady(deps.orchestrator, request) as StartReadyResult & {
-    preview: StartReadyPreviewExt;
-  };
+  const result = await runStartReady(deps.orchestrator, request);
   const runnable = result.started.filter(isDispatchableLaunch);
   const preview = result.preview;
 
-  const modeLabel = request.recreateAll
-    ? 'Start and recreate all (including finished)'
-    : request.recreateFailedPendingAndRunning
-      ? 'Start and recreate failed, pending, and running'
-      : request.recreateFailedAndPending
-        ? 'Start and recreate failed and pending'
-        : request.recreateFailed
-          ? 'Start and recreate failed'
-          : 'Start ready work';
+  const modeLabel = startReadyModeLabel(request);
   process.stdout.write(`${modeLabel}: ${result.dryRun ? 'preview' : 'submitted'}\n`);
   process.stdout.write(`  ready: ${preview.readyTaskIds.length}\n`);
   process.stdout.write(`  recoverable: ${preview.recoverableTaskIds.length}\n`);
   process.stdout.write(`  failed workflows: ${preview.failedWorkflowIds.length}\n`);
-  if (
-    request.recreateAll
-    || request.recreateFailedAndPending
-    || request.recreateFailedPendingAndRunning
-  ) {
+  if (startReadyScopeIncludesPending(request)) {
     process.stdout.write(`  pending workflows: ${preview.pendingWorkflowIds.length}\n`);
   }
-  if (request.recreateAll || request.recreateFailedPendingAndRunning) {
+  if (startReadyScopeIncludesRunning(request)) {
     process.stdout.write(`  running workflows: ${preview.runningWorkflowIds.length}\n`);
   }
-  if (request.recreateAll) {
+  if (startReadyScopeIncludesCompleted(request)) {
     process.stdout.write(`  completed workflows: ${preview.completedWorkflowIds?.length ?? 0}\n`);
   }
+  if (hasFreshBaseOutput(request, result)) {
+    process.stdout.write(`  fresh-base workflows: ${freshBasePreviewCount(result)}\n`);
+    for (const workflow of preview.freshBaseWorkflows ?? []) {
+      process.stdout.write(`    ${workflow.workflowId}: ${freshBasePreviewDetails(workflow)}\n`);
+    }
+  }
   process.stdout.write(`  recreated workflows: ${result.recreatedWorkflowIds.length}\n`);
+  if (result.partial === true || result.partialOutcomes?.length) {
+    const outcomes = result.partialOutcomes ?? [];
+    const succeeded = outcomes.filter((outcome) => outcome.ok).length;
+    const failed = outcomes.length - succeeded;
+    process.stdout.write(`  partial outcomes: ${outcomes.length} (${succeeded} ok, ${failed} failed)\n`);
+  }
   process.stdout.write(`  started: ${runnable.length}\n`);
 
   if (result.dryRun || runnable.length === 0) {
