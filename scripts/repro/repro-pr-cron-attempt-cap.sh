@@ -2,7 +2,7 @@
 # End-to-end proof that the PR cron jobs cannot retry a failing operation
 # forever (CodeRabbit findings: count attempts, not just successes).
 #
-# Before the fix both jobs only recorded SUCCESS markers, so a failed omp run
+# Before the fix both jobs only recorded SUCCESS markers, so a failed submit
 # (Job 1) or an accepted-but-unconfirmed rebase-recreate (Job 2) recorded
 # nothing and re-fired every tick indefinitely. The fix records an attempt on
 # every real try and caps on that ledger.
@@ -11,8 +11,9 @@
 # offline with fakes:
 #   Job 2: fake `node` accepts the dispatch; CONFIRM_TIMEOUT=0 means it never
 #          confirms -> each run records one rebase-recreate-attempt and exits 1.
-#   Job 1: fake `gh repo clone` fails -> prepare_checkout fails after the
-#          attempt is recorded -> each run records one coderabbit-attempt, exits 1.
+#   Job 1: fake submit command exits 1 AFTER the repair plan is generated ->
+#          each run records one coderabbit-attempt, exits 1, and does not record
+#          the success marker.
 # After MAX attempts the next run hits the cap instead of dispatching again.
 set -euo pipefail
 
@@ -117,7 +118,7 @@ echo "$out" | grep -q "giving up" \
   || fail "Job 2: 4th run must hit the cap (giving up), not dispatch again" "$out"
 
 # ---------------------------------------------------------------------------
-# Job 1 — omp attempt fails (clone fails) but the attempt is still counted.
+# Job 1 — repair workflow submit fails but the attempt is still counted.
 # ---------------------------------------------------------------------------
 cat > "$TMP/bin/gh" <<'GH'
 #!/usr/bin/env bash
@@ -132,33 +133,36 @@ case "${1:-}" in
       */pulls/*/comments) printf '%s\n' '[{"user":{"login":"coderabbitai[bot]"},"body":"x","updated_at":"2026-06-25T10:00:00Z"}]'; exit 0;;
       */issues/*/comments) printf '[]\n'; exit 0;;
     esac;;
-  repo)
-    # Force prepare_checkout to fail AFTER the attempt has been recorded.
-    [ "${2:-}" = "clone" ] && exit 1;;
 esac
 echo "fake gh: unhandled: $*" >&2; exit 1
 GH
 chmod +x "$TMP/bin/gh"
 
 # Job 1's task context is irrelevant to the attempt cap; return an empty result
-# so launch_omp skips the (real) tasks query and stays fully offline.
+# so the worker stays fully offline. The submit stub fails after the plan is
+# generated, so each tick records one attempt without the success marker.
 cat > "$TMP/review-gate-empty.sh" <<'RG'
 #!/usr/bin/env bash
 printf '{}\n'
 RG
-chmod +x "$TMP/review-gate-empty.sh"
+cat > "$TMP/submit-fail.sh" <<'SUBMIT'
+#!/usr/bin/env bash
+echo "fake submit failure for $1" >&2
+exit 1
+SUBMIT
+chmod +x "$TMP/review-gate-empty.sh" "$TMP/submit-fail.sh"
 
 J1_LEDGER="$TMP/j1.tsv"; : > "$J1_LEDGER"
 J1_CONFIG="$TMP/j1-config.json"
 cat > "$J1_CONFIG" <<EOF
-{"prMaintenance":{"enabled":true,"repoRoot":"$ROOT","lockPath":"$TMP/j1.lock","env":{"PATH":"$TMP/bin:$PATH","INVOKER_PR_CRON_DRY_RUN":"0","INVOKER_PR_CODERABBIT_STATE_FILE":"$J1_LEDGER","INVOKER_PR_CRON_LOCK":"$TMP/j1.lock","INVOKER_PR_CRON_WORKDIR":"$TMP/work","INVOKER_PR_CRON_REVIEW_GATE_CMD":"$TMP/review-gate-empty.sh"}}}
+{"prMaintenance":{"enabled":true,"repoRoot":"$ROOT","lockPath":"$TMP/j1.lock","env":{"PATH":"$TMP/bin:$PATH","INVOKER_PR_CRON_DRY_RUN":"0","INVOKER_PR_CODERABBIT_STATE_FILE":"$J1_LEDGER","INVOKER_PR_CRON_LOCK":"$TMP/j1.lock","INVOKER_PR_CRON_WORKDIR":"$TMP/work","INVOKER_PR_CRON_REVIEW_GATE_CMD":"$TMP/review-gate-empty.sh","INVOKER_PR_CODERABBIT_SUBMIT_CMD":"$TMP/submit-fail.sh"}}}
 EOF
 run_job1() { run_native_worker coderabbit-address "$J1_CONFIG"; }
 
 for i in 1 2 3; do
   out="$(run_job1 || true)"
-  echo "$out" | grep -q "clone failed" \
-    || fail "Job 1 run $i: expected the omp checkout to fail" "$out"
+  echo "$out" | grep -q "repair workflow submit failed" \
+    || fail "Job 1 run $i: expected the repair-workflow submit to fail" "$out"
 done
 n="$(awk -F'\t' '$1=="coderabbit-attempt" && $2=="556"{c++} END{print c+0}' "$J1_LEDGER")"
 [ "$n" -eq 3 ] || fail "Job 1: expected 3 recorded attempts, got $n"
