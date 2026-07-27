@@ -93,6 +93,9 @@ fi
 if ! out2="$(run_worker)"; then
   fail 'tick 2: worker failed' "$out2"
 fi
+case "$out2" in
+  *"BLOCK PR #5885"*) fail 'tick 2: worker retried existing no-current-bottom blocker' "$out2" ;;
+esac
 
 python3 - <<'PY' || fail 'expected one exact no-current-bottom comment' "$(cat "$STATE_PATH")"
 import json
