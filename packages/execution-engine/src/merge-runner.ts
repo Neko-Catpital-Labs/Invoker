@@ -258,6 +258,44 @@ async function syncGateWorkspaceToFeatureBranch(
   await execGitInMergeSafe(host, ['checkout', featureBranch], gateWorkspacePath);
 }
 
+async function listReviewableChangedFiles(
+  host: MergeRunnerHost,
+  dir: string,
+  baseBranch: string,
+  featureBranch: string,
+): Promise<string[]> {
+  const normalizedBase = normalizeBranchForGithubCli(baseBranch);
+  let diffBaseRef = baseBranch;
+  for (const candidate of [
+    `refs/remotes/origin/${normalizedBase}`,
+    `origin/${normalizedBase}`,
+    baseBranch,
+  ]) {
+    try {
+      const resolved = (await execGitInMergeSafe(
+        host,
+        ['rev-parse', '--verify', `${candidate}^{commit}`],
+        dir,
+      )).trim();
+      if (resolved) {
+        diffBaseRef = candidate;
+        break;
+      }
+    } catch {
+      // Try the next base spelling.
+    }
+  }
+  const out = await execGitInMergeSafe(
+    host,
+    ['diff', '--name-only', `${diffBaseRef}...${featureBranch}`, '--'],
+    dir,
+  );
+  return out
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 // ── Host interface ───────────────────────────────────────
 
 /**
@@ -847,6 +885,50 @@ export async function runMergeGateActionImpl(
           featureBranch,
         });
         await syncGateWorkspaceToFeatureBranch(host, gateWorkspacePath, featureBranch);
+
+        if (isInvokerRepoUrl(workflow?.repoUrl)) {
+          const changedFiles = await listReviewableChangedFiles(
+            host,
+            gateWorkspacePath!,
+            baseBranch,
+            featureBranch,
+          );
+          if (changedFiles.length === 0) {
+            logTaskProgress(host, task.id, 'info', 'Skipping review stack publication for empty Invoker branch', {
+              baseBranch,
+              featureBranch,
+            });
+            mergeTrace('GATE_WS_PATH_REVIEW_PUBLISH_NOOP', {
+              taskId: task.id,
+              gateWorkspacePath: gateWorkspacePath ?? null,
+              baseBranch,
+              featureBranch,
+              onFinish,
+              mergeMode,
+            });
+            response = {
+              requestId: `merge-${task.id}`,
+              actionId: task.id,
+              executionGeneration: task.execution.generation ?? 0,
+              status: 'completed',
+              outputs: { exitCode: 0, summary, branch: featureBranch },
+            };
+            return {
+              response,
+              taskChanges: {
+                config: { summary },
+                execution: {
+                  branch: featureBranch,
+                  workspacePath: gateWorkspacePath,
+                  reviewUrl: undefined,
+                  reviewId: undefined,
+                  reviewStatus: undefined,
+                  reviewGate: undefined,
+                },
+              },
+            };
+          }
+        }
 
         const expectedGeneration = task.execution.generation ?? 0;
         let fullSummary = summary;
