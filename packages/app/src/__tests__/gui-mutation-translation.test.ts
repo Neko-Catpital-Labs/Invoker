@@ -62,7 +62,7 @@ describe('GUI mutation translation', () => {
     );
   });
   it.each([
-    ['invoker:restart-task', 'retry-task'],
+    ['invoker:retry-task', 'retry-task'],
     ['invoker:cancel-task', 'cancel'],
     ['invoker:delete-task', 'delete-task'],
     ['invoker:cancel-workflow', 'cancel-workflow'],

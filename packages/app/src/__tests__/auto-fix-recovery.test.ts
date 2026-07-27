@@ -187,7 +187,7 @@ describe('auto-fix recovery worker', () => {
     expect(harness.submit).toHaveBeenCalledWith(
       'wf-1',
       'normal',
-      'invoker:restart-task',
+      'invoker:retry-task',
       ['wf-1/task-1'],
     );
   });
@@ -398,7 +398,7 @@ describe('auto-fix recovery candidate validation', () => {
     expect(harness.submit).toHaveBeenCalledWith(
       'wf-1',
       'normal',
-      'invoker:restart-task',
+      'invoker:retry-task',
       ['wf-1/task-1'],
     );
   });
@@ -419,7 +419,7 @@ describe('auto-fix recovery scan submission', () => {
     expect(harness.submit).toHaveBeenCalledWith(
       'wf-1',
       'normal',
-      'invoker:restart-task',
+      'invoker:retry-task',
       ['wf-1/task-1'],
     );
     expect(harness.logEvent).toHaveBeenCalledWith(
@@ -427,7 +427,7 @@ describe('auto-fix recovery scan submission', () => {
       'debug.auto-fix',
       expect.objectContaining({
         phase: 'worker-autofix-bare-retry-submitted',
-        channel: 'invoker:restart-task',
+        channel: 'invoker:retry-task',
       }),
     );
 
@@ -480,7 +480,7 @@ describe('auto-fix recovery scan submission', () => {
     // budget=1 → exactly one automatic retry total (the bare restart counts),
     // then the durable per-task cap exhausts.
     expect(harness.submit).toHaveBeenCalledTimes(1);
-    expect(harness.submit.mock.calls.map((call) => call[2])).toEqual(['invoker:restart-task']);
+    expect(harness.submit.mock.calls.map((call) => call[2])).toEqual(['invoker:retry-task']);
     expect(task.execution).not.toHaveProperty(attemptStateKey);
     expect(harness.logEvent).toHaveBeenCalledWith(
       'wf-1/task-1',
@@ -512,7 +512,7 @@ describe('auto-fix recovery scan submission', () => {
     // The generation bump must NOT reset the budget (incident 2026-07-12): the
     // durable per-task counter already spent its single retry, so no second one.
     expect(harness.submit).toHaveBeenCalledTimes(1);
-    expect(harness.submit.mock.calls.map((call) => call[2])).toEqual(['invoker:restart-task']);
+    expect(harness.submit.mock.calls.map((call) => call[2])).toEqual(['invoker:retry-task']);
     expect(harness.logEvent).toHaveBeenCalledWith(
       'wf-1/task-1',
       'debug.auto-fix',
