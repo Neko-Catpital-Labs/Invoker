@@ -10,11 +10,15 @@ import type { TaskStateChanges } from '@invoker/workflow-core';
 import type { InvokerConfig } from '../../src/config.js';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { randomInt } from 'node:crypto';
+import { once } from 'node:events';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 
@@ -29,6 +33,123 @@ export type ElectronFixtures = {
 };
 
 const repoRoot = resolveRepoRoot(__dirname);
+const execFileAsync = promisify(execFile);
+
+type ManagedDisplay = {
+  env: NodeJS.ProcessEnv;
+  cleanup: () => Promise<void>;
+};
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function commandExists(command: string): Promise<boolean> {
+  try {
+    await execFileAsync('sh', ['-c', 'command -v "$1"', 'sh', command]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function canOpenXDisplay(env: NodeJS.ProcessEnv): Promise<boolean> {
+  if (process.platform !== 'linux' || !env.DISPLAY) return process.platform !== 'linux';
+  if (!await commandExists('xdpyinfo')) return true;
+  try {
+    await execFileAsync('xdpyinfo', [], { env, timeout: 2000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasDisplayArtifacts(displayNumber: number): boolean {
+  return existsSync(`/tmp/.X${displayNumber}-lock`) || existsSync(`/tmp/.X11-unix/X${displayNumber}`);
+}
+
+function chooseDisplayNumber(): number {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const displayNumber = 200 + randomInt(10000);
+    if (!hasDisplayArtifacts(displayNumber)) return displayNumber;
+  }
+  for (let displayNumber = 200; displayNumber < 10200; displayNumber += 1) {
+    if (!hasDisplayArtifacts(displayNumber)) return displayNumber;
+  }
+  throw new Error('Unable to find a free Xvfb display number for Electron E2E');
+}
+
+async function stopChildProcess(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill('SIGTERM');
+  await Promise.race([
+    once(child, 'exit').catch(() => undefined),
+    delay(1000),
+  ]);
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill('SIGKILL');
+    await Promise.race([
+      once(child, 'exit').catch(() => undefined),
+      delay(1000),
+    ]);
+  }
+}
+
+async function startPrivateXvfb(): Promise<ManagedDisplay> {
+  if (!await commandExists('Xvfb')) {
+    return { env: process.env, cleanup: async () => {} };
+  }
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const displayNumber = chooseDisplayNumber();
+    const display = `:${displayNumber}`;
+    const child = spawn('Xvfb', [
+      display,
+      '-screen', '0', '1280x1024x24',
+      '-nolisten', 'tcp',
+    ], {
+      stdio: 'ignore',
+      detached: false,
+    });
+    child.once('error', (err) => {
+      lastError = err;
+    });
+
+    const env = { ...process.env, DISPLAY: display };
+    delete env.XAUTHORITY;
+    for (let waitAttempt = 0; waitAttempt < 50; waitAttempt += 1) {
+      if (child.exitCode !== null || child.signalCode !== null) break;
+      if (await canOpenXDisplay(env)) {
+        return {
+          env,
+          cleanup: async () => {
+            await stopChildProcess(child);
+          },
+        };
+      }
+      await delay(100);
+    }
+
+    await stopChildProcess(child);
+  }
+
+  throw new Error(`Unable to start a private Xvfb display for Electron E2E${lastError instanceof Error ? `: ${lastError.message}` : ''}`);
+}
+
+async function ensureElectronDisplay(): Promise<ManagedDisplay> {
+  if (process.platform !== 'linux') {
+    return { env: process.env, cleanup: async () => {} };
+  }
+  if (await canOpenXDisplay(process.env)) {
+    return { env: process.env, cleanup: async () => {} };
+  }
+
+  // Debian xvfb-run can hand off an unusable display when many lower display
+  // numbers are already occupied. Recover inside the fixture without changing
+  // the package test command.
+  return startPrivateXvfb();
+}
 
 async function removeTestDir(dir: string): Promise<void> {
   let lastError: unknown;
@@ -148,53 +269,62 @@ exit 64
     const recordVideo = process.env.CAPTURE_VIDEO
       ? { recordVideo: { dir: path.resolve(__dirname, '..', 'test-results', 'videos') } }
       : {};
-    const app = await electron.launch({
-      ...recordVideo,
-      args: [
-        ...(process.platform === 'linux'
-          ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
-          : []),
-        `--user-data-dir=${electronUserDataDir}`,
-        path.resolve(__dirname, '..', '..', 'dist', 'main.js'),
-      ],
-      env: {
-        ...process.env,
-        NODE_ENV: 'test',
-        INVOKER_TEST_WORKFLOW_IDS: '1',
-        INVOKER_DISABLE_SLACK: '1',
-        TZ: 'UTC',
-        INVOKER_GUI_OWNER_MODE: (forceReadOnlyStatus || forceConnectionLostStatus) ? 'gui' : guiOwnerMode,
-        INVOKER_DB_DIR: testDir,
-        INVOKER_IPC_SOCKET: ipcSocketPath,
-        INVOKER_ALLOW_DELETE_ALL: '1',
-        INVOKER_E2E_ENABLE_COMPOSITOR: '1',
-        INVOKER_REPO_CONFIG_PATH: configPath,
-        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:
-          process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000',
-        INVOKER_EMBEDDED_TERMINAL_BACKEND:
-          process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
-        INVOKER_E2E_MARKER_ROOT: markerRoot,
-        INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
-        INVOKER_CLAUDE_COMMAND: claudeMarker,
-        INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
-        HOME: homeDir,
-        ...(process.env.INVOKER_E2E_CODEX_DEMO
-          ? { INVOKER_E2E_CODEX_DEMO: process.env.INVOKER_E2E_CODEX_DEMO }
-          : {}),
-        ...(process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS
-          ? { INVOKER_E2E_CODEX_DEMO_HOLD_SECS: process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS }
-          : {}),
-        ...(process.env.INVOKER_E2E_CODEX_DEMO_RENDERER
-          ? { INVOKER_E2E_CODEX_DEMO_RENDERER: process.env.INVOKER_E2E_CODEX_DEMO_RENDERER }
-          : {}),
-        ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
-        ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
-        ...(forceConnectionLostStatus ? { INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS: '1' } : {}),
-        PATH: pathEnv,
-      },
-    });
-    await use(app);
-    await app.close();
+    const managedDisplay = await ensureElectronDisplay();
+    let app: ElectronApplication | undefined;
+    try {
+      app = await electron.launch({
+        ...recordVideo,
+        args: [
+          ...(process.platform === 'linux'
+            ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
+            : []),
+          `--user-data-dir=${electronUserDataDir}`,
+          path.resolve(__dirname, '..', '..', 'dist', 'main.js'),
+        ],
+        env: {
+          ...process.env,
+          ...managedDisplay.env,
+          NODE_ENV: 'test',
+          INVOKER_TEST_WORKFLOW_IDS: '1',
+          INVOKER_DISABLE_SLACK: '1',
+          TZ: 'UTC',
+          INVOKER_GUI_OWNER_MODE: (forceReadOnlyStatus || forceConnectionLostStatus) ? 'gui' : guiOwnerMode,
+          INVOKER_DB_DIR: testDir,
+          INVOKER_IPC_SOCKET: ipcSocketPath,
+          INVOKER_ALLOW_DELETE_ALL: '1',
+          INVOKER_E2E_ENABLE_COMPOSITOR: '1',
+          INVOKER_REPO_CONFIG_PATH: configPath,
+          INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:
+            process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000',
+          INVOKER_EMBEDDED_TERMINAL_BACKEND:
+            process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
+          INVOKER_E2E_MARKER_ROOT: markerRoot,
+          INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
+          INVOKER_CLAUDE_COMMAND: claudeMarker,
+          INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+          HOME: homeDir,
+          ...(process.env.INVOKER_E2E_CODEX_DEMO
+            ? { INVOKER_E2E_CODEX_DEMO: process.env.INVOKER_E2E_CODEX_DEMO }
+            : {}),
+          ...(process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS
+            ? { INVOKER_E2E_CODEX_DEMO_HOLD_SECS: process.env.INVOKER_E2E_CODEX_DEMO_HOLD_SECS }
+            : {}),
+          ...(process.env.INVOKER_E2E_CODEX_DEMO_RENDERER
+            ? { INVOKER_E2E_CODEX_DEMO_RENDERER: process.env.INVOKER_E2E_CODEX_DEMO_RENDERER }
+            : {}),
+          ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
+          ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
+          ...(forceConnectionLostStatus ? { INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS: '1' } : {}),
+          PATH: pathEnv,
+        },
+      });
+      await use(app);
+    } finally {
+      if (app) {
+        await app.close().catch(() => undefined);
+      }
+      await managedDisplay.cleanup();
+    }
   },
 
   page: async ({ electronApp }, use) => {
