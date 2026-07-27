@@ -708,6 +708,7 @@ describe('Invoker terminal (component)', () => {
       reply: 'Here is the plan.',
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
+      draftPlanText: 'name: Mock Plan\ntasks:\n  - id: first\n    description: First\n',
     })) as any;
     render(<App />);
     await openPlanningTerminal();
@@ -734,6 +735,31 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
     expect(mock.api.start).not.toHaveBeenCalled();
+  });
+
+  it('does not submit when the user types submit before a draft is ready', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('talk through the plan first');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        message: 'talk through the plan first',
+        presetKey: 'codex',
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
+    });
+    vi.mocked(mock.api.planningChatSend).mockClear();
+
+    submitPlanningText('submit');
+
+    expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
+    expect(mock.api.planningChatSend).not.toHaveBeenCalled();
+    expect(mock.api.startReady).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
   });
 
   it('shows stacked workflow counts before creating the workflow', async () => {

@@ -859,6 +859,7 @@ export function App() {
   const planningInput = activePlanningSession.input;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
+  const activePlanningDraftReady = draftPlanAvailable || activePlanningSession.status === 'draft_ready';
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
   const activePlanningSessionBusy = activePlanningSession.busy;
@@ -2639,7 +2640,9 @@ export function App() {
     }
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
-      await handlePlanningSubmitDraft();
+      if (activePlanningDraftReady) {
+        await handlePlanningSubmitDraft();
+      }
       return;
     }
 
@@ -2709,6 +2712,7 @@ export function App() {
       appendTerminalLine(message, 'system', 'error');
     }
   }, [
+    activePlanningDraftReady,
     activePlanningSessionBusy,
     activePlanningSessionId,
     activePlanningReadOnly,
