@@ -14,6 +14,7 @@ import { makeEnvelope } from '@invoker/contracts';
 import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 import {
   AUTO_FIX_WORKER_KIND,
+  AUTO_FIX_RETRY_CAP_ACTION_TYPE,
   TaskRunner,
   acquireWorkerLock,
   createAutoFixAttemptLedger,
@@ -22,6 +23,7 @@ import {
   resolveInvokerHomeRoot,
   GitHubMergeGateProvider,
   WorkerLockHeldError,
+  resetAutoFixBudgetForTasks,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
 import {
@@ -35,6 +37,7 @@ import {
 } from './workflow-actions.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 import { resolvePrMaintenanceWorkerConfig } from './config.js';
+import { resolveAutoFixRetries } from './autofix-defaults.js';
 import {
   isDispatchableLaunch,
 } from './global-topup.js';
@@ -308,6 +311,26 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'rebase-recreate':
       await headlessRebaseRecreate(args[1], deps);
       break;
+    case 'reset-autofix-budget':
+      if (args[1] !== '--exhausted') {
+        throw new Error('Usage: --headless reset-autofix-budget --exhausted');
+      }
+      {
+        const budget = resolveAutoFixRetries(deps.invokerConfig);
+        const taskIds = deps.persistence
+          .listWorkerActions()
+          .filter((action) =>
+            action.workerKind === AUTO_FIX_WORKER_KIND
+            && action.actionType === AUTO_FIX_RETRY_CAP_ACTION_TYPE
+            && action.attemptCount >= budget
+            && budget > 0,
+          )
+          .map((action) => action.taskId)
+          .filter((taskId): taskId is string => typeof taskId === 'string');
+        resetAutoFixBudgetForTasks(deps.persistence, [...new Set(taskIds)]);
+        process.stdout.write(`Reset auto-fix budget for ${new Set(taskIds).size} exhausted task(s).\n`);
+      }
+      break;
     case 'repair-review-gate-ci':
       await headlessRepairReviewGateCi(args[1], deps);
       break;
@@ -575,6 +598,7 @@ ${BOLD}Execute:${RESET}
   detach-workflow <workflowId> <upstreamWorkflowId>  Detach one upstream workflow and void downstream to pending
   rebase-retry <workflowId|mergeTaskId|taskId>        Refresh pool base, then retry incomplete work
   rebase-recreate <workflowId|mergeTaskId|taskId>     Refresh pool base, then recreate workflow
+  reset-autofix-budget --exhausted                    Reset exhausted automatic recovery budgets only
   repair-review-gate-ci <prNumber|prUrl>              Queue CI repair for one mapped review-gate PR
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
 
