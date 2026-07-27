@@ -38,6 +38,8 @@ import type {
   PersistenceAdapter,
   ReviewGateLookup,
   Workflow,
+  WorkflowListOptions,
+  WorkflowReadOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -78,6 +80,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -1050,12 +1053,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, opts?: WorkflowReadOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, opts);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(opts?: WorkflowListOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(opts);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1081,6 +1084,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
+    if (changes.status !== undefined) {
+      this.runTransaction(() => {
+        this.taskAttemptRepo.updateTask(taskId, changes);
+      });
+      return;
+    }
     this.taskAttemptRepo.updateTask(taskId, changes);
   }
 
@@ -1546,6 +1555,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteWorkflow(workflowId: string): void {
+    const workflowRow = this.queryOne(
+      'SELECT * FROM workflows WHERE id = ? AND deleted_at IS NULL',
+      [workflowId],
+    );
+    if (!workflowRow) return;
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
@@ -1587,7 +1601,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      const deletedAt = Date.now();
+      const updatedAt = new Date(deletedAt).toISOString();
+      this.db.run(
+        'UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+        [deletedAt, updatedAt, workflowId],
+      );
+      const tombstoneRow = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+      if (!tombstoneRow) {
+        throw new Error(`Cannot journal workflow "${workflowId}": row not found after soft-delete`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'workflow',
+        entityId: workflowId,
+        op: 'tombstone',
+        payload: tombstoneRow,
+      });
     });
     this.removeOutputFiles(taskIds);
   }
@@ -2615,7 +2644,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Attempts ────────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.taskAttemptRepo.saveAttempt(attempt);
+    this.runTransaction(() => {
+      this.taskAttemptRepo.saveAttempt(attempt);
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -2639,6 +2670,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    if (changes.status !== undefined) {
+      this.runTransaction(() => {
+        this.taskAttemptRepo.updateAttempt(attemptId, changes);
+      });
+      return;
+    }
     this.taskAttemptRepo.updateAttempt(attemptId, changes);
   }
 
