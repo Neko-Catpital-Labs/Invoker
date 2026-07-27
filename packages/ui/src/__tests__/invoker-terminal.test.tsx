@@ -11,6 +11,68 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+const xtermMock = vi.hoisted(() => {
+  type DataHandler = (data: string) => void;
+
+  const instances: MockTerminal[] = [];
+  const fitInstances: MockFitAddon[] = [];
+  const writeLog: string[] = [];
+
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    dataHandler: DataHandler | null = null;
+    loadAddon = vi.fn();
+    open = vi.fn((host: HTMLElement) => {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      terminalElement.textContent = 'mock terminal';
+      host.appendChild(terminalElement);
+    });
+    write = vi.fn((data: string) => {
+      writeLog.push(data);
+    });
+    onData = vi.fn((cb: DataHandler) => {
+      this.dataHandler = cb;
+      return { dispose: vi.fn() };
+    });
+    focus = vi.fn();
+    dispose = vi.fn();
+
+    constructor() {
+      instances.push(this);
+    }
+
+    emitData(data: string) {
+      this.dataHandler?.(data);
+    }
+  }
+
+  class MockFitAddon {
+    fit = vi.fn();
+
+    constructor() {
+      fitInstances.push(this);
+    }
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+    instances,
+    fitInstances,
+    writeLog,
+    reset: () => {
+      instances.length = 0;
+      fitInstances.length = 0;
+      writeLog.length = 0;
+    },
+  };
+});
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
+
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
@@ -21,12 +83,14 @@ describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermMock.reset();
     mock = createMockInvoker();
     mock.install();
   });
 
   afterEach(() => {
     mock.cleanup();
+    xtermMock.reset();
   });
 
   async function openPlanningTerminal() {
@@ -900,6 +964,64 @@ describe('Invoker terminal (component)', () => {
       expect(screen.queryByTestId('invoker-terminal-expanded')).not.toBeInTheDocument();
     });
     expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('I can help draft that.');
+  });
+
+  it('restores planning tmux output emitted while the terminal surface is hidden', async () => {
+    render(<App />);
+    await openPlanningTerminal();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Tmux' }));
+
+    const initialPane = await screen.findByTestId('invoker-terminal-tmux-pane');
+    expect(initialPane).toHaveAttribute('data-session-id', 'mock-planning-terminal-session-1');
+    await waitFor(() => expect(mock.api.planningTerminalOpen).toHaveBeenCalledWith('session-1'));
+    expect(mock.api.planningTerminalOpen).toHaveBeenCalledTimes(1);
+    expect(xtermMock.writeLog).toEqual([]);
+
+    await act(async () => {
+      mock.fireTerminalOutput({
+        sessionId: 'mock-planning-terminal-session-1',
+        taskId: 'planning:session-1',
+        kind: 'planning',
+        planningSessionId: 'session-1',
+        data: 'visible tmux output\n',
+      });
+    });
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['visible tmux output\n']);
+    });
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('invoker-terminal-tmux-pane')).not.toBeInTheDocument();
+    });
+
+    await act(async () => {
+      mock.fireTerminalOutput({
+        sessionId: 'mock-planning-terminal-session-1',
+        taskId: 'planning:session-1',
+        kind: 'planning',
+        planningSessionId: 'session-1',
+        data: 'hidden tmux output\n',
+      });
+      mock.fireTerminalOutput({
+        sessionId: 'mock-planning-terminal-session-1',
+        taskId: 'planning:session-1',
+        kind: 'planning',
+        data: 'fallback matched output\n',
+      });
+    });
+
+    expect(xtermMock.writeLog).toEqual(['visible tmux output\n']);
+    expect(mock.api.planningTerminalOpen).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    const restoredPane = await screen.findByTestId('invoker-terminal-tmux-pane');
+    expect(restoredPane).toHaveAttribute('data-session-id', 'mock-planning-terminal-session-1');
+    await waitFor(() => {
+      expect(xtermMock.writeLog.join('')).toContain('visible tmux output\nhidden tmux output\nfallback matched output\n');
+    });
+    expect(mock.api.planningTerminalOpen).toHaveBeenCalledTimes(1);
   });
 
   it('creates another planning chat without clearing the first transcript', async () => {

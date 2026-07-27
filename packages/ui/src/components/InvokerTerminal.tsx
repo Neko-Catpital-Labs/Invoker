@@ -26,6 +26,7 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS = 64 * 1024;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -141,15 +142,34 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+function appendSeededOutputSnapshot(snapshot: string, chunk: string): string {
+  const nextSnapshot = `${snapshot}${chunk}`;
+  if (nextSnapshot.length <= PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS) return nextSnapshot;
+  return nextSnapshot.slice(nextSnapshot.length - PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS);
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
 ): void {
-  const outputSnapshot = session.outputSnapshot;
+  const outputSnapshot = session.outputSnapshot ?? '';
   const seededSnapshot = seededSnapshotRef.current;
+  if (!outputSnapshot) {
+    if (
+      !seededSnapshot ||
+      seededSnapshot.sessionId !== session.sessionId ||
+      seededSnapshot.term !== term
+    ) {
+      seededSnapshotRef.current = {
+        sessionId: session.sessionId,
+        snapshot: '',
+        term,
+      };
+    }
+    return;
+  }
   if (
-    outputSnapshot &&
     (
       !seededSnapshot ||
       seededSnapshot.sessionId !== session.sessionId ||
@@ -222,6 +242,17 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
       if (event.sessionId !== session.sessionId) return;
       try {
         term.write(event.data);
+        const seededSnapshot = seededSnapshotRef.current;
+        seededSnapshotRef.current = {
+          sessionId: session.sessionId,
+          snapshot: appendSeededOutputSnapshot(
+            seededSnapshot?.sessionId === session.sessionId && seededSnapshot.term === term
+              ? seededSnapshot.snapshot
+              : '',
+            event.data,
+          ),
+          term,
+        };
       } catch {
         /* terminal disposed */
       }

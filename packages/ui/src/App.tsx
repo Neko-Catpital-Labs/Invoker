@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -112,8 +112,15 @@ const EDITABLE_SELECTOR = [
   '[role="dialog"] textarea',
 ].join(',');
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
+const TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS = 64 * 1024;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+
+function appendTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${snapshot ?? ''}${chunk}`;
+  if (nextSnapshot.length <= TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS) return nextSnapshot;
+  return nextSnapshot.slice(nextSnapshot.length - TERMINAL_OUTPUT_SNAPSHOT_CAP_CHARS);
+}
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -1304,6 +1311,67 @@ export function App() {
             : session
         )),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event: TerminalOutputEvent) => {
+      if (event.kind !== 'planning' || !event.data) return;
+
+      const eventPlanningSessionId = typeof event.planningSessionId === 'string' && event.planningSessionId.trim()
+        ? event.planningSessionId.trim()
+        : null;
+      const eventTerminalSessionId = typeof event.sessionId === 'string' && event.sessionId.trim()
+        ? event.sessionId.trim()
+        : null;
+      if (!eventPlanningSessionId && !eventTerminalSessionId) return;
+
+      const terminalUpdatedAt = new Date().toISOString();
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const matches = eventPlanningSessionId
+            ? session.id === eventPlanningSessionId
+            : session.terminalSession?.sessionId === eventTerminalSessionId;
+          if (!matches || !eventTerminalSessionId) return session;
+
+          const previousTerminalSession = session.terminalSession ?? {
+            sessionId: eventTerminalSessionId,
+            taskId: event.taskId || `planning:${session.id}`,
+            kind: 'planning' as const,
+            planningSessionId: eventPlanningSessionId ?? session.id,
+            status: 'running' as const,
+            mode: 'spawn' as const,
+            attached: false,
+            createdAt: session.terminalUpdatedAt ?? session.updatedAt ?? terminalUpdatedAt,
+            outputSnapshot: session.terminalOutputSnapshot ?? '',
+          };
+          const outputSnapshot = appendTerminalOutputSnapshot(
+            previousTerminalSession.outputSnapshot ?? session.terminalOutputSnapshot,
+            event.data,
+          );
+          changed = true;
+          return {
+            ...session,
+            terminalMode: 'tmux',
+            terminalSessionId: previousTerminalSession.sessionId,
+            terminalStatus: 'running' as const,
+            terminalExitCode: undefined,
+            terminalOutputSnapshot: outputSnapshot,
+            terminalUpdatedAt,
+            terminalSession: {
+              ...previousTerminalSession,
+              kind: 'planning' as const,
+              planningSessionId: previousTerminalSession.planningSessionId ?? eventPlanningSessionId ?? session.id,
+              status: 'running' as const,
+              exitCode: undefined,
+              outputSnapshot,
+            },
+          };
+        });
+        return changed ? next : prev;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);
