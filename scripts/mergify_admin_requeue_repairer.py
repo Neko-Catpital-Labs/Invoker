@@ -32,6 +32,12 @@ PROOF_TOOLING_POLICY_UNIT_ERROR = (
 )
 NON_TRUNK_PREREQ_ERROR = "automatic tooling-policy split is only supported for base master"
 NON_TRUNK_MANUAL_SPLIT_ERROR = "worker cannot auto-split this PR on a non-trunk base; human stack split required"
+REMOTE_ADVANCED_PUSH_MARKERS = (
+    "fetch first",
+    "non-fast-forward",
+    "[rejected]",
+    "stale info",
+)
 
 
 def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tuple[str, ...]:
@@ -41,6 +47,11 @@ def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tupl
         if name == check_name:
             return urls
     return ()
+
+
+def is_remote_advanced_push_error(error: subprocess.CalledProcessError) -> bool:
+    output = "\n".join(str(value or "") for value in (error.stdout, error.stderr))
+    return any(marker in output for marker in REMOTE_ADVANCED_PUSH_MARKERS)
 
 
 class AdminBypassRepairer:
@@ -321,8 +332,37 @@ class AdminBypassRepairer:
             prereq=prereq,
         )
 
-    def push_branch(self, work_root: Path, branch_name: str) -> None:
-        self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
+    def push_branch(self, work_root: Path, branch_name: str) -> str:
+        remote_ref = f"refs/remotes/origin/{branch_name}"
+        refspec = f"+refs/heads/{branch_name}:{remote_ref}"
+        for attempt in range(3):
+            try:
+                self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
+                return self.git_output(work_root, "rev-parse", "HEAD").strip()
+            except subprocess.CalledProcessError as error:
+                if attempt == 2 or not is_remote_advanced_push_error(error):
+                    raise
+                self.logger.trace(
+                    "admin-bypass-repair-push-remote-advanced",
+                    repo=self.repo,
+                    branch=branch_name,
+                    attempt=attempt + 1,
+                )
+                self.git_output(work_root, "fetch", "origin", refspec)
+                if self.is_ancestor(work_root, remote_ref, "HEAD"):
+                    continue
+                if self.is_ancestor(work_root, "HEAD", remote_ref):
+                    self.hard_reset_work_root(work_root, remote_ref)
+                    return self.git_output(work_root, "rev-parse", "HEAD").strip()
+                try:
+                    self.git_output(work_root, "rebase", remote_ref)
+                except subprocess.CalledProcessError:
+                    try:
+                        self.git_output(work_root, "rebase", "--abort")
+                    except subprocess.CalledProcessError:
+                        pass
+                    raise
+        raise RuntimeError("unreachable push retry state")
 
     def create_repair_prerequisite(
         self,
@@ -502,7 +542,10 @@ class AdminBypassRepairer:
         repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
         validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
         if validation.get("valid"):
-            self.push_branch(work_root, pr.head_ref_name)
+            pushed_head = self.push_branch(work_root, pr.head_ref_name)
+            if pushed_head != end_head:
+                end_head = pushed_head
+                repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
             return self.blocked_outcome(
                 "pushed",
                 check_name,
