@@ -29,6 +29,7 @@ from scripts.mergify_admin_requeue import (
 from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
+from scripts.mergify_admin_requeue_model import RepairStopComment
 from scripts.mergify_admin_requeue_repairer import (
     NON_TRUNK_MANUAL_SPLIT_ERROR,
     NON_TRUNK_PREREQ_ERROR,
@@ -50,7 +51,7 @@ def mergify(state="dequeued", comment_id="m1", sha=HEAD):
     return MergifyQueueEvent(comment_id, state, "admin-bypass", "2026-07-03T00:00:00Z", sha, (), (), "https://example.invalid/comment")
 
 
-def pr(number, *, base="master", head=None, labels=None, checks=None, threads=(), latest=None, merge_state="CLEAN", mergeable="MERGEABLE", state="OPEN", draft=False, body=""):
+def pr(number, *, base="master", head=None, labels=None, checks=None, threads=(), latest=None, merge_state="CLEAN", mergeable="MERGEABLE", state="OPEN", draft=False, body="", repair_stop_comments=()):
     return PrSnapshot(
         number=number,
         title=f"PR {number}",
@@ -67,6 +68,7 @@ def pr(number, *, base="master", head=None, labels=None, checks=None, threads=()
         checks=checks if checks is not None else {name: check(name) for name in REQUIRED},
         review_threads=tuple(threads),
         latest_mergify=latest,
+        repair_stop_comments=tuple(repair_stop_comments),
     )
 
 PROOF_BODY = """## Summary
@@ -859,6 +861,31 @@ Failing checks
         executor.execute(action, item, 3)
         self.assertEqual([comment["body"] for comment in fake.comments].count(f"Mergify repair stopped: {detail}"), 1)
         self.assertEqual(ledger.count("comment-blocked", 2647, HEAD, "no-current-bottom:exact"), 1)
+
+    def test_no_current_bottom_exact_comment_stops_future_planning(self):
+        detail = "no current bottom on master: lowest open stack PR #2647 is based on `feature/base`, not `master`; land or retarget that base before babysitting can queue this stack"
+        bottom = pr(
+            2647,
+            base="feature/base",
+            head="stack/bottom",
+            labels={"admin-bypass"},
+            repair_stop_comments=(RepairStopComment(f"Mergify repair stopped: {detail}", "2026-07-27T00:00:00Z", "EdbertChan"),),
+        )
+        top = pr(2648, base="stack/bottom", labels={"admin-bypass"})
+        ledger = self.ledger()
+        ledger.record("comment-blocked", 2647, HEAD, "no-current-bottom", 1)
+        actions = plan_stack_actions(StackGroup("s", (bottom, top)), REQUIRED, ledger, 2)
+        self.assertEqual(actions, ())
+
+        legacy = pr(
+            2647,
+            base="feature/base",
+            head="stack/bottom",
+            labels={"admin-bypass"},
+            repair_stop_comments=(RepairStopComment("Mergify repair stopped: no current bottom on master", "2026-07-27T00:00:00Z", "EdbertChan"),),
+        )
+        actions = plan_stack_actions(StackGroup("s", (legacy, top)), REQUIRED, ledger, 3)
+        self.assertEqual([(a.kind, a.key, a.detail) for a in actions], [("comment_blocked", "no-current-bottom", detail)])
 
     def test_human_block_comment_records_once_then_waits(self):
         class FakeGh:

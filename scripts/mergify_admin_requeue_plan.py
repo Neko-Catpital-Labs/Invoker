@@ -301,6 +301,11 @@ def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | N
     return None
 
 
+def has_exact_repair_stop_comment(pr: PrSnapshot, detail: str) -> bool:
+    expected = f"{REPAIR_STOP_PREFIX}{detail}".strip()
+    return any(comment.body.strip() == expected for comment in pr.repair_stop_comments)
+
+
 def latest_mergify_repair_invalid_blockers(
     pr: PrSnapshot,
     ledger: Ledger,
@@ -558,11 +563,18 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         first = next((pr for pr in facts.stack.prs if pr.state == "OPEN"), None)
         if first is None:
             return None
+        detail = (
+            f"no current bottom on {facts.trunk}: lowest open stack PR #{first.number} "
+            f"is based on `{first.base_ref_name}`, not `{facts.trunk}`; land or retarget "
+            "that base before babysitting can queue this stack"
+        )
+        if has_exact_repair_stop_comment(first, detail):
+            return None
         return Action(
             "comment_blocked",
             first.number,
             "no-current-bottom",
-            f"no current bottom on {facts.trunk}: lowest open stack PR #{first.number} is based on `{first.base_ref_name}`, not `{facts.trunk}`; land or retarget that base before babysitting can queue this stack",
+            detail,
         )
 
     bottom = facts.bottom
