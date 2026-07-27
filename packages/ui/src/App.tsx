@@ -2874,7 +2874,9 @@ export function App() {
     }
 
     if (/^submit(\s+to\s+invoker)?[.!?]*$/i.test(input)) {
-      await handlePlanningSubmitDraft();
+      if (activePlanningSession.draftPlanAvailable || activePlanningSession.status === 'draft_ready') {
+        await handlePlanningSubmitDraft();
+      }
       return;
     }
 
@@ -2971,6 +2973,8 @@ export function App() {
     hasLoadedPlan,
     keepPlanningStreamFailureForSessionIds,
     invoker,
+    activePlanningSession.draftPlanAvailable,
+    activePlanningSession.status,
     planningInput,
     planningSessionId,
     selectedPlanningConfirmationMode,
