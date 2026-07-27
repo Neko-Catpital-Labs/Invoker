@@ -82,7 +82,7 @@ function makeHarness(task = makeFailedTask()) {
 }
 
 describe('AutoFixWorker attempt-0 bare retry', () => {
-  it('submits invoker:restart-task on the first tick and does not consume an auto-fix attempt', async () => {
+  it('submits invoker:retry-task on the first tick and does not consume an auto-fix attempt', async () => {
     const harness = makeHarness();
     const tick = createAutoFixRecoveryTick({
       store: harness.store,
@@ -99,7 +99,7 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
     const [workflowId, priority, channel, args] = harness.submit.mock.calls[0]!;
     expect(workflowId).toBe('wf-1');
     expect(priority).toBe('normal');
-    expect(channel).toBe('invoker:restart-task');
+    expect(channel).toBe('invoker:retry-task');
     expect(args).toEqual(['wf-1/build']);
 
     const retryRow = harness.actions.get(`${AUTO_FIX_WORKER_KIND}:${AUTO_FIX_WORKER_KIND}:retry:wf-1/build`);
@@ -194,7 +194,7 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
     });
 
     await tick({ reason: 'poll' } as never);
-    expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:restart-task');
+    expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:retry-task');
     harness.submit.mockClear();
 
     // Bare retry succeeded then failed again under a new generation/attempt.
@@ -237,7 +237,7 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
     });
 
     await tick({ reason: 'poll' } as never);
-    expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:restart-task');
+    expect(harness.submit.mock.calls[0]?.[2]).toBe('invoker:retry-task');
     harness.submit.mockClear();
 
     harness.tasks.set('wf-1/build', makeFailedTask({
@@ -271,6 +271,6 @@ describe('AutoFixWorker attempt-0 bare retry', () => {
     expect(submitCalls.length).toBeGreaterThan(0);
     const payload = submitCalls[0]?.[2] as { phase?: string; details?: { channel?: string } };
     expect(payload.phase).toBe('worker-autofix-bare-retry-submitted');
-    expect(payload.details?.channel).toBe('invoker:restart-task');
+    expect(payload.details?.channel).toBe('invoker:retry-task');
   });
 });

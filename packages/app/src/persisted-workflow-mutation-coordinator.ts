@@ -41,7 +41,7 @@ const TASK_SCOPED_MUTATION_CHANNELS = new Set([
   'invoker:reject',
   'invoker:provide-input',
   'invoker:select-experiment',
-  'invoker:restart-task',
+  'invoker:retry-task',
   'invoker:cancel-task',
   'invoker:recreate-task',
   'invoker:recreate-downstream',
