@@ -550,6 +550,88 @@ describe('GitHub auth check', () => {
 });
 
 describe('setup oneshot ending', () => {
+  it('uses the injected command runner for a successful gh auth check', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-gh-ok-'));
+    const lines: string[] = [];
+    const calls: string[][] = [];
+    const savedHome = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        commandRunner: (command, args) => {
+          calls.push([command, ...args]);
+          return { status: 0, stdout: 'Logged in to github.com', stderr: '' };
+        },
+        githubAuthCheck: checkGithubAuth,
+      }));
+
+      expect(code).toBe(0);
+      expect(calls).toEqual([['gh', 'auth', 'status']]);
+      expect(lines.join('\n')).toContain('gh is authenticated');
+      expect(lines.join('\n')).toContain("You're ready.");
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the injected command runner for a failing gh auth check', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-gh-fail-'));
+    const lines: string[] = [];
+    const savedHome = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        commandRunner: () => ({ status: 1, stdout: '', stderr: 'not logged in to any GitHub hosts' }),
+        githubAuthCheck: checkGithubAuth,
+      }));
+
+      const output = lines.join('\n');
+      expect(code).toBe(1);
+      expect(output).toContain('not logged in to any GitHub hosts');
+      expect(output).toContain('Fix this first: GitHub auth: not logged in to any GitHub hosts.');
+      expect(output).not.toContain("You're ready.");
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('does not call the injected command runner when gh is missing', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-gh-missing-'));
+    const lines: string[] = [];
+    const commandRunner = vi.fn(() => ({ status: 0, stdout: '', stderr: '' }));
+    const savedHome = process.env.HOME;
+    try {
+      process.env.HOME = home;
+      const code = await runSetup([], {
+        print: (line) => lines.push(line),
+        prompt: async () => 'n',
+      }, readySetupDeps({
+        isInstalled: (command) => command !== 'gh',
+        commandRunner,
+        githubAuthCheck: checkGithubAuth,
+      }));
+
+      expect(code).toBe(0);
+      expect(commandRunner).not.toHaveBeenCalled();
+      expect(lines.join('\n')).toContain('gh not installed; skipped auth check');
+      expect(lines.join('\n')).toContain("You're ready.");
+    } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('selects the first error for Fix this first', () => {
     const checks: Check[] = [
       okCheck('a', 'A'),
