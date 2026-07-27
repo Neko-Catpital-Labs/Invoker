@@ -3103,28 +3103,21 @@ export function App() {
     focusKeyboardRegion('planning');
   }, [focusKeyboardRegion]);
 
-  const navigatePlanGraph = useCallback((reason: string, options: { fit: boolean }) => {
+  const navigatePlanGraphPreservingViewport = useCallback((_reason: string) => {
     setSidebarSurface('planning');
     setInspectorManualOpen(false);
     setViewMode('dag');
     focusKeyboardRegion('workflowGraph');
 
-    if (options.fit) {
-      workflowGraphViewportRef.current = null;
-      issueCameraCommand({ kind: 'fitInitial', scope: 'workflow', reason });
-      return;
+    const shouldKeepPendingSubmitFit =
+      cameraCommand?.kind === 'fitInitial'
+      && cameraCommand.scope === 'workflow'
+      && cameraCommand.reason === 'planning-submit'
+      && workflowGraphViewportRef.current === null;
+    if (!shouldKeepPendingSubmitFit) {
+      setCameraCommand(null);
     }
-
-    setCameraCommand(null);
-  }, [focusKeyboardRegion, issueCameraCommand]);
-
-  const navigatePlanGraphAndFit = useCallback((reason: string) => {
-    navigatePlanGraph(reason, { fit: true });
-  }, [navigatePlanGraph]);
-
-  const navigatePlanGraphPreservingViewport = useCallback((reason: string) => {
-    navigatePlanGraph(reason, { fit: false });
-  }, [navigatePlanGraph]);
+  }, [cameraCommand, focusKeyboardRegion]);
 
   const handleSelectSidebarSurface = useCallback((nextSurface: SidebarSurface) => {
     setGraphActionsMenuOpen(false);
@@ -3147,18 +3140,14 @@ export function App() {
       return;
     }
     if (nextSurface === 'planning') {
-      if (sidebarSurface === 'home') {
-        navigatePlanGraphPreservingViewport('sidebar-planning');
-        return;
-      }
-      navigatePlanGraphAndFit('sidebar-planning');
+      navigatePlanGraphPreservingViewport('sidebar-planning');
       return;
     }
     setViewMode('dag');
     setSidebarSurface(nextSurface);
     setInspectorManualOpen(false);
     setStatusFilters(new Set<WorkflowStatus>());
-  }, [navigatePlanGraphAndFit, navigatePlanGraphPreservingViewport, navigatePlanningHome, sidebarSurface, viewMode]);
+  }, [navigatePlanGraphPreservingViewport, navigatePlanningHome, sidebarSurface, viewMode]);
 
   const handleDismissBrowserSurface = useCallback(() => {
     setGraphActionsMenuOpen(false);
@@ -4197,7 +4186,7 @@ export function App() {
               )}
               <button
                 type="button"
-                onClick={() => navigatePlanGraphAndFit('planning-draft-review')}
+                onClick={() => navigatePlanGraphPreservingViewport('planning-draft-review')}
                 className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
               >
                 Open graph
@@ -4231,7 +4220,7 @@ export function App() {
                 <button
                   type="button"
                   data-testid="planning-context-open-graph"
-                  onClick={() => navigatePlanGraphAndFit('planning-context')}
+                  onClick={() => navigatePlanGraphPreservingViewport('planning-context')}
                   className="w-full rounded-md border border-border px-3 py-1.5 text-xs text-foreground hover:bg-secondary"
                 >
                   Open graph
@@ -4353,7 +4342,7 @@ export function App() {
             onConfirmationModeChange={handlePlanningConfirmationModeChange}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
-            onOpenGraph={() => navigatePlanGraphAndFit('planning-open-graph')}
+            onOpenGraph={() => navigatePlanGraphPreservingViewport('planning-open-graph')}
             onReviewDraft={() => {
               setReviewDraftSessionId(activePlanningSession.id);
               setPlanningContextCollapsed(false);
@@ -4691,7 +4680,7 @@ export function App() {
             onCloseExpanded={() => setPlanningTerminalExpanded(false)}
             onOpenGraph={() => {
               setPlanningTerminalExpanded(false);
-              navigatePlanGraphAndFit('planning-expanded-open-graph');
+              navigatePlanGraphPreservingViewport('planning-expanded-open-graph');
             }}
             onReviewDraft={() => {
               setPlanningTerminalExpanded(false);
