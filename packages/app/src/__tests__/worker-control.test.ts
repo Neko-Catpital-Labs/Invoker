@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_FIX_WORKER_KIND,
-  CI_FAILURE_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   CODERABBIT_ADDRESS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
@@ -117,7 +116,6 @@ function controller(
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
   register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes pull request summaries.');
-  register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
   register(PR_CI_FAILURE_SCAN_WORKER_KIND, 'Scans mapped PRs for failing CI.');
@@ -149,7 +147,6 @@ describe('createWorkerRuntimeController', () => {
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
@@ -267,7 +264,6 @@ describe('createWorkerRuntimeController', () => {
 
     for (const kind of [
       AUTO_FIX_WORKER_KIND,
-      CI_FAILURE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
       PR_CI_FAILURE_SCAN_WORKER_KIND,
