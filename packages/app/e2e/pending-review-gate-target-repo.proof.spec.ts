@@ -40,8 +40,8 @@ test('pending review gate target repo row', async ({ page }) => {
   await mergeGateNode.click();
 
   await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
-  await expect(page.getByText('Target Branch')).toBeVisible();
-  await expect(page.getByTestId('target-branch-input')).toHaveValue('master');
+  await expect(page.getByText('Base Branch')).toBeVisible();
+  await expect(page.getByTestId('base-branch-display')).toHaveText('master');
   await expect(page.getByText('PR target repo')).toBeVisible();
   await expect(page.getByText('github.com/Neko-Catpital-Labs/Invoker')).toBeVisible();
 
