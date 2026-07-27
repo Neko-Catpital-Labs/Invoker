@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/repro-babysit-no-current-bottom-comment.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/repro-babysit-retarget-stale-bottom-base.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
@@ -54,7 +54,7 @@ state = {
         {
             "number": 5885,
             "title": "Tighten Slack repo routing",
-            "body": "## Summary\n\nExternal dependency blocker repro.\n",
+            "body": "## Summary\n\nStale base retarget repro.\n",
             "url": "https://github.com/fake/repo/pull/5885",
             "state": "OPEN",
             "isDraft": False,
@@ -84,22 +84,6 @@ state = {
             "checks": {"*": "SUCCESS"},
         },
         {
-            "number": 7001,
-            "title": "Prerequisite split still open",
-            "body": "## Summary\n\nExternal owner of the stale base branch.\n",
-            "url": "https://github.com/fake/repo/pull/7001",
-            "state": "OPEN",
-            "isDraft": False,
-            "baseRefName": "master",
-            "headRefName": "pr/babysit-prereq-split",
-            "headRefOid": "3333333333333333333333333333333333333333",
-            "mergeStateStatus": "CLEAN",
-            "mergeable": "MERGEABLE",
-            "labels": [],
-            "reviewThreads": [],
-            "checks": {"*": "SUCCESS"},
-        },
-        {
             "number": 7002,
             "title": "Unrelated stack root",
             "body": "## Summary\n\nUnrelated stack should stay untouched.\n",
@@ -111,7 +95,23 @@ state = {
             "headRefOid": "4444444444444444444444444444444444444444",
             "mergeStateStatus": "CLEAN",
             "mergeable": "MERGEABLE",
-            "labels": [],
+            "labels": ["admin-bypass"],
+            "reviewThreads": [],
+            "checks": {"*": "SUCCESS"},
+        },
+        {
+            "number": 7003,
+            "title": "Unrelated stack child",
+            "body": "## Summary\n\nUnrelated stack child should stay untouched.\n",
+            "url": "https://github.com/fake/repo/pull/7003",
+            "state": "OPEN",
+            "isDraft": False,
+            "baseRefName": "stack/unrelated-root",
+            "headRefName": "stack/unrelated-top",
+            "headRefOid": "5555555555555555555555555555555555555555",
+            "mergeStateStatus": "CLEAN",
+            "mergeable": "MERGEABLE",
+            "labels": ["admin-bypass"],
             "reviewThreads": [],
             "checks": {"*": "SUCCESS"},
         },
@@ -119,8 +119,8 @@ state = {
     "issue_comments": {
         "5885": [stack_comment],
         "5886": [dict(stack_comment, html_url="https://github.com/fake/repo/pull/5886#stack")],
-        "7001": [],
         "7002": [],
+        "7003": [],
     },
     "job_logs": {},
 }
@@ -129,44 +129,47 @@ PY
 : > "$LEDGER_PATH"
 
 run_worker() {
-  python3 scripts/mergify_admin_requeue.py --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 5886 2>&1
+  python3 scripts/mergify_admin_requeue.py --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 5886 "$@" 2>&1
 }
 
 if ! out1="$(run_worker)"; then
   fail 'tick 1: worker failed' "$out1"
 fi
-if ! out2="$(run_worker)"; then
-  fail 'tick 2: worker failed' "$out2"
-fi
 
-python3 - <<'PY' || fail 'expected one external-open-base comment on root only' "$(cat "$STATE_PATH")"
+echo "$out1" | grep -q 'retarget-base PR #5885 from=pr/babysit-prereq-split to=master' || fail 'tick 1 output did not show root retarget' "$out1"
+
+python3 - <<'PY' || fail 'expected root-only base retarget on tick 1' "$(cat "$STATE_PATH")"
 import json
 import os
 from pathlib import Path
 
 state = json.loads(Path(os.environ["STATE_PATH"]).read_text(encoding="utf-8"))
-comments = [
-    comment for comment in state.get("issue_comments", {}).get("5885", [])
-    if str(comment.get("body", "")).startswith("Mergify repair stopped:")
-]
-if len(comments) != 1:
-    raise SystemExit(f"expected 1 blocker comment on #5885, saw {len(comments)}")
-body = comments[0].get("body", "")
-expected = "lowest open stack PR #5885 is based on `pr/babysit-prereq-split`, which still belongs to open PR(s) #7001 outside this stack"
-if expected not in body:
-    raise SystemExit(body)
-for number in (5886, 7001, 7002):
+prs = {pr["number"]: pr for pr in state["prs"]}
+if prs[5885]["baseRefName"] != "master":
+    raise SystemExit(f"expected #5885 baseRefName=master, saw {prs[5885]['baseRefName']}")
+if prs[5886]["baseRefName"] != "stack/slack-routing-1":
+    raise SystemExit("upper PR base changed unexpectedly")
+if prs[7002]["baseRefName"] != "master" or prs[7003]["baseRefName"] != "stack/unrelated-root":
+    raise SystemExit("unrelated stack changed unexpectedly")
+for number in (5885, 5886, 7002, 7003):
     blocker_comments = [
         comment for comment in state.get("issue_comments", {}).get(str(number), [])
         if str(comment.get("body", "")).startswith("Mergify repair stopped:")
     ]
     if blocker_comments:
         raise SystemExit(f"unexpected blocker comment on #{number}")
-if next(pr for pr in state["prs"] if pr["number"] == 5885)["baseRefName"] != "pr/babysit-prereq-split":
-    raise SystemExit("root base changed unexpectedly")
 PY
 
-python3 - <<'PY' || fail 'expected one external-open-base ledger row' "$(cat "$LEDGER_PATH")"
+grep -q 'gh api --method PATCH repos/fake/repo/pulls/5885 -f base=master' "$CALLS_PATH" || fail 'tick 1 did not PATCH the root base' "$(cat "$CALLS_PATH")"
+
+if ! out2="$(run_worker --dry-run)"; then
+  fail 'tick 2: worker failed' "$out2"
+fi
+
+echo "$out2" | grep -q 'DRY-RUN requeue PR #5885' || fail 'tick 2 dry-run did not requeue the retargeted root' "$out2"
+! echo "$out2" | grep -q 'retarget-base PR #5885' || fail 'tick 2 planned another retarget instead of re-reading state' "$out2"
+
+python3 - <<'PY' || fail 'expected one retarget-base ledger row' "$(cat "$LEDGER_PATH")"
 import json
 import os
 from pathlib import Path
@@ -178,16 +181,12 @@ rows = [
 ]
 matches = [
     row for row in rows
-    if row.get("kind") == "comment-blocked"
-    and row.get("key") == "external-open-base-pr"
+    if row.get("kind") == "retarget-base"
+    and row.get("key") == "pr/babysit-prereq-split->master"
     and int(row.get("pr", 0)) == 5885
 ]
 if len(matches) != 1:
     raise SystemExit(f"expected 1 matching row, saw {len(matches)}")
 PY
-
-! grep -q 'gh api --method PATCH repos/fake/repo/pulls/5885 -f base=master' "$CALLS_PATH" || fail 'saw unexpected base retarget PATCH' "$(cat "$CALLS_PATH")"
-echo "$out1$out2" | grep -q 'external-open-base-pr' || fail 'worker output did not name the external dependency blocker' "$out1$out2"
-echo "$out1$out2" | grep -q '#7001' || fail 'worker output did not name the external owner PR' "$out1$out2"
 
 echo '[repro] passed'
