@@ -42,7 +42,7 @@ export interface OwnerReadQueryHandlers {
   getWorkerStatus: () => WorkerStatusSnapshot;
   getWorkers: () => WorkerStatusSnapshot;
   getWorkflowStatus: (workflowId?: string) => Record<string, unknown>;
-  getTasksSnapshot: (opts: { refresh: boolean }) => Record<string, unknown>;
+  getTasksSnapshot: () => Record<string, unknown>;
   getActionGraphSnapshot: () => Record<string, unknown>;
   listWorkflows: () => unknown[];
   loadWorkflowBundle: (workflowId: string) => Record<string, unknown>;
@@ -123,9 +123,8 @@ export function answerOwnerReadQuery(
     case 'workflow-status':
       return handlers.getWorkflowStatus(body.workflowId);
     case 'tasks':
-      return handlers.getTasksSnapshot({ refresh: false });
     case 'task-graph-refresh':
-      return handlers.getTasksSnapshot({ refresh: true });
+      return handlers.getTasksSnapshot();
     case 'action-graph':
       return handlers.getActionGraphSnapshot();
     case 'workflows':
@@ -236,8 +235,8 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     listWorkerActionHistory: (request: WorkerActionHistoryRequest) => listWorkerActionHistory(persistence, request),
     listWorkerDecisions: (request: WorkerDecisionsRequest) => listWorkerDecisions(persistence, request),
     getWorkflowStatus: (workflowId?: string) => orchestrator.getWorkflowStatus(workflowId) as unknown as Record<string, unknown>,
-    getTasksSnapshot: ({ refresh }) => {
-      if (refresh) orchestrator.syncAllFromDb();
+    getTasksSnapshot: () => {
+      orchestrator.syncAllFromDb();
       return {
         tasks: orchestrator.getAllTasks(),
         workflows: persistence.listWorkflows(),
