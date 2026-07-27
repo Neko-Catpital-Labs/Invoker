@@ -29,7 +29,12 @@ import type { ActiveExecutionEntry, TaskRunner } from './task-runner.js';
 
 export type ExecutionPoolMember =
   | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
-  | { type: 'worktree'; id: string; maxConcurrentTasks?: number; provisionCommand?: string };
+  | { type: 'worktree'; id: string; maxConcurrentTasks?: number };
+
+export type WorktreeTargetDisplay = {
+  provisionCommand?: string;
+  maxConcurrentTasks?: number;
+};
 
 export type ExecutionPoolConfig = {
   members: ExecutionPoolMember[];
@@ -80,11 +85,6 @@ export type RemoteTargetDisplay = {
   maxConcurrentTasks?: number;
 };
 
-export type WorktreeTargetDisplay = {
-  provisionCommand?: string;
-  maxConcurrentTasks?: number;
-};
-
 // ── Host surface ─────────────────────────────────────────
 
 /**
@@ -106,6 +106,7 @@ export type TaskRunnerPoolHost = Pick<
   | 'getRemoteTargets'
   | 'getWorktreeTargets'
   | 'getExecutionPools'
+  | 'resolveExecutionAgent'
   | 'resolveExecutionModel'
   | 'executorRegistry'
   | 'dockerConfig'
@@ -605,7 +606,7 @@ export function selectExecutor(
     ? 'merge'
     : task.config.runnerKind;
   let selectedPoolMemberId: string | undefined;
-  let selectedWorktreeMember: Extract<ExecutionPoolMember, { type: 'worktree' }> | undefined;
+  let selectedWorktreeTargetId: string | undefined;
   const explicitPoolMemberId = (task.config as { poolMemberId?: string }).poolMemberId;
   let resolvedExecution: ResolvedExecutionSelection = {
     executionAgent: host.resolveExecutionAgent(task),
@@ -628,7 +629,7 @@ export function selectExecutor(
       }
       effectiveType = member.type;
       selectedPoolMemberId = member.id;
-      selectedWorktreeMember = member.type === 'worktree' ? member : undefined;
+      selectedWorktreeTargetId = member.type === 'worktree' ? member.id : undefined;
     }
   } else if (task.config.poolId) {
     const pool = host.getExecutionPools()[task.config.poolId];
@@ -642,7 +643,7 @@ export function selectExecutor(
         if (reserved) {
           effectiveType = member.type;
           selectedPoolMemberId = member.id;
-          selectedWorktreeMember = member.type === 'worktree' ? member : undefined;
+          selectedWorktreeTargetId = member.type === 'worktree' ? member.id : undefined;
           break;
         }
         attempted.add(poolMemberKey(member));
@@ -686,8 +687,19 @@ export function selectExecutor(
 
     if (effectiveType === 'worktree') {
       const invokerHome = resolve(homedir(), '.invoker');
+      const worktreeTargets = host.getWorktreeTargets();
+      const selectedWorktreeTarget = selectedWorktreeTargetId
+        ? worktreeTargets[selectedWorktreeTargetId]
+        : undefined;
+      if (selectedWorktreeTargetId && !selectedWorktreeTarget) {
+        throw new Error(
+          `Task ${task.id} references poolMemberId="${selectedWorktreeTargetId}" but no matching ` +
+          `entry exists in worktreeTargets config. Available: [${Object.keys(worktreeTargets).join(', ')}]`,
+        );
+      }
       const configFingerprint = JSON.stringify({
-        provisionCommand: selectedWorktreeMember?.provisionCommand?.trim() || '',
+        ...(selectedWorktreeTarget ?? {}),
+        provisionCommand: selectedWorktreeTarget?.provisionCommand?.trim() || '',
         worktreeBaseDir: resolve(invokerHome, 'worktrees'),
         cacheDir: resolve(invokerHome, 'repos'),
       });
@@ -702,7 +714,7 @@ export function selectExecutor(
         cacheDir: resolve(invokerHome, 'repos'),
         maxWorktrees: host.maxWorktreesPerRepo,
         agentRegistry: host.executionAgentRegistry,
-        provisionCommand: selectedWorktreeMember?.provisionCommand,
+        provisionCommand: selectedWorktreeTarget?.provisionCommand,
       });
       host.executorRegistry.register('worktree', worktree);
       host.worktreeExecutorCache.set(configFingerprint, worktree);
@@ -768,6 +780,8 @@ export function selectExecutor(
         port: target.port,
         agentRegistry: host.executionAgentRegistry,
         managedWorkspaces: target.managedWorkspaces,
+        remoteInvokerHome: target.remoteInvokerHome,
+        provisionCommand: target.provisionCommand?.trim() || '',
         useApiKey: target.use_api_key,
         secretsFile: target.secretsFile ?? host.dockerConfig.secretsFile,
         remoteHeartbeatIntervalSeconds: target.remoteHeartbeatIntervalSeconds,

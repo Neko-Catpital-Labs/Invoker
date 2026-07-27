@@ -2641,7 +2641,7 @@ describe('TaskRunner', () => {
 
       expect(provider).toHaveBeenCalledTimes(2);
     });
-    it.fails('forwards SSH target provisioning fields into the selected SSH executor', () => {
+    it('forwards SSH target provisioning fields into the selected SSH executor', () => {
       const provider = vi.fn()
         .mockReturnValueOnce({
           'do-droplet': {
@@ -2688,7 +2688,7 @@ describe('TaskRunner', () => {
 
       expect(provider).toHaveBeenCalledTimes(2);
     });
-    it.fails('resolves worktree provisioning from worktree targets', () => {
+    it('resolves worktree provisioning from worktree targets', () => {
       const poolProvider = vi.fn()
         .mockReturnValueOnce({
           fast: {
@@ -2732,6 +2732,38 @@ describe('TaskRunner', () => {
       expect(poolProvider).toHaveBeenCalledTimes(2);
       expect(targetProvider).toHaveBeenCalledTimes(2);
     });
+    it('bypasses arbitrary registered worktree executors so target provisioning fingerprints win', () => {
+      const preRegistered = { type: 'worktree' };
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: {
+          getDefault: () => ({ type: 'worktree' }),
+          get: (type: string) => type === 'worktree' ? preRegistered : null,
+          getAll: () => [],
+          register: vi.fn(),
+        } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          fast: {
+            members: [{ type: 'worktree', id: 'local-mac' }],
+          },
+        }),
+        worktreeTargetsProvider: () => ({
+          'local-mac': { provisionCommand: 'pnpm install --frozen-lockfile' },
+        }),
+      });
+
+      const task = makeTask({
+        id: 'worktree-task',
+        config: { runnerKind: 'worktree', poolId: 'fast' },
+      });
+
+      const selected = executor.selectExecutor(task);
+      expect(selected.executor).not.toBe(preRegistered);
+      expect(selected.executor.type).toBe('worktree');
+      expect(Reflect.get(selected.executor, 'provisionCommand')).toBe('pnpm install --frozen-lockfile');
+    });
 
 
     it('throws when provider returns no entry for the target ID', () => {
@@ -2750,6 +2782,27 @@ describe('TaskRunner', () => {
       });
 
       expect(() => executor.selectExecutor(task)).toThrow('no matching');
+    });
+    it('throws when selected worktree member has no matching worktree target', () => {
+      const executor = new TaskRunner({
+        orchestrator: { getTask: () => undefined } as any,
+        persistence: {} as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        executionPoolsProvider: () => ({
+          fast: {
+            members: [{ type: 'worktree', id: 'missing-target' }],
+          },
+        }),
+        worktreeTargetsProvider: () => ({}),
+      });
+
+      const task = makeTask({
+        id: 'worktree-task',
+        config: { runnerKind: 'worktree', poolId: 'fast' },
+      });
+
+      expect(() => executor.selectExecutor(task)).toThrow('worktreeTargets config');
     });
   });
 
@@ -3288,7 +3341,7 @@ describe('TaskRunner', () => {
       expect(executor2.executor.type).toBe('worktree');
       expect(executor1.executor).toBe(executor2.executor);
     });
-    it.fails('retains cached worktree executors for earlier worktree target provisioning fingerprints', () => {
+    it('retains cached worktree executors for earlier worktree target provisioning fingerprints', () => {
       const executor = new TaskRunner({
         orchestrator: { getTask: () => null, getAllTasks: () => [] } as any,
         persistence: {} as any,
@@ -3311,7 +3364,7 @@ describe('TaskRunner', () => {
           'local-a': { provisionCommand: 'pnpm install --frozen-lockfile' },
           'local-b': { provisionCommand: 'pnpm install' },
         }),
-      } as any);
+      });
 
       const executorA1 = executor.selectExecutor(makeTask({
         id: 'task-a1',
