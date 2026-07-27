@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as childProcess from 'node:child_process';
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -118,8 +118,40 @@ tasks:
 `);
 
     const plan = await parsePlanFile(planPath);
-    expect(plan.repoUrl).toBe(pathToFileURL(repoRoot).href);
+    expect(plan.repoUrl).toBe(repoRoot);
     expect(plan.tasks).toHaveLength(1);
+  });
+
+  it('normalizes a file:// checkout URL before default branch detection', async () => {
+    const { pathToFileURL } = await import('node:url');
+    const configMod = await import('../config.js');
+    const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({});
+    const repoRoot = mkdtempSync(join(tmpdir(), 'invoker file-url repo '));
+    try {
+      childProcess.execFileSync('git', ['init', '-q', repoRoot]);
+      childProcess.execFileSync('git', ['-C', repoRoot, 'config', 'user.email', 'test@test.com']);
+      childProcess.execFileSync('git', ['-C', repoRoot, 'config', 'user.name', 'Test']);
+      writeFileSync(join(repoRoot, 'README.md'), '# Test Repo\n');
+      childProcess.execFileSync('git', ['-C', repoRoot, 'add', '-A']);
+      childProcess.execFileSync('git', ['-C', repoRoot, 'commit', '-q', '-m', 'initial']);
+      childProcess.execFileSync('git', ['-C', repoRoot, 'branch', '-M', 'main']);
+
+      const yaml = `
+name: File URL Branch Detection
+repoUrl: ${pathToFileURL(repoRoot).href}
+onFinish: none
+tasks:
+  - id: greet
+    description: Say hello
+    command: echo "Hello"
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.repoUrl).toBe(repoRoot);
+      expect(plan.baseBranch).toBe('main');
+    } finally {
+      loadConfigSpy.mockRestore();
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it('rejects plan without repoUrl', () => {
@@ -934,9 +966,8 @@ tasks:
       const configMod = await import('../config.js');
       const loadConfigSpy = vi.spyOn(configMod, 'loadConfig').mockReturnValue({});
 
-      const mockExecSync = vi.mocked(execSync);
-      mockExecSync.mockImplementation(((cmd: string) => {
-        if (typeof cmd === 'string' && cmd.includes('ls-remote')) {
+      const execFileSyncSpy = vi.spyOn(childProcess, 'execFileSync').mockImplementation(((cmd: string, args?: readonly string[]) => {
+        if (cmd === 'git' && Array.isArray(args) && args.includes('ls-remote')) {
           return 'ref: refs/heads/develop\tHEAD\nabc123\tHEAD\n';
         }
         throw new Error('unexpected');
@@ -953,7 +984,7 @@ tasks:
 `;
       const plan = parsePlan(yaml);
       expect(plan.baseBranch).toBe('develop');
-      mockExecSync.mockRestore();
+      execFileSyncSpy.mockRestore();
       loadConfigSpy.mockRestore();
     });
 
