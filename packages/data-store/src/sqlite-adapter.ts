@@ -38,6 +38,7 @@ import type {
   PersistenceAdapter,
   ReviewGateLookup,
   Workflow,
+  WorkflowReadOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -78,6 +79,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendJournalEntry, type SyncEntityType, type SyncJournalOperation } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -951,6 +953,25 @@ export class SQLiteAdapter implements PersistenceAdapter {
     };
   }
 
+  private appendJournalSnapshot(
+    entityType: SyncEntityType,
+    entityId: string,
+    op: SyncJournalOperation,
+    tableName: 'workflows' | 'tasks' | 'attempts',
+    idColumn: 'id' = 'id',
+  ): void {
+    const row = this.queryOne(`SELECT * FROM ${tableName} WHERE ${idColumn} = ?`, [entityId]);
+    if (!row) {
+      throw new Error(`Cannot journal ${op} for missing ${entityType} "${entityId}"`);
+    }
+    appendJournalEntry(this.executor, {
+      entityType,
+      entityId,
+      op,
+      payload: row,
+    });
+  }
+
   runCompatibilityMigration(): {
     migratedFixingWithAiStatuses: number;
     normalizedMergeModes: number;
@@ -1047,19 +1068,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Workflows ─────────────────────────────────────────
 
   saveWorkflow(workflow: WorkflowSaveInput): void {
-    this.workflowRepo.saveWorkflow(workflow);
+    this.runTransaction(() => {
+      this.workflowRepo.saveWorkflow(workflow);
+      this.appendJournalSnapshot('workflow', workflow.id, 'upsert', 'workflows');
+    });
   }
 
   updateWorkflow(workflowId: string, changes: WorkflowMetadataChanges): void {
-    this.workflowRepo.updateWorkflow(workflowId, changes);
+    this.runTransaction(() => {
+      if (!this.workflowRepo.loadWorkflow(workflowId)) return;
+      this.workflowRepo.updateWorkflow(workflowId, changes);
+      this.appendJournalSnapshot('workflow', workflowId, 'upsert', 'workflows');
+    });
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, options);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(options?: WorkflowReadOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(options);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1070,8 +1098,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.workflowRepo.searchWorkflowsAndTasks(query, opts);
   }
 
-  loadWorkflowTaskSnapshot(): WorkflowTaskSnapshot {
-    return this.workflowRepo.loadWorkflowTaskSnapshot();
+  loadWorkflowTaskSnapshot(options?: WorkflowReadOptions): WorkflowTaskSnapshot {
+    return this.workflowRepo.loadWorkflowTaskSnapshot(options);
   }
 
   getLastWorkflowTaskSnapshotStats(): Record<string, unknown> | null {
@@ -1081,11 +1109,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Tasks ─────────────────────────────────────────────
 
   saveTask(workflowId: string, task: TaskState): void {
-    this.taskAttemptRepo.saveTask(workflowId, task);
+    this.runTransaction(() => {
+      this.taskAttemptRepo.saveTask(workflowId, task);
+      this.appendJournalSnapshot('task', task.id, 'upsert', 'tasks');
+    });
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
-    this.taskAttemptRepo.updateTask(taskId, changes);
+    this.runTransaction(() => {
+      const shouldJournal = changes.status !== undefined && this.taskAttemptRepo.loadTask(taskId) !== undefined;
+      this.taskAttemptRepo.updateTask(taskId, changes);
+      if (shouldJournal) {
+        this.appendJournalSnapshot('task', taskId, 'upsert', 'tasks');
+      }
+    });
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -1557,7 +1594,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteWorkflow(workflowId: string): void {
+    const existing = this.queryOne(
+      'SELECT id, deleted_at FROM workflows WHERE id = ?',
+      [workflowId],
+    );
+    if (!existing || (existing.deleted_at !== null && existing.deleted_at !== undefined)) return;
+
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
+    const deletedAt = Date.now();
+    const updatedAt = new Date(deletedAt).toISOString();
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
@@ -1598,7 +1643,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      this.db.run(
+        'UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+        [deletedAt, updatedAt, workflowId],
+      );
+      this.appendJournalSnapshot('workflow', workflowId, 'tombstone', 'workflows');
     });
     this.removeOutputFiles(taskIds);
   }
@@ -2630,7 +2679,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Attempts ────────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.taskAttemptRepo.saveAttempt(attempt);
+    this.runTransaction(() => {
+      this.taskAttemptRepo.saveAttempt(attempt);
+      this.appendJournalSnapshot('attempt', attempt.id, 'upsert', 'attempts');
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -2654,7 +2706,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
-    this.taskAttemptRepo.updateAttempt(attemptId, changes);
+    this.runTransaction(() => {
+      const shouldJournal =
+        (changes.status !== undefined || changes.completedAt !== undefined)
+        && this.taskAttemptRepo.loadAttempt(attemptId) !== undefined;
+      this.taskAttemptRepo.updateAttempt(attemptId, changes);
+      if (shouldJournal) {
+        this.appendJournalSnapshot('attempt', attemptId, 'upsert', 'attempts');
+      }
+    });
   }
 
   claimAttemptForLaunch(
