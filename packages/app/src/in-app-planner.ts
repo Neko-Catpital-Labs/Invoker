@@ -43,7 +43,6 @@ import {
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
-import { selectHarnessSessionDriver } from '@invoker/surfaces';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
@@ -119,6 +118,13 @@ interface PlannerSurfacesModule {
   DEFAULT_HARNESS_PRESET: string;
   PlanConversation: PlanConversationConstructor;
   extractYamlPlan: (output: string) => string | null;
+  selectHarnessSessionDriver: (
+    preset: HarnessPreset,
+    deps: {
+      executionAgentRegistry?: Pick<AgentRegistry, 'get'>;
+      planningCommandBuilder?: PlanningCommandBuilder;
+    },
+  ) => PlanConversationConfig['harnessSessionDriver'];
 }
 
 async function loadPlannerSurfaces(): Promise<PlannerSurfacesModule> {
@@ -372,6 +378,7 @@ function planConversationConfig(
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'onRawPlannerOutput'>,
   threadTs: string,
+  surfaces: Pick<PlannerSurfacesModule, 'selectHarnessSessionDriver'>,
   options: { conversationalPlanning?: boolean } = {},
 ): PlanConversationConfig {
   return {
@@ -387,7 +394,7 @@ function planConversationConfig(
     conversationalPlanning: options.conversationalPlanning ?? false,
     preferStackedWorkflows: true,
     planningCommandBuilder: deps.planningCommandBuilder,
-    harnessSessionDriver: selectHarnessSessionDriver(preset, {
+    harnessSessionDriver: surfaces.selectHarnessSessionDriver(preset, {
       executionAgentRegistry: deps.executionAgentRegistry,
       planningCommandBuilder: deps.planningCommandBuilder,
     }),
@@ -417,7 +424,7 @@ async function createSession(
     return { error: `Unknown planner preset "${presetKey}".` };
   }
 
-  const { PlanConversation } = await loadPlannerSurfaces();
+  const surfaces = await loadPlannerSurfaces();
   const createdAt = new Date().toISOString();
   const id = randomUUID();
   const confirmationMode = normalizePlanningConfirmationMode(
@@ -431,7 +438,7 @@ async function createSession(
     confirmationMode,
     status: 'still_discussing',
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id, { conversationalPlanning: true })),
+    conversation: new surfaces.PlanConversation(planConversationConfig(preset, deps, id, surfaces, { conversationalPlanning: true })),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
@@ -481,10 +488,10 @@ export async function planFromGoal(
   }
 
   try {
-    const { PlanConversation, extractYamlPlan } = await loadPlannerSurfaces();
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID()));
+    const surfaces = await loadPlannerSurfaces();
+    const conversation = new surfaces.PlanConversation(planConversationConfig(preset, deps, randomUUID(), surfaces));
     const plannerOutput = await conversation.sendMessage(goal);
-    const planText = extractYamlPlan(plannerOutput);
+    const planText = surfaces.extractYamlPlan(plannerOutput);
     if (!planText) {
       return { ok: false, error: 'Planner did not return a valid YAML plan.' };
     }
@@ -860,13 +867,13 @@ export async function restorePlanningChatSessions(
   // boots without surfaces/dist, so an eager load here would crash startup with no sessions.
   if (records.length === 0) return;
   const presets = await resolveHarnessPresets(deps.config);
-  const { PlanConversation } = await loadPlannerSurfaces();
+  const surfaces = await loadPlannerSurfaces();
 
   for (const record of records) {
     const preset = presets[record.presetKey];
     if (!preset) continue;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id));
+    const conversation = new surfaces.PlanConversation(planConversationConfig(preset, deps, record.id, surfaces));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
