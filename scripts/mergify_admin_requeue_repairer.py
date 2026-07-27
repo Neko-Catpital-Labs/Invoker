@@ -317,6 +317,32 @@ class AdminBypassRepairer:
     def push_branch(self, work_root: Path, branch_name: str) -> None:
         self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
 
+    def terminal_repair_outcome(
+        self,
+        pr: PrSnapshot,
+        check_name: str,
+        start_head: str,
+        end_head: str,
+        work_root: Path,
+    ) -> RepairOutcome | None:
+        if not hasattr(self.gh, "pr_detail"):
+            return None
+        detail = self.gh.pr_detail(self.repo, pr.number)
+        state = str(detail.get("state") or pr.state)
+        if state == "OPEN":
+            return None
+        self.logger.trace(
+            "admin-bypass-repair-check-terminal",
+            repo=self.repo,
+            pr_number=pr.number,
+            check_name=check_name,
+            state=state,
+            start_head=start_head,
+            end_head=end_head,
+        )
+        self.hard_reset_work_root(work_root, start_head)
+        return self.blocked_outcome("noop", check_name, start_head, end_head)
+
     def create_repair_prerequisite(
         self,
         pr: PrSnapshot,
@@ -409,6 +435,9 @@ class AdminBypassRepairer:
             )
         log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
         if check_name == "PR Body" and self.job_log_is_empty(log_path):
+            terminal = self.terminal_repair_outcome(pr, check_name, start_head, start_head, work_root)
+            if terminal:
+                return terminal
             validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
             if validation.get("valid"):
                 self.logger.trace(
@@ -459,6 +488,9 @@ class AdminBypassRepairer:
         self.run_claude_repair(work_root, prompt)
         end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
         status_lines = self.git_lines(work_root, "status", "--porcelain")
+        terminal = self.terminal_repair_outcome(pr, check_name, start_head, end_head, work_root)
+        if terminal:
+            return terminal
         if end_head == start_head and not status_lines:
             if not queue_only:
                 validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
