@@ -36,6 +36,39 @@ describe('acknowledgeNoTrackHeadlessExec start-ready', () => {
     );
   });
 
+  it('falls through for no-track start-ready with a fresh-base scope flag', () => {
+    const logger = {
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+    };
+    const result = acknowledgeNoTrackHeadlessExec(
+      {
+        args: ['start-ready', '--fresh-base-failed-pending-and-running'],
+        noTrack: true,
+      },
+      undefined,
+      'normal',
+      'gui',
+      {
+        ownerId: 'owner-1',
+        getWorkflowMutationCoordinator: () => ({
+          submit: vi.fn(),
+        }) as never,
+        workflowExists: () => false,
+        logger: logger as never,
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining('headless.exec start-ready noTrack fallthrough'),
+      expect.objectContaining({ module: 'ipc-delegate' }),
+    );
+  });
+
   it('repro: pre-fix path rejected no-track start-ready as workflow-not-resolved', () => {
     // Root cause proof: without the start-ready fallthrough, acknowledgeNoTrackHeadlessExec
     // throws because classifyHeadlessExecMutation leaves workflowId undefined for global

@@ -561,7 +561,8 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
 ${BOLD}Execute:${RESET}
   watch [<workflowId>]                                Watch workflow status until settled or Ctrl-C
   run <plan.yaml>                                     Load and execute plan
-  start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--recreate-failed-pending-and-running] [--recreate-all] [--no-track]
+  start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--recreate-failed-pending-and-running] [--recreate-all]
+              [--fresh-base-failed] [--fresh-base-failed-and-pending] [--fresh-base-failed-pending-and-running] [--fresh-base-all] [--no-track]
                                                       Start pending work that is ready to execute
   resume <id>                                         Resume incomplete workflow
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
