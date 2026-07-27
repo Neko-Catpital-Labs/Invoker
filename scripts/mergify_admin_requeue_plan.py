@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Collection, Mapping
+from typing import Collection, Literal, Mapping
 
 try:
     from .mergify_admin_requeue_model import (
@@ -51,10 +51,19 @@ MANUAL_SPLIT_STOP_MARKERS = (
 
 
 @dataclass(frozen=True)
+class BottomTopology:
+    kind: Literal["current_bottom", "external_open_base", "stale_unowned_base"]
+    root: PrSnapshot
+    bottom: PrSnapshot | None
+    external_open_base_pr_numbers: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class StackFacts:
     stack: StackGroup
     required_checks: frozenset[str]
     trunk: str
+    bottom_topology: BottomTopology
     bottom: PrSnapshot | None
     upper_stack_needs_acceptance: bool
     prereq_status: RepairPrereqStatus | None
@@ -72,17 +81,12 @@ def is_queue_only_required_check(name: str) -> bool:
 
 def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
-    if pr.state == "MERGED":
-        blockers.append(Blocker("merged", "merged", pr.number, "state=MERGED"))
-        return tuple(blockers)
     if pr.state != "OPEN":
         blockers.append(Blocker("closed", "closed", pr.number, f"state={pr.state}"))
         return tuple(blockers)
     if pr.is_draft:
         blockers.append(Blocker("draft", "draft", pr.number, "PR is draft"))
         return tuple(blockers)
-    if pr.base_ref_name != trunk:
-        blockers.append(Blocker("not_current_bottom", "not_current_bottom", pr.number, f"base={pr.base_ref_name}"))
     if "merge-hold" in pr.labels:
         blockers.append(Blocker("merge-hold", "merge_hold", pr.number, "merge-hold label present"))
 
@@ -136,7 +140,7 @@ def effective_blockers(
     suppressed = set(suppressed_failed_checks)
     blockers = [
         b for b in classify_pr(pr, required_checks, trunk)
-        if b.kind != "not_current_bottom" and not (b.kind == "failed_check" and b.key in suppressed)
+        if not (b.kind == "failed_check" and b.key in suppressed)
     ]
     latest = pr.latest_mergify
     if not latest or latest.head_sha != pr.head_ref_oid:
@@ -181,6 +185,42 @@ def current_bottom_pr(stack: StackGroup, trunk: str) -> PrSnapshot | None:
         if pr.state == "OPEN" and pr.base_ref_name == trunk:
             return pr
     return None
+
+def classify_bottom_topology(
+    stack: StackGroup,
+    trunk: str,
+    open_pr_numbers_by_head: Mapping[str, Collection[int]],
+) -> BottomTopology:
+    root = stack.prs[0]
+    bottom = current_bottom_pr(stack, trunk)
+    if bottom is not None:
+        return BottomTopology(
+            kind="current_bottom",
+            root=root,
+            bottom=bottom,
+            external_open_base_pr_numbers=(),
+        )
+    current_stack_numbers = {pr.number for pr in stack.prs}
+    external_open_base_pr_numbers = tuple(sorted(
+        number
+        for number in open_pr_numbers_by_head.get(root.base_ref_name, ())
+        if number not in current_stack_numbers
+    ))
+    if external_open_base_pr_numbers:
+        return BottomTopology(
+            kind="external_open_base",
+            root=root,
+            bottom=None,
+            external_open_base_pr_numbers=external_open_base_pr_numbers,
+        )
+    return BottomTopology(
+        kind="stale_unowned_base",
+        root=root,
+        bottom=None,
+        external_open_base_pr_numbers=(),
+    )
+
+
 
 
 def stack_has_unaccepted_upper_pr(stack: StackGroup, bottom: PrSnapshot | None) -> bool:
@@ -269,6 +309,8 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
 
 
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
+    if blocker.kind != "failed_check":
+        return None
     latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
     if latest is None:
         return None
@@ -297,11 +339,6 @@ def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | N
             continue
         return Blocker(blocker.key, "human_decision", pr.number, detail)
     return None
-
-
-def has_exact_repair_stop_comment(pr: PrSnapshot, detail: str) -> bool:
-    expected = f"{REPAIR_STOP_PREFIX}{detail}".strip()
-    return any(comment.body.strip() == expected for comment in pr.repair_stop_comments)
 
 
 def latest_mergify_repair_invalid_blockers(
@@ -338,6 +375,15 @@ def _assert_stack_facts_invariants(facts: StackFacts) -> None:
         for blocker in facts.blockers_by_pr[pr.number]
     )
     assert facts.all_blockers == expected_all, "all_blockers must flatten blockers_by_pr in stack order"
+    assert facts.bottom is facts.bottom_topology.bottom, "bottom mirror must track bottom topology"
+    assert (facts.bottom_topology.kind == "current_bottom") is (facts.bottom is not None), "current_bottom topology must match bottom presence"
+    assert (facts.bottom_topology.kind != "current_bottom") is (facts.bottom is None), "non-current topology must match missing bottom"
+    assert (facts.bottom_topology.kind == "external_open_base") is bool(facts.bottom_topology.external_open_base_pr_numbers), "external owners must only appear on external_open_base topology"
+    assert (
+        facts.bottom_topology.kind == "stale_unowned_base"
+    ) is (
+        facts.bottom is None and facts.bottom_topology.external_open_base_pr_numbers == ()
+    ), "stale_unowned_base must mean no bottom and no external owners"
     if facts.suppressed_failed_checks_by_pr:
         assert facts.bottom is not None, "suppression requires a current bottom PR"
         assert set(facts.suppressed_failed_checks_by_pr) == {facts.bottom.number}, "derived suppression is bottom-only"
@@ -358,10 +404,12 @@ def build_stack_facts(
     required_checks: Collection[str],
     ledger: Ledger,
     open_pr_numbers: Collection[int],
+    open_pr_numbers_by_head: Mapping[str, Collection[int]],
     trunk: str,
 ) -> StackFacts:
     required = frozenset(required_checks)
-    bottom = current_bottom_pr(stack, trunk)
+    bottom_topology = classify_bottom_topology(stack, trunk, open_pr_numbers_by_head)
+    bottom = bottom_topology.bottom
     upper_stack_needs_acceptance = stack_has_unaccepted_upper_pr(stack, bottom)
     prereq_status = latest_repair_prereq_status(stack, ledger, open_pr_numbers, trunk)
     queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, trunk)
@@ -399,6 +447,7 @@ def build_stack_facts(
         stack=stack,
         required_checks=required,
         trunk=trunk,
+        bottom_topology=bottom_topology,
         bottom=bottom,
         upper_stack_needs_acceptance=upper_stack_needs_acceptance,
         prereq_status=prereq_status,
@@ -420,6 +469,7 @@ def build_stack_facts(
 def summarize_stack(facts: StackFacts) -> dict[str, object]:
     return {
         "stack_id": facts.stack.stack_id,
+        "bottom_topology": facts.bottom_topology.kind,
         "bottom_pr": facts.bottom.number if facts.bottom else None,
         "upper_stack_needs_acceptance": facts.upper_stack_needs_acceptance,
         "prs": [
@@ -480,14 +530,10 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
-def _pr_has_human_decision(facts: StackFacts, pr_number: int) -> bool:
-    return any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr_number])
-
-
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
-        if _pr_has_human_decision(facts, pr.number):
+        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
@@ -499,8 +545,6 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
-        if _pr_has_human_decision(facts, pr.number):
-            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
@@ -517,8 +561,6 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
-        if _pr_has_human_decision(facts, pr.number):
-            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
@@ -534,8 +576,6 @@ def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attemp
 
 def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
     for pr in facts.stack.prs:
-        if _pr_has_human_decision(facts, pr.number):
-            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "pending_check":
                 return None
@@ -568,21 +608,22 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
     if any(blocker.kind == "merge_hold" for blocker in facts.all_blockers):
         return None
     if not facts.bottom:
-        first = next((pr for pr in facts.stack.prs if pr.state == "OPEN"), None)
-        if first is None:
-            return None
-        detail = (
-            f"no current bottom on {facts.trunk}: lowest open stack PR #{first.number} "
-            f"is based on `{first.base_ref_name}`, not `{facts.trunk}`; land or retarget "
-            "that base before babysitting can queue this stack"
-        )
-        if has_exact_repair_stop_comment(first, detail):
-            return None
+        if facts.bottom_topology.kind == "current_bottom":
+            raise AssertionError("current_bottom topology reached no-bottom branch")
+        root = facts.bottom_topology.root
+        if facts.bottom_topology.kind == "external_open_base":
+            owners = ", ".join(f"#{number}" for number in facts.bottom_topology.external_open_base_pr_numbers)
+            return Action(
+                "comment_blocked",
+                root.number,
+                "external-open-base-pr",
+                f"lowest open stack PR #{root.number} is based on `{root.base_ref_name}`, which still belongs to open PR(s) {owners} outside this stack; leaving it alone to avoid dropping dependency changes",
+            )
         return Action(
-            "comment_blocked",
-            first.number,
-            "no-current-bottom",
-            detail,
+            "retarget_base",
+            root.number,
+            facts.trunk,
+            f"retarget stack root from `{root.base_ref_name}` to `{facts.trunk}`",
         )
 
     bottom = facts.bottom
@@ -653,10 +694,18 @@ def plan_stack_actions(
     max_requeue_attempts: int = 2,
     max_repair_attempts: int = 3,
     suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
+    open_pr_numbers_by_head: Mapping[str, Collection[int]] | None = None,
 ) -> tuple[Action, ...]:
     del now_epoch
     del suppressed_failed_checks_by_pr
-    facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers=(), trunk=TRUNK)
+    facts = build_stack_facts(
+        stack,
+        required_checks,
+        ledger,
+        open_pr_numbers=(),
+        open_pr_numbers_by_head=open_pr_numbers_by_head or {},
+        trunk=TRUNK,
+    )
     return plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts)
 
 
@@ -666,12 +715,13 @@ def plan_stack_execution(
     ledger: Ledger,
     now_epoch: int,
     open_pr_numbers: Collection[int],
+    open_pr_numbers_by_head: Mapping[str, Collection[int]],
     max_requeue_attempts: int = 2,
     max_repair_attempts: int = 3,
     trunk: str = TRUNK,
 ) -> StackExecutionPlan:
     del now_epoch
-    facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers, trunk)
+    facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head, trunk)
     summary = summarize_stack(facts)
     if facts.prereq_status and facts.prereq_status.is_open:
         return StackExecutionPlan(

@@ -73,9 +73,9 @@ class PlannerTestCase(unittest.TestCase):
         self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
         return m.Ledger(Path(d) / "ledger.jsonl")
 
-    def _facts(self, stack, required_checks=REQUIRED, ledger=None, open_pr_numbers=(), trunk="master"):
+    def _facts(self, stack, required_checks=REQUIRED, ledger=None, open_pr_numbers=(), open_pr_numbers_by_head=None, trunk="master"):
         ledger = ledger or self._ledger()
-        return p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, trunk), ledger
+        return p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head or {}, trunk), ledger
 
 
 class ClassifyPr(unittest.TestCase):
@@ -99,7 +99,7 @@ class ClassifyPr(unittest.TestCase):
     def test_missing_required_check_only_on_bottom(self):
         # Missing check counts as a blocker only when the PR sits on trunk.
         self.assertEqual(self._kinds(pr(checks={})), {"missing_check"})
-        self.assertEqual(self._kinds(pr(checks={}, base_ref_name="other")), {"not_current_bottom"})
+        self.assertEqual(self._kinds(pr(checks={}, base_ref_name="other")), set())
 
     def test_conflict_from_git_state(self):
         self.assertIn("conflict", self._kinds(pr(merge_state_status="DIRTY")))
@@ -151,6 +151,56 @@ class EffectiveBlockers(unittest.TestCase):
             )
         }
         self.assertNotIn("missing_check", kinds)
+
+
+
+class ClassifyBottomTopology(unittest.TestCase):
+    def test_open_trunk_root_is_current_bottom(self):
+        stack = m.StackGroup("s", (pr(number=10),))
+        topology = p.classify_bottom_topology(stack, "master", {})
+        self.assertEqual(topology.kind, "current_bottom")
+        self.assertEqual(topology.root.number, 10)
+        self.assertEqual(topology.bottom.number, 10)
+        self.assertEqual(topology.external_open_base_pr_numbers, ())
+
+    def test_stale_root_with_outside_owner_is_external_open_base(self):
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(number=10, base_ref_name="pr/babysit-prereq-split"),
+                pr(number=11, base_ref_name="stack/a"),
+            ),
+        )
+        topology = p.classify_bottom_topology(stack, "master", {"pr/babysit-prereq-split": (7001,)})
+        self.assertEqual(topology.kind, "external_open_base")
+        self.assertIsNone(topology.bottom)
+        self.assertEqual(topology.external_open_base_pr_numbers, (7001,))
+
+    def test_stale_root_with_no_outside_owner_is_stale_unowned_base(self):
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(number=10, base_ref_name="pr/babysit-prereq-split"),
+                pr(number=11, base_ref_name="stack/a"),
+            ),
+        )
+        topology = p.classify_bottom_topology(stack, "master", {})
+        self.assertEqual(topology.kind, "stale_unowned_base")
+        self.assertIsNone(topology.bottom)
+        self.assertEqual(topology.external_open_base_pr_numbers, ())
+
+    def test_same_stack_parent_owner_is_not_treated_as_external(self):
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(number=10, base_ref_name="stack/shared-parent", head_ref_name="stack/child"),
+                pr(number=11, base_ref_name="stack/child", head_ref_name="stack/shared-parent"),
+            ),
+        )
+        topology = p.classify_bottom_topology(stack, "master", {"stack/shared-parent": (11,)})
+        self.assertEqual(topology.kind, "stale_unowned_base")
+        self.assertIsNone(topology.bottom)
+        self.assertEqual(topology.external_open_base_pr_numbers, ())
 
 
 class BuildStackFacts(PlannerTestCase):
@@ -274,10 +324,10 @@ class BuildStackFacts(PlannerTestCase):
 class PlanStackActions(PlannerTestCase):
     """Named planning passes over prebuilt facts still honor the same ladder."""
 
-    def _plan(self, stack_or_snapshot, ledger=None, required_checks=REQUIRED, open_pr_numbers=()):
+    def _plan(self, stack_or_snapshot, ledger=None, required_checks=REQUIRED, open_pr_numbers=(), open_pr_numbers_by_head=None):
         ledger = ledger or self._ledger()
         stack = stack_or_snapshot if isinstance(stack_or_snapshot, m.StackGroup) else m.StackGroup("s", (stack_or_snapshot,))
-        facts = p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, "master")
+        facts = p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head or {}, "master")
         return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
 
     def test_pending_check_means_wait_do_nothing(self):
@@ -333,27 +383,95 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(m.StackGroup("s", (bottom, upper)))
         self.assertEqual((actions[0].kind, actions[0].pr_number), ("requeue", 10))
 
-    def test_no_current_bottom_blocker_names_base_branch(self):
-        actions = self._plan(
-            m.StackGroup(
-                "s",
-                (
-                    pr(
-                        number=5885,
-                        base_ref_name="pr/babysit-prereq-split",
-                        labels=frozenset({"admin-bypass"}),
-                    ),
-                    pr(
-                        number=5886,
-                        base_ref_name="stack/slack-routing",
-                        labels=frozenset({"admin-bypass"}),
-                    ),
+    def test_stale_root_base_retargets_root_pr(self):
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(
+                    number=5885,
+                    base_ref_name="pr/babysit-prereq-split",
+                    labels=frozenset({"admin-bypass"}),
                 ),
-            )
+                pr(
+                    number=5886,
+                    base_ref_name="stack/slack-routing",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+            ),
         )
-        self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "no-current-bottom"))
-        self.assertIn("lowest open stack PR #5885 is based on `pr/babysit-prereq-split`", actions[0].detail)
-        self.assertIn("land or retarget that base", actions[0].detail)
+        facts, ledger = self._facts(stack, open_pr_numbers_by_head={})
+        self.assertEqual(facts.bottom_topology.kind, "stale_unowned_base")
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("retarget_base", 5885, "master"))
+        self.assertIn("`pr/babysit-prereq-split`", actions[0].detail)
+        self.assertIn("`master`", actions[0].detail)
+
+    def test_external_open_base_owner_blocks_instead_of_retargeting(self):
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(
+                    number=5885,
+                    base_ref_name="pr/babysit-prereq-split",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+                pr(
+                    number=5886,
+                    base_ref_name="stack/slack-routing",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+            ),
+        )
+        facts, ledger = self._facts(stack, open_pr_numbers_by_head={"pr/babysit-prereq-split": (7001,)})
+        self.assertEqual(facts.bottom_topology.kind, "external_open_base")
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("comment_blocked", 5885, "external-open-base-pr"))
+        self.assertIn("#7001", actions[0].detail)
+
+    def test_stale_root_retarget_ignores_unrelated_stack(self):
+        stale_stack = m.StackGroup(
+            "stack-a",
+            (
+                pr(
+                    number=5885,
+                    base_ref_name="pr/babysit-prereq-split",
+                    head_ref_name="stack/slack-routing-1",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+                pr(
+                    number=5886,
+                    base_ref_name="stack/slack-routing-1",
+                    head_ref_name="stack/slack-routing-2",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+            ),
+        )
+        facts, ledger = self._facts(stale_stack, open_pr_numbers_by_head={})
+        self.assertEqual(facts.bottom_topology.kind, "stale_unowned_base")
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        self.assertEqual([(action.kind, action.pr_number) for action in actions], [("retarget_base", 5885)])
+
+    def test_stale_root_failed_check_repairs_before_retarget(self):
+        stack = m.StackGroup(
+            "s",
+            (
+                pr(
+                    number=5885,
+                    base_ref_name="pr/babysit-prereq-split",
+                    labels=frozenset({"admin-bypass"}),
+                    checks={"build": check("failure")},
+                ),
+                pr(
+                    number=5886,
+                    base_ref_name="stack/slack-routing",
+                    labels=frozenset({"admin-bypass"}),
+                ),
+            ),
+        )
+        facts, _ledger = self._facts(stack, open_pr_numbers_by_head={})
+        self.assertEqual(facts.bottom_topology.kind, "stale_unowned_base")
+        actions = p.plan_stack_actions(stack, REQUIRED, self._ledger(), now_epoch=0, open_pr_numbers_by_head={})
+        self.assertEqual([(action.kind, action.key) for action in actions], [("repair_check", "build")])
 
     def test_requeue_is_capped_after_repeated_attempts(self):
         ledger = self._ledger()
@@ -426,6 +544,7 @@ class PlanStackExecution(PlannerTestCase):
             ledger,
             now_epoch=0,
             open_pr_numbers={10, 99},
+            open_pr_numbers_by_head={},
         )
         self.assertEqual(plan.wait_reason, "repair-prereq-open")
         self.assertEqual(plan.actions, ())
@@ -455,6 +574,7 @@ class PlanStackExecution(PlannerTestCase):
             ledger,
             now_epoch=0,
             open_pr_numbers={10},
+            open_pr_numbers_by_head={},
         )
         self.assertEqual(plan.actions[0].kind, "requeue")
         self.assertTrue(plan.prereq_status.needs_followup_requeue)
@@ -478,6 +598,7 @@ class PlanStackExecution(PlannerTestCase):
             ledger,
             now_epoch=0,
             open_pr_numbers={10},
+            open_pr_numbers_by_head={},
         )
         self.assertEqual(
             [(action.kind, action.key) for action in restore.actions],
@@ -505,6 +626,7 @@ class PlanStackExecution(PlannerTestCase):
             ledger,
             now_epoch=0,
             open_pr_numbers={10},
+            open_pr_numbers_by_head={},
         )
         self.assertEqual(
             [(action.kind, action.key) for action in requeue.actions],
@@ -532,6 +654,7 @@ class PlanStackExecution(PlannerTestCase):
             ledger,
             now_epoch=0,
             open_pr_numbers={10},
+            open_pr_numbers_by_head={},
         )
         self.assertEqual(
             [(action.kind, action.key) for action in retry.actions],
@@ -564,6 +687,7 @@ class PlanStackExecution(PlannerTestCase):
             ledger,
             now_epoch=0,
             open_pr_numbers={5873},
+            open_pr_numbers_by_head={},
         )
         self.assertEqual(plan.actions, ())
         self.assertEqual(plan.wait_reason, "blocked-needs-human")

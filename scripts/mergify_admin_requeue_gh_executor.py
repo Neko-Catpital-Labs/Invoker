@@ -58,6 +58,10 @@ class AdminBypassGhExecutor:
             self.gh.edit_label(self.repo, pr.number, add="admin-bypass")
             self.ledger.record(RESTORE_ADMIN_BYPASS_LABEL_LEDGER_KIND, pr.number, pr.head_ref_oid, "admin-bypass", now)
 
+    def retarget_base(self, pr: PrSnapshot, new_base: str, now: int) -> None:
+        self.gh.retarget_base(self.repo, pr.number, new_base)
+        self.ledger.record("retarget-base", pr.number, pr.head_ref_oid, f"{pr.base_ref_name}->{new_base}", now)
+
     def comment_admin_bypass_nudge(self, pr: PrSnapshot, key: str, now: int) -> None:
         if self.ledger.count(ADMIN_BYPASS_NUDGE_LEDGER_KIND, pr.number, pr.head_ref_oid, key) == 0:
             self.gh.comment(self.repo, pr.number, admin_bypass_nudge_body())
@@ -106,6 +110,9 @@ class AdminBypassGhExecutor:
             return
         if action.kind == "restore_admin_bypass_label":
             self.restore_admin_bypass_label(pr, now)
+            return
+        if action.kind == "retarget_base":
+            self.retarget_base(pr, action.key, now)
             return
         if action.kind == "comment_admin_bypass_nudge":
             self.comment_admin_bypass_nudge(pr, action.key, now)

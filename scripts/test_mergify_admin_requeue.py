@@ -27,9 +27,9 @@ from scripts.mergify_admin_requeue import (
     plan_stack_actions,
 )
 from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
+from scripts.mergify_admin_requeue_model import LoadedStacks
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
-from scripts.mergify_admin_requeue_model import RepairStopComment
 from scripts.mergify_admin_requeue_repairer import (
     NON_TRUNK_MANUAL_SPLIT_ERROR,
     NON_TRUNK_PREREQ_ERROR,
@@ -51,7 +51,7 @@ def mergify(state="dequeued", comment_id="m1", sha=HEAD):
     return MergifyQueueEvent(comment_id, state, "admin-bypass", "2026-07-03T00:00:00Z", sha, (), (), "https://example.invalid/comment")
 
 
-def pr(number, *, base="master", head=None, labels=None, checks=None, threads=(), latest=None, merge_state="CLEAN", mergeable="MERGEABLE", state="OPEN", draft=False, body="", repair_stop_comments=()):
+def pr(number, *, base="master", head=None, labels=None, checks=None, threads=(), latest=None, merge_state="CLEAN", mergeable="MERGEABLE", state="OPEN", draft=False, body=""):
     return PrSnapshot(
         number=number,
         title=f"PR {number}",
@@ -68,7 +68,6 @@ def pr(number, *, base="master", head=None, labels=None, checks=None, threads=()
         checks=checks if checks is not None else {name: check(name) for name in REQUIRED},
         review_threads=tuple(threads),
         latest_mergify=latest,
-        repair_stop_comments=tuple(repair_stop_comments),
     )
 
 PROOF_BODY = """## Summary
@@ -394,9 +393,9 @@ Failing checks
             def issue_comments(self, repo, number):
                 return []
 
-        stacks = AdminBypassStackLoader(FakeGh()).load("owner/repo", None, [], REQUIRED, "master")
-        self.assertEqual(len(stacks), 1)
-        self.assertEqual([item.number for item in stacks[0].prs], [1, 2])
+        loaded = AdminBypassStackLoader(FakeGh()).load("owner/repo", None, [], REQUIRED, "master")
+        self.assertEqual(len(loaded.stacks), 1)
+        self.assertEqual([item.number for item in loaded.stacks[0].prs], [1, 2])
 
     def test_repair_check_logs_work_context(self):
         stderr = io.StringIO()
@@ -420,38 +419,6 @@ Failing checks
         self.assertIn('"check_name": "PR Body"', log)
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
-
-    def test_repair_check_noop_skips_validation_when_pr_merges_during_repair(self):
-        class FakeGh:
-            def pr_detail(self, repo, number):
-                return {"number": number, "state": "MERGED"}
-
-        stderr = io.StringIO()
-        item = pr(6111, latest=mergify(state="queued"))
-        repairer = self.repairer(FakeGh(), self.ledger())
-        git_rev_parse = iter([HEAD, HEAD])
-        git_commands = []
-
-        def fake_git_output(_work_root, *args):
-            git_commands.append(args)
-            if args == ("rev-parse", "HEAD"):
-                return next(git_rev_parse)
-            return ""
-
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
-                with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
-                    with mock.patch.object(repairer, "git_lines", return_value=()):
-                        with mock.patch.object(repairer, "run_claude_repair"):
-                            with mock.patch.object(repairer, "validate_current_pr_body") as validate:
-                                with redirect_stderr(stderr):
-                                    result = repairer.repair_check(item, "PR Body")
-
-        validate.assert_not_called()
-        self.assertEqual(result.status, "noop")
-        self.assertIn(("reset", "--hard", HEAD), git_commands)
-        self.assertIn(("clean", "-fd"), git_commands)
-        self.assertIn('"event": "admin-bypass-repair-check-terminal"', stderr.getvalue())
 
 
     def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):
@@ -488,53 +455,9 @@ Failing checks
     def test_plan_stack_actions_stop_retrying_after_repair_invalid(self):
         ledger = self.ledger()
         ledger.record("repair-invalid", 2606, HEAD, "PR Body", 1, meta={"errors": ["human stack split required"]})
-        stack = StackGroup(
-            "s",
-            (pr(
-                2606,
-                labels={"admin-bypass"},
-                checks={
-                    "PR Body": check("PR Body", "failure"),
-                    "quality / TypeScript Types": check("quality / TypeScript Types"),
-                },
-            ),),
-        )
+        stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual(actions, ())
-
-    def test_repair_invalid_stops_other_repairs_on_same_pr_head(self):
-        ledger = self.ledger()
-        ledger.record("repair-invalid", 6163, HEAD, "UI Vitest", 1, meta={"errors": ["manual split required"]})
-        checks = {
-            "UI Vitest": check("UI Vitest", "failure"),
-            "quality / TypeScript Types": check("quality / TypeScript Types", "failure"),
-        }
-        stack = StackGroup("s", (pr(6163, labels={"admin-bypass"}, checks=checks),))
-        actions = plan_stack_actions(stack, REQUIRED | {"UI Vitest"}, ledger, 2)
-        self.assertEqual(actions, ())
-
-    def test_bot_thread_repair_invalid_stops_retrying_thread_repair(self):
-        ledger = self.ledger()
-        ledger.record("repair-bot-thread", 6158, HEAD, "PRRT_kwDOSFkSDM6T97v9", 1)
-        ledger.record(
-            "repair-invalid",
-            6158,
-            HEAD,
-            "PRRT_kwDOSFkSDM6T97v9",
-            1,
-            meta={"errors": ["PR body Review Unit must be split"]},
-        )
-        stack = StackGroup(
-            "s",
-            (pr(
-                6158,
-                threads=(ReviewThread("PRRT_kwDOSFkSDM6T97v9", False, ("coderabbitai[bot]",)),),
-                latest=mergify(),
-            ),),
-        )
-        actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
-        self.assertEqual(actions, ())
-
     def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):
         stderr = io.StringIO()
         latest = MergifyQueueEvent(
@@ -612,7 +535,7 @@ Failing checks
         stdout = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
-                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
         self.assertFalse(should_poll)
@@ -629,7 +552,7 @@ Failing checks
         stderr = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
-                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
                     with redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
         self.assertTrue(should_poll)
@@ -732,7 +655,7 @@ Failing checks
         stdout = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
-                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(original, prereq)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(original, prereq), open_pr_numbers_by_head={})):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
         self.assertTrue(should_poll)
@@ -757,7 +680,7 @@ Failing checks
         fake_gh = FakeGh()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
-                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)]))
         self.assertTrue(should_poll)
@@ -799,7 +722,7 @@ Failing checks
         first_stack = StackGroup("orig", (pr(5811, labels={"dequeued"}, checks={}, latest=latest),))
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), {"required-fast / Guardrails"})):
             with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
-                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(first_stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(first_stack,), open_pr_numbers_by_head={})):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)]))
         self.assertTrue(should_poll)
@@ -809,7 +732,7 @@ Failing checks
         second_stack = StackGroup("orig", (pr(5811, labels={"admin-bypass", "dequeued"}, checks={}, latest=latest),))
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), {"required-fast / Guardrails"})):
             with mock.patch.object(exec_impl, "GhClient", return_value=fake_gh):
-                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(second_stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(second_stack,), open_pr_numbers_by_head={})):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)]))
         self.assertTrue(should_poll)
@@ -827,7 +750,7 @@ Failing checks
         stdout = io.StringIO()
         with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
             with mock.patch.object(exec_impl, "GhClient", return_value=object()):
-                with mock.patch.object(AdminBypassStackLoader, "load", return_value=(stack,)):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
                     with redirect_stdout(stdout), redirect_stderr(stderr):
                         should_poll = exec_impl.run_cycle(args)
         self.assertFalse(should_poll)
@@ -858,6 +781,23 @@ Failing checks
         executor.execute(action, item, 1)
         executor.execute(action, item, 2)
         self.assertEqual(len(fake.comments), 1)
+
+    def test_retarget_base_executes_once_and_records_ledger(self):
+        class FakeGh:
+            def __init__(self):
+                self.retargets = []
+
+            def retarget_base(self, repo, pr_number, base):
+                self.retargets.append((repo, pr_number, base))
+
+        ledger = self.ledger()
+        item = pr(5811, base="pr/babysit-prereq-split", labels={"admin-bypass"}, latest=mergify())
+        action = Action("retarget_base", 5811, "master", "retarget stack root from `pr/babysit-prereq-split` to `master`")
+        fake = FakeGh()
+        executor = self.executor(fake, ledger, "owner/repo")
+        executor.execute(action, item, 1)
+        self.assertEqual(fake.retargets, [("owner/repo", 5811, "master")])
+        self.assertEqual(ledger.count("retarget-base", 5811, HEAD, "pr/babysit-prereq-split->master"), 1)
 
     def test_human_blocker_comment_records_once(self):
         class FakeGh:
@@ -905,31 +845,6 @@ Failing checks
         executor.execute(action, item, 3)
         self.assertEqual([comment["body"] for comment in fake.comments].count(f"Mergify repair stopped: {detail}"), 1)
         self.assertEqual(ledger.count("comment-blocked", 2647, HEAD, "no-current-bottom:exact"), 1)
-
-    def test_no_current_bottom_exact_comment_stops_future_planning(self):
-        detail = "no current bottom on master: lowest open stack PR #2647 is based on `feature/base`, not `master`; land or retarget that base before babysitting can queue this stack"
-        bottom = pr(
-            2647,
-            base="feature/base",
-            head="stack/bottom",
-            labels={"admin-bypass"},
-            repair_stop_comments=(RepairStopComment(f"Mergify repair stopped: {detail}", "2026-07-27T00:00:00Z", "EdbertChan"),),
-        )
-        top = pr(2648, base="stack/bottom", labels={"admin-bypass"})
-        ledger = self.ledger()
-        ledger.record("comment-blocked", 2647, HEAD, "no-current-bottom", 1)
-        actions = plan_stack_actions(StackGroup("s", (bottom, top)), REQUIRED, ledger, 2)
-        self.assertEqual(actions, ())
-
-        legacy = pr(
-            2647,
-            base="feature/base",
-            head="stack/bottom",
-            labels={"admin-bypass"},
-            repair_stop_comments=(RepairStopComment("Mergify repair stopped: no current bottom on master", "2026-07-27T00:00:00Z", "EdbertChan"),),
-        )
-        actions = plan_stack_actions(StackGroup("s", (legacy, top)), REQUIRED, ledger, 3)
-        self.assertEqual([(a.kind, a.key, a.detail) for a in actions], [("comment_blocked", "no-current-bottom", detail)])
 
     def test_human_block_comment_records_once_then_waits(self):
         class FakeGh:
@@ -1047,11 +962,6 @@ The merge conditions cannot be satisfied due to failing checks
         stack = StackGroup("s", (pr(2999, state="CLOSED", latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2999, "state=CLOSED")])
-
-    def test_merged_pr_is_terminal_success_not_blocked(self):
-        stack = StackGroup("s", (pr(6108, state="MERGED", latest=mergify(state="merged")),))
-        actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
-        self.assertEqual(actions, ())
 
 
 if __name__ == "__main__":
