@@ -1,0 +1,247 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+import time
+from typing import Sequence
+
+from .gh_executor import AdminBypassGhExecutor
+from .loader import AdminBypassStackLoader
+from .logger import AdminBypassLogger
+from .model import Action, Ledger, PrSnapshot, RepairOutcome, load_mergify_rules
+from .plan import plan_stack_execution
+from .repairer import AdminBypassRepairer
+from .snapshot import GhClient
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(action.__dict__, sort_keys=True))
+        return
+    prefix = "DRY-RUN " if dry_run else ""
+    if action.kind == "requeue":
+        head = pr.head_ref_oid if pr else ""
+        print(f"{prefix}requeue PR #{action.pr_number} head={head} reason={action.detail}")
+    elif action.kind == "repair_check":
+        key = action.key.split(":", 1)[-1]
+        print(f"{prefix}repair-check PR #{action.pr_number} check={json.dumps(key)}")
+    elif action.kind == "comment_blocked":
+        print(f"BLOCK PR #{action.pr_number} {action.detail}")
+    elif action.kind == "comment_admin_bypass_nudge":
+        print(f"{prefix}comment-admin-bypass-nudge PR #{action.pr_number}")
+    elif action.kind == "restore_admin_bypass_label":
+        print(f"{prefix}restore-admin-bypass-label PR #{action.pr_number}")
+    elif action.kind == "remove_merge_hold":
+        print(f"{prefix}remove-merge-hold PR #{action.pr_number}")
+    elif action.kind == "resolve_bot_threads":
+        print(f"{prefix}resolve-bot-threads PR #{action.pr_number} thread={action.key}")
+    elif action.kind == "repair_conflict":
+        print(f"{prefix}repair-conflict PR #{action.pr_number} {action.detail}")
+
+
+def record_repair_outcome(
+    ledger: Ledger,
+    logger: AdminBypassLogger,
+    repo: str,
+    pr: PrSnapshot,
+    outcome: RepairOutcome,
+    now: int,
+) -> None:
+    if outcome.status == "queue_only_noop":
+        ledger.record("queue-only-noop", pr.number, pr.head_ref_oid, outcome.check_name, now)
+        logger.trace(
+            "admin-bypass-queue-only-noop",
+            repo=repo,
+            pr_number=pr.number,
+            check_name=outcome.check_name,
+            queue_pr_number=pr.latest_mergify.queue_pr_number if pr.latest_mergify else 0,
+        )
+    if outcome.status == "noop" and outcome.check_name == "PR Body":
+        ledger.record("repair-noop", pr.number, pr.head_ref_oid, outcome.check_name, now)
+        logger.trace(
+            "admin-bypass-repair-noop",
+            repo=repo,
+            pr_number=pr.number,
+            check_name=outcome.check_name,
+        )
+
+
+def handle_repair_outcome(
+    executor: AdminBypassGhExecutor,
+    ledger: Ledger,
+    logger: AdminBypassLogger,
+    repo: str,
+    pr: PrSnapshot,
+    outcome: RepairOutcome,
+    now: int,
+) -> None:
+
+    ledger.record("repair-evaluated", pr.number, pr.head_ref_oid, outcome.check_name, now)
+    if outcome.status == "blocked_dirty":
+        executor.comment_blocked(
+            pr,
+            "repair left uncommitted changes:\n" + "\n".join(outcome.status_lines),
+            f"repair-dirty:{outcome.check_name}:{outcome.start_head}",
+            now,
+        )
+        return
+    if outcome.status == "blocked_invalid":
+        ledger.record(
+            "repair-invalid",
+            pr.number,
+            pr.head_ref_oid,
+            outcome.check_name,
+            now,
+            meta={"errors": list(outcome.errors)},
+        )
+        executor.comment_blocked(
+            pr,
+            "\n".join(outcome.errors),
+            f"repair-invalid:{outcome.check_name}:{outcome.start_head}",
+            now,
+        )
+        return
+    record_repair_outcome(ledger, logger, repo, pr, outcome, now)
+
+
+def run_cycle(args: argparse.Namespace) -> bool:
+    rule_path = REPO_ROOT / ".mergify.yml"
+    try:
+        trunk, _labels, required_checks = load_mergify_rules(rule_path)
+    except ValueError as exc:
+        print("ERROR: failed to load admin-bypass Mergify rule", file=sys.stderr)
+        raise RuntimeError("failed to load admin-bypass Mergify rule") from exc
+
+    logger = AdminBypassLogger()
+    logger.trace(
+        "admin-bypass-scan-start",
+        repo=args.repo,
+        author=args.author,
+        pr_numbers=list(args.pr),
+        dry_run=args.dry_run,
+        json_output=args.json,
+    )
+    gh = GhClient()
+    ledger = Ledger(Path(args.state_file).expanduser())
+    loader = AdminBypassStackLoader(gh)
+    executor = AdminBypassGhExecutor(gh, ledger, logger, args.repo)
+    repairer = AdminBypassRepairer(gh, executor, logger, ledger, args.repo)
+    stacks = loader.load(args.repo, args.author, args.pr, required_checks, trunk)
+    now = int(time.time())
+    pr_by_number = {pr.number: pr for stack in stacks for pr in stack.prs}
+    logger.trace(
+        "admin-bypass-scan-loaded",
+        stack_count=len(stacks),
+        stack_ids=[stack.stack_id for stack in stacks],
+        candidate_pr_numbers=sorted(pr_by_number),
+    )
+    should_poll = False
+    open_pr_numbers = set(pr_by_number)
+    for stack in stacks:
+        plan = plan_stack_execution(
+            stack,
+            required_checks,
+            ledger,
+            now,
+            open_pr_numbers,
+            args.max_requeue_attempts,
+            args.max_repair_attempts,
+            trunk,
+        )
+        queue_only_noop_check = plan.queue_only_noop_check
+        logger.stack("admin-bypass-stack", plan.summary)
+        if not plan.actions:
+            should_poll = True
+            if plan.wait_reason == "repair-prereq-open" and plan.prereq_status:
+                logger.trace(
+                    "admin-bypass-repair-prereq-wait",
+                    repo=args.repo,
+                    pr_number=plan.summary.get("bottom_pr"),
+                    check_name=plan.prereq_status.check_name,
+                    prereq_pr_number=plan.prereq_status.prereq_pr_number,
+                )
+            logger.trace("admin-bypass-stack-wait", reason=plan.wait_reason, summary=plan.summary)
+            continue
+        logger.trace("admin-bypass-stack-actions", stack_id=stack.stack_id, actions=logger.stack_action_payload(plan.actions))
+        for action in plan.actions:
+            pr = pr_by_number.get(action.pr_number)
+            print_action(action, pr, args.dry_run, args.json)
+            if args.dry_run:
+                continue
+            if pr is None:
+                raise RuntimeError(f"missing PR snapshot for #{action.pr_number}")
+            if action.kind == "repair_check":
+                check_name = action.key.split(":", 1)[-1]
+                kind = "repair-bot-thread" if action.key.startswith("bot_review_thread:") else "repair-check"
+                ledger.record(kind, action.pr_number, pr.head_ref_oid, check_name, now)
+                outcome = repairer.repair_check(pr, check_name, now)
+                handle_repair_outcome(executor, ledger, logger, args.repo, pr, outcome, now)
+            elif action.kind == "repair_conflict":
+                ledger.record("conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now)
+                repairer.repair_conflict(pr, action.detail)
+            else:
+                executor.execute(action, pr, now)
+                if action.kind == "requeue":
+                    if (
+                        plan.prereq_status
+                        and plan.prereq_status.needs_followup_requeue
+                        and action.pr_number == plan.summary.get("bottom_pr")
+                    ):
+                        ledger.record("repair-prereq-requeue", pr.number, pr.head_ref_oid, plan.prereq_status.check_name, now)
+                        logger.trace(
+                            "admin-bypass-repair-prereq-requeue",
+                            repo=args.repo,
+                            pr_number=pr.number,
+                            check_name=plan.prereq_status.check_name,
+                        )
+                    if queue_only_noop_check and action.pr_number == plan.summary.get("bottom_pr"):
+                        ledger.record("queue-only-requeue", pr.number, pr.head_ref_oid, queue_only_noop_check, now)
+                        logger.trace(
+                            "admin-bypass-queue-only-requeue",
+                            repo=args.repo,
+                            pr_number=pr.number,
+                            check_name=queue_only_noop_check,
+                        )
+            if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
+                return True
+    if not stacks:
+        logger.trace("admin-bypass-scan-empty")
+    return should_poll
+
+
+def run_once(args: argparse.Namespace) -> int:
+    try:
+        run_cycle(args)
+    except RuntimeError:
+        return 2
+    return 0
+
+
+def run_loop(args: argparse.Namespace) -> int:
+    try:
+        while run_cycle(args):
+            time.sleep(args.poll_seconds)
+    except RuntimeError:
+        return 2
+    return 0
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Repair and queue open admin-bypass Mergify stacks.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--once", action="store_true", help="Run one scan/action cycle and exit. Cron uses this.")
+    mode.add_argument("--loop", action="store_true", help="Poll until no actionable stack remains.")
+    parser.add_argument("--poll-seconds", type=float, default=60, help="Seconds to wait between loop scans. Default: 60.")
+    parser.add_argument("--dry-run", action="store_true", help="Print planned actions; perform no GitHub mutations.")
+    parser.add_argument("--repo", default="Neko-Catpital-Labs/Invoker", help="Default: Neko-Catpital-Labs/Invoker.")
+    parser.add_argument("--author", help="Limit scan to one author. Default: all authors.")
+    parser.add_argument("--state-file", default=str(Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"), help="Ledger JSONL path.")
+    parser.add_argument("--pr", type=int, action="append", default=[], help="Limit to a PR; repeatable.")
+    parser.add_argument("--max-requeue-attempts", type=int, default=2, help="Default: 2 per PR/head/dequeue event.")
+    parser.add_argument("--max-repair-attempts", type=int, default=3, help="Default: 3 per PR/head/blocker.")
+    parser.add_argument("--json", action="store_true", help="Emit one JSON object per decision/action.")
+    return parser.parse_args(argv)
