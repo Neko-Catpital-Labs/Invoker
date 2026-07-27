@@ -1187,6 +1187,21 @@ describe('WorktreeExecutor', () => {
       taskProcess.emit('close', 0, null);
     });
 
+    it('getTerminalSpec preserves caller-supplied display bridge text', async () => {
+      const { taskProcess } = setupSpawnMock();
+
+      const request = makeRequest();
+      const handle = await executor.start(request);
+      handle.displayOnlyBridgeText = 'Context: live task handoff';
+
+      expect(executor.getTerminalSpec(handle)).toEqual(expect.objectContaining({
+        cwd: expect.stringMatching(/^\/fake\/worktrees\//),
+        displayOnlyBridgeText: 'Context: live task handoff',
+      }));
+
+      taskProcess.emit('close', 0, null);
+    });
+
     it('does not set agentSessionId for command tasks', async () => {
       const { taskProcess } = setupSpawnMock();
 
@@ -1418,6 +1433,23 @@ describe('WorktreeExecutor', () => {
     it('returns spec with undefined cwd when no workspace path', () => {
       const spec = executor.getRestoredTerminalSpec(baseMeta);
       expect(spec).toEqual({ cwd: undefined });
+    });
+
+    it('preserves caller-supplied display bridge text on restored specs', () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      const spec = executor.getRestoredTerminalSpec({
+        ...baseMeta,
+        workspacePath: '/home/user/.invoker/worktrees/wt-abc',
+        agentSessionId: 'session-wt-1',
+        displayOnlyBridgeText: 'Context: restored task handoff',
+      });
+
+      expect(spec).toEqual({
+        command: 'claude',
+        args: ['--resume', 'session-wt-1', '--dangerously-skip-permissions'],
+        cwd: '/home/user/.invoker/worktrees/wt-abc',
+        displayOnlyBridgeText: 'Context: restored task handoff',
+      });
     });
   });
 

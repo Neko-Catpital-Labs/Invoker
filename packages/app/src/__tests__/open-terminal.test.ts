@@ -11,7 +11,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
 import {
@@ -432,6 +433,39 @@ describe('terminal-external-launch', () => {
     // Should use '\'' (backslash-quote) not '"'"' (double-quote idiom)
     expect(line).toContain("\\'");
     expect(line).not.toMatch(/'"'"'/);
+  });
+
+  it('prints display bridge text without injection and preserves command argv', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'terminal-bridge-'));
+    const marker = join(dir, 'injected');
+    try {
+      const line = buildTerminalShellCommand(
+        {
+          cwd: dir,
+          command: 'sh',
+          args: [
+            '-c',
+            'printf "%s\\n" "$@" > argv.txt',
+            'argv0',
+            'arg one',
+            'semi;colon',
+            "quote'arg",
+          ],
+          displayOnlyBridgeText: `bridge $(touch ${marker}); echo 'bad'`,
+        },
+        '/fallback',
+      );
+
+      execFileSync('bash', ['-c', line], { cwd: dir });
+
+      expect(readFileSync(join(dir, 'argv.txt'), 'utf8')).toBe(
+        "arg one\nsemi;colon\nquote'arg\n",
+      );
+      expect(readFileSync(join(dir, 'argv.txt'), 'utf8')).not.toContain('bad');
+      expect(() => readFileSync(marker)).toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('buildMacOSOsascriptArgs includes activate and uses multi-line AppleScript', () => {
