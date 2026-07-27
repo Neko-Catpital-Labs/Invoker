@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -114,6 +114,7 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS = 64 * 1024;
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -124,6 +125,12 @@ function notifyMutationError(rawTitle: string, err: unknown): void {
 
 function formatCount(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function appendTerminalOutputSnapshot(snapshot: string | undefined, chunk: string): string {
+  const nextSnapshot = `${snapshot ?? ''}${chunk}`;
+  if (nextSnapshot.length <= TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS) return nextSnapshot;
+  return nextSnapshot.slice(nextSnapshot.length - TERMINAL_OUTPUT_SNAPSHOT_MAX_CHARS);
 }
 
 type StartReadyRailModeId =
@@ -1305,6 +1312,54 @@ export function App() {
         )),
       );
     });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const handlePlanningTerminalOutput = (event: TerminalOutputEvent): void => {
+      if (event.kind !== 'planning' || !event.data) return;
+      const eventPlanningSessionId = typeof event.planningSessionId === 'string' && event.planningSessionId.length > 0
+        ? event.planningSessionId
+        : null;
+
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          const matches = eventPlanningSessionId
+            ? session.id === eventPlanningSessionId
+            : session.terminalSession?.sessionId === event.sessionId;
+          if (!matches || !session.terminalSession) return session;
+
+          const outputSnapshot = appendTerminalOutputSnapshot(
+            session.terminalSession.outputSnapshot,
+            event.data,
+          );
+          const planningSessionId = eventPlanningSessionId ?? session.terminalSession.planningSessionId;
+          const terminalSession = {
+            ...session.terminalSession,
+            kind: 'planning' as const,
+            planningSessionId,
+            outputSnapshot,
+          };
+          if (
+            session.terminalSession.kind === terminalSession.kind
+            && session.terminalSession.planningSessionId === terminalSession.planningSessionId
+            && session.terminalSession.outputSnapshot === terminalSession.outputSnapshot
+          ) {
+            return session;
+          }
+
+          changed = true;
+          return {
+            ...session,
+            terminalSession,
+          };
+        });
+        return changed ? next : prev;
+      });
+    };
+
+    const unsubscribe = window.invoker?.onTerminalOutput?.(handlePlanningTerminalOutput);
     return () => { unsubscribe?.(); };
   }, []);
 
