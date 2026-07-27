@@ -262,7 +262,6 @@ export function TaskPanel({
   onEditType,
   onEditAgent,
   onSetExternalGatePolicies,
-  onSetMergeBranch,
   mergeMode,
   onSetMergeMode,
   showApprovalActions = true,
@@ -271,7 +270,6 @@ export function TaskPanel({
   const [editCommandValue, setEditCommandValue] = useState('');
   const [isEditingPrompt, setIsEditingPrompt] = useState(false);
   const [editPromptValue, setEditPromptValue] = useState('');
-  const [branchValue, setBranchValue] = useState(baseBranch ?? '');
   const [showAdvanced, setShowAdvanced] = useState(true);
   const [isEditingGatePolicies, setIsEditingGatePolicies] = useState(false);
   const [isSavingGatePolicies, setIsSavingGatePolicies] = useState(false);
@@ -284,7 +282,6 @@ export function TaskPanel({
     setEditCommandValue(task?.config.command ?? '');
     setIsEditingPrompt(false);
     setEditPromptValue(task?.config.prompt ?? '');
-    setBranchValue(baseBranch ?? '');
     setIsEditingGatePolicies(false);
     setIsSavingGatePolicies(false);
     setIsSatisfiedListExpanded(false);
@@ -443,30 +440,16 @@ export function TaskPanel({
       </div>
 
 
-      {/* Target branch (merge gates only) */}
-      {task.config.isMergeNode && onSetMergeBranch && task.config.workflowId && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Target Branch</span>
-          <input
-            data-testid="target-branch-input"
-            value={branchValue}
-            onChange={(e) => setBranchValue(e.target.value)}
-            onBlur={() => {
-              const trimmed = branchValue.trim();
-              if (trimmed && trimmed !== baseBranch) {
-                onSetMergeBranch(task.config.workflowId!, trimmed);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                (e.target as HTMLInputElement).blur();
-              }
-              if (e.key === 'Escape') {
-                setBranchValue(baseBranch ?? '');
-              }
-            }}
-            className="bg-muted text-foreground text-xs font-mono rounded px-2 py-1 border border-border-strong focus:outline-none focus:border-border-strong w-28 text-right"
-          />
+      {/* Base branch (merge gates only) */}
+      {task.config.isMergeNode && (
+        <div className="flex items-start justify-between gap-3">
+          <span className="text-sm text-muted-foreground">Base Branch</span>
+          <div className="text-right">
+            <div data-testid="base-branch-display" className="font-mono text-xs text-foreground">
+              {baseBranch ?? 'n/a'}
+            </div>
+            <div className="text-[11px] text-muted-foreground">Task branches start from here.</div>
+          </div>
         </div>
       )}
 
