@@ -9,6 +9,7 @@ REPO_DIR="$(pwd -P)"
 DRY_RUN=0
 SKIP_SYSTEM_PACKAGES="${INVOKER_SKIP_SYSTEM_PACKAGES:-0}"
 SKIP_AGENT_TOOLS="${INVOKER_SKIP_AGENT_TOOLS:-0}"
+SKIP_SHELL_HOOKS="${INVOKER_SKIP_SHELL_HOOKS:-0}"
 INVOKER_HOME="${INVOKER_HOME:-$HOME/.invoker}"
 INVOKER_ENV_FILE="${INVOKER_ENV_FILE:-$INVOKER_HOME/env.sh}"
 INVOKER_NODE_MAJOR="${INVOKER_NODE_MAJOR:-26}"
@@ -47,6 +48,7 @@ Environment overrides:
   INVOKER_GIT_USER_EMAIL       Git committer email for managed worktrees.
   INVOKER_SKIP_SYSTEM_PACKAGES Skip apt/brew package installation when set to 1.
   INVOKER_SKIP_AGENT_TOOLS     Skip codex/claude npm global installs when set to 1.
+  INVOKER_SKIP_SHELL_HOOKS     Skip login shell hook writes when set to 1.
   INVOKER_PROVISION_TRACE_FILE Optional file that receives one line per provision run.
 EOF
 }
@@ -183,6 +185,10 @@ EOF
 }
 
 ensure_shell_hooks() {
+  if [[ "$SKIP_SHELL_HOOKS" == "1" ]]; then
+    log "Skipping shell hook installation."
+    return 0
+  fi
   local marker="# >>> invoker ssh worker env >>>"
   local block
   block=$(cat <<EOF
@@ -526,7 +532,7 @@ ensure_repo_ready() {
 }
 
 print_provision_command() {
-  printf 'bash scripts/provision-ssh-worker.sh ensure-repo-ready && . "$HOME/.invoker/env.sh"\n'
+  printf 'bash scripts/provision-ssh-worker.sh ensure-repo-ready && . "${INVOKER_ENV_FILE:-$HOME/.invoker/env.sh}"\n'
 }
 
 while [[ "$#" -gt 0 ]]; do
