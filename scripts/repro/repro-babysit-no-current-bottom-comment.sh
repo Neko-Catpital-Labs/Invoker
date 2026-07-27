@@ -93,6 +93,8 @@ fi
 if ! out2="$(run_worker)"; then
   fail 'tick 2: worker failed' "$out2"
 fi
+! echo "$out2" | grep -q 'BLOCK PR #5885 no current bottom on master' \
+  || fail 'tick 2: worker retried no-current-bottom blocker' "$out2"
 
 python3 - <<'PY' || fail 'expected one exact no-current-bottom comment' "$(cat "$STATE_PATH")"
 import json

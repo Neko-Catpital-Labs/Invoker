@@ -57,7 +57,7 @@ state = {
             "mergeable": "MERGEABLE",
             "labels": ["admin-bypass", "queued"],
             "reviewThreads": [],
-            "checks": {"*": "SUCCESS"},
+            "checks": {"*": "SUCCESS", "PR Body": "FAILURE"},
         }
     ],
     "issue_comments": {
@@ -96,6 +96,8 @@ printf '%s\n' "$out"
 
 ! echo "$out" | grep -q 'DRY-RUN requeue PR #5805' \
   || fail "worker tried to requeue a PR already in Mergify queue" "$out"
+! echo "$out" | grep -q 'DRY-RUN repair-check PR #5805 check="PR Body"' \
+  || fail "worker tried to repair a PR already in Mergify queue" "$out"
 echo "$out" | grep -q '"reason": "bottom-already-queued"' \
   || fail "worker did not wait on the active queue state" "$out"
 
