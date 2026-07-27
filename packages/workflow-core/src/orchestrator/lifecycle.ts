@@ -74,6 +74,7 @@ export interface LifecycleHost {
   readonly logger: Logger;
   readonly taskRepository: TaskRepository;
   readonly deferredTaskIds: Set<string>;
+  readonly onRecreateTasksReset?: (taskIds: readonly string[]) => void;
   lastInvalidationPlan?: InvalidationPlan;
 
   refreshFromDb(): void;
@@ -508,6 +509,7 @@ export function applyRecreateResetImpl(host: LifecycleHost, plan: InvalidationPl
     host.deferredTaskIds.delete(id);
     host.clearQueuedSchedulerEntries(id, priorAttemptId);
   }
+  host.onRecreateTasksReset?.(toResetIds);
 
   const readyIds = host.stateMachine
     .getReadyTasks()
@@ -654,6 +656,7 @@ export function recreateWorkflowImpl(host: LifecycleHost, workflowId: string): T
     host.messageBus.publish(TASK_DELTA_CHANNEL, delta);
     host.clearQueuedSchedulerEntries(task.id, priorAttemptId);
   }
+  host.onRecreateTasksReset?.(allTasks.map((task) => task.id));
 
   const readyIds = host.stateMachine
     .getReadyTasks()

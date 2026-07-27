@@ -25,6 +25,7 @@ import {
   isLivenessFailureTask,
 } from './auto-fix-gating.js';
 import {
+  autoFixBareRetryExternalKey,
   checkAutoFixRetryCap,
   recordAutoFixRetryConsumed,
 } from './auto-fix-retry-cap.js';
@@ -255,12 +256,6 @@ function autoFixDecisionExternalKey(candidate: AutoFixRecoveryCandidate): string
   return `${AUTO_FIX_WORKER_KIND}:${candidate.taskId}:${candidate.generation}:${candidate.attemptId ?? ''}`;
 }
 
-function autoFixBareRetryExternalKey(candidate: AutoFixRecoveryCandidate): string {
-  // Bare retry is once-per-task: after restart-task bumps generation, the next
-  // failure must escalate to fix-with-agent instead of another bare retry.
-  return `${AUTO_FIX_WORKER_KIND}:retry:${candidate.taskId}`;
-}
-
 function recordAutoFixDecisionRow(
   options: AutoFixRecoveryPolicyOptions,
   candidate: AutoFixRecoveryCandidate,
@@ -311,7 +306,7 @@ function recordAutoFixBareRetryRow(
   recordWorkerDecisionRow(options.store, {
     workerKind: AUTO_FIX_WORKER_KIND,
     actionType: AUTO_FIX_BARE_RETRY_ACTION_TYPE,
-    externalKey: autoFixBareRetryExternalKey(candidate),
+    externalKey: autoFixBareRetryExternalKey(candidate.taskId),
     subjectType: 'task',
     subjectId: candidate.taskId,
     workflowId: candidate.workflowId,
@@ -336,7 +331,7 @@ function hasBareRetryAlreadySubmitted(
 ): boolean {
   const existing = options.store.getWorkerAction?.(
     AUTO_FIX_WORKER_KIND,
-    autoFixBareRetryExternalKey(candidate),
+    autoFixBareRetryExternalKey(candidate.taskId),
   );
   if (!existing) return false;
   return existing.attemptCount > 0;
