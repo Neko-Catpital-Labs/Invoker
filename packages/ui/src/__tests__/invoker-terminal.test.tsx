@@ -232,18 +232,45 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'try again',
+        presetKey: 'codex',
+      });
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
 
     await act(async () => {
       resolveSecondSend?.({
         ok: true,
-        sessionId: 'session-2',
+        sessionId: 'session-1',
         reply: 'Recovered.',
         draftPlanAvailable: false,
       });
     });
     await waitFor(() => expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Recovered.'));
+  });
+
+  it('shows an explicit error instead of restarting when a local planning transcript has no session id', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: false,
+      error: 'Planner connection dropped before the session was created.',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan before disconnect');
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Planner connection dropped before the session was created.');
+    });
+
+    submitPlanningText('continue anyway');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('This planning chat lost its session. Start a new planning chat to continue.');
+    });
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
   });
 
   it('keeps live planning activity isolated when switching planning sessions', async () => {

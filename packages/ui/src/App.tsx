@@ -248,6 +248,7 @@ function relativePlanningUpdatedAt(value: string): string {
 }
 const PLANNING_TYPING_LAG_METRIC = 'planning_typing_lag_baseline';
 const PLANNING_TYPING_SCENARIO = 'many-chats-many-messages-typing';
+const PLANNING_CONTINUATION_LOST_MESSAGE = 'This planning chat lost its session. Start a new planning chat to continue.';
 
 interface PlanningTypingTelemetryState {
   tasks: Map<string, TaskState>;
@@ -857,6 +858,7 @@ export function App() {
   const activePlanningConversationKey = activePlanningSession.conversationKey;
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
+  const planningTranscriptLineCount = activePlanningSession.messages.length;
   const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
@@ -2648,6 +2650,12 @@ export function App() {
       return;
     }
 
+    if (!planningSessionId && planningTranscriptLineCount > 0) {
+      appendTerminalLine(PLANNING_CONTINUATION_LOST_MESSAGE, 'system', 'error');
+      setPlanningSubmitError({ title: 'Planner could not respond', message: PLANNING_CONTINUATION_LOST_MESSAGE });
+      return;
+    }
+
     const previousSessionId = activePlanningSessionId;
     pendingPlanningStreamSessionIdsRef.current.add(previousSessionId);
     clearPlanningStreamForSessionIds([previousSessionId, planningSessionId]);
@@ -2690,12 +2698,29 @@ export function App() {
         pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
         setHasLoadedPlan(false);
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        const updatedAt = new Date().toISOString();
+        const errorLineId = nextTerminalLineIdRef.current;
+        nextTerminalLineIdRef.current += 1;
+        setPlanningSessions((prev) => prev.map((session) => {
+          if (session.id !== previousSessionId) return session;
+          return {
+            ...session,
+            busy: false,
+            id: result.sessionId ?? session.id,
+            conversationKey: result.sessionId ?? session.conversationKey,
+            messages: [...session.messages, { id: errorLineId, text: result.error, role: 'system', tone: 'error' }],
+            updatedAt,
+          };
+        }));
+        if (result.sessionId) {
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === previousSessionId ? result.sessionId! : currentSessionId
+          ));
+        }
         keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
         forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
@@ -2722,6 +2747,7 @@ export function App() {
     invoker,
     planningInput,
     planningSessionId,
+    planningTranscriptLineCount,
     selectedPlanningPresetKey,
     setPlanningInput,
     tasks.size,
