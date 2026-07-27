@@ -17,6 +17,7 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
@@ -113,7 +114,8 @@ export class SqliteTaskAttemptRepository {
     assertTaskConsistent(task);
     const cfg = task.config;
     const exec = task.execution;
-    this.exec.execRun(`
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
         command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies,
@@ -222,8 +224,10 @@ export class SqliteTaskAttemptRepository {
       cfg.executionModel ?? null,
       exec.agentName ?? null,
       task.taskStateVersion ?? 1,
-    ]);
-    this.syncCrashPreservationState(task.id, undefined, task.execution);
+      ]);
+      this.syncCrashPreservationState(task.id, undefined, task.execution);
+      this.appendTaskJournalEntry(task.id);
+    });
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
@@ -299,7 +303,6 @@ export class SqliteTaskAttemptRepository {
     }
 
     if (changes.execution) {
-      this.syncCrashPreservationState(taskId, beforeTask, changes.execution);
       const execution = changes.execution as Record<string, unknown>;
       const execMap: Record<string, string> = {
         blockedBy: 'blocked_by',
@@ -385,7 +388,24 @@ export class SqliteTaskAttemptRepository {
       execution: changes.execution ? { ...beforeTask.execution, ...changes.execution } : beforeTask.execution,
     });
 
-    if (setClauses.length === 0) return;
+    const hasCrashPreservationChange = Boolean(
+      changes.execution
+      && (
+        'crashPreservedAt' in changes.execution
+        || 'crashPreservedOwnerPid' in changes.execution
+        || 'crashPreservedReportPath' in changes.execution
+        || 'crashPreservedDiagnosticSummary' in changes.execution
+      ),
+    );
+    if (setClauses.length === 0) {
+      const executionChanges = changes.execution;
+      if (executionChanges && hasCrashPreservationChange) {
+        this.exec.runTransaction(() => {
+          this.syncCrashPreservationState(taskId, beforeTask, executionChanges);
+        });
+      }
+      return;
+    }
 
     // Atomically bump task-state version with every mutation
     setClauses.push('task_state_version = task_state_version + 1');
@@ -417,7 +437,16 @@ export class SqliteTaskAttemptRepository {
       const cols = setClauses.map((c) => c.split(/\s*=\s*/)[0]!.trim()).join(', ');
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }
-    this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    const shouldJournalStatusChange = changes.status !== undefined;
+    this.exec.runTransaction(() => {
+      if (changes.execution && hasCrashPreservationChange) {
+        this.syncCrashPreservationState(taskId, beforeTask, changes.execution);
+      }
+      this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      if (shouldJournalStatusChange) {
+        this.appendTaskJournalEntry(taskId);
+      }
+    });
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -459,7 +488,8 @@ export class SqliteTaskAttemptRepository {
              w.name AS workflow_name
       FROM tasks t${this.taskSelectJoin('t')}
       JOIN workflows w ON w.id = t.workflow_id
-      WHERE t.status = 'completed'
+      WHERE w.deleted_at IS NULL
+        AND t.status = 'completed'
       ORDER BY t.completed_at DESC
     `);
     return rows.map((row) => ({
@@ -481,7 +511,8 @@ export class SqliteTaskAttemptRepository {
         FROM events
         GROUP BY task_id
       ) e ON e.task_id = t.id
-      WHERE COALESCE(e.event_count, 0) > 0 OR t.status != 'pending'
+      WHERE w.deleted_at IS NULL
+        AND (COALESCE(e.event_count, 0) > 0 OR t.status != 'pending')
       ORDER BY COALESCE(e.max_created_at, t.completed_at, t.started_at, t.created_at) DESC
     `);
     return rows.map((row) => {
@@ -594,40 +625,43 @@ export class SqliteTaskAttemptRepository {
   // ── Attempt CRUD ─────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
-    this.exec.execRun(`
-      INSERT OR REPLACE INTO attempts (
-        id, node_id, attempt_number, queue_priority, status,
-        snapshot_commit, base_branch, upstream_attempt_ids,
-        command_override, prompt_override,
-        claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
-        branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
-        supersedes_attempt_id, created_at, merge_conflict
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?,
-        ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
-        ?, ?, ?
-      )
-    `, [
-      attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
-      attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
-      JSON.stringify(attempt.upstreamAttemptIds),
-      attempt.commandOverride ?? null, attempt.promptOverride ?? null,
-      attempt.claimedAt?.toISOString() ?? null,
-      attempt.startedAt?.toISOString() ?? null,
-      attempt.completedAt?.toISOString() ?? null,
-      attempt.exitCode ?? null, attempt.error ?? null,
-      attempt.lastHeartbeatAt?.toISOString() ?? null,
-      attempt.leaseExpiresAt?.toISOString() ?? null,
-      attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
-      attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
-      attempt.containerId ?? null,
-      attempt.supersedesAttemptId ?? null,
-      attempt.createdAt.toISOString(),
-      attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
-    ]);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`
+        INSERT OR REPLACE INTO attempts (
+          id, node_id, attempt_number, queue_priority, status,
+          snapshot_commit, base_branch, upstream_attempt_ids,
+          command_override, prompt_override,
+          claimed_at, started_at, completed_at, exit_code, error, last_heartbeat_at, lease_expires_at,
+          branch, commit_hash, summary, workspace_path, agent_session_id, container_id,
+          supersedes_attempt_id, created_at, merge_conflict
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?,
+          ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?
+        )
+      `, [
+        attempt.id, attempt.nodeId, 0, attempt.queuePriority, attempt.status,
+        attempt.snapshotCommit ?? null, attempt.baseBranch ?? null,
+        JSON.stringify(attempt.upstreamAttemptIds),
+        attempt.commandOverride ?? null, attempt.promptOverride ?? null,
+        attempt.claimedAt?.toISOString() ?? null,
+        attempt.startedAt?.toISOString() ?? null,
+        attempt.completedAt?.toISOString() ?? null,
+        attempt.exitCode ?? null, attempt.error ?? null,
+        attempt.lastHeartbeatAt?.toISOString() ?? null,
+        attempt.leaseExpiresAt?.toISOString() ?? null,
+        attempt.branch ?? null, attempt.commit ?? null, attempt.summary ?? null,
+        attempt.workspacePath ?? null, attempt.agentSessionId ?? null,
+        attempt.containerId ?? null,
+        attempt.supersedesAttemptId ?? null,
+        attempt.createdAt.toISOString(),
+        attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
+      ]);
+      this.appendAttemptJournalEntry(attempt.id);
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -711,7 +745,23 @@ export class SqliteTaskAttemptRepository {
 
     if (setClauses.length === 0) return;
     values.push(attemptId);
-    this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    const shouldJournalCompletion =
+      changes.status !== undefined ||
+      changes.completedAt !== undefined ||
+      changes.exitCode !== undefined ||
+      changes.error !== undefined ||
+      changes.branch !== undefined ||
+      changes.commit !== undefined ||
+      changes.summary !== undefined;
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      if (shouldJournalCompletion) {
+        const row = this.exec.queryOne('SELECT id FROM attempts WHERE id = ?', [attemptId]);
+        if (row) {
+          this.appendAttemptJournalEntry(attemptId);
+        }
+      }
+    });
   }
 
   claimAttemptForLaunch(
@@ -888,5 +938,31 @@ export class SqliteTaskAttemptRepository {
       [nodeId, selected.createdAt.toISOString(), cappedLimit],
     );
     return rows.map((row) => mapRowToAttempt(row));
+  }
+
+  private appendTaskJournalEntry(taskId: string): void {
+    const row = this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    if (!row) {
+      throw new Error(`Cannot journal missing task "${taskId}"`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType: 'task',
+      entityId: taskId,
+      op: 'upsert',
+      payload: row,
+    });
+  }
+
+  private appendAttemptJournalEntry(attemptId: string): void {
+    const row = this.exec.queryOne('SELECT * FROM attempts WHERE id = ?', [attemptId]);
+    if (!row) {
+      throw new Error(`Cannot journal missing attempt "${attemptId}"`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType: 'attempt',
+      entityId: attemptId,
+      op: 'upsert',
+      payload: row,
+    });
   }
 }

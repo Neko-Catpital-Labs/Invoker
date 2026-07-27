@@ -57,6 +57,7 @@ import type {
   TerminalSessionRecord,
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
+  WorkflowReadOptions,
 } from './adapter.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
 import { SCHEMA_DDL } from './sqlite-schema.js';
@@ -78,6 +79,7 @@ import type { SqliteExecutor } from './sqlite-executor.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 function normalizeWorkerActionStatus(status: string): string {
   return status === 'canceled' ? 'cancelled' : status;
@@ -1054,12 +1056,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, options);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(options?: WorkflowReadOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(options);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1557,8 +1559,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteWorkflow(workflowId: string): void {
-    const taskIds = this.getTaskIdsForWorkflow(workflowId);
-    this.runTransaction(() => {
+    const taskIds = this.runTransaction(() => {
+      const existing = this.queryOne(
+        'SELECT id FROM workflows WHERE id = ? AND deleted_at IS NULL',
+        [workflowId],
+      );
+      if (!existing) return [];
+      const workflowTaskIds = this.getTaskIdsForWorkflow(workflowId);
+      const deletedAt = Date.now();
+      const updatedAt = new Date(deletedAt).toISOString();
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
@@ -1598,7 +1607,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      this.db.run(
+        'UPDATE workflows SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
+        [deletedAt, updatedAt, workflowId],
+      );
+      const tombstone = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+      if (!tombstone) {
+        throw new Error(`Cannot journal missing workflow tombstone "${workflowId}"`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'workflow',
+        entityId: workflowId,
+        op: 'tombstone',
+        payload: tombstone,
+        createdAt: deletedAt,
+      });
+      return workflowTaskIds;
     });
     this.removeOutputFiles(taskIds);
   }
@@ -1606,10 +1630,24 @@ export class SQLiteAdapter implements PersistenceAdapter {
   // ── Events ────────────────────────────────────────────
 
   logEvent(taskId: string, eventType: string, payload?: unknown): void {
-    this.execRun(`
-      INSERT INTO events (task_id, event_type, payload)
-      VALUES (?, ?, ?)
-    `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+    this.runTransaction(() => {
+      this.execRun(`
+        INSERT INTO events (task_id, event_type, payload)
+        VALUES (?, ?, ?)
+      `, [taskId, eventType, payload ? JSON.stringify(payload) : null]);
+      const row = this.queryOne(
+        'SELECT * FROM events WHERE rowid = last_insert_rowid()',
+      );
+      if (!row) {
+        throw new Error(`Cannot journal missing event for task "${taskId}"`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'event',
+        entityId: String(row.id),
+        op: 'upsert',
+        payload: row,
+      });
+    });
   }
 
   getEvents(taskId: string): TaskEvent[];
