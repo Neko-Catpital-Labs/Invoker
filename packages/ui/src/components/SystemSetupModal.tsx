@@ -62,6 +62,8 @@ const setupStepLabels: Record<'choose' | 'review' | 'finish', string> = {
 
 type SlackFieldId = 'botToken' | 'appToken' | 'signingSecret' | 'channelId';
 
+const firstAgentWorkflowTutorialUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/blob/main/docs/tutorial-first-agent-workflow.md';
+
 const slackSetupFields: Array<{
   id: SlackFieldId;
   label: string;
@@ -122,7 +124,7 @@ export function SystemSetupModal({
     updateCli: true,
     installHelpers: true,
     fixTools: true,
-    slack: true,
+    slack: false,
   });
   const [slackFields, setSlackFields] = useState<Record<SlackFieldId, string>>({
     botToken: '',
@@ -216,7 +218,7 @@ export function SystemSetupModal({
     {
       checkId: 'slack',
       title: 'Set up Slack integration',
-      detail: 'Add Slack app values here; Slack is on by default.',
+      detail: 'Optional: opt in to Slack by adding app values here.',
       status: slackFieldsComplete ? 'Ready to run' : 'Needs fields',
     },
   ];
@@ -359,7 +361,19 @@ export function SystemSetupModal({
               )}
               {setupResult && (
                 <div className={`rounded border px-3 py-2 text-sm ${setupResult.ok ? 'border-green-700/50 bg-green-950/30 text-green-100' : 'border-red-700/50 bg-red-950/30 text-red-100'}`}>
-                  <div className="font-medium">{setupResult.ok ? 'Setup completed' : 'Setup completed with failures'}</div>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="font-medium">{setupResult.ok ? 'Setup completed' : 'Setup completed with failures'}</div>
+                    {currentSetupStep === 'finish' && (
+                      <a
+                        href={firstAgentWorkflowTutorialUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded bg-green-800/70 px-3 py-1.5 text-xs font-medium text-green-50 hover:bg-green-700"
+                      >
+                        Open the First Agent Workflow Tutorial
+                      </a>
+                    )}
+                  </div>
                   <div className="mt-2 space-y-2">
                     {setupResult.steps.map((step) => (
                       <div key={step.id} className="rounded bg-card/50 px-2 py-2">
