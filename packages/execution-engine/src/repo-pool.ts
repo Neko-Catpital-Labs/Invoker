@@ -492,8 +492,10 @@ export class RepoPool {
     }
     try {
       await this.execGit(['worktree', 'prune'], clonePath);
-    } catch {
-      /* best-effort; bashPreserveOrReset will surface failure */
+    } catch (err) {
+      traceExecution(
+        `[RepoPool] reconcileStaleWorktreePath: worktree prune failed clonePath=${clonePath} worktreePath=${worktreePath} error=${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
