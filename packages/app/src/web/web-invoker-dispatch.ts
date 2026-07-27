@@ -284,6 +284,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:set-merge-branch':
       case 'invoker:approve-merge':
       case 'invoker:fix-with-agent':
+      case 'invoker:spawn-review-gate-ci-repair':
       case 'invoker:edit-task-pool':
       case 'invoker:replace-task':
       case 'invoker:load-plan':
