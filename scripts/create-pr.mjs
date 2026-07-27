@@ -638,6 +638,24 @@ function assertStackHeadForStackedBase(baseBranch, currentBranch, mergifyState) 
   );
 }
 
+function assertNotPlanBaseForMergifyStack(baseBranch, currentBranch, mergifyState) {
+  if (!baseBranch.startsWith('plan/')) return;
+  if (!mergifyState.managed && !currentBranch.startsWith('stack/')) return;
+  throw new Error(
+    [
+      'Refusing to create or update a Mergify stack PR with a plan/ base branch.',
+      `Current branch: ${currentBranch}`,
+      `Requested base: ${baseBranch}`,
+      '',
+      'Recovery:',
+      '  Rebuild the working branch from origin/master, or from the live upstream stack/ branch.',
+      '  Cherry-pick the intended commits, publish with mergify stack push, then update PR metadata.',
+      '',
+      'This restriction applies only to Mergify stacks. Non-Mergify workflows may use plan/ integration branches.',
+    ].join('\n'),
+  );
+}
+
 function assertOpenHelperBasePr(nwo, baseBranch, dryRun) {
   if (!baseBranch.startsWith('pr/')) return;
   if (dryRun) return;
@@ -840,10 +858,10 @@ async function updatePr(nwo, prNum, title, body, dryRun) {
 async function main() {
   const args = parseArgs();
 
-  assertCleanPrBase(args.base);
-
   const currentBranch = getCurrentBranch();
   const mergifyState = getMergifyBranchState(currentBranch);
+  assertNotPlanBaseForMergifyStack(args.base, currentBranch, mergifyState);
+  assertCleanPrBase(args.base);
   assertStackHeadForStackedBase(args.base, currentBranch, mergifyState);
   let nwo = '';
   if (args.base.startsWith('pr/')) {
