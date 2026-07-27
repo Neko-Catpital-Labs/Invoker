@@ -3,7 +3,6 @@ export type HeadlessCommandKind = 'read' | 'write' | 'special';
 export interface HeadlessCommandDefinition {
   readonly name: string;
   readonly kind: HeadlessCommandKind;
-  readonly aliases?: readonly string[];
 }
 
 export const HEADLESS_SET_SUBCOMMANDS = [
@@ -54,30 +53,24 @@ export const HEADLESS_COMMANDS = [
   { name: 'cancel', kind: 'write' },
   { name: 'cancel-workflow', kind: 'write' },
   { name: 'delete-task', kind: 'write' },
-  { name: 'delete-workflow', kind: 'write', aliases: ['delete'] },
+  { name: 'delete', kind: 'write' },
   { name: 'delete-all', kind: 'write' },
   { name: 'open-terminal', kind: 'read' },
   { name: 'query-select', kind: 'read' },
   { name: 'worker', kind: 'read' },
-  { name: 'list', kind: 'read' },
-  { name: 'status', kind: 'read' },
-  { name: 'task-status', kind: 'read' },
-  { name: 'queue', kind: 'read' },
-  { name: 'audit', kind: 'read' },
-  { name: 'session', kind: 'read' },
-  { name: 'edit', kind: 'write' },
-  { name: 'edit-executor', kind: 'write' },
-  { name: 'edit-type', kind: 'write' },
-  { name: 'edit-agent', kind: 'write' },
-  { name: 'set-merge-mode', kind: 'write' },
 ] as const satisfies readonly HeadlessCommandDefinition[];
 
 export function findHeadlessCommandDefinition(command: string | undefined): HeadlessCommandDefinition | undefined {
   if (!command) return undefined;
-  return HEADLESS_COMMANDS.find((definition) => (
-    definition.name === command
-      || ('aliases' in definition && (definition.aliases as readonly string[]).includes(command))
-  ));
+  return HEADLESS_COMMANDS.find((definition) => definition.name === command);
+}
+
+export function isHeadlessHelpCommand(command: string | undefined): boolean {
+  return command === undefined || command === '--help' || command === '-h';
+}
+
+export function isRemovedHeadlessCommandAlias(command: string | undefined): boolean {
+  return command === 'set-merge-mode';
 }
 
 export function isMutatingSetSubcommand(subcommand: string | undefined): boolean {
