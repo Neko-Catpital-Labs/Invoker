@@ -55,6 +55,7 @@ interface TaskDAGProps {
   statusFilters?: Set<string>;
   runningTaskIds?: ReadonlySet<string>;
   surfaceMode?: 'default' | 'browser' | 'overlay';
+  suppressBrowserSurfaceAutoFit?: boolean;
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
@@ -173,7 +174,20 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds, surfaceMode = 'default' }: TaskDAGProps) {
+function TaskDAGInner({
+  tasks,
+  workflows,
+  selectedTaskId,
+  cameraCommand,
+  onTaskClick,
+  onTaskDoubleClick,
+  onTaskContextMenu,
+  onManualViewport,
+  statusFilters,
+  runningTaskIds,
+  surfaceMode = 'default',
+  suppressBrowserSurfaceAutoFit = false,
+}: TaskDAGProps) {
   const { fitView, setCenter, getZoom } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
@@ -181,6 +195,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const watchdogMissCountRef = useRef(0);
   const watchdogRecoveryAttemptedRef = useRef(false);
   const lastHandledCameraSeqRef = useRef(0);
+  const browserAutoFitDoneRef = useRef(false);
   const browserRemountDoneRef = useRef(false);
   const initFitFrameRef = useRef(0);
   const nodesRef = useRef<typeof nodes>([]);
@@ -190,8 +205,12 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   const lastLayoutRef = useRef<TaskGraphLayout | null>(null);
   const [flowInstanceKey, setFlowInstanceKey] = useState(0);
   const onInitHandler = useCallback(() => {
+    if (surfaceMode === 'browser' && suppressBrowserSurfaceAutoFit) {
+      browserAutoFitDoneRef.current = true;
+      return;
+    }
     initFitFrameRef.current = requestAnimationFrame(() => fitView({ padding: 0.2 }));
-  }, [fitView]);
+  }, [fitView, surfaceMode, suppressBrowserSurfaceAutoFit]);
 
   // Cancel a pending first-fit frame on unmount so it never fires against a
   // torn-down graph after the component has gone away.
@@ -519,7 +538,16 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   }, [cameraCommand, fitView, getZoom, nodes, setCenter]);
 
   useEffect(() => {
-    if (surfaceMode !== 'browser' || nodesRef.current.length === 0) return;
+    if (surfaceMode !== 'browser') {
+      browserAutoFitDoneRef.current = false;
+      return;
+    }
+    if (suppressBrowserSurfaceAutoFit) {
+      browserAutoFitDoneRef.current = true;
+      return;
+    }
+    if (nodesRef.current.length === 0 || browserAutoFitDoneRef.current) return;
+    browserAutoFitDoneRef.current = true;
 
     let cancelled = false;
     const frame = requestAnimationFrame(() => {
@@ -540,7 +568,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [fitView, getZoom, rawGraph.layoutKey, setCenter, surfaceMode]);
+  }, [fitView, getZoom, rawGraph.layoutKey, setCenter, surfaceMode, suppressBrowserSurfaceAutoFit]);
 
   useEffect(() => {
     if (surfaceMode !== 'browser' || nodesRef.current.length === 0 || browserRemountDoneRef.current) return;
