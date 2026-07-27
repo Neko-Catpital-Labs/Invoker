@@ -95,13 +95,6 @@ export function resolveHeadlessOwnerLaunchSpec(
   const mainJs = join(options.repoRoot, 'packages', 'app', 'dist', 'main.js');
   if (fileExists(electronCjs) && fileExists(mainJs)) {
     const launchArgs = buildElectronHeadlessArgs('packages/app/dist/main.js', ['owner-serve'], platform);
-    if (platform === 'linux') {
-      return {
-        command: 'xvfb-run',
-        args: ['--auto-servernum', './scripts/electron.cjs', ...launchArgs],
-        cwd: options.repoRoot,
-      };
-    }
     return {
       command: './scripts/electron.cjs',
       args: launchArgs,
