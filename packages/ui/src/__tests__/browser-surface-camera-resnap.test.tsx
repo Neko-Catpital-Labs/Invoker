@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
@@ -95,6 +95,19 @@ async function settleCamera(): Promise<void> {
       prev = total;
     }
   }
+}
+
+function movePlanGraphViewport(viewport: { x: number; y: number; zoom: number }): void {
+  getViewportMock.mockReturnValue(viewport);
+  const pane = within(screen.getByTestId('workflow-graph-content')).getByTestId('rf__pane');
+  fireEvent.pointerDown(pane);
+  fireEvent.pointerUp(pane);
+}
+
+function expectNoWorkflowFitInitialCommand(): void {
+  expect(workflowGraphSpy.commands.filter((command) => (
+    command?.kind === 'fitInitial' && command.scope === 'workflow'
+  ))).toEqual([]);
 }
 
 describe('Browser-surface camera (component)', () => {
@@ -187,7 +200,7 @@ describe('Browser-surface camera (component)', () => {
     await screen.findByTestId('workflow-node-wf-a');
     await settleCamera();
 
-    getViewportMock.mockReturnValue(savedViewport);
+    movePlanGraphViewport(savedViewport);
 
     fireEvent.click(await screen.findByTestId('sidebar-workflows'));
     await screen.findByTestId('selected-workflow-mini-dag');
@@ -204,11 +217,7 @@ describe('Browser-surface camera (component)', () => {
     await flushFrames(4);
 
     expect(setCenterMock).not.toHaveBeenCalled();
-    expect(workflowGraphSpy.commands.some((command) => (
-      command?.kind === 'fitInitial'
-      && command.scope === 'workflow'
-      && command.reason === 'sidebar-planning'
-    ))).toBe(false);
+    expectNoWorkflowFitInitialCommand();
   });
 
   it('returns to the workflow graph from the planning-home chat rail by restoring the saved viewport instead of fitting', async () => {
@@ -223,7 +232,7 @@ describe('Browser-surface camera (component)', () => {
     await settleCamera();
 
     // Simulate the user having panned/zoomed the graph before leaving it.
-    getViewportMock.mockReturnValue(savedViewport);
+    movePlanGraphViewport(savedViewport);
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
     await screen.findByTestId('planning-session-rail');
@@ -241,10 +250,6 @@ describe('Browser-surface camera (component)', () => {
 
     expect(fitViewMock).not.toHaveBeenCalled();
     expect(setCenterMock).not.toHaveBeenCalled();
-    expect(workflowGraphSpy.commands.some((command) => (
-      command?.kind === 'fitInitial'
-      && command.scope === 'workflow'
-      && command.reason === 'sidebar-planning'
-    ))).toBe(false);
+    expectNoWorkflowFitInitialCommand();
   });
 });

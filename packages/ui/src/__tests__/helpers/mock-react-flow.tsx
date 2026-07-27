@@ -61,10 +61,11 @@ export function createReactFlowMock() {
     // viewport move, forwarding a non-null event to onMoveStart (mirroring real
     // React Flow, which passes null for programmatic moves). It is a sibling of
     // the node elements, so node clicks do not trigger manual-viewport events.
+    const currentViewport = () => getViewport();
     const emitManualMove = (event: unknown) =>
-      onMoveStart?.(event, { x: 0, y: 0, zoom: getZoom() });
+      onMoveStart?.(event, currentViewport());
     const emitManualMoveEnd = (event: unknown) =>
-      onMoveEnd?.(event, { x: 0, y: 0, zoom: getZoom() });
+      onMoveEnd?.(event, currentViewport());
 
     const nodeElements = nodes.map((node) => {
       const NodeComponent = nodeTypes[node.type ?? ''];
