@@ -10,10 +10,9 @@
 
 import { execSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import dotenv from 'dotenv';
 
 import { SlackSurface, type SlackSurfaceConfig } from '@invoker/surfaces';
 import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter, WorkflowChannelRepository } from '@invoker/data-store';
@@ -28,24 +27,42 @@ import { createHarnessSessionDriverFactory, createPlanningCommandBuilder, create
 import { createWatchdog } from './watchdog.js';
 import { errMessage } from './util.js';
 import { acquireSlackConsumerLock } from './slack-consumer-lock.js';
+import { loadSlackOwnerEnv, runComplaintScoutDraftCommand } from './complaint-scout-bridge.js';
 const VERSION = '0.0.8';
-
-const REQUIRED_ENV = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_CHANNEL_ID'];
+let runDaemon = true;
 
 if (process.argv.includes('--version') || process.argv.includes('-V')) {
   console.log(VERSION);
   process.exit(0);
 }
 
-if (process.argv.includes('--help') || process.argv.includes('-h')) {
+const stagePlanDraftArg = process.argv.indexOf('--stage-plan-draft');
+if (stagePlanDraftArg !== -1) {
+  const payloadFile = process.argv[stagePlanDraftArg + 1];
+  if (!payloadFile) {
+    console.error('[slack-manager] fatal: --stage-plan-draft requires a payload JSON file');
+    process.exit(1);
+  }
+  runDaemon = false;
+  void runComplaintScoutDraftCommand(payloadFile)
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error(`[slack-manager] fatal: ${errMessage(err)}`);
+      process.exit(1);
+    });
+} else if (process.argv.includes('--help') || process.argv.includes('-h')) {
   console.log(`invoker-slack ${VERSION}
 
-Usage: invoker-slack [--version] [--help]
+Usage: invoker-slack [--version] [--help] [--stage-plan-draft payload.json]
 
 Standalone Slack manager daemon. Loads credentials from
 ~/.invoker/.slack-owner.env, or ~/.invoker/.env when the legacy file is absent
 (or INVOKER_SLACK_OWNER_ENV), and drives Invoker
 over IPC. Install via: npm i -g @neko-catpital-labs/invoker-slack
+
+--stage-plan-draft is a bounded one-shot used by the Slack complaint scout. It
+posts an existing Approve/Cancel plan review draft and exits; it does not start
+Socket Mode or submit a workflow.
 `);
   process.exit(0);
 }
@@ -73,15 +90,9 @@ async function main(): Promise<void> {
   const instanceId = randomUUID();
   const { log, logFn } = makeLog(instanceId);
 
-  const legacyOwnerEnvPath = path.join(homedir(), '.invoker', '.slack-owner.env');
-  const canonicalEnvPath = path.join(homedir(), '.invoker', '.env');
-  const ownerEnvPath = process.env.INVOKER_SLACK_OWNER_ENV
-    ?? (existsSync(legacyOwnerEnvPath) ? legacyOwnerEnvPath : canonicalEnvPath);
-  dotenv.config({ path: ownerEnvPath });
-
-  const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
-  if (missing.length > 0) {
-    log('error', `missing Slack credentials: ${missing.join(', ')} (looked in ${ownerEnvPath})`);
+  const env = loadSlackOwnerEnv();
+  if (env.missing.length > 0) {
+    log('error', `missing Slack credentials: ${env.missing.join(', ')} (looked in ${env.ownerEnvPath})`);
     process.exit(1);
   }
 
@@ -178,7 +189,9 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
-void main().catch((err) => {
-  console.error(`[slack-manager] fatal: ${errMessage(err)}`);
-  process.exit(1);
-});
+if (runDaemon) {
+  void main().catch((err) => {
+    console.error(`[slack-manager] fatal: ${errMessage(err)}`);
+    process.exit(1);
+  });
+}
