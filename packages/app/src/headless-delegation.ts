@@ -20,6 +20,12 @@ export const WORKFLOW_DELEGATION_TIMEOUT_MS = 60_000;
 /** start-ready --recreate-all can recreate dozens of workflows inline on the owner. */
 export const START_READY_RECREATE_ALL_DELEGATION_TIMEOUT_MS = 300_000;
 const START_READY_RECREATE_ALL_FLAG = '--recreate-all';
+const START_READY_FRESH_BASE_FLAGS = new Set([
+  '--fresh-base-failed',
+  '--fresh-base-failed-and-pending',
+  '--fresh-base-failed-pending-and-running',
+  '--fresh-base-all',
+]);
 
 // ---------------------------------------------------------------------------
 // DelegationOutcome — typed result union for delegation attempts
@@ -96,9 +102,13 @@ function looksLikeWorkflowId(target: unknown): boolean {
 }
 
 function startReadyDelegationTimeoutMs(args: readonly string[]): number {
-  return args.includes(START_READY_RECREATE_ALL_FLAG)
-    ? START_READY_RECREATE_ALL_DELEGATION_TIMEOUT_MS
-    : WORKFLOW_DELEGATION_TIMEOUT_MS;
+  if (args.some((arg) => START_READY_FRESH_BASE_FLAGS.has(arg))) {
+    return WORKFLOW_DELEGATION_TIMEOUT_MS;
+  }
+  if (args.includes(START_READY_RECREATE_ALL_FLAG)) {
+    return START_READY_RECREATE_ALL_DELEGATION_TIMEOUT_MS;
+  }
+  return WORKFLOW_DELEGATION_TIMEOUT_MS;
 }
 
 export function delegationTimeoutMs(
