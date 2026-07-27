@@ -2318,10 +2318,6 @@ startMainProcessBootstrap({
         commandService,
         taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
-        allowGraphMutation: invokerConfig.allowGraphMutation,
-        defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
-        getAutoFixAgent: () => invokerConfig.autoFixAgent,
-        getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
         killRunningTask,
       });
       apiServer = startApiServer({

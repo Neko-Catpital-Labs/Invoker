@@ -110,10 +110,6 @@ export interface WorkflowMutationFacadeDeps {
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
   autoApproveAIFixes?: boolean;
-  allowGraphMutation?: boolean;
-  defaultAutoFixRetries?: number;
-  getAutoFixAgent?: () => string | undefined;
-  getAutoFixExecutionModel?: () => string | undefined;
   /** Optional pre-kill hook for active task executions. */
   killRunningTask?: (taskId: string) => Promise<void>;
 }
