@@ -16,6 +16,7 @@ const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
+const NO_COMPLETE_PLAN_DRAFT_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
@@ -701,6 +702,33 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('does not route typed submit before a draft is ready', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'What should the plan include?',
+      draftPlanAvailable: false,
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('start a plan');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('What should the plan include?');
+    });
+
+    submitPlanningText('submit');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(NO_COMPLETE_PLAN_DRAFT_ERROR);
+    });
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+    expect(mock.api.planningChatSubmit).not.toHaveBeenCalled();
+    expect(mock.api.startReady).not.toHaveBeenCalled();
+  });
+
   it('submits a draft and starts ready work when the user types submit', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,
@@ -708,6 +736,7 @@ describe('Invoker terminal (component)', () => {
       reply: 'Here is the plan.',
       draftPlanAvailable: true,
       draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
+      draftPlanText: 'name: Mock Plan\ntasks:\n  - id: first\n    description: First\n',
     })) as any;
     render(<App />);
     await openPlanningTerminal();
@@ -733,6 +762,7 @@ describe('Invoker terminal (component)', () => {
     expect(screen.queryByRole('heading', { name: 'Plan graph' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('invoker-terminal-ready-bar')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit to Invoker' })).not.toBeInTheDocument();
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
     expect(mock.api.start).not.toHaveBeenCalled();
   });
 
