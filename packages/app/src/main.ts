@@ -1245,6 +1245,13 @@ function startHeadlessMode(): void {
             logger.info(`standalone startExecution returned ${started.length} tasks: [${started.map(t => t.id).join(', ')}]`, { module: 'ipc-delegate' });
             return started;
           }
+          case 'invoker:start-ready': {
+            const handler = workflowMutationDispatcher.get('invoker:start-ready');
+            if (!handler) {
+              throw new Error('No workflow mutation dispatcher registered for invoker:start-ready');
+            }
+            return handler(payload.args[0] as StartReadyRequest | undefined);
+          }
           case 'invoker:stop': {
             logger.info('stop — destroying all daemon executors', { module: 'ipc-delegate' });
             const failInFlightTasks = (): void => {
