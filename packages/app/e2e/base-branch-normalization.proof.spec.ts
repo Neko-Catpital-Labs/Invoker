@@ -3,7 +3,7 @@ import { test, expect, captureScreenshot, loadPlan } from './fixtures/electron-a
 const BASE_BRANCH_NORMALIZATION_PLAN = {
   name: 'Base branch normalization proof',
   repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker',
-  baseBranch: 'upstream/release',
+  baseBranch: 'release',
   onFinish: 'pull_request' as const,
   mergeMode: 'external_review' as const,
   tasks: [
@@ -16,7 +16,7 @@ const BASE_BRANCH_NORMALIZATION_PLAN = {
   ],
 };
 
-test('loadPlan preserves an explicit remote-qualified base ref', async ({ page }) => {
+test('loading a non-master plan base shows the normalized master value', async ({ page }) => {
   await loadPlan(page, BASE_BRANCH_NORMALIZATION_PLAN);
   await page.locator('.react-flow__node[data-testid$="base-branch-proof-task"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
@@ -33,8 +33,8 @@ test('loadPlan preserves an explicit remote-qualified base ref', async ({ page }
   await mergeGateNode.click();
 
   await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
-  await expect(page.getByText('Base Branch', { exact: true })).toBeVisible();
-  await expect(page.getByTestId('base-branch-display')).toHaveText('upstream/release');
+  await expect(page.getByText('Base Ref')).toBeVisible();
+  await expect(page.getByTestId('base-ref-input')).toHaveValue('master');
 
-  await captureScreenshot(page, 'base-branch-upstream-release');
+  await captureScreenshot(page, 'base-branch-normalized-to-master');
 });

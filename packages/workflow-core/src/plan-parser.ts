@@ -60,7 +60,7 @@ export interface RawPlan {
 
 
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
-  return normalizeWorkflowBaseBranch(plan.baseBranch, 'master');
+  return normalizeWorkflowBaseBranch(plan.baseBranch);
 }
 
 export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {
