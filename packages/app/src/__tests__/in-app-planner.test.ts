@@ -1847,6 +1847,7 @@ describe('rebindPlanningChatRepo', () => {
 });
 
 
+
 describe('plan draft sidecar mirror', () => {
   const planningCommandBuilder = vi.fn(() => ({ command: 'planner', args: ['prompt'] }));
 
