@@ -440,15 +440,16 @@ export function TaskPanel({
       </div>
 
 
-      {/* Base branch (merge gates only) */}
+      {/* Base ref (merge gates only) */}
       {task.config.isMergeNode && (
         <div className="flex items-start justify-between gap-3">
-          <span className="text-sm text-muted-foreground">Base Branch</span>
+          <span className="text-sm text-muted-foreground">Base Ref</span>
           <div className="text-right">
             <div data-testid="base-branch-display" className="font-mono text-xs text-foreground">
               {baseBranch ?? 'n/a'}
             </div>
-            <div className="text-[11px] text-muted-foreground">Task branches start from here.</div>
+            <div className="text-[11px] text-muted-foreground">Use master, origin/master, or upstream/master.</div>
+
           </div>
         </div>
       )}
