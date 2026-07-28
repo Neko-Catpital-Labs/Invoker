@@ -491,7 +491,7 @@ invoker_e2e_task_status() {
   invoker_e2e_run_headless task-status "$task_id" 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' \
     | grep -E '^(pending|running|completed|failed|blocked|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
-    | tail -1
+    | tail -1 || true
 }
 
 # Poll until task status equals expected (1s interval). Use after cancel/restart

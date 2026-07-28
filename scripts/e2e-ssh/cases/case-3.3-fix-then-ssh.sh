@@ -15,11 +15,15 @@ echo "==> case 3.3: delete-all"
 invoker_e2e_run_headless delete-all
 
 echo "==> case 3.3: submit plan"
-invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.3-fix-then-ssh.yaml"
+invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.3-fix-then-ssh.yaml" || true
 
-STA=$(invoker_e2e_task_status e2e-g333-taskA)
-STB=$(invoker_e2e_task_status e2e-g333-taskB)
-STC=$(invoker_e2e_task_status e2e-g333-taskC)
+invoker_e2e_wait_task_status e2e-g333-taskA completed
+invoker_e2e_wait_task_status e2e-g333-taskB completed
+invoker_e2e_wait_task_status e2e-g333-taskC completed
+
+STA=$(invoker_e2e_task_status e2e-g333-taskA || true)
+STB=$(invoker_e2e_task_status e2e-g333-taskB || true)
+STC=$(invoker_e2e_task_status e2e-g333-taskC || true)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ] || [ "$STC" != "completed" ]; then
   echo "FAIL case 3.3: expected all completed, got A='$STA' B='$STB' C='$STC'"
   invoker_e2e_run_headless status 2>&1 || true
