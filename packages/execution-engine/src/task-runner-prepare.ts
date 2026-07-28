@@ -132,6 +132,7 @@ export async function buildWorkRequest(
     executionGeneration: task.execution.generation ?? 0,
     actionType,
     inputs: {
+      workflowId: task.config.workflowId,
       description: task.description,
       command: task.config.command,
       prompt: task.config.prompt,

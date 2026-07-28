@@ -17,6 +17,7 @@ import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
+import { buildRemoteProgressJournalShell } from './remote-progress-journal.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   sshInteractiveCdFragment,
@@ -154,18 +155,44 @@ if [[ $# -ne 1 ]]; then
 fi
 
 PAYLOAD_PATH=$1
+trap '' HUP
+if declare -F invoker_remote_append_attempt_started >/dev/null 2>&1; then
+  invoker_remote_append_attempt_started || true
+fi
 (
-  bash "$PAYLOAD_PATH"
+  if declare -F invoker_remote_stream_output >/dev/null 2>&1; then
+    bash "$PAYLOAD_PATH" > >(invoker_remote_stream_output stdout) 2> >(invoker_remote_stream_output stderr)
+  else
+    bash "$PAYLOAD_PATH"
+  fi
 ) &
 PAYLOAD_PID=$!
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
-printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+emit_remote_heartbeat() {
+  printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+  if declare -F invoker_remote_append_heartbeat_checkpoint >/dev/null 2>&1; then
+    invoker_remote_append_heartbeat_checkpoint || true
+  fi
+}
+check_remote_tombstone() {
+  if declare -F invoker_remote_should_stop_for_tombstone >/dev/null 2>&1 && invoker_remote_should_stop_for_tombstone; then
+    INVOKER_REMOTE_TERMINATED_BY_TOMBSTONE=1
+    export INVOKER_REMOTE_TERMINATED_BY_TOMBSTONE
+    kill "$PAYLOAD_PID" >/dev/null 2>&1 || true
+    sleep 5
+    kill -0 "$PAYLOAD_PID" 2>/dev/null && kill -KILL "$PAYLOAD_PID" >/dev/null 2>&1 || true
+    return 0
+  fi
+  return 1
+}
+emit_remote_heartbeat
 (
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
     sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
-    printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    emit_remote_heartbeat
+    check_remote_tombstone || true
   done
 ) &
 HEARTBEAT_PID=$!
@@ -176,6 +203,9 @@ else
 fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
+if declare -F invoker_remote_append_attempt_finished >/dev/null 2>&1; then
+  invoker_remote_append_attempt_finished "$PAYLOAD_EXIT" || true
+fi
 exit "$PAYLOAD_EXIT"
 `;
   }
@@ -237,12 +267,25 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     payload: string;
     managed: boolean;
     envExports: string;
+    attemptId?: string;
+    workflowId?: string;
+    branch?: string;
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const remoteProgressJournalShell = buildRemoteProgressJournalShell({
+      runtimeDirVariable: 'SSH_EXECUTOR_RUNTIME_DIR',
+      journalToken: stagingTokenExpression,
+      workflowId: options.workflowId,
+      taskId: options.actionId,
+      attemptId: options.attemptId ?? options.executionId,
+      executionId: options.executionId,
+      branch: options.branch,
+      workspacePath: options.workspacePath,
+    });
     const managedWorkspaceBootstrap = options.managed && this.provisionCommand
       ? `ensure_managed_pnpm_workspace() {
   if [ "\${INVOKER_SKIP_MANAGED_PNPM_INSTALL:-}" = "1" ]; then
@@ -263,9 +306,12 @@ ensure_managed_pnpm_workspace
     return `set -euo pipefail
 ${this.remotePathNormalizeFunction()}
 ${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_HOME')}
-STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
+SSH_EXECUTOR_RUNTIME_DIR="$INVOKER_HOME/runtime/ssh-executor"
+export SSH_EXECUTOR_RUNTIME_DIR
+STAGING_DIR="$SSH_EXECUTOR_RUNTIME_DIR/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
+${remoteProgressJournalShell}
 cleanup_runtime() {
   trap - EXIT HUP INT TERM
   stop_bootstrap_heartbeat
@@ -276,10 +322,16 @@ INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${heartbeatIntervalSeconds}
 start_bootstrap_heartbeat() {
   printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+  if declare -F invoker_remote_append_heartbeat_checkpoint >/dev/null 2>&1; then
+    invoker_remote_append_heartbeat_checkpoint || true
+  fi
   (
     while true; do
       sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
       printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+      if declare -F invoker_remote_append_heartbeat_checkpoint >/dev/null 2>&1; then
+        invoker_remote_append_heartbeat_checkpoint || true
+      fi
     done
   ) &
   BOOTSTRAP_HEARTBEAT_PID=$!
@@ -564,6 +616,9 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       payload,
       managed: false,
       envExports,
+      attemptId: request.attemptId,
+      workflowId: request.inputs.workflowId,
+      branch: handle.branch,
     });
 
     bench('SshExecutor.startBYOWorkspace.spawnSshRemoteStdin.before', { workspacePath });
@@ -808,6 +863,9 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       payload,
       managed: true,
       envExports,
+      attemptId: request.attemptId,
+      workflowId: request.inputs.workflowId,
+      branch: experimentBranch,
     });
 
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.before', {
