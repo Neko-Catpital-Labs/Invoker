@@ -452,6 +452,42 @@ Failing checks
         self.assertIsNotNone(recorded.latest("repair-invalid", 6118, HEAD, "conflict"))
         self.assertEqual(recorded.count("comment-blocked", 6118, HEAD, f"repair-invalid:conflict:{HEAD}"), 1)
 
+    def test_run_cycle_skips_stale_invalid_repair_comment_after_head_moves(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def pr_detail(self, _repo, _number):
+                return {"state": "OPEN", "headRefOid": "b" * 40}
+
+        ledger = self.ledger()
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)])
+        item = pr(6326, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")})
+        stack = StackGroup("s", (item,))
+        outcome = exec_impl.RepairOutcome(
+            "blocked_invalid",
+            "PR Body",
+            HEAD,
+            HEAD,
+            errors=("human split based on stale PR Body failure",),
+        )
+        fake = FakeGh()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=fake):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                    with mock.patch.object(AdminBypassRepairer, "repair_check", return_value=outcome):
+                        exec_impl.run_cycle(args)
+        self.assertEqual(fake.comments, [])
+        recorded = Ledger(ledger.path)
+        self.assertEqual(recorded.count("repair-check", 6326, HEAD, "PR Body"), 1)
+        self.assertIsNotNone(recorded.latest("repair-evaluated", 6326, HEAD, "PR Body"))
+        self.assertIsNotNone(recorded.latest("repair-stale", 6326, HEAD, "PR Body"))
+        self.assertIsNone(recorded.latest("repair-invalid", 6326, HEAD, "PR Body"))
+        self.assertEqual(recorded.count("comment-blocked", 6326, HEAD, f"repair-invalid:PR Body:{HEAD}"), 0)
+
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())
         with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run") as run:
