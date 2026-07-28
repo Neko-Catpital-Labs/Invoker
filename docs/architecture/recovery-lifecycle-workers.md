@@ -97,6 +97,11 @@ On owner boot `startAutoStartedWorkers()` starts two tiers of built-in workers
 Saved per-worker desired state (Workers tab / `worker start|stop`) overrides
 the auto-start default in both directions.
 
+Implementation ownership follows the package layout: admin-requeue lives in
+`packages/mergify-admin-requeue`, and PR-maintenance cron shells live under
+`packages/execution-engine/scripts/pr-maintenance/`. The old `scripts/` paths
+remain compatibility shims for existing operator commands and repro scripts.
+
 ## Worker Wakeups
 
 A lifecycle event should carry enough context to make wakeups efficient, such as workflow ID, task ID, transition type, and generation where available. That context is an optimization, not authority.
