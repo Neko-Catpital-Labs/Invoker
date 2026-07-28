@@ -116,6 +116,7 @@ const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
 const PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+const PLANNING_CONTINUATION_LOST_MESSAGE = 'This planning chat lost its server session. Start a new chat to continue planning.';
 
 function appendPlanningTerminalSnapshot(snapshot: string | undefined, data: string): string {
   const next = `${snapshot ?? ''}${data}`;
@@ -2941,6 +2942,12 @@ export function App() {
       return;
     }
 
+    if (!planningSessionId && activePlanningSession.messages.length > 0) {
+      setPlanningSubmitError({ title: 'Planner could not respond', message: PLANNING_CONTINUATION_LOST_MESSAGE });
+      appendTerminalLine(PLANNING_CONTINUATION_LOST_MESSAGE, 'system', 'error');
+      return;
+    }
+
     const request = {
       message: input,
       presetKey: selectedPlanningPresetKey || undefined,
@@ -3005,6 +3012,17 @@ export function App() {
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
         appendTerminalLine(result.error, 'system', 'error');
+        if (result.sessionId) {
+          const failedSessionId = result.sessionId;
+          setPlanningSessions((prev) => prev.map((session) => (
+            session.id === previousSessionId
+              ? { ...session, id: failedSessionId }
+              : session
+          )));
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === previousSessionId ? failedSessionId : currentSessionId
+          ));
+        }
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
@@ -3030,6 +3048,7 @@ export function App() {
     keepPlanningStreamFailureForSessionIds,
     invoker,
     activePlanningSession.draftPlanAvailable,
+    activePlanningSession.messages.length,
     activePlanningSession.status,
     planningInput,
     planningSessionId,
