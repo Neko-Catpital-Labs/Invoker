@@ -304,7 +304,7 @@ Package boundaries and runtime invariants live in [ARCHITECTURE.md](../ARCHITECT
 
 ## Core concepts
 
-- **Plan** — YAML: tasks, `dependencies`, and workflow defaults. `baseBranch` is pinned to `master` today.
+- **Plan** — YAML: tasks, `dependencies`, and workflow defaults. `baseBranch` defaults to `master`, but you can set an explicit ref like `origin/master` or `upstream/main`.
 - **Workflow** — Persisted instance; generation and DB are source of truth.
 - **Task / attempt** — DAG node plus immutable execution records; **selected attempt** drives downstream validity and staleness.
 - **Executors** — `worktree`, `docker`, `ssh` (isolated workspaces).
