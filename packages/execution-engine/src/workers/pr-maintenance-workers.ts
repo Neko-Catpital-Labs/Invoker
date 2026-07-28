@@ -20,7 +20,8 @@ export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
 /**
  * Even spacing between each PR-maintenance worker's first tick, so the 5
- * workers sharing the cron lock (scripts/cron-pr-lib.sh) don't all wake on
+ * workers sharing the cron lock
+ * (packages/execution-engine/scripts/pr-maintenance/cron-pr-lib.sh) don't all wake on
  * the same intervalMs boundary and race for it every cycle.
  */
 export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 5;
@@ -42,28 +43,28 @@ export interface PrMaintenanceEntrypoint {
 
 const CODERABBIT_ADDRESS_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: CODERABBIT_ADDRESS_WORKER_KIND,
-  scriptRelativePath: 'scripts/cron-coderabbit-address.sh',
+  scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-coderabbit-address.sh',
   note: 'Runs the CodeRabbit review-address cron entrypoint under worker scheduling.',
 };
 
 const PR_CONFLICT_REBASE_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_CONFLICT_REBASE_WORKER_KIND,
-  scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh',
+  scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-pr-conflict-rebase.sh',
   note: 'Runs the PR conflict rebase-recreate cron entrypoint under worker scheduling.',
 };
 const PR_CI_FAILURE_SCAN_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_CI_FAILURE_SCAN_WORKER_KIND,
-  scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh',
+  scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-pr-ci-failure.sh',
   note: 'Runs the mapped-PR CI scan cron entrypoint under worker scheduling.',
 };
 const PR_ADMIN_BYPASS_LAND_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
-  scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh',
+  scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-pr-admin-bypass-land.sh',
   note: 'Runs the admin-bypass land babysitting cron entrypoint under worker scheduling.',
 };
 const PR_ORPHAN_REPAIR_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_ORPHAN_REPAIR_WORKER_KIND,
-  scriptRelativePath: 'scripts/cron-pr-orphan-repair.sh',
+  scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-pr-orphan-repair.sh',
   note: 'Classifies unmapped broken PRs and submits one combined Invoker repair task per PR.',
 };
 
