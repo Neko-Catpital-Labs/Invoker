@@ -14,6 +14,8 @@ export type ActionType = 'command' | 'ai_task' | 'reconciliation' | 'merge_gate'
 // ── Work Request ────────────────────────────────────────────
 
 export interface WorkRequestInputs {
+  /** Owning workflow id for remote runners that need workflow-level control metadata. */
+  workflowId?: string;
   workspacePath?: string;
   /** Human-readable task description for commit messages. */
   description?: string;

@@ -18,6 +18,13 @@ import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
 import {
+  buildRemoteProgressJournalBash,
+  REMOTE_PROGRESS_DIR_RELATIVE,
+  REMOTE_PROGRESS_JOURNAL_FILENAME,
+  REMOTE_PROGRESS_SEQUENCE_FILENAME,
+  REMOTE_PROGRESS_TOMBSTONES_FILENAME,
+} from './remote-progress-journal.js';
+import {
   shellPosixSingleQuote as sshGitShellQuote,
   sshInteractiveCdFragment,
   buildMirrorCloneScript,
@@ -145,6 +152,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
 
   private buildRunnerScript(): string {
     const intervalSeconds = this.remoteHeartbeatIntervalSeconds;
+    const progressJournalBash = buildRemoteProgressJournalBash();
     return `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -154,17 +162,28 @@ if [[ $# -ne 1 ]]; then
 fi
 
 PAYLOAD_PATH=$1
+${progressJournalBash}
+invoker_progress_attempt_started
 (
-  bash "$PAYLOAD_PATH"
+  bash "$PAYLOAD_PATH" > >(invoker_progress_stream_stdout) 2> >(invoker_progress_stream_stderr)
 ) &
 PAYLOAD_PID=$!
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
+invoker_progress_heartbeat
 printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
 (
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
     sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
+    if invoker_progress_has_workflow_tombstone; then
+      printf '%s\\n' 'Terminated after workflow tombstone synced from home.' > "$INVOKER_PROGRESS_TERMINATION_REASON_PATH"
+      kill "$PAYLOAD_PID" >/dev/null 2>&1 || true
+      sleep 2
+      kill -9 "$PAYLOAD_PID" >/dev/null 2>&1 || true
+      break
+    fi
+    invoker_progress_heartbeat
     printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
   done
 ) &
@@ -176,6 +195,14 @@ else
 fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
+TERMINATION_REASON=""
+if [ -f "$INVOKER_PROGRESS_TERMINATION_REASON_PATH" ]; then
+  TERMINATION_REASON=$(cat "$INVOKER_PROGRESS_TERMINATION_REASON_PATH" 2>/dev/null || true)
+  if [ "$PAYLOAD_EXIT" -eq 0 ]; then
+    PAYLOAD_EXIT=143
+  fi
+fi
+invoker_progress_attempt_finished "$PAYLOAD_EXIT" "$TERMINATION_REASON"
 exit "$PAYLOAD_EXIT"
 `;
   }
@@ -237,6 +264,10 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     payload: string;
     managed: boolean;
     envExports: string;
+    attemptId?: string;
+    workflowId?: string;
+    branch?: string;
+    agentSessionId?: string;
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
@@ -305,6 +336,21 @@ chmod 700 "$STAGING_DIR"
 ${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
+INVOKER_PROGRESS_SYNC_DIR="$INVOKER_HOME/${REMOTE_PROGRESS_DIR_RELATIVE}"
+INVOKER_PROGRESS_JOURNAL_PATH="$INVOKER_PROGRESS_SYNC_DIR/${REMOTE_PROGRESS_JOURNAL_FILENAME}"
+INVOKER_PROGRESS_SEQ_PATH="$INVOKER_PROGRESS_SYNC_DIR/${REMOTE_PROGRESS_SEQUENCE_FILENAME}"
+INVOKER_PROGRESS_TOMBSTONE_PATH="$INVOKER_PROGRESS_SYNC_DIR/${REMOTE_PROGRESS_TOMBSTONES_FILENAME}"
+INVOKER_PROGRESS_OUTPUT_OFFSET_PATH="$STAGING_DIR/output.offset"
+INVOKER_PROGRESS_TERMINATION_REASON_PATH="$STAGING_DIR/tombstone.reason"
+INVOKER_TASK_ID=${this.shellQuote(options.actionId)}
+INVOKER_ATTEMPT_ID=${this.shellQuote(options.attemptId ?? options.executionId)}
+INVOKER_WORKFLOW_ID=${this.shellQuote(options.workflowId ?? '')}
+INVOKER_REMOTE_WORKSPACE_PATH="$WT"
+INVOKER_REMOTE_BRANCH=${this.shellQuote(options.branch ?? '')}
+INVOKER_AGENT_SESSION_ID=${this.shellQuote(options.agentSessionId ?? '')}
+export INVOKER_PROGRESS_SYNC_DIR INVOKER_PROGRESS_JOURNAL_PATH INVOKER_PROGRESS_SEQ_PATH
+export INVOKER_PROGRESS_TOMBSTONE_PATH INVOKER_PROGRESS_OUTPUT_OFFSET_PATH INVOKER_PROGRESS_TERMINATION_REASON_PATH
+export INVOKER_TASK_ID INVOKER_ATTEMPT_ID INVOKER_WORKFLOW_ID INVOKER_REMOTE_WORKSPACE_PATH INVOKER_REMOTE_BRANCH INVOKER_AGENT_SESSION_ID
 ${options.envExports}
 start_bootstrap_heartbeat
 ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
@@ -564,6 +610,9 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       payload,
       managed: false,
       envExports,
+      attemptId: request.attemptId,
+      workflowId: request.inputs.workflowId,
+      agentSessionId,
     });
 
     bench('SshExecutor.startBYOWorkspace.spawnSshRemoteStdin.before', { workspacePath });
@@ -808,6 +857,10 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       payload,
       managed: true,
       envExports,
+      attemptId: request.attemptId,
+      workflowId: request.inputs.workflowId,
+      branch: experimentBranch,
+      agentSessionId,
     });
 
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.before', {

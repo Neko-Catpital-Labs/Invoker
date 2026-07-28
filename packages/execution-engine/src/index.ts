@@ -16,6 +16,8 @@ export * from './docker-executor.js';
 export * from './worktree-executor.js';
 export * from './merge-gate-executor.js';
 export * from './ssh-executor.js';
+export * from './ssh-sync-channel.js';
+export * from './remote-progress-journal.js';
 export {
   buildSshConnectionArgs,
   buildSshTransportOptions,
