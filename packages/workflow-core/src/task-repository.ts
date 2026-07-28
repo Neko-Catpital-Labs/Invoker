@@ -26,7 +26,7 @@ export interface WorkflowRecord {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
   externalDependencies?: ExternalDependency[];
   externalDependencyChanges?: ExternalDependencyChange[];
   detachedExternalDependencies?: DetachedExternalDependency[];
@@ -45,7 +45,7 @@ export interface WorkflowChanges {
   baseBranch?: string;
   featureBranch?: string;
   generation?: number;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
   reviewProvider?: string;
   /**
    * Presence semantics: a key explicitly set to `undefined` clears the
