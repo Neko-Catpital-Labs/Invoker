@@ -11,10 +11,6 @@ async function readTerminalOutputSnapshot(page: import('@playwright/test').Page,
   }, sessionId);
 }
 
-// Fixed by the next stack slice: today the local viewer never learns about a
-// planning chat created on the daemon owner, so opening its tmux tab reports
-// "not found"; even once opened, writes are rejected as read-only.
-test.fail();
 test('planning tmux tab opens and stays writable for a session created while running as a daemon-owner delegate', async ({ page }) => {
   const runtimeStatus = await page.evaluate(async () => window.invoker.getRuntimeStatus());
   expect(runtimeStatus.mode).toBe('daemon-owner');
