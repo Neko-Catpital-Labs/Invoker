@@ -258,12 +258,12 @@ export interface OrchestratorPersistence {
     onFinish?: string;
     baseBranch?: string;
     featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic' | 'external_review';
+    mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
   }): void;
-  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
+  updateWorkflow?(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[]; detachedExternalDependencies?: DetachedExternalDependency[] }): void;
   saveTask(workflowId: string, task: TaskState): void;
   updateTask(taskId: string, changes: TaskStateChanges): void;
   logEvent?(taskId: string, eventType: string, payload?: unknown): void;
@@ -276,7 +276,7 @@ export interface OrchestratorPersistence {
     repoUrl?: string;
     baseBranch?: string;
     onFinish?: string;
-    mergeMode?: 'manual' | 'automatic' | 'external_review';
+    mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
@@ -293,7 +293,7 @@ export interface OrchestratorPersistence {
       repoUrl?: string;
       baseBranch?: string;
       onFinish?: string;
-      mergeMode?: 'manual' | 'automatic' | 'external_review';
+      mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
       externalDependencies?: ExternalDependency[];
       externalDependencyChanges?: ExternalDependencyChange[];
       detachedExternalDependencies?: DetachedExternalDependency[];
@@ -325,7 +325,7 @@ export interface OrchestratorPersistence {
     intermediateRepoUrl?: string;
     baseBranch?: string;
     featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic' | 'external_review';
+    mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     detachedExternalDependencies?: DetachedExternalDependency[];
@@ -386,7 +386,7 @@ export interface PlanDefinition {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
   reviewProvider?: string;
   repoUrl?: string;
   intermediateRepoUrl?: string;
@@ -2229,7 +2229,7 @@ export class Orchestrator {
 
   editTaskMergeMode(
     taskId: string,
-    mergeMode: 'manual' | 'automatic' | 'external_review',
+    mergeMode: 'manual' | 'automatic' | 'external_review' | 'no_op',
   ): TaskState[] {
     return editTaskMergeModeImpl(this as unknown as TaskEditHost, taskId, mergeMode);
   }
@@ -2386,7 +2386,12 @@ export class Orchestrator {
       if (typeof m.onFinish === 'string') baseSaveWf.onFinish = m.onFinish;
       if (typeof m.baseBranch === 'string') baseSaveWf.baseBranch = m.baseBranch;
       if (typeof m.featureBranch === 'string') baseSaveWf.featureBranch = m.featureBranch;
-      if (m.mergeMode === 'manual' || m.mergeMode === 'automatic' || m.mergeMode === 'external_review') {
+      if (
+        m.mergeMode === 'manual'
+        || m.mergeMode === 'automatic'
+        || m.mergeMode === 'external_review'
+        || m.mergeMode === 'no_op'
+      ) {
         baseSaveWf.mergeMode = m.mergeMode;
       }
       if (Array.isArray(m.externalDependencies)) {
@@ -3079,6 +3084,22 @@ export class Orchestrator {
 
   getWorkflowIds(): string[] {
     return Array.from(this.activeWorkflowIds);
+  }
+
+  /** Merge mode for a workflow, used by bulk start-ready exclusion selectors. */
+  getWorkflowMergeMode(workflowId: string): 'manual' | 'automatic' | 'external_review' | 'no_op' | undefined {
+    const workflow = this.persistence.loadWorkflow?.(workflowId)
+      ?? this.persistence.listWorkflows().find((candidate) => candidate.id === workflowId);
+    const mergeMode = workflow?.mergeMode;
+    if (
+      mergeMode === 'manual'
+      || mergeMode === 'automatic'
+      || mergeMode === 'external_review'
+      || mergeMode === 'no_op'
+    ) {
+      return mergeMode;
+    }
+    return undefined;
   }
 
   /**
