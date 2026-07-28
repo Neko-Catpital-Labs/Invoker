@@ -135,6 +135,39 @@ describe('WorkflowInspector', () => {
     expect(onSetMergeMode).toHaveBeenCalledWith('wf-1', 'external_review');
   });
 
+  it('shows and edits the base ref for a merge gate', async () => {
+    const onSetMergeBranch = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', baseBranch: 'origin/main' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeBranch={onSetMergeBranch}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const input = screen.getByTestId('base-ref-input');
+    expect(screen.getByText('Base Ref')).toBeInTheDocument();
+    expect(input).toHaveValue('origin/main');
+    expect(screen.getByTestId('base-ref-help')).toHaveTextContent('Use master, origin/master, or upstream/master.');
+
+    fireEvent.change(input, { target: { value: 'upstream/release' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(onSetMergeBranch).toHaveBeenCalledWith('wf-1', 'upstream/release');
+    });
+  });
+
   it('keeps the PR link for a completed review gate in a completed workflow', () => {
     render(
       <WorkflowInspector
@@ -753,38 +786,6 @@ describe('WorkflowInspector', () => {
     expect(screen.getByTestId('inspector-pending-fix-error')).toHaveTextContent(
       'Approval blocked: capability mismatch',
     );
-  });
-  it('normalizes legacy ssh cleanup-tail blobs in the inspector error card', () => {
-    const task = makeTask({
-      status: 'failed',
-      execution: {
-        error: [
-          '{"type":"item.completed","item":{"type":"agent_message","text":"Done"}}',
-          '{"type":"turn.completed","usage":{"input_tokens":1}}',
-          'main: line 1: pop_var_context: head of shell_variables not a function context',
-          '[SshExecutor] Recording task result and pushing branch on remote...',
-        ].join('\n'),
-        exitCode: 1,
-      },
-    });
-
-    render(
-      <WorkflowInspector
-        workflow={workflow}
-        task={task}
-        collapsed={false}
-        advancedExpanded={false}
-        onApprove={vi.fn()}
-        onReject={vi.fn()}
-        onToggleCollapsed={() => {}}
-        onToggleAdvanced={() => {}}
-      />,
-    );
-
-    expect(screen.getByText(
-      'Executor cleanup failed (ssh remote finalize): bash pop_var_context after remote run completed.',
-    )).toBeInTheDocument();
-    expect(screen.queryByText(/Recording task result and pushing branch on remote/)).not.toBeInTheDocument();
   });
   it('surfaces crash-preserved inspection actions for orphaned running tasks', () => {
     const onRestartTask = vi.fn();

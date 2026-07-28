@@ -28,20 +28,28 @@ test('pending review gate target repo row', async ({ page }) => {
   });
   expect(mergeGateTaskId).toBeTruthy();
   const workflowId = String(mergeGateTaskId).replace('__merge__', '');
-  await page.evaluate(
-    async ({ workflowId: wf }) => {
-      await window.invoker.setMergeBranch(wf, 'master');
-    },
-    { workflowId },
-  );
 
   const mergeGateNode = page.locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`).first();
   await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
   await mergeGateNode.click();
 
   await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
-  await expect(page.getByText('Base Branch')).toBeVisible();
-  await expect(page.getByTestId('base-branch-display')).toHaveText('master');
+  await expect(page.getByText('Base Ref')).toBeVisible();
+  const input = page.getByTestId('base-ref-input');
+  await expect(input).toHaveValue('master');
+  await input.fill('upstream/master');
+  await input.blur();
+  await expect.poll(
+    async () => page.evaluate(
+      async ({ workflowId: wf }) => {
+        const workflows = await window.invoker.listWorkflows();
+        return workflows.find((workflow: { id: string; baseBranch?: string }) => workflow.id === wf)?.baseBranch ?? null;
+      },
+      { workflowId },
+    ),
+    { timeout: 15000 },
+  ).toBe('upstream/master');
+  await expect(input).toHaveValue('upstream/master');
   await expect(page.getByText('PR target repo')).toBeVisible();
   await expect(page.getByText('github.com/Neko-Catpital-Labs/Invoker')).toBeVisible();
 

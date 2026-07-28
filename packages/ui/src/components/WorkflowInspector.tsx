@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReviewGateArtifact, ReviewGateQueryResponse, TaskState, WorkflowMeta } from '../types.js';
 import { getEffectiveVisualStatus, getStatusColor } from '../lib/colors.js';
-import { formatTaskExecutionErrorForDisplay } from '../lib/task-execution-error-display.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
 import { subscribeVisibilityAwarePoll } from '../hooks/visibilityAwarePoll.js';
 import { mutationFailureTitle } from '../lib/mutation-failure-display.js';
@@ -311,6 +310,7 @@ export function WorkflowInspector({
   onReject,
   onRestartTask,
   onRecreateTask,
+  onSetMergeBranch,
   onSetMergeMode,
   onToggleCollapsed,
   onToggleAdvanced,
@@ -319,6 +319,7 @@ export function WorkflowInspector({
   const [editPromptValue, setEditPromptValue] = useState('');
   const [isEditingCommand, setIsEditingCommand] = useState(false);
   const [editCommandValue, setEditCommandValue] = useState('');
+  const [branchValue, setBranchValue] = useState(workflow?.baseBranch ?? '');
   const [taskLogEvents, setTaskLogEvents] = useState<TaskAuditEvent[]>([]);
   const [taskLogError, setTaskLogError] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(true);
@@ -330,6 +331,9 @@ export function WorkflowInspector({
     setIsEditingCommand(false);
     setEditCommandValue(task?.config.command ?? '');
   }, [task?.id, task?.config.prompt, task?.config.command]);
+  useEffect(() => {
+    setBranchValue(workflow?.baseBranch ?? '');
+  }, [workflow?.id, workflow?.baseBranch]);
 
   useEffect(() => {
     if (!task) {
@@ -448,7 +452,6 @@ export function WorkflowInspector({
   const logEntries = taskLogEvents.map(taskEventToLogEntry);
   const visibleLogEntries = logEntries
     .filter((entry) => LOG_LEVEL_RANK[entry.level] >= LOG_LEVEL_RANK[logLevelFilter]);
-  const displayError = formatTaskExecutionErrorForDisplay(task?.execution.error);
   const selectedWorkflowId = workflow?.id ?? task?.config.workflowId;
   const timelineDecisionTitle = task ? 'Worker decisions' : 'Workflow decisions';
   const timelineDecisionEmptyText = task
@@ -478,6 +481,16 @@ export function WorkflowInspector({
     }
   };
 
+  const saveBranch = () => {
+    const trimmed = branchValue.trim();
+    if (!trimmed) {
+      setBranchValue(workflow?.baseBranch ?? '');
+      return;
+    }
+    if (workflow?.id && trimmed !== (workflow.baseBranch ?? '')) {
+      void onSetMergeBranch?.(workflow.id, trimmed);
+    }
+  };
 
   if (collapsed) {
     return (
@@ -524,16 +537,16 @@ export function WorkflowInspector({
             )}
             {formatStatus(task?.status ?? workflow?.status)}
           </div>
-          {displayError && (
+          {task?.execution.error && (
             <div className="mt-3 border-t border-red-500/30 pt-2">
               <h3 className="text-[11px] uppercase tracking-wide text-red-300">Error</h3>
-              <p className="mt-1 text-xs text-red-300 break-words">{displayError}</p>
+              <p className="mt-1 text-xs text-red-300 break-words">{task.execution.error}</p>
               {task.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
                 <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
               )}
             </div>
           )}
-          {!displayError && task?.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
+          {!task?.execution.error && task?.execution.exitCode !== undefined && task.execution.exitCode !== 0 && (
             <p className="mt-2 text-xs text-red-300">Exit code: {task.execution.exitCode}</p>
           )}
           {task?.execution.pendingFixError && (
@@ -751,18 +764,44 @@ export function WorkflowInspector({
 
         {isMergeNode && (
           <section className="rounded border border-border bg-secondary/70 p-3 space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <span className="text-xs uppercase tracking-wide text-muted-foreground">Base Branch</span>
-              <div className="max-w-[210px] text-right">
-                <div
-                  data-testid="base-branch-display"
-                  className="font-mono text-xs text-foreground"
-                >
-                  {workflow?.baseBranch ?? 'n/a'}
+            {onSetMergeBranch && workflow?.id ? (
+              <label className="flex items-start justify-between gap-3">
+                <span className="pt-2 text-xs uppercase tracking-wide text-muted-foreground">Base Ref</span>
+                <div className="max-w-[210px] text-right space-y-1">
+                  <input
+                    data-testid="base-ref-input"
+                    value={branchValue}
+                    onChange={(event) => setBranchValue(event.target.value)}
+                    onBlur={saveBranch}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        (event.target as HTMLInputElement).blur();
+                      }
+                      if (event.key === 'Escape') {
+                        setBranchValue(workflow?.baseBranch ?? '');
+                      }
+                    }}
+                    className="min-w-0 w-full rounded border border-border-strong bg-muted px-2 py-1 text-right font-mono text-xs text-foreground focus:border-border-strong focus:outline-none"
+                  />
+                  <div data-testid="base-ref-help" className="text-[11px] text-muted-foreground">
+                    Use master, origin/master, or upstream/master.
+                  </div>
                 </div>
-                <div className="text-[11px] text-muted-foreground">Task branches start from here.</div>
+              </label>
+            ) : (
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">Base Ref</span>
+                <div className="max-w-[210px] text-right">
+                  <div
+                    data-testid="base-branch-display"
+                    className="font-mono text-xs text-foreground"
+                  >
+                    {workflow?.baseBranch ?? 'n/a'}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">Use master, origin/master, or upstream/master.</div>
+                </div>
               </div>
-            </div>
+            )}
             {(workflow?.featureBranch ?? task?.config.featureBranch) && (
               <div className="flex items-start justify-between gap-3">
                 <span className="text-xs uppercase tracking-wide text-muted-foreground">Feature Branch</span>
@@ -993,7 +1032,7 @@ export function WorkflowInspector({
               <div>workflow id: {workflow?.id ?? 'n/a'}</div>
               <div>task id: {task?.id ?? 'n/a'}</div>
               <div>feature branch: {workflow?.featureBranch ?? task?.config.featureBranch ?? 'n/a'}</div>
-              <div>base branch: {workflow?.baseBranch ?? 'n/a'}</div>
+              <div>base ref: {workflow?.baseBranch ?? 'n/a'}</div>
               <div>heartbeat: {String(task?.execution.lastHeartbeatAt ?? 'n/a')}</div>
               <div>pool id: {task?.config.poolId ?? 'n/a'}</div>
             </div>
