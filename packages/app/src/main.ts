@@ -1105,6 +1105,7 @@ function startHeadlessMode(): void {
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
+        repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
       });
 
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
@@ -1149,6 +1150,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1164,6 +1166,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
           case 'invoker:planning-chat-submit': {
