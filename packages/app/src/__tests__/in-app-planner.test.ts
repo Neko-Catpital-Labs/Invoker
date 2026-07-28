@@ -23,6 +23,7 @@ import {
   type InAppPlanningChatSession,
   type LoadedGeneratedPlan,
 } from '../in-app-planner.js';
+import type { PlanningRepoPool } from '../planning-chat-worktree.js';
 import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
 
 const VALID_PLAN = `Here is the plan.
@@ -1417,6 +1418,212 @@ tasks:
 
     expect(resetPlanningChat({ sessionId: 'session-1' }, { sessions })).toEqual({ ok: true });
     expect(sessions.has('session-1')).toBe(false);
+  });
+});
+
+describe('planning chat worktree provisioning', () => {
+  const planningCommandBuilder = vi.fn(() => ({ command: 'planner', args: ['prompt'] }));
+
+  function createFakeRepoPool(
+    worktreePath: string,
+  ): PlanningRepoPool & { release: ReturnType<typeof vi.fn>; softRelease: ReturnType<typeof vi.fn> } {
+    const release = vi.fn(async () => {});
+    const softRelease = vi.fn();
+    const acquireWorktree = vi.fn(async (_repoUrl: string, branch: string) => ({
+      clonePath: '/fake/clone',
+      worktreePath,
+      branch,
+      release,
+      softRelease,
+    }));
+    return {
+      ensureCloneThroughRepoQueue: vi.fn(async () => '/fake/clone'),
+      resolveBaseCommit: vi.fn(async () => 'fake-head-sha'),
+      acquireWorktree,
+      externalWorktreePath: vi.fn(() => worktreePath),
+      release,
+      softRelease,
+    };
+  }
+
+  it('provisions a worktree and persists the binding fields when repoPool + config.defaultRepoUrl are set', async () => {
+    const worktreePath = '/fake/worktree/create-session';
+    const repoPool = createFakeRepoPool(worktreePath);
+    const sessions = createInAppPlanningChatSessions();
+    const upsert = vi.fn();
+
+    const created = await createPlanningChatSession({}, {
+      config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      repoPool,
+      planningSessionStore: {
+        upsertInAppPlanningSession: upsert,
+        updateInAppPlanningSession: vi.fn(),
+        deleteInAppPlanningSession: vi.fn(),
+      },
+    });
+    if (!created.ok) throw new Error(created.error);
+    const sessionId = created.session.id;
+    const expectedBranch = `invoker/planning/${sessionId}`;
+
+    expect(repoPool.ensureCloneThroughRepoQueue).toHaveBeenCalledWith('https://example.com/repo.git');
+    expect(repoPool.resolveBaseCommit).toHaveBeenCalledWith('https://example.com/repo.git', 'main');
+    expect(repoPool.acquireWorktree).toHaveBeenCalledWith(
+      'https://example.com/repo.git',
+      expectedBranch,
+      'fake-head-sha',
+      sessionId,
+    );
+    expect(repoPool.softRelease).toHaveBeenCalledTimes(1);
+
+    const session = sessions.get(sessionId);
+    expect(session?.repoUrl).toBe('https://example.com/repo.git');
+    expect(session?.baseBranch).toBe('main');
+    expect(session?.baseCommit).toBe('fake-head-sha');
+    expect(session?.worktreePath).toBe(worktreePath);
+    expect(session?.worktreeBranch).toBe(expectedBranch);
+    expect(session?.conversation.workingDir).toBe(worktreePath);
+
+    expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'fake-head-sha',
+      worktreePath,
+      worktreeBranch: expectedBranch,
+    }));
+  });
+
+  it('falls back to deps.workingDir exactly as before when no repoPool is supplied', async () => {
+    const workingDir = mkdtempSync(join(tmpdir(), 'in-app-no-repo-pool-'));
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const created = await createPlanningChatSession({}, {
+        config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        workingDir,
+      });
+      if (!created.ok) throw new Error(created.error);
+      const session = sessions.get(created.session.id);
+      expect(session?.repoUrl).toBeUndefined();
+      expect(session?.baseBranch).toBeUndefined();
+      expect(session?.baseCommit).toBeUndefined();
+      expect(session?.worktreePath).toBeUndefined();
+      expect(session?.worktreeBranch).toBeUndefined();
+      expect(session?.conversation.workingDir).toBe(workingDir);
+    } finally {
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to deps.workingDir when repoPool is set but no defaultRepoUrl is configured', async () => {
+    const workingDir = mkdtempSync(join(tmpdir(), 'in-app-no-default-repo-'));
+    try {
+      const repoPool = createFakeRepoPool('/fake/should-not-be-used');
+      const sessions = createInAppPlanningChatSessions();
+      const created = await createPlanningChatSession({}, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        workingDir,
+        repoPool,
+      });
+      if (!created.ok) throw new Error(created.error);
+      expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+      const session = sessions.get(created.session.id);
+      expect(session?.worktreePath).toBeUndefined();
+      expect(session?.conversation.workingDir).toBe(workingDir);
+    } finally {
+      rmSync(workingDir, { recursive: true, force: true });
+    }
+  });
+
+  it('restore reconstructs a missing worktree for a session that has one recorded', async () => {
+    const worktreePath = '/fake/worktree/restore-missing';
+    const repoPool = createFakeRepoPool(worktreePath);
+    repoPool.externalWorktreePath = vi.fn(() => '/fake/worktree/restore-missing-nonexistent');
+
+    const record: InAppPlanningSessionRecord = {
+      id: 'planning-worktree-restore',
+      title: 'Restored plan with worktree',
+      presetKey: 'codex',
+      status: 'still_discussing',
+      confirmationMode: 'require',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'stored-base-commit',
+      worktreePath: '/fake/worktree/restore-missing-nonexistent',
+      worktreeBranch: 'invoker/planning/planning-worktree-restore',
+      messages: [],
+      pendingResponse: false,
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+    };
+
+    const sessions = createInAppPlanningChatSessions();
+    await restorePlanningChatSessions([record], {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      repoPool,
+    });
+
+    expect(repoPool.acquireWorktree).toHaveBeenCalledWith(
+      'https://example.com/repo.git',
+      'invoker/planning/planning-worktree-restore',
+      'stored-base-commit',
+      'planning-worktree-restore',
+    );
+    expect(repoPool.resolveBaseCommit).not.toHaveBeenCalled();
+    const session = sessions.get('planning-worktree-restore');
+    expect(session?.worktreePath).toBe(worktreePath);
+    expect(session?.conversation.workingDir).toBe(worktreePath);
+  });
+
+  it('restore leaves worktreePath untouched when the recorded path already exists on disk', async () => {
+    const existingWorktreePath = mkdtempSync(join(tmpdir(), 'in-app-restore-present-'));
+    try {
+      const repoPool = createFakeRepoPool(existingWorktreePath);
+      repoPool.externalWorktreePath = vi.fn(() => existingWorktreePath);
+
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-worktree-present',
+        title: 'Restored plan with existing worktree',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        confirmationMode: 'require',
+        repoUrl: 'https://example.com/repo.git',
+        baseBranch: 'main',
+        baseCommit: 'stored-base-commit',
+        worktreePath: existingWorktreePath,
+        worktreeBranch: 'invoker/planning/planning-worktree-present',
+        messages: [],
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:00.000Z',
+      };
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        repoPool,
+      });
+
+      expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+      const session = sessions.get('planning-worktree-present');
+      expect(session?.worktreePath).toBe(existingWorktreePath);
+      expect(session?.conversation.workingDir).toBe(existingWorktreePath);
+    } finally {
+      rmSync(existingWorktreePath, { recursive: true, force: true });
+    }
   });
 });
 

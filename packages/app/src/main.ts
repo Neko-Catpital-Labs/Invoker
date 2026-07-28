@@ -1106,6 +1106,7 @@ function startHeadlessMode(): void {
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
+        repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
       });
 
       let testPlanningChatResponse:
@@ -1161,6 +1162,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1189,6 +1191,7 @@ function startHeadlessMode(): void {
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
               plannerReplyOverride,
+              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
           case 'invoker:planning-chat-submit': {
