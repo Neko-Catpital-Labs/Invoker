@@ -121,6 +121,34 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
+  it('persists sanitized assistant text when a turn has no current draft', async () => {
+    const saveConversation = vi.fn();
+    const conversationRepo = {
+      loadConversation: vi.fn(() => null),
+      saveConversation,
+      deleteConversation: vi.fn(),
+    };
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'abc-123',
+      conversationRepo: conversationRepo as any,
+      plannerRetryLimit: 0,
+    });
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_REPLY_LINE}`));
+    const reply = await conversation.sendMessage('Draft it');
+
+    expect(reply).toBe('Drafted the plan. Summary: one step.');
+    expect(saveConversation).toHaveBeenCalledTimes(1);
+
+    const savedMessages = saveConversation.mock.calls[0]?.[1] as Array<{ role: string; content: string }>;
+    expect(savedMessages[savedMessages.length - 1]).toEqual({
+      role: 'assistant',
+      content: 'Drafted the plan. Summary: one step.',
+    });
+    expect(savedMessages[savedMessages.length - 1]?.content).not.toContain(SUBMIT_REPLY_LINE);
+  });
+
   it('routes approval through the review flow instead of a submit reply', () => {
     const conversation = new PlanConversation({});
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
