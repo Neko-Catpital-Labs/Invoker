@@ -352,6 +352,69 @@ describe('SshExecutor managed workspace mode', () => {
     }
   });
 
+  it('exports remote invoker env variables to child provision commands', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteHeartbeatIntervalSeconds: 1,
+      remoteInvokerHome: '~/.invoker-e2e',
+      provisionCommand:
+        'bash -c \'printf "%s\\n" "$INVOKER_HOME" > "$HOME/provision-home.log"; ' +
+        'printf "%s\\n" "$INVOKER_ENV_FILE" > "$HOME/provision-env-file.log"; mkdir -p node_modules\'',
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+
+    await ssh.start(makeRequest({
+      actionType: 'command',
+      inputs: {
+        command: "printf 'payload-ran\\n' > payload.out",
+        description: 'run tests',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const bootstrapScript = writeMock.mock.calls[0]![0] as string;
+    const workspaceMatch = bootstrapScript.match(/WT=\$\(normalize_remote_path '([^']+)'\)/);
+    if (!workspaceMatch?.[1]) {
+      throw new Error('Managed SSH bootstrap did not embed a workspace path');
+    }
+
+    const fakeHome = mkdtempSync(join(tmpdir(), 'ssh-provision-export-home-'));
+    try {
+      const workspacePath = workspaceMatch[1].replace(/^~(?=\/|$)/, fakeHome);
+      mkdirSync(workspacePath, { recursive: true });
+      writeFileSync(join(workspacePath, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+
+      const childProcessModule = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+      const result = childProcessModule.spawnSync('/bin/bash', ['-c', bootstrapScript], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: fakeHome, PATH: process.env.PATH ?? '' },
+      });
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(join(fakeHome, 'provision-home.log'), 'utf8')).toBe(`${fakeHome}/.invoker-e2e\n`);
+      expect(readFileSync(join(fakeHome, 'provision-env-file.log'), 'utf8')).toBe(`${fakeHome}/.invoker-e2e/env.sh\n`);
+      expect(readFileSync(join(workspacePath, 'payload.out'), 'utf8')).toBe('payload-ran\n');
+    } finally {
+      rmSync(fakeHome, { recursive: true, force: true });
+      proc.emit('close', 0, null);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  });
+
   it('reuses a managed SSH worktree by actionId when the old base is still compatible', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
@@ -1040,6 +1103,8 @@ describe('SshExecutor entry lifecycle', () => {
     const writeMock = (sshProcess.stdin as any).write as ReturnType<typeof vi.fn>;
     const script = writeMock.mock.calls[0]![0] as string;
     expect(script).toContain('INVOKER_ENV_FILE="$INVOKER_HOME/env.sh"');
+    expect(script).toContain('export INVOKER_HOME');
+    expect(script).toContain('export INVOKER_ENV_FILE');
     expect(script).toContain('. "$INVOKER_ENV_FILE"');
 
     sshProcess.emit('close', 0, null);
@@ -1374,6 +1439,7 @@ describe('SshExecutor entry lifecycle', () => {
     // bash would NOT expand) and avoiding base64 runtime delivery.
     expect(script).not.toContain('base64 -d');
     expect(script).toContain("INVOKER_HOME='~/.invoker'");
+    expect(script).toContain('export INVOKER_HOME');
     expect(script).toContain('WT=$(normalize_remote_path \'~/.invoker/worktrees/');
     expect(script).toContain(`if [[ "$path" == '~' ]]; then`);
     expect(script).not.toContain('WT="~/.invoker/');
@@ -1585,6 +1651,7 @@ describe('SshExecutor entry lifecycle', () => {
 
     expect(script).not.toContain('base64 -d');
     expect(script).toContain("INVOKER_HOME='/opt/invoker'");
+    expect(script).toContain('export INVOKER_HOME');
     expect(script).toContain('STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/');
     expect(script).toContain('WT=$(normalize_remote_path \'/opt/invoker/worktrees/');
     expect(script).toContain('RUNNER_PATH="$STAGING_DIR/runner.sh"');
