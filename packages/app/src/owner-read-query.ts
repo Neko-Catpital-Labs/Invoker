@@ -47,6 +47,7 @@ export interface OwnerReadQueryHandlers {
   listWorkflows: () => unknown[];
   loadWorkflowBundle: (workflowId: string) => Record<string, unknown>;
   getReviewGate: (workflowId: string) => unknown;
+  getPlanningChatSession: (sessionId: string) => unknown;
   getEvents: (taskId: string, options: GetEventsOptions) => unknown[];
   getTaskById: (taskId: string) => unknown;
   getTaskOutput: (taskId: string) => string;
@@ -66,6 +67,7 @@ export function answerOwnerReadQuery(
     reset?: boolean;
     workflowId?: string;
     taskId?: string;
+    sessionId?: string;
     fromOffset?: number;
     workerKind?: string;
     decision?: string;
@@ -133,6 +135,8 @@ export function answerOwnerReadQuery(
       return handlers.loadWorkflowBundle(requiredString(body.workflowId, 'workflowId'));
     case 'review-gate':
       return { reviewGate: handlers.getReviewGate(requiredString(body.workflowId, 'workflowId')) ?? null };
+    case 'planning-chat-session':
+      return { session: handlers.getPlanningChatSession(requiredString(body.sessionId, 'sessionId')) ?? null };
     case 'events': {
       const options: GetEventsOptions = body.options ?? {
         limit: body.limit as number,
@@ -219,6 +223,7 @@ export interface OwnerReadQueryDeps {
   persistence: ReadPersistence;
   /** App-level action-graph projection (needs invokerConfig, which lives in the app). */
   getActionGraphSnapshot: () => Record<string, unknown>;
+  getPlanningChatSession: (sessionId: string) => unknown;
 }
 
 /** Build the handler set both owners pass to {@link answerOwnerReadQuery}. */
@@ -258,6 +263,7 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
       if (!workflow) return null;
       return buildReviewGateQueryResponse({ workflowId, workflow, tasks: persistence.loadTasks(workflowId) });
     },
+    getPlanningChatSession: deps.getPlanningChatSession,
     getEvents: (taskId: string, options: GetEventsOptions) =>
       getEventsPage(persistence, taskId, options),
     getTaskById: (taskId: string) => {
