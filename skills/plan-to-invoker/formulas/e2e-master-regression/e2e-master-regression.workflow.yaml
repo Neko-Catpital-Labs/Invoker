@@ -1,0 +1,83 @@
+name: "E2E regression: {{bug_slug}}"
+description: |
+  {{marker}}
+
+  {{test_count}} e2e test(s) first went red at master commit {{sha}}, all
+  grouped as one candidate root cause (highest blast-radius test:
+  {{primary_file}}:{{primary_line}} - {{primary_title}}). Full list:
+  {{affected_tests_summary}}
+
+  Filed automatically by the e2e master-regression watcher. The root cause is
+  not known at filing time; the fix task's prompt requires the executing
+  agent to reproduce, find the root cause, and only then implement the fix,
+  per CLAUDE.md's three-phase bug-fix policy.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: {{base_branch}}
+repoUrl: {{repo_url}}
+
+tasks:
+  - id: fix-{{bug_slug}}
+    description: |
+      Fix the e2e regression first observed at master commit {{sha}}.
+      Review claim: The change corrects the regression's root cause at its source, found during this task, with no unrelated edits.
+      Review lane: behavior
+      Safety invariant: All other behavior stays identical; only the path causing {{primary_file}}:{{primary_line}} to fail changes.
+      Slice rationale: One behavior slice: the regression's defect and its deterministic proof, nothing else.
+      Architectural effect: None expected; no new module boundaries or interfaces unless the root cause requires it.
+      Goal: Make `{{verify_command}}` pass by correcting the regression at its source.
+      Motivation: {{test_count}} previously-passing e2e test(s) started failing at commit {{sha}}; this is a real regression, not a pre-existing flake.
+      Alternative considerations: A local workaround in the test was rejected; the correction belongs at the source that regressed.
+      Implementation details: Root cause is unknown at filing time. Fix the defect once found; keep everything else identical.
+      Non-goals: No refactor, no new fields, no unrelated cleanup, no doc edits, no changes to {{primary_file}} itself unless the regression is in test setup.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - Unknown at filing time; determined during root-cause investigation below and reported before any file is modified.
+      Change types:
+      - Unknown at filing time: to be determined during root-cause investigation.
+      Acceptance criteria:
+      - `{{verify_command}}` exits 0 after the change.
+    prompt: |
+      Goal: Diagnose and fix a real e2e regression introduced at master commit
+      {{sha}}. {{test_count}} test(s) first went red at this exact commit,
+      grouped as one candidate root cause: {{affected_tests_summary}}
+      Review lane: behavior
+      Motivation: These tests passed before {{sha}} and started failing at
+      {{sha}}; this is a real regression that must be fixed at the root.
+      Alternative considerations: Do not edit the test to mask the symptom;
+      correct the root cause in product code unless the regression is
+      genuinely in test setup/fixtures.
+      Implementation details: Fix the root cause found in step 2 below; touch
+      nothing else.
+      Non-goals: No refactor, no new fields, no unrelated cleanup.
+      You are NOT given the root cause. Assume no prior context beyond this
+      task. Follow this repo's three-phase bug-fix policy (CLAUDE.md)
+      yourself, in order, and do not skip ahead. Step 1, reproduce: run
+      `{{verify_command}}` and confirm it currently fails; report the exact
+      observed vs. expected behavior. Step 2, debug and report: inspect what
+      changed at {{sha}} (`git show {{sha}}`, `git log {{sha}}~1..{{sha}}`)
+      and identify the root cause and the test gap that let it merge; report
+      both before touching code. Step 3, plan the fix: only after steps 1 and
+      2, implement the fix. Acceptance criteria: `{{verify_command}}` must
+      exit code 0 after your change; this is the expected pass condition.
+    dependencies: []
+
+  - id: verify-{{bug_slug}}
+    description: |
+      Run the shared repro/verify command proving the {{sha}} regression is fixed.
+      Review claim: `{{verify_command}}` passes only when the {{sha}} regression is fixed.
+      Review lane: proof
+      Safety invariant: The command is identical before and after the fix; it fails before and passes after.
+      Slice rationale: One proof slice: the deterministic verification only.
+      Architectural effect: None; adds no product behavior.
+      Goal: Deterministically prove the fix with a single command.
+      Motivation: A shared repro/verify guards against this regression recurring.
+      Alternative considerations: Manual verification was rejected as non-deterministic.
+      Implementation details: Execute `{{verify_command}}` as the terminal proof.
+      Non-goals: No product edits here; proof only.
+      Layer: e2e_regression
+      Feature state: active
+    command: "{{verify_command}}"
+    dependencies:
+      - fix-{{bug_slug}}
