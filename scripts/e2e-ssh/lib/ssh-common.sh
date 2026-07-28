@@ -26,6 +26,7 @@ _INVOKER_E2E_SSH_TAG="invoker-e2e-ssh-$$"
 # Temp directory for SSH key pair, config, and remote invoker home.
 _INVOKER_E2E_SSH_TMPDIR=""
 _INVOKER_E2E_SSH_REMOTE_HOME=""
+_INVOKER_E2E_SSH_TOOL_PATH_PREFIX=""
 
 # SSH login user and passwd-backed home directory used by sshd.
 _INVOKER_E2E_SSH_USER=""
@@ -50,6 +51,10 @@ invoker_e2e_ssh_resolve_home() {
     resolved_home="$(eval "printf '%s' ~$user")"
   fi
   printf '%s\n' "$resolved_home"
+}
+
+invoker_e2e_ssh_authorized_keys_lock_path() {
+  printf '%s\n' "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys.invoker-e2e.lock"
 }
 
 # --------------------------------------------------------------------------- #
@@ -80,8 +85,18 @@ invoker_e2e_ssh_setup_keys() {
   touch "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
   chmod 600 "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
 
-  # Append public key (comment already contains tag).
-  cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
+  # Append public key (comment already contains tag). authorized_keys is shared
+  # by concurrently running SSH shards, so mutate it under a per-user lock.
+  local lock_file
+  lock_file="$(invoker_e2e_ssh_authorized_keys_lock_path)"
+  if command -v flock >/dev/null 2>&1; then
+    {
+      flock 9
+      cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
+    } 9>"$lock_file"
+  else
+    cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
+  fi
 
   export INVOKER_E2E_SSH_KEY="$keyfile"
   export INVOKER_SSH_USER_KNOWN_HOSTS_FILE="$known_hosts_file"
@@ -94,9 +109,21 @@ invoker_e2e_ssh_cleanup_keys() {
   local authorized_keys="${_INVOKER_E2E_SSH_HOME:-}/.ssh/authorized_keys"
   local env_path="${_INVOKER_E2E_SSH_REMOTE_HOME:-}/env.sh"
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$authorized_keys" ]; then
-    grep -v "$_INVOKER_E2E_SSH_TAG" "$authorized_keys" > "${authorized_keys}.tmp" || true
-    mv "${authorized_keys}.tmp" "$authorized_keys"
-    chmod 600 "$authorized_keys"
+    local lock_file tmp_file
+    lock_file="$(invoker_e2e_ssh_authorized_keys_lock_path)"
+    tmp_file="${authorized_keys}.${_INVOKER_E2E_SSH_TAG}.tmp"
+    if command -v flock >/dev/null 2>&1; then
+      {
+        flock 9
+        grep -Fv "$_INVOKER_E2E_SSH_TAG" "$authorized_keys" > "$tmp_file" || true
+        mv "$tmp_file" "$authorized_keys"
+        chmod 600 "$authorized_keys"
+      } 9>"$lock_file"
+    else
+      grep -Fv "$_INVOKER_E2E_SSH_TAG" "$authorized_keys" > "$tmp_file" || true
+      mv "$tmp_file" "$authorized_keys"
+      chmod 600 "$authorized_keys"
+    fi
   fi
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$env_path" ]; then
     # Remove the marker line and the following PATH export we appended.
@@ -122,7 +149,13 @@ invoker_e2e_ssh_provision_command() {
 }
 
 invoker_e2e_ssh_config_provision_command() {
-  printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+  if [ -n "$_INVOKER_E2E_SSH_TOOL_PATH_PREFIX" ]; then
+    printf 'PATH="%s:$PATH" INVOKER_SKIP_SHELL_HOOKS=1 %s\n' \
+      "$_INVOKER_E2E_SSH_TOOL_PATH_PREFIX" \
+      "$(invoker_e2e_ssh_provision_command)"
+  else
+    printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+  fi
 }
 
 # --------------------------------------------------------------------------- #
@@ -169,7 +202,6 @@ NODE
 invoker_e2e_ssh_init() {
   invoker_e2e_init
   invoker_e2e_ssh_setup_keys
-  invoker_e2e_ssh_write_config
 
   # Verify SSH works with the generated key.
   if ! ssh -o BatchMode=yes \
@@ -186,6 +218,8 @@ invoker_e2e_ssh_init() {
     invoker_e2e_ssh_cleanup_keys
     return 1
   fi
+
+  invoker_e2e_ssh_write_config
 }
 
 # --------------------------------------------------------------------------- #
@@ -202,6 +236,7 @@ invoker_e2e_ssh_install_login_path() {
   fi
   pnpm_dir="$(cd "$(dirname "$pnpm_bin")" && pwd)"
   node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
+  _INVOKER_E2E_SSH_TOOL_PATH_PREFIX="$node_dir:$pnpm_dir"
 
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
   touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
