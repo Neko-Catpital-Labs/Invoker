@@ -315,7 +315,7 @@ export class CommandService {
   async editTaskMergeMode(
     envelope: CommandEnvelope<{
       taskId: string;
-      mergeMode: 'manual' | 'automatic' | 'external_review';
+      mergeMode: 'manual' | 'automatic' | 'external_review' | 'no_op';
     }>,
   ): Promise<CommandResult<TaskState[]>> {
     return this.executeCommand<TaskState[]>(

@@ -173,7 +173,7 @@ export function parsePlan(yamlContent: string): PlanDefinition {
   }
   const onFinish = (raw.onFinish as (typeof validOnFinishValues)[number]) ?? 'pull_request';
 
-  const validMergeModes = ['manual', 'automatic', 'external_review'] as const;
+  const validMergeModes = ['manual', 'automatic', 'external_review', 'no_op'] as const;
   if (raw.mergeMode !== undefined && !validMergeModes.includes(raw.mergeMode as any)) {
     throw new PlanParseError(`"mergeMode" must be one of: ${validMergeModes.join(', ')}. Got: "${raw.mergeMode}"`);
   }
