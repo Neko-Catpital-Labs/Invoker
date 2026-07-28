@@ -98,6 +98,7 @@ export interface ApiMutationFacade {
   retryWorkflow(workflowId: string): Promise<MutationResult>;
   rebaseRetry(target: string): Promise<MutationResult>;
   rebaseRecreate(target: string): Promise<MutationResult>;
+  spawnRepairWorkflow(payload: unknown): Promise<MutationResult>;
   forkWorkflow(workflowId: string): Promise<ForkMutationResult>;
   cancelWorkflow(workflowId: string): Promise<CancelMutationResult>;
   setWorkflowMergeMode(workflowId: string, mergeMode: string): Promise<void>;
