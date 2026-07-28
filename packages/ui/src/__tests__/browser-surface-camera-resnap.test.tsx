@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
+import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 import type { GraphCameraCommand } from '../lib/graph-camera.js';
 import * as ReactFlowModule from '@xyflow/react';
@@ -178,31 +178,40 @@ describe('Browser-surface camera (component)', () => {
     expect(fitViewMock).not.toHaveBeenCalled();
   });
 
-  it('clicking the left-nav home icon returns to the workflow graph and issues the Home fit command', async () => {
+  it('returns to the workflow graph from a browser surface by restoring the saved viewport instead of fitting', async () => {
+    const savedViewport = { x: -420, y: 96, zoom: 0.74 };
     mock.setTasks(tasks, workflows);
     render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+    getViewportMock.mockReturnValue(savedViewport);
 
     fireEvent.click(await screen.findByTestId('sidebar-workflows'));
     await screen.findByTestId('selected-workflow-mini-dag');
     await settleCamera();
+
     fitViewMock.mockClear();
     setCenterMock.mockClear();
+    setViewportMock.mockClear();
     workflowGraphSpy.reset();
 
     fireEvent.click(screen.getByTestId('sidebar-planning'));
 
     await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
-    await waitFor(() => {
-      const matchingCommands = workflowGraphSpy.commands.filter((command): command is GraphCameraCommand => (
-        command?.kind === 'fitInitial'
-        && command.scope === 'workflow'
-        && command.reason === 'sidebar-planning'
-      ));
-      expect(matchingCommands.length).toBeGreaterThan(0);
-    });
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
     await flushFrames(4);
 
-    expect(fitViewMock).toHaveBeenCalled();
+    // The selected task DAG can mount as a floating panel and run its own
+    // initial fit. The workflow graph contract is no `sidebar-planning`
+    // fitInitial command and a restored viewport.
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+      && command.reason === 'sidebar-planning'
+    ))).toBe(false);
   });
 
   it('returns to the workflow graph from the planning-home chat rail by restoring the saved viewport instead of fitting', async () => {
@@ -239,6 +248,53 @@ describe('Browser-surface camera (component)', () => {
       command?.kind === 'fitInitial'
       && command.scope === 'workflow'
       && command.reason === 'sidebar-planning'
+    ))).toBe(false);
+  });
+
+  it('opens the workflow graph from the planning context panel by restoring the saved viewport instead of fitting', async () => {
+    const savedViewport = { x: -512, y: 188, zoom: 0.81 };
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'saved-draft-chat',
+          title: 'Saved draft chat',
+          status: 'draft_ready',
+          draftPlanAvailable: true,
+        }),
+      ],
+    })) as any;
+    mock.setTasks([], workflows);
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('Saved draft chat'));
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+    getViewportMock.mockReturnValue(savedViewport);
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    await screen.findByTestId('planning-session-rail');
+    fireEvent.click(screen.getByTestId('planning-context-toggle'));
+    await screen.findByTestId('planning-context-open-graph');
+
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+    workflowGraphSpy.reset();
+
+    fireEvent.click(screen.getByTestId('planning-context-open-graph'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+      && command.reason === 'planning-context'
     ))).toBe(false);
   });
 });
