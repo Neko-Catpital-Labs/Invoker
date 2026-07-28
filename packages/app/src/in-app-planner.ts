@@ -412,6 +412,30 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
   };
 }
 
+export function hydrateRemotePlanningTerminalSession(summary: InAppPlanningSessionSummary): InAppPlanningChatSession {
+  return {
+    id: summary.id,
+    title: summary.title,
+    presetKey: summary.presetKey,
+    confirmationMode: summary.confirmationMode ?? 'require',
+    status: summary.status,
+    messages: summary.messages,
+    conversation: null as unknown as PlanConversation,
+    draftPlanSummary: summary.draftPlanSummary,
+    submittedWorkflowId: summary.submittedWorkflowId,
+    submittedPlanName: summary.submittedPlanName,
+    terminalMode: summary.terminalMode,
+    terminalSessionId: summary.terminalSessionId,
+    terminalStatus: summary.terminalStatus,
+    terminalExitCode: summary.terminalExitCode,
+    terminalOutputSnapshot: summary.terminalOutputSnapshot,
+    terminalUpdatedAt: summary.terminalUpdatedAt,
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    nextMessageId: summary.messages.length + 1,
+  };
+}
+
 function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessionSummary {
   return {
     id: session.id,

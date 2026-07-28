@@ -13,10 +13,12 @@ import {
 } from './terminal-ui-perf.js';
 import {
   ensurePlanningTerminalSummaryBridge,
+  hydrateRemotePlanningTerminalSession,
   updatePlanningChatTerminalState,
   type InAppPlanningChatSessions,
   type InAppPlanningSessionStore,
 } from './in-app-planner.js';
+import type { InAppPlanningSessionSummary } from '@invoker/contracts';
 
 /** Coalesce running-session snapshot upserts so PTY output does not 1:1 SQLite-write on main. */
 export const TERMINAL_SESSION_UPSERT_COALESCE_MS = 250;
@@ -368,12 +370,12 @@ function planningTerminalOnly(
 function planningTerminalWritable(
   embeddedTerminalManager: EmbeddedTerminalManager,
   planningChatSessions: InAppPlanningChatSessions,
-  getPlanningSessionStore: PlanningSessionStoreGetter,
+  isPlanningTerminalWriteAllowed: () => boolean,
   sessionId: string,
 ): { ok: true } | { ok: false; reason: string } {
   const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
   if (!allowed.ok) return allowed;
-  if (!getPlanningSessionStore()) {
+  if (!isPlanningTerminalWriteAllowed()) {
     return { ok: false, reason: 'Planning terminal is read-only in this window.' };
   }
   const planningSession = planningChatSessions.get(allowed.planningSessionId);
@@ -482,6 +484,8 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
   planningChatSessions: InAppPlanningChatSessions;
   getPlanningSessionStore: PlanningSessionStoreGetter;
   repoRoot: string;
+  resolveRemotePlanningSession?: (planningSessionId: string) => Promise<InAppPlanningSessionSummary | undefined>;
+  isPlanningTerminalWriteAllowed?: () => boolean;
 }): void {
   const {
     ipcMain,
@@ -490,6 +494,8 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
     planningChatSessions,
     getPlanningSessionStore,
     repoRoot,
+    resolveRemotePlanningSession,
+    isPlanningTerminalWriteAllowed = () => Boolean(getPlanningSessionStore()),
   } = deps;
 
   ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
@@ -497,7 +503,14 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
     if (!planningSessionId) {
       return { opened: false, reason: 'Planning session id is required.' };
     }
-    const planningSession = planningChatSessions.get(planningSessionId);
+    let planningSession = planningChatSessions.get(planningSessionId);
+    if (!planningSession && resolveRemotePlanningSession) {
+      const remoteSummary = await resolveRemotePlanningSession(planningSessionId);
+      if (remoteSummary) {
+        planningSession = hydrateRemotePlanningTerminalSession(remoteSummary);
+        planningChatSessions.set(planningSessionId, planningSession);
+      }
+    }
     if (!planningSession) {
       return { opened: false, reason: 'Planning conversation was not found.' };
     }
@@ -546,7 +559,7 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
     const allowed = planningTerminalWritable(
       embeddedTerminalManager,
       planningChatSessions,
-      getPlanningSessionStore,
+      isPlanningTerminalWriteAllowed,
       sessionId,
     );
     if (!allowed.ok) return allowed;
