@@ -66,8 +66,8 @@ describe('workflow advanced metadata (component)', () => {
     fireEvent.click(screen.getByTestId('rf__node-__merge__wf-1'));
 
     await waitFor(() => {
-      expect(screen.getByText('Base Branch')).toBeInTheDocument();
-      expect(screen.getByTestId('base-branch-display')).toHaveTextContent('master');
+      expect(screen.getByText('Base Ref')).toBeInTheDocument();
+      expect(screen.getByTestId('base-ref-input')).toHaveValue('master');
     });
   });
 });
