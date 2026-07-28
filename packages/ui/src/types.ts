@@ -299,7 +299,7 @@ export interface PlanDefinition {
   tasks: PlanTask[];
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
   externalDependencies?: ExternalDependency[];
 }
 
