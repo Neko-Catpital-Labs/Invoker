@@ -36,7 +36,7 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
     "required-fast / Vitest Workspace",
     "required-fast / Submit Workflow Chain",
 })
-ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
+ACTIVE_QUEUE_STATES = frozenset({"queued", "checking", "merging"})
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
 REPAIR_STOP_PREFIX = "Mergify repair stopped: "
@@ -131,6 +131,13 @@ def cap_action(pr: PrSnapshot, blocker: Blocker, detail: str) -> Action:
 
 def mergify_condition_map(event: MergifyQueueEvent | None) -> dict[str, str]:
     return dict(event.condition_states) if event else {}
+
+
+def is_active_queue_entry(pr: PrSnapshot) -> bool:
+    latest = pr.latest_mergify
+    if not latest or latest.state not in ACTIVE_QUEUE_STATES:
+        return False
+    return latest.head_sha in {"", pr.head_ref_oid} or "queued" in pr.labels
 
 
 def effective_blockers(
@@ -513,7 +520,7 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
 def wait_reason_for_facts(facts: StackFacts) -> str:
     if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
-    if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
+    if facts.bottom and is_active_queue_entry(facts.bottom):
         return "bottom-already-queued"
     for pr in facts.stack.prs:
         blocker_kinds = {blocker.kind for blocker in facts.blockers_by_pr[pr.number]}
@@ -679,6 +686,8 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
+    if facts.bottom and is_active_queue_entry(facts.bottom):
+        return ()
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)

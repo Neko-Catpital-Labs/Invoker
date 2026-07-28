@@ -100,7 +100,7 @@ state = {
             "headRefOid": head,
             "mergeStateStatus": "BLOCKED",
             "mergeable": "MERGEABLE",
-            "labels": ["admin-bypass", "queued"],
+            "labels": ["admin-bypass", "dequeued"],
             "reviewThreads": [],
             "checks": {"*": "SUCCESS", "PR Body": "FAILURE"},
         }
@@ -112,7 +112,7 @@ state = {
                 "user": {"login": "mergify"},
                 "updated_at": "2026-07-27T06:23:56Z",
                 "html_url": "https://github.com/fake/repo/pull/6111#m6111",
-                "body": "-*- Mergify Payload -*-\n{\"state\":\"queued\",\"queue_rule_name\":\"admin-bypass\"}\n-*- Mergify Payload End -*-\n# Merge Queue Status\n\n- Checks running",
+                "body": f"-*- Mergify Payload -*-\n{{\"state\":\"dequeued\",\"queue_rule_name\":\"admin-bypass\"}}\n-*- Mergify Payload End -*-\n# Merge Queue Status\n\n- Checks failed\n- Left the queue at `{head}`\n\nFailing checks\n- PR Body",
             }
         ]
     },

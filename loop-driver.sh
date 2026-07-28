@@ -67,8 +67,8 @@ if [[ -n "$STATE_FILE" && ! -f "$STATE_FILE" ]]; then
   echo "WARN: ledger file not found: $STATE_FILE" >&2
 fi
 
-admin_json="$(gh pr list --repo "$REPO" --state open --label admin-bypass --json number,title,labels,mergeStateStatus,updatedAt,url)"
-dequeued_json="$(gh pr list --repo "$REPO" --state open --label dequeued --json number,title,labels,mergeStateStatus,updatedAt,url)"
+admin_json="$(gh pr list --repo "$REPO" --state open --label admin-bypass --limit 200 --json number,title,labels,mergeStateStatus,updatedAt,url)"
+dequeued_json="$(gh pr list --repo "$REPO" --state open --label dequeued --limit 200 --json number,title,labels,mergeStateStatus,updatedAt,url)"
 
 targets_json="$(python3 - "$admin_json" "$dequeued_json" <<'PY'
 import json

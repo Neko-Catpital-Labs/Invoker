@@ -28,6 +28,7 @@ from scripts.mergify_admin_requeue import (
 )
 from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
 from scripts.mergify_admin_requeue_model import LoadedStacks
+from scripts.mergify_admin_requeue_plan import plan_stack_execution
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
 from scripts.mergify_admin_requeue_repairer import (
@@ -197,6 +198,28 @@ Failing checks
         self.assertEqual(event.waiting_for, ("PR Body",))
         self.assertEqual(event.head_sha, HEAD)
 
+    def test_parses_mergify_checking_payload_as_active_queue(self):
+        comment = {
+            "id": "m6043",
+            "user": {"login": "mergify"},
+            "updated_at": "2026-07-28T08:10:00Z",
+            "html_url": "https://github.invalid/comment/6043",
+            "body": """
+-*- Mergify Payload -*-
+{"state":"checking","queue_rule_name":"admin-bypass","queued_at":"2026-07-28T08:09:34Z"}
+
+# Merge Queue Status
+
+- Entered queue - 2026-07-28 08:09 UTC
+- Checks deferred - conflict with a PR ahead in the queue
+  - This PR is dequeued if the PR ahead merges
+""",
+        }
+        event = parse_mergify_queue_event(comment)
+        self.assertIsNotNone(event)
+        self.assertEqual(event.state, "checking")
+        self.assertEqual(event.queue_rule_name, "admin-bypass")
+
     def test_stack_metadata_orders_bottom_to_top(self):
         comments = [{"created_at": "2026-07-03T00:00:00Z", "body": '<!-- mergify-stack-data: {"stack_id":"s1","pull_numbers_bottom_to_top":[2604,2605,2601]} -->'}]
         self.assertEqual(parse_stack_metadata(comments), ("s1", (2604, 2605, 2601)))
@@ -271,6 +294,30 @@ Failing checks
         stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
+
+    def test_active_queue_waits_before_stale_failed_required_check(self):
+        latest = MergifyQueueEvent(
+            "m6043",
+            "checking",
+            "admin-bypass",
+            "2026-07-28T08:10:00Z",
+            "",
+            (),
+            (),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/6043#issuecomment-5101602184",
+        )
+        checks = {
+            "PR Body": check("PR Body"),
+            "UI Vitest": check("UI Vitest", "failure"),
+            "quality / TypeScript Types": check("quality / TypeScript Types"),
+        }
+        stack = StackGroup("s", (pr(6043, labels={"admin-bypass", "queued"}, checks=checks, latest=latest),))
+        actions = plan_stack_actions(stack, REQUIRED | {"UI Vitest"}, self.ledger(), 1)
+        self.assertEqual(actions, ())
+
+        plan = plan_stack_execution(stack, REQUIRED | {"UI Vitest"}, self.ledger(), 1, (6043,), {})
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "bottom-already-queued")
 
     def test_current_head_failure_preempts_stale_mergify_queue_order(self):
         latest = MergifyQueueEvent(
