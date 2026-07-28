@@ -89,6 +89,7 @@ export function LeftStatusColumn({
   return (
     <aside
       data-testid="app-sidebar"
+      data-collapsed={collapsed ? 'true' : 'false'}
       className={[
         'flex h-full shrink-0 flex-col border-r border-sidebar-border bg-sidebar py-4 text-sm text-sidebar-foreground transition-all duration-150',
         collapsed ? 'w-16 px-2' : 'w-60 px-3',
