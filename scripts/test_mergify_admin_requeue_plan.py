@@ -93,6 +93,9 @@ class ClassifyPr(unittest.TestCase):
     def test_closed_short_circuits(self):
         self.assertEqual(self._kinds(pr(state="CLOSED")), {"closed"})
 
+    def test_merged_is_terminal_success(self):
+        self.assertEqual(self._kinds(pr(state="MERGED")), set())
+
     def test_failed_required_check(self):
         self.assertEqual(self._kinds(pr(checks={"build": check("failure")})), {"failed_check"})
 
@@ -675,6 +678,7 @@ class PlanStackExecution(PlannerTestCase):
                 ],
             },
         )
+        ledger.record("comment-blocked", 5873, HEAD, f"repair-invalid:UI Vitest:{HEAD}", 2)
         snapshot = pr(
             number=5873,
             labels=frozenset({"admin-bypass", "dequeued"}),
@@ -694,6 +698,96 @@ class PlanStackExecution(PlannerTestCase):
         blockers = plan.summary["prs"][0]["blockers"]
         self.assertEqual(blockers[0]["kind"], "human_decision")
         self.assertIn("outside the PR head", blockers[0]["detail"])
+
+    def test_merged_pr_is_terminal_noop(self):
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (pr(number=6108, state="MERGED", merge_state_status="UNKNOWN", mergeable="UNKNOWN"),)),
+            REQUIRED,
+            self._ledger(),
+            now_epoch=0,
+            open_pr_numbers=set(),
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "no-action")
+        self.assertEqual(plan.summary["prs"][0]["blockers"], [])
+
+    def test_repair_invalid_conflict_stops_retry_cap(self):
+        ledger = self._ledger()
+        detail = (
+            "PR #6118 is superseded by already-merged remote-aware workflow base refs; "
+            "a human must decide whether to keep the pin-to-master behavior."
+        )
+        for epoch in range(3):
+            ledger.record("conflict-repair", 6118, HEAD, "conflict:6118", epoch)
+        ledger.record("repair-invalid", 6118, HEAD, "conflict", 4, meta={"errors": [detail]})
+        ledger.record("comment-blocked", 6118, HEAD, f"repair-invalid:conflict:{HEAD}", 5)
+        snapshot = pr(
+            number=6118,
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6118},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "human_decision")
+        self.assertIn("pin-to-master", blockers[0]["detail"])
+
+    def test_human_decision_wait_reason_beats_queued_state(self):
+        ledger = self._ledger()
+        detail = "human must resolve the semantic conflict"
+        ledger.record("repair-invalid", 6118, HEAD, "conflict", 1, meta={"errors": [detail]})
+        ledger.record("comment-blocked", 6118, HEAD, f"repair-invalid:conflict:{HEAD}", 2)
+        snapshot = pr(
+            number=6118,
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+            latest_mergify=event(state="queued"),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6118},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+
+    def test_human_decision_suppresses_same_pr_repair_attempts(self):
+        ledger = self._ledger()
+        detail = "manual split required before this PR can be repaired"
+        ledger.record("repair-invalid", 6163, HEAD, "UI Vitest", 1, meta={"errors": [detail]})
+        ledger.record("comment-blocked", 6163, HEAD, f"repair-invalid:UI Vitest:{HEAD}", 2)
+        snapshot = pr(
+            number=6163,
+            labels=frozenset({"admin-bypass"}),
+            checks={
+                "build": check("failure"),
+                "UI Vitest": check("failure", "UI Vitest"),
+            },
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"build", "UI Vitest"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6163},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
 
 
 if __name__ == "__main__":

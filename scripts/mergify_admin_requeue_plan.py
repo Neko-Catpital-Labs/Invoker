@@ -81,6 +81,8 @@ def is_queue_only_required_check(name: str) -> bool:
 
 def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
+    if pr.state == "MERGED":
+        return tuple(blockers)
     if pr.state != "OPEN":
         blockers.append(Blocker("closed", "closed", pr.number, f"state={pr.state}"))
         return tuple(blockers)
@@ -309,8 +311,6 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
 
 
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
-    if blocker.kind != "failed_check":
-        return None
     latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
     if latest is None:
         return None
@@ -321,6 +321,15 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
         if detail:
             return Blocker(blocker.key, "human_decision", pr.number, detail)
     return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
+
+
+def repair_invalid_comment_key(pr: PrSnapshot, blocker: Blocker) -> str:
+    return f"repair-invalid:{blocker.key}:{pr.head_ref_oid}"
+
+
+def has_exact_repair_stop_comment(pr: PrSnapshot, detail: str) -> bool:
+    expected = f"{REPAIR_STOP_PREFIX}{detail}".strip()
+    return any(comment.body.strip() == expected for comment in pr.repair_stop_comments)
 
 
 def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | None:
@@ -503,6 +512,8 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
 def wait_reason_for_facts(facts: StackFacts) -> str:
     if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
+    if any(HUMAN_BLOCKER_KINDS & {blocker.kind for blocker in facts.blockers_by_pr[pr.number]} for pr in facts.stack.prs):
+        return "blocked-needs-human"
     if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
         return "bottom-already-queued"
     for pr in facts.stack.prs:
@@ -511,8 +522,6 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
             return "pending-check"
         if "merge_hold" in blocker_kinds and len(blocker_kinds) == 1:
             return "merge-hold-only"
-        if HUMAN_BLOCKER_KINDS & blocker_kinds:
-            return "blocked-needs-human"
     return "no-action"
 
 
@@ -543,8 +552,14 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
     return None
 
 
+def _pr_has_human_decision(facts: StackFacts, pr_number: int) -> bool:
+    return any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr_number])
+
+
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
@@ -561,6 +576,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
@@ -580,6 +597,12 @@ def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
             if blocker.kind == "pending_check":
                 return None
             if blocker.kind == "human_decision":
+                key = repair_invalid_comment_key(pr, blocker)
+                if (
+                    ledger.count("comment-blocked", pr.number, pr.head_ref_oid, key) == 0
+                    and not has_exact_repair_stop_comment(pr, blocker.detail)
+                ):
+                    return Action("comment_blocked", pr.number, key, blocker.detail)
                 return None
             if blocker.kind in HUMAN_BLOCKER_KINDS:
                 if ledger.count("comment-blocked", pr.number, pr.head_ref_oid, blocker.key) > 0:
@@ -611,6 +634,8 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         if facts.bottom_topology.kind == "current_bottom":
             raise AssertionError("current_bottom topology reached no-bottom branch")
         root = facts.bottom_topology.root
+        if root.state != "OPEN":
+            return None
         if facts.bottom_topology.kind == "external_open_base":
             owners = ", ".join(f"#{number}" for number in facts.bottom_topology.external_open_base_pr_numbers)
             return Action(

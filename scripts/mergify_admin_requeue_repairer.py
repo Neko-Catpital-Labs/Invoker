@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from typing import Mapping, Sequence
 
 try:
@@ -547,10 +548,30 @@ class AdminBypassRepairer:
             repair_commits=repair_commits,
         )
 
-    def repair_conflict(self, pr: PrSnapshot, reason: str) -> None:
+    def record_conflict_human_blocker(self, pr: PrSnapshot, blocker_path: Path, now: int) -> bool:
+        if not blocker_path.exists():
+            return False
+        detail = blocker_path.read_text(encoding="utf-8").strip()
+        if not detail:
+            return False
+        self.ledger.record("repair-evaluated", pr.number, pr.head_ref_oid, "conflict", now)
+        self.ledger.record(
+            "repair-invalid",
+            pr.number,
+            pr.head_ref_oid,
+            "conflict",
+            now,
+            meta={"errors": [detail]},
+        )
+        self.executor.comment_blocked(pr, detail, f"repair-invalid:conflict:{pr.head_ref_oid}", now)
+        return True
+
+    def repair_conflict(self, pr: PrSnapshot, reason: str, now: int | None = None) -> None:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
+        blocker_path = work_root / ".git" / "mergify-admin-requeue-human-blocker.txt"
+        blocker_path.unlink(missing_ok=True)
         prompt = (
             f"Resolve only the merge conflict that keeps this PR from merging. "
             f"Rebase the PR head branch onto its base branch, preserve the PR's intended changes, "
@@ -569,4 +590,11 @@ class AdminBypassRepairer:
             head_ref=pr.head_ref_name,
             head_sha=pr.head_ref_oid,
         )
-        self.run_claude_repair(work_root, prompt)
+        epoch = now if now is not None else int(time.time())
+        try:
+            self.run_claude_repair(work_root, prompt)
+        except Exception:
+            if self.record_conflict_human_blocker(pr, blocker_path, epoch):
+                return
+            raise
+        self.record_conflict_human_blocker(pr, blocker_path, epoch)

@@ -350,6 +350,41 @@ Failing checks
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
+    def test_conflict_repair_records_exact_human_blocker_file(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def issue_comments(self, repo, pr_number):
+                return [{"body": body} for _repo, _pr_number, body in self.comments]
+
+        ledger = self.ledger()
+        item = pr(6118, merge_state="DIRTY", latest=mergify())
+        detail = (
+            "PR #6118 is superseded by already-merged remote-aware workflow base refs; "
+            "a human must decide whether to keep the pin-to-master behavior."
+        )
+        fake = FakeGh()
+        repairer = self.repairer(fake, ledger, "Neko-Catpital-Labs/Invoker")
+
+        def write_human_blocker(work_root, _prompt):
+            marker = work_root / ".git" / "mergify-admin-requeue-human-blocker.txt"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(detail, encoding="utf-8")
+
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer, "run_claude_repair", side_effect=write_human_blocker):
+                repairer.repair_conflict(item, "GitHub reports merge conflict", 123)
+
+        invalid = ledger.latest("repair-invalid", 6118, HEAD, "conflict")
+        self.assertIsNotNone(invalid)
+        self.assertEqual(invalid["meta"]["errors"], [detail])
+        self.assertEqual(ledger.count("comment-blocked", 6118, HEAD, f"repair-invalid:conflict:{HEAD}"), 1)
+        self.assertEqual(fake.comments, [("Neko-Catpital-Labs/Invoker", 6118, f"Mergify repair stopped: {detail}")])
+
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())
         with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run") as run:
@@ -457,7 +492,14 @@ Failing checks
         ledger.record("repair-invalid", 2606, HEAD, "PR Body", 1, meta={"errors": ["human stack split required"]})
         stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
+        self.assertEqual(
+            [(a.kind, a.key, a.detail) for a in actions],
+            [("comment_blocked", f"repair-invalid:PR Body:{HEAD}", "human stack split required")],
+        )
+        ledger.record("comment-blocked", 2606, HEAD, f"repair-invalid:PR Body:{HEAD}", 3)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
         self.assertEqual(actions, ())
+
     def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):
         stderr = io.StringIO()
         latest = MergifyQueueEvent(
