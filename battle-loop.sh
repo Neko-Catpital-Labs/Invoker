@@ -33,8 +33,7 @@ REPROS=(
 fail=0
 
 echo "== stage 1: unit tests =="
-if python3 -m unittest scripts/test_mergify_admin_requeue.py scripts/test_mergify_admin_requeue_model.py \
-    scripts/test_mergify_admin_requeue_plan.py scripts/test_mergify_admin_requeue_snapshot.py; then
+if PYTHONPATH=packages/mergify-admin-requeue python3 -m unittest discover -s packages/mergify-admin-requeue/tests; then
   echo "PASS: unit tests"
 else
   echo "FAIL: unit tests"
