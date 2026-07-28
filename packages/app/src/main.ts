@@ -84,7 +84,6 @@ import {
   ExecutorRegistry,
   TaskRunner,
   WorktreeExecutor,
-  CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,

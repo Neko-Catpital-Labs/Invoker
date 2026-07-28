@@ -10,7 +10,6 @@ import {
 import { registerBuiltinWorkers } from '../builtin-workers.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import { createWorkerRegistry } from '../worker-registry.js';
-import { CI_FAILURE_WORKER_KIND } from '../workers/ci-failure-worker.js';
 import { AUTO_APPROVE_WORKER_KIND } from '../workers/auto-approve-worker.js';
 import {
   CODERABBIT_ADDRESS_WORKER_KIND,
@@ -77,7 +76,6 @@ describe('worker registry', () => {
       WORKFLOW_RESUME_WORKER_KIND,
       PR_STATUS_WORKER_KIND,
       PR_SUMMARY_REFRESH_WORKER_KIND,
-      CI_FAILURE_WORKER_KIND,
       REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
       DISK_HEADROOM_WORKER_KIND,
       AUTO_APPROVE_WORKER_KIND,
@@ -93,7 +91,6 @@ describe('worker registry', () => {
     expect(registry.get(WORKFLOW_RESUME_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_SUMMARY_REFRESH_WORKER_KIND)).toBeDefined();
-    expect(registry.get(CI_FAILURE_WORKER_KIND)).toBeDefined();
     expect(registry.get(REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND)).toBeDefined();
     expect(registry.get(DISK_HEADROOM_WORKER_KIND)).toBeDefined();
     expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
@@ -121,13 +118,12 @@ describe('worker registry', () => {
   });
 
 
-  it('builds the PR status and CI-failure worker runtimes from the registered factories', () => {
+  it('builds the PR status and PR-maintenance worker runtimes from the registered factories', () => {
     const registry = registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>());
 
     expect(registry.get(PR_STATUS_WORKER_KIND)?.factory(deps()).identity.kind).toBe(PR_STATUS_WORKER_KIND);
     expect(registry.get(PR_SUMMARY_REFRESH_WORKER_KIND)?.factory(deps()).identity.kind)
       .toBe(PR_SUMMARY_REFRESH_WORKER_KIND);
-    expect(registry.get(CI_FAILURE_WORKER_KIND)?.factory(deps()).identity.kind).toBe(CI_FAILURE_WORKER_KIND);
     expect(registry.get(CODERABBIT_ADDRESS_WORKER_KIND)?.factory(deps()).identity.kind)
       .toBe(CODERABBIT_ADDRESS_WORKER_KIND);
     expect(registry.get(PR_CONFLICT_REBASE_WORKER_KIND)?.factory(deps()).identity.kind)
