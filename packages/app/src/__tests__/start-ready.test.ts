@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 
-import { collectStartReadyPreview, runStartReady } from '../start-ready.js';
+import {
+  collectStartReadyPreview,
+  parseStartReadyExcludeSelector,
+  runStartReady,
+} from '../start-ready.js';
 
 function makeTask(
   id: string,
@@ -21,13 +25,19 @@ function makeTask(
   } as TaskState;
 }
 
-function harness(initialTasks: TaskState[], readyTasks: TaskState[], activeTaskIds: string[] = []) {
+function harness(
+  initialTasks: TaskState[],
+  readyTasks: TaskState[],
+  activeTaskIds: string[] = [],
+  mergeModes: Record<string, 'manual' | 'automatic' | 'external_review' | 'no_op' | undefined> = {},
+) {
   let tasks = [...initialTasks];
   const orchestrator = {
     syncAllFromDb: vi.fn(() => undefined),
     getAllTasks: vi.fn(() => tasks),
     getPersistedActiveTaskIds: vi.fn(() => new Set(activeTaskIds)),
     getExecutableReadyTasks: vi.fn(() => readyTasks),
+    getWorkflowMergeMode: vi.fn((workflowId: string) => mergeModes[workflowId]),
     prepareTaskForNewAttempt: vi.fn((taskId: string) => {
       tasks = tasks.map((task) => task.id === taskId
         ? { ...task, status: 'pending' as TaskState['status'], execution: {} }
@@ -322,5 +332,71 @@ describe('start-ready', () => {
     expect(result.preview.freshBase?.completedWorkflowIds).toEqual(['wf-2']);
     expect(result.freshBaseRecreatedWorkflowIds).toEqual(['wf-1', 'wf-2']);
     expect(result.partial).toBe(false);
+  });
+
+  it('excludes mergeMode:no_op workflows from recreate-all when requested', async () => {
+    const failed = makeTask('wf-1/failed', 'failed');
+    const completedNoOp = makeTask('wf-2/completed', 'completed');
+    const completedManual = makeTask('wf-3/completed', 'completed');
+    const orchestrator = harness(
+      [failed, completedNoOp, completedManual],
+      [],
+      [],
+      { 'wf-2': 'no_op', 'wf-3': 'manual' },
+    );
+
+    const result = await runStartReady(orchestrator, {
+      recreateAll: true,
+      exclude: [{ field: 'mergeMode', value: 'no_op' }],
+    });
+
+    expect(result.recreatedWorkflowIds).toEqual(['wf-1', 'wf-3']);
+    expect(result.excludedWorkflowIds).toEqual(['wf-2']);
+    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalledWith('wf-2');
+  });
+
+  it('keeps recreate-all broad when exclude is omitted', async () => {
+    const completedNoOp = makeTask('wf-1/completed', 'completed');
+    const orchestrator = harness([completedNoOp], [], [], { 'wf-1': 'no_op' });
+
+    const result = await runStartReady(orchestrator, { recreateAll: true });
+
+    expect(result.recreatedWorkflowIds).toEqual(['wf-1']);
+    expect(result.excludedWorkflowIds).toEqual([]);
+  });
+
+  it('dry-run reports excluded no_op workflows without mutating', async () => {
+    const completedNoOp = makeTask('wf-1/completed', 'completed');
+    const completedManual = makeTask('wf-2/completed', 'completed');
+    const orchestrator = harness(
+      [completedNoOp, completedManual],
+      [],
+      [],
+      { 'wf-1': 'no_op', 'wf-2': 'manual' },
+    );
+
+    const result = await runStartReady(orchestrator, {
+      recreateAll: true,
+      dryRun: true,
+      exclude: [{ field: 'mergeMode', value: 'no_op' }],
+    });
+
+    expect(result.dryRun).toBe(true);
+    expect(result.recreatedWorkflowIds).toEqual([]);
+    expect(result.excludedWorkflowIds).toEqual(['wf-1']);
+    expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('accepts repeated mergeMode:no_op exclude selectors and rejects unsupported ones', () => {
+    expect(parseStartReadyExcludeSelector('mergeMode:no_op')).toEqual({
+      field: 'mergeMode',
+      value: 'no_op',
+    });
+    expect(parseStartReadyExcludeSelector(' mergeMode:no_op ')).toEqual({
+      field: 'mergeMode',
+      value: 'no_op',
+    });
+    expect(() => parseStartReadyExcludeSelector('mergeMode:manual')).toThrow(/Unsupported/);
+    expect(() => parseStartReadyExcludeSelector('namePrefix:pr-maintenance-')).toThrow(/Unsupported/);
   });
 });
