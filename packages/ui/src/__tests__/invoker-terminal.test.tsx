@@ -232,6 +232,12 @@ describe('Invoker terminal (component)', () => {
 
     await waitFor(() => {
       expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-1',
+        message: 'try again',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
       expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
     });
 
@@ -689,6 +695,36 @@ describe('Invoker terminal (component)', () => {
         confirmationMode: 'require',
       });
     });
+  });
+
+  it('shows a visible lost-session error instead of sending a local transcript as a fresh chat', async () => {
+    const missingSessionError = 'Planner stopped before returning a session id.';
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: false,
+      error: missingSessionError,
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('start a plan');
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledWith({
+        message: 'start a plan',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(missingSessionError);
+    });
+
+    submitPlanningText('continue that plan');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent(
+        'Planning session identity was lost. Start a new planning chat and resend your request.',
+      );
+    });
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
   });
 
   it('passes the selected planning preset', async () => {
