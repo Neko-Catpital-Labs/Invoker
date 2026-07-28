@@ -328,7 +328,7 @@ describe('SystemSetupModal — Invoker CLI section', () => {
     const tutorialLink = screen.getByRole('link', { name: 'Open the First Agent Workflow Tutorial' });
     expect(tutorialLink).toHaveAttribute(
       'href',
-      'https://github.com/Neko-Catpital-Labs/Invoker/blob/main/docs/tutorial-first-agent-workflow.md',
+      'https://github.com/Neko-Catpital-Labs/Invoker/blob/master/docs/tutorial-first-agent-workflow.md',
     );
     expect(tutorialLink).toHaveAttribute('target', '_blank');
   });
