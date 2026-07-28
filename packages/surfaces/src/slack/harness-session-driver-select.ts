@@ -12,6 +12,7 @@ export interface HarnessSessionDriverDeps {
   executionAgentRegistry?: { get(name: string): ExecutionAgent | undefined };
   /** Builds the planner CLI command for harnesses without real session resume (e.g. cursor). */
   planningCommandBuilder?: PlanningCommandBuilder;
+  mcpConfigPath?: string;
 }
 
 /** Picks an ExecutionHarnessSessionDriver for tools with a registered execution agent, else a ReplayHarnessSessionDriver, else undefined. */
@@ -21,7 +22,7 @@ export function selectHarnessSessionDriver(
 ): HarnessSessionDriver | undefined {
   const agent = deps.executionAgentRegistry?.get(preset.tool);
   if (agent) {
-    return new ExecutionHarnessSessionDriver(agent);
+    return new ExecutionHarnessSessionDriver(agent, deps.mcpConfigPath);
   }
   if (!deps.planningCommandBuilder) return undefined;
   const planningCommandBuilder = deps.planningCommandBuilder;

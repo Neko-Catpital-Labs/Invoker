@@ -19,7 +19,7 @@ export class ExecutionHarnessSessionDriver implements HarnessSessionDriver {
   readonly harness: string;
   readonly supportsSessionContinuity = true;
 
-  constructor(private readonly agent: ExecutionAgent) {
+  constructor(private readonly agent: ExecutionAgent, private readonly mcpConfigPath?: string) {
     this.harness = agent.name;
   }
 
@@ -30,7 +30,7 @@ export class ExecutionHarnessSessionDriver implements HarnessSessionDriver {
     }
     return {
       command: command.cmd,
-      args: command.args,
+      args: this.withMcpConfig(command.args),
       sessionId: command.sessionId,
     };
   }
@@ -39,9 +39,22 @@ export class ExecutionHarnessSessionDriver implements HarnessSessionDriver {
     const resumed = this.agent.buildResumeArgs(sessionId);
     return {
       command: resumed.cmd,
-      args: this.appendPromptArgs(resumed.args, prompt, options?.model),
+      args: this.withMcpConfig(this.appendPromptArgs(resumed.args, prompt, options?.model)),
       sessionId,
     };
+  }
+
+  private withMcpConfig(args: string[]): string[] {
+    if (!this.mcpConfigPath) return args;
+    switch (this.agent.name) {
+      case 'claude':
+        // claude's `-p <prompt>` takes the rest of argv as prompt text, so flags must precede it, never follow.
+        return ['--mcp-config', this.mcpConfigPath, ...args];
+      case 'codex':
+        return [...args, '-c', 'mcp_servers.invoker.command="invoker-cli"', '-c', 'mcp_servers.invoker.args=["mcp"]'];
+      default:
+        return args;
+    }
   }
 
   private appendPromptArgs(resumeArgs: string[], prompt: string, model?: string): string[] {
