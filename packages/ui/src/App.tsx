@@ -400,6 +400,148 @@ function makeInitialPlanningSession(
   };
 }
 
+function planningTitleFromInput(input: string): string {
+  return input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input;
+}
+
+function isInitialPlanningSessionPlaceholder(session: PlanningSessionView): boolean {
+  return session.id === 'local-planning-session-1'
+    && session.title === 'Untitled plan'
+    && session.status === 'still_discussing'
+    && session.input === ''
+    && !session.busy
+    && !session.draftPlanAvailable
+    && (session.presetKey ?? '') === ''
+    && (session.confirmationMode ?? 'require') === 'require'
+    && session.mode === 'chat'
+    && !session.terminalSession
+    && !session.terminalSessionId
+    && session.messages.every((line) => line.role === 'system');
+}
+
+function isUserOwnedPlanningSession(session: PlanningSessionView): boolean {
+  const originatedLocally = session.id.startsWith('local-') || session.conversationKey.startsWith('local-');
+  return originatedLocally && !isInitialPlanningSessionPlaceholder(session);
+}
+
+function shouldPreserveUnmatchedHydratedSession(session: PlanningSessionView): boolean {
+  return isUserOwnedPlanningSession(session)
+    || session.input !== ''
+    || session.busy
+    || session.terminalBusy === true;
+}
+
+function mergePlanningTerminalState(
+  primary: PlanningSessionView,
+  fallback: PlanningSessionView,
+): PlanningSessionView {
+  const primaryHasTerminal = Boolean(
+    primary.terminalMode
+      || primary.terminalSession
+      || primary.terminalSessionId
+      || primary.terminalOutputSnapshot
+      || primary.terminalBusy,
+  );
+  return {
+    ...primary,
+    mode: primaryHasTerminal ? primary.mode : fallback.mode,
+    terminalMode: primary.terminalMode ?? fallback.terminalMode,
+    terminalSessionId: primary.terminalSessionId ?? fallback.terminalSessionId,
+    terminalStatus: primary.terminalStatus ?? fallback.terminalStatus,
+    terminalExitCode: primary.terminalExitCode ?? fallback.terminalExitCode,
+    terminalOutputSnapshot: primary.terminalOutputSnapshot ?? fallback.terminalOutputSnapshot,
+    terminalUpdatedAt: primary.terminalUpdatedAt ?? fallback.terminalUpdatedAt,
+    terminalSession: primary.terminalSession ?? fallback.terminalSession,
+    terminalBusy: primary.terminalBusy || fallback.terminalBusy || false,
+    terminalError: primary.terminalError ?? fallback.terminalError ?? null,
+  };
+}
+
+function mergePlanningSessionFromHydrate(
+  current: PlanningSessionView,
+  restored: PlanningSessionView,
+): PlanningSessionView {
+  const preserveCurrentConversation = current.busy || isUserOwnedPlanningSession(current);
+  return mergePlanningTerminalState({
+    ...restored,
+    ...(preserveCurrentConversation
+      ? {
+          title: current.title,
+          status: current.status,
+          messages: current.messages,
+          draftPlanAvailable: current.draftPlanAvailable,
+          draftPlanSummary: current.draftPlanSummary,
+          draftPlanText: current.draftPlanText,
+          submittedWorkflowId: current.submittedWorkflowId,
+          submittedPlanName: current.submittedPlanName,
+          updatedAt: current.updatedAt,
+        }
+      : {}),
+    input: current.input,
+    busy: current.busy,
+    conversationKey: current.conversationKey,
+    presetKey: current.presetKey || restored.presetKey,
+    confirmationMode: current.confirmationMode ?? restored.confirmationMode,
+  }, current);
+}
+
+function mergeHydratedPlanningSessions(
+  currentSessions: PlanningSessionView[],
+  restoredSessions: PlanningSessionView[],
+): PlanningSessionView[] {
+  if (restoredSessions.length === 0) return currentSessions;
+
+  const restoredById = new Map(restoredSessions.map((session) => [session.id, session]));
+  const seenRestoredIds = new Set<string>();
+  const merged: PlanningSessionView[] = [];
+
+  for (const current of currentSessions) {
+    const restored = restoredById.get(current.id);
+    if (restored) {
+      merged.push(mergePlanningSessionFromHydrate(current, restored));
+      seenRestoredIds.add(restored.id);
+      continue;
+    }
+    if (shouldPreserveUnmatchedHydratedSession(current)) {
+      merged.push(current);
+    }
+  }
+
+  for (const restored of restoredSessions) {
+    if (!seenRestoredIds.has(restored.id)) {
+      merged.push(restored);
+    }
+  }
+
+  return merged.length > 0 ? merged : restoredSessions;
+}
+
+function replacePlanningSessionId(
+  sessions: PlanningSessionView[],
+  previousSessionId: string,
+  nextSessionId: string,
+  buildReplacement: (session: PlanningSessionView) => PlanningSessionView,
+): PlanningSessionView[] {
+  const duplicateTarget = sessions.find((session) => (
+    session.id === nextSessionId && session.id !== previousSessionId
+  ));
+  let replaced = false;
+  const nextSessions: PlanningSessionView[] = [];
+
+  for (const session of sessions) {
+    if (session.id === previousSessionId) {
+      replaced = true;
+      const replacement = buildReplacement(session);
+      nextSessions.push(duplicateTarget ? mergePlanningTerminalState(replacement, duplicateTarget) : replacement);
+      continue;
+    }
+    if (duplicateTarget && session.id === nextSessionId) continue;
+    nextSessions.push(session);
+  }
+
+  return replaced ? nextSessions : sessions;
+}
+
 function planningSessionSummaryToView(session: InAppPlanningSessionSummary): PlanningSessionView {
   return planningSessionFromSummary(session);
 }
@@ -1177,6 +1319,14 @@ export function App() {
     activePlanningSessionIdRef.current = activePlanningSessionId;
   }, [activePlanningSessionId]);
 
+  useLayoutEffect(() => {
+    if (planningSessions.length === 0) return;
+    if (planningSessions.some((session) => session.id === activePlanningSessionId)) return;
+    const nextActiveSessionId = planningSessions[0].id;
+    activePlanningSessionIdRef.current = nextActiveSessionId;
+    setActivePlanningSessionId(nextActiveSessionId);
+  }, [activePlanningSessionId, planningSessions]);
+
   useEffect(() => {
     window.invoker?.getRemoteTargets?.().then(setRemoteTargets).catch(() => {});
     window.invoker?.getExecutionPools?.().then(setExecutionPools).catch(() => {});
@@ -1220,9 +1370,8 @@ export function App() {
         const currentSessions = planningSessionsRef.current;
         const first = currentSessions[0];
         const onlyInitialPlaceholder = currentSessions.length === 1
-          && first?.id === 'local-planning-session-1'
-          && first.input === ''
-          && first.messages.every((line) => line.role === 'system');
+          && first !== undefined
+          && isInitialPlanningSessionPlaceholder(first);
         if (!onlyInitialPlaceholder) return;
         const restored = response.sessions.map(planningSessionSummaryToView);
         const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
@@ -1270,12 +1419,7 @@ export function App() {
             ? planningSessionFromSummary(summary, { terminalSession: liveTerminal })
             : planningSessionFromSummary(summary);
         });
-        setPlanningSessions(restored);
-        setActivePlanningSessionId((currentSessionId) => (
-          restored.some((session) => session.id === currentSessionId)
-            ? currentSessionId
-            : restored[0]?.id ?? currentSessionId
-        ));
+        setPlanningSessions((currentSessions) => mergeHydratedPlanningSessions(currentSessions, restored));
         const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
         nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
       } catch {
@@ -2965,14 +3109,16 @@ export function App() {
         const updatedAt = new Date().toISOString();
         const replyLineId = nextTerminalLineIdRef.current;
         nextTerminalLineIdRef.current += 1;
-        setPlanningSessions((prev) => prev.map((session) => {
-          if (session.id !== previousSessionId) return session;
-          return {
+        setPlanningSessions((prev) => replacePlanningSessionId(
+          prev,
+          previousSessionId,
+          result.sessionId,
+          (session) => ({
             ...session,
             busy: false,
             id: result.sessionId,
             title: session.title === 'Untitled plan'
-              ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
+              ? planningTitleFromInput(input)
               : session.title,
             presetKey: request.presetKey ?? session.presetKey,
             confirmationMode: result.confirmationMode ?? session.confirmationMode ?? 'require',
@@ -2982,8 +3128,8 @@ export function App() {
             draftPlanSummary: result.draftPlanAvailable ? result.draftPlanSummary : undefined,
             draftPlanText: result.draftPlanAvailable ? result.draftPlanText : undefined,
             updatedAt,
-          };
-        }));
+          }),
+        ));
         setActivePlanningSessionId((currentSessionId) => (
           currentSessionId === previousSessionId ? result.sessionId : currentSessionId
         ));
@@ -3006,19 +3152,32 @@ export function App() {
           }
         }
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
         keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
         forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
+        const failedSessionId = result.sessionId ?? previousSessionId;
+        const errorLineId = nextTerminalLineIdRef.current;
+        nextTerminalLineIdRef.current += 1;
+        const updatedAt = new Date().toISOString();
+        setPlanningSessions((prev) => replacePlanningSessionId(
+          prev,
+          previousSessionId,
+          failedSessionId,
+          (session) => ({
+            ...session,
+            busy: false,
+            id: failedSessionId,
+            title: session.title === 'Untitled plan'
+              ? planningTitleFromInput(input)
+              : session.title,
+            presetKey: request.presetKey ?? session.presetKey,
+            confirmationMode: request.confirmationMode ?? session.confirmationMode ?? 'require',
+            messages: [...session.messages, { id: errorLineId, text: result.error, role: 'system', tone: 'error' }],
+            updatedAt,
+          }),
+        ));
         if (result.sessionId) {
-          const failedSessionId = result.sessionId;
-          setPlanningSessions((prev) => prev.map((session) => (
-            session.id === previousSessionId
-              ? { ...session, id: failedSessionId }
-              : session
-          )));
           setActivePlanningSessionId((currentSessionId) => (
             currentSessionId === previousSessionId ? failedSessionId : currentSessionId
           ));

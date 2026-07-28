@@ -61,6 +61,11 @@ describe('planning terminal failed first send session id persist repro', () => {
 
     submitPlanningText('draft a plan that fails before replying');
     expect(await screen.findByText('planner exited before producing a reply')).toBeInTheDocument();
+    expect(mock.api.planningChatSend).toHaveBeenNthCalledWith(1, {
+      message: 'draft a plan that fails before replying',
+      presetKey: 'codex',
+      confirmationMode: 'require',
+    });
 
     submitPlanningText('retry in the same chat');
 
@@ -73,5 +78,7 @@ describe('planning terminal failed first send session id persist repro', () => {
         confirmationMode: 'require',
       });
     });
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('draft a plan that fails before replying');
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Recovered on the same session.');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { InAppPlanningListSessionsResponse, TerminalSessionDescriptor } from '@invoker/contracts';
 import { createMockInvoker, makePlanningSessionSummary, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -28,6 +28,72 @@ describe('planning terminal startup hydrate race repro', () => {
 
   afterEach(() => {
     mock.cleanup();
+  });
+
+  function submitPlanningText(text: string) {
+    fireEvent.change(screen.getByTestId('invoker-terminal-input'), { target: { value: text } });
+    fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
+  }
+
+  it('merges delayed restored chats without replacing a locally edited planning chat', async () => {
+    const chatOnlyHydrate = deferred<InAppPlanningListSessionsResponse>();
+    const terminalAwareHydrate = deferred<InAppPlanningListSessionsResponse>();
+    const restoredChat = makePlanningSessionSummary({
+      id: 'restored-startup-chat',
+      title: 'Restored startup chat',
+      status: 'still_discussing',
+      messages: [
+        {
+          id: 10,
+          role: 'user',
+          text: 'Old startup request',
+          createdAt: '2026-07-26T00:00:00.000Z',
+        },
+        {
+          id: 11,
+          role: 'assistant',
+          text: 'Restored startup reply.',
+          createdAt: '2026-07-26T00:00:01.000Z',
+        },
+      ],
+      draftPlanAvailable: false,
+    });
+
+    mock.api.planningChatList = vi
+      .fn()
+      .mockReturnValueOnce(chatOnlyHydrate.promise)
+      .mockReturnValueOnce(terminalAwareHydrate.promise) as any;
+    mock.api.planningChatSend = vi.fn(() => new Promise(() => {}) as any) as any;
+
+    render(<App />);
+    await waitFor(() => {
+      expect(mock.api.planningChatList).toHaveBeenCalledTimes(2);
+    });
+
+    submitPlanningText('draft a local plan during startup');
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('draft a local plan during startup');
+
+    await act(async () => {
+      terminalAwareHydrate.resolve({ ok: true, sessions: [restoredChat] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('draft a local plan during startup');
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('Restored startup reply.');
+    expect(screen.getByTestId('planning-session-list')).toHaveTextContent('Restored startup chat');
+
+    await act(async () => {
+      chatOnlyHydrate.resolve({ ok: true, sessions: [restoredChat] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('draft a local plan during startup');
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).not.toHaveTextContent('Restored startup reply.');
   });
 
   it('keeps a live planning tmux session when chat-only hydrate resolves after terminal hydrate', async () => {
