@@ -33,7 +33,7 @@ import type {
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import type { AgentRegistry, HarnessSessionDriver } from '@invoker/execution-engine';
 import {
   evaluatePlanningTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
@@ -43,8 +43,42 @@ import {
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
-import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
+
+interface HarnessPreset {
+  tool: string;
+  model?: string;
+}
+
+interface PlanConversation {
+  readonly lastTurnReasoning: string[];
+  readonly lastTurnDraftPlanText?: string;
+  init(): Promise<void>;
+  sendMessage(message: string): Promise<string>;
+}
+
+interface PlanConversationConfig {
+  threadTs?: string;
+  conversationRepo?: ConversationRepository;
+  tool?: string;
+  model?: string;
+  workingDir?: string;
+  timeoutMs?: number;
+  defaultBranch?: string;
+  repoUrl?: string;
+  experimentalPlanner?: boolean;
+  conversationalPlanning?: boolean;
+  preferStackedWorkflows?: boolean;
+  planningCommandBuilder?: PlanningCommandBuilder;
+  harnessSessionDriver?: HarnessSessionDriver;
+  onRawPlannerOutput?: (chunk: string) => void;
+}
+
+export type PlanningCommandBuilder = (opts: {
+  tool: string;
+  model?: string;
+  prompt: string;
+}) => { command: string; args: string[] };
 
 export interface LoadedGeneratedPlan {
   planName: string;
