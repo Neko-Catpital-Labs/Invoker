@@ -137,7 +137,6 @@ function MessageBody({ text, toneClass }: { text: string; toneClass: string }): 
 
 type SeededOutputSnapshot = {
   sessionId: string;
-  snapshot: string;
   term: XTermTerminal;
 };
 
@@ -149,27 +148,32 @@ function seedTerminalOutputSnapshot(
   const outputSnapshot = session.outputSnapshot;
   const seededSnapshot = seededSnapshotRef.current;
   if (
-    outputSnapshot &&
-    (
-      !seededSnapshot ||
-      seededSnapshot.sessionId !== session.sessionId ||
-      seededSnapshot.snapshot !== outputSnapshot ||
-      seededSnapshot.term !== term
-    )
+    seededSnapshot &&
+    seededSnapshot.sessionId === session.sessionId &&
+    seededSnapshot.term === term
   ) {
-    try {
-      term.write(outputSnapshot);
-      seededSnapshotRef.current = {
-        sessionId: session.sessionId,
-        snapshot: outputSnapshot,
-        term,
-      };
-    } catch (err) {
-      console.warn(
-        `Failed to seed output snapshot for planning terminal session ${session.sessionId}:`,
-        err,
-      );
-    }
+    return;
+  }
+
+  if (!outputSnapshot) {
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      term,
+    };
+    return;
+  }
+
+  try {
+    term.write(outputSnapshot);
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      term,
+    };
+  } catch (err) {
+    console.warn(
+      `Failed to seed output snapshot for planning terminal session ${session.sessionId}:`,
+      err,
+    );
   }
 }
 
@@ -230,6 +234,9 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
     const tryFit = () => {
       try {
         fit.fit();
+        if (term.rows > 0) {
+          term.refresh?.(0, term.rows - 1);
+        }
         void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
       } catch {
         /* host has zero size or fit unsupported */
@@ -281,6 +288,9 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
     if (!term || !fit || !session) return;
     try {
       fit.fit();
+      if (term.rows > 0) {
+        term.refresh?.(0, term.rows - 1);
+      }
       void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
       term.focus();
     } catch {

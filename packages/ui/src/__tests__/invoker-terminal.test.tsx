@@ -11,6 +11,69 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+const xtermMock = vi.hoisted(() => {
+  type DataHandler = (data: string) => void;
+
+  const instances: MockTerminal[] = [];
+  const fitInstances: MockFitAddon[] = [];
+  const writeLog: string[] = [];
+
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    dataHandler: DataHandler | null = null;
+    loadAddon = vi.fn();
+    open = vi.fn((host: HTMLElement) => {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      terminalElement.textContent = 'mock terminal';
+      host.appendChild(terminalElement);
+    });
+    write = vi.fn((data: string) => {
+      writeLog.push(data);
+    });
+    onData = vi.fn((cb: DataHandler) => {
+      this.dataHandler = cb;
+      return { dispose: vi.fn() };
+    });
+    focus = vi.fn();
+    refresh = vi.fn();
+    dispose = vi.fn();
+
+    constructor() {
+      instances.push(this);
+    }
+
+    emitData(data: string) {
+      this.dataHandler?.(data);
+    }
+  }
+
+  class MockFitAddon {
+    fit = vi.fn();
+
+    constructor() {
+      fitInstances.push(this);
+    }
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+    instances,
+    fitInstances,
+    writeLog,
+    reset: () => {
+      instances.length = 0;
+      fitInstances.length = 0;
+      writeLog.length = 0;
+    },
+  };
+});
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
+
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
@@ -27,6 +90,7 @@ describe('Invoker terminal (component)', () => {
 
   afterEach(() => {
     mock.cleanup();
+    xtermMock.reset();
   });
 
   async function openPlanningTerminal() {
@@ -310,6 +374,74 @@ describe('Invoker terminal (component)', () => {
 
     const firstPanel = await screen.findByTestId('invoker-terminal-planner-stream');
     expect(firstPanel).toHaveTextContent('Drafting your plan…');
+  });
+
+  it('replays planning tmux output when switching sessions back without duplicating live output', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'plan-alpha',
+          title: 'Alpha tmux session',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          terminalMode: 'tmux',
+          terminalSessionId: 'term-alpha',
+          terminalStatus: 'running',
+          terminalOutputSnapshot: '',
+        }),
+        makePlanningSessionSummary({
+          id: 'plan-beta',
+          title: 'Beta tmux session',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          terminalMode: 'tmux',
+          terminalSessionId: 'term-beta',
+          terminalStatus: 'running',
+          terminalOutputSnapshot: '',
+        }),
+      ],
+    })) as any;
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-home'));
+    await waitFor(() => expect(mock.api.onTerminalOutput).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', 'term-alpha');
+    });
+
+    await act(async () => {
+      mock.fireTerminalOutput({
+        sessionId: 'term-alpha',
+        taskId: 'planning:plan-alpha',
+        kind: 'planning',
+        planningSessionId: 'plan-alpha',
+        data: 'ALPHA_TMUX_VISIBLE\n',
+      });
+    });
+    expect(xtermMock.writeLog.filter((entry) => entry === 'ALPHA_TMUX_VISIBLE\n')).toHaveLength(1);
+
+    fireEvent.click(within(screen.getByTestId('planning-session-list')).getByRole('button', { name: /Beta tmux session/ }));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', 'term-beta');
+    });
+    await act(async () => {
+      mock.fireTerminalOutput({
+        sessionId: 'term-beta',
+        taskId: 'planning:plan-beta',
+        kind: 'planning',
+        planningSessionId: 'plan-beta',
+        data: 'BETA_TMUX_VISIBLE\n',
+      });
+    });
+    expect(xtermMock.writeLog.filter((entry) => entry === 'BETA_TMUX_VISIBLE\n')).toHaveLength(1);
+
+    fireEvent.click(within(screen.getByTestId('planning-session-list')).getByRole('button', { name: /Alpha tmux session/ }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', 'term-alpha');
+      expect(xtermMock.writeLog.filter((entry) => entry === 'ALPHA_TMUX_VISIBLE\n')).toHaveLength(2);
+    });
   });
 
   it('renders chat role labels and fenced YAML in a mono code panel', async () => {
