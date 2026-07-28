@@ -16,6 +16,8 @@ import type {
   InAppPlanningDiscardDraftResponse,
   InAppPlanningListSessionsResponse,
   InAppPlanningPlanSummary,
+  InAppPlanningRebindRepoRequest,
+  InAppPlanningRebindRepoResponse,
   InAppPlanningResetRequest,
   InAppPlanningResetResponse,
   InAppPlanningSetTerminalModeRequest,
@@ -39,6 +41,7 @@ import type {
 } from '@invoker/data-store';
 import type { AgentRegistry } from '@invoker/execution-engine';
 import {
+  decideWorktreeBinding,
   evaluatePlanningTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
   isDraftingAuthorized,
@@ -49,7 +52,12 @@ import {
 } from '@invoker/planning-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
-import { ensurePlanningWorktreeReady, provisionPlanningWorktree, type PlanningRepoPool } from './planning-chat-worktree.js';
+import {
+  ensurePlanningWorktreeReady,
+  provisionPlanningWorktree,
+  releasePlanningWorktree,
+  type PlanningRepoPool,
+} from './planning-chat-worktree.js';
 
 function logPlanningWorktreeReadyError(sessionId: string, step: string, error: unknown): void {
   console.error(`[planning-chat] ensurePlanningWorktreeReady ${step} failed session="${sessionId}": ${
@@ -1088,6 +1096,109 @@ export function setPlanningChatTerminalMode(
     updatedAt,
   });
   return { ok: true };
+}
+
+export async function rebindPlanningChatRepo(
+  request: InAppPlanningRebindRepoRequest,
+  deps: {
+    config: InvokerConfig;
+    sessions: InAppPlanningChatSessions;
+    planningSessionStore?: InAppPlanningSessionStore;
+    repoPool?: PlanningRepoPool;
+  },
+): Promise<InAppPlanningRebindRepoResponse> {
+  const rawRequest = request as Partial<InAppPlanningRebindRepoRequest> | null | undefined;
+  const sessionId = typeof rawRequest?.sessionId === 'string' ? rawRequest.sessionId.trim() : '';
+  const session = sessionId ? deps.sessions.get(sessionId) : undefined;
+  if (!session) {
+    return { ok: false, error: 'No planning conversation yet.' };
+  }
+  if (!deps.repoPool) {
+    return { ok: false, error: 'Worktree provisioning is not available.' };
+  }
+  const repoPool = deps.repoPool;
+
+  const requestedRepoUrl = rawRequest?.repoUrl?.trim() || deps.config.defaultRepoUrl;
+  if (!requestedRepoUrl) {
+    return { ok: false, error: 'No repository specified.' };
+  }
+  const requestedBaseBranch = rawRequest?.baseBranch?.trim() || deps.config.defaultBranch || 'main';
+
+  try {
+    await repoPool.ensureCloneThroughRepoQueue(requestedRepoUrl);
+    const requestedHeadSha = await repoPool.resolveBaseCommit(requestedRepoUrl, requestedBaseBranch);
+
+    const decision = decideWorktreeBinding({
+      storedRepoUrl: session.repoUrl,
+      storedHeadSha: session.baseCommit,
+      requestedRepoUrl,
+      requestedHeadSha,
+      hasDraft: hasDraftPlan(session),
+    });
+
+    if (decision.action === 'reuse') {
+      return { ok: true, action: 'reuse' };
+    }
+
+    if (session.repoUrl && session.baseCommit && session.worktreePath) {
+      try {
+        await releasePlanningWorktree(repoPool, {
+          repoUrl: session.repoUrl,
+          baseCommit: session.baseCommit,
+          sessionId: session.id,
+        });
+      } catch (error) {
+        logPlanningWorktreeReadyError(session.id, 'rebind-release', error);
+      }
+    }
+
+    const provisioned = await provisionPlanningWorktree(repoPool, {
+      repoUrl: requestedRepoUrl,
+      baseBranch: requestedBaseBranch,
+      sessionId: session.id,
+    });
+
+    const presets = await resolveHarnessPresets(deps.config);
+    const preset = presets[session.presetKey];
+    if (!preset) {
+      return { ok: false, error: `Unknown planner preset "${session.presetKey}".` };
+    }
+    const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
+    const conversationDeps = { ...deps, workingDir: provisioned.worktreePath };
+    const conversation = new PlanConversation(planConversationConfig(
+      preset,
+      conversationDeps,
+      session.id,
+      selectHarnessSessionDriver,
+      { conversationalPlanning: true },
+    ));
+    await conversation.init();
+
+    session.repoUrl = requestedRepoUrl;
+    session.baseBranch = requestedBaseBranch;
+    session.baseCommit = provisioned.baseCommit;
+    session.worktreePath = provisioned.worktreePath;
+    session.worktreeBranch = provisioned.branch;
+    session.conversation = conversation;
+
+    if (decision.action === 'invalidate_and_block_submit') {
+      session.draftPlanSummary = undefined;
+      session.draftPlanText = undefined;
+      if (session.status === 'draft_ready') {
+        session.status = 'still_discussing';
+      }
+      appendSessionMessage(
+        session,
+        'system',
+        'The target repository changed. The previous draft was cleared — ask Invoker to draft it again.',
+      );
+    }
+
+    persistPlanningSession(session, deps.planningSessionStore, false);
+    return { ok: true, action: decision.action };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export interface PlanningChatTerminalStatePatch {

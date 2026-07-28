@@ -14,6 +14,7 @@ import {
   listInAppPlanningPresets,
   listPlanningChatSessions,
   planFromGoal,
+  rebindPlanningChatRepo,
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
@@ -1624,6 +1625,224 @@ describe('planning chat worktree provisioning', () => {
     } finally {
       rmSync(existingWorktreePath, { recursive: true, force: true });
     }
+  });
+});
+
+describe('rebindPlanningChatRepo', () => {
+  function sidecarPathFor(sessionId: string): string {
+    return join(resolveInvokerHomeRoot(), 'plan-drafts', `${sessionId}.yaml`);
+  }
+
+  function createFakeRebindRepoPool(
+    worktreePath: string,
+    headSha: string,
+  ): PlanningRepoPool & { release: ReturnType<typeof vi.fn>; softRelease: ReturnType<typeof vi.fn> } {
+    const release = vi.fn(async () => {});
+    const softRelease = vi.fn();
+    const acquireWorktree = vi.fn(async (_repoUrl: string, branch: string) => ({
+      clonePath: '/fake/clone',
+      worktreePath,
+      branch,
+      release,
+      softRelease,
+    }));
+    return {
+      ensureCloneThroughRepoQueue: vi.fn(async () => '/fake/clone'),
+      resolveBaseCommit: vi.fn(async () => headSha),
+      acquireWorktree,
+      externalWorktreePath: vi.fn(() => worktreePath),
+      release,
+      softRelease,
+    };
+  }
+
+  it('returns reuse and leaves the session untouched when the requested binding is unchanged', async () => {
+    const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'sha-a');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'reuse-session',
+      title: 'Reuse test',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'sha-a',
+      worktreePath: '/fake/worktree/existing-reuse',
+      worktreeBranch: 'invoker/planning/reuse-session',
+    });
+    const originalConversation = session.conversation;
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({ ok: true, action: 'reuse' });
+    expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/repo.git');
+    expect(stored?.baseBranch).toBe('main');
+    expect(stored?.baseCommit).toBe('sha-a');
+    expect(stored?.worktreePath).toBe('/fake/worktree/existing-reuse');
+    expect(stored?.worktreeBranch).toBe('invoker/planning/reuse-session');
+    expect(stored?.conversation).toBe(originalConversation);
+  });
+
+  it('provisions a new worktree and constructs a fresh conversation when there is no prior binding', async () => {
+    const worktreePath = '/fake/worktree/provision-session';
+    const repoPool = createFakeRebindRepoPool(worktreePath, 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'provision-session',
+      title: 'Provision test',
+    });
+    const originalConversation = session.conversation;
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/new-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({ ok: true, action: 'provision' });
+    expect(repoPool.acquireWorktree).toHaveBeenCalledWith(
+      'https://example.com/new-repo.git',
+      'invoker/planning/provision-session',
+      'new-head-sha',
+      'provision-session',
+    );
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/new-repo.git');
+    expect(stored?.baseBranch).toBe('main');
+    expect(stored?.baseCommit).toBe('new-head-sha');
+    expect(stored?.worktreePath).toBe(worktreePath);
+    expect(stored?.worktreeBranch).toBe('invoker/planning/provision-session');
+    expect(stored?.conversation).not.toBe(originalConversation);
+    expect(stored?.conversation.workingDir).toBe(worktreePath);
+  });
+
+  it('invalidates and clears a draft (session, DB, and sidecar) when rebinding to a different repo', async () => {
+    const worktreePath = '/fake/worktree/invalidate-session';
+    const repoPool = createFakeRebindRepoPool(worktreePath, 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const adapter = await SQLiteAdapter.create(':memory:');
+    const sessionId = 'invalidate-session';
+    try {
+      const session = planningSession({
+        id: sessionId,
+        title: 'Invalidate test',
+        status: 'draft_ready',
+        repoUrl: 'https://example.com/repo.git',
+        baseBranch: 'main',
+        baseCommit: 'sha-a',
+        worktreePath: '/fake/worktree/existing-invalidate',
+        worktreeBranch: `invoker/planning/${sessionId}`,
+        draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+        draftPlanText: VALID_PLAN_TEXT,
+      });
+      sessions.set(sessionId, session);
+
+      adapter.upsertInAppPlanningSession({
+        id: sessionId,
+        title: session.title,
+        presetKey: session.presetKey,
+        status: session.status,
+        confirmationMode: session.confirmationMode,
+        repoUrl: session.repoUrl,
+        baseBranch: session.baseBranch,
+        baseCommit: session.baseCommit,
+        worktreePath: session.worktreePath,
+        worktreeBranch: session.worktreeBranch,
+        messages: session.messages,
+        draftPlanSummary: session.draftPlanSummary,
+        draftPlanText: session.draftPlanText,
+        pendingResponse: false,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+      });
+
+      mkdirSync(dirname(sidecarPathFor(sessionId)), { recursive: true });
+      writeFileSync(sidecarPathFor(sessionId), VALID_PLAN_TEXT, 'utf8');
+      expect(existsSync(sidecarPathFor(sessionId))).toBe(true);
+
+      const result = await rebindPlanningChatRepo({
+        sessionId,
+        repoUrl: 'https://example.com/other-repo.git',
+        baseBranch: 'main',
+      }, {
+        config: {},
+        sessions,
+        planningSessionStore: adapter,
+        repoPool,
+      });
+
+      expect(result).toEqual({ ok: true, action: 'invalidate_and_block_submit' });
+      const stored = sessions.get(sessionId);
+      expect(stored?.draftPlanText).toBeUndefined();
+      expect(stored?.draftPlanSummary).toBeUndefined();
+      expect(stored?.status).toBe('still_discussing');
+      expect(stored?.repoUrl).toBe('https://example.com/other-repo.git');
+      expect(stored?.baseCommit).toBe('new-head-sha');
+      expect(stored?.worktreePath).toBe(worktreePath);
+
+      const persisted = adapter.loadInAppPlanningSession(sessionId);
+      expect(persisted?.draftPlanText).toBeUndefined();
+      expect(existsSync(sidecarPathFor(sessionId))).toBe(false);
+    } finally {
+      rmSync(sidecarPathFor(sessionId), { force: true });
+      adapter.close();
+    }
+  });
+
+  it('returns an error when the session is missing', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'sha-a');
+
+    const result = await rebindPlanningChatRepo({ sessionId: 'does-not-exist' }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({ ok: false, error: 'No planning conversation yet.' });
+  });
+
+  it('returns an error when no repoPool is configured', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({ id: 'no-pool-session', title: 'No pool' });
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({ sessionId: session.id }, {
+      config: {},
+      sessions,
+    });
+
+    expect(result).toEqual({ ok: false, error: 'Worktree provisioning is not available.' });
+  });
+
+  it('returns an error when no repo URL can be resolved', async () => {
+    const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'sha-a');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({ id: 'no-repo-session', title: 'No repo' });
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({ sessionId: session.id }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({ ok: false, error: 'No repository specified.' });
+    expect(repoPool.ensureCloneThroughRepoQueue).not.toHaveBeenCalled();
   });
 });
 
