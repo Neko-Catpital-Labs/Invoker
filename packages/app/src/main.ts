@@ -1145,8 +1145,19 @@ function startHeadlessMode(): void {
         planningSessionStore: readOnlyMode ? undefined : persistence,
       });
 
+      let testPlanningChatResponse:
+        | { planYaml: string; planName: string; reply?: string; delayMs?: number }
+        | { throwError: string }
+        | null = null;
+
       const executeStandaloneGuiMutation = async (payload: GuiMutationPayload): Promise<unknown> => {
         switch (payload.channel) {
+          case 'invoker:set-test-planning-chat-response': {
+            if (process.env.NODE_ENV === 'test') {
+              testPlanningChatResponse = payload.args[0] as typeof testPlanningChatResponse;
+            }
+            return undefined;
+          }
           case 'invoker:clear': {
             logger.info('clear — stopping all tasks and resetting daemon DAG', { module: 'ipc-delegate' });
             await sharedDeleteAllWorkflows({ logger, orchestrator, taskExecutor: undefined });
@@ -1193,6 +1204,18 @@ function startHeadlessMode(): void {
             return listPlanningChatSessions({ sessions: planningChatSessions });
           }
           case 'invoker:planning-chat-send': {
+            const planningChatResponseOverride = process.env.NODE_ENV === 'test' ? testPlanningChatResponse : null;
+            const plannerReplyOverride = planningChatResponseOverride
+              ? async (): Promise<string> => {
+                if ('throwError' in planningChatResponseOverride) {
+                  throw new Error(planningChatResponseOverride.throwError);
+                }
+                if (planningChatResponseOverride.delayMs) {
+                  await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
+                }
+                return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
+              }
+              : undefined;
             return sendPlanningChatMessage(payload.args[0] as InAppPlanningChatRequest, {
               config: invokerConfig,
               workingDir: repoRoot,
@@ -1202,6 +1225,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              plannerReplyOverride,
             });
           }
           case 'invoker:planning-chat-submit': {
