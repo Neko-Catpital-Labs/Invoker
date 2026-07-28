@@ -400,6 +400,38 @@ describe('IpcBus', () => {
     expect(result).toBe(42);
   });
 
+  it('REGRESSION: a slow invoker:planning-chat-send delegated over headless.gui-mutation is killed by the default deadline instead of getting the long-deadline protection headless.exec gets', async () => {
+    const sock = tempSocketPath();
+
+    const server = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(server);
+    await server.ready();
+
+    // Simulates the planner subprocess still working on an investigative reply
+    // (e.g. "why wasn't PR #6459 queued by the admin-bypass land worker?") past
+    // the transport's default deadline.
+    server.onRequest('headless.gui-mutation', () => new Promise(() => {}));
+
+    const client = new IpcBus(sock, { requestDeadlineMs: 50 });
+    buses.push(client);
+    await client.ready();
+    await sleep(20);
+
+    const pending = client.request('headless.gui-mutation', {
+      channel: 'invoker:planning-chat-send',
+      args: [{ sessionId: 'session-1', message: 'why was PR #6459 not queued by the admin-bypass land worker?' }],
+    });
+
+    const stillPending = Symbol('still-pending');
+    const winner = await Promise.race([pending, sleep(300).then(() => stillPending)]);
+
+    // headless.exec is on LONG_REQUEST_DEADLINE_CHANNELS and survives a slow owner
+    // reply; headless.gui-mutation (which wraps invoker:planning-chat-send and
+    // invoker:plan-from-goal) is not on that list, so it should behave the same
+    // way but currently does not.
+    expect(winner).toBe(stillPending);
+  });
+
   it('disconnect rejects with DISCONNECTED, not REQUEST_TIMEOUT', async () => {
     const sock = tempSocketPath();
 

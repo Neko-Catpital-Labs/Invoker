@@ -241,6 +241,7 @@ export const DEFAULT_SOCKET_PATH = resolveDefaultSocketPath();
  *  caller deadline so the responder is less likely to finish after the requester has given up. */
 const LONG_REQUEST_DEADLINE_CHANNELS = new Set([
   'invoker:plan-from-goal',
+  'invoker:planning-chat-send',
   // start-ready --recreate-all and other bulk mutations run inline on the owner.
   'headless.exec',
 ]);
@@ -661,7 +662,13 @@ export class IpcBus implements MessageBus {
     const env: ReqEnvelope = { kind: 'req', channel, body: message, reqId };
 
     return new Promise<Res>((resolve, reject) => {
-      const effectiveDeadlineMs = LONG_REQUEST_DEADLINE_CHANNELS.has(channel)
+      // Generic wrapper channels (e.g. headless.gui-mutation) carry the real
+      // operation name inside the message body, so a long-running operation
+      // delegated through one must be recognized there too.
+      const innerChannel = (message as { channel?: unknown } | null)?.channel;
+      const isLongRunning = LONG_REQUEST_DEADLINE_CHANNELS.has(channel)
+        || (typeof innerChannel === 'string' && LONG_REQUEST_DEADLINE_CHANNELS.has(innerChannel));
+      const effectiveDeadlineMs = isLongRunning
         ? Math.max(this.requestDeadlineMs, LONG_REQUEST_DEADLINE_MS)
         : this.requestDeadlineMs;
       const timer = setTimeout(() => {
