@@ -215,6 +215,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.rebaseRetry(String(args[0]));
       case 'invoker:rebase-recreate':
         return mutations.rebaseRecreate(String(args[0]));
+      case 'invoker:spawn-repair-workflow':
+        return mutations.spawnRepairWorkflow(args[0]);
       case 'invoker:edit-task-command':
         return mutations.editTaskCommand(String(args[0]), String(args[1]));
       case 'invoker:edit-task-prompt':
