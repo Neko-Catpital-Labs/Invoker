@@ -2169,7 +2169,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     'normal',
     async (workflowIdArg: unknown, baseBranchArg: unknown) => {
     const workflowId = String(workflowIdArg);
-    const baseBranch = normalizeWorkflowBaseBranch(String(baseBranchArg), 'master');
+    const baseBranch = normalizeWorkflowBaseBranch(String(baseBranchArg));
     logger.info(`set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`, { module: 'ipc' });
     try {
       persistence.updateWorkflow(workflowId, { baseBranch });

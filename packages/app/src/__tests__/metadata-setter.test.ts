@@ -68,23 +68,15 @@ describe('metadata-setter', () => {
     expect(deps.orchestrator.syncFromDb).toHaveBeenCalledWith('wf-1');
   });
 
-  it('preserves explicit workflow base refs on metadata writes', async () => {
+  it('pins workflow baseBranch metadata writes to master', async () => {
     const deps = makeDeps();
-    await setWorkflowMetadata(deps, 'wf-1', 'baseBranch', 'upstream/release');
+    await setWorkflowMetadata(deps, 'wf-1', 'baseBranch', 'release');
 
     expect(deps.persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', {
-      baseBranch: 'upstream/release',
+      baseBranch: 'master',
     });
   });
 
-  it('canonicalizes workflow base refs on metadata writes', async () => {
-    const deps = makeDeps();
-    await setWorkflowMetadata(deps, 'wf-1', 'baseBranch', 'refs/remotes/origin/release');
-
-    expect(deps.persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', {
-      baseBranch: 'origin/release',
-    });
-  });
   it('sets allowed task config metadata through serialized workflow mutation', async () => {
     const deps = makeDeps();
     await setTaskMetadata(deps, 'task-1', 'config.poolId', 'some-pool');

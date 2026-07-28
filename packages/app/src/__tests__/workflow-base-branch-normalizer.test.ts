@@ -9,11 +9,10 @@ function makePersistence(workflows: Array<{ id: string; baseBranch?: string }>) 
 }
 
 describe('normalizePersistedWorkflowBaseBranches', () => {
-  it('fills missing refs and canonicalizes stored base refs', () => {
+  it('rewrites every non-master workflow base branch to master', () => {
     const persistence = makePersistence([
       { id: 'wf-master', baseBranch: 'master' },
-      { id: 'wf-origin-ref', baseBranch: 'refs/remotes/origin/master' },
-      { id: 'wf-local-ref', baseBranch: 'refs/heads/release' },
+      { id: 'wf-main', baseBranch: 'main' },
       { id: 'wf-empty', baseBranch: '' },
       { id: 'wf-missing' },
     ]);
@@ -21,23 +20,19 @@ describe('normalizePersistedWorkflowBaseBranches', () => {
 
     const updated = normalizePersistedWorkflowBaseBranches(persistence, logger);
 
-    expect(updated).toBe(4);
-    expect(persistence.updateWorkflow).toHaveBeenCalledTimes(4);
-    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(1, 'wf-origin-ref', { baseBranch: 'origin/master' });
-    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(2, 'wf-local-ref', { baseBranch: 'release' });
-    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(3, 'wf-empty', { baseBranch: 'master' });
-    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(4, 'wf-missing', { baseBranch: 'master' });
+    expect(updated).toBe(3);
+    expect(persistence.updateWorkflow).toHaveBeenCalledTimes(3);
+    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(1, 'wf-main', { baseBranch: 'master' });
+    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(2, 'wf-empty', { baseBranch: 'master' });
+    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(3, 'wf-missing', { baseBranch: 'master' });
     expect(logger.info).toHaveBeenCalledWith(
-      '[init] normalized 4 workflow base branch refs to canonical form',
-      { module: 'init', workflowCount: 4 },
+      '[init] normalized 3 workflow base branches to master',
+      { module: 'init', workflowCount: 3, baseBranch: 'master' },
     );
   });
 
-  it('skips logging when every workflow already has a canonical base ref', () => {
-    const persistence = makePersistence([
-      { id: 'wf-master', baseBranch: 'master' },
-      { id: 'wf-upstream', baseBranch: 'upstream/release' },
-    ]);
+  it('skips logging when every workflow already targets master', () => {
+    const persistence = makePersistence([{ id: 'wf-master', baseBranch: 'master' }]);
     const logger = { info: vi.fn() };
 
     const updated = normalizePersistedWorkflowBaseBranches(persistence, logger);

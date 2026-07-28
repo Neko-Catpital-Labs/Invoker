@@ -166,7 +166,7 @@ function validateWorkflowValue(fieldPath: string, value: unknown, raw: boolean):
     return { mergeMode: enumValue<'manual' | 'automatic' | 'external_review' | 'no_op'>(path, value, ['manual', 'automatic', 'external_review', 'no_op']) ?? undefined };
   }
   if (path === 'baseBranch') {
-    return { baseBranch: normalizeWorkflowBaseBranch(value == null ? null : String(value), 'master') };
+    return { baseBranch: normalizeWorkflowBaseBranch(value == null ? null : String(value)) };
   }
   if (path === 'externalDependencies' || path === 'externalDependencyChanges') {
     if (value !== null && !Array.isArray(value)) throw new Error(`Field "${fieldPath}" must be an array or null.`);

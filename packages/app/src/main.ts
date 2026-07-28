@@ -23,6 +23,7 @@ import {
   startMainProcessBootstrap,
 } from './bootstrap/app-bootstrap.js';
 import { createStartupWorkflowCache } from './bootstrap/startup-workflow-cache.js';
+import { normalizePersistedWorkflowBaseBranches } from './workflow-base-branch-normalizer.js';
 
 const enableTestCompositor = process.env.INVOKER_E2E_ENABLE_COMPOSITOR === '1' || Boolean(process.env.CAPTURE_MODE);
 const hideE2eWindow = process.env.NODE_ENV === 'test' && process.env.INVOKER_E2E_HIDE_WINDOW !== '0';
@@ -761,6 +762,9 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
       );
     }
   }
+  if (!readOnly) {
+    normalizePersistedWorkflowBaseBranches(persistence, logger);
+  }
   const shellEnv = await initializeShellEnvironment();
   if (process.platform === 'darwin') {
     const suffix = shellEnv.reason ? ` (${shellEnv.reason})` : '';
@@ -1318,7 +1322,7 @@ function startHeadlessMode(): void {
           }
           case 'invoker:set-merge-branch': {
             const workflowId = String(payload.args[0]);
-            const baseBranch = normalizeWorkflowBaseBranch(String(payload.args[1]), 'master');
+            const baseBranch = normalizeWorkflowBaseBranch(String(payload.args[1]));
             persistence.updateWorkflow(workflowId, { baseBranch });
             const tasks = persistence.loadTasks(workflowId);
             const mergeTask = tasks.find((task) => task.config.isMergeNode);
