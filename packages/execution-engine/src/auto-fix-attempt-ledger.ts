@@ -25,6 +25,7 @@ export type AutoFixAttemptDecision =
 export interface AutoFixAttemptLedger {
   get(key: AutoFixAttemptLedgerKey): number;
   consume(key: AutoFixAttemptLedgerKey, rawBudget: unknown): AutoFixAttemptDecision;
+  refund(key: AutoFixAttemptLedgerKey): number;
 }
 
 function ledgerMapKey(key: AutoFixAttemptLedgerKey): string {
@@ -70,6 +71,17 @@ export function createAutoFixAttemptLedger(): AutoFixAttemptLedger {
         attemptsAfter,
         workerRetryBudget,
       };
+    },
+    refund(key) {
+      const mapKey = ledgerMapKey(key);
+      const attempts = attemptsByKey.get(mapKey) ?? 0;
+      if (attempts <= 1) {
+        attemptsByKey.delete(mapKey);
+        return 0;
+      }
+      const attemptsAfter = attempts - 1;
+      attemptsByKey.set(mapKey, attemptsAfter);
+      return attemptsAfter;
     },
   };
 }
