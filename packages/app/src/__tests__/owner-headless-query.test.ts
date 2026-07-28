@@ -21,6 +21,7 @@ function makeHandlers(over: Partial<OwnerReadQueryHandlers> = {}): OwnerReadQuer
     listWorkflows: vi.fn(() => []),
     loadWorkflowBundle: vi.fn(() => ({ workflow: null, tasks: [] })),
     getReviewGate: vi.fn(() => null),
+    getPlanningChatSession: vi.fn(() => null),
     getEvents: vi.fn(() => []),
     getTaskById: vi.fn(() => null),
     getTaskOutput: vi.fn(() => ''),
