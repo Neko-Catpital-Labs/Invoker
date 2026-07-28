@@ -15,7 +15,7 @@ echo "==> case 3.3: delete-all"
 invoker_e2e_run_headless delete-all
 
 echo "==> case 3.3: submit plan"
-invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.3-fix-then-ssh.yaml"
+invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.3-fix-then-ssh.yaml" || true
 
 STA=$(invoker_e2e_task_status e2e-g333-taskA)
 STB=$(invoker_e2e_task_status e2e-g333-taskB)
