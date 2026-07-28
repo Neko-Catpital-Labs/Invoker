@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import * as child_process from 'node:child_process';
 import { buildPlanSystemPrompt, PlanConversation, isConfirmation } from '../slack/plan-conversation.js';
+import type { ConversationRepository } from '@invoker/data-store';
 
 // Activation side: the planner is told to write the full plan to the draft file
 // and reply with a summary, and each turn starts from a cleared file so a prior
@@ -29,6 +30,16 @@ function fakePlannerChild(stdout: string, beforeClose?: () => void): any {
     proc.emit('close', 0);
   }, 0);
   return proc;
+}
+
+function fakeConversationRepo() {
+  const saveConversation = vi.fn();
+  const repo = {
+    loadConversation: vi.fn(() => null),
+    saveConversation,
+    deleteConversation: vi.fn(),
+  } as unknown as ConversationRepository;
+  return { repo, saveConversation };
 }
 
 const VALID_PLAN_YAML = `name: "Draft Activation"
@@ -121,6 +132,26 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
+  it('saves no-draft assistant text without the standalone submit line', async () => {
+    const { repo, saveConversation } = fakeConversationRepo();
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'no-draft-save',
+      conversationRepo: repo,
+      plannerRetryLimit: 0,
+    });
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_REPLY_LINE}`));
+    const reply = await conversation.sendMessage('Draft it');
+
+    expect(reply).toBe('Drafted the plan. Summary: one step.');
+    expect(saveConversation).toHaveBeenCalled();
+    const savedMessages = saveConversation.mock.calls.at(-1)?.[1] as Array<{ role: string; content: string }>;
+    const savedAssistantText = savedMessages[savedMessages.length - 1]?.content;
+    expect(savedAssistantText).toBe(reply);
+    expect(savedAssistantText).not.toContain(SUBMIT_REPLY_LINE);
+  });
+
   it('routes approval through the review flow instead of a submit reply', () => {
     const conversation = new PlanConversation({});
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
@@ -153,6 +184,31 @@ describe('plan draft file - activation side', () => {
     expect(draftedPlan).not.toBeNull();
     const parsedDraft = parseYaml(draftedPlan!) as Record<string, unknown>;
     expect(parsedDraft.name).toBe('Draft Activation');
+  });
+
+  it('saves real-draft assistant text with the standalone submit line', async () => {
+    const { repo, saveConversation } = fakeConversationRepo();
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'real-draft-save',
+      conversationRepo: repo,
+      plannerRetryLimit: 0,
+    });
+    const path = conversation.planDraftFilePath();
+    if (!path) throw new Error('expected a plan draft path');
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(
+      `Drafted the plan.\n\n${SUBMIT_REPLY_LINE}`,
+      () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
+    ));
+    const reply = await conversation.sendMessage('Create the plan');
+
+    expect(reply).toContain(SUBMIT_REPLY_LINE);
+    expect(saveConversation).toHaveBeenCalled();
+    const savedMessages = saveConversation.mock.calls.at(-1)?.[1] as Array<{ role: string; content: string }>;
+    const savedAssistantText = savedMessages[savedMessages.length - 1]?.content;
+    expect(savedAssistantText).toBe(reply);
+    expect(savedAssistantText).toContain(SUBMIT_REPLY_LINE);
   });
 
   it('falls back to the latest inline plan when no draft file path exists', async () => {
