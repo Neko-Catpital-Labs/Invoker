@@ -834,6 +834,15 @@ test.describe('Visual proof capture', () => {
     await page.getByRole('button', { name: 'Review draft' }).click();
     await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
     await expect(page.getByTestId('draft-raw-yaml')).toContainText('name: Terminal Planned Flow');
+    // planning-draft-locked-note is a net-new element; this spec also runs
+    // against the pre-change base branch for before/after visual proof, where
+    // the testid does not exist yet.
+    const lockedNote = page.getByTestId('planning-draft-locked-note');
+    if (await lockedNote.count() > 0) {
+      await expect(lockedNote).toContainText(
+        'This draft is locked — critique in chat, or ask Invoker to re-draft, to change it.',
+      );
+    }
     await captureScreenshot(page, 'terminal-planned-draft-review');
     await page.getByTestId('planning-create-workflow').click();
 
@@ -848,6 +857,26 @@ test.describe('Visual proof capture', () => {
     await page.evaluate(async () => {
       await window.invoker.setTestPlanningChatResponse(null);
     });
+  });
+
+  test('planning context sidebar shows repo bind status', async ({ page }) => {
+    await page.getByTestId('sidebar-home').click();
+    await page.getByRole('button', { name: 'Options' }).click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+    await page.getByTestId('invoker-terminal-input').fill('What does this repo do?');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('What does this repo do?');
+
+    await page.getByTestId('planning-context-toggle').click();
+    // planning-repo-status is a net-new element; this spec also runs against
+    // the pre-change base branch for before/after visual proof, where the
+    // testid does not exist yet.
+    const repoStatus = page.getByTestId('planning-repo-status');
+    if (await repoStatus.count() > 0) {
+      await expect(repoStatus).toBeVisible();
+      await expect(repoStatus).toContainText('No repository bound yet');
+    }
+    await captureScreenshot(page, 'planning-context-no-repo-bound');
   });
 
   test('planning rail — per-row delete and clear-submitted controls', async ({ page }) => {
