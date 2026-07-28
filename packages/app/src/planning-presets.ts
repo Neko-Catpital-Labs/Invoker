@@ -7,6 +7,7 @@ export const BUILTIN_PLANNING_PRESETS: Record<string, PlanningPresetSpec> = {
   'omp+codex': { tool: 'omp', model: 'codex' },
   omp: { tool: 'omp' },
   codex: { tool: 'codex' },
+  claude: { tool: 'claude' },
 };
 
 export const DEFAULT_PLANNING_PRESET = 'cursor+claude';
