@@ -23,6 +23,8 @@ export type ElectronFixtures = {
   guiOwnerMode: string;
   /** When true, the app's embedded terminal backend throws on spawn (fault injection). */
   breakTerminalSpawn: boolean;
+  /** When true, the invoker:get-planning-presets IPC handler throws (fault injection). */
+  breakPlanningPresets: boolean;
   repoConfig: Partial<InvokerConfig>;
   page: Page;
   testDir: string;
@@ -51,6 +53,7 @@ async function removeTestDir(dir: string): Promise<void> {
 export const test = base.extend<ElectronFixtures>({
   guiOwnerMode: [process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui', { option: true }],
   breakTerminalSpawn: [false, { option: true }],
+  breakPlanningPresets: [false, { option: true }],
   repoConfig: [{ autoFixRetries: 0 }, { option: true }],
 
   testDir: async ({}, use) => {
@@ -61,7 +64,7 @@ export const test = base.extend<ElectronFixtures>({
     }
   },
 
-  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, repoConfig, testDir }, use) => {
+  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, repoConfig, testDir }, use) => {
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
@@ -188,6 +191,7 @@ exit 64
           ? { INVOKER_E2E_CODEX_DEMO_RENDERER: process.env.INVOKER_E2E_CODEX_DEMO_RENDERER }
           : {}),
         ...(breakTerminalSpawn ? { INVOKER_E2E_BREAK_TERMINAL_SPAWN: '1' } : {}),
+        ...(breakPlanningPresets ? { INVOKER_E2E_BREAK_PLANNING_PRESETS: '1' } : {}),
         ...(forceReadOnlyStatus ? { INVOKER_E2E_FORCE_READ_ONLY_STATUS: '1' } : {}),
         ...(forceConnectionLostStatus ? { INVOKER_E2E_FORCE_CONNECTION_LOST_STATUS: '1' } : {}),
         PATH: pathEnv,
