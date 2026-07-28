@@ -598,10 +598,11 @@ describe('PlanConversation', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const prompt = mockSpawn.mock.calls[0][1][1] as string;
     expect(prompt).toContain('The user has explicitly approved drafting');
-    expect(prompt).toContain('name: "Plan Name"');
-    expect(prompt).toContain('Generate a YAML task plan');
-    expect(prompt).not.toContain('Reply `submit` to submit it.');
-    expect(prompt).toContain('Do not tell the user to reply `submit`');
+    expect(prompt).toContain('plan-to-invoker');
+    expect(prompt).toContain('Harness handoff mode');
+    expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
+    expect(prompt).not.toContain('name: "Plan Name"');
+    expect(prompt).not.toContain('tasks:\n  - id: task-1');
   });
 
   it('submittedPlanText is null before confirmation', async () => {
@@ -866,6 +867,29 @@ describe('PlanConversation prompt construction', () => {
     expect(prompt).toContain('name: "Plan Name"');
     expect(prompt).toContain('Generate a YAML task plan');
     expect(prompt).toContain('Every implementation task MUST have a corresponding test task');
+  });
+
+  it('buildPlanSystemPrompt direct mode is unchanged when explicitly non-conversational', () => {
+    const prompt = buildPlanSystemPrompt('main', undefined, { conversationalPlanning: false });
+    expect(prompt).toContain('Generate a YAML task plan');
+    expect(prompt).toContain('name: "Plan Name"');
+    expect(prompt).toContain('tasks:\n  - id: task-1');
+  });
+
+  it('buildPlanSystemPrompt conversational mode without drafting authorization is unchanged', () => {
+    const prompt = buildPlanSystemPrompt('main', undefined, { conversationalPlanning: true, draftingAuthorized: false });
+    expect(prompt).toContain('Drafting is not authorized yet.');
+    expect(prompt).toContain('Ask scoping questions first');
+    expect(prompt).not.toContain('name: "Plan Name"');
+  });
+
+  it('buildPlanSystemPrompt conversational mode with drafting authorized points at the plan-to-invoker skill instead of embedding the ad hoc contract', () => {
+    const prompt = buildPlanSystemPrompt('main', undefined, { conversationalPlanning: true, draftingAuthorized: true });
+    expect(prompt).toContain('plan-to-invoker');
+    expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
+    expect(prompt).toContain('Harness handoff mode');
+    expect(prompt).not.toContain('tasks:\n  - id: task-1');
+    expect(prompt).not.toContain('name: "Plan Name"');
   });
 
   it('buildCursorPrompt includes system prompt for first message', () => {
