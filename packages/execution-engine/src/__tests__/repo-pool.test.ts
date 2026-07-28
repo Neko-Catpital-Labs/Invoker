@@ -235,6 +235,147 @@ describe('RepoPool', () => {
     }
   });
 
+  it('acquireWorktree: retries once after a transient git worktree setup failure', async () => {
+    const branch = 'experiment/race-not-in-work-tree';
+    const actionId = 'wf-race/task-not-in-work-tree';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          const error = new Error(
+            `bash exited with code 128: Preparing worktree (new branch '${branch}')\n` +
+              'fatal: this operation must be run in a work tree',
+          );
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
+      const currentBranch = execSync('git branch --show-current', { cwd: acquired.worktreePath })
+        .toString()
+        .trim();
+      expect(currentBranch).toBe(branch);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
+  it('acquireWorktree: retries once when worktree add reports target gitdir missing', async () => {
+    const branch = 'experiment/race-missing-gitdir';
+    const actionId = 'wf-race/task-missing-gitdir';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailFirstAttempt = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        if (shouldFailFirstAttempt) {
+          shouldFailFirstAttempt = false;
+          const error = new Error(
+            `bash exited with code 128: Preparing worktree (new branch '${branch}')\n` +
+              `fatal: not a git repository: '${targetPath}/.git'`,
+          );
+          (error as Error & { exitCode?: number }).exitCode = 128;
+          throw error;
+        }
+        return originalRunBashLocal(script, cwd);
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
+      const currentBranch = execSync('git branch --show-current', { cwd: acquired.worktreePath })
+        .toString()
+        .trim();
+      expect(currentBranch).toBe(branch);
+      expect(runBashSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
+  it('acquireWorktree: reuses a worktree when git reports failure after creating it', async () => {
+    const branch = 'experiment/race-partial-success';
+    const actionId = 'wf-race/task-partial';
+    const poolWithExternalBase = new RepoPool({
+      cacheDir: tmpDir,
+      worktreeBaseDir: join(tmpDir, 'managed-worktrees'),
+    });
+    const targetPath = poolWithExternalBase.externalWorktreePath(localRepoUrl, branch);
+
+    const originalRunBashLocal = branchUtils.runBashLocal;
+    let shouldFailAfterCreatingWorktree = true;
+    const runBashSpy = vi
+      .spyOn(branchUtils, 'runBashLocal')
+      .mockImplementation(async (script, cwd) => {
+        await originalRunBashLocal(script, cwd);
+        if (shouldFailAfterCreatingWorktree) {
+          shouldFailAfterCreatingWorktree = false;
+          const error = new Error(
+            `bash exited with code 255: Preparing worktree (resetting branch '${branch}')\n` +
+              `fatal: cannot force update the branch '${branch}' used by worktree at '${targetPath}'`,
+          );
+          (error as Error & { exitCode?: number }).exitCode = 255;
+          throw error;
+        }
+      });
+
+    try {
+      const acquired = await poolWithExternalBase.acquireWorktree(
+        localRepoUrl,
+        branch,
+        undefined,
+        actionId,
+        { forceFresh: true },
+      );
+      expect(realpathSync(acquired.worktreePath)).toBe(realpathSync(targetPath));
+      expect(existsSync(join(acquired.worktreePath, '.git'))).toBe(true);
+      const currentBranch = execSync('git branch --show-current', { cwd: acquired.worktreePath })
+        .toString()
+        .trim();
+      expect(currentBranch).toBe(branch);
+      expect(runBashSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      runBashSpy.mockRestore();
+      await poolWithExternalBase.destroyAll();
+    }
+  });
+
   it('softRelease: frees slot without removing worktree from disk', async () => {
     const limitedPool = new RepoPool({ cacheDir: tmpDir, maxWorktrees: 1 });
     const wt1 = await limitedPool.acquireWorktree(localRepoUrl, 'branch-soft');

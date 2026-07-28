@@ -19,6 +19,7 @@ import { syncPlanBaseRemoteForRef, isInvokerManagedPoolBranch, resolvePlanBaseRe
 import { remoteFetchForPool } from './remote-fetch-policy.js';
 import { isWorkspaceCleanupEnabled } from './workspace-cleanup-policy.js';
 import { computeRepoCacheHash, computeRepoCacheKey, sanitizeBranchForPath } from './git-utils.js';
+import { cleanGitRepositoryEnv } from './process-utils.js';
 
 export interface RepoPoolConfig {
   cacheDir: string;
@@ -489,6 +490,13 @@ export class RepoPool {
         /* best-effort; bashPreserveOrReset will surface failure */
       }
     }
+    try {
+      await this.execGit(['worktree', 'prune'], clonePath);
+    } catch (err) {
+      traceExecution(
+        `[RepoPool] reconcileStaleWorktreePath: worktree prune failed clonePath=${clonePath} worktreePath=${worktreePath} error=${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   private isPathRegisteredInPorcelain(porcelain: string, worktreePath: string): boolean {
@@ -526,6 +534,46 @@ export class RepoPool {
     return message.includes(normalizedPath);
   }
 
+  private isBranchCheckedOutAtWorktreeError(err: unknown, worktreePath: string): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    if (
+      !message.includes('cannot force update the branch')
+      && !message.includes('is already checked out at')
+    ) {
+      return false;
+    }
+    if (message.includes(worktreePath)) return true;
+    const normalizedPath = canonicalPathForComparison(worktreePath);
+    return message.includes(normalizedPath);
+  }
+
+  private isTransientWorktreeSetupError(err: unknown, worktreePath: string): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.includes('Preparing worktree')) return false;
+    const normalizedPath = canonicalPathForComparison(worktreePath);
+    return message.includes('fatal: this operation must be run in a work tree')
+      || (
+        message.includes('No such file or directory')
+        && (
+          message.includes('unable to create file')
+          || message.includes('cannot create directory')
+        )
+      )
+      || (
+        message.includes('fatal: not a git repository:')
+        && (
+          message.includes(worktreePath)
+          || message.includes(normalizedPath)
+        )
+      );
+  }
+
+  private isRetryableWorktreeSetupError(err: unknown, worktreePath: string): boolean {
+    return this.isAlreadyExistsWorktreeError(err, worktreePath)
+      || this.isBranchCheckedOutAtWorktreeError(err, worktreePath)
+      || this.isTransientWorktreeSetupError(err, worktreePath);
+  }
+
   private async runPreserveOrResetWithRecovery(
     clonePath: string,
     worktreePath: string,
@@ -549,21 +597,43 @@ export class RepoPool {
       bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.after');
       return;
     } catch (err) {
-      if (!this.isAlreadyExistsWorktreeError(err, worktreePath)) {
+      if (await this.isReusableManagedWorktree(worktreePath, branch)) {
+        traceExecution(
+          `[RepoPool] runPreserveOrResetWithRecovery: worktree became reusable despite failure branch=${branch} path=${worktreePath}`,
+        );
+        bench('RepoPool.runPreserveOrResetWithRecovery.partialSuccessReused', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      if (!this.isRetryableWorktreeSetupError(err, worktreePath)) {
         bench('RepoPool.runPreserveOrResetWithRecovery.runBashLocal.failed', {
           error: err instanceof Error ? err.message : String(err),
         });
         throw err;
       }
       traceExecution(
-        `[RepoPool] runPreserveOrResetWithRecovery: retrying after pre-existing path branch=${branch} path=${worktreePath}`,
+        `[RepoPool] runPreserveOrResetWithRecovery: retrying after worktree setup failure branch=${branch} path=${worktreePath}`,
       );
       bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.before');
       await this.reconcileStaleWorktreePath(clonePath, worktreePath);
       bench('RepoPool.runPreserveOrResetWithRecovery.reconcileStaleWorktreePath.after');
     }
     bench('RepoPool.runPreserveOrResetWithRecovery.retryRunBashLocal.before');
-    await runBashLocal(script, clonePath);
+    try {
+      await runBashLocal(script, clonePath);
+    } catch (err) {
+      if (await this.isReusableManagedWorktree(worktreePath, branch)) {
+        traceExecution(
+          `[RepoPool] runPreserveOrResetWithRecovery: retry left reusable worktree branch=${branch} path=${worktreePath}`,
+        );
+        bench('RepoPool.runPreserveOrResetWithRecovery.retryPartialSuccessReused', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return;
+      }
+      throw err;
+    }
     bench('RepoPool.runPreserveOrResetWithRecovery.retryRunBashLocal.after');
   }
 
@@ -962,7 +1032,11 @@ export class RepoPool {
 
   private execGit(args: string[], cwd: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn('git', args, {
+        cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: cleanGitRepositoryEnv(),
+      });
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
