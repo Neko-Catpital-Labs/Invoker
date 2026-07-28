@@ -371,18 +371,78 @@ function makeInitialPlanningSession(
 }
 
 function planningSessionSummaryToView(session: InAppPlanningSessionSummary): PlanningSessionView {
+  return planningSessionFromSummary(session);
+}
+
+function planningTitleFromInput(input: string): string {
+  return input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input;
+}
+
+function isInitialPlanningPlaceholder(session: PlanningSessionView | undefined): boolean {
+  return Boolean(
+    session
+      && session.id === 'local-planning-session-1'
+      && session.title === 'Untitled plan'
+      && session.input === ''
+      && !session.busy
+      && !session.terminalBusy
+      && session.messages.length === 0
+      && !session.draftPlanAvailable
+      && !session.terminalSession,
+  );
+}
+
+function mergeRestoredPlanningSession(
+  existing: PlanningSessionView,
+  restored: PlanningSessionView,
+): PlanningSessionView {
+  const existingUpdatedAt = Date.parse(existing.updatedAt);
+  const restoredUpdatedAt = Date.parse(restored.updatedAt);
+  const existingIsNewer = Number.isFinite(existingUpdatedAt)
+    && (!Number.isFinite(restoredUpdatedAt) || existingUpdatedAt > restoredUpdatedAt);
+  const keepExistingContent = existingIsNewer || existing.busy || existing.messages.length > restored.messages.length;
+  const contentSource = keepExistingContent ? existing : restored;
+  const terminalSession = existing.terminalSession ?? restored.terminalSession ?? null;
+  const terminalBusy = terminalSession ? false : Boolean(existing.terminalBusy || restored.terminalBusy);
+
   return {
-    ...session,
-    messages: session.messages.map((line) => ({
-      id: line.id,
-      text: line.text,
-      role: line.role,
-      ...(line.tone ? { tone: line.tone } : {}),
-    })),
-    input: '',
-    busy: false,
-    conversationKey: session.id,
+    ...contentSource,
+    input: existing.input,
+    busy: existing.busy,
+    conversationKey: existing.conversationKey,
+    messages: keepExistingContent ? existing.messages : restored.messages,
+    mode: existing.mode === 'tmux' || restored.mode === 'tmux' ? 'tmux' : 'chat',
+    terminalSession,
+    terminalBusy,
+    terminalError: terminalSession ? null : existing.terminalError ?? restored.terminalError ?? null,
   };
+}
+
+function mergeRestoredPlanningSessions(
+  currentSessions: PlanningSessionView[],
+  restoredSessions: PlanningSessionView[],
+): PlanningSessionView[] {
+  if (restoredSessions.length === 0) return currentSessions;
+  if (currentSessions.length === 1 && isInitialPlanningPlaceholder(currentSessions[0])) {
+    return restoredSessions;
+  }
+
+  const restoredById = new Map(restoredSessions.map((session) => [session.id, session]));
+  const nextSessions: PlanningSessionView[] = [];
+
+  for (const currentSession of currentSessions) {
+    const restoredSession = restoredById.get(currentSession.id);
+    if (restoredSession) {
+      nextSessions.push(mergeRestoredPlanningSession(currentSession, restoredSession));
+      restoredById.delete(currentSession.id);
+      continue;
+    }
+    if (!isInitialPlanningPlaceholder(currentSession)) {
+      nextSessions.push(currentSession);
+    }
+  }
+
+  return [...nextSessions, ...restoredById.values()];
 }
 
 function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
@@ -1198,20 +1258,22 @@ export function App() {
     window.invoker?.planningChatList?.()
       .then((response) => {
         if (cancelled || !response.ok || response.sessions.length === 0) return;
-        const currentSessions = planningSessionsRef.current;
-        const first = currentSessions[0];
-        const onlyInitialPlaceholder = currentSessions.length === 1
-          && first?.id === 'local-planning-session-1'
-          && first.input === ''
-          && first.messages.every((line) => line.role === 'system');
-        if (!onlyInitialPlaceholder) return;
         const restored = response.sessions.map(planningSessionSummaryToView);
-        const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
+        const nextSessions = mergeRestoredPlanningSessions(planningSessionsRef.current, restored);
+        const nextActiveSessionId = nextSessions.some((session) => session.id === activePlanningSessionIdRef.current)
+          ? activePlanningSessionIdRef.current
+          : nextSessions[0]?.id ?? activePlanningSessionIdRef.current;
+        const nextActiveSession = nextSessions.find((session) => session.id === nextActiveSessionId);
+        const maxLineId = Math.max(1, ...nextSessions.flatMap((session) => session.messages.map((message) => message.id)));
         nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
-        setPlanningSessions(restored);
-        setActivePlanningSessionId(restored[0]?.id ?? 'local-planning-session-1');
-        setSelectedPlanningPresetKey((current) => current || restored[0]?.presetKey || current);
-        setSelectedPlanningConfirmationMode(restored[0]?.confirmationMode ?? 'require');
+        planningSessionsRef.current = nextSessions;
+        activePlanningSessionIdRef.current = nextActiveSessionId;
+        setPlanningSessions(nextSessions);
+        setActivePlanningSessionId(nextActiveSessionId);
+        if (nextActiveSession) {
+          setSelectedPlanningPresetKey((current) => nextActiveSession.presetKey || current);
+          setSelectedPlanningConfirmationMode(nextActiveSession.confirmationMode ?? 'require');
+        }
       })
       .catch(() => {});
     return () => {
@@ -1251,13 +1313,15 @@ export function App() {
             ? planningSessionFromSummary(summary, { terminalSession: liveTerminal })
             : planningSessionFromSummary(summary);
         });
-        setPlanningSessions(restored);
-        setActivePlanningSessionId((currentSessionId) => (
-          restored.some((session) => session.id === currentSessionId)
-            ? currentSessionId
-            : restored[0]?.id ?? currentSessionId
-        ));
-        const maxLineId = Math.max(1, ...restored.flatMap((session) => session.messages.map((message) => message.id)));
+        const nextSessions = mergeRestoredPlanningSessions(planningSessionsRef.current, restored);
+        const nextActiveSessionId = nextSessions.some((session) => session.id === activePlanningSessionIdRef.current)
+          ? activePlanningSessionIdRef.current
+          : nextSessions[0]?.id ?? activePlanningSessionIdRef.current;
+        const maxLineId = Math.max(1, ...nextSessions.flatMap((session) => session.messages.map((message) => message.id)));
+        planningSessionsRef.current = nextSessions;
+        activePlanningSessionIdRef.current = nextActiveSessionId;
+        setPlanningSessions(nextSessions);
+        setActivePlanningSessionId(nextActiveSessionId);
         nextTerminalLineIdRef.current = Math.max(nextTerminalLineIdRef.current, maxLineId + 1);
       } catch {
         /* planning chat restore is best-effort */
@@ -2910,7 +2974,7 @@ export function App() {
             busy: false,
             id: result.sessionId,
             title: session.title === 'Untitled plan'
-              ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
+              ? planningTitleFromInput(input)
               : session.title,
             presetKey: request.presetKey ?? session.presetKey,
             confirmationMode: result.confirmationMode ?? session.confirmationMode ?? 'require',
@@ -2944,12 +3008,57 @@ export function App() {
           }
         }
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        const nextSessionId = result.sessionId ?? previousSessionId;
+        const returnedSessionId = result.sessionId;
+        const errorLineId = nextTerminalLineIdRef.current;
+        nextTerminalLineIdRef.current += 1;
+        const updatedAt = new Date().toISOString();
+        setPlanningSessions((prev) => {
+          const previousSession = prev.find((session) => session.id === previousSessionId);
+          const existingTargetSession = nextSessionId !== previousSessionId
+            ? prev.find((session) => session.id === nextSessionId)
+            : undefined;
+          const sessionToUpdate = previousSession ?? existingTargetSession;
+          if (!sessionToUpdate) return prev;
+
+          let reconciledSession: PlanningSessionView = {
+            ...sessionToUpdate,
+            id: nextSessionId,
+            busy: false,
+            title: sessionToUpdate.title === 'Untitled plan' ? planningTitleFromInput(input) : sessionToUpdate.title,
+            presetKey: request.presetKey ?? sessionToUpdate.presetKey,
+            confirmationMode: sessionToUpdate.confirmationMode ?? selectedPlanningConfirmationMode,
+            messages: [...sessionToUpdate.messages, { id: errorLineId, text: result.error, role: 'system', tone: 'error' }],
+            updatedAt,
+          };
+
+          if (previousSession && existingTargetSession) {
+            reconciledSession = mergeRestoredPlanningSession(reconciledSession, existingTargetSession);
+          }
+
+          const insertionIndex = prev.findIndex((session) => (
+            session.id === previousSessionId || session.id === nextSessionId
+          ));
+          const remainingSessions = prev.filter((session) => (
+            session.id !== previousSessionId && session.id !== nextSessionId
+          ));
+          const nextSessions = [...remainingSessions];
+          nextSessions.splice(Math.max(0, insertionIndex), 0, reconciledSession);
+          planningSessionsRef.current = nextSessions;
+          return nextSessions;
+        });
+        if (returnedSessionId) {
+          activePlanningSessionIdRef.current = activePlanningSessionIdRef.current === previousSessionId
+            ? returnedSessionId
+            : activePlanningSessionIdRef.current;
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === previousSessionId ? returnedSessionId : currentSessionId
+          ));
+        }
         keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
         forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
