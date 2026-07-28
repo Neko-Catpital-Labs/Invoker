@@ -77,7 +77,7 @@ This table lists every mutating command path and how the owner-boundary contract
 | `set command` | headless.ts:829 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set executor` | headless.ts:841 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
 | `set agent` | headless.ts:853 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
-| `set merge-mode` | headless.ts:1011 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | |
+| `set merge-mode` | headless.ts:1011 | **Yes** (line 365) | `tryDelegateExec()` OR standalone writable | Allowed modes: `manual | automatic | external_review` |
 | **Headless Read-Only Commands** | | | | delegate to the owner when present; open `readOnly` only when none |
 | `query workflows` | headless.ts:193 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
 | `query tasks` | headless.ts:206 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
@@ -85,20 +85,21 @@ This table lists every mutating command path and how the owner-boundary contract
 | `query queue` | headless.ts:272 | **Yes** (owner-required) | Owner answers over IPC | Live scheduler state; requires an owner |
 | `query audit` | headless.ts:295 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
 | `query session` | headless.ts:308 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
-| **Workflow Actions** (shared library, always called by owner) |
-| `rejectTask()` | workflow-actions.ts:54 | N/A | Called by owner (GUI/headless standalone) → orchestrator → persistence | Shared library assumes writable context |
-| `restartTask()` | workflow-actions.ts:75 | N/A | Called by owner → orchestrator → persistence | |
-| `retryWorkflow()` | workflow-actions.ts:82 | N/A | Called by owner → orchestrator → persistence | |
-| `recreateWorkflow()` | workflow-actions.ts:89 | N/A | Called by owner → `bumpGenerationAndRecreate()` → persistence | |
-| `recreateTask()` | workflow-actions.ts:96 | N/A | Called by owner → orchestrator → persistence | |
-| `cancelWorkflow()` | workflow-actions.ts:103 | N/A | Called by owner → orchestrator → persistence | |
-| `rebaseAndRetry()` | workflow-actions.ts:117 | N/A | Called by owner → `bumpGenerationAndRecreate()` → persistence | |
-| `editTaskCommand()` | workflow-actions.ts:136 | N/A | Called by owner → orchestrator → persistence | |
-| `editTaskType()` | workflow-actions.ts:144 | N/A | Called by owner → orchestrator → persistence | |
-| `editTaskAgent()` | workflow-actions.ts:153 | N/A | Called by owner → orchestrator → persistence | |
-| `selectExperiment()` | workflow-actions.ts:161 | N/A | Called by owner → orchestrator → persistence | |
-| `setWorkflowMergeMode()` | workflow-actions.ts:189 | N/A | Called by owner → persistence.updateWorkflow | |
-| `resolveConflictAction()` | workflow-actions.ts:208 | N/A | Called by owner → orchestrator → persistence | |
+| **Workflow Mutation Facade / Actions** (shared owner-side mutation layer) |
+| `rejectTask()` | workflow-actions.ts:233 | N/A | Called by owner (GUI/headless standalone) → orchestrator → persistence | Shared library assumes writable context |
+| `retryTask()` | workflow-mutation-facade.ts:167 / command-service.ts:153 | N/A | Owner facade → `CommandService.retryTask()` → `Orchestrator.retryTask()` → persistence | Lineage-preserving task retry |
+| `retryWorkflow()` | workflow-mutation-facade.ts:311 / command-service.ts:487 | N/A | Owner facade → `CommandService.retryWorkflow()` → orchestrator → persistence | |
+| `recreateWorkflow()` | workflow-mutation-facade.ts:319 / command-service.ts:510 | N/A | Owner facade → `CommandService.recreateWorkflow()` → orchestrator → persistence | |
+| `recreateTask()` | workflow-mutation-facade.ts:175 / command-service.ts:169 | N/A | Owner facade → `CommandService.recreateTask()` → orchestrator → persistence | |
+| `cancelWorkflow()` | workflow-actions.ts:360 | N/A | Called by owner → orchestrator → persistence | |
+| `recreateWorkflowFromFreshBase()` | workflow-actions.ts:571 / command-service.ts:533 | N/A | Called by owner → fresh-base prep → `CommandService.recreateWorkflowFromFreshBase()` → persistence | Fresh-base workflow recreation |
+| `rebaseRetry()` / `rebaseRecreate()` | workflow-actions.ts:583, 610 | N/A | Owner-side helpers resolve the target and route to `retryWorkflow()` / `recreateWorkflowFromFreshBase()` | Canonical fresh-base helper names |
+| `editTaskCommand()` | workflow-actions.ts:661 | N/A | Called by owner → orchestrator → persistence | |
+| `editTaskType()` | workflow-actions.ts:677 | N/A | Called by owner → orchestrator → persistence | |
+| `editTaskAgent()` | workflow-actions.ts:687 | N/A | Called by owner → orchestrator → persistence | |
+| `selectExperiment()` | workflow-actions.ts:711 | N/A | Called by owner → orchestrator → persistence | |
+| `setWorkflowMergeMode()` | workflow-actions.ts:780 | N/A | Called by owner → persistence.updateWorkflow | Allowed modes: `manual | automatic | external_review` |
+| `resolveConflictAction()` | workflow-actions.ts:831 | N/A | Called by owner → orchestrator → persistence | |
 
 ### Enforcement Locations
 
@@ -114,7 +115,7 @@ This table lists every mutating command path and how the owner-boundary contract
 
 1. **GUI always owns DB**: When GUI is running, `initServices()` (main.ts:605) opens writable persistence. All IPC handlers mutate via this owner instance.
 2. **Headless delegates by default**: When GUI is present, headless commands try delegation first. `run`, `resume`, and most `headless.exec` commands use a 5s timeout; workflow-scoped `rebase-retry` and `rebase-recreate` use 60s. Only if delegation fails (no GUI or timeout) does headless open its own writable DB.
-3. **Read-only commands never delegate**: `query` subcommands always open `readOnly: true` persistence (main.ts:386), never write.
+3. **Read-only commands never write**: `query` subcommands delegate reads to the owner when one is present; otherwise they open `readOnly: true` persistence (main.ts:386).
 4. **Standalone escape hatch**: `INVOKER_HEADLESS_STANDALONE=1` skips delegation, allowing headless to own the DB (main.ts:348-349).
 5. **Delegation timeout prevents deadlock**: IPC delegation is bounded so headless does not hang if GUI is unresponsive. The default is 5s, with a 60s allowance for workflow-scoped `rebase-retry` and `rebase-recreate` command shapes in `headless.exec`.
 
