@@ -196,7 +196,9 @@ def run_cycle(args: argparse.Namespace) -> bool:
                 handle_repair_outcome(executor, ledger, logger, args.repo, pr, outcome, now)
             elif action.kind == "repair_conflict":
                 ledger.record("conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now)
-                repairer.repair_conflict(pr, action.detail)
+                outcome = repairer.repair_conflict(pr, action.detail)
+                if outcome is not None:
+                    handle_repair_outcome(executor, ledger, logger, args.repo, pr, outcome, now)
             else:
                 executor.execute(action, pr, now)
                 if action.kind == "requeue":

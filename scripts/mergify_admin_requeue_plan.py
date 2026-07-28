@@ -39,6 +39,7 @@ QUEUE_ONLY_REQUIRED_CHECKS = frozenset({
 ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
+TERMINAL_BLOCKER_KINDS = frozenset({"terminal"})
 REPAIR_STOP_PREFIX = "Mergify repair stopped: "
 MANUAL_SPLIT_STOP_MARKERS = (
     "human stack split required",
@@ -81,6 +82,9 @@ def is_queue_only_required_check(name: str) -> bool:
 
 def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
+    if pr.state == "MERGED":
+        blockers.append(Blocker("merged", "terminal", pr.number, "state=MERGED"))
+        return tuple(blockers)
     if pr.state != "OPEN":
         blockers.append(Blocker("closed", "closed", pr.number, f"state={pr.state}"))
         return tuple(blockers)
@@ -309,7 +313,7 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
 
 
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
-    if blocker.kind != "failed_check":
+    if blocker.kind not in {"failed_check", "conflict", "bot_review_thread"}:
         return None
     latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
     if latest is None:
@@ -503,21 +507,32 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
 def wait_reason_for_facts(facts: StackFacts) -> str:
     if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
-    if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
-        return "bottom-already-queued"
     for pr in facts.stack.prs:
         blocker_kinds = {blocker.kind for blocker in facts.blockers_by_pr[pr.number]}
         if "pending_check" in blocker_kinds:
             return "pending-check"
         if "merge_hold" in blocker_kinds and len(blocker_kinds) == 1:
             return "merge-hold-only"
+        if TERMINAL_BLOCKER_KINDS & blocker_kinds:
+            return "terminal"
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
+    if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
+        return "bottom-already-queued"
     return "no-action"
 
 
 def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
-    return any(blocker.kind == "pending_check" or blocker.kind in HUMAN_BLOCKER_KINDS for blocker in facts.all_blockers)
+    return any(
+        blocker.kind == "pending_check"
+        or blocker.kind in HUMAN_BLOCKER_KINDS
+        or blocker.kind in TERMINAL_BLOCKER_KINDS
+        for blocker in facts.all_blockers
+    )
+
+
+def _pr_has_human_decision(facts: StackFacts, pr_number: int) -> bool:
+    return any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr_number])
 
 
 def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
@@ -545,6 +560,8 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
@@ -561,6 +578,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_human_decision(facts, pr.number):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
