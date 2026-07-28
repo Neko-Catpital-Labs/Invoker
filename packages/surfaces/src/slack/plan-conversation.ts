@@ -556,9 +556,7 @@ export class PlanConversation {
       : inlineDraft;
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
-    if (!nextDraft) {
-      message = removeStandaloneSubmitInstruction(message);
-    }
+    message = nextDraft ? message : removeStandaloneSubmitInstruction(message);
     this._lastTurnReasoning = formatted.reasoning;
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
