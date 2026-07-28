@@ -17,8 +17,10 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
+const TERMINAL_ATTEMPT_STATUSES = new Set(['completed', 'failed']);
 
 /**
  * Adapter-side task/attempt mutators that {@link SqliteTaskAttemptRepository.failTaskAndAttempt}
@@ -227,8 +229,23 @@ export class SqliteTaskAttemptRepository {
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
+    if (changes.status !== undefined) {
+      this.exec.runTransaction(() => this.updateTaskInternal(taskId, changes));
+      return;
+    }
+    this.updateTaskInternal(taskId, changes);
+  }
+
+  private updateTaskInternal(taskId: string, changes: TaskStateChanges): void {
     const beforeTask = this.loadTask(taskId);
     if (!beforeTask) return;
+    const beforeStoredStatus = changes.status === undefined
+      ? undefined
+      : String(
+        this.exec.queryOne('SELECT status FROM tasks WHERE id = ?', [taskId])?.status ?? beforeTask.status,
+      );
+    const shouldJournalStatusChange =
+      changes.status !== undefined && changes.status !== beforeStoredStatus;
 
     const setClauses: string[] = [];
     const values: unknown[] = [];
@@ -418,6 +435,18 @@ export class SqliteTaskAttemptRepository {
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }
     this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    if (shouldJournalStatusChange) {
+      const row = this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+      if (!row) {
+        throw new Error(`Failed to read task ${taskId} after status update`);
+      }
+      appendJournalEntry(this.exec, {
+        entityType: 'task',
+        entityId: taskId,
+        op: 'upsert',
+        payload: row,
+      });
+    }
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -594,6 +623,10 @@ export class SqliteTaskAttemptRepository {
   // ── Attempt CRUD ─────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
+    this.exec.runTransaction(() => this.saveAttemptInternal(attempt));
+  }
+
+  private saveAttemptInternal(attempt: Attempt): void {
     this.exec.execRun(`
       INSERT OR REPLACE INTO attempts (
         id, node_id, attempt_number, queue_priority, status,
@@ -628,6 +661,16 @@ export class SqliteTaskAttemptRepository {
       attempt.createdAt.toISOString(),
       attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
     ]);
+    const row = this.exec.queryOne('SELECT * FROM attempts WHERE id = ?', [attempt.id]);
+    if (!row) {
+      throw new Error(`Failed to read attempt ${attempt.id} after creation`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType: 'attempt',
+      entityId: attempt.id,
+      op: 'upsert',
+      payload: row,
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -689,6 +732,23 @@ export class SqliteTaskAttemptRepository {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    const mayJournalCompletion =
+      (changes.status !== undefined && TERMINAL_ATTEMPT_STATUSES.has(changes.status)) ||
+      changes.completedAt !== undefined;
+    if (mayJournalCompletion) {
+      this.exec.runTransaction(() => this.updateAttemptInternal(attemptId, changes));
+      return;
+    }
+    this.updateAttemptInternal(attemptId, changes);
+  }
+
+  private updateAttemptInternal(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
+    const beforeRow = this.exec.queryOne(
+      'SELECT status, completed_at FROM attempts WHERE id = ?',
+      [attemptId],
+    ) as { status?: string; completed_at?: string | null } | undefined;
+    if (!beforeRow) return;
+
     const setClauses: string[] = [];
     const values: unknown[] = [];
 
@@ -712,6 +772,27 @@ export class SqliteTaskAttemptRepository {
     if (setClauses.length === 0) return;
     values.push(attemptId);
     this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    const nextStatus = changes.status ?? beforeRow.status;
+    const statusJustBecameTerminal =
+      changes.status !== undefined &&
+      TERMINAL_ATTEMPT_STATUSES.has(changes.status) &&
+      changes.status !== beforeRow.status;
+    const completedAtChanged =
+      changes.completedAt !== undefined &&
+      (changes.completedAt instanceof Date ? changes.completedAt.toISOString() : changes.completedAt ?? null) !==
+        (beforeRow.completed_at ?? null);
+    if ((statusJustBecameTerminal || completedAtChanged) && nextStatus && TERMINAL_ATTEMPT_STATUSES.has(nextStatus)) {
+      const row = this.exec.queryOne('SELECT * FROM attempts WHERE id = ?', [attemptId]);
+      if (!row) {
+        throw new Error(`Failed to read attempt ${attemptId} after completion update`);
+      }
+      appendJournalEntry(this.exec, {
+        entityType: 'attempt',
+        entityId: attemptId,
+        op: 'upsert',
+        payload: row,
+      });
+    }
   }
 
   claimAttemptForLaunch(
