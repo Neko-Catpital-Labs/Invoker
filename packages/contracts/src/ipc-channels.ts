@@ -484,6 +484,9 @@ export interface InAppPlanningSessionSummary {
   draftPlanAvailable: boolean;
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
+  repoUrl?: string;
+  baseBranch?: string;
+  baseCommit?: string;
   submittedWorkflowId?: string;
   submittedPlanName?: string;
   terminalMode?: PlanningTerminalMode;
