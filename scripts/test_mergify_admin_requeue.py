@@ -1,5 +1,6 @@
 import io
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -442,25 +443,72 @@ Failing checks
         item = pr(2647, merge_state="DIRTY", latest=mergify())
         repairs = []
         repairer = self.repairer(FakeGh(), ledger, "Neko-Catpital-Labs/Invoker")
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, _prompt: repairs.append(item.number)):
-                for epoch in range(3):
-                    ledger.record("conflict-repair", item.number, item.head_ref_oid, "conflict:2647", epoch)
-                    repairer.repair_conflict(item, "GitHub reports merge conflict")
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"HOME": home}):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                    with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                        with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, _prompt: repairs.append(item.number)):
+                            for epoch in range(3):
+                                ledger.record("conflict-repair", item.number, item.head_ref_oid, "conflict:2647", epoch)
+                                repairer.repair_conflict(item, "GitHub reports merge conflict")
         self.assertEqual(ledger.count("conflict-repair", 2647, HEAD, "conflict:2647"), 3)
         self.assertEqual(repairs, [2647, 2647, 2647])
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
+    def test_conflict_repair_human_blocker_file_returns_invalid_outcome(self):
+        reason = (
+            "Conflict is human-only: PR #6118 is superseded by the already-merged "
+            "workflow-base-ref-docs stack, and keeping #6118 would regress preserved explicit base refs."
+        )
+        item = pr(6118, merge_state="DIRTY", mergeable="CONFLICTING")
+        repairer = self.repairer(object(), self.ledger())
+        revs = iter([HEAD, HEAD])
+
+        with tempfile.TemporaryDirectory() as home:
+            work_root = Path(home) / ".invoker" / "mergify-admin-requeue-work" / "6118"
+            blocker_path = work_root / ".git" / "mergify-admin-requeue-human-blocker.txt"
+
+            def write_blocker(_work_root, _prompt):
+                blocker_path.parent.mkdir(parents=True, exist_ok=True)
+                blocker_path.write_text(reason, encoding="utf-8")
+                return reason
+
+            with mock.patch.dict(os.environ, {"HOME": home}):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                    with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(revs) if args == ("rev-parse", "HEAD") else ""):
+                        with mock.patch.object(repairer, "run_claude_repair", side_effect=write_blocker):
+                            with mock.patch.object(repairer, "hard_reset_work_root") as reset:
+                                outcome = repairer.repair_conflict(item, "GitHub reports merge conflict")
+
+        self.assertIsNotNone(outcome)
+        assert outcome is not None
+        self.assertEqual(outcome.status, "blocked_invalid")
+        self.assertEqual(outcome.check_name, "conflict")
+        self.assertEqual(outcome.errors, (reason,))
+        reset.assert_called_once_with(work_root, HEAD)
+
+    def test_conflict_human_blocker_stops_retries(self):
+        reason = (
+            "Conflict is human-only: PR #6118 is superseded by the already-merged "
+            "workflow-base-ref-docs stack, and keeping #6118 would regress preserved explicit base refs."
+        )
+        ledger = self.ledger()
+        ledger.record("repair-invalid", 6118, HEAD, "conflict", 1, meta={"errors": [reason]})
+        item = pr(6118, merge_state="DIRTY", mergeable="CONFLICTING")
+        actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 2)
+        self.assertEqual(actions, ())
+
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())
         with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(["claude"], 0, "fixed\n", "")
             repairer.run_claude_repair(Path("/tmp/work"), "repair this")
         run.assert_called_once_with(
             ["claude", "-p", "repair this", "--dangerously-skip-permissions"],
             cwd="/tmp/work",
-            check=True,
             text=True,
+            capture_output=True,
         )
 
     def test_candidate_stack_includes_unlabeled_upper_prs(self):
