@@ -355,6 +355,23 @@ function buildRegisteredOwnerWorkerDeps(
       localPath: resolveInvokerHomeRoot(),
       remoteTargets,
     },
+    infraRepair: {
+      ownerRepoRoot: repoRoot,
+      ownerInvokerHome: resolveInvokerHomeRoot(),
+      remoteTargets: Object.fromEntries(
+        Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => [
+          name,
+          {
+            host: target.host,
+            user: target.user,
+            sshKeyPath: target.sshKeyPath,
+            port: target.port,
+            provisionCommand: target.provisionCommand,
+            remoteInvokerHome: target.remoteInvokerHome,
+          },
+        ]),
+      ),
+    },
     e2eAutoFix: { intervalMs: invokerConfig.e2eAutoFixIntervalMs },
     autoApprove: {
       enabled: resolveAutoApproveAIFixes(invokerConfig),
