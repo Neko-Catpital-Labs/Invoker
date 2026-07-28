@@ -105,3 +105,23 @@ Credentials: `~/.invoker/.slack-owner.env` (see `invoker-cli setup slack` and
 `packages/slack-manager/deploy/install.sh`.
 
 For a public release, prefer the tagged GitHub Release workflow so users get the standard release assets and checksums.
+
+## Daily prereleases
+
+GitHub Actions also cuts a **full** multi-platform prerelease once per day from
+`master` (workflow `Daily release`, tag `daily-YYYYMMDD` in UTC). Daily cuts:
+
+- Build the same CLI, Slack, and desktop asset set as a tagged `v*` release
+- Publish as a GitHub **prerelease** (so `/releases/latest` and default
+  `scripts/install.sh` installs stay on the latest stable `v*` release)
+- Do **not** bump package versions, roll `CHANGELOG.md`, or publish npm
+
+Install a specific daily cut:
+
+```bash
+bash scripts/install.sh --version daily-20260728
+```
+
+Use this local macOS script when you need an unsigned handoff build before the
+next daily or tagged cut exists. Real versioned releases still use
+`node scripts/bump-version.mjs <semver>`, commit, and push a `v*` tag.
