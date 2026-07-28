@@ -124,24 +124,45 @@ function appendPlanningTerminalSnapshot(snapshot: string | undefined, data: stri
   return next.slice(next.length - PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS);
 }
 
+function planningTerminalOutputMatchesSession(session: PlanningSessionView, event: TerminalOutputEvent): boolean {
+  if (event.planningSessionId) {
+    return session.id === event.planningSessionId;
+  }
+  return session.terminalSession?.sessionId === event.sessionId || session.terminalSessionId === event.sessionId;
+}
+
 function planningTerminalSessionFromOutputEvent(
   session: PlanningSessionView,
   event: TerminalOutputEvent,
   outputSnapshot: string,
 ): TerminalSessionDescriptor {
+  const existingTerminalSession = session.terminalSession;
+  const existingSessionMatchesEvent = existingTerminalSession?.sessionId === event.sessionId;
+  const summarySessionMatchesEvent = session.terminalSessionId === event.sessionId;
+  const terminalStatus = existingSessionMatchesEvent
+    ? existingTerminalSession.status
+    : summarySessionMatchesEvent
+      ? session.terminalStatus ?? 'running'
+      : 'running';
   return {
-    sessionId: session.terminalSession?.sessionId ?? session.terminalSessionId ?? event.sessionId,
-    taskId: session.terminalSession?.taskId ?? event.taskId,
+    sessionId: event.sessionId,
+    taskId: event.taskId,
     kind: 'planning',
     planningSessionId: session.id,
-    status: session.terminalSession?.status ?? session.terminalStatus ?? 'running',
-    exitCode: session.terminalSession?.exitCode ?? session.terminalExitCode,
-    cwd: session.terminalSession?.cwd,
-    command: session.terminalSession?.command,
-    args: session.terminalSession?.args,
-    mode: session.terminalSession?.mode ?? 'spawn',
-    attached: session.terminalSession?.attached ?? false,
-    createdAt: session.terminalSession?.createdAt ?? session.terminalUpdatedAt ?? session.updatedAt,
+    status: terminalStatus,
+    exitCode: existingSessionMatchesEvent
+      ? existingTerminalSession.exitCode
+      : summarySessionMatchesEvent
+        ? session.terminalExitCode
+        : undefined,
+    cwd: existingSessionMatchesEvent ? existingTerminalSession.cwd : undefined,
+    command: existingSessionMatchesEvent ? existingTerminalSession.command : undefined,
+    args: existingSessionMatchesEvent ? existingTerminalSession.args : undefined,
+    mode: existingSessionMatchesEvent ? existingTerminalSession.mode : 'spawn',
+    attached: existingSessionMatchesEvent ? existingTerminalSession.attached : false,
+    createdAt: existingSessionMatchesEvent
+      ? existingTerminalSession.createdAt
+      : session.terminalUpdatedAt ?? session.updatedAt,
     outputSnapshot,
   };
 }
@@ -1341,23 +1362,21 @@ export function App() {
       if (event.kind !== 'planning' || typeof event.data !== 'string' || event.data.length === 0) return;
       setPlanningSessions((prev) =>
         prev.map((session) => {
-          const matchesSession =
-            session.terminalSession?.sessionId === event.sessionId
-            || session.terminalSessionId === event.sessionId
-            || (event.planningSessionId !== undefined && session.id === event.planningSessionId);
-          if (!matchesSession) return session;
+          if (!planningTerminalOutputMatchesSession(session, event)) return session;
 
           const outputSnapshot = appendPlanningTerminalSnapshot(
             session.terminalSession?.outputSnapshot ?? session.terminalOutputSnapshot,
             event.data,
           );
+          const terminalSession = planningTerminalSessionFromOutputEvent(session, event, outputSnapshot);
           return {
             ...session,
             terminalMode: 'tmux',
-            terminalSessionId: session.terminalSession?.sessionId ?? session.terminalSessionId ?? event.sessionId,
-            terminalStatus: session.terminalSession?.status ?? session.terminalStatus ?? 'running',
+            terminalSessionId: terminalSession.sessionId,
+            terminalStatus: terminalSession.status,
+            terminalExitCode: terminalSession.exitCode,
             terminalOutputSnapshot: outputSnapshot,
-            terminalSession: planningTerminalSessionFromOutputEvent(session, event, outputSnapshot),
+            terminalSession,
           };
         }),
       );
