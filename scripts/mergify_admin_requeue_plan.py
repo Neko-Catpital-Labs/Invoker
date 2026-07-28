@@ -69,6 +69,7 @@ class StackFacts:
     upper_stack_needs_acceptance: bool
     prereq_status: RepairPrereqStatus | None
     queue_only_noop_check: str | None
+    queue_command_inflight: bool
     suppressed_failed_checks_by_pr: Mapping[int, tuple[str, ...]]
     blockers_by_pr: Mapping[int, tuple[Blocker, ...]]
     all_blockers: tuple[Blocker, ...]
@@ -312,6 +313,30 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
     return check_name
 
 
+def queue_command_is_after_latest_mergify(pr: PrSnapshot) -> bool:
+    command = pr.latest_queue_command
+    if command is None or not command.updated_at:
+        return False
+    latest = pr.latest_mergify
+    return latest is None or not latest.queued_at or command.updated_at > latest.queued_at
+
+
+def requeue_key_for_bottom(bottom: PrSnapshot) -> str:
+    latest = bottom.latest_mergify
+    if latest and latest.state == "dequeued":
+        return latest.comment_id or "manual"
+    if "dequeued" in bottom.labels:
+        return "ready"
+    return "ready"
+
+
+def has_recorded_queue_command_inflight(bottom: PrSnapshot, ledger: Ledger) -> bool:
+    if not queue_command_is_after_latest_mergify(bottom):
+        return False
+    key = requeue_key_for_bottom(bottom)
+    return ledger.latest("requeue", bottom.number, bottom.head_ref_oid, key) is not None
+
+
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
     if blocker.kind not in {"failed_check", "conflict", "bot_review_thread"}:
         return None
@@ -401,6 +426,8 @@ def _assert_stack_facts_invariants(facts: StackFacts) -> None:
         assert latest.queue_rule_name == "admin-bypass", "queue-only noop requires the admin-bypass queue"
         assert latest.head_sha == facts.bottom.head_ref_oid, "queue-only noop requires a same-head Mergify event"
         assert facts.queue_only_noop_check in latest.failing_checks, "queue-only noop check must still be failing in Mergify"
+    if facts.queue_command_inflight:
+        assert facts.bottom is not None, "queue command in flight requires a current bottom PR"
 
 
 def build_stack_facts(
@@ -417,6 +444,7 @@ def build_stack_facts(
     upper_stack_needs_acceptance = stack_has_unaccepted_upper_pr(stack, bottom)
     prereq_status = latest_repair_prereq_status(stack, ledger, open_pr_numbers, trunk)
     queue_only_noop_check = latest_queue_only_noop_check(stack, ledger, trunk)
+    queue_command_inflight = bool(bottom and has_recorded_queue_command_inflight(bottom, ledger))
 
     suppressed_failed_checks_by_pr: dict[int, tuple[str, ...]] = {}
     if prereq_status and prereq_status.needs_followup_requeue and bottom:
@@ -457,6 +485,7 @@ def build_stack_facts(
         upper_stack_needs_acceptance=upper_stack_needs_acceptance,
         prereq_status=prereq_status,
         queue_only_noop_check=queue_only_noop_check,
+        queue_command_inflight=queue_command_inflight,
         suppressed_failed_checks_by_pr=suppressed_failed_checks_by_pr,
         blockers_by_pr=blockers_by_pr,
         all_blockers=tuple(
@@ -495,6 +524,11 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
                     "failing_checks": list(pr.latest_mergify.failing_checks),
                     "waiting_for": list(pr.latest_mergify.waiting_for),
                 },
+                "latest_queue_command": None if not pr.latest_queue_command else {
+                    "comment_id": pr.latest_queue_command.comment_id,
+                    "updated_at": pr.latest_queue_command.updated_at,
+                    "author": pr.latest_queue_command.author_login,
+                },
                 "blockers": [
                     {"kind": blocker.kind, "key": blocker.key, "detail": blocker.detail}
                     for blocker in facts.blockers_by_pr[pr.number]
@@ -519,6 +553,8 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
     if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
+        return "bottom-already-queued"
+    if facts.queue_command_inflight:
         return "bottom-already-queued"
     return "no-action"
 
@@ -665,6 +701,8 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
     if facts.upper_stack_needs_acceptance:
         return None
     if latest and latest.state in ACTIVE_QUEUE_STATES and (latest.head_sha == bottom.head_ref_oid or "queued" in bottom.labels):
+        return None
+    if facts.queue_command_inflight:
         return None
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
