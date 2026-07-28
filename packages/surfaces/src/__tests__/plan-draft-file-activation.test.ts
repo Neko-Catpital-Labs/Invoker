@@ -121,6 +121,28 @@ describe('plan draft file - activation side', () => {
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
+  it('persists no-draft replies without the standalone submit line', async () => {
+    const repo = {
+      loadConversation: vi.fn().mockReturnValue(null),
+      saveConversation: vi.fn(),
+    };
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'persist-no-draft',
+      conversationRepo: repo as any,
+      plannerRetryLimit: 0,
+    });
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_REPLY_LINE}`));
+    await conversation.sendMessage('Draft it');
+
+    expect(repo.saveConversation).toHaveBeenCalledOnce();
+    const savedMessages = repo.saveConversation.mock.calls[0]?.[1] as Array<{ role: string; content: string }>;
+    const savedReply = savedMessages[savedMessages.length - 1]?.content;
+    expect(savedReply).toBe('Drafted the plan. Summary: one step.');
+    expect(savedReply).not.toContain(SUBMIT_REPLY_LINE);
+  });
+
   it('routes approval through the review flow instead of a submit reply', () => {
     const conversation = new PlanConversation({});
     (conversation as any).messages.push({ role: 'user', content: 'Draft a plan' });
@@ -153,6 +175,32 @@ describe('plan draft file - activation side', () => {
     expect(draftedPlan).not.toBeNull();
     const parsedDraft = parseYaml(draftedPlan!) as Record<string, unknown>;
     expect(parsedDraft.name).toBe('Draft Activation');
+  });
+
+  it('persists real drafted replies with the standalone submit line', async () => {
+    const repo = {
+      loadConversation: vi.fn().mockReturnValue(null),
+      saveConversation: vi.fn(),
+    };
+    const conversation = new PlanConversation({
+      workingDir,
+      threadTs: 'persist-draft',
+      conversationRepo: repo as any,
+      plannerRetryLimit: 0,
+    });
+    const path = conversation.planDraftFilePath();
+    if (!path) throw new Error('expected a plan draft path');
+
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(
+      `Drafted the plan.\n\n${SUBMIT_REPLY_LINE}`,
+      () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
+    ));
+    const reply = await conversation.sendMessage('Create the plan');
+
+    expect(reply).toContain(SUBMIT_REPLY_LINE);
+    expect(repo.saveConversation).toHaveBeenCalledOnce();
+    const savedMessages = repo.saveConversation.mock.calls[0]?.[1] as Array<{ role: string; content: string }>;
+    expect(savedMessages[savedMessages.length - 1]?.content).toContain(SUBMIT_REPLY_LINE);
   });
 
   it('falls back to the latest inline plan when no draft file path exists', async () => {

@@ -555,8 +555,10 @@ export class PlanConversation {
       ? fileDraft
       : inlineDraft;
     this._lastTurnDraftPlanText = nextDraft;
-    if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
-    if (!nextDraft) {
+    const hasCurrentTurnDraft = nextDraft !== null;
+    if (hasCurrentTurnDraft) {
+      this.lastKnownGoodPlanText = nextDraft;
+    } else {
       message = removeStandaloneSubmitInstruction(message);
     }
     this._lastTurnReasoning = formatted.reasoning;
