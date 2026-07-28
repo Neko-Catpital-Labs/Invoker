@@ -2542,7 +2542,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return agentRegistry.listExecutionHarnesses();
   });
 
-  ipcMain.handle('invoker:get-planning-presets', () => listInAppPlanningPresets(loadConfig()));
+  ipcMain.handle('invoker:get-planning-presets', () => {
+    if (process.env.INVOKER_E2E_BREAK_PLANNING_PRESETS === '1') {
+      throw new Error('simulated getPlanningPresets IPC failure (injected by INVOKER_E2E_BREAK_PLANNING_PRESETS)');
+    }
+    return listInAppPlanningPresets(loadConfig());
+  });
 
   ipcMain.handle('invoker:get-execution-defaults', () => {
     return resolveDefaultTaskExecutionSettings(loadConfig());
