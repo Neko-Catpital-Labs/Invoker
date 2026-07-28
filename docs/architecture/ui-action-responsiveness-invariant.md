@@ -7,8 +7,6 @@ Any user-visible action must **acknowledge within 200ms**:
 - Click / key → immediate UI feedback (optimistic state, pending control, open overlay, selection highlight).
 - Electron **main-process event loop / IPC accept** must stay responsive: concurrent cheap IPC
   (`listWorkflows`, `getWorkerStatus`) under load should stay **p95 ≤ 200ms**, max sample ≤ 250ms.
-  Planning-chat send is a tighter hot path: while a 1,000-message transcript send is in flight,
-  `listWorkflows` must stay **p95 ≤ 100ms locally / ≤ 150ms in CI**, max sample ≤ 250ms.
 
 **Workflow select is tighter:** clicking a workflow node must show
 `selected-workflow-mini-dag` within **100ms**. That path is an in-memory task filter; it must not
@@ -47,7 +45,6 @@ the critical path.
 | Unit | `packages/app/src/__tests__/worker-runtime.test.ts` — default `stop()` returns promptly; `settleTimeoutMs` bounds quit |
 | PR Playwright | `packages/app/e2e/main-process-hitch-responsiveness.spec.ts` — fat DB + `startWorker`/`stopWorker` IPC accept ≤ 200ms |
 | PR Playwright | `packages/app/e2e/dag-click-hitch-responsiveness.spec.ts` — workflow select → mini-DAG ≤ 100ms under fat events table |
-| PR Playwright | `packages/app/e2e/planning-chat-hitch-responsiveness.spec.ts` — planning-chat send keeps concurrent `listWorkflows` p95 ≤ 100ms locally / ≤ 150ms in CI, max ≤ 250ms, and observes the fixed 2-row append path |
 | Daily / extended | `packages/app/e2e/ui-action-responsiveness-battery.spec.ts` via `optional/41-ui-action-responsiveness.sh` (workflow select ≤ 100ms; menus ≤ 200ms) |
 
 PR CI keeps the narrow hitch gate. The full interaction matrix runs only on the twice-daily
@@ -59,7 +56,6 @@ extended e2e worker (`scripts/daily-e2e-do-submit.sh` / `INVOKER_TEST_ALL_EXTEND
 - Quit / `stopAll` / OS signal handlers pass a bounded settle (e.g. 5s).
 - Auto-started workers are deferred past first paint (`startDeferredStartupWork`).
 - Worker Start/Stop buttons use optimistic lifecycle + `data-testid`s for ack measurement.
-- Planning-chat send must append only the new user/assistant messages on monotonic histories; full transcript rewrites belong on edited-history fallback paths only.
 
 ## Follow-ups (out of scope here)
 
