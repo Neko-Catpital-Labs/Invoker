@@ -4,11 +4,15 @@ import { resolve } from 'node:path';
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { InAppPlanningSubmitResponse } from '@invoker/contracts';
+import type { MessageBus } from '@invoker/transport';
 import type { PlanningConfirmationMode, PlanningReviewDraft } from '../../planning-core/src/planning-review.js';
 import { buildPlanningHandoffInstructions } from '../../planning-core/src/planning-handoff-prompt.js';
-import { preparePlanningReview } from '../../planning-core/src/planning-review.js';
+import { confirmationTextForMode, preparePlanningReview } from '../../planning-core/src/planning-review.js';
+import type { PlanSummary } from '../../planning-core/src/plan-summary.js';
 import { parsePlanFile } from '@invoker/workflow-core';
 import { z } from 'zod';
+import { createDefaultMessageBus, discoverLiveOwner } from './live-owner-bus.js';
 
 export type McpSubmitMode = 'live' | 'auto' | 'standalone';
 
@@ -17,6 +21,83 @@ export interface McpCliRunner {
 }
 
 export const HANDOFF_PROMPT_DESCRIPTION = 'Plan a requested change, trigger PR skills for PR/stack work, convert it to Invoker YAML, review the canonical ordered steps, and submit it live.';
+
+const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+const NO_LIVE_OWNER_ERROR = 'No live Invoker app is running to answer this planning session.';
+
+interface PlanningChatSessionSnapshot {
+  draftPlanText?: string;
+  draftPlanSummary?: PlanSummary;
+  confirmationMode: PlanningConfirmationMode;
+  status: string;
+}
+
+type McpToolErrorResult = { content: [{ type: 'text'; text: string }]; isError: true };
+
+function mcpError(text: string): McpToolErrorResult {
+  return { content: [{ type: 'text', text }], isError: true };
+}
+
+function resolveEffectiveSessionId(sessionId: string | undefined): string | undefined {
+  if (sessionId) return sessionId;
+  const envSessionId = process.env.INVOKER_PLANNING_SESSION_ID;
+  return envSessionId && envSessionId.length > 0 ? envSessionId : undefined;
+}
+
+export async function preparePlanReviewForSession(
+  sessionId: string,
+  createBus: () => Promise<MessageBus> = createDefaultMessageBus,
+): Promise<PlanningReviewDraft | McpToolErrorResult> {
+  const bus = await createBus();
+  try {
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) {
+      return mcpError(NO_LIVE_OWNER_ERROR);
+    }
+    const response = await bus.request<{ kind: string; sessionId: string }, { session: PlanningChatSessionSnapshot | null }>(
+      'headless.query',
+      { kind: 'planning-chat-session', sessionId },
+    );
+    const session = response.session;
+    if (!session) {
+      return mcpError(`Unknown planning session "${sessionId}". It may have been deleted or never existed.`);
+    }
+    if (!session.draftPlanText) {
+      return mcpError(NO_COMPLETE_PLAN_DRAFTED_ERROR);
+    }
+    return {
+      planText: session.draftPlanText,
+      summary: session.draftPlanSummary as PlanSummary,
+      confirmationMode: session.confirmationMode,
+      confirmationText: confirmationTextForMode(session.confirmationMode),
+    };
+  } finally {
+    bus.disconnect();
+  }
+}
+
+export async function submitPlanForSession(
+  sessionId: string,
+  createBus: () => Promise<MessageBus> = createDefaultMessageBus,
+): Promise<{ ok: true; workflowId: string } | McpToolErrorResult> {
+  const bus = await createBus();
+  try {
+    const owner = await discoverLiveOwner(bus);
+    if (!owner) {
+      return mcpError(NO_LIVE_OWNER_ERROR);
+    }
+    const response = await bus.request<{ channel: string; args: unknown[] }, InAppPlanningSubmitResponse>(
+      'headless.gui-mutation',
+      { channel: 'invoker:planning-chat-submit', args: [{ sessionId }] },
+    );
+    if (!response.ok) {
+      return mcpError(response.error);
+    }
+    return { ok: true, workflowId: response.workflowId };
+  } finally {
+    bus.disconnect();
+  }
+}
 
 type SubmitSuccess = { ok: true; workflowId: string; stdout: string };
 type SubmitFailure = { ok: false; exitCode: number; stdout: string; stderr: string; error?: string };
@@ -166,8 +247,15 @@ export function handoffPrompt(request: string): string {
   ].join('\n');
 }
 
-export async function runMcpServer(options: { runner?: McpCliRunner; cliPath?: string } = {}): Promise<void> {
+export interface McpServerOptions {
+  runner?: McpCliRunner;
+  cliPath?: string;
+  createMessageBus?: () => Promise<MessageBus>;
+}
+
+export function createMcpServer(options: McpServerOptions = {}): McpServer {
   const runner = options.runner ?? createProcessRunner(options.cliPath);
+  const createBus = options.createMessageBus ?? createDefaultMessageBus;
   const server = new McpServer({ name: 'invoker', version: '0.0.5' });
 
   server.registerTool(
@@ -201,9 +289,25 @@ export async function runMcpServer(options: { runner?: McpCliRunner; cliPath?: s
       inputSchema: {
         planPath: z.string(),
         confirmationMode: z.enum(['require', 'auto_submit']).optional(),
+        sessionId: z.string().optional(),
       },
     },
-    async ({ planPath, confirmationMode }) => {
+    async ({ planPath, confirmationMode, sessionId }) => {
+      const effectiveSessionId = resolveEffectiveSessionId(sessionId);
+      if (effectiveSessionId) {
+        const sessionResult = await preparePlanReviewForSession(effectiveSessionId, createBus);
+        if ('isError' in sessionResult) {
+          return sessionResult;
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(sessionResult, null, 2),
+            },
+          ],
+        };
+      }
       const result = await preparePlanReviewForMcp(planPath, confirmationMode ?? 'require');
       if ('ok' in result && result.ok === false) {
         return {
@@ -229,9 +333,25 @@ export async function runMcpServer(options: { runner?: McpCliRunner; cliPath?: s
       inputSchema: {
         planPath: z.string(),
         mode: z.enum(['live', 'auto', 'standalone']).optional(),
+        sessionId: z.string().optional(),
       },
     },
-    async ({ planPath, mode }) => {
+    async ({ planPath, mode, sessionId }) => {
+      const effectiveSessionId = resolveEffectiveSessionId(sessionId);
+      if (effectiveSessionId) {
+        const sessionResult = await submitPlanForSession(effectiveSessionId, createBus);
+        if ('isError' in sessionResult) {
+          return sessionResult;
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Submitted Invoker plan. Workflow id: ${sessionResult.workflowId}.`,
+            },
+          ],
+        };
+      }
       const result = await submitPlanForMcp(planPath, mode ?? 'live', runner);
       if (!result.ok) {
         return {
@@ -267,5 +387,10 @@ export async function runMcpServer(options: { runner?: McpCliRunner; cliPath?: s
     }),
   );
 
+  return server;
+}
+
+export async function runMcpServer(options: McpServerOptions = {}): Promise<void> {
+  const server = createMcpServer(options);
   await server.connect(new StdioServerTransport());
 }
