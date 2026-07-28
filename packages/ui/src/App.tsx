@@ -4705,6 +4705,7 @@ export function App() {
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
+            terminalActive={!planningTerminalExpanded}
             submittedPlanName={activePlanningSession.submittedPlanName}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
@@ -5039,6 +5040,7 @@ export function App() {
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
+            terminalActive
             submittedPlanName={activePlanningSession.submittedPlanName}
             onValueChange={setPlanningInput}
             readOnly={activePlanningReadOnly}
