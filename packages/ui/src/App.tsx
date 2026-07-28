@@ -297,11 +297,19 @@ type PlanningSessionView = Omit<InAppPlanningSessionSummary, 'messages'> & {
   input: string;
   busy: boolean;
   conversationKey: string;
+  continuationLost?: boolean;
   mode: PlanningTerminalMode;
   terminalSession?: TerminalSessionDescriptor | null;
   terminalBusy?: boolean;
   terminalError?: string | null;
 };
+
+const LOCAL_PLANNING_SESSION_PREFIX = 'local-';
+const PLANNING_CONTINUATION_LOST_MESSAGE = 'This planning chat no longer has a saved session id. Start a new planning chat and resend your request.';
+
+function isLocalPlanningSessionId(sessionId: string): boolean {
+  return sessionId.startsWith(LOCAL_PLANNING_SESSION_PREFIX);
+}
 
 function planningSessionFromSummary(
   summary: InAppPlanningSessionSummary,
@@ -1030,7 +1038,7 @@ export function App() {
   const activePlanningConversationKey = activePlanningSession.conversationKey;
   const terminalLines = activePlanningSession.messages;
   const planningInput = activePlanningSession.input;
-  const planningSessionId = activePlanningSession.id.startsWith('local-') ? null : activePlanningSession.id;
+  const planningSessionId = isLocalPlanningSessionId(activePlanningSession.id) ? null : activePlanningSession.id;
   const draftPlanAvailable = activePlanningSession.draftPlanAvailable;
   const draftPlanSummary = activePlanningSession.draftPlanSummary;
   const draftPlanText = activePlanningSession.draftPlanText;
@@ -1332,10 +1340,10 @@ export function App() {
         : undefined;
       const activeLocalSession = sessions.find((session) => (
         session.id === activePlanningSessionIdRef.current
-        && session.id.startsWith('local-')
+        && isLocalPlanningSessionId(session.id)
         && isStreamingTarget(session)
       ));
-      const localBusySession = sessions.find((session) => session.id.startsWith('local-') && isStreamingTarget(session));
+      const localBusySession = sessions.find((session) => isLocalPlanningSessionId(session.id) && isStreamingTarget(session));
       const targetSessionId = matchingSession && isStreamingTarget(matchingSession)
         ? matchingSession.id
         : aliasedSession && isStreamingTarget(aliasedSession)
@@ -2886,6 +2894,12 @@ export function App() {
       return;
     }
 
+    if (activePlanningSession.continuationLost) {
+      appendTerminalLine(PLANNING_CONTINUATION_LOST_MESSAGE, 'system', 'error');
+      setPlanningSubmitError({ title: 'Planner could not respond', message: PLANNING_CONTINUATION_LOST_MESSAGE });
+      return;
+    }
+
     const request = {
       message: input,
       presetKey: selectedPlanningPresetKey || undefined,
@@ -2909,6 +2923,7 @@ export function App() {
             ...session,
             busy: false,
             id: result.sessionId,
+            continuationLost: false,
             title: session.title === 'Untitled plan'
               ? (input.length > 56 ? `${input.slice(0, 53).trimEnd()}…` : input)
               : session.title,
@@ -2944,16 +2959,44 @@ export function App() {
           }
         }
       } else {
-        updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+        if (result.sessionId && result.sessionId !== previousSessionId) {
+          const errorLineId = nextTerminalLineIdRef.current;
+          nextTerminalLineIdRef.current += 1;
+          const updatedAt = new Date().toISOString();
+          setPlanningSessions((prev) => prev.map((session) => {
+            if (session.id !== previousSessionId) return session;
+            return {
+              ...session,
+              busy: false,
+              id: result.sessionId!,
+              continuationLost: false,
+              messages: [...session.messages, { id: errorLineId, text: result.error, role: 'system', tone: 'error' }],
+              updatedAt,
+            };
+          }));
+          setActivePlanningSessionId((currentSessionId) => (
+            currentSessionId === previousSessionId ? result.sessionId! : currentSessionId
+          ));
+        } else {
+          updatePlanningSessionById(previousSessionId, (session) => ({
+            ...session,
+            busy: false,
+            continuationLost: isLocalPlanningSessionId(session.id) ? true : session.continuationLost,
+          }));
+          appendTerminalLine(result.error, 'system', 'error');
+        }
         keepPlanningStreamFailureForSessionIds([previousSessionId, result.sessionId], result.error);
         forgetPlanningStreamAliasesForSessionIds([previousSessionId, result.sessionId]);
         pendingPlanningStreamSessionIdsRef.current.delete(previousSessionId);
         if (result.sessionId) pendingPlanningStreamSessionIdsRef.current.delete(result.sessionId);
-        appendTerminalLine(result.error, 'system', 'error');
         setPlanningSubmitError({ title: 'Planner could not respond', message: result.error });
       }
     } catch (err) {
-      updatePlanningSessionById(previousSessionId, (session) => ({ ...session, busy: false }));
+      updatePlanningSessionById(previousSessionId, (session) => ({
+        ...session,
+        busy: false,
+        continuationLost: isLocalPlanningSessionId(session.id) && !planningSessionId ? true : session.continuationLost,
+      }));
       const message = err instanceof Error ? err.message : 'Failed to reach the planner.';
       keepPlanningStreamFailureForSessionIds([previousSessionId, planningSessionId], message);
       forgetPlanningStreamAliasesForSessionIds([previousSessionId, planningSessionId]);
@@ -2976,6 +3019,7 @@ export function App() {
     invoker,
     activePlanningSession.draftPlanAvailable,
     activePlanningSession.status,
+    activePlanningSession.continuationLost,
     planningInput,
     planningSessionId,
     selectedPlanningConfirmationMode,
@@ -3056,7 +3100,7 @@ export function App() {
     if (activePlanningReadOnly) {
       return;
     }
-    if (!sessionId.startsWith('local-')) {
+    if (!isLocalPlanningSessionId(sessionId)) {
       void invoker?.planningChatDelete?.({ sessionId });
     }
     removePlanningSessionsById([sessionId]);
@@ -3080,7 +3124,7 @@ export function App() {
     const sourceSession = activePlanningSession;
     if (mode === 'chat') {
       updatePlanningSessionById(sourceSession.id, (session) => ({ ...session, mode: 'chat' }));
-      if (!activePlanningReadOnly && !sourceSession.id.startsWith('local-')) {
+      if (!activePlanningReadOnly && !isLocalPlanningSessionId(sourceSession.id)) {
         void invoker?.planningChatSetTerminalMode?.({ sessionId: sourceSession.id, mode: 'chat' });
       }
       return;
@@ -3108,7 +3152,7 @@ export function App() {
     let targetSessionId = sourceSession.id;
     let terminalSession = sourceSession.terminalSession ?? null;
 
-    if (sourceSession.id.startsWith('local-')) {
+    if (isLocalPlanningSessionId(sourceSession.id)) {
       if (!invoker?.planningChatCreate) {
         updatePlanningSessionById(sourceSession.id, (session) => ({
           ...session,
@@ -3167,7 +3211,7 @@ export function App() {
         terminalBusy: false,
         terminalError: null,
       }));
-      if (!targetSessionId.startsWith('local-')) {
+      if (!isLocalPlanningSessionId(targetSessionId)) {
         void invoker?.planningChatSetTerminalMode?.({ sessionId: targetSessionId, mode: 'tmux' });
       }
       return;

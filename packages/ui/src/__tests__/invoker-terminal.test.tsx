@@ -860,6 +860,59 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('continues with a server session id returned by a failed first send', async () => {
+    mock.api.planningChatSend = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        sessionId: 'session-created-before-error',
+        error: 'planner exited before producing a reply',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        sessionId: 'session-created-before-error',
+        reply: 'Recovered on the same session.',
+        draftPlanAvailable: false,
+      }) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan that fails before replying');
+    expect(await screen.findByText('planner exited before producing a reply')).toBeInTheDocument();
+
+    submitPlanningText('retry in the same chat');
+
+    await waitFor(() => {
+      expect(mock.api.planningChatSend).toHaveBeenCalledTimes(2);
+      expect(mock.api.planningChatSend).toHaveBeenLastCalledWith({
+        sessionId: 'session-created-before-error',
+        message: 'retry in the same chat',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      });
+    });
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Recovered on the same session.');
+  });
+
+  it('shows an explicit lost-session error instead of restarting a local planning transcript', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: false,
+      error: 'planner exited before saving a session',
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft a plan before identity is lost');
+    expect(await screen.findByText('planner exited before saving a session')).toBeInTheDocument();
+
+    submitPlanningText('continue without the saved id');
+
+    expect(await screen.findByText('This planning chat no longer has a saved session id. Start a new planning chat and resend your request.')).toBeInTheDocument();
+    expect(mock.api.planningChatSend).toHaveBeenCalledTimes(1);
+  });
+
   it('passes the selected planning preset', async () => {
     render(<App />);
     await openPlanningTerminal();
