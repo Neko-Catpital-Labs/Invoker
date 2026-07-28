@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { AcquiredWorktree, RepoPool } from '@invoker/execution-engine';
 
@@ -50,6 +51,26 @@ async function runBestEffortInstall(worktreePath: string): Promise<void> {
   }
 }
 
+export function planningMcpConfigPath(worktreePath: string): string {
+  return join(worktreePath, '.mcp.json');
+}
+
+export function writePlanningMcpConfig(worktreePath: string): void {
+  try {
+    writeFileSync(planningMcpConfigPath(worktreePath), JSON.stringify({
+      mcpServers: {
+        invoker: { type: 'stdio', command: 'invoker-cli', args: ['mcp'] },
+      },
+    }, null, 2), 'utf8');
+  } catch (error) {
+    console.warn(
+      `[planning-chat-worktree] writePlanningMcpConfig failed in ${worktreePath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
 async function acquireProvisionAndSoftRelease(
   pool: Pick<PlanningRepoPool, 'acquireWorktree'>,
   repoUrl: string,
@@ -59,6 +80,9 @@ async function acquireProvisionAndSoftRelease(
 ): Promise<AcquiredWorktree> {
   const acquired = await pool.acquireWorktree(repoUrl, branch, baseCommit, sessionId);
   await runBestEffortInstall(acquired.worktreePath);
+  writePlanningMcpConfig(acquired.worktreePath);
+  // A planning-chat worktree lives for the whole chat session, not a single task run,
+  // so it must not hold one of RepoPool's limited concurrent-worktree slots the whole time.
   acquired.softRelease();
   return acquired;
 }
