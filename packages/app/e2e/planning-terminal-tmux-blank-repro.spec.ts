@@ -144,6 +144,10 @@ async function createPlanningSession(page: Page, prompt: string): Promise<void> 
   await expect(transcript).toContainText('I drafted the tmux blank repro plan.', { timeout: 10000 });
 }
 
+async function selectPlanningSession(page: Page, title: string): Promise<void> {
+  await page.getByTestId('planning-session-list').getByRole('button', { name: new RegExp(title, 'i') }).click();
+}
+
 async function switchActivePlanningSessionToTmux(page: Page): Promise<string> {
   await page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' }).click();
   const pane = page.getByTestId('invoker-terminal-tmux-pane');
@@ -210,11 +214,11 @@ async function captureTerminalEvidence(
   return evidence;
 }
 
-function expectBuggyBlankScreen(evidence: PlanningTerminalEvidence, sentinel: string): void {
+function expectBuggyVisiblePaneOutputBlanked(evidence: PlanningTerminalEvidence, sentinel: string): void {
   expect(evidence.backendStatus).toBe('running');
   expect(evidence.backendOutputSnapshot).toContain(sentinel);
   expect(evidence.visibleText).not.toContain(sentinel);
-  expect(evidence.normalizedVisibleText).toBe('');
+  expect(evidence.normalizedVisibleText).toContain('Invoker planning tmux bridge');
 }
 
 base.describe('Planning Terminal tmux blank repro', () => {
@@ -248,16 +252,15 @@ base.describe('Planning Terminal tmux blank repro', () => {
       const betaSentinel = '__INVOKER_PLANNING_TMUX_BETA_SENTINEL__';
       await writeSentinel(page, betaSessionId, betaSentinel);
 
-      const sessionButtons = page.getByTestId('planning-session-list').getByRole('button');
-      await sessionButtons.nth(1).click();
+      await selectPlanningSession(page, 'Draft tmux blank repro alpha');
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', alphaSessionId, { timeout: 10000 });
       const alphaEvidence = await captureTerminalEvidence(page, testInfo, 'after-switch-back-to-alpha', alphaSessionId);
-      expectBuggyBlankScreen(alphaEvidence, alphaSentinel);
+      expectBuggyVisiblePaneOutputBlanked(alphaEvidence, alphaSentinel);
 
-      await sessionButtons.nth(0).click();
+      await selectPlanningSession(page, 'Draft tmux blank repro beta');
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', betaSessionId, { timeout: 10000 });
       const betaEvidence = await captureTerminalEvidence(page, testInfo, 'after-switch-back-to-beta', betaSessionId);
-      expectBuggyBlankScreen(betaEvidence, betaSentinel);
+      expectBuggyVisiblePaneOutputBlanked(betaEvidence, betaSentinel);
     } finally {
       if (page) await closePlanningTerminalSessions(page);
       if (app) await closeApp(app).catch(() => undefined);
@@ -300,7 +303,7 @@ base.describe('Planning Terminal tmux blank repro', () => {
       await expect(page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' })).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', terminalSessionId, { timeout: 10000 });
       const evidence = await captureTerminalEvidence(page, testInfo, 'after-navigation-back-to-planning-tmux', terminalSessionId);
-      expectBuggyBlankScreen(evidence, sentinel);
+      expectBuggyVisiblePaneOutputBlanked(evidence, sentinel);
     } finally {
       if (page) await closePlanningTerminalSessions(page);
       if (app) await closeApp(app).catch(() => undefined);
