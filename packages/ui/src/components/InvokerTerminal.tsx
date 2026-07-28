@@ -26,6 +26,9 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const MIN_PLANNING_TMUX_COLS = 20;
+const MIN_PLANNING_TMUX_ROWS = 5;
+const PLANNING_TMUX_FIT_SETTLE_FRAMES = 2;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -233,27 +236,91 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
       }
     });
 
-    const tryFit = () => {
+    let disposed = false;
+    let scheduledFitHandle: number | null = null;
+    let scheduledFitKind: 'raf' | 'timeout' | null = null;
+    let pendingFocus = false;
+    let lastSentSize: { cols: number; rows: number } | null = null;
+
+    const cancelScheduledFit = () => {
+      if (scheduledFitHandle === null) return;
+      if (scheduledFitKind === 'raf' && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(scheduledFitHandle);
+      } else {
+        window.clearTimeout(scheduledFitHandle);
+      }
+      scheduledFitHandle = null;
+      scheduledFitKind = null;
+    };
+
+    const tryFit = (focusAfterFit: boolean): boolean => {
       try {
+        if (disposed || !host.isConnected) return false;
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
+        const rect = host.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        const proposedDimensions = fit.proposeDimensions();
+        if (
+          !proposedDimensions ||
+          proposedDimensions.cols < MIN_PLANNING_TMUX_COLS ||
+          proposedDimensions.rows < MIN_PLANNING_TMUX_ROWS
+        ) {
+          return false;
+        }
+
         fit.fit();
         if (term.rows > 0) {
           term.refresh?.(0, term.rows - 1);
         }
-        void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
+        const nextSize = { cols: term.cols, rows: term.rows };
+        if (!lastSentSize || lastSentSize.cols !== nextSize.cols || lastSentSize.rows !== nextSize.rows) {
+          lastSentSize = nextSize;
+          void window.invoker?.planningTerminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+        }
+        if (focusAfterFit) term.focus();
+        return true;
       } catch {
         /* host has zero size or fit unsupported */
+        return false;
       }
     };
 
-    const raf = typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame(tryFit)
-      : null;
+    const scheduleFit = ({ focus = false }: { focus?: boolean } = {}) => {
+      if (disposed) return;
+      pendingFocus = pendingFocus || focus;
+      cancelScheduledFit();
+
+      const runAfterFrames = (remainingFrames: number) => {
+        if (typeof window.requestAnimationFrame === 'function') {
+          scheduledFitKind = 'raf';
+          scheduledFitHandle = window.requestAnimationFrame(() => {
+            scheduledFitHandle = null;
+            scheduledFitKind = null;
+            if (remainingFrames > 0) {
+              runAfterFrames(remainingFrames - 1);
+              return;
+            }
+            if (tryFit(pendingFocus)) pendingFocus = false;
+          });
+          return;
+        }
+
+        scheduledFitKind = 'timeout';
+        scheduledFitHandle = window.setTimeout(() => {
+          scheduledFitHandle = null;
+          scheduledFitKind = null;
+          if (tryFit(pendingFocus)) pendingFocus = false;
+        }, 0);
+      };
+
+      runAfterFrames(PLANNING_TMUX_FIT_SETTLE_FRAMES);
+    };
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
         resizeObserver = new ResizeObserver(() => {
-          tryFit();
+          scheduleFit();
         });
         resizeObserver.observe(host);
       } catch {
@@ -261,10 +328,22 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
       }
     }
 
+    const handleVisibilityChange = () => {
+      scheduleFit();
+    };
+    const handleWindowFocus = () => {
+      scheduleFit({ focus: true });
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleWindowFocus);
+    scheduleFit({ focus: true });
+
     return () => {
-      if (raf !== null && typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(raf);
-      }
+      disposed = true;
+      cancelScheduledFit();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleWindowFocus);
       resizeObserver?.disconnect();
       inputDisposable.dispose();
       unsubscribeOutput?.();
@@ -284,23 +363,6 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
     if (!term || !session) return;
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
   }, [session?.outputSnapshot, session?.sessionId, terminalActive]);
-
-  useEffect(() => {
-    if (!terminalActive) return;
-    const term = termRef.current;
-    const fit = fitRef.current;
-    if (!term || !fit || !session) return;
-    try {
-      fit.fit();
-      if (term.rows > 0) {
-        term.refresh?.(0, term.rows - 1);
-      }
-      void window.invoker?.planningTerminalResize?.(session.sessionId, term.cols, term.rows);
-      term.focus();
-    } catch {
-      /* fit failed (e.g., hidden) */
-    }
-  }, [session?.sessionId, terminalActive]);
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
