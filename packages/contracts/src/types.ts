@@ -15,6 +15,8 @@ export type ActionType = 'command' | 'ai_task' | 'reconciliation' | 'merge_gate'
 
 export interface WorkRequestInputs {
   workspacePath?: string;
+  /** Owning workflow id, when the action is part of a persisted workflow. */
+  workflowId?: string;
   /** Human-readable task description for commit messages. */
   description?: string;
   prompt?: string;

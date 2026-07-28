@@ -31,6 +31,12 @@ import {
   createSshRemoteScriptError,
   parseOwnedWorktreePath,
 } from './ssh-git-exec.js';
+import {
+  REMOTE_PROGRESS_JOURNAL_FILENAME,
+  REMOTE_PROGRESS_SEQ_FILENAME,
+  REMOTE_SYNC_SPOOL_FILENAME,
+  buildRemoteProgressJournalRunnerLibrary,
+} from './remote-progress-journal.js';
 export interface SshExecutorConfig {
   host: string;
   user: string;
@@ -147,6 +153,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     const intervalSeconds = this.remoteHeartbeatIntervalSeconds;
     return `#!/usr/bin/env bash
 set -euo pipefail
+${buildRemoteProgressJournalRunnerLibrary()}
 
 if [[ $# -ne 1 ]]; then
   echo "usage: $0 <payload-script>" >&2
@@ -154,18 +161,25 @@ if [[ $# -ne 1 ]]; then
 fi
 
 PAYLOAD_PATH=$1
+invoker_progress_append_attempt_started
 (
-  bash "$PAYLOAD_PATH"
+  bash "$PAYLOAD_PATH" \
+    > >(invoker_progress_capture_stream stdout) \
+    2> >(invoker_progress_capture_stream stderr >&2)
 ) &
 PAYLOAD_PID=$!
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
 printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+invoker_progress_append_heartbeat
+invoker_progress_maybe_terminate_for_spool "$PAYLOAD_PID" || true
 (
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
     sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
     printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    invoker_progress_append_heartbeat
+    invoker_progress_maybe_terminate_for_spool "$PAYLOAD_PID" || true
   done
 ) &
 HEARTBEAT_PID=$!
@@ -176,6 +190,11 @@ else
 fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
+INVOKER_TERMINATION_REASON=""
+if [ -f "\${INVOKER_PROGRESS_TERMINATION_FILE:-}" ]; then
+  IFS= read -r INVOKER_TERMINATION_REASON < "$INVOKER_PROGRESS_TERMINATION_FILE" || INVOKER_TERMINATION_REASON=""
+fi
+invoker_progress_append_attempt_finished "$PAYLOAD_EXIT" "$INVOKER_TERMINATION_REASON"
 exit "$PAYLOAD_EXIT"
 `;
   }
@@ -237,12 +256,18 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     payload: string;
     managed: boolean;
     envExports: string;
+    attemptId?: string;
+    workflowId?: string;
+    branch?: string;
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const attemptId = options.attemptId ?? options.executionId;
+    const workflowId = options.workflowId ?? '';
+    const branch = options.branch ?? '';
     const managedWorkspaceBootstrap = options.managed && this.provisionCommand
       ? `ensure_managed_pnpm_workspace() {
   if [ "\${INVOKER_SKIP_MANAGED_PNPM_INSTALL:-}" = "1" ]; then
@@ -266,10 +291,15 @@ ${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_HOME')}
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
+JOURNAL_PATH="$STAGING_DIR/${REMOTE_PROGRESS_JOURNAL_FILENAME}"
+PROGRESS_OUTPUT_OFFSET_PATH="$STAGING_DIR/output.offset"
+PROGRESS_TERMINATION_PATH="$STAGING_DIR/terminated"
+PROGRESS_SEQ_PATH="$INVOKER_HOME/runtime/ssh-executor/${REMOTE_PROGRESS_SEQ_FILENAME}"
+SYNC_SPOOL_PATH="$INVOKER_HOME/runtime/ssh-executor/${REMOTE_SYNC_SPOOL_FILENAME}"
 cleanup_runtime() {
   trap - EXIT HUP INT TERM
   stop_bootstrap_heartbeat
-  rm -rf "$STAGING_DIR" >/dev/null 2>&1 || true
+  rm -f "$RUNNER_PATH" "$PAYLOAD_PATH" "$PROGRESS_OUTPUT_OFFSET_PATH" "$PROGRESS_TERMINATION_PATH" >/dev/null 2>&1 || true
 }
 BOOTSTRAP_HEARTBEAT_PID=""
 INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
@@ -302,9 +332,22 @@ trap 'cleanup_runtime; exit 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
+touch "$JOURNAL_PATH"
+chmod 600 "$JOURNAL_PATH"
 ${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
+export INVOKER_PROGRESS_JOURNAL_FILE="$JOURNAL_PATH"
+export INVOKER_PROGRESS_OUTPUT_OFFSET_FILE="$PROGRESS_OUTPUT_OFFSET_PATH"
+export INVOKER_PROGRESS_TERMINATION_FILE="$PROGRESS_TERMINATION_PATH"
+export INVOKER_PROGRESS_SEQ_FILE="$PROGRESS_SEQ_PATH"
+export INVOKER_SYNC_SPOOL_FILE="$SYNC_SPOOL_PATH"
+export INVOKER_REMOTE_EXECUTION_ID=${this.shellQuote(options.executionId)}
+export INVOKER_REMOTE_TASK_ID=${this.shellQuote(options.actionId)}
+export INVOKER_REMOTE_ATTEMPT_ID=${this.shellQuote(attemptId)}
+export INVOKER_REMOTE_WORKFLOW_ID=${this.shellQuote(workflowId)}
+export INVOKER_REMOTE_WORKSPACE_PATH="$WT"
+export INVOKER_REMOTE_BRANCH=${this.shellQuote(branch)}
 ${options.envExports}
 start_bootstrap_heartbeat
 ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
