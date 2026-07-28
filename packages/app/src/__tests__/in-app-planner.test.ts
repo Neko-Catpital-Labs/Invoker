@@ -1173,6 +1173,31 @@ tasks:
     expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
+  it('rejects submit before reusing a stale pending submit when the session is not draft-ready', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('stale-pending-submit', planningSession({
+      id: 'stale-pending-submit',
+      title: 'Stale pending submit',
+      status: 'still_discussing',
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+      draftPlanText: VALID_PLAN_TEXT,
+      pendingSubmit: Promise.resolve({
+        ok: true,
+        planName: 'Mock Plan',
+        workflowId: 'wf-1',
+      }),
+    }));
+    const loadGeneratedPlan = vi.fn();
+
+    await expect(submitPlanningChatDraft({
+      sessionId: 'stale-pending-submit',
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+  });
+
   it('rejects submit when draft-ready state has empty draft text', async () => {
     const sessions = createInAppPlanningChatSessions();
     sessions.set('empty-draft-ready', planningSession({
