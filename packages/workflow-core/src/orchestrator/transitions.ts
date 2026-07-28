@@ -13,7 +13,7 @@
  * downstream auto-start / deferred re-enqueue sequence are preserved exactly.
  */
 
-import type { FailureClass, TaskState, TaskDelta, TaskStateChanges } from '@invoker/workflow-graph';
+import { FailureClassifier, type FailureClass, type TaskState, type TaskDelta, type TaskStateChanges } from '@invoker/workflow-graph';
 import type { Logger } from '@invoker/contracts';
 import type { ParsedResponse } from '../response-handler.js';
 import { scopePlanTaskId } from '../task-id-scope.js';
@@ -208,10 +208,16 @@ export function finalizeFailedTaskImpl(
     throw new OrchestratorError(OrchestratorErrorCode.TASK_NOT_FOUND, `finalizeFailedTask: task ${taskId} not found in graph`);
   }
 
+  const failureClass = executionFields.failureClass
+    ?? (existing.config.runnerKind === 'ssh'
+      ? FailureClassifier.classifyError(executionFields.error)
+      : undefined);
+
   const changes: TaskStateChanges = {
     status: 'failed',
     execution: {
       ...executionFields,
+      failureClass,
       completedAt: new Date(),
     },
   };

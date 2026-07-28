@@ -5,24 +5,24 @@
 set -euo pipefail
 
 MODE="${1:-after}"
-if [[ "$MODE" != "before" && "$MODE" != "after" ]]; then
-  echo "usage: $0 [before|after]" >&2
-  exit 64
-fi
+case "$MODE" in
+  before|after)
+    ;;
+  *)
+    echo "usage: $0 [before|after]" >&2
+    exit 64
+    ;;
+esac
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-echo "==> Building UI"
-pnpm --filter @invoker/ui build
+echo "[repro] Building UI package."
+pnpm -C "$REPO_ROOT" --filter @invoker/ui build
 
-echo "==> Building app"
-pnpm --filter @invoker/app build
+echo "[repro] Building app package."
+pnpm -C "$REPO_ROOT" --filter @invoker/app build
 
-echo "==> Running planning tmux blank repro ($MODE)"
-(
-  cd "$ROOT/packages/app"
-  INVOKER_PLANNING_TMUX_BLANK_EXPECT="$MODE" \
-  INVOKER_PLAYWRIGHT_WORKERS=1 \
-    pnpm run test:e2e e2e/planning-tmux-blank-repro.spec.ts --workers=1
-)
+echo "[repro] Running planning tmux blank repro in ${MODE} mode."
+INVOKER_PLANNING_TMUX_BLANK_EXPECT="$MODE" \
+INVOKER_PLAYWRIGHT_WORKERS=1 \
+pnpm -C "$REPO_ROOT" --filter @invoker/app test:e2e -- e2e/planning-tmux-blank-repro.spec.ts --workers=1

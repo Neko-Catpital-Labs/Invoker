@@ -302,7 +302,7 @@ export function editTaskAgentImpl(host: TaskEditHost, taskId: string, agentName:
 export function editTaskMergeModeImpl(
   host: TaskEditHost,
   taskId: string,
-  mergeMode: 'manual' | 'automatic' | 'external_review',
+  mergeMode: 'manual' | 'automatic' | 'external_review' | 'no_op',
 ): TaskState[] {
   host.refreshFromDb();
   const task = host.stateGetTask(taskId);

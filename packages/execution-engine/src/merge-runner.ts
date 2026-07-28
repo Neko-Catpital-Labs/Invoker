@@ -59,10 +59,11 @@ function safeGetWorkspacePath(persistence: SQLiteAdapter, taskId: string): strin
     : undefined;
 }
 
-function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 'external_review' {
+function canonicalMergeMode(mode: string | undefined): 'manual' | 'automatic' | 'external_review' | 'no_op' {
   const m = mode ?? 'manual';
   if (m === 'external_review') return 'external_review';
   if (m === 'automatic') return 'automatic';
+  if (m === 'no_op') return 'no_op';
   return 'manual';
 }
 
@@ -810,6 +811,19 @@ export async function runMergeGateActionImpl(
   const baseBranch = workflow?.baseBranch ?? host.defaultBranch ?? await host.detectDefaultBranch();
   const featureBranch = workflow?.featureBranch;
   const visualProof = workflow?.visualProof ?? false;
+
+  if (mergeMode === 'no_op') {
+    return {
+      response: {
+        requestId: `merge-${task.id}`,
+        actionId: task.id,
+        executionGeneration: task.execution.generation ?? 0,
+        status: 'completed',
+        outputs: { exitCode: 0 },
+      },
+      taskChanges: {},
+    };
+  }
 
   let response: WorkResponse;
   let reviewUrl: string | undefined;

@@ -109,7 +109,7 @@ describe('metadata-setter', () => {
 
   it('rejects invalid enum and type values', async () => {
     const deps = makeDeps();
-    await expect(setWorkflowMetadata(deps, 'wf-1', 'mergeMode', 'sometimes')).rejects.toThrow(/manual, automatic, external_review/);
+    await expect(setWorkflowMetadata(deps, 'wf-1', 'mergeMode', 'sometimes')).rejects.toThrow(/manual, automatic, external_review, no_op/);
     await expect(setTaskMetadata(deps, 'task-1', 'dependencies', 'task-a')).rejects.toThrow(/array of strings/);
     await expect(setTaskMetadata(deps, 'task-1', 'config.requiresManualApproval', 'true')).rejects.toThrow(/boolean/);
   });

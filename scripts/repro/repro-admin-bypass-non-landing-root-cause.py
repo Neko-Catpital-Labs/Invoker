@@ -7,13 +7,14 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
-DB_PATH = Path.home() / '.invoker' / 'invoker.db'
-REPO = 'Neko-Catpital-Labs/Invoker'
-TARGET_PRS = (5801, 5811)
-WORKER_SOURCE = 'pr-maintenance-worker'
-WORKER_TAG = '[worker:pr-admin-bypass-land]'
-PLACEHOLDER_REQUIRED_FAST = 'required-fast / ${{ matrix.name }}'
+DB_PATH = Path.home() / ".invoker" / "invoker.db"
+LEDGER_PATH = Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"
+REPO = "Neko-Catpital-Labs/Invoker"
+TARGET_PRS = (6118, 6158)
+WORKER_SOURCE = "pr-maintenance-worker"
+REPAIR_STOP_PREFIX = "Mergify repair stopped: "
 
 
 @dataclass(frozen=True)
@@ -24,14 +25,14 @@ class LogEvidence:
 
 
 def run_gh_json(args: list[str]) -> dict:
-    completed = subprocess.run(['gh', *args], text=True, capture_output=True, check=True)
+    completed = subprocess.run(["gh", *args], text=True, capture_output=True, check=True)
     return json.loads(completed.stdout)
 
 
 def connect_db() -> sqlite3.Connection:
     if not DB_PATH.exists():
-        raise SystemExit(f'missing invoker db: {DB_PATH}')
-    uri = f'file:{DB_PATH}?mode=ro&immutable=1'
+        raise SystemExit(f"missing invoker db: {DB_PATH}")
+    uri = f"file:{DB_PATH}?mode=ro&immutable=1"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
@@ -40,117 +41,190 @@ def connect_db() -> sqlite3.Connection:
 def fetch_worker_logs(conn: sqlite3.Connection, pr_number: int) -> list[LogEvidence]:
     cur = conn.cursor()
     cur.execute(
-        '''
+        """
         select timestamp, level, message
         from activity_log
         where source = ? and message like ?
         order by datetime(timestamp) asc, id asc
-        ''',
-        (WORKER_SOURCE, f'%{pr_number}%'),
+        """,
+        (WORKER_SOURCE, f"%{pr_number}%"),
     )
-    return [LogEvidence(str(row['timestamp']), str(row['level']), str(row['message'])) for row in cur.fetchall()]
+    return [LogEvidence(str(row["timestamp"]), str(row["level"]), str(row["message"])) for row in cur.fetchall()]
 
 
 def require_line(logs: list[LogEvidence], needle: str, label: str) -> LogEvidence:
     for row in logs:
         if needle in row.message:
             return row
-    raise AssertionError(f'missing {label}: {needle}')
+    raise AssertionError(f"missing {label}: {needle}")
+
+
+def load_ledger_rows(pr_number: int) -> list[dict]:
+    if not LEDGER_PATH.exists():
+        raise SystemExit(f"missing ledger: {LEDGER_PATH}")
+    rows: list[dict] = []
+    for raw in LEDGER_PATH.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if row.get("pr") == pr_number:
+            rows.append(row)
+    return rows
+
+
+def latest_row(rows: list[dict], kind: str, head: str, key: str | None = None) -> dict | None:
+    matches = [
+        row
+        for row in rows
+        if row.get("kind") == kind
+        and row.get("headSha") == head
+        and (key is None or row.get("key") == key)
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda row: int(row.get("epoch", 0) or 0))
+
+
+def row_errors(row: Mapping[str, object]) -> list[str]:
+    meta = row.get("meta") if isinstance(row.get("meta"), Mapping) else {}
+    errors = meta.get("errors") if isinstance(meta, Mapping) else []
+    return [str(error) for error in errors] if isinstance(errors, list) else []
 
 
 def gh_pr_snapshot(pr_number: int) -> dict:
     return run_gh_json([
-        'pr', 'view', str(pr_number), '--repo', REPO,
-        '--json', 'number,title,state,labels,headRefOid,statusCheckRollup',
+        "pr", "view", str(pr_number), "--repo", REPO, "--comments",
+        "--json", "number,title,state,labels,headRefOid,mergeStateStatus,comments,statusCheckRollup",
     ])
 
 
 def check_names(snapshot: dict) -> list[str]:
-    return [node.get('name') or node.get('context') or '' for node in snapshot.get('statusCheckRollup') or []]
+    return [node.get("name") or node.get("context") or "" for node in snapshot.get("statusCheckRollup") or []]
 
 
-def summarize_5801(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
-    logs = fetch_worker_logs(conn, 5801)
-    ts_repair = require_line(logs, 'repair-check PR #5801 check="quality / TypeScript Types"', '5801 repair check')
-    ts_pushed = require_line(logs, "Pushed to PR #5801's head branch (`871f16fb6`).", '5801 push')
-    ts_conflict = require_line(logs, 'repair-conflict PR #5801 GitHub reports merge conflict', '5801 conflict repair')
-    ts_fixed = require_line(logs, 'Force-pushed the rebased branch to the PR head.', '5801 fixed note')
-    ts_stalled = require_line(logs, '"kind": "comment_blocked", "pr_number": 5803', '5801 stack blocked by 5803')
-    snapshot = gh_pr_snapshot(5801)
-    names = check_names(snapshot)
-    assert 'required-fast / Guardrails' not in names, '5801 unexpectedly has required-fast / Guardrails'
-    assert 'required-fast / Submit Workflow Chain' not in names, '5801 unexpectedly has required-fast / Submit Workflow Chain'
-    assert PLACEHOLDER_REQUIRED_FAST in names, '5801 missing placeholder required-fast check name'
+def stop_comments(snapshot: Mapping[str, object]) -> list[str]:
+    comments = snapshot.get("comments")
+    if not isinstance(comments, list):
+        return []
+    bodies = [str(comment.get("body") or "") for comment in comments if isinstance(comment, Mapping)]
+    return [body for body in bodies if body.startswith(REPAIR_STOP_PREFIX)]
+
+
+def require_stop_comment(snapshot: Mapping[str, object], fragment: str, label: str) -> str:
+    for body in stop_comments(snapshot):
+        if fragment in body:
+            return body
+    raise AssertionError(f"missing {label} stop comment fragment: {fragment}")
+
+
+def summarize_6118(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
+    snapshot = gh_pr_snapshot(6118)
+    head = str(snapshot["headRefOid"])
+    assert snapshot["state"] == "OPEN", "6118 is no longer open"
+    assert snapshot["mergeStateStatus"] == "DIRTY", "6118 is no longer dirty"
+
+    rows = load_ledger_rows(6118)
+    invalid = latest_row(rows, "repair-invalid", head, "conflict")
+    assert invalid is not None, "6118 missing conflict repair-invalid evidence"
+    errors = row_errors(invalid)
+    assert any("duplicate bottom PR" in error for error in errors), "6118 repair-invalid missing duplicate-stack proof"
+    assert any("requires a human to decide" in error for error in errors), "6118 repair-invalid missing human-decision proof"
+    exact_stop = require_stop_comment(snapshot, "requires a human to decide", "6118 exact")
+    generic_stop = require_stop_comment(snapshot, "The retry cap was reached", "6118 generic cap")
+
+    logs = fetch_worker_logs(conn, 6118)
+    cap_log = require_line(logs, "The retry cap was reached for current head " + head, "6118 generic cap retry")
+    attempts = sum(1 for row in rows if row.get("kind") == "conflict-repair" and row.get("headSha") == head and row.get("key") == "conflict:6118")
+
     return {
-        'pr': 5801,
-        'state': snapshot['state'],
-        'labels': [label['name'] for label in snapshot['labels']],
-        'head': snapshot['headRefOid'],
-        'repair_started_at': ts_repair.timestamp,
-        'repair_pushed_at': ts_pushed.timestamp,
-        'conflict_repaired_at': ts_conflict.timestamp,
-        'fixed_note_at': ts_fixed.timestamp,
-        'stalled_on_stack_at': ts_stalled.timestamp,
-        'root_cause': '5801 was repaired, then rebased, but its head still lacked the required-fast check contexts and the worker kept prioritizing capped PR #5803 in the same stack.',
-    }, names
+        "pr": 6118,
+        "state": snapshot["state"],
+        "merge_state": snapshot["mergeStateStatus"],
+        "labels": [label["name"] for label in snapshot["labels"]],
+        "head": head,
+        "attempts": attempts,
+        "exact_stop_at": str(invalid.get("epoch") or ""),
+        "generic_cap_at": cap_log.timestamp,
+        "exact_comment": exact_stop[len(REPAIR_STOP_PREFIX):],
+        "generic_comment": generic_stop[len(REPAIR_STOP_PREFIX):],
+        "root_cause": "conflict repair-invalid evidence was recorded, but the planner did not promote conflict blockers to human_decision and later emitted a generic retry-cap blocker.",
+    }, check_names(snapshot)
 
 
-def summarize_5811(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
-    logs = fetch_worker_logs(conn, 5811)
-    ts_dequeued = require_line(logs, '"latest_mergify": {"comment_id": "5078148864", "failing_checks": ["required-fast / Guardrails"]', '5811 dequeued trace')
-    ts_block = require_line(logs, 'BLOCK PR #5811 missing-check', '5811 blocked comment')
-    repair_lines = [row for row in logs if 'repair-check PR #5811' in row.message or 'admin-bypass-repair-check-start' in row.message and '"pr_number": 5811' in row.message]
-    if repair_lines:
-        raise AssertionError('5811 unexpectedly has a repair-check execution in live logs')
-    snapshot = gh_pr_snapshot(5811)
-    names = check_names(snapshot)
-    assert 'required-fast / Guardrails' not in names, '5811 unexpectedly has required-fast / Guardrails'
-    assert PLACEHOLDER_REQUIRED_FAST in names, '5811 missing placeholder required-fast check name'
+def summarize_6158(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
+    snapshot = gh_pr_snapshot(6158)
+    head = str(snapshot["headRefOid"])
+    assert snapshot["state"] == "OPEN", "6158 is no longer open"
+    assert snapshot["mergeStateStatus"] == "DIRTY", "6158 is no longer dirty"
+
+    rows = load_ledger_rows(6158)
+    invalid = latest_row(rows, "repair-invalid", head, "PRRT_kwDOSFkSDM6T97v9")
+    assert invalid is not None, "6158 missing bot-thread repair-invalid evidence"
+    errors = row_errors(invalid)
+    assert any("activation-surface files" in error for error in errors), "6158 repair-invalid missing review-unit split proof"
+    exact_stop = require_stop_comment(snapshot, "activation-surface files in the same PR", "6158 exact")
+    generic_stop = require_stop_comment(snapshot, "The retry cap was reached", "6158 generic cap")
+
+    logs = fetch_worker_logs(conn, 6158)
+    cap_log = require_line(logs, "The retry cap was reached for current head " + head, "6158 generic cap retry")
+    attempts = sum(1 for row in rows if row.get("kind") == "conflict-repair" and row.get("headSha") == head and row.get("key") == "conflict:6158")
+
     return {
-        'pr': 5811,
-        'state': snapshot['state'],
-        'labels': [label['name'] for label in snapshot['labels']],
-        'head': snapshot['headRefOid'],
-        'dequeued_trace_at': ts_dequeued.timestamp,
-        'blocked_at': ts_block.timestamp,
-        'root_cause': '5811 left the queue on a merge-queue Guardrails failure, but the original PR head never had that required-fast check context, so the worker only emitted missing-check blocks and never repaired or requeued it.',
-    }, names
+        "pr": 6158,
+        "state": snapshot["state"],
+        "merge_state": snapshot["mergeStateStatus"],
+        "labels": [label["name"] for label in snapshot["labels"]],
+        "head": head,
+        "attempts": attempts,
+        "exact_stop_at": str(invalid.get("epoch") or ""),
+        "generic_cap_at": cap_log.timestamp,
+        "exact_comment": exact_stop[len(REPAIR_STOP_PREFIX):],
+        "generic_comment": generic_stop[len(REPAIR_STOP_PREFIX):],
+        "root_cause": "a bot-thread repair-invalid human split blocker existed on the PR, but later repair passes still retried the conflict path and emitted a generic retry-cap blocker.",
+    }, check_names(snapshot)
+
+
+def print_summary(row: Mapping[str, object], names: list[str]) -> None:
+    labels = ",".join(row["labels"]) if isinstance(row.get("labels"), list) else ""
+    print(
+        f"| {row['pr']} | {labels} | {row['state']} / {row['merge_state']} | {row['head']} | "
+        f"{row['attempts']} conflict attempts | exact stop at {row['exact_stop_at']} | "
+        f"generic cap at {row['generic_cap_at']} | {row['root_cause']} |"
+    )
+    print(f"  exact: {row['exact_comment']}")
+    print(f"  generic: {row['generic_comment']}")
+    print("  checks:")
+    for name in names:
+        print(f"    - {name}")
 
 
 def main() -> int:
     conn = connect_db()
     try:
-        summary_5801, names_5801 = summarize_5801(conn)
-        summary_5811, names_5811 = summarize_5811(conn)
+        summary_6118, names_6118 = summarize_6118(conn)
+        summary_6158, names_6158 = summarize_6158(conn)
     finally:
         conn.close()
 
-    print('Admin-bypass non-landing root cause repro')
-    print(f'DB: {DB_PATH}')
+    print("Admin-bypass non-landing root cause repro")
+    print(f"DB: {DB_PATH}")
+    print(f"Ledger: {LEDGER_PATH}")
     print()
-    print('| PR | labels | live proof of worker handling | live proof of fix | live blocker after fix | root cause |')
-    print('|---|---|---|---|---|---|')
-    print(
-        f"| 5801 | {','.join(summary_5801['labels'])} | repair-check at {summary_5801['repair_started_at']} | pushed at {summary_5801['repair_pushed_at']}; rebased/fixed at {summary_5801['fixed_note_at']} | stack blocked at {summary_5801['stalled_on_stack_at']} while required-fast checks were absent on head {summary_5801['head']} | {summary_5801['root_cause']} |"
-    )
-    print(
-        f"| 5811 | {','.join(summary_5811['labels'])} | dequeued failing-check trace at {summary_5811['dequeued_trace_at']} | none in worker logs | repeated missing-check block at {summary_5811['blocked_at']} while required-fast check was absent on head {summary_5811['head']} | {summary_5811['root_cause']} |"
-    )
+    print("| PR | labels | live state | head | conflict attempts | exact proof | later bad retry | root cause |")
+    print("|---|---|---|---|---|---|---|---|")
+    print_summary(summary_6118, names_6118)
+    print_summary(summary_6158, names_6158)
     print()
-    print('5801 check names:')
-    for name in names_5801:
-        print(f'  - {name}')
-    print('5811 check names:')
-    for name in names_5811:
-        print(f'  - {name}')
-    print()
-    print('Shared signature: both PR heads are missing the exact required-fast check names that Mergify requires; only placeholder skipped check names remain on the PR heads.')
+    print("Shared signature: exact human-only repair-invalid evidence exists, but subsequent planner passes treated the PR as repairable and emitted generic retry-cap blockers.")
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except AssertionError as exc:
-        print(f'REPRO FAILED: {exc}', file=sys.stderr)
+        print(f"REPRO FAILED: {exc}", file=sys.stderr)
         raise SystemExit(1)

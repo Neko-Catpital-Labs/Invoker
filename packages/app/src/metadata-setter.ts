@@ -163,7 +163,7 @@ function validateWorkflowValue(fieldPath: string, value: unknown, raw: boolean):
     return { onFinish: enumValue<'none' | 'merge' | 'pull_request'>(path, value, ['none', 'merge', 'pull_request']) ?? undefined };
   }
   if (path === 'mergeMode') {
-    return { mergeMode: enumValue<'manual' | 'automatic' | 'external_review'>(path, value, ['manual', 'automatic', 'external_review']) ?? undefined };
+    return { mergeMode: enumValue<'manual' | 'automatic' | 'external_review' | 'no_op'>(path, value, ['manual', 'automatic', 'external_review', 'no_op']) ?? undefined };
   }
   if (path === 'baseBranch') {
     return { baseBranch: normalizeWorkflowBaseBranch(value == null ? null : String(value), 'master') };

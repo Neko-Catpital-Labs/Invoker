@@ -41,7 +41,7 @@ else
 fi
 
 prs_json="$(gh_json pr list --repo "$TARGET_REPO" --author "$PR_AUTHOR" --state open \
-  --json number,title,url,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision \
+  --json number,title,url,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,statusCheckRollup,reviewDecision,labels \
   --limit 100)" || {
   log_line "could not list PRs; exiting"
   exit 0
@@ -53,6 +53,11 @@ while IFS= read -r pr; do
   num="$(jq -r '.number' <<<"$pr")"
 
   if [ "$(jq -r '.isDraft' <<<"$pr")" = "true" ]; then
+    continue
+  fi
+
+  if jq -e '.labels[]? | select(.name == "admin-bypass")' <<<"$pr" >/dev/null; then
+    log_line "PR #$num: admin-bypass labeled; admin-bypass-land owns it"
     continue
   fi
 

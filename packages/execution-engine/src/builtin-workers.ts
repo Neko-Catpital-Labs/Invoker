@@ -4,6 +4,7 @@ import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js
 import type { WorkerRegistry } from './worker-registry.js';
 import { registerE2eAutoFixWorker } from './workers/e2e-autofix-worker.js';
 import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
+import { registerInfraRepairWorker } from './workers/infra-repair-worker.js';
 import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
 import { registerPrSummaryRefreshWorker } from './workers/pr-summary-refresh-worker.js';
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
@@ -19,6 +20,7 @@ export function registerBuiltinWorkers(
   registerWorkflowResumeWorker(registry);
   registerPrStatusWorker(registry);
   registerPrSummaryRefreshWorker(registry);
+  registerInfraRepairWorker(registry);
   registerDiskHeadroomWorker(registry);
   registerAutoApproveWorker(registry);
   registerPrMaintenanceWorkers(registry);

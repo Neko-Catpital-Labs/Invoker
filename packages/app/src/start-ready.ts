@@ -1,4 +1,5 @@
 import type {
+  StartReadyExcludeSelector,
   StartReadyFreshBasePreview,
   StartReadyFreshBaseScope,
   StartReadyPreview,
@@ -17,6 +18,7 @@ type StartReadyOrchestrator = Pick<
   | 'prepareTaskForNewAttempt'
   | 'recreateWorkflow'
   | 'startExecution'
+  | 'getWorkflowMergeMode'
 >;
 
 type StartReadyRequestExt = StartReadyRequest & {
@@ -38,6 +40,19 @@ type StartReadyPreviewExt = StartReadyPreview & {
     completedTasks: number;
   };
 };
+
+const SUPPORTED_EXCLUDE_SELECTORS = new Set(['mergeMode:no_op']);
+
+export function parseStartReadyExcludeSelector(raw: string): StartReadyExcludeSelector {
+  const trimmed = raw.trim();
+  if (!SUPPORTED_EXCLUDE_SELECTORS.has(trimmed)) {
+    throw new Error(
+      `Unsupported start-ready --exclude selector "${raw}". Expected one of: ${[...SUPPORTED_EXCLUDE_SELECTORS].join(', ')}`,
+    );
+  }
+  return { field: 'mergeMode', value: 'no_op' };
+}
+
 function collectRecoverableTasks(orchestrator: StartReadyOrchestrator): TaskState[] {
   const activeTaskIds = orchestrator.getPersistedActiveTaskIds();
   return orchestrator
@@ -96,6 +111,38 @@ function unionWorkflowIds(...groups: readonly (readonly string[])[]): string[] {
     for (const id of group) ids.add(id);
   }
   return Array.from(ids);
+}
+
+
+function matchesExcludeSelector(
+  orchestrator: StartReadyOrchestrator,
+  workflowId: string,
+  selector: StartReadyExcludeSelector,
+): boolean {
+  if (selector.field === 'mergeMode' && selector.value === 'no_op') {
+    return orchestrator.getWorkflowMergeMode(workflowId) === 'no_op';
+  }
+  return false;
+}
+
+function partitionExcludedWorkflowIds(
+  orchestrator: StartReadyOrchestrator,
+  workflowIds: readonly string[],
+  exclude: readonly StartReadyExcludeSelector[] | undefined,
+): { selected: string[]; excluded: string[] } {
+  if (!exclude || exclude.length === 0) {
+    return { selected: [...workflowIds], excluded: [] };
+  }
+  const selected: string[] = [];
+  const excluded: string[] = [];
+  for (const workflowId of workflowIds) {
+    if (exclude.some((selector) => matchesExcludeSelector(orchestrator, workflowId, selector))) {
+      excluded.push(workflowId);
+    } else {
+      selected.push(workflowId);
+    }
+  }
+  return { selected, excluded };
 }
 
 function workflowIdsToRecreate(
@@ -227,11 +274,21 @@ async function runStartReadyAsync(
   if (freshBasePreview) {
     preview.freshBase = freshBasePreview;
   }
+  const recreateCandidates = freshBasePreview
+    ? []
+    : workflowIdsToRecreate(extendedRequest, preview);
+  const { selected: selectedRecreateIds, excluded: excludedWorkflowIds } = partitionExcludedWorkflowIds(
+    orchestrator,
+    recreateCandidates,
+    extendedRequest.exclude,
+  );
+
   if (request.dryRun) {
     return {
       preview,
       started: [],
       recreatedWorkflowIds: [],
+      excludedWorkflowIds,
       dryRun: true,
     };
   }
@@ -266,7 +323,7 @@ async function runStartReadyAsync(
       }
     }
   } else {
-    for (const workflowId of workflowIdsToRecreate(extendedRequest, preview)) {
+    for (const workflowId of selectedRecreateIds) {
       started.push(...orchestrator.recreateWorkflow(workflowId));
       recreatedWorkflowIds.push(workflowId);
     }
@@ -283,6 +340,7 @@ async function runStartReadyAsync(
     preview,
     started: uniqueTasks(started),
     recreatedWorkflowIds,
+    excludedWorkflowIds,
     ...(freshBasePreview
       ? {
           freshBaseRecreatedWorkflowIds,

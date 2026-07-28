@@ -183,7 +183,13 @@ export interface ReviewGateState {
   readonly artifacts: readonly ReviewGateArtifact[];
 }
 
-export type FailureClass = 'liveness_stall';
+/** Machine/infra failure buckets that require repairing host or workspace state, not a code fix. */
+export type SshInfraFailureClass =
+  | 'ssh-env-invalid-export'
+  | 'ssh-worktree-missing'
+  | 'ssh-invalid-reference';
+
+export type FailureClass = 'liveness_stall' | SshInfraFailureClass;
 
 export function isLivenessFailureClass(failureClass: FailureClass | undefined): boolean {
   return failureClass === 'liveness_stall';

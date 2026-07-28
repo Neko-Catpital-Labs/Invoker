@@ -6,9 +6,10 @@ describe('normalizeMergeModeForPersistence', () => {
     expect(normalizeMergeModeForPersistence('external_review')).toBe('external_review');
   });
 
-  it('passes through manual and automatic', () => {
+  it('passes through manual, automatic, and no_op', () => {
     expect(normalizeMergeModeForPersistence('manual')).toBe('manual');
     expect(normalizeMergeModeForPersistence('automatic')).toBe('automatic');
+    expect(normalizeMergeModeForPersistence('no_op')).toBe('no_op');
   });
 
   it('rejects unknown labels', () => {

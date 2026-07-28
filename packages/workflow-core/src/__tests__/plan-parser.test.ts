@@ -104,4 +104,21 @@ tasks:
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow(/executionModel/);
   });
+
+  it('parses mergeMode no_op', () => {
+    const yaml = `
+name: No Op Plan
+repoUrl: git@github.com:test/repo.git
+baseBranch: main
+onFinish: none
+mergeMode: no_op
+tasks:
+  - id: work
+    description: Do work
+    command: echo "ok"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.mergeMode).toBe('no_op');
+    expect(plan.onFinish).toBe('none');
+  });
 });

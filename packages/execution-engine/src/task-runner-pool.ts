@@ -11,8 +11,8 @@
  */
 
 import { resolve } from 'node:path';
-import { homedir } from 'node:os';
 
+import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import type { Executor, ExecutorHandle } from './executor.js';
 import { ResourceLimitError } from './repo-pool.js';
@@ -686,7 +686,7 @@ export function selectExecutor(
     }
 
     if (effectiveType === 'worktree') {
-      const invokerHome = resolve(homedir(), '.invoker');
+      const invokerHome = resolveInvokerHomeRoot();
       const worktreeTargets = host.getWorktreeTargets();
       const selectedWorktreeTarget = selectedWorktreeTargetId
         ? worktreeTargets[selectedWorktreeTargetId]

@@ -6,7 +6,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Orchestrator } from '@invoker/workflow-core';
-import type { SQLiteAdapter } from '@invoker/data-store';
+import type { SQLiteAdapter, WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
 import type { TaskRunner } from '@invoker/execution-engine';
 import { WorkflowMutationFacade, type WorkflowMutationFacadeDeps } from '../workflow-mutation-facade.js';
 
@@ -27,6 +27,52 @@ function makeTask(overrides: Record<string, unknown> = {}) {
 
 function makeRunningTask(overrides: Record<string, unknown> = {}) {
   return makeTask({ status: 'running', ...overrides });
+}
+
+function makeCiFailedEvent(overrides: Record<string, unknown> = {}) {
+  return {
+    eventKey: 'review_gate.ci_failed|workflow:wf-upstream|task:wf-upstream/merge',
+    kind: 'review_gate.ci_failed',
+    workflowId: 'wf-upstream',
+    taskId: 'wf-upstream/merge',
+    status: 'review_ready',
+    taskStateVersion: 12,
+    generation: 3,
+    attemptId: 'attempt-merge',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    recoveryWakeup: {
+      eventKey: 'review_gate.ci_failed|workflow:wf-upstream|task:wf-upstream/merge',
+      eventKind: 'review_gate.ci_failed',
+      workflowId: 'wf-upstream',
+      taskId: 'wf-upstream/merge',
+      taskStateVersion: 12,
+      generation: 3,
+      attemptId: 'attempt-merge',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      reason: 'review_gate_failure',
+      authoritative: false,
+    },
+    reviewId: '123',
+    reviewUrl: 'https://github.com/owner/repo/pull/123',
+    headSha: 'abcdef1234567890abcdef1234567890abcdef12',
+    headRef: 'feature/ci',
+    branch: 'feature/ci',
+    failedChecks: [
+      { name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://github.com/owner/repo/actions/1' },
+    ],
+    statusText: 'CI failed',
+    ...overrides,
+  };
+}
+
+function toWorkerAction(write: WorkerActionWrite, existing?: WorkerActionRecord): WorkerActionRecord {
+  return {
+    ...write,
+    id: existing?.id ?? write.id,
+    attemptCount: write.attemptCount ?? existing?.attemptCount ?? 0,
+    createdAt: existing?.createdAt ?? '2026-01-01T00:00:00.000Z',
+    updatedAt: write.updatedAt ?? '2026-01-01T00:00:00.000Z',
+  };
 }
 
 function makeDeps(overrides: Partial<WorkflowMutationFacadeDeps> = {}): WorkflowMutationFacadeDeps {
@@ -444,6 +490,70 @@ describe('WorkflowMutationFacade', () => {
       expect(result.runnable).toEqual([scoped]);
       expect(result.topup).toEqual([crossWorkflow]);
       expect(deps.taskExecutor.executeTasks).not.toHaveBeenCalled();
+    });
+
+    it('spawns a repair workflow and dispatches the spawned workflow scope', async () => {
+      const upstreamTask = makeTask({
+        id: 'wf-upstream/merge',
+        status: 'review_ready',
+        config: { workflowId: 'wf-upstream', isMergeNode: true },
+      });
+      const repairTask = makeRunningTask({
+        id: 'wf-repair-1/repair-ci',
+        config: { workflowId: 'wf-repair-1' },
+        execution: { selectedAttemptId: 'attempt-repair' },
+      });
+      const actions = new Map<string, WorkerActionRecord>();
+      const workflowIds = ['wf-upstream'];
+      const loadPlan = vi.fn(() => {
+        workflowIds.push('wf-repair-1');
+      });
+      deps = makeDeps({
+        orchestrator: {
+          ...deps.orchestrator,
+          getWorkflowIds: vi.fn(() => [...workflowIds]),
+          loadPlan,
+          startExecution: vi.fn(() => [repairTask]),
+          getAllTasks: vi.fn(() => [upstreamTask, repairTask]),
+        } as unknown as Orchestrator,
+        persistence: {
+          ...deps.persistence,
+          loadTask: vi.fn((taskId: string) => (taskId === upstreamTask.id ? upstreamTask : undefined)),
+          loadTasks: vi.fn((workflowId: string) => (workflowId === 'wf-upstream' ? [upstreamTask] : [])),
+          loadWorkflow: vi.fn((workflowId: string) => (workflowId === 'wf-upstream'
+            ? { id: 'wf-upstream', repoUrl: 'git@github.com:owner/repo.git' }
+            : undefined)),
+          getWorkerAction: vi.fn((workerKind: string, externalKey: string) => actions.get(`${workerKind}:${externalKey}`)),
+          upsertWorkerAction: vi.fn((write: WorkerActionWrite) => {
+            const key = `${write.workerKind}:${write.externalKey}`;
+            const saved = toWorkerAction(write, actions.get(key));
+            actions.set(key, saved);
+            return saved;
+          }),
+          logEvent: vi.fn(),
+        } as unknown as SQLiteAdapter,
+        defaultAutoFixRetries: 1,
+      });
+      facade = new WorkflowMutationFacade(deps);
+
+      const result = await facade.spawnRepairWorkflow({
+        event: makeCiFailedEvent(),
+        upstreamWorkflowId: 'wf-upstream',
+        upstreamFeatureBranch: 'feature/ci',
+        prHeadSha: 'abcdef1234567890abcdef1234567890abcdef12',
+        failedCheckNames: ['unit'],
+      });
+
+      expect(result.workflowId).toBe('wf-repair-1');
+      expect(result.runnable).toEqual([repairTask]);
+      expect(result.topup).toEqual([]);
+      expect(loadPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          onFinish: 'none',
+          featureBranch: 'repair/feature/ci-abcdef123456',
+        }),
+        expect.any(Object),
+      );
     });
   });
 });

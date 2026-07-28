@@ -26,6 +26,9 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const MIN_PLANNING_TMUX_COLS = 20;
+const MIN_PLANNING_TMUX_ROWS = 5;
+const PLANNING_TMUX_FIT_SETTLE_FRAMES = 2;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -61,10 +64,10 @@ interface InvokerTerminalProps {
   readOnly?: boolean;
   expanded?: boolean;
   mode?: PlanningTerminalMode;
-  terminalActive?: boolean;
   terminalSession?: TerminalSessionDescriptor | null;
   terminalBusy?: boolean;
   terminalError?: string | null;
+  terminalActive?: boolean;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
@@ -141,11 +144,6 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
-type PlanningTerminalSize = {
-  cols: number;
-  rows: number;
-};
-
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
@@ -196,7 +194,6 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
-  const lastSentSizeRef = useRef<PlanningTerminalSize | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -221,7 +218,6 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
     }
     termRef.current = term;
     fitRef.current = fit;
-    lastSentSizeRef.current = null;
 
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
 
@@ -240,89 +236,117 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
       }
     });
 
-    let fitFrame: number | null = null;
-    let secondFitFrame: number | null = null;
+    let disposed = false;
+    let scheduledFitHandle: number | null = null;
+    let scheduledFitKind: 'raf' | 'timeout' | null = null;
+    let pendingFocus = false;
+    let lastSentSize: { cols: number; rows: number } | null = null;
 
-    const clearScheduledFit = (): void => {
-      if (fitFrame !== null) {
-        if (typeof cancelAnimationFrame === 'function') {
-          cancelAnimationFrame(fitFrame);
-        }
-        fitFrame = null;
+    const cancelScheduledFit = () => {
+      if (scheduledFitHandle === null) return;
+      if (scheduledFitKind === 'raf' && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(scheduledFitHandle);
+      } else {
+        window.clearTimeout(scheduledFitHandle);
       }
-      if (secondFitFrame !== null) {
-        if (typeof cancelAnimationFrame === 'function') {
-          cancelAnimationFrame(secondFitFrame);
-        }
-        secondFitFrame = null;
-      }
+      scheduledFitHandle = null;
+      scheduledFitKind = null;
     };
 
-    const tryFit = (): void => {
+    const tryFit = (focusAfterFit: boolean): boolean => {
       try {
-        if (!host.isConnected) return;
-        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-        const hostRect = host.getBoundingClientRect();
-        if (hostRect.width <= 0 || hostRect.height <= 0) return;
-        const proposed = fit.proposeDimensions();
-        if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return;
-        if (proposed.cols < 20 || proposed.rows < 5) return;
+        if (disposed || !host.isConnected) return false;
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
+        const rect = host.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        const proposedDimensions = fit.proposeDimensions();
+        if (
+          !proposedDimensions ||
+          !Number.isFinite(proposedDimensions.cols) ||
+          !Number.isFinite(proposedDimensions.rows) ||
+          proposedDimensions.cols < MIN_PLANNING_TMUX_COLS ||
+          proposedDimensions.rows < MIN_PLANNING_TMUX_ROWS
+        ) {
+          return false;
+        }
 
         fit.fit();
         if (term.rows > 0) {
           term.refresh?.(0, term.rows - 1);
         }
         const nextSize = { cols: term.cols, rows: term.rows };
-        const lastSentSize = lastSentSizeRef.current;
-        if (lastSentSize?.cols === nextSize.cols && lastSentSize.rows === nextSize.rows) return;
-        lastSentSizeRef.current = nextSize;
-        void window.invoker?.planningTerminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+        if (!lastSentSize || lastSentSize.cols !== nextSize.cols || lastSentSize.rows !== nextSize.rows) {
+          lastSentSize = nextSize;
+          void window.invoker?.planningTerminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+        }
+        if (focusAfterFit) term.focus();
+        return true;
       } catch {
         /* host has zero size or fit unsupported */
+        return false;
       }
     };
 
-    const scheduleFit = (): void => {
-      clearScheduledFit();
-      tryFit();
-      if (typeof requestAnimationFrame !== 'function') return;
-      fitFrame = requestAnimationFrame(() => {
-        fitFrame = null;
-        tryFit();
-        secondFitFrame = requestAnimationFrame(() => {
-          secondFitFrame = null;
-          tryFit();
-        });
-      });
+    const scheduleFit = ({ focus = false }: { focus?: boolean } = {}) => {
+      if (disposed) return;
+      pendingFocus = pendingFocus || focus;
+      cancelScheduledFit();
+
+      const runAfterFrames = (remainingFrames: number) => {
+        if (typeof window.requestAnimationFrame === 'function') {
+          scheduledFitKind = 'raf';
+          scheduledFitHandle = window.requestAnimationFrame(() => {
+            scheduledFitHandle = null;
+            scheduledFitKind = null;
+            if (remainingFrames > 0) {
+              runAfterFrames(remainingFrames - 1);
+              return;
+            }
+            if (tryFit(pendingFocus)) pendingFocus = false;
+          });
+          return;
+        }
+
+        scheduledFitKind = 'timeout';
+        scheduledFitHandle = window.setTimeout(() => {
+          scheduledFitHandle = null;
+          scheduledFitKind = null;
+          if (tryFit(pendingFocus)) pendingFocus = false;
+        }, 0);
+      };
+
+      runAfterFrames(PLANNING_TMUX_FIT_SETTLE_FRAMES);
     };
 
     let resizeObserver: ResizeObserver | null = null;
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        resizeObserver = new ResizeObserver(() => scheduleFit());
+        resizeObserver = new ResizeObserver(() => {
+          scheduleFit();
+        });
         resizeObserver.observe(host);
       } catch {
         resizeObserver = null;
       }
     }
 
-    const handleVisibilityChange = (): void => scheduleFit();
-    const handleWindowFocus = (): void => scheduleFit();
+    const handleVisibilityChange = () => {
+      scheduleFit();
+    };
+    const handleWindowFocus = () => {
+      scheduleFit({ focus: true });
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleWindowFocus);
-
-    scheduleFit();
-    try {
-      term.focus();
-    } catch {
-      /* focus unsupported */
-    }
+    scheduleFit({ focus: true });
 
     return () => {
-      clearScheduledFit();
-      resizeObserver?.disconnect();
+      disposed = true;
+      cancelScheduledFit();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleWindowFocus);
+      resizeObserver?.disconnect();
       inputDisposable.dispose();
       unsubscribeOutput?.();
       try {
@@ -332,7 +356,6 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
       }
       termRef.current = null;
       fitRef.current = null;
-      lastSentSizeRef.current = null;
     };
   }, [readOnly, session?.sessionId, terminalActive]);
 

@@ -57,7 +57,7 @@ import {
   preemptTaskSubgraph,
   preemptWorkflowExecution,
 } from './headless-shared.js';
-import { runStartReady } from './start-ready.js';
+import { parseStartReadyExcludeSelector, runStartReady } from './start-ready.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 type StartReadyRequestExt = StartReadyRequest & {
   recreateFailedAndPending?: boolean;
@@ -82,7 +82,7 @@ type StartReadyPreviewExt = {
   };
 };
 
-const START_READY_USAGE = '--headless start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--recreate-failed-pending-and-running] [--recreate-all] [--fresh-base-failed] [--fresh-base-failed-and-pending] [--fresh-base-failed-pending-and-running] [--fresh-base-all] [--no-track]';
+const START_READY_USAGE = '--headless start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--recreate-failed-pending-and-running] [--recreate-all] [--exclude mergeMode:no_op]... [--fresh-base-failed] [--fresh-base-failed-and-pending] [--fresh-base-failed-pending-and-running] [--fresh-base-all] [--no-track]';
 
 const FRESH_BASE_MODE_LABELS: Record<StartReadyFreshBaseScope, string> = {
   failed: 'Start ready work and recreate failed workflows from fresh base',
@@ -448,7 +448,8 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
 } {
   const request: StartReadyRequestExt = {};
   let noTrack = inheritedNoTrack ?? false;
-  for (const arg of args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
     switch (arg) {
       case '--dry-run':
         request.dryRun = true;
@@ -465,6 +466,15 @@ function parseStartReadyArgs(args: string[], inheritedNoTrack: boolean | undefin
       case '--recreate-all':
         request.recreateAll = true;
         break;
+      case '--exclude': {
+        const selector = args[++i];
+        if (!selector || selector.startsWith('--')) {
+          throw new Error(`Missing value for --exclude. Usage: ${START_READY_USAGE}`);
+        }
+        const parsed = parseStartReadyExcludeSelector(selector);
+        request.exclude = [...(request.exclude ?? []), parsed];
+        break;
+      }
       case '--fresh-base-failed':
         request.freshBaseScope = 'failed';
         break;
@@ -520,6 +530,9 @@ export async function headlessStartReady(args: string[], deps: HeadlessDeps): Pr
     printFreshBasePreview(preview, request.freshBaseScope);
   }
   process.stdout.write(`  recreated workflows: ${result.recreatedWorkflowIds.length}\n`);
+  if ((result.excludedWorkflowIds?.length ?? 0) > 0 || (request.exclude?.length ?? 0) > 0) {
+    process.stdout.write(`  excluded workflows: ${result.excludedWorkflowIds?.length ?? 0}\n`);
+  }
   printStartReadyOutcomeSummary(result, request);
   process.stdout.write(`  started: ${runnable.length}\n`);
 

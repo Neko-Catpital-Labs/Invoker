@@ -5,6 +5,7 @@ import {
   CODERABBIT_ADDRESS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
+  INFRA_REPAIR_WORKER_KIND,
   PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
@@ -115,6 +116,7 @@ function controller(
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
   register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes pull request summaries.');
+  register(INFRA_REPAIR_WORKER_KIND, 'Repairs infra-owned SSH and CI failures.');
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
   register(PR_CI_FAILURE_SCAN_WORKER_KIND, 'Scans mapped PRs for failing CI.');
@@ -145,6 +147,7 @@ describe('createWorkerRuntimeController', () => {
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === INFRA_REPAIR_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CI_FAILURE_SCAN_WORKER_KIND)?.lifecycle).toBe('running');

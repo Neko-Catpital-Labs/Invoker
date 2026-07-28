@@ -10,7 +10,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string; status: string;
     createdAt: string; updatedAt: string;
     onFinish?: 'none' | 'merge' | 'pull_request'; baseBranch?: string; featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic' | 'external_review';
+    mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
@@ -22,7 +22,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     id: string; name: string;
     createdAt: string; updatedAt: string;
     onFinish?: 'none' | 'merge' | 'pull_request'; baseBranch?: string; featureBranch?: string;
-    mergeMode?: 'manual' | 'automatic' | 'external_review';
+    mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
     externalDependencies?: ExternalDependency[];
     externalDependencyChanges?: ExternalDependencyChange[];
     generation?: number;
@@ -36,7 +36,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     });
   }
 
-  updateWorkflow(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[] }): void {
+  updateWorkflow(workflowId: string, changes: { updatedAt?: string; baseBranch?: string; generation?: number; mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op'; externalDependencies?: ExternalDependency[]; externalDependencyChanges?: ExternalDependencyChange[] }): void {
     const wf = this.workflows.get(workflowId);
     if (wf) {
       if (changes.updatedAt) wf.updatedAt = changes.updatedAt;
@@ -97,7 +97,7 @@ export class InMemoryPersistence implements OrchestratorPersistence {
     }
   }
 
-  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; baseBranch?: string; onFinish?: string; mergeMode?: 'manual' | 'automatic' | 'external_review'; generation?: number }> {
+  listWorkflows(): Array<{ id: string; name: string; status: string; createdAt: string; updatedAt: string; baseBranch?: string; onFinish?: string; mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op'; generation?: number }> {
     return Array.from(this.workflows.values()).map((workflow) => this.withDerivedStatus(workflow));
   }
 

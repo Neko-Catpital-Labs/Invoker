@@ -78,11 +78,12 @@ async function openHome(page: Page): Promise<void> {
 }
 
 async function switchPlanningTerminalToTmux(page: Page): Promise<string> {
-  await page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' }).click();
+  await page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: /tmux/i }).click();
   const pane = page.getByTestId('invoker-terminal-tmux-pane');
   await expect(pane).toBeVisible({ timeout: 10000 });
   const sessionId = await pane.getAttribute('data-session-id');
   expect(sessionId).toBeTruthy();
+  await expect.poll(async () => readOutputSnapshot(page, sessionId ?? ''), { timeout: 10000 }).toContain('Invoker planning tmux bridge');
   return sessionId ?? '';
 }
 

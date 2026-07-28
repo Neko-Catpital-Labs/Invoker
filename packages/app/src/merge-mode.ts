@@ -1,9 +1,9 @@
 /**
  * Canonical merge modes stored in persistence and consumed by the merge executor.
  */
-export type CanonicalMergeMode = 'manual' | 'automatic' | 'external_review';
+export type CanonicalMergeMode = 'manual' | 'automatic' | 'external_review' | 'no_op';
 
-const VALID_INPUT = new Set(['manual', 'automatic', 'external_review']);
+const VALID_INPUT = new Set(['manual', 'automatic', 'external_review', 'no_op']);
 
 /**
  * Normalize user-facing merge mode strings for workflow persistence.
@@ -17,5 +17,6 @@ export function normalizeMergeModeForPersistence(raw: string): CanonicalMergeMod
   }
   if (raw === 'external_review') return 'external_review';
   if (raw === 'automatic') return 'automatic';
+  if (raw === 'no_op') return 'no_op';
   return 'manual';
 }

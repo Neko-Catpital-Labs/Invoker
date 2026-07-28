@@ -155,7 +155,7 @@ tasks:
 To adapt it:
 
 - Change `repoUrl` to your repo URL or local repo path.
-- Leave `baseBranch: master`. Invoker pins workflow base branches to `master` today.
+- Set `baseBranch` to the branch or remote-qualified ref you want, such as `master`, `origin/master`, or `upstream/main`.
 - Replace the prompt with the concrete change you want.
 - Replace `npm test` with your real verification command.
 - Use `executionAgent: codex` or `executionAgent: claude`, depending on the agent you want.

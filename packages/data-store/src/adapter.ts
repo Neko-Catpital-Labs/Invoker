@@ -117,7 +117,7 @@ export interface Workflow {
   onFinish?: 'none' | 'merge' | 'pull_request';
   baseBranch?: string;
   featureBranch?: string;
-  mergeMode?: 'manual' | 'automatic' | 'external_review';
+  mergeMode?: 'manual' | 'automatic' | 'external_review' | 'no_op';
   reviewProvider?: string;
   externalDependencies?: ExternalDependency[];
   externalDependencyChanges?: ExternalDependencyChange[];

@@ -2770,6 +2770,31 @@ describe('TaskRunner', () => {
       expect(poolProvider).toHaveBeenCalledTimes(2);
       expect(targetProvider).toHaveBeenCalledTimes(2);
     });
+    it('roots lazy worktree executors under INVOKER_DB_DIR when set', () => {
+      const previousDbDir = process.env.INVOKER_DB_DIR;
+      const invokerHome = createTempWorkspace();
+      process.env.INVOKER_DB_DIR = invokerHome;
+      try {
+        const executor = new TaskRunner({
+          orchestrator: { getTask: () => undefined } as any,
+          persistence: {} as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [], register: vi.fn() } as any,
+          cwd: '/tmp',
+        } as any);
+
+        const selected = executor.selectExecutor(makeTask({
+          id: 'worktree-task',
+          config: { runnerKind: 'worktree' },
+        }));
+
+        expect(selected.executor.type).toBe('worktree');
+        expect(Reflect.get(selected.executor, 'worktreeBaseDir')).toBe(join(invokerHome, 'worktrees'));
+        expect(Reflect.get(Reflect.get(selected.executor, 'pool'), 'cacheDir')).toBe(join(invokerHome, 'repos'));
+      } finally {
+        if (previousDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+        else process.env.INVOKER_DB_DIR = previousDbDir;
+      }
+    });
     it('bypasses arbitrary registered worktree executors so target provisioning fingerprints win', () => {
       const preRegistered = { type: 'worktree' };
       const executor = new TaskRunner({
