@@ -81,6 +81,8 @@ def is_queue_only_required_check(name: str) -> bool:
 
 def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
+    if pr.state == "MERGED":
+        return tuple(blockers)
     if pr.state != "OPEN":
         blockers.append(Blocker("closed", "closed", pr.number, f"state={pr.state}"))
         return tuple(blockers)
@@ -171,8 +173,18 @@ def mergify_failed_check_actions(
     latest = pr.latest_mergify
     if not latest or latest.state != "dequeued" or latest.head_sha != pr.head_ref_oid:
         return ()
-    for name in latest.failing_checks:
-        if name in suppressed:
+    candidates = [name for name in latest.failing_checks if name not in suppressed]
+    has_queue_only_candidate = any(
+        pr.checks.get(name) is None and is_queue_only_required_check(name)
+        for name in candidates
+    )
+    if any(ctx.state == "failure" for ctx in pr.checks.values()):
+        if not has_queue_only_candidate:
+            return ()
+    for name in candidates:
+        evaluated = ledger.latest("repair-evaluated", pr.number, pr.head_ref_oid, name)
+        ctx = pr.checks.get(name)
+        if evaluated is not None and ctx is not None and ctx.state in {"neutral", "skipped", "success"}:
             continue
         if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= 3:
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"), f"Mergify queue check failed: {name}"),)
@@ -309,8 +321,6 @@ def latest_queue_only_noop_check(stack: StackGroup, ledger: Ledger, trunk: str) 
 
 
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
-    if blocker.kind != "failed_check":
-        return None
     latest = ledger.latest("repair-invalid", pr.number, pr.head_ref_oid, blocker.key)
     if latest is None:
         return None
@@ -545,6 +555,8 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
                 key = f"conflict:{pr.number}"
@@ -611,6 +623,8 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         if facts.bottom_topology.kind == "current_bottom":
             raise AssertionError("current_bottom topology reached no-bottom branch")
         root = facts.bottom_topology.root
+        if root.state != "OPEN":
+            return None
         if facts.bottom_topology.kind == "external_open_base":
             owners = ", ".join(f"#{number}" for number in facts.bottom_topology.external_open_base_pr_numbers)
             return Action(

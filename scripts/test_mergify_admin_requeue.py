@@ -272,6 +272,58 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
 
+    def test_current_head_failure_preempts_stale_mergify_queue_order(self):
+        latest = MergifyQueueEvent(
+            "m6042",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-28T02:56:05Z",
+            HEAD,
+            ("UI Vitest", "build-artifacts", "quality / TypeScript Types"),
+            ("build-artifacts", "quality / TypeScript Types", "UI Vitest"),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/6042#issuecomment-5099390630",
+            6365,
+            (
+                ("build-artifacts", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30324450640/job/90166775963",)),
+                ("quality / TypeScript Types", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30324450640/job/90166775953",)),
+                ("UI Vitest", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30324450640/job/90166775944",)),
+            ),
+        )
+        checks = {
+            "PR Body": check("PR Body"),
+            "UI Vitest": check("UI Vitest"),
+            "build-artifacts": check("build-artifacts", "skipped"),
+            "quality / TypeScript Types": check("quality / TypeScript Types", "failure"),
+        }
+        stack = StackGroup("s", (pr(6042, checks=checks, latest=latest),))
+        actions = plan_stack_actions(stack, REQUIRED | {"UI Vitest", "build-artifacts"}, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 6042, "quality / TypeScript Types")])
+
+    def test_evaluated_non_failing_mergify_queue_check_is_not_retried(self):
+        latest = MergifyQueueEvent(
+            "m6042",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-28T02:56:05Z",
+            HEAD,
+            ("build-artifacts",),
+            ("build-artifacts",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/6042#issuecomment-5099390630",
+            6365,
+            (("build-artifacts", ("https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30324450640/job/90166775963",)),),
+        )
+        checks = {
+            "PR Body": check("PR Body"),
+            "build-artifacts": check("build-artifacts", "skipped"),
+            "quality / TypeScript Types": check("quality / TypeScript Types"),
+        }
+        ledger = self.ledger()
+        ledger.record("repair-check", 6042, HEAD, "build-artifacts", 1)
+        ledger.record("repair-evaluated", 6042, HEAD, "build-artifacts", 1)
+        stack = StackGroup("s", (pr(6042, checks=checks, latest=latest),))
+        actions = plan_stack_actions(stack, REQUIRED | {"build-artifacts"}, ledger, 2)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("requeue", 6042, "m6042")])
+
     def test_failed_check_at_cap_gets_one_more_attempt_until_evaluated(self):
         checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
         stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
