@@ -8615,4 +8615,48 @@ describe('Orchestrator', () => {
 
   // ── Merge gate leaf reconciliation ────────────────────────
 
+  describe('finalize failure classification', () => {
+    function loadSingleTask(planName: string): { wfId: string; taskId: string } {
+      orchestrator.loadPlan({ name: planName, onFinish: 'none', tasks: [{ id: 't1', description: 'd', command: 'x' }] });
+      const wfId = orchestrator.getWorkflowIds()[0]!;
+      const taskId = orchestrator.getAllTasks().find((t) => t.config.workflowId === wfId && !t.config.isMergeNode)!.id;
+      return { wfId, taskId };
+    }
+
+    it('classifies an ssh env.sh failure into a persisted failureClass', () => {
+      const { wfId, taskId } = loadSingleTask('infra-ssh');
+      const cfg = orchestrator.getTask(taskId)!.config;
+      persistence.updateTask(taskId, { config: { ...cfg, runnerKind: 'ssh' } });
+      orchestrator.syncFromDb(wfId);
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(makeResponse({
+        actionId: taskId,
+        status: 'failed',
+        outputs: {
+          exitCode: 1,
+          error: 'export BADVAR: not a valid identifier while sourcing /home/ci/.invoker/env.sh',
+        },
+      }));
+
+      expect(orchestrator.getTask(taskId)!.execution.failureClass).toBe('ssh-env-invalid-export');
+    });
+
+    it('does not classify a non-ssh task with the same error text', () => {
+      const { taskId } = loadSingleTask('infra-nonssh');
+      orchestrator.startExecution();
+
+      orchestrator.handleWorkerResponse(makeResponse({
+        actionId: taskId,
+        status: 'failed',
+        outputs: {
+          exitCode: 1,
+          error: 'export BADVAR: not a valid identifier while sourcing /home/ci/.invoker/env.sh',
+        },
+      }));
+
+      expect(orchestrator.getTask(taskId)!.execution.failureClass).toBeUndefined();
+    });
+  });
+
 });
