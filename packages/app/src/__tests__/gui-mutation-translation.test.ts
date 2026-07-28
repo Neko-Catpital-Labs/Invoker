@@ -24,6 +24,14 @@ function getStandaloneClassifierSource(): string {
   return mainSource.slice(start, end);
 }
 
+function getStandaloneGuiMutationSource(): string {
+  const start = mainSource.indexOf('const executeStandaloneGuiMutation = async');
+  const end = mainSource.indexOf('      // In standalone owner mode, serve delegated requests from peer headless processes.', start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return mainSource.slice(start, end);
+}
+
 function getPerformDeleteWorkflowSource(): string {
   const start = guiMutationHandlersSource.indexOf('async function performDeleteWorkflow');
   const end = guiMutationHandlersSource.indexOf('  async function performDetachWorkflow', start);
@@ -97,6 +105,13 @@ describe('GUI mutation translation', () => {
     const classifierSource = getStandaloneClassifierSource();
     expect(classifierSource).toMatch(
       /case 'delete':\s*case 'delete-workflow':\s*case 'detach-workflow':\s*return \{ workflowId: arg0 === undefined \? undefined : String\(arg0\), priority: 'high' \};/,
+    );
+  });
+
+  it('handles start-ready in the standalone owner GUI mutation switch', () => {
+    const standaloneGuiMutationSource = getStandaloneGuiMutationSource();
+    expect(standaloneGuiMutationSource).toMatch(
+      /case 'invoker:start-ready':\s*\{[\s\S]*workflowMutationDispatcher\.get\('invoker:start-ready'\)[\s\S]*return handler\(payload\.args\[0\] as StartReadyRequest \| undefined\);/,
     );
   });
 
