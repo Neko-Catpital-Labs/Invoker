@@ -57,6 +57,13 @@ export interface WorkerRuntimeOptions {
   onTick: WorkerTick;
   /** Periodic poll interval in ms. `<= 0` disables polling (wakeup-only). */
   intervalMs?: number;
+  /**
+   * Delay before the poll interval (and `tickOnStart`) begin, in ms. Default 0.
+   * Use to stagger multiple worker runtimes that share an external resource
+   * (e.g. a cross-process lock) and would otherwise all wake on the same
+   * `intervalMs` boundary every cycle.
+   */
+  startDelayMs?: number;
   /** Run a tick immediately when `start()` is called. Default `true`. */
   tickOnStart?: boolean;
   /** OS signals that trigger deterministic shutdown. Default `SIGINT`/`SIGTERM`. */
@@ -112,6 +119,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     instanceId: options.instanceId ?? nextInstanceId(options.kind),
   };
   const intervalMs = options.intervalMs ?? 0;
+  const startDelayMs = options.startDelayMs ?? 0;
   const tickOnStart = options.tickOnStart ?? true;
   const shutdownSignals = options.shutdownSignals ?? DEFAULT_SHUTDOWN_SIGNALS;
   const installSignalHandlers = options.installSignalHandlers ?? true;
@@ -120,6 +128,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let started = false;
   let stopped = false;
   let interval: ReturnType<typeof setInterval> | null = null;
+  let startDelayTimer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<void> | null = null;
   let pendingReason: WorkerTickReason | null = null;
   let tickNumber = 0;
@@ -196,6 +205,10 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       clearInterval(interval);
       interval = null;
     }
+    if (startDelayTimer) {
+      clearTimeout(startDelayTimer);
+      startDelayTimer = null;
+    }
     for (const [signal, handler] of signalHandlers) {
       process.removeListener(signal, handler);
     }
@@ -227,7 +240,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     if (started) return;
     started = true;
     options.logger.info(
-      `[worker:${identity.kind}] started intervalMs=${intervalMs} signals=${installSignalHandlers ? shutdownSignals.join(',') : 'none'}`,
+      `[worker:${identity.kind}] started intervalMs=${intervalMs} startDelayMs=${startDelayMs} signals=${installSignalHandlers ? shutdownSignals.join(',') : 'none'}`,
       logFields,
     );
 
@@ -242,12 +255,23 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       }
     }
 
-    if (intervalMs > 0) {
-      interval = setInterval(() => wake('poll'), intervalMs);
-      interval.unref?.();
-    }
+    const beginPolling = (): void => {
+      if (intervalMs > 0) {
+        interval = setInterval(() => wake('poll'), intervalMs);
+        interval.unref?.();
+      }
+      if (tickOnStart) wake('startup');
+    };
 
-    if (tickOnStart) wake('startup');
+    if (startDelayMs > 0) {
+      startDelayTimer = setTimeout(() => {
+        startDelayTimer = null;
+        if (!stopped) beginPolling();
+      }, startDelayMs);
+      startDelayTimer.unref?.();
+    } else {
+      beginPolling();
+    }
   };
 
   const stop = async (stopOptions?: WorkerRuntimeStopOptions): Promise<void> => {

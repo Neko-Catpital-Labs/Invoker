@@ -18,6 +18,12 @@ export const PR_CI_FAILURE_SCAN_WORKER_KIND = 'pr-ci-failure-scan';
 export const PR_ADMIN_BYPASS_LAND_WORKER_KIND = 'pr-admin-bypass-land';
 export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
+/**
+ * Even spacing between each PR-maintenance worker's first tick, so the 5
+ * workers sharing the cron lock (scripts/cron-pr-lib.sh) don't all wake on
+ * the same intervalMs boundary and race for it every cycle.
+ */
+export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 5;
 
 export type PrMaintenanceWorkerKind =
   | typeof CODERABBIT_ADDRESS_WORKER_KIND
@@ -68,6 +74,15 @@ export interface PrMaintenanceWorkerConfig {
   env?: EnvOverrides;
   /** Poll cadence for PR-maintenance workers. Defaults to five minutes. */
   intervalMs?: number;
+  /**
+   * Delay before this worker's first tick/poll begins, in ms. Default 0.
+   * Every PR-maintenance worker shares one intervalMs with zero stagger by
+   * default, so without this they all wake on the same boundary every cycle
+   * and race for the shared cron lock — the same worker (typically whichever
+   * registers first) wins almost every time, starving the others. Each
+   * registerXWorker call below assigns a distinct offset to fix this.
+   */
+  startDelayMs?: number;
   /** Shared cron lock path. Defaults to the shell script's `INVOKER_PR_CRON_LOCK` behavior. */
   lockPath?: string;
   /** Shell executable used to run the existing entrypoint. Defaults to `bash`. */
@@ -130,6 +145,7 @@ export function registerCoderabbitAddressWorker(
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
+        startDelayMs: 0 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
   });
   return registry;
@@ -146,6 +162,7 @@ export function registerPrConflictRebaseWorker(
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
+        startDelayMs: 1 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
   });
   return registry;
@@ -161,6 +178,7 @@ export function registerPrCiFailureScanWorker(
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
+        startDelayMs: 2 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
   });
   return registry;
@@ -177,6 +195,7 @@ export function registerPrAdminBypassLandWorker(
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
+        startDelayMs: 3 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
   });
   return registry;
@@ -193,6 +212,7 @@ export function registerPrOrphanRepairWorker(
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
+        startDelayMs: 4 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
   });
   return registry;
@@ -264,6 +284,7 @@ function createPrMaintenanceWorker(
     instanceId: options.instanceId,
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
+    startDelayMs: options.startDelayMs,
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
     onTick: options.onTick ?? createPrMaintenanceTick({
