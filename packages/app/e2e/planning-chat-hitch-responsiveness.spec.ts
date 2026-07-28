@@ -15,6 +15,7 @@ import { percentile } from './fixtures/hitch-rtt.js';
 const repoRoot = resolveRepoRoot(__dirname);
 const PLANNING_TRANSCRIPT_SIZE = 1_000;
 const ROW_WRITE_BASELINE = 2_004;
+const ROW_WRITE_FIXED = 2;
 const IPC_SAMPLE_COUNT = 40;
 const SESSION_ID = 'planning-send-benchmark-session';
 
@@ -190,6 +191,7 @@ test('planning chat send benchmark captures baseline beachball numbers', async (
       const evidence = {
         transcriptSize: PLANNING_TRANSCRIPT_SIZE,
         rowWriteBaseline: ROW_WRITE_BASELINE,
+        rowWriteFixed: ROW_WRITE_FIXED,
         measuredRttMs: {
           p95: Number(p95.toFixed(1)),
           max: Number(max.toFixed(1)),
@@ -197,7 +199,7 @@ test('planning chat send benchmark captures baseline beachball numbers', async (
         },
         sendInFlightMs: Number(measurement.sendInFlightMs.toFixed(1)),
       };
-      console.log(`PLANNING_CHAT_SEND_BASELINE_RESULT=${JSON.stringify(evidence)}`);
+      console.log(`PLANNING_CHAT_SEND_FIXED_RESULT=${JSON.stringify(evidence)}`);
     } finally {
       await app.close();
     }

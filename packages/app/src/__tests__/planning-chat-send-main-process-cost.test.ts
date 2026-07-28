@@ -10,7 +10,13 @@ import {
 
 const TRANSCRIPT_SIZE = 1_000;
 const ROW_WRITE_BASELINE = 2_004;
+const ROW_WRITE_TARGET = 2;
 const SESSION_ID = 'planning-send-baseline';
+
+type PersistedMessageState = {
+  count: number;
+  maxMessageId: number;
+};
 
 function buildTranscript(messageCount: number): InAppPlanningChatLine[] {
   return Array.from({ length: messageCount }, (_, index) => {
@@ -38,8 +44,33 @@ function planningSession(overrides: Partial<InAppPlanningChatSession> & Pick<InA
   };
 }
 
+function persistedStateForMessages(messages: InAppPlanningChatLine[]): PersistedMessageState {
+  return {
+    count: messages.length,
+    maxMessageId: messages.reduce((maxMessageId, message) => Math.max(maxMessageId, message.id), 0),
+  };
+}
+
+function canAppendPlanningMessages(
+  messages: InAppPlanningChatLine[],
+  persistedState: PersistedMessageState,
+): boolean {
+  if (persistedState.count > messages.length) return false;
+
+  let previousMessageId = 0;
+  for (const message of messages) {
+    if (!Number.isSafeInteger(message.id) || message.id <= previousMessageId) {
+      return false;
+    }
+    previousMessageId = message.id;
+  }
+
+  if (persistedState.count === 0) return true;
+  return messages[persistedState.count - 1]?.id === persistedState.maxMessageId;
+}
+
 describe('planning chat send main-process cost', () => {
-  it('captures the current 1,000-message row-write baseline for one send', async () => {
+  it('persists only appended planning messages for one 1,000-message send', async () => {
     const sessions = createInAppPlanningChatSessions();
     const messages = buildTranscript(TRANSCRIPT_SIZE);
     sessions.set(SESSION_ID, planningSession({
@@ -49,25 +80,49 @@ describe('planning chat send main-process cost', () => {
       nextMessageId: TRANSCRIPT_SIZE + 1,
     }));
 
-    const persistedMessageRows = new Map([[SESSION_ID, TRANSCRIPT_SIZE]]);
-    const observedWrites: Array<{
+    const persistedMessages = new Map([[SESSION_ID, messages]]);
+    const persistedMessageStates = new Map([[SESSION_ID, persistedStateForMessages(messages)]]);
+    const cachedMessageStates = new Map<string, PersistedMessageState>();
+    const observedCost: {
+      baselineRowWrites: number;
       deletedMessageRows: number;
       insertedMessageRows: number;
       sessionRowWrites: number;
-      rowWrites: number;
-    }> = [];
+      fullTranscriptReloads: number;
+      countQueries: number;
+    } = {
+      baselineRowWrites: ROW_WRITE_BASELINE,
+      deletedMessageRows: 0,
+      insertedMessageRows: 0,
+      sessionRowWrites: 0,
+      fullTranscriptReloads: 0,
+      countQueries: 0,
+    };
     const planningSessionStore: InAppPlanningSessionStore = {
       upsertInAppPlanningSession(record) {
-        const deletedMessageRows = persistedMessageRows.get(record.id) ?? 0;
-        const insertedMessageRows = record.messages.length;
-        const sessionRowWrites = 1;
-        observedWrites.push({
-          deletedMessageRows,
-          insertedMessageRows,
-          sessionRowWrites,
-          rowWrites: deletedMessageRows + insertedMessageRows + sessionRowWrites,
-        });
-        persistedMessageRows.set(record.id, insertedMessageRows);
+        observedCost.sessionRowWrites += 1;
+        let persistedState = cachedMessageStates.get(record.id);
+        if (!persistedState) {
+          observedCost.countQueries += 1;
+          persistedState = persistedMessageStates.get(record.id) ?? { count: 0, maxMessageId: 0 };
+          cachedMessageStates.set(record.id, persistedState);
+        }
+
+        if (canAppendPlanningMessages(record.messages, persistedState)) {
+          const unseenMessages = record.messages.slice(persistedState.count);
+          observedCost.insertedMessageRows += unseenMessages.length;
+        } else {
+          const existingMessages = persistedMessages.get(record.id) ?? [];
+          observedCost.fullTranscriptReloads += 1;
+          observedCost.deletedMessageRows += existingMessages.length;
+          observedCost.insertedMessageRows += record.messages.length;
+        }
+
+        const updatedMessages = record.messages.map((message) => ({ ...message }));
+        const updatedState = persistedStateForMessages(updatedMessages);
+        persistedMessages.set(record.id, updatedMessages);
+        persistedMessageStates.set(record.id, updatedState);
+        cachedMessageStates.set(record.id, updatedState);
       },
       updateInAppPlanningSession: vi.fn(),
       deleteInAppPlanningSession: vi.fn(),
@@ -88,20 +143,13 @@ describe('planning chat send main-process cost', () => {
 
     expect(result.ok).toBe(true);
     expect(sessions.get(SESSION_ID)?.messages).toHaveLength(TRANSCRIPT_SIZE + 2);
-    expect(observedWrites).toEqual([
-      {
-        deletedMessageRows: TRANSCRIPT_SIZE,
-        insertedMessageRows: TRANSCRIPT_SIZE + 1,
-        sessionRowWrites: 1,
-        rowWrites: 2_002,
-      },
-      {
-        deletedMessageRows: TRANSCRIPT_SIZE + 1,
-        insertedMessageRows: TRANSCRIPT_SIZE + 2,
-        sessionRowWrites: 1,
-        rowWrites: ROW_WRITE_BASELINE,
-      },
-    ]);
-    expect(Math.max(...observedWrites.map((entry) => entry.rowWrites))).toBe(ROW_WRITE_BASELINE);
+    expect(observedCost).toEqual({
+      baselineRowWrites: ROW_WRITE_BASELINE,
+      deletedMessageRows: 0,
+      insertedMessageRows: ROW_WRITE_TARGET,
+      sessionRowWrites: 2,
+      fullTranscriptReloads: 0,
+      countQueries: 1,
+    });
   });
 });
