@@ -1001,6 +1001,8 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
           channel: 'headless.exec',
           request: { args: ['replace-task', String(arg0), JSON.stringify(Array.isArray(arg1) ? arg1 : [])], noTrack: true },
         };
+      case 'invoker:set-test-planning-chat-response':
+        return { channel: 'headless.gui-mutation', request: payload };
       default:
         return null;
     }
@@ -1272,7 +1274,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   // given message. The error variant lets visual-proof specs render the
   // exhausted-retry error path without spawning a real planner subprocess.
   let testPlanningChatResponse:
-    | { planYaml: string; planName: string; reply?: string }
+    | { planYaml: string; planName: string; reply?: string; delayMs?: number }
     | { throwError: string }
     | null = null;
 
@@ -1312,6 +1314,9 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       ? async (): Promise<string> => {
         if ('throwError' in planningChatResponseOverride) {
           throw new Error(planningChatResponseOverride.throwError);
+        }
+        if (planningChatResponseOverride.delayMs) {
+          await new Promise((resolve) => setTimeout(resolve, planningChatResponseOverride.delayMs));
         }
         return `${planningChatResponseOverride.reply ?? 'Draft plan ready.'}\n\n\`\`\`yaml\n${planningChatResponseOverride.planYaml}\n\`\`\``;
       }
@@ -1399,16 +1404,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         testPlanFromGoalResponse = response;
       },
     );
-    ipcMain.handle(
+    registerGuiMutationHandler(
       'invoker:set-test-planning-chat-response',
-      async (
-        _event,
-        response:
-          | { planYaml: string; planName: string; reply?: string }
+      async (responseArg: unknown) => {
+        testPlanningChatResponse = responseArg as
+          | { planYaml: string; planName: string; reply?: string; delayMs?: number }
           | { throwError: string }
-          | null,
-      ) => {
-        testPlanningChatResponse = response;
+          | null;
       },
     );
     registerGuiMutationHandler('invoker:seed-main-process-hitch-fixture', async () => {
