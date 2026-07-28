@@ -147,6 +147,7 @@ export const BUILTIN_HARNESS_PRESETS: Record<string, HarnessPreset> = {
   'omp+codex': { tool: 'omp', model: 'codex' },
   omp: { tool: 'omp' },
   codex: { tool: 'codex' },
+  claude: { tool: 'claude' },
 };
 
 export const DEFAULT_HARNESS_PRESET = 'cursor+claude';
