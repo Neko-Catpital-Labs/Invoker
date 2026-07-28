@@ -1836,6 +1836,7 @@ describe('rebindPlanningChatRepo', () => {
     }
   });
 
+
   it('invalidates and clears a draft (session, DB, and sidecar) when rebinding to a different repo', async () => {
     const worktreePath = '/fake/worktree/invalidate-session';
     const repoPool = createFakeRebindRepoPool(worktreePath, 'new-head-sha');
