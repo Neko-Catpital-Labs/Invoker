@@ -207,7 +207,7 @@ export interface InvokerConfig {
    */
   plannerRetryBaseDelayMs?: number;
   /** Named Slack planning harness presets: preset key → {tool, model}; built-ins apply when omitted. */
-  slackHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex'; model?: string }>;
+  slackHarnessPresets?: Record<string, { tool: 'cursor' | 'omp' | 'codex' | 'claude'; model?: string }>;
   /** Default harness preset key when the message carries no `[preset]` tag. Default: 'cursor+claude'. */
   defaultSlackHarnessPreset?: string;
   /** Slack repo aliases: alias → git URL, resolved from a `[repo:<alias>]` tag. */
@@ -385,6 +385,7 @@ export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarn
   'omp+codex': { tool: 'omp', model: 'codex' },
   omp: { tool: 'omp' },
   codex: { tool: 'codex' },
+  claude: { tool: 'claude' },
 };
 
 function readJsonSafe(path: string): InvokerConfig {
