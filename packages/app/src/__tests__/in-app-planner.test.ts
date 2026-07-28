@@ -608,6 +608,121 @@ describe('planning chat', () => {
     expect(sessions.get(result.sessionId)?.draftPlanText).toBeUndefined();
   });
 
+  it('keeps the retained draft when an ordinary critique reply coincidentally contains a fenced YAML plan', async () => {
+    const critiqueReplyWithYaml = `Sure, that step is optional if you already have the schema.
+
+\`\`\`yaml
+name: Coincidental Plan
+onFinish: none
+tasks:
+  - id: only
+    description: Only task
+    command: echo only
+\`\`\``;
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner')
+      .mockResolvedValueOnce(VALID_PLAN)
+      .mockResolvedValueOnce(critiqueReplyWithYaml);
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const sessions = createInAppPlanningChatSessions();
+
+      const first = await sendPlanningChatMessage({
+        message: 'draft the full plan',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+      if (!first.ok) throw new Error(first.error);
+      expect(first).toMatchObject({ ok: true, draftPlanAvailable: true });
+      expect(sessions.get(first.sessionId)?.status).toBe('draft_ready');
+      const planA = sessions.get(first.sessionId)?.draftPlanText;
+      expect(planA).toContain('name: Mock Plan');
+
+      const second = await sendPlanningChatMessage({
+        sessionId: first.sessionId,
+        message: 'Can we skip the migration step?',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+      if (!second.ok) throw new Error(second.error);
+      expect(second.reply).toBe(critiqueReplyWithYaml);
+
+      expect(sessions.get(first.sessionId)?.draftPlanText).toBe(planA);
+      expect(sessions.get(first.sessionId)?.status).toBe('draft_ready');
+      expect(adapter.loadInAppPlanningSession(first.sessionId)?.draftPlanText).toBe(planA);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('overwrites the retained draft when the user explicitly asks to re-draft', async () => {
+    const redraftReply = `Here is the revised plan.
+
+\`\`\`yaml
+name: Revised Plan
+onFinish: none
+tasks:
+  - id: only
+    description: Only task
+    command: echo only
+\`\`\``;
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner')
+      .mockResolvedValueOnce(VALID_PLAN)
+      .mockResolvedValueOnce(redraftReply);
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const sessions = createInAppPlanningChatSessions();
+
+      const first = await sendPlanningChatMessage({
+        message: 'draft the full plan',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+      if (!first.ok) throw new Error(first.error);
+      const planA = sessions.get(first.sessionId)?.draftPlanText;
+      expect(planA).toContain('name: Mock Plan');
+
+      const second = await sendPlanningChatMessage({
+        sessionId: first.sessionId,
+        message: 'draft it again with the migration step removed',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+      if (!second.ok) throw new Error(second.error);
+
+      const planB = sessions.get(first.sessionId)?.draftPlanText;
+      expect(planB).toContain('name: Revised Plan');
+      expect(planB).not.toBe(planA);
+      expect(sessions.get(first.sessionId)?.status).toBe('draft_ready');
+      expect(adapter.loadInAppPlanningSession(first.sessionId)?.draftPlanText).toBe(planB);
+    } finally {
+      adapter.close();
+    }
+  });
+
   it('returns a stacked workflow summary when the assistant drafts workflow bundles', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(WORKERS_SURFACE_STACKED_PLAN);
     const sessions = createInAppPlanningChatSessions();
