@@ -27,7 +27,7 @@ invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.7-ssh-target-pro
 STA=$(invoker_e2e_task_status e2e-g337-taskA)
 if [ "$STA" != "completed" ]; then
   echo "FAIL case 3.7: expected SSH task=completed, got '$STA'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_run_headless query tasks 2>&1 || true
   exit 1
 fi
 

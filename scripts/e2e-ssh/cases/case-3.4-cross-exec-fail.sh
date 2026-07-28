@@ -22,7 +22,7 @@ STB=$(invoker_e2e_task_status e2e-g334-taskB)
 STC=$(invoker_e2e_task_status e2e-g334-taskC)
 if [ "$STA" != "completed" ] || [ "$STB" != "failed" ] || [ "$STC" != "pending" ]; then
   echo "FAIL case 3.4: expected A=completed B=failed C=pending, got A='$STA' B='$STB' C='$STC'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_run_headless query tasks 2>&1 || true
   exit 1
 fi
 
