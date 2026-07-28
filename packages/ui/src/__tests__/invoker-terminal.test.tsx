@@ -1298,6 +1298,75 @@ describe('Invoker terminal (component)', () => {
     expect(mock.api.startReady).not.toHaveBeenCalled();
   });
 
+  it('shows the bound repo and short commit sha in the planning context sidebar', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'repo-bound-session',
+          title: 'Repo bound chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+          baseBranch: 'main',
+          baseCommit: 'a1b2c3d4e5f6',
+        }),
+      ],
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+    fireEvent.click(screen.getByTestId('planning-context-toggle'));
+
+    const repoStatus = await screen.findByTestId('planning-repo-status');
+    expect(repoStatus).toHaveTextContent('Neko-Catpital-Labs/Invoker @ a1b2c3d');
+  });
+
+  it('shows "No repository bound yet" when the planning session has no repo bound', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'no-repo-session',
+          title: 'No repo chat',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          draftPlanSummary: undefined,
+          repoUrl: undefined,
+          baseBranch: undefined,
+          baseCommit: undefined,
+        }),
+      ],
+    })) as any;
+
+    render(<App />);
+    await openPlanningTerminal();
+    fireEvent.click(screen.getByTestId('planning-context-toggle'));
+
+    const repoStatus = await screen.findByTestId('planning-repo-status');
+    expect(repoStatus).toHaveTextContent('No repository bound yet');
+  });
+
+  it('shows a locked-draft note in the sidebar while reviewing a draft', async () => {
+    mock.api.planningChatSend = vi.fn(async () => ({
+      ok: true,
+      sessionId: 'session-1',
+      reply: 'Here is the plan.',
+      draftPlanAvailable: true,
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First', 'Second'] },
+      draftPlanText: 'name: Mock Plan\ntasks: []\n',
+    })) as any;
+    render(<App />);
+    await openPlanningTerminal();
+
+    submitPlanningText('draft the full plan');
+
+    expect(await screen.findByTestId('planning-draft-locked-note')).toHaveTextContent(
+      'This draft is locked — critique in chat, or ask Invoker to re-draft, to change it.',
+    );
+  });
+
   it('submits a draft and starts ready work when the user types submit', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,

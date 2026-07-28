@@ -453,6 +453,18 @@ function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
   return status === 'waiting_for_answer' || status === 'draft_ready';
 }
 
+function planningRepoLabel(repoUrl: string): string {
+  const trimmed = repoUrl.trim().replace(/\.git$/, '');
+  const segments = trimmed.split(/[/:]/).filter(Boolean);
+  return segments.length >= 2 ? segments.slice(-2).join('/') : (segments.at(-1) ?? trimmed);
+}
+
+function planningRepoStatusText(repoUrl: string | undefined, baseCommit: string | undefined): string {
+  if (!repoUrl) return 'No repository bound yet';
+  const label = planningRepoLabel(repoUrl);
+  return baseCommit ? `${label} @ ${baseCommit.slice(0, 7)}` : label;
+}
+
 function previewPlanningMessage(session: PlanningSessionView): string {
   const last = [...session.messages].reverse().find((line) => line.role !== 'system') ?? session.messages.at(-1);
   return last?.text.replace(/\s+/g, ' ').trim() || 'No messages yet';
@@ -4531,6 +4543,9 @@ export function App() {
         {!planningContextCollapsed && (
           reviewingDraft ? (
             <div className="space-y-4 p-4 text-sm">
+              <p data-testid="planning-draft-locked-note" className="text-xs text-muted-foreground">
+                This draft is locked — critique in chat, or ask Invoker to re-draft, to change it.
+              </p>
               {draftTaskGroups.map((group, groupIndex) => (
                 <section key={`${group.workflow ?? 'plan'}-${groupIndex}`} data-testid="draft-task-group">
                   {group.workflow && <h3 className="text-xs font-medium text-foreground">{group.workflow}</h3>}
@@ -4595,6 +4610,12 @@ export function App() {
                   {activePlanningSession.title === 'Untitled plan'
                     ? 'Describe a goal in the chat to begin drafting.'
                     : activePlanningSession.title}
+                </p>
+              </div>
+              <div data-testid="planning-repo-status">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Repo</div>
+                <p className="mt-1 text-foreground">
+                  {planningRepoStatusText(activePlanningSession.repoUrl, activePlanningSession.baseCommit)}
                 </p>
               </div>
               {draftPlanSummary && (
