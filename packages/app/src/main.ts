@@ -1769,6 +1769,16 @@ function startHeadlessMode(): void {
             persistence,
             getActionGraphSnapshot: () =>
               buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+            getPlanningChatSession: (sessionId: string) => {
+              const session = planningChatSessions.get(sessionId);
+              if (!session) return null;
+              return {
+                draftPlanText: session.draftPlanText,
+                draftPlanSummary: session.draftPlanSummary,
+                confirmationMode: session.confirmationMode,
+                status: session.status,
+              };
+            },
           }), {
             orchestrator,
             persistence,
@@ -2812,6 +2822,16 @@ startMainProcessBootstrap({
           persistence,
           getActionGraphSnapshot: () =>
             buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig }) as unknown as Record<string, unknown>,
+          getPlanningChatSession: (sessionId: string) => {
+            const session = planningChatSessions.get(sessionId);
+            if (!session) return null;
+            return {
+              draftPlanText: session.draftPlanText,
+              draftPlanSummary: session.draftPlanSummary,
+              confirmationMode: session.confirmationMode,
+              status: session.status,
+            };
+          },
         }), {
           orchestrator,
           persistence,
