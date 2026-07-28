@@ -32,7 +32,11 @@ ${BOLD}Execute:${RESET}
   start-ready [--dry-run] [--recreate-failed] [--recreate-failed-and-pending] [--recreate-failed-pending-and-running] [--recreate-all]
               [--fresh-base-failed] [--fresh-base-failed-and-pending] [--fresh-base-failed-pending-and-running] [--fresh-base-all] [--no-track]
                                                       Start pending work that is ready to execute
-                                                      Fresh-base flags recreate selected workflows from a refreshed base
+                                                      Fresh-base flags recreate selected workflows from a refreshed base:
+                                                      --fresh-base-failed: failed workflows
+                                                      --fresh-base-failed-and-pending: failed and pending workflows
+                                                      --fresh-base-failed-pending-and-running: failed, pending, and running workflows
+                                                      --fresh-base-all: failed, pending, running, and completed workflows
   resume <id>                                         Resume incomplete workflow
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
   retry-task <taskId>                                 Retry a single failed/stuck task
