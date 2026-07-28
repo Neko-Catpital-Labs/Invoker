@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 /**
  * Options for acquiring the shared PR-maintenance lock. The lock guarantees
- * that only one surviving PR-maintenance operation runs at a time, mirroring
+ * that only one PR-maintenance operation runs at a time, mirroring
  * the shell `cron_lock`.
  */
 export interface PrMaintenanceLockOptions {

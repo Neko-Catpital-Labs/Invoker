@@ -121,6 +121,7 @@ describe('headless-client', () => {
       expect(runElectronHeadless).not.toHaveBeenCalled();
       expect(output).toContain('Worker kinds');
       expect(output).toContain('pr-admin-bypass-land');
+      expect(output).toContain('pr-admin-bypass-queue');
       expect(output).toContain('pr-orphan-repair');
     } finally {
       stdout.mockRestore();
