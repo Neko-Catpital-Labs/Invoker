@@ -50,6 +50,22 @@ MANUAL_SPLIT_STOP_MARKERS = (
 )
 
 
+def should_retry_stale_base_pr_body_invalid(
+    pr: PrSnapshot,
+    blocker: Blocker,
+    ledger: Ledger,
+    errors: Collection[object],
+) -> bool:
+    if pr.base_ref_name != TRUNK or blocker.key != "PR Body":
+        return False
+    if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) != 1:
+        return False
+    joined = "\n".join(str(error) for error in errors)
+    if "multiple review units" in joined or "proof" in joined:
+        return False
+    return "activation-surface" in joined and "tooling-policy" in joined
+
+
 @dataclass(frozen=True)
 class BottomTopology:
     kind: Literal["current_bottom", "external_open_base", "stale_unowned_base"]
@@ -334,6 +350,8 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
     meta = latest.get("meta") if isinstance(latest.get("meta"), Mapping) else {}
     errors = meta.get("errors") if isinstance(meta, Mapping) else None
     if isinstance(errors, list):
+        if should_retry_stale_base_pr_body_invalid(pr, blocker, ledger, errors):
+            return None
         detail = "\n".join(str(error) for error in errors if str(error))
         if detail:
             return Blocker(blocker.key, "human_decision", pr.number, detail)

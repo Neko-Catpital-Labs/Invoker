@@ -99,6 +99,13 @@ class AdminBypassRepairer:
         self.git_output(work_root, "commit", "-m", f"Repair {check_name}")
         return self.git_output(work_root, "rev-parse", "HEAD").strip()
 
+    def is_rebased_onto_updated_trunk(self, work_root: Path, pr: PrSnapshot, start_head: str, end_head: str) -> bool:
+        if pr.base_ref_name != TRUNK:
+            return False
+        base_ref = f"origin/{pr.base_ref_name}"
+        self.git_output(work_root, "fetch", "origin", f"+refs/heads/{pr.base_ref_name}:refs/remotes/origin/{pr.base_ref_name}")
+        return self.is_ancestor(work_root, base_ref, end_head) and not self.is_ancestor(work_root, base_ref, start_head)
+
     def validate_local_pr_body(self, work_root: Path, body: str, base_branch: str) -> dict[str, object]:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write(body)
@@ -314,8 +321,22 @@ class AdminBypassRepairer:
             prereq=prereq,
         )
 
-    def push_branch(self, work_root: Path, branch_name: str) -> None:
-        self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
+    def push_branch(
+        self,
+        work_root: Path,
+        branch_name: str,
+        *,
+        force_with_lease: bool = False,
+        expected_head: str | None = None,
+    ) -> None:
+        args = ["push"]
+        if force_with_lease:
+            if expected_head:
+                args.append(f"--force-with-lease=refs/heads/{branch_name}:{expected_head}")
+            else:
+                args.append("--force-with-lease")
+        args.extend(["origin", f"HEAD:{branch_name}"])
+        self.git_output(work_root, *args)
 
     def terminal_repair_outcome(
         self,
@@ -511,6 +532,30 @@ class AdminBypassRepairer:
                 end_head,
                 status_lines=status_lines,
             )
+        if (
+            check_name == "PR Body"
+            and not self.is_ancestor(work_root, start_head, end_head)
+            and self.is_rebased_onto_updated_trunk(work_root, pr, start_head, end_head)
+        ):
+            validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+            if validation.get("valid"):
+                repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
+                self.push_branch(work_root, pr.head_ref_name, force_with_lease=True, expected_head=start_head)
+                self.logger.trace(
+                    "admin-bypass-pr-body-rebase-pushed",
+                    repo=self.repo,
+                    pr_number=pr.number,
+                    check_name=check_name,
+                    start_head=start_head,
+                    end_head=end_head,
+                )
+                return self.blocked_outcome(
+                    "pushed",
+                    check_name,
+                    start_head,
+                    end_head,
+                    repair_commits=repair_commits,
+                )
         end_head = self.normalize_repair_commit(work_root, start_head, end_head, check_name)
         repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
         validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)

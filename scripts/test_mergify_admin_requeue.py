@@ -42,6 +42,7 @@ from scripts.mergify_admin_requeue_repairer import (
 REQUIRED = {"PR Body", "quality / TypeScript Types"}
 HEAD = "c2532d229dbed2fd57419698c48d973001c78e9e"
 OLD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+NEW = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 
 def check(name, state="success", sha=HEAD):
@@ -557,6 +558,77 @@ Failing checks
         stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual(actions, ())
+
+    def test_plan_stack_actions_retries_stale_base_pr_body_invalid_once(self):
+        ledger = self.ledger()
+        errors = [
+            "Review lane behavior cannot ship with policy files in the same PR. Split behavior or cleanup from docs, policy, repro, and benchmark slices.",
+            'PR body Review Unit "routing" cannot ship with activation-surface, tooling-policy files in the same PR. Split this into one Review Unit per PR.',
+        ]
+        ledger.record("repair-check", 6099, HEAD, "PR Body", 1)
+        ledger.record("repair-invalid", 6099, HEAD, "PR Body", 1, meta={"errors": errors})
+        stack = StackGroup("s", (pr(6099, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
+        self.assertEqual([(action.kind, action.key) for action in actions], [("repair_check", "PR Body")])
+
+        ledger.record("repair-check", 6099, HEAD, "PR Body", 3)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
+        self.assertEqual(actions, ())
+
+    def test_repair_check_pushes_valid_pr_body_rebase_with_lease(self):
+        item = pr(
+            6099,
+            head="stack/6099",
+            labels={"admin-bypass"},
+            body="## Summary\n\nStale-base repair.\n",
+            checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")},
+        )
+        repairer = self.repairer(object(), self.ledger())
+        git_rev_parse = iter([HEAD, NEW])
+
+        def git_output(_work_root, *args):
+            if args == ("rev-parse", "HEAD"):
+                return next(git_rev_parse)
+            return ""
+
+        def git_lines(_work_root, *args):
+            if args == ("status", "--porcelain"):
+                return ()
+            if args == ("rev-list", "--reverse", f"{HEAD}..{NEW}"):
+                return (NEW,)
+            return ()
+
+        def is_ancestor(_work_root, ancestor, descendant):
+            if (ancestor, descendant) == (HEAD, NEW):
+                return False
+            if (ancestor, descendant) == ("origin/master", NEW):
+                return True
+            if (ancestor, descendant) == ("origin/master", HEAD):
+                return False
+            return False
+
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+                with mock.patch.object(repairer, "git_output", side_effect=git_output) as git_mock:
+                    with mock.patch.object(repairer, "git_lines", side_effect=git_lines):
+                        with mock.patch.object(repairer, "is_ancestor", side_effect=is_ancestor):
+                            with mock.patch.object(repairer, "run_claude_repair"):
+                                with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True, "errors": []}):
+                                    result = repairer.repair_check(item, "PR Body")
+        self.assertEqual(result.status, "pushed")
+        self.assertEqual(result.start_head, HEAD)
+        self.assertEqual(result.end_head, NEW)
+        self.assertIn(NEW, result.repair_commits)
+        self.assertIn(
+            mock.call(
+                mock.ANY,
+                "push",
+                f"--force-with-lease=refs/heads/{item.head_ref_name}:{HEAD}",
+                "origin",
+                f"HEAD:{item.head_ref_name}",
+            ),
+            git_mock.call_args_list,
+        )
     def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):
         stderr = io.StringIO()
         latest = MergifyQueueEvent(
