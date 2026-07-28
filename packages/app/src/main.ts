@@ -65,6 +65,7 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningDeleteRequest,
   InAppPlanningDiscardDraftRequest,
+  InAppPlanningListSessionsResponse,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
@@ -3173,6 +3174,26 @@ startMainProcessBootstrap({
       planningChatSessions,
       getPlanningSessionStore: () => (ownerMode ? persistence : undefined),
       repoRoot,
+      isPlanningTerminalWriteAllowed: () =>
+        !computeGuiRuntimeStatus({ ownerMode, guiUsingDaemonOwner, connectionLost: guiDaemonOwnerConnectionLost }).readOnly,
+      resolveRemotePlanningSession: guiUsingDaemonOwner
+        ? async (planningSessionId: string) => {
+          try {
+            const response = await messageBus.request('headless.gui-mutation', {
+              channel: 'invoker:planning-chat-list',
+              args: [],
+            }) as InAppPlanningListSessionsResponse;
+            return response.ok ? response.sessions.find((session) => session.id === planningSessionId) : undefined;
+          } catch (err) {
+            if (isMutationOwnerUnavailableError(err)) markDaemonOwnerUnavailable(err instanceof Error ? err.message : String(err));
+            logger.warn(
+              `planning-terminal-open remote session lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+              { module: 'planning-terminal' },
+            );
+            return undefined;
+          }
+        }
+        : undefined,
     });
 
     registerTerminalSessionIpcHandlers({
