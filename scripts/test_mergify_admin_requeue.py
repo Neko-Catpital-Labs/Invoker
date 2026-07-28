@@ -488,6 +488,98 @@ Failing checks
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
 
+    def test_repair_check_accepts_agent_updated_pr_body(self):
+        old_body = "\n\nDepends-On: #6317"
+        fixed_body = """## Summary
+
+Adds infra repair task routing for failed SSH task recovery.
+
+This keeps owner worker handling tied to the existing task lifecycle.
+
+## Review Claim
+
+Approve the routing change that lets infra repair handle failed SSH tasks.
+
+## Review Lane
+
+behavior
+
+## Review Unit
+
+routing
+
+## Safety Invariant
+
+The worker only acts on failed SSH task records and leaves unrelated workflows unchanged.
+
+## Slice Rationale
+
+This keeps the runtime routing change in its own review slice.
+
+## Non-goals
+
+- No validation policy change.
+
+## Test Plan
+
+<details>
+<summary>Test Plan</summary>
+
+- [x] pnpm --filter @invoker/execution-engine test -- infra-repair-worker
+
+</details>
+
+## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
+
+- Safe to revert? Yes
+- Revert command: git revert <sha>
+- Post-revert steps: None
+- Data migration? No
+
+</details>
+"""
+
+        class FakeGh:
+            def __init__(self):
+                self.body = old_body
+
+            def pr_detail(self, _repo, _number):
+                return {"state": "OPEN", "body": self.body}
+
+        fake = FakeGh()
+        item = pr(
+            6318,
+            base="master",
+            body=old_body,
+            checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")},
+        )
+        repairer = self.repairer(fake, self.ledger())
+        git_rev_parse = iter([HEAD, HEAD])
+        validated_bodies = []
+
+        def validate_body(_work_root, body, _base):
+            validated_bodies.append(body)
+            return {"valid": body == fixed_body, "errors": [] if body == fixed_body else ["still invalid"]}
+
+        def update_body(_work_root, _prompt):
+            fake.body = fixed_body
+
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                        with mock.patch.object(repairer, "run_claude_repair", side_effect=update_body) as repair:
+                            with mock.patch.object(repairer, "validate_current_pr_body", side_effect=validate_body):
+                                result = repairer.repair_check(item, "PR Body")
+
+        self.assertEqual(result.status, "noop")
+        self.assertEqual(validated_bodies, [fixed_body])
+        self.assertIn("update the pull request body on GitHub", repair.call_args.args[1])
+        self.assertIn("--base master --json", repair.call_args.args[1])
+
 
     def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):
         item = pr(

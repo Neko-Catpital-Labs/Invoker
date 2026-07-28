@@ -397,6 +397,13 @@ class AdminBypassRepairer:
             text=True,
         )
 
+    def refreshed_pr_body(self, pr: PrSnapshot) -> str:
+        if not hasattr(self.gh, "pr_detail"):
+            return pr.body
+        detail = self.gh.pr_detail(self.repo, pr.number)
+        body = detail.get("body") if isinstance(detail, Mapping) else None
+        return str(body) if body is not None else pr.body
+
     def job_log_has_evidence(self, log_path: str) -> bool:
         if not log_path:
             return False
@@ -495,6 +502,14 @@ class AdminBypassRepairer:
             f"PR: #{pr.number}\nFailed check: {check_name}\nDetails URL: {details_url}\nJob log path: {log_path}\n"
             f"Latest Mergify event: {json.dumps(latest.__dict__ if latest else None, sort_keys=True)}\n"
         )
+        if check_name == "PR Body":
+            prompt += (
+                "For PR Body failures, first inspect the current PR body and validator output. "
+                "If the diff can be represented by the canonical PR body schema, update the pull request body on GitHub, "
+                "run `node scripts/validate-pr-body-local.mjs --body-file <updated-body-file> --base "
+                f"{pr.base_ref_name} --json`, and make no commit for a body-only repair. "
+                "If the validator proves this needs a human split or another human-only decision, leave the PR body unchanged and exit 0.\n"
+            )
         if queue_only:
             prompt += f"Queue draft PR: #{queue_pr_number}\nRepair the real PR head, using only evidence from the queue draft failure.\n"
         self.logger.trace(
@@ -513,9 +528,18 @@ class AdminBypassRepairer:
         terminal = self.terminal_repair_outcome(pr, check_name, start_head, end_head, work_root)
         if terminal:
             return terminal
+        body_after_repair = self.refreshed_pr_body(pr) if check_name == "PR Body" else pr.body
+        if check_name == "PR Body" and body_after_repair != pr.body:
+            self.logger.trace(
+                "admin-bypass-pr-body-refreshed",
+                repo=self.repo,
+                pr_number=pr.number,
+                check_name=check_name,
+                head_sha=pr.head_ref_oid,
+            )
         if end_head == start_head and not status_lines:
             if not queue_only:
-                validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+                validation = self.validate_current_pr_body(work_root, body_after_repair, pr.base_ref_name)
                 if not validation.get("valid"):
                     return self.invalid_repair_outcome(pr, check_name, start_head, end_head, validation)
             return self.blocked_outcome(
@@ -535,7 +559,7 @@ class AdminBypassRepairer:
             )
         end_head = self.normalize_repair_commit(work_root, start_head, end_head, check_name)
         repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
-        validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+        validation = self.validate_current_pr_body(work_root, body_after_repair, pr.base_ref_name)
         if validation.get("valid"):
             self.push_branch(work_root, pr.head_ref_name)
             return self.blocked_outcome(
