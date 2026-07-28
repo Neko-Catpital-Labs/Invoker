@@ -183,6 +183,29 @@ function execStandalone(args) {
 // Request execution via the shared bus
 // ---------------------------------------------------------------------------
 
+// The owner process answers `headless.exec` in one of two shapes (see the
+// two-shape contract documented in packages/app/src/headless-delegation.ts):
+//   1. { ok: true, intentId } — mutation / acknowledgement commands.
+//   2. { workflowId, tasks, ... } — workflow-creating commands such as
+//      `run <plan.yaml>`, which never carry an `ok` field at all.
+// A --no-track dispatch must accept either shape as proof the owner queued
+// the work; requiring `ok: true` unconditionally misreads every successful
+// `run` dispatch as a failure.
+function isNoTrackAcknowledgedResponse(response) {
+  if (!response || typeof response !== 'object') {
+    return false;
+  }
+  const hasWorkflowIdentity = typeof response.workflowId === 'string' && response.workflowId.length > 0;
+  if (response.ok === true) {
+    return (
+      hasWorkflowIdentity
+      || typeof response.intentId === 'number'
+      || typeof response.intentId === 'string'
+    );
+  }
+  return hasWorkflowIdentity && Array.isArray(response.tasks);
+}
+
 async function requestExec(bus, item, options) {
   const payload = {
     args: item.args,
@@ -191,15 +214,10 @@ async function requestExec(bus, item, options) {
   };
   const response = await withTimeout(bus.request('headless.exec', payload), options.timeoutMs);
   if (options.noTrack) {
-    const acknowledged =
-      response &&
-      typeof response === 'object' &&
-      response.ok === true &&
-      (typeof response.intentId === 'number' || typeof response.intentId === 'string');
-    if (!acknowledged) {
+    if (!isNoTrackAcknowledgedResponse(response)) {
       throw new Error(
         `Fire-and-forget dispatch was not queued for args "${item.args.join(' ')}"; ` +
-        `expected owner response { ok: true, intentId }, got ${JSON.stringify(response)}`,
+        `expected owner response { ok: true, intentId } or { workflowId, tasks }, got ${JSON.stringify(response)}`,
       );
     }
   }
@@ -361,7 +379,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exit(1);
+  });
+}
+
+module.exports = { isNoTrackAcknowledgedResponse, requestExec };
