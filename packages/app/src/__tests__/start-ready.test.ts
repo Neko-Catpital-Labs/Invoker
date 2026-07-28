@@ -266,12 +266,12 @@ describe('start-ready', () => {
   it('routes fresh-base scopes through fresh-base recreation and reports partial outcomes', async () => {
     const failed = makeTask('wf-1/failed', 'failed');
     const pendingOnly = makeTask('wf-2/pending', 'pending');
-    const runningOnly = makeTask('wf-3/running', 'running');
-    const orchestrator = harness([failed, pendingOnly, runningOnly], []);
-    const freshStarted = makeTask('wf-1/fresh', 'pending');
+    const queuedOnly = makeTask('wf-3/queued', 'queued' as TaskState['status']);
+    const runningOnly = makeTask('wf-4/running', 'running');
+    const orchestrator = harness([failed, pendingOnly, queuedOnly, runningOnly], []);
     const freshBaseRecreateWorkflow = vi.fn(async (workflowId: string) => {
       if (workflowId === 'wf-2') throw new Error('base refresh failed');
-      return [freshStarted];
+      return [makeTask(`${workflowId}/fresh`, 'pending')];
     });
 
     const result = await runStartReady(orchestrator, {
@@ -280,11 +280,12 @@ describe('start-ready', () => {
       freshBaseRecreateWorkflow,
     });
 
-    expect(freshBaseRecreateWorkflow).toHaveBeenCalledTimes(2);
+    expect(freshBaseRecreateWorkflow).toHaveBeenCalledTimes(3);
     expect(freshBaseRecreateWorkflow).toHaveBeenNthCalledWith(1, 'wf-1');
     expect(freshBaseRecreateWorkflow).toHaveBeenNthCalledWith(2, 'wf-2');
+    expect(freshBaseRecreateWorkflow).toHaveBeenNthCalledWith(3, 'wf-3');
     expect(orchestrator.recreateWorkflow).not.toHaveBeenCalled();
-    expect(result.freshBaseRecreatedWorkflowIds).toEqual(['wf-1']);
+    expect(result.freshBaseRecreatedWorkflowIds).toEqual(['wf-1', 'wf-3']);
     expect(result.recreatedWorkflowIds).toEqual([]);
     expect(result.partial).toBe(true);
     expect(result.workflowOutcomes).toEqual([
@@ -300,8 +301,14 @@ describe('start-ready', () => {
         mode: 'fresh-base-recreate',
         error: 'base refresh failed',
       },
+      {
+        ok: true,
+        workflowId: 'wf-3',
+        mode: 'fresh-base-recreate',
+        startedTaskIds: ['wf-3/fresh'],
+      },
     ]);
-    expect(result.started.map((task) => task.id)).toEqual(['wf-1/fresh']);
+    expect(result.started.map((task) => task.id)).toEqual(['wf-1/fresh', 'wf-3/fresh']);
   });
 
   it('fresh-base all scope includes completed workflows', async () => {
