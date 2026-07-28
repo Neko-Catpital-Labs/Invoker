@@ -1,0 +1,60 @@
+formula: e2e-master-regression
+version: 1
+description: >
+  File a bug-fix workflow for one or more e2e tests that all first went red at
+  the same master commit (one candidate root cause). Unlike the bugfix
+  formula, the filer does not supply a root-cause narrative: the fix task's
+  prompt instructs the executing agent to run CLAUDE.md's reproduce ->
+  debug/root-cause -> plan-the-fix policy itself before touching code.
+vars:
+  repo_url:
+    required: true
+    example: "git@github.com:Neko-Catpital-Labs/Invoker.git"
+    description: "Git remote for the repo where tasks run (git remote get-url origin)."
+  base_branch:
+    required: false
+    default: "master"
+    example: "master"
+    description: "Base branch for the workflow. Always current master, not the regressed SHA — the fix must land on top of today's code."
+  sha:
+    required: true
+    example: "abc123def456abc123def456abc123def456ab1"
+    description: "40-hex master commit where the regression first appeared. Investigative anchor for the agent (git show <sha>), not the worktree base."
+  short_sha:
+    required: true
+    example: "abc123d"
+    description: "Short form of sha, used in ids and file names."
+  bug_slug:
+    required: true
+    example: "e2e-regression-abc123d"
+    description: "Kebab-case identifier used in task ids and the plan name."
+  test_count:
+    required: true
+    example: "1"
+    description: "Number of tests that first went red at sha (one candidate root cause)."
+  primary_file:
+    required: true
+    example: "packages/app/e2e/foo.spec.ts"
+    description: "Repo-relative spec file of the highest-blast-radius affected test."
+  primary_line:
+    required: true
+    example: "12"
+    description: "Line number of the highest-blast-radius affected test within primary_file."
+  primary_title:
+    required: true
+    example: "does the thing"
+    description: "Test title of the highest-blast-radius affected test."
+  verify_command:
+    required: true
+    example: "pnpm --filter @invoker/app exec playwright test packages/app/e2e/foo.spec.ts:12"
+    description: "Shared repro/verify command; fails before the fix, passes after."
+  affected_tests_summary:
+    required: true
+    example: "packages/app/e2e/foo.spec.ts:12 - does the thing"
+    description: "Multi-line 'file:line - title' list, one per test in the group."
+  marker:
+    required: true
+    example: "<!-- invoker-e2e-regression-watch: first-bad-sha=abc123def456abc123def456abc123def456ab1 -->"
+    description: "Exact dedup marker line embedded as the first line of the plan description."
+workflows:
+  - e2e-master-regression.workflow.yaml
