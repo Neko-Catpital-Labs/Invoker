@@ -15,6 +15,8 @@ export type ActionType = 'command' | 'ai_task' | 'reconciliation' | 'merge_gate'
 
 export interface WorkRequestInputs {
   workspacePath?: string;
+  /** Workflow id for durable remote progress/cancel sync. */
+  workflowId?: string;
   /** Human-readable task description for commit messages. */
   description?: string;
   prompt?: string;

@@ -17,6 +17,7 @@ import { buildSshConnectionArgs } from './ssh-transport-options.js';
 import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
+import { buildRemoteProgressJournalRuntimeScript } from './remote-progress-journal.js';
 import {
   shellPosixSingleQuote as sshGitShellQuote,
   sshInteractiveCdFragment,
@@ -143,8 +144,27 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     }, { batchMode: false });
   }
 
-  private buildRunnerScript(): string {
+  private buildRunnerScript(options: {
+    requestId: string;
+    actionId: string;
+    attemptId?: string;
+    workflowId?: string;
+    executionGeneration: number;
+    workspacePath?: string;
+    branch?: string;
+    agentSessionId?: string;
+  }): string {
     const intervalSeconds = this.remoteHeartbeatIntervalSeconds;
+    const progressJournal = buildRemoteProgressJournalRuntimeScript({
+      requestId: options.requestId,
+      taskId: options.actionId,
+      attemptId: options.attemptId,
+      workflowId: options.workflowId,
+      executionGeneration: options.executionGeneration,
+      workspacePath: options.workspacePath,
+      branch: options.branch,
+      agentSessionId: options.agentSessionId,
+    });
     return `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -154,18 +174,31 @@ if [[ $# -ne 1 ]]; then
 fi
 
 PAYLOAD_PATH=$1
+${progressJournal}
+mkdir -p "$INVOKER_PROGRESS_TASK_DIR"
+touch "$INVOKER_STDOUT_LOG" "$INVOKER_STDERR_LOG"
+invoker_progress_attempt_started
 (
-  bash "$PAYLOAD_PATH"
+  bash "$PAYLOAD_PATH" > >(tee -a "$INVOKER_STDOUT_LOG") 2> >(tee -a "$INVOKER_STDERR_LOG" >&2)
 ) &
 PAYLOAD_PID=$!
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
 printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+invoker_progress_heartbeat
 (
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
     sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
+    if invoker_sync_should_terminate; then
+      INVOKER_REMOTE_TERMINATED_BY_SYNC=1
+      kill "$PAYLOAD_PID" >/dev/null 2>&1 || true
+      sleep 5
+      kill -9 "$PAYLOAD_PID" >/dev/null 2>&1 || true
+      break
+    fi
     printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    invoker_progress_heartbeat
   done
 ) &
 HEARTBEAT_PID=$!
@@ -176,6 +209,11 @@ else
 fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
+PAYLOAD_STATUS="failed"
+if [ "$PAYLOAD_EXIT" -eq 0 ]; then
+  PAYLOAD_STATUS="completed"
+fi
+invoker_progress_attempt_finished "$PAYLOAD_STATUS" "$PAYLOAD_EXIT"
 exit "$PAYLOAD_EXIT"
 `;
   }
@@ -237,8 +275,20 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     payload: string;
     managed: boolean;
     envExports: string;
+    request: WorkRequest;
+    branch?: string;
+    agentSessionId?: string;
   }): string {
-    const runner = this.buildRunnerScript();
+    const runner = this.buildRunnerScript({
+      requestId: options.request.requestId,
+      actionId: options.actionId,
+      attemptId: options.request.attemptId,
+      workflowId: options.request.inputs.workflowId,
+      executionGeneration: options.request.executionGeneration,
+      workspacePath: options.workspacePath,
+      branch: options.branch,
+      agentSessionId: options.agentSessionId,
+    });
     const payload = this.buildPayloadScript(options.payload);
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
@@ -564,6 +614,8 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       payload,
       managed: false,
       envExports,
+      request,
+      agentSessionId,
     });
 
     bench('SshExecutor.startBYOWorkspace.spawnSshRemoteStdin.before', { workspacePath });
@@ -808,6 +860,9 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       payload,
       managed: true,
       envExports,
+      request,
+      branch: experimentBranch,
+      agentSessionId,
     });
 
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.before', {
