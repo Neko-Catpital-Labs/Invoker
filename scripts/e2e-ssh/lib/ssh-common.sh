@@ -133,12 +133,15 @@ invoker_e2e_ssh_write_config() {
   local remote_home
   local provision_cmd
   remote_home="$_INVOKER_E2E_SSH_REMOTE_HOME"
-  provision_cmd="$(invoker_e2e_ssh_config_provision_command)"
+  provision_cmd=""
+  if [ "${INVOKER_E2E_SSH_ENABLE_PROVISION:-0}" = "1" ]; then
+    provision_cmd="$(invoker_e2e_ssh_config_provision_command)"
+  fi
 
   node - "$config_file" "$_INVOKER_E2E_SSH_USER" "$INVOKER_E2E_SSH_KEY" "$remote_home" "$provision_cmd" <<'NODE'
 const { writeFileSync } = require('node:fs');
 const [configFile, user, sshKeyPath, remoteInvokerHome, provisionCommand] = process.argv.slice(2);
-writeFileSync(configFile, `${JSON.stringify({
+const config = {
   executionPools: {
     'localhost-e2e': {
       members: [
@@ -154,10 +157,13 @@ writeFileSync(configFile, `${JSON.stringify({
       port: 22,
       managedWorkspaces: true,
       remoteInvokerHome,
-      provisionCommand,
     },
   },
-}, null, 2)}\n`);
+};
+if (provisionCommand) {
+  config.remoteTargets['localhost-e2e'].provisionCommand = provisionCommand;
+}
+writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
 NODE
 
   export INVOKER_REPO_CONFIG_PATH="$config_file"
@@ -193,15 +199,44 @@ invoker_e2e_ssh_init() {
 # SshExecutor uses a non-login shell and sources remoteInvokerHome/env.sh.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_install_login_path() {
-  local pnpm_bin node_bin pnpm_dir node_dir
+  local pnpm_bin node_bin path_dirs=() standard_dirs=()
+  local cmd bin dir existing found path_prefix
   pnpm_bin="$(command -v pnpm || true)"
   node_bin="$(command -v node || true)"
   if [ -z "$pnpm_bin" ] || [ -z "$node_bin" ]; then
     echo "ERROR: host pnpm/node not found; cannot provision remote login PATH." >&2
     return 1
   fi
-  pnpm_dir="$(cd "$(dirname "$pnpm_bin")" && pwd)"
-  node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
+  for cmd in node pnpm bash git cat grep mktemp base64 sed awk dirname; do
+    bin="$(command -v "$cmd" || true)"
+    [ -n "$bin" ] || continue
+    dir="$(cd "$(dirname "$bin")" && pwd)"
+    found=0
+    for existing in "${path_dirs[@]}"; do
+      if [ "$existing" = "$dir" ]; then
+        found=1
+        break
+      fi
+    done
+    if [ "$found" -eq 0 ]; then
+      path_dirs+=( "$dir" )
+    fi
+  done
+  standard_dirs=(/usr/local/bin /usr/bin /bin /usr/sbin /sbin)
+  for dir in "${standard_dirs[@]}"; do
+    [ -d "$dir" ] || continue
+    found=0
+    for existing in "${path_dirs[@]}"; do
+      if [ "$existing" = "$dir" ]; then
+        found=1
+        break
+      fi
+    done
+    if [ "$found" -eq 0 ]; then
+      path_dirs+=( "$dir" )
+    fi
+  done
+  path_prefix="$(IFS=:; printf '%s' "${path_dirs[*]}")"
 
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
   touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
@@ -209,7 +244,7 @@ invoker_e2e_ssh_install_login_path() {
   if ! grep -Fq "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
     {
       printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
-      printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
+      printf 'export PATH="%s:${PATH:-}"\n' "$path_prefix"
     } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   fi
 
@@ -221,10 +256,12 @@ invoker_e2e_ssh_install_login_path() {
            "$_INVOKER_E2E_SSH_USER@localhost" \
            "bash -s" <<EOF >/dev/null 2>&1; then
 . "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
-command -v pnpm >/dev/null
+for cmd in bash git node pnpm cat grep mktemp base64; do
+  command -v "\$cmd" >/dev/null
+done
 pnpm --version
 EOF
-    echo "ERROR: 'pnpm' not found after sourcing $_INVOKER_E2E_SSH_REMOTE_HOME/env.sh." >&2
+    echo "ERROR: required SSH E2E commands not found after sourcing $_INVOKER_E2E_SSH_REMOTE_HOME/env.sh." >&2
     return 1
   fi
 }
