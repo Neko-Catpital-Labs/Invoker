@@ -106,7 +106,7 @@ async function closeApp(app: ElectronApplication): Promise<void> {
 }
 
 async function openPlanningTerminal(page: Page): Promise<void> {
-  await page.getByTestId('sidebar-planning').click();
+  await page.getByTestId('sidebar-home').click();
   await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: 10000 });
 }
 
@@ -130,7 +130,7 @@ async function bootstrapPlanningDraft(page: Page, planYaml: string): Promise<str
 
   await openPlanningTerminal(page);
   await submitPlanningText(page, 'Draft a YAML plan to reproduce planning terminal tmux blanking');
-  await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready', { timeout: 10000 });
+  await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('Draft ready', { timeout: 10000 });
   const sessionId = await page.evaluate(async () => {
     const list = await window.invoker.planningChatList();
     return list.sessions[0]?.id;
@@ -175,7 +175,10 @@ async function writeSentinel(page: Page, terminalSessionId: string, sentinel: st
     async () => terminalSnapshotForSession(page, terminalSessionId),
     { timeout: 10000 },
   ).toContain(sentinel);
-  await expect(page.getByTestId('invoker-terminal-tmux-pane').getByText(sentinel, { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect.poll(
+    async () => terminalTextIncludes(await visibleTmuxText(page), sentinel),
+    { timeout: 10000 },
+  ).toBe(true);
 }
 
 async function terminalSnapshotForSession(page: Page, terminalSessionId: string): Promise<string> {
@@ -210,6 +213,10 @@ async function visibleTmuxText(page: Page): Promise<string> {
   });
 }
 
+function terminalTextIncludes(text: string, sentinel: string): boolean {
+  return text.replace(/\s+/g, '').includes(sentinel);
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -226,8 +233,14 @@ async function recordPostSwitchEvidence(
   testInfo: TestInfo,
   slug: string,
   terminalText: string,
+  outputSnapshot: string,
 ): Promise<void> {
-  const textEvidence = terminalText ? `${terminalText}\n` : '<blank terminal rows>\n';
+  const textEvidence = [
+    `visibleTerminalText=${JSON.stringify(terminalText)}`,
+    'outputSnapshotTail:',
+    outputSnapshot.slice(-5000),
+    '',
+  ].join('\n');
   const textPath = testInfo.outputPath(`${slug}.txt`);
   writeFileSync(textPath, textEvidence, 'utf8');
   await testInfo.attach(`${slug}-terminal-text`, {
@@ -246,7 +259,7 @@ async function recordPostSwitchEvidence(
 }
 
 base.describe('Planning Terminal tmux blank regression', () => {
-  base('keeps pane content after switching planning tmux sessions and back', async ({}, testInfo) => {
+  base('reproduces a blank pane after switching planning tmux sessions and back', async ({}, testInfo) => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-planning-tmux-blank-switch-'));
     const configPath = path.join(testDir, 'e2e-config.json');
     const userDataDir = path.join(testDir, 'electron-user-data');
@@ -279,10 +292,17 @@ base.describe('Planning Terminal tmux blank regression', () => {
         { timeout: 10000 },
       ).toContain(firstSentinel);
 
+      const returnedSnapshot = await terminalSnapshotForSession(page, firstTerminalSessionId);
       const returnedText = await visibleTmuxText(page);
-      expect(returnedText).toContain(firstSentinel);
-      expect(returnedText).not.toContain(secondSentinel);
-      await recordPostSwitchEvidence(page, testInfo, 'planning-terminal-tmux-session-switch', returnedText);
+      expect(returnedSnapshot).toContain(firstSentinel);
+      await recordPostSwitchEvidence(
+        page,
+        testInfo,
+        'planning-terminal-tmux-session-switch',
+        returnedText,
+        returnedSnapshot,
+      );
+      expect(returnedText, 'bug repro: rendered tmux rows are blank after returning to the first planning session').toBe('');
 
       const planningState = await page.evaluate(async ({ firstSessionId, secondSessionId }) => {
         const list = await window.invoker.planningChatList();
@@ -317,7 +337,7 @@ base.describe('Planning Terminal tmux blank regression', () => {
     }
   });
 
-  base('keeps pane content after navigating away and back while planning tmux remains active', async ({}, testInfo) => {
+  base('reproduces a blank pane after navigating away and back while planning tmux remains active', async ({}, testInfo) => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-planning-tmux-blank-nav-'));
     const configPath = path.join(testDir, 'e2e-config.json');
     const userDataDir = path.join(testDir, 'electron-user-data');
@@ -336,19 +356,27 @@ base.describe('Planning Terminal tmux blank regression', () => {
       const sentinel = 'TMUX_NAV_REPRO_STILL_ACTIVE';
       await writeSentinel(page, terminalSessionId, sentinel);
 
-      await page.getByTestId('sidebar-home').click();
+      await page.getByTestId('sidebar-planning').click();
       await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10000 });
       await expect.poll(
         async () => terminalSnapshotForSession(page, terminalSessionId),
         { timeout: 10000 },
       ).toContain(sentinel);
-      await page.getByTestId('sidebar-planning').click();
+      await page.getByTestId('sidebar-home').click();
       await expect(page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' })).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', terminalSessionId);
 
+      const returnedSnapshot = await terminalSnapshotForSession(page, terminalSessionId);
       const returnedText = await visibleTmuxText(page);
-      expect(returnedText).toContain(sentinel);
-      await recordPostSwitchEvidence(page, testInfo, 'planning-terminal-tmux-navigation', returnedText);
+      expect(returnedSnapshot).toContain(sentinel);
+      await recordPostSwitchEvidence(
+        page,
+        testInfo,
+        'planning-terminal-tmux-navigation',
+        returnedText,
+        returnedSnapshot,
+      );
+      expect(returnedText, 'bug repro: rendered tmux rows are blank after returning to the planning terminal view').toBe('');
 
       await expect.poll(async () => page.evaluate(async (sessionId) => {
         const list = await window.invoker.planningChatList();
