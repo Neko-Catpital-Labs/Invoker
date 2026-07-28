@@ -104,6 +104,7 @@ const slackSetupFields: Array<{
   },
 ];
 
+const firstAgentWorkflowTutorialUrl = 'https://github.com/Neko-Catpital-Labs/Invoker/blob/main/docs/tutorial-first-agent-workflow.md';
 
 export function SystemSetupModal({
   diagnostics,
@@ -122,7 +123,7 @@ export function SystemSetupModal({
     updateCli: true,
     installHelpers: true,
     fixTools: true,
-    slack: true,
+    slack: false,
   });
   const [slackFields, setSlackFields] = useState<Record<SlackFieldId, string>>({
     botToken: '',
@@ -216,7 +217,7 @@ export function SystemSetupModal({
     {
       checkId: 'slack',
       title: 'Set up Slack integration',
-      detail: 'Add Slack app values here; Slack is on by default.',
+      detail: 'Slack is optional and opt-in; add app values only when needed.',
       status: slackFieldsComplete ? 'Ready to run' : 'Needs fields',
     },
   ];
@@ -369,6 +370,16 @@ export function SystemSetupModal({
                       </div>
                     ))}
                   </div>
+                  {currentSetupStep === 'finish' && (
+                    <a
+                      href={firstAgentWorkflowTutorialUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-flex rounded bg-primary px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-primary/90"
+                    >
+                      Open the First Agent Workflow Tutorial
+                    </a>
+                  )}
                 </div>
               )}
             </div>
