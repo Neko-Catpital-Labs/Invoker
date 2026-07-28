@@ -16,6 +16,7 @@ import type {
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
+import type { InfraRepairWorkerConfig } from './workers/infra-repair-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
 import type { RequeueWorkerConfig, RequeueWorkerSubmitter } from './workers/requeue-worker.js';
 import type {
@@ -55,6 +56,8 @@ export interface WorkerRuntimeDependencies {
   prMaintenance?: PrMaintenanceWorkerConfig;
   /** Disk-headroom worker configuration (local/remote paths and thresholds). */
   diskHeadroom?: DiskHeadroomWorkerConfig;
+  /** Infra-repair worker configuration (owner/local repo plus remote SSH repair targets). */
+  infraRepair?: InfraRepairWorkerConfig;
   /** Auto-approval tuning for worker-owned AI fix approvals. */
   autoApprove?: AutoApproveWorkerConfig;
   /** Workflow-resume worker tuning (cooldown and poll cadence). */
