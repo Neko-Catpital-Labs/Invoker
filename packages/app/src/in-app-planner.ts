@@ -412,14 +412,6 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
   };
 }
 
-/**
- * Rebuilds a usable local session record from a summary fetched from a remote
- * owner (daemon-owner delegate mode), for the planning-terminal IPC handlers
- * only. `conversation` is an inert stand-in, never a real harness session:
- * every planning-chat mutation channel (send/submit/discard-draft/etc.) is
- * delegated straight to the owner in that mode and never reads this field
- * locally, so it is safe to leave unusable here.
- */
 export function hydrateRemotePlanningTerminalSession(summary: InAppPlanningSessionSummary): InAppPlanningChatSession {
   return {
     id: summary.id,

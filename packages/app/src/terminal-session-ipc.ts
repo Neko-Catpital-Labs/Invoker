@@ -484,9 +484,7 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
   planningChatSessions: InAppPlanningChatSessions;
   getPlanningSessionStore: PlanningSessionStoreGetter;
   repoRoot: string;
-  /** Daemon-owner delegate mode only: fetches a session the owner created that this window's local map hasn't seen yet. */
   resolveRemotePlanningSession?: (planningSessionId: string) => Promise<InAppPlanningSessionSummary | undefined>;
-  /** Whether this window may type into its own local planning PTYs (distinct from DB-write ownership). Defaults to the getPlanningSessionStore check for callers that don't distinguish the two. */
   isPlanningTerminalWriteAllowed?: () => boolean;
 }): void {
   const {
