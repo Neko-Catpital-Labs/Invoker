@@ -99,13 +99,17 @@ describe('plan draft file - activation side', () => {
     ));
     const firstReply = await conversation.sendMessage('Draft it');
     expect(firstReply).toContain(SUBMIT_REPLY_LINE);
+    expect(conversation.lastTurnDraftPlanText).toBe(VALID_PLAN_YAML.trim());
+    expect(conversation.history[conversation.history.length - 1]?.content).toContain(SUBMIT_REPLY_LINE);
 
     mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_REPLY_LINE}`));
     const followUpReply = await conversation.sendMessage('What does it do?');
 
     expect(existsSync(path)).toBe(false);
     expect(followUpReply).toBe('Drafted the plan. Summary: one step.');
+    expect(conversation.lastTurnDraftPlanText).toBeNull();
     expect(conversation.history[conversation.history.length - 1]?.content).toBe(followUpReply);
+    expect(conversation.history[conversation.history.length - 1]?.content).not.toContain(SUBMIT_REPLY_LINE);
     expect(conversation.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
   });
 
@@ -118,6 +122,7 @@ describe('plan draft file - activation side', () => {
     expect(reply).toBe('Drafted the plan. Summary: one step.');
     expect(conversation.history[conversation.history.length - 1]?.content).toBe(reply);
     expect(reply).not.toContain(SUBMIT_REPLY_LINE);
+    expect(conversation.lastTurnDraftPlanText).toBeNull();
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
@@ -144,6 +149,8 @@ describe('plan draft file - activation side', () => {
     const reply = await conversation.sendMessage('Create the plan');
 
     expect(reply).toContain(SUBMIT_REPLY_LINE);
+    expect(conversation.lastTurnDraftPlanText).toBe(VALID_PLAN_YAML.trim());
+    expect(conversation.history[conversation.history.length - 1]?.content).toContain(SUBMIT_REPLY_LINE);
     expect(isConfirmation('submit')).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(conversation.planSubmitted).toBe(false);

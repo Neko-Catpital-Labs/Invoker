@@ -551,9 +551,10 @@ export class PlanConversation {
     }
     const fileDraft = this.readPlanDraftFile();
     const inlineDraft = extractYamlPlan(message);
-    const nextDraft = fileDraft && summarizePlanText(fileDraft)
+    const validFileDraft = fileDraft && summarizePlanText(fileDraft)
       ? fileDraft
-      : inlineDraft;
+      : null;
+    const nextDraft = validFileDraft ?? inlineDraft;
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
     if (!nextDraft) {
