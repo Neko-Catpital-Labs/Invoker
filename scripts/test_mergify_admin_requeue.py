@@ -341,14 +341,82 @@ Failing checks
         repairs = []
         repairer = self.repairer(FakeGh(), ledger, "Neko-Catpital-Labs/Invoker")
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, _prompt: repairs.append(item.number)):
-                for epoch in range(3):
-                    ledger.record("conflict-repair", item.number, item.head_ref_oid, "conflict:2647", epoch)
-                    repairer.repair_conflict(item, "GitHub reports merge conflict")
+            with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, _prompt: repairs.append(item.number)):
+                    for epoch in range(3):
+                        ledger.record("conflict-repair", item.number, item.head_ref_oid, "conflict:2647", epoch)
+                        repairer.repair_conflict(item, "GitHub reports merge conflict")
         self.assertEqual(ledger.count("conflict-repair", 2647, HEAD, "conflict:2647"), 3)
         self.assertEqual(repairs, [2647, 2647, 2647])
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
+
+    def test_conflict_repair_human_blocker_file_returns_invalid_outcome(self):
+        reason = "exact conflict reason requiring a human decision"
+        item = pr(6118, merge_state="DIRTY", mergeable="CONFLICTING", latest=mergify())
+        repairer = self.repairer(object(), self.ledger(), "Neko-Catpital-Labs/Invoker")
+        with tempfile.TemporaryDirectory() as home:
+            work_root = Path(home) / ".invoker" / "mergify-admin-requeue-work" / str(item.number)
+
+            def fake_run_claude_repair(path, prompt):
+                self.assertEqual(path, work_root)
+                self.assertIn("write one exact human-only reason", prompt)
+                blocker_dir = path / ".git"
+                blocker_dir.mkdir(parents=True, exist_ok=True)
+                (blocker_dir / "mergify-admin-requeue-human-blocker.txt").write_text(reason + "\n", encoding="utf-8")
+
+            rev_parse = iter([HEAD, HEAD])
+
+            def fake_git_output(_work_root, *args):
+                if args == ("rev-parse", "HEAD"):
+                    return next(rev_parse)
+                return ""
+
+            with mock.patch.dict(os.environ, {"HOME": home}):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                    with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+                        with mock.patch.object(repairer, "run_claude_repair", side_effect=fake_run_claude_repair):
+                            result = repairer.repair_conflict(item, "GitHub reports merge conflict")
+            self.assertIsNotNone(result)
+            self.assertEqual(result.status, "blocked_invalid")
+            self.assertEqual(result.check_name, "conflict")
+            self.assertEqual(result.errors, (reason,))
+            self.assertFalse((work_root / ".git" / "mergify-admin-requeue-human-blocker.txt").exists())
+
+    def test_run_cycle_records_conflict_human_blocker(self):
+        class FakeGh:
+            def __init__(self):
+                self.comments = []
+
+            def comment(self, repo, pr_number, body):
+                self.comments.append((repo, pr_number, body))
+
+            def issue_comments(self, repo, pr_number):
+                return [{"body": body} for _repo, _pr_number, body in self.comments]
+
+        ledger = self.ledger()
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(ledger.path)])
+        item = pr(6118, merge_state="DIRTY", mergeable="CONFLICTING", latest=mergify())
+        stack = StackGroup("s", (item,))
+        outcome = exec_impl.RepairOutcome(
+            "blocked_invalid",
+            "conflict",
+            HEAD,
+            HEAD,
+            errors=("exact conflict reason",),
+        )
+        fake = FakeGh()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=fake):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                    with mock.patch.object(AdminBypassRepairer, "repair_conflict", return_value=outcome):
+                        exec_impl.run_cycle(args)
+        self.assertEqual(len(fake.comments), 1)
+        self.assertIn("Mergify repair stopped: exact conflict reason", fake.comments[0][2])
+        recorded = Ledger(ledger.path)
+        self.assertEqual(recorded.count("conflict-repair", 6118, HEAD, "conflict:6118"), 1)
+        self.assertIsNotNone(recorded.latest("repair-invalid", 6118, HEAD, "conflict"))
+        self.assertEqual(recorded.count("comment-blocked", 6118, HEAD, f"repair-invalid:conflict:{HEAD}"), 1)
 
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())

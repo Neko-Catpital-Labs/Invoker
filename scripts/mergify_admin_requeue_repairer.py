@@ -32,6 +32,7 @@ PROOF_TOOLING_POLICY_UNIT_ERROR = (
 )
 NON_TRUNK_PREREQ_ERROR = "automatic tooling-policy split is only supported for base master"
 NON_TRUNK_MANUAL_SPLIT_ERROR = "worker cannot auto-split this PR on a non-trunk base; human stack split required"
+HUMAN_BLOCKER_FILE = "mergify-admin-requeue-human-blocker.txt"
 
 
 def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tuple[str, ...]:
@@ -547,15 +548,21 @@ class AdminBypassRepairer:
             repair_commits=repair_commits,
         )
 
-    def repair_conflict(self, pr: PrSnapshot, reason: str) -> None:
+    def repair_conflict(self, pr: PrSnapshot, reason: str) -> RepairOutcome | None:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
+        start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        human_blocker_path = work_root / ".git" / HUMAN_BLOCKER_FILE
+        human_blocker_path.unlink(missing_ok=True)
         prompt = (
             f"Resolve only the merge conflict that keeps this PR from merging. "
             f"Rebase the PR head branch onto its base branch, preserve the PR's intended changes, "
             f"run the narrow proof for the conflict resolution, then commit and push to the PR head branch. "
-            f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
+            f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0. "
+            f"If the conflict is human-only because resolving it would require choosing between this PR's intended behavior "
+            f"and already-merged behavior, or because the PR/stack is superseded, do not push; write one exact human-only "
+            f"reason to .git/{HUMAN_BLOCKER_FILE} and exit 0.\n\n"
             f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
             f"Head SHA: {pr.head_ref_oid}\nReason: {reason}\n"
         )
@@ -570,3 +577,24 @@ class AdminBypassRepairer:
             head_sha=pr.head_ref_oid,
         )
         self.run_claude_repair(work_root, prompt)
+        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        if human_blocker_path.exists():
+            detail = human_blocker_path.read_text(encoding="utf-8").strip()
+            human_blocker_path.unlink(missing_ok=True)
+            if detail:
+                subprocess.run(
+                    ["git", "rebase", "--abort"],
+                    cwd=str(work_root),
+                    check=False,
+                    text=True,
+                    capture_output=True,
+                )
+                self.hard_reset_work_root(work_root, start_head)
+                return self.blocked_outcome(
+                    "blocked_invalid",
+                    "conflict",
+                    start_head,
+                    end_head,
+                    errors=(detail,),
+                )
+        return None
