@@ -18,6 +18,10 @@ import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
 import {
+  buildRemoteProgressJournalEnvScript,
+  buildRemoteProgressJournalRunnerFragment,
+} from './remote-progress-journal.js';
+import {
   shellPosixSingleQuote as sshGitShellQuote,
   sshInteractiveCdFragment,
   buildMirrorCloneScript,
@@ -154,18 +158,30 @@ if [[ $# -ne 1 ]]; then
 fi
 
 PAYLOAD_PATH=$1
+${buildRemoteProgressJournalRunnerFragment()}
 (
-  bash "$PAYLOAD_PATH"
+  bash "$PAYLOAD_PATH" > >(invoker_capture_output_stream stdout) 2> >(invoker_capture_output_stream stderr >&2)
 ) &
 PAYLOAD_PID=$!
+invoker_journal_attempt_started "$PAYLOAD_PID"
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
-printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+TERMINATION_REASON=""
+HEARTBEAT_TS="$(date +%s)"
+printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$HEARTBEAT_TS"
+invoker_journal_heartbeat "$HEARTBEAT_TS"
 (
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
     sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
-    printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    if invoker_remote_tombstone_seen; then
+      TERMINATION_REASON="tombstone"
+      kill "$PAYLOAD_PID" >/dev/null 2>&1 || true
+      break
+    fi
+    HEARTBEAT_TS="$(date +%s)"
+    printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$HEARTBEAT_TS"
+    invoker_journal_heartbeat "$HEARTBEAT_TS"
   done
 ) &
 HEARTBEAT_PID=$!
@@ -176,6 +192,7 @@ else
 fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
+invoker_journal_attempt_finished "$PAYLOAD_EXIT" "$TERMINATION_REASON"
 exit "$PAYLOAD_EXIT"
 `;
   }
@@ -233,10 +250,13 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
   private buildRuntimeBootstrapScript(options: {
     executionId: string;
     actionId: string;
+    request: WorkRequest;
     workspacePath: string;
     payload: string;
     managed: boolean;
     envExports: string;
+    branch?: string;
+    workflowId?: string;
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
@@ -269,7 +289,7 @@ PAYLOAD_PATH="$STAGING_DIR/payload.sh"
 cleanup_runtime() {
   trap - EXIT HUP INT TERM
   stop_bootstrap_heartbeat
-  rm -rf "$STAGING_DIR" >/dev/null 2>&1 || true
+  rm -f "$RUNNER_PATH" "$PAYLOAD_PATH" >/dev/null 2>&1 || true
 }
 BOOTSTRAP_HEARTBEAT_PID=""
 INVOKER_HEARTBEAT_MARKER=${heartbeatMarker}
@@ -302,6 +322,13 @@ trap 'cleanup_runtime; exit 143' TERM
 rm -rf "$STAGING_DIR" 2>/dev/null || true
 mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
+${buildRemoteProgressJournalEnvScript({
+  request: options.request,
+  executionId: options.executionId,
+  workspacePath: options.workspacePath,
+  branch: options.branch,
+  workflowId: options.workflowId,
+})}
 ${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
 cd "$WT"
@@ -560,10 +587,12 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     const runScript = this.buildRuntimeBootstrapScript({
       executionId,
       actionId: request.actionId,
+      request,
       workspacePath,
       payload,
       managed: false,
       envExports,
+      workflowId: this.workflowIdForRequest(request),
     });
 
     bench('SshExecutor.startBYOWorkspace.spawnSshRemoteStdin.before', { workspacePath });
@@ -804,10 +833,13 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     const runScript = this.buildRuntimeBootstrapScript({
       executionId,
       actionId: request.actionId,
+      request,
       workspacePath: remoteWt,
       payload,
       managed: true,
       envExports,
+      branch: experimentBranch,
+      workflowId: this.workflowIdForRequest(request),
     });
 
     bench('SshExecutor.startManagedWorkspace.spawnSshRemoteStdin.before', {
