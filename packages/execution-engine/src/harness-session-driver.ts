@@ -70,6 +70,7 @@ export class ExecutionHarnessSessionDriver implements HarnessSessionDriver {
     return command.sessionId;
   }
 
+
   private withMcpConfig(args: string[]): string[] {
     if (!this.mcpConfigPath) return args;
     switch (this.agent.name) {
