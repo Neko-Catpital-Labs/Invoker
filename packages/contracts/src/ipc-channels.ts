@@ -1345,7 +1345,7 @@ export const IpcTestOnlyChannels = {
   'invoker:set-test-planning-chat-response': {} as {
     request: [
       response:
-        | { planYaml: string; planName: string; reply?: string }
+        | { planYaml: string; planName: string; reply?: string; delayMs?: number }
         | { throwError: string }
         | null,
     ];
