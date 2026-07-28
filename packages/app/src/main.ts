@@ -66,6 +66,7 @@ import type {
   InAppPlanningDeleteRequest,
   InAppPlanningDiscardDraftRequest,
   InAppPlanningListSessionsResponse,
+  InAppPlanningRebindRepoRequest,
   InAppPlanningResetRequest,
   InAppPlanningSubmitRequest,
   Logger,
@@ -280,6 +281,7 @@ import {
   discardPlanningChatDraft,
   listPlanningChatSessions,
   planFromGoal as planFromGoalInApp,
+  rebindPlanningChatRepo,
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
@@ -1213,6 +1215,14 @@ function startHeadlessMode(): void {
             return resetPlanningChat(payload.args[0] as InAppPlanningResetRequest, {
               sessions: planningChatSessions,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+            });
+          }
+          case 'invoker:planning-chat-rebind-repo': {
+            return rebindPlanningChatRepo(payload.args[0] as InAppPlanningRebindRepoRequest, {
+              config: invokerConfig,
+              sessions: planningChatSessions,
+              planningSessionStore: readOnlyMode ? undefined : persistence,
+              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
           case 'invoker:planning-chat-delete': {
