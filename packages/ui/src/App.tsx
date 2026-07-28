@@ -1197,7 +1197,8 @@ export function App() {
         setSelectedPlanningPresetKey(resolved.find((option) => option.isDefault)?.key ?? resolved[0]?.key ?? 'codex');
         setSelectedPlanningConfirmationMode(resolved.find((option) => option.isDefault)?.defaultConfirmationMode ?? resolved[0]?.defaultConfirmationMode ?? 'require');
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error('Failed to load planning presets', err);
         setPlanningPresetOptions([{ key: 'codex', label: 'Codex', isDefault: true, defaultConfirmationMode: 'require' }]);
         setSelectedPlanningPresetKey('codex');
         setSelectedPlanningConfirmationMode('require');
