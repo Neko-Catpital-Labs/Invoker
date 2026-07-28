@@ -638,6 +638,11 @@ export type StartReadyWorkflowOutcome =
       error: string;
     };
 
+export type StartReadyExcludeSelector = {
+  field: 'mergeMode';
+  value: 'no_op';
+};
+
 export interface StartReadyRequest {
   recreateFailed?: boolean;
   recreateFailedAndPending?: boolean;
@@ -646,6 +651,8 @@ export interface StartReadyRequest {
   recreateAll?: boolean;
   freshBaseScope?: StartReadyFreshBaseScope;
   dryRun?: boolean;
+  /** Typed selectors that remove matching workflows from bulk recreation. */
+  exclude?: StartReadyExcludeSelector[];
 }
 
 export interface StartReadyPreview {
@@ -671,6 +678,7 @@ export interface StartReadyResult {
   preview: StartReadyPreview;
   started: TaskState[];
   recreatedWorkflowIds: string[];
+  excludedWorkflowIds?: string[];
   freshBaseRecreatedWorkflowIds?: string[];
   workflowOutcomes?: StartReadyWorkflowOutcome[];
   partial?: boolean;
