@@ -16,8 +16,13 @@ const repoRoot = resolveRepoRoot(__dirname);
 const PLANNING_TRANSCRIPT_SIZE = 1_000;
 const ROW_WRITE_BASELINE = 2_004;
 const ROW_WRITE_FIXED = 2;
+const FULL_TRANSCRIPT_RELOAD_FIXED = 0;
+const COUNT_QUERY_FIXED = 1;
 const IPC_SAMPLE_COUNT = 40;
 const SESSION_ID = 'planning-send-benchmark-session';
+const MAX_P95_RTT_MS = process.env.CI ? 150 : 100;
+const MAX_SAMPLE_RTT_MS = 250;
+const BENCHMARK_COUNTER_TABLE = 'planning_send_benchmark_counters';
 
 const BENCHMARK_PLAN = {
   name: 'Planning Send Benchmark Plan',
@@ -39,6 +44,24 @@ type PlanningSendMeasurement = {
   sendResponse: Awaited<ReturnType<typeof window.invoker.planningChatSend>>;
 };
 
+type PlanningSendPersistenceCost = {
+  insertedMessageRows: number;
+  deletedMessageRows: number;
+  fullTranscriptReloads: number;
+};
+
+type SqliteCounterRow = {
+  name: string;
+  value: number;
+};
+
+type SqliteDatabaseCompat = {
+  run(sql: string, params?: unknown[]): void;
+  prepare(sql: string): {
+    all(...params: unknown[]): unknown[];
+  };
+};
+
 function buildTranscript(messageCount: number): InAppPlanningChatLine[] {
   return Array.from({ length: messageCount }, (_, index) => {
     const role: InAppPlanningChatLine['role'] = index % 2 === 0 ? 'user' : 'assistant';
@@ -49,6 +72,38 @@ function buildTranscript(messageCount: number): InAppPlanningChatLine[] {
       createdAt: '2026-07-28T00:00:00.000Z',
     };
   });
+}
+
+function sqliteDb(adapter: SQLiteAdapter): SqliteDatabaseCompat {
+  return (adapter as unknown as { db: SqliteDatabaseCompat }).db;
+}
+
+function installPlanningSendBenchmarkCounters(adapter: SQLiteAdapter): void {
+  const db = sqliteDb(adapter);
+  db.run(`
+    CREATE TABLE IF NOT EXISTS ${BENCHMARK_COUNTER_TABLE} (
+      name TEXT PRIMARY KEY,
+      value INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR REPLACE INTO ${BENCHMARK_COUNTER_TABLE} (name, value)
+      VALUES ('insertedMessageRows', 0), ('deletedMessageRows', 0);
+    DROP TRIGGER IF EXISTS planning_send_benchmark_count_insert;
+    DROP TRIGGER IF EXISTS planning_send_benchmark_count_delete;
+    CREATE TRIGGER planning_send_benchmark_count_insert
+      AFTER INSERT ON in_app_planning_messages
+      BEGIN
+        UPDATE ${BENCHMARK_COUNTER_TABLE}
+          SET value = value + 1
+          WHERE name = 'insertedMessageRows';
+      END;
+    CREATE TRIGGER planning_send_benchmark_count_delete
+      AFTER DELETE ON in_app_planning_messages
+      BEGIN
+        UPDATE ${BENCHMARK_COUNTER_TABLE}
+          SET value = value + 1
+          WHERE name = 'deletedMessageRows';
+      END;
+  `);
 }
 
 async function seedPlanningTranscript(dbDir: string): Promise<void> {
@@ -69,6 +124,26 @@ async function seedPlanningTranscript(dbDir: string): Promise<void> {
   };
   try {
     adapter.upsertInAppPlanningSession(record);
+    installPlanningSendBenchmarkCounters(adapter);
+  } finally {
+    adapter.close();
+  }
+}
+
+async function readPlanningSendPersistenceCost(dbDir: string): Promise<PlanningSendPersistenceCost> {
+  const adapter = await SQLiteAdapter.create(path.join(dbDir, 'invoker.db'), { readOnly: true });
+  try {
+    const rows = sqliteDb(adapter)
+      .prepare(`SELECT name, value FROM ${BENCHMARK_COUNTER_TABLE}`)
+      .all() as SqliteCounterRow[];
+    const counters = new Map(rows.map((row) => [row.name, Number(row.value)]));
+    const insertedMessageRows = counters.get('insertedMessageRows') ?? 0;
+    const deletedMessageRows = counters.get('deletedMessageRows') ?? 0;
+    return {
+      insertedMessageRows,
+      deletedMessageRows,
+      fullTranscriptReloads: deletedMessageRows > 0 ? 1 : 0,
+    };
   } finally {
     adapter.close();
   }
@@ -128,10 +203,11 @@ async function waitForInvoker(page: Page): Promise<void> {
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
 }
 
-test('planning chat send benchmark captures baseline beachball numbers', async () => {
+test('planning chat send keeps listWorkflows IPC responsive under transcript pressure', async () => {
   const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-planning-send-benchmark-'));
   try {
     await seedPlanningTranscript(testDir);
+    let measurement: PlanningSendMeasurement | undefined;
     const app = await launchElectronApp(testDir);
     try {
       const page = await app.firstWindow({ timeout: 10_000 });
@@ -155,7 +231,7 @@ test('planning chat send benchmark captures baseline beachball numbers', async (
         });
       }, { yaml: planYaml });
 
-      const measurement = await page.evaluate(async ({ sessionId, sampleCount }): Promise<PlanningSendMeasurement> => {
+      measurement = await page.evaluate(async ({ sessionId, sampleCount }): Promise<PlanningSendMeasurement> => {
         const startedAt = performance.now();
         const sendPromise = window.invoker.planningChatSend({
           sessionId,
@@ -184,25 +260,48 @@ test('planning chat send benchmark captures baseline beachball numbers', async (
       const sessions = await page.evaluate(async () => window.invoker.planningChatList());
       const session = sessions.sessions.find((candidate) => candidate.id === SESSION_ID);
       expect(session?.messages.length).toBe(PLANNING_TRANSCRIPT_SIZE + 2);
-
-      const sortedSamples = [...measurement.samples].sort((a, b) => a - b);
-      const p95 = percentile(sortedSamples, 95);
-      const max = sortedSamples[sortedSamples.length - 1] ?? 0;
-      const evidence = {
-        transcriptSize: PLANNING_TRANSCRIPT_SIZE,
-        rowWriteBaseline: ROW_WRITE_BASELINE,
-        rowWriteFixed: ROW_WRITE_FIXED,
-        measuredRttMs: {
-          p95: Number(p95.toFixed(1)),
-          max: Number(max.toFixed(1)),
-          samples: measurement.samples.length,
-        },
-        sendInFlightMs: Number(measurement.sendInFlightMs.toFixed(1)),
-      };
-      console.log(`PLANNING_CHAT_SEND_FIXED_RESULT=${JSON.stringify(evidence)}`);
     } finally {
       await app.close();
     }
+
+    if (!measurement) {
+      throw new Error('planning-send measurement was not captured');
+    }
+    const persistenceCost = await readPlanningSendPersistenceCost(testDir);
+    expect(persistenceCost.insertedMessageRows).toBe(ROW_WRITE_FIXED);
+    expect(persistenceCost.deletedMessageRows).toBe(0);
+    expect(persistenceCost.fullTranscriptReloads).toBe(FULL_TRANSCRIPT_RELOAD_FIXED);
+
+    const sortedSamples = [...measurement.samples].sort((a, b) => a - b);
+    const p95 = percentile(sortedSamples, 95);
+    const max = sortedSamples[sortedSamples.length - 1] ?? 0;
+    const evidence = {
+      transcriptSize: PLANNING_TRANSCRIPT_SIZE,
+      rowWriteBaseline: ROW_WRITE_BASELINE,
+      rowWriteFixed: persistenceCost.insertedMessageRows,
+      rowWriteReduction: ROW_WRITE_BASELINE - persistenceCost.insertedMessageRows,
+      reloadCountFixed: persistenceCost.fullTranscriptReloads,
+      countQueryFixed: COUNT_QUERY_FIXED,
+      measuredRttMs: {
+        p95: Number(p95.toFixed(1)),
+        max: Number(max.toFixed(1)),
+        samples: measurement.samples.length,
+        p95Budget: MAX_P95_RTT_MS,
+        maxBudget: MAX_SAMPLE_RTT_MS,
+      },
+      sendInFlightMs: Number(measurement.sendInFlightMs.toFixed(1)),
+    };
+    console.log(`PLANNING_CHAT_SEND_FIXED_RESULT=${JSON.stringify(evidence)}`);
+    expect(
+      p95,
+      `p95 IPC RTT ${p95.toFixed(1)}ms exceeded ${MAX_P95_RTT_MS}ms `
+        + `(max=${max.toFixed(1)}ms, n=${measurement.samples.length}, evidence=${JSON.stringify(evidence)})`,
+    ).toBeLessThanOrEqual(MAX_P95_RTT_MS);
+    expect(
+      max,
+      `max IPC RTT ${max.toFixed(1)}ms exceeded ${MAX_SAMPLE_RTT_MS}ms `
+        + `(p95=${p95.toFixed(1)}ms, n=${measurement.samples.length}, evidence=${JSON.stringify(evidence)})`,
+    ).toBeLessThanOrEqual(MAX_SAMPLE_RTT_MS);
   } finally {
     rmSync(testDir, { recursive: true, force: true });
   }
