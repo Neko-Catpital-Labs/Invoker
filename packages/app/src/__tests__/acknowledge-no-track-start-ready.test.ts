@@ -89,6 +89,12 @@ describe('acknowledgeNoTrackHeadlessExec start-ready', () => {
     expect(output).toContain('[--fresh-base-failed-pending-and-running]');
     expect(output).toContain('[--fresh-base-all]');
     expect(output).toContain('Fresh-base flags recreate selected workflows from a refreshed base');
+    expect(output).toContain('--fresh-base-failed: failed workflows');
+    expect(output).toContain('--fresh-base-failed-and-pending: failed and pending workflows');
+    expect(output).toContain(
+      '--fresh-base-failed-pending-and-running: failed, pending, and running workflows',
+    );
+    expect(output).toContain('--fresh-base-all: failed, pending, running, and completed workflows');
   });
 
   it.each([
