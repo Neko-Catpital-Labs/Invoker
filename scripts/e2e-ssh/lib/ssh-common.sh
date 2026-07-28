@@ -122,6 +122,11 @@ invoker_e2e_ssh_provision_command() {
 }
 
 invoker_e2e_ssh_config_provision_command() {
+  # Marker-only SSH e2e cases do not need remote dependency hydration; case 3.7
+  # opts in to cover target-owned provisioning explicitly.
+  if [ "${INVOKER_E2E_SSH_ENABLE_REPO_PROVISION:-0}" != "1" ]; then
+    return 0
+  fi
   printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
 }
 
@@ -138,6 +143,17 @@ invoker_e2e_ssh_write_config() {
   node - "$config_file" "$_INVOKER_E2E_SSH_USER" "$INVOKER_E2E_SSH_KEY" "$remote_home" "$provision_cmd" <<'NODE'
 const { writeFileSync } = require('node:fs');
 const [configFile, user, sshKeyPath, remoteInvokerHome, provisionCommand] = process.argv.slice(2);
+const localhostTarget = {
+  host: 'localhost',
+  user,
+  sshKeyPath,
+  port: 22,
+  managedWorkspaces: true,
+  remoteInvokerHome,
+};
+if (provisionCommand) {
+  localhostTarget.provisionCommand = provisionCommand;
+}
 writeFileSync(configFile, `${JSON.stringify({
   executionPools: {
     'localhost-e2e': {
@@ -147,15 +163,7 @@ writeFileSync(configFile, `${JSON.stringify({
     },
   },
   remoteTargets: {
-    'localhost-e2e': {
-      host: 'localhost',
-      user,
-      sshKeyPath,
-      port: 22,
-      managedWorkspaces: true,
-      remoteInvokerHome,
-      provisionCommand,
-    },
+    'localhost-e2e': localhostTarget,
   },
 }, null, 2)}\n`);
 NODE

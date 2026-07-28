@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../lib/ssh-common.sh"
 
+export INVOKER_E2E_SSH_ENABLE_REPO_PROVISION=1
 invoker_e2e_ssh_init
 trap invoker_e2e_ssh_full_cleanup EXIT
 
