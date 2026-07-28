@@ -27,7 +27,7 @@ from scripts.mergify_admin_requeue import (
     plan_stack_actions,
 )
 from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
-from scripts.mergify_admin_requeue_model import LoadedStacks
+from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
 from scripts.mergify_admin_requeue_repairer import (
@@ -596,6 +596,48 @@ Failing checks
         download.assert_called_once()
         repair.assert_not_called()
         self.assertEqual(result.status, "noop")
+
+    def test_green_mergify_failure_empty_log_noops_without_claude(self):
+        queue_url = "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/9/job/99"
+        latest = MergifyQueueEvent(
+            "m6163",
+            "dequeued",
+            "admin-bypass",
+            "2026-07-03T06:13:00Z",
+            HEAD,
+            (),
+            ("UI Vitest",),
+            "https://github.com/Neko-Catpital-Labs/Invoker/pull/6163#issuecomment-1",
+            6395,
+            (("UI Vitest", (queue_url,)),),
+        )
+        item = pr(6163, checks={"UI Vitest": check("UI Vitest", "success")}, latest=latest)
+        repairer = self.repairer(object(), self.ledger())
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/ui.log") as download:
+                with mock.patch.object(repairer, "job_log_is_empty", return_value=True):
+                    with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                        with mock.patch.object(repairer, "run_claude_repair") as repair:
+                            result = repairer.repair_check(item, "UI Vitest")
+        checkout.assert_called_once()
+        download.assert_called_once()
+        self.assertEqual(download.call_args.args[1], queue_url)
+        repair.assert_not_called()
+        self.assertEqual(result.status, "noop")
+
+    def test_record_repair_outcome_records_generic_noop(self):
+        ledger = self.ledger()
+        item = pr(6163, checks={"UI Vitest": check("UI Vitest", "success")})
+        exec_impl.record_repair_outcome(
+            ledger,
+            AdminBypassLogger(),
+            "owner/repo",
+            item,
+            RepairOutcome("noop", "UI Vitest", HEAD, HEAD),
+            1,
+        )
+        self.assertIsNotNone(ledger.latest("repair-noop", 6163, HEAD, "UI Vitest"))
+
     def test_run_cycle_logs_selected_bottom_repair_context(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
         stack = StackGroup("s", (pr(2606, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}, latest=mergify()),))

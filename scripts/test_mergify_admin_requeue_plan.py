@@ -310,6 +310,30 @@ class BuildStackFacts(PlannerTestCase):
         actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
         self.assertEqual([(action.kind, action.key) for action in actions], [("restore_admin_bypass_label", QUEUE_ONLY_CHECK)])
 
+    def test_green_check_noop_suppresses_stale_mergify_failure(self):
+        ledger = self._ledger()
+        ledger.record("repair-noop", 6163, HEAD, "UI Vitest", 2)
+        snapshot = pr(
+            number=6163,
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            checks={"UI Vitest": check("success", "UI Vitest")},
+            latest_mergify=event(
+                state="dequeued",
+                comment_id="cm6163",
+                failing=("UI Vitest",),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"UI Vitest"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6163},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.summary["prs"][0]["blockers"], [])
+        self.assertEqual([(action.kind, action.key) for action in plan.actions], [("requeue", "cm6163")])
+
     def test_detects_bottom_and_unaccepted_upper(self):
         facts, _ledger = self._facts(
             m.StackGroup(
