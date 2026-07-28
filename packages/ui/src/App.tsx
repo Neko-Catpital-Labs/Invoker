@@ -129,19 +129,22 @@ function planningTerminalSessionFromOutputEvent(
   event: TerminalOutputEvent,
   outputSnapshot: string,
 ): TerminalSessionDescriptor {
+  const existingTerminal = session.terminalSession?.sessionId === event.sessionId
+    ? session.terminalSession
+    : null;
   return {
-    sessionId: session.terminalSession?.sessionId ?? session.terminalSessionId ?? event.sessionId,
-    taskId: session.terminalSession?.taskId ?? event.taskId,
+    sessionId: event.sessionId,
+    taskId: event.taskId,
     kind: 'planning',
-    planningSessionId: session.id,
-    status: session.terminalSession?.status ?? session.terminalStatus ?? 'running',
-    exitCode: session.terminalSession?.exitCode ?? session.terminalExitCode,
-    cwd: session.terminalSession?.cwd,
-    command: session.terminalSession?.command,
-    args: session.terminalSession?.args,
-    mode: session.terminalSession?.mode ?? 'spawn',
-    attached: session.terminalSession?.attached ?? false,
-    createdAt: session.terminalSession?.createdAt ?? session.terminalUpdatedAt ?? session.updatedAt,
+    planningSessionId: event.planningSessionId ?? session.id,
+    status: existingTerminal?.status ?? 'running',
+    exitCode: existingTerminal?.exitCode,
+    cwd: existingTerminal?.cwd,
+    command: existingTerminal?.command,
+    args: existingTerminal?.args,
+    mode: existingTerminal?.mode ?? 'spawn',
+    attached: existingTerminal?.attached ?? false,
+    createdAt: existingTerminal?.createdAt ?? session.terminalUpdatedAt ?? session.updatedAt,
     outputSnapshot,
   };
 }
@@ -1341,21 +1344,27 @@ export function App() {
       if (event.kind !== 'planning' || typeof event.data !== 'string' || event.data.length === 0) return;
       setPlanningSessions((prev) =>
         prev.map((session) => {
-          const matchesSession =
-            session.terminalSession?.sessionId === event.sessionId
-            || session.terminalSessionId === event.sessionId
-            || (event.planningSessionId !== undefined && session.id === event.planningSessionId);
+          const matchesSession = event.planningSessionId
+            ? session.id === event.planningSessionId
+            : session.terminalSession?.sessionId === event.sessionId
+              || session.terminalSessionId === event.sessionId;
           if (!matchesSession) return session;
 
           const outputSnapshot = appendPlanningTerminalSnapshot(
             session.terminalSession?.outputSnapshot ?? session.terminalOutputSnapshot,
             event.data,
           );
+          const existingTerminal = session.terminalSession?.sessionId === event.sessionId
+            ? session.terminalSession
+            : null;
+          const terminalStatus = existingTerminal?.status ?? 'running';
           return {
             ...session,
             terminalMode: 'tmux',
-            terminalSessionId: session.terminalSession?.sessionId ?? session.terminalSessionId ?? event.sessionId,
-            terminalStatus: session.terminalSession?.status ?? session.terminalStatus ?? 'running',
+            terminalSessionId: event.sessionId,
+            terminalStatus,
+            terminalExitCode: terminalStatus === 'exited' ? existingTerminal?.exitCode ?? session.terminalExitCode : undefined,
+            terminalUpdatedAt: new Date().toISOString(),
             terminalOutputSnapshot: outputSnapshot,
             terminalSession: planningTerminalSessionFromOutputEvent(session, event, outputSnapshot),
           };
