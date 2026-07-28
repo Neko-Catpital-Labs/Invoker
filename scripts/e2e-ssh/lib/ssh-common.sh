@@ -26,6 +26,7 @@ _INVOKER_E2E_SSH_TAG="invoker-e2e-ssh-$$"
 # Temp directory for SSH key pair, config, and remote invoker home.
 _INVOKER_E2E_SSH_TMPDIR=""
 _INVOKER_E2E_SSH_REMOTE_HOME=""
+_INVOKER_E2E_SSH_PATH_PREFIX=""
 
 # SSH login user and passwd-backed home directory used by sshd.
 _INVOKER_E2E_SSH_USER=""
@@ -50,6 +51,75 @@ invoker_e2e_ssh_resolve_home() {
     resolved_home="$(eval "printf '%s' ~$user")"
   fi
   printf '%s\n' "$resolved_home"
+}
+
+invoker_e2e_ssh_append_authorized_key() {
+  local authorized_keys="$1"
+  local pubkey_file="$2"
+  local lock_file="${authorized_keys}.invoker-e2e.lock"
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x 9
+      cat "$pubkey_file" >> "$authorized_keys"
+      chmod 600 "$authorized_keys"
+    ) 9>"$lock_file"
+  else
+    cat "$pubkey_file" >> "$authorized_keys"
+    chmod 600 "$authorized_keys"
+  fi
+}
+
+invoker_e2e_ssh_remove_authorized_key_tag() {
+  local authorized_keys="$1"
+  local tag="$2"
+  local lock_file="${authorized_keys}.invoker-e2e.lock"
+  local tmp_file
+  tmp_file="$(mktemp "${authorized_keys}.tmp.XXXXXX")"
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock -x 9
+      grep -v "$tag" "$authorized_keys" > "$tmp_file" || true
+      mv "$tmp_file" "$authorized_keys"
+      chmod 600 "$authorized_keys"
+    ) 9>"$lock_file"
+  else
+    grep -v "$tag" "$authorized_keys" > "$tmp_file" || true
+    mv "$tmp_file" "$authorized_keys"
+    chmod 600 "$authorized_keys"
+  fi
+  rm -f "$tmp_file" 2>/dev/null || true
+}
+
+invoker_e2e_ssh_build_path_prefix() {
+  local tool bin dir path_prefix missing
+  path_prefix=""
+  missing=""
+  for tool in node pnpm bash git; do
+    bin="$(command -v "$tool" || true)"
+    if [ -z "$bin" ]; then
+      missing="${missing:+$missing }$tool"
+      continue
+    fi
+    dir="$(cd "$(dirname "$bin")" && pwd)"
+    case ":$path_prefix:" in
+      *":$dir:"*) ;;
+      *) path_prefix="${path_prefix:+$path_prefix:}$dir" ;;
+    esac
+  done
+  if [ -n "$missing" ]; then
+    echo "ERROR: host tools not found for remote SSH PATH: $missing" >&2
+    return 1
+  fi
+  printf '%s\n' "$path_prefix"
+}
+
+invoker_e2e_ssh_append_env_path() {
+  local env_path="$1"
+  local path_prefix="$2"
+  {
+    printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
+    printf 'export PATH="%s:$PATH"\n' "$path_prefix"
+  } >> "$env_path"
 }
 
 # --------------------------------------------------------------------------- #
@@ -81,7 +151,7 @@ invoker_e2e_ssh_setup_keys() {
   chmod 600 "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
 
   # Append public key (comment already contains tag).
-  cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
+  invoker_e2e_ssh_append_authorized_key "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys" "${keyfile}.pub"
 
   export INVOKER_E2E_SSH_KEY="$keyfile"
   export INVOKER_SSH_USER_KNOWN_HOSTS_FILE="$known_hosts_file"
@@ -94,9 +164,7 @@ invoker_e2e_ssh_cleanup_keys() {
   local authorized_keys="${_INVOKER_E2E_SSH_HOME:-}/.ssh/authorized_keys"
   local env_path="${_INVOKER_E2E_SSH_REMOTE_HOME:-}/env.sh"
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$authorized_keys" ]; then
-    grep -v "$_INVOKER_E2E_SSH_TAG" "$authorized_keys" > "${authorized_keys}.tmp" || true
-    mv "${authorized_keys}.tmp" "$authorized_keys"
-    chmod 600 "$authorized_keys"
+    invoker_e2e_ssh_remove_authorized_key_tag "$authorized_keys" "$_INVOKER_E2E_SSH_TAG"
   fi
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$env_path" ]; then
     # Remove the marker line and the following PATH export we appended.
@@ -122,7 +190,11 @@ invoker_e2e_ssh_provision_command() {
 }
 
 invoker_e2e_ssh_config_provision_command() {
-  printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+  local provision_cmd path_prefix_q marker_q
+  provision_cmd="$(invoker_e2e_ssh_provision_command)"
+  printf -v path_prefix_q '%q' "$_INVOKER_E2E_SSH_PATH_PREFIX"
+  printf -v marker_q '%q' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
+  printf 'export PATH=%s:"$PATH"; INVOKER_SKIP_SHELL_HOOKS=1 %s && { printf "%%s\\n" %s; printf "export PATH=%%s:\\$PATH\\n" %s; } >> "${INVOKER_ENV_FILE:-$HOME/.invoker/env.sh}" && . "${INVOKER_ENV_FILE:-$HOME/.invoker/env.sh}"\n' "$path_prefix_q" "$provision_cmd" "$marker_q" "$path_prefix_q"
 }
 
 # --------------------------------------------------------------------------- #
@@ -169,7 +241,6 @@ NODE
 invoker_e2e_ssh_init() {
   invoker_e2e_init
   invoker_e2e_ssh_setup_keys
-  invoker_e2e_ssh_write_config
 
   # Verify SSH works with the generated key.
   if ! ssh -o BatchMode=yes \
@@ -186,31 +257,24 @@ invoker_e2e_ssh_init() {
     invoker_e2e_ssh_cleanup_keys
     return 1
   fi
+
+  invoker_e2e_ssh_write_config
 }
 
 # --------------------------------------------------------------------------- #
-# Ensure host pnpm/node are on the remote task PATH.
+# Ensure host tools are on the remote task PATH.
 # SshExecutor uses a non-login shell and sources remoteInvokerHome/env.sh.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_install_login_path() {
-  local pnpm_bin node_bin pnpm_dir node_dir
-  pnpm_bin="$(command -v pnpm || true)"
-  node_bin="$(command -v node || true)"
-  if [ -z "$pnpm_bin" ] || [ -z "$node_bin" ]; then
-    echo "ERROR: host pnpm/node not found; cannot provision remote login PATH." >&2
+  if ! _INVOKER_E2E_SSH_PATH_PREFIX="$(invoker_e2e_ssh_build_path_prefix)"; then
     return 1
   fi
-  pnpm_dir="$(cd "$(dirname "$pnpm_bin")" && pwd)"
-  node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
 
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
   touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   chmod 600 "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   if ! grep -Fq "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
-    {
-      printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
-      printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
-    } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
+    invoker_e2e_ssh_append_env_path "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" "$_INVOKER_E2E_SSH_PATH_PREFIX"
   fi
 
   # Verify via non-login bash — matches the executor sourcing remoteInvokerHome/env.sh explicitly.
@@ -222,9 +286,10 @@ invoker_e2e_ssh_install_login_path() {
            "bash -s" <<EOF >/dev/null 2>&1; then
 . "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
 command -v pnpm >/dev/null
+command -v git >/dev/null
 pnpm --version
 EOF
-    echo "ERROR: 'pnpm' not found after sourcing $_INVOKER_E2E_SSH_REMOTE_HOME/env.sh." >&2
+    echo "ERROR: required tools not found after sourcing $_INVOKER_E2E_SSH_REMOTE_HOME/env.sh." >&2
     return 1
   fi
 }

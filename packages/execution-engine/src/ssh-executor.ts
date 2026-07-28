@@ -330,6 +330,12 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     return ['bash', '-s'];
   }
 
+  private buildUtilityScript(script: string): string {
+    return `set -euo pipefail
+${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_HOME')}
+${script}`;
+  }
+
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
     const bench = createExecutionBench({
       module: 'ssh-executor-start-bench',
@@ -346,7 +352,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
         env: cleanElectronEnv(),
       });
       bench('SshExecutor.execRemoteCapture.spawned');
-      child.stdin.write(script);
+      child.stdin.write(this.buildUtilityScript(script));
       child.stdin.end();
       let out = '';
       let err = '';

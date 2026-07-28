@@ -112,6 +112,30 @@ describe('SshExecutor pre-flight validation', () => {
     expect(handle.executionId).toBeDefined();
   });
 
+  it('sources the configured remote env for utility SSH scripts', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: '/tmp/invoker-ssh-env',
+    }) as any;
+
+    const resultPromise = ssh.execRemoteCapture('command -v git\n', 'utility_env');
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    const writeMock = (sshProcess.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+
+    expect(script).toContain("INVOKER_HOME='/tmp/invoker-ssh-env'");
+    expect(script).toContain('INVOKER_ENV_FILE="$INVOKER_HOME/env.sh"');
+    expect(script).toContain('. "$INVOKER_ENV_FILE"');
+    expect(script.indexOf('. "$INVOKER_ENV_FILE"')).toBeLessThan(script.indexOf('command -v git'));
+
+    sshProcess.stdout?.emit('data', Buffer.from('/usr/bin/git\n'));
+    sshProcess.emit('close', 0, null);
+    await expect(resultPromise).resolves.toBe('/usr/bin/git\n');
+  });
+
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
