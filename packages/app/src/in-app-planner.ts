@@ -244,6 +244,8 @@ function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary'
   return Boolean(session.draftPlanText || session.draftPlanSummary);
 }
 
+const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
 function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
   return {
     id: session.id,
@@ -707,6 +709,9 @@ export async function submitPlanningChatDraft(
   }
   if (session.pendingSubmit) {
     return session.pendingSubmit;
+  }
+  if (session.status !== 'draft_ready' || !session.draftPlanText?.trim()) {
+    return { ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR };
   }
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
