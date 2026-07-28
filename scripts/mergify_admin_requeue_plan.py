@@ -423,12 +423,13 @@ def build_stack_facts(
         suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (prereq_status.check_name,)
     if queue_only_noop_check and bottom:
         suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (queue_only_noop_check,)
-    if (
-        bottom
-        and "PR Body" in required
-        and ledger.latest("repair-noop", bottom.number, bottom.head_ref_oid, "PR Body") is not None
-    ):
-        suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + ("PR Body",)
+    if bottom:
+        for name, ctx in sorted(bottom.checks.items()):
+            if ledger.latest("repair-noop", bottom.number, bottom.head_ref_oid, name) is None:
+                continue
+            if name != "PR Body" and ctx.state != "success":
+                continue
+            suppressed_failed_checks_by_pr[bottom.number] = suppressed_failed_checks_by_pr.get(bottom.number, ()) + (name,)
 
     blockers_by_pr: dict[int, tuple[Blocker, ...]] = {}
     for pr in stack.prs:

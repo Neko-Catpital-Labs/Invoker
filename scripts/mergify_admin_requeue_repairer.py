@@ -420,8 +420,18 @@ class AdminBypassRepairer:
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
         queue_only = ctx is None and is_queue_only_required_check(check_name)
+        mergify_failure = bool(
+            latest
+            and latest.state == "dequeued"
+            and latest.head_sha == pr.head_ref_oid
+            and check_name in latest.failing_checks
+        )
         mergify_urls = mergify_check_urls(latest, check_name)
-        details_url = (ctx.details_url if ctx and ctx.details_url else "") or (mergify_urls[0] if mergify_urls else "")
+        details_url = (
+            (mergify_urls[0] if mergify_failure and mergify_urls else "")
+            or (ctx.details_url if ctx and ctx.details_url else "")
+            or (mergify_urls[0] if mergify_urls else "")
+        )
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
@@ -435,6 +445,17 @@ class AdminBypassRepairer:
                 errors=(f"queue-only check {check_name} is missing a Mergify job URL",),
             )
         log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
+        if mergify_failure and ctx and ctx.state == "success" and (not log_path or self.job_log_is_empty(log_path)):
+            self.logger.trace(
+                "admin-bypass-stale-queue-check-noop",
+                repo=self.repo,
+                pr_number=pr.number,
+                check_name=check_name,
+                details_url=details_url,
+                log_path=log_path,
+                head_sha=pr.head_ref_oid,
+            )
+            return self.blocked_outcome("noop", check_name, start_head, start_head)
         if check_name == "PR Body" and self.job_log_is_empty(log_path):
             terminal = self.terminal_repair_outcome(pr, check_name, start_head, start_head, work_root)
             if terminal:
