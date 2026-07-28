@@ -210,7 +210,7 @@ That is another consistent theme: if a claim about the system matters, there sho
 
 These are the words that keep showing up once you read the code. The definitions below are intentionally plain-language, but they track the runtime types in `packages/workflow-graph/src/types.ts`.
 
-- **Plan**: A YAML document describing a workflow: a name, workflow defaults like `featureBranch`, a pinned `baseBranch: master`, and a list of tasks with ids, descriptions, and dependency edges. Plans are parsed into a `PlanDefinition` with validation on required fields.
+- **Plan**: A YAML document describing a workflow: a name, workflow defaults like `featureBranch`, a `baseBranch` that defaults to `master` but can also be an explicit remote-qualified ref like `origin/master` or `upstream/main`, and a list of tasks with ids, descriptions, and dependency edges. Plans are parsed into a `PlanDefinition` with validation on required fields.
 - **Workflow**: The persisted instance created from a plan. It has durable identity, stored tasks, and workflow-level fields (including a generation counter used to salt branch naming and invalidate stale work).
 - **Task (node)**: One unit of work in the DAG: a human-readable description, dependency ids, a `TaskConfig` (what to run and how), and `TaskExecution` (runtime fields like branch/commit/workspace metadata).
 - **Task status**: The workflow-visible lifecycle label (`pending`, `running`, `failed`, `needs_input`, `review_ready`, `awaiting_approval`, `stale`, and others).
