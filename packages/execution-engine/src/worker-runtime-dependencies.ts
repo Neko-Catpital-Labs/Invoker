@@ -17,10 +17,6 @@ import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
-import type {
-  ReviewGateMergeConflictWorkerStore,
-  ReviewGateMergeConflictWorkerSubmitter,
-} from './workers/review-gate-merge-conflict-worker.js';
 import type { RequeueWorkerConfig, RequeueWorkerSubmitter } from './workers/requeue-worker.js';
 import type {
   WorkflowResumeWorkerConfig,
@@ -35,7 +31,6 @@ export interface WorkerRuntimeDependencies {
   store: AutoFixRecoveryStore
     & ReviewGateCiRepairStore
     & AutoApproveWorkerStore
-    & ReviewGateMergeConflictWorkerStore
     & WorkflowResumeWorkerStore
     & PrSummaryRefreshWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
@@ -43,7 +38,6 @@ export interface WorkerRuntimeDependencies {
     & ReviewGateCiRepairSubmitter
     & RequeueWorkerSubmitter
     & AutoApproveWorkerSubmitter
-    & ReviewGateMergeConflictWorkerSubmitter
     & WorkflowResumeWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;
