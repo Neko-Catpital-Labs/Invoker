@@ -123,6 +123,17 @@ function appendPlanningTerminalSnapshot(snapshot: string | undefined, data: stri
   return next.slice(next.length - PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS);
 }
 
+function planningTerminalOutputMatchesSession(
+  session: PlanningSessionView,
+  event: TerminalOutputEvent,
+): boolean {
+  if (event.planningSessionId) {
+    return session.id === event.planningSessionId;
+  }
+  return session.terminalSession?.sessionId === event.sessionId
+    || session.terminalSessionId === event.sessionId;
+}
+
 function planningTerminalSessionFromOutputEvent(
   session: PlanningSessionView,
   event: TerminalOutputEvent,
@@ -1338,14 +1349,12 @@ export function App() {
   useEffect(() => {
     const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
       if (event.kind !== 'planning' || typeof event.data !== 'string' || event.data.length === 0) return;
-      setPlanningSessions((prev) =>
-        prev.map((session) => {
-          const matchesSession =
-            session.terminalSession?.sessionId === event.sessionId
-            || session.terminalSessionId === event.sessionId
-            || (event.planningSessionId !== undefined && session.id === event.planningSessionId);
-          if (!matchesSession) return session;
+      setPlanningSessions((prev) => {
+        let changed = false;
+        const next = prev.map((session) => {
+          if (!planningTerminalOutputMatchesSession(session, event)) return session;
 
+          changed = true;
           const outputSnapshot = appendPlanningTerminalSnapshot(
             session.terminalSession?.outputSnapshot ?? session.terminalOutputSnapshot,
             event.data,
@@ -1358,8 +1367,9 @@ export function App() {
             terminalOutputSnapshot: outputSnapshot,
             terminalSession: planningTerminalSessionFromOutputEvent(session, event, outputSnapshot),
           };
-        }),
-      );
+        });
+        return changed ? next : prev;
+      });
     });
     return () => { unsubscribe?.(); };
   }, []);

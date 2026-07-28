@@ -81,7 +81,7 @@ describe('planning terminal tmux', () => {
     xtermMock.reset();
   });
 
-  it.fails('restores planning tmux output emitted while the planning terminal surface is hidden', async () => {
+  it('restores planning tmux output emitted while the planning terminal surface is hidden', async () => {
     mock.api.planningChatList = vi.fn(async () => ({
       ok: true,
       sessions: [
