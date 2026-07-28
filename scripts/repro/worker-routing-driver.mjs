@@ -120,7 +120,7 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
     INVOKER_PR_REBASE_CONFIRM_TIMEOUT: '0',
   }, 'pr-dirty.json');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
-  assert(leg, has(leg, '[worker:pr-conflict-rebase] spawning scripts/cron-pr-conflict-rebase.sh'),
+  assert(leg, has(leg, '[worker:pr-conflict-rebase] spawning packages/execution-engine/scripts/pr-maintenance/cron-pr-conflict-rebase.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, nodeLogText(leg).includes('rebase-recreate wf-routing-1'),
     'conflicted PR triggered a rebase-recreate dispatch');
@@ -143,7 +143,7 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
   const err = await tickWorker(leg, createPrCiFailureScanWorker, {
     INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
   }, 'pr-ci-failed.json');
-  assert(leg, has(leg, '[worker:pr-ci-failure-scan] spawning packages/execution-engine/scripts/cron-pr-ci-failure.sh'),
+  assert(leg, has(leg, '[worker:pr-ci-failure-scan] spawning packages/execution-engine/scripts/pr-maintenance/cron-pr-ci-failure.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
   assert(leg, nodeLogText(leg).includes('repair-review-gate-ci 601'),
@@ -162,7 +162,7 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
     INVOKER_PR_CRON_DRY_RUN: '1',
     FAKE_GH_REQUIRED_CHECKS: process.env.FAKE_GH_REQUIRED_CHECKS ?? '',
   }, 'stack-landable.json');
-  assert(leg, has(leg, '[worker:pr-admin-bypass-land] spawning scripts/cron-pr-admin-bypass-land.sh'),
+  assert(leg, has(leg, '[worker:pr-admin-bypass-land] spawning packages/execution-engine/scripts/pr-maintenance/cron-pr-admin-bypass-land.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
   assert(leg, has(leg, 'DRY-RUN requeue PR #701'),
@@ -182,7 +182,7 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
   const leg = makeLeg('coderabbit-address');
   console.log('\n=== leg 4: review sweep (pr-dirty.json) -> coderabbit-address ===');
   const err = await tickWorker(leg, createCoderabbitAddressWorker, {}, 'pr-dirty.json');
-  assert(leg, has(leg, '[worker:coderabbit-address] spawning scripts/cron-coderabbit-address.sh'),
+  assert(leg, has(leg, '[worker:coderabbit-address] spawning packages/execution-engine/scripts/pr-maintenance/cron-coderabbit-address.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
   assert(leg, callsLog(leg).length > 0, 'sweep queried the fake GitHub');
@@ -205,7 +205,7 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
     INVOKER_PR_ORPHAN_STATE_FILE: join(leg.legDir, 'ledger.tsv'),
     INVOKER_PR_ORPHAN_PLAN_DIR: join(leg.legDir, 'plans'),
   }, 'pr-orphan-broken.json');
-  assert(leg, has(leg, '[worker:pr-orphan-repair] spawning scripts/cron-pr-orphan-repair.sh'),
+  assert(leg, has(leg, '[worker:pr-orphan-repair] spawning packages/execution-engine/scripts/pr-maintenance/cron-pr-orphan-repair.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
   assert(leg, /exec -- run .*repair-pr-801\.yaml/.test(nodeLogText(leg)),

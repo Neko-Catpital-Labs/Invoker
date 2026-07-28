@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
-python3 -m unittest scripts/test_mergify_admin_requeue.py
+PYTHONPATH=packages/mergify-admin-requeue python3 -m unittest discover -s packages/mergify-admin-requeue/tests
 bash scripts/repro/repro-mergify-admin-requeue.sh
 bash scripts/repro/repro-mergify-admin-requeue-stack-expansion.sh
 bash scripts/repro/repro-mergify-rejected-pr.sh
