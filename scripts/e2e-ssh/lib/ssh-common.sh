@@ -189,6 +189,71 @@ invoker_e2e_ssh_init() {
 }
 
 # --------------------------------------------------------------------------- #
+# Submit an SSH e2e plan without tracking the merge gate to completion.
+# These cases assert task-node outcomes directly; manual/external review gates
+# are not part of the SSH executor handoff being tested.
+# --------------------------------------------------------------------------- #
+invoker_e2e_ssh_submit_plan_no_track() {
+  local plan_path="$1"
+  local submit_log workflow_id
+  submit_log="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-ssh-submit.log.XXXXXX")"
+
+  if ! invoker_e2e_submit_plan_no_track_capture "$plan_path" "$submit_log"; then
+    rm -f "$submit_log"
+    return 1
+  fi
+
+  workflow_id="$(invoker_e2e_extract_workflow_id_from_log "$submit_log")"
+  rm -f "$submit_log"
+  if [ -z "$workflow_id" ]; then
+    echo "FAIL: could not resolve workflow id after submitting $plan_path" >&2
+    invoker_e2e_run_headless status 2>&1 || true
+    return 1
+  fi
+
+  export INVOKER_E2E_SSH_LAST_WORKFLOW_ID="$workflow_id"
+  echo "==> e2e ssh: workflow submitted: $workflow_id"
+}
+
+invoker_e2e_ssh_wait_tasks_completed() {
+  local max_secs="$1"
+  shift
+  local deadline=$((SECONDS + max_secs))
+  local task status all_done
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    all_done=1
+    for task in "$@"; do
+      status="$(invoker_e2e_task_status "$task" 2>/dev/null || true)"
+      case "$status" in
+        completed)
+          ;;
+        pending|running|queued|fixing_with_ai|"")
+          all_done=0
+          ;;
+        *)
+          echo "FAIL: task $task reached status='$status' before completed" >&2
+          invoker_e2e_run_headless status 2>&1 || true
+          return 1
+          ;;
+      esac
+    done
+    if [ "$all_done" -eq 1 ]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "TIMEOUT: expected tasks to complete after ${max_secs}s: $*" >&2
+  for task in "$@"; do
+    status="$(invoker_e2e_task_status "$task" 2>/dev/null || true)"
+    echo "  $task=${status:-unknown}" >&2
+  done
+  invoker_e2e_run_headless status 2>&1 || true
+  return 1
+}
+
+# --------------------------------------------------------------------------- #
 # Ensure host pnpm/node are on the remote task PATH.
 # SshExecutor uses a non-login shell and sources remoteInvokerHome/env.sh.
 # --------------------------------------------------------------------------- #

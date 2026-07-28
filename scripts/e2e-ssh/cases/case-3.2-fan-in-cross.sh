@@ -14,8 +14,14 @@ unset ELECTRON_RUN_AS_NODE
 echo "==> case 3.2: delete-all"
 invoker_e2e_run_headless delete-all
 
-echo "==> case 3.2: submit plan"
-invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.2-fan-in-cross.yaml"
+echo "==> case 3.2: submit plan (--no-track)"
+invoker_e2e_ssh_submit_plan_no_track "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.2-fan-in-cross.yaml"
+
+echo "==> case 3.2: wait for cross-executor fan-in tasks to complete"
+invoker_e2e_ssh_wait_tasks_completed 300 \
+  e2e-g332-taskA \
+  e2e-g332-taskB \
+  e2e-g332-taskC
 
 STA=$(invoker_e2e_task_status e2e-g332-taskA)
 STB=$(invoker_e2e_task_status e2e-g332-taskB)
