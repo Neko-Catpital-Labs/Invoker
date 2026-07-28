@@ -1,0 +1,102 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { act, render, screen, waitFor } from '@testing-library/react';
+import type { InAppPlanningListSessionsResponse, TerminalSessionDescriptor } from '@invoker/contracts';
+import { createMockInvoker, makePlanningSessionSummary, type MockInvoker } from './helpers/mock-invoker.js';
+
+vi.mock('@xyflow/react', async () => {
+  const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
+  return createReactFlowMock();
+});
+
+const { App } = await import('../App.js');
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
+}
+
+describe('planning terminal startup hydrate race repro', () => {
+  let mock: MockInvoker;
+
+  beforeEach(() => {
+    mock = createMockInvoker();
+    mock.install();
+  });
+
+  afterEach(() => {
+    mock.cleanup();
+  });
+
+  it('keeps a live planning tmux session when chat-only hydrate resolves after terminal hydrate', async () => {
+    const chatOnlyHydrate = deferred<InAppPlanningListSessionsResponse>();
+    const terminalAwareHydrate = deferred<InAppPlanningListSessionsResponse>();
+    const restoredChat = makePlanningSessionSummary({
+      id: 'planning-hydrate-race',
+      title: 'Hydrated tmux chat',
+      status: 'still_discussing',
+      messages: [
+        {
+          id: 1,
+          role: 'system',
+          text: 'Restored planning chat.',
+          createdAt: '2026-07-26T00:00:00.000Z',
+        },
+      ],
+      draftPlanAvailable: false,
+      draftPlanSummary: undefined,
+      draftPlanText: undefined,
+      terminalMode: 'tmux',
+      terminalSessionId: undefined,
+      terminalOutputSnapshot: '',
+      updatedAt: '2026-07-26T00:00:01.000Z',
+    });
+    const liveTerminal: TerminalSessionDescriptor = {
+      sessionId: 'live-planning-terminal',
+      taskId: 'planning:planning-hydrate-race',
+      kind: 'planning',
+      planningSessionId: 'planning-hydrate-race',
+      status: 'running',
+      mode: 'spawn',
+      attached: false,
+      cwd: '/repo',
+      createdAt: '2026-07-26T00:00:02.000Z',
+      outputSnapshot: 'already running in tmux\n',
+    };
+
+    mock.api.planningChatList = vi
+      .fn()
+      .mockReturnValueOnce(chatOnlyHydrate.promise)
+      .mockReturnValueOnce(terminalAwareHydrate.promise) as any;
+    mock.api.planningTerminalList = vi.fn(async () => [liveTerminal]) as any;
+
+    render(<App />);
+    await waitFor(() => {
+      expect(mock.api.planningChatList).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async () => {
+      terminalAwareHydrate.resolve({ ok: true, sessions: [restoredChat] });
+    });
+
+    expect(await screen.findByTestId('invoker-terminal-tmux-pane')).toHaveAttribute(
+      'data-session-id',
+      'live-planning-terminal',
+    );
+    expect(screen.getByTestId('planning-session-rail')).toHaveTextContent('Hydrated tmux chat');
+
+    await act(async () => {
+      chatOnlyHydrate.resolve({ ok: true, sessions: [restoredChat] });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute(
+        'data-session-id',
+        'live-planning-terminal',
+      );
+    });
+    expect(mock.api.planningTerminalOpen).not.toHaveBeenCalled();
+  });
+});
