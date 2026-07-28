@@ -331,7 +331,7 @@ async function closePlanningTerminalSessions(page: Page): Promise<void> {
 }
 
 test.describe('Planning tmux blank geometry repro', () => {
-  test('records planning tmux resize IPC and PTY geometry during a zero-size host transition', async ({ electronApp, page }, testInfo) => {
+  test('checks planning tmux resize IPC and PTY geometry during a zero-size host transition', async ({ electronApp, page }, testInfo) => {
     let artifact: ReproArtifact | null = null;
     let sessionId = '';
     let resizeRecorderStrategy: ResizeRecorderStrategy = 'page';
@@ -367,11 +367,11 @@ test.describe('Planning tmux blank geometry repro', () => {
       const tinySttySamples = artifact.sttySizeSamples.filter((sample) => sample.tiny);
       const artifactJson = JSON.stringify(artifact);
 
-      expect(relevantResizePayloads.length, artifactJson).toBeGreaterThan(0);
       expect(beforeSamples.length, artifactJson).toBeGreaterThan(0);
       expect(afterSamples.length, artifactJson).toBeGreaterThan(0);
 
       if (MODE === 'before') {
+        expect(relevantResizePayloads.length, artifactJson).toBeGreaterThan(0);
         expect(tinyResizePayloads.length, artifactJson).toBeGreaterThan(0);
         expect(afterSamples.some((sample) => sample.tiny), artifactJson).toBe(true);
         console.log(`BUG_REPRODUCED=${artifactJson}`);
