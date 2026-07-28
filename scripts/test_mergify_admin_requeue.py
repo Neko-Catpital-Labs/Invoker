@@ -613,6 +613,41 @@ Failing checks
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
 
+    def test_repair_check_accepts_live_pr_body_metadata_repair(self):
+        class FakeGh:
+            def __init__(self):
+                self.details = []
+
+            def pr_detail(self, repo, number):
+                self.details.append((repo, number))
+                return {"state": "OPEN", "body": PROOF_BODY}
+
+        item = pr(
+            6314,
+            latest=mergify(),
+            body="",
+            checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")},
+        )
+        fake = FakeGh()
+        repairer = self.repairer(fake, self.ledger())
+        git_rev_parse = iter([HEAD, HEAD])
+        validated_bodies = []
+
+        def validate(_work_root, body, _base_branch):
+            validated_bodies.append(body)
+            return {"valid": body == PROOF_BODY, "errors": ["PR body is empty."]}
+
+        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                        with mock.patch.object(repairer, "run_claude_repair") as repair:
+                            with mock.patch.object(repairer, "validate_current_pr_body", side_effect=validate):
+                                result = repairer.repair_check(item, "PR Body")
+        repair.assert_called_once()
+        self.assertEqual(result.status, "noop")
+        self.assertEqual(validated_bodies, [PROOF_BODY])
+        self.assertGreaterEqual(len(fake.details), 1)
 
     def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):
         item = pr(

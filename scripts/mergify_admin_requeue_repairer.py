@@ -201,6 +201,12 @@ class AdminBypassRepairer:
         except RuntimeError:
             return self.validate_pr_body_from_current_diff(work_root, body, base_branch)
 
+    def refreshed_pr_body(self, pr: PrSnapshot) -> str:
+        if not hasattr(self.gh, "pr_detail"):
+            return pr.body
+        detail = self.gh.pr_detail(self.repo, pr.number)
+        return str(detail.get("body") or "")
+
     def is_proof_tooling_policy_validation(self, value: Mapping[str, object]) -> bool:
         errors = value.get("errors")
         scope_kinds = value.get("scopeKinds")
@@ -535,9 +541,10 @@ class AdminBypassRepairer:
         terminal = self.terminal_repair_outcome(pr, check_name, start_head, end_head, work_root)
         if terminal:
             return terminal
+        pr_body = self.refreshed_pr_body(pr) if check_name == "PR Body" else pr.body
         if end_head == start_head and not status_lines:
             if not queue_only:
-                validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+                validation = self.validate_current_pr_body(work_root, pr_body, pr.base_ref_name)
                 if not validation.get("valid"):
                     return self.invalid_repair_outcome(pr, check_name, start_head, end_head, validation)
             return self.blocked_outcome(
@@ -560,7 +567,7 @@ class AdminBypassRepairer:
             and not self.is_ancestor(work_root, start_head, end_head)
             and self.is_rebased_onto_updated_trunk(work_root, pr, start_head, end_head)
         ):
-            validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+            validation = self.validate_current_pr_body(work_root, pr_body, pr.base_ref_name)
             if validation.get("valid"):
                 repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
                 self.push_branch(work_root, pr.head_ref_name, force_with_lease=True, expected_head=start_head)
@@ -581,7 +588,7 @@ class AdminBypassRepairer:
                 )
         end_head = self.normalize_repair_commit(work_root, start_head, end_head, check_name)
         repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
-        validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+        validation = self.validate_current_pr_body(work_root, pr_body, pr.base_ref_name)
         if validation.get("valid"):
             self.push_branch(work_root, pr.head_ref_name)
             return self.blocked_outcome(
