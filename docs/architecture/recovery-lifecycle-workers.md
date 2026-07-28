@@ -97,6 +97,12 @@ On owner boot `startAutoStartedWorkers()` starts two tiers of built-in workers
 Saved per-worker desired state (Workers tab / `worker start|stop`) overrides
 the auto-start default in both directions.
 
+Tool ownership follows the package layout: the mergify admin-requeue CLI lives
+in `packages/mergify-admin-requeue`, and the PR-maintenance cron shells live
+under `packages/execution-engine/scripts/pr-maintenance/`. The old `scripts/`
+entry paths are compatibility shims for existing operator and babysit repro
+commands.
+
 ## Worker Wakeups
 
 A lifecycle event should carry enough context to make wakeups efficient, such as workflow ID, task ID, transition type, and generation where available. That context is an optimization, not authority.
