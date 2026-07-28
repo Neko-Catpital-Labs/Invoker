@@ -4,12 +4,71 @@ import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
 });
+
+const xtermMock = vi.hoisted(() => {
+  type DataHandler = (data: string) => void;
+
+  const instances: MockTerminal[] = [];
+  const fitInstances: MockFitAddon[] = [];
+  const writeLog: string[] = [];
+
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    dataHandler: DataHandler | null = null;
+    loadAddon = vi.fn();
+    open = vi.fn((host: HTMLElement) => {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      terminalElement.textContent = 'mock terminal';
+      host.appendChild(terminalElement);
+    });
+    write = vi.fn((data: string) => {
+      writeLog.push(data);
+    });
+    onData = vi.fn((cb: DataHandler) => {
+      this.dataHandler = cb;
+      return { dispose: vi.fn() };
+    });
+    focus = vi.fn();
+    dispose = vi.fn();
+
+    constructor() {
+      instances.push(this);
+    }
+  }
+
+  class MockFitAddon {
+    fit = vi.fn();
+
+    constructor() {
+      fitInstances.push(this);
+    }
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+    instances,
+    fitInstances,
+    writeLog,
+    reset: () => {
+      instances.length = 0;
+      fitInstances.length = 0;
+      writeLog.length = 0;
+    },
+  };
+});
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
 
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
@@ -21,6 +80,7 @@ describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermMock.reset();
     mock = createMockInvoker();
     mock.install();
   });
@@ -179,6 +239,51 @@ describe('Invoker terminal (component)', () => {
       ...overrides,
     };
   }
+
+  function planningTerminalSession(overrides: Partial<TerminalSessionDescriptor> = {}): TerminalSessionDescriptor {
+    return {
+      sessionId: 'planning-tmux-session',
+      taskId: 'planning:chat-1',
+      kind: 'planning',
+      planningSessionId: 'chat-1',
+      status: 'running',
+      mode: 'spawn',
+      attached: false,
+      createdAt: '2026-07-28T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('does not mount xterm or resize an inactive planning tmux pane', async () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        mode: 'tmux',
+        terminalActive: false,
+        terminalSession: planningTerminalSession({ outputSnapshot: 'seed output\n' }),
+      })}
+    />);
+
+    expect(screen.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', 'planning-tmux-session');
+    expect(xtermMock.instances).toHaveLength(0);
+    expect(xtermMock.fitInstances).toHaveLength(0);
+    expect(xtermMock.writeLog).toEqual([]);
+    expect(mock.api.onTerminalOutput).not.toHaveBeenCalled();
+    expect(mock.api.planningTerminalResize).not.toHaveBeenCalled();
+    expect(screen.queryByText('mock terminal')).not.toBeInTheDocument();
+  });
+
+  it('keeps chat mode on the transcript path when terminalActive is false', () => {
+    render(<InvokerTerminal
+      {...terminalProps({
+        terminalActive: false,
+        lines: [{ id: 1, text: 'Chat mode still renders.', role: 'assistant' }],
+      })}
+    />);
+
+    expect(screen.getByTestId('invoker-terminal-transcript')).toHaveTextContent('Chat mode still renders.');
+    expect(screen.queryByTestId('invoker-terminal-tmux-pane')).not.toBeInTheDocument();
+    expect(xtermMock.instances).toHaveLength(0);
+  });
 
   it('generates a planning reply from plain language', async () => {
     render(<App />);

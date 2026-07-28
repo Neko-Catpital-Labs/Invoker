@@ -4628,6 +4628,7 @@ export function App() {
             planningStream={activePlanningStream}
             readOnly={activePlanningReadOnly}
             mode={activePlanningMode}
+            terminalActive={!planningTerminalExpanded}
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
@@ -4962,6 +4963,7 @@ export function App() {
             planningStream={activePlanningStream}
             expanded
             mode={activePlanningMode}
+            terminalActive={true}
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
