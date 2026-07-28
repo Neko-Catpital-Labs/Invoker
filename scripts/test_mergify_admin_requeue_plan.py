@@ -45,6 +45,15 @@ def event(state="dequeued", head=HEAD, comment_id="cm1", failing=(), conditions=
     )
 
 
+def queue_command(updated_at="2026-07-07T05:01:00Z"):
+    return m.QueueCommandComment(
+        comment_id="q1",
+        body="@mergifyio queue",
+        updated_at=updated_at,
+        author_login="EdbertChan",
+    )
+
+
 def pr(**kw):
     base = dict(
         number=1,
@@ -76,6 +85,47 @@ class PlannerTestCase(unittest.TestCase):
     def _facts(self, stack, required_checks=REQUIRED, ledger=None, open_pr_numbers=(), open_pr_numbers_by_head=None, trunk="master"):
         ledger = ledger or self._ledger()
         return p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head or {}, trunk), ledger
+
+
+class QueueCommandInFlight(PlannerTestCase):
+    def test_recorded_queue_command_after_dequeue_waits(self):
+        ledger = self._ledger()
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(comment_id="cm1"),
+            latest_queue_command=queue_command(),
+        )
+        ledger.record("requeue", snapshot.number, snapshot.head_ref_oid, "cm1", epoch=1)
+
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=2,
+            open_pr_numbers=(snapshot.number,),
+            open_pr_numbers_by_head={},
+        )
+
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "bottom-already-queued")
+
+    def test_newer_dequeue_event_after_queue_command_can_requeue(self):
+        ledger = self._ledger()
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(comment_id="cm2"),
+            latest_queue_command=queue_command(updated_at="2026-07-07T04:59:00Z"),
+        )
+        ledger.record("requeue", snapshot.number, snapshot.head_ref_oid, "cm1", epoch=1)
+
+        action = p.plan_bottom_progress(
+            self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)[0],
+            ledger,
+            max_requeue_attempts=2,
+        )
+
+        assert action is not None
+        self.assertEqual((action.kind, action.key), ("requeue", "cm2"))
 
 
 class ClassifyPr(unittest.TestCase):

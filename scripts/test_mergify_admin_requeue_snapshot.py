@@ -82,6 +82,24 @@ class ParseMergifyQueueEvent(unittest.TestCase):
         self.assertEqual(event.queued_at, "2026-07-07T05:00:00Z")
 
 
+class ParseQueueCommandComment(unittest.TestCase):
+    def test_parses_exact_queue_command(self):
+        command = s.parse_queue_command_comment({
+            "user": {"login": "EdbertChan"},
+            "id": "q1",
+            "updated_at": "2026-07-07T05:01:00Z",
+            "body": "@mergifyio queue",
+        })
+
+        assert command is not None
+        self.assertEqual(command.comment_id, "q1")
+        self.assertEqual(command.updated_at, "2026-07-07T05:01:00Z")
+        self.assertEqual(command.author_login, "EdbertChan")
+
+    def test_ignores_non_queue_chatter(self):
+        self.assertIsNone(s.parse_queue_command_comment({"body": "@mergifyio status"}))
+
+
 class GhCommandFailures(unittest.TestCase):
     def test_graphql_rate_limit_becomes_controlled_runtime_error(self):
         error = subprocess.CalledProcessError(
@@ -214,6 +232,33 @@ class SnapshotFromDetail(unittest.TestCase):
         assert snap.latest_mergify is not None
         self.assertEqual(snap.latest_mergify.state, "dequeued")
         self.assertEqual(snap.latest_mergify.head_sha, HEAD)
+        self.assertIsNone(snap.latest_queue_command)
+
+    def test_attaches_latest_queue_command(self):
+        detail = {
+            "number": 3221, "title": "Add model", "body": "", "url": "https://x/3221",
+            "state": "OPEN", "isDraft": False,
+            "baseRefName": "master", "headRefName": "stack/x", "headRefOid": HEAD,
+            "mergeStateStatus": "BLOCKED", "mergeable": "MERGEABLE",
+            "labels": {"nodes": [{"name": "admin-bypass"}]},
+            "statusCheckRollup": {"contexts": {"nodes": []}},
+            "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+        }
+        comments = [
+            {**MERGIFY_DEQUEUE_COMMENT},
+            {
+                "user": {"login": "EdbertChan"},
+                "id": "q1",
+                "updated_at": "2026-07-07T05:01:00Z",
+                "body": "@mergifyio queue",
+            },
+        ]
+
+        snap = s.snapshot_from_detail(detail, comments, required_checks=[])
+
+        assert snap.latest_queue_command is not None
+        self.assertEqual(snap.latest_queue_command.comment_id, "q1")
+        self.assertEqual(snap.latest_queue_command.updated_at, "2026-07-07T05:01:00Z")
 
 
 class GhClientCandidateDiscovery(unittest.TestCase):

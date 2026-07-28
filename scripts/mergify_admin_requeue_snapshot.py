@@ -18,6 +18,7 @@ try:
     from .mergify_admin_requeue_model import (
         MergifyQueueEvent,
         PrSnapshot,
+        QueueCommandComment,
         RepairStopComment,
         ReviewThread,
         STACK_MARKER_RE,
@@ -35,6 +36,7 @@ except ImportError:
     from mergify_admin_requeue_model import (
         MergifyQueueEvent,
         PrSnapshot,
+        QueueCommandComment,
         RepairStopComment,
         ReviewThread,
         STACK_MARKER_RE,
@@ -266,6 +268,24 @@ def parse_repair_stop_comment(comment: Mapping[str, object]) -> RepairStopCommen
     )
 
 
+def parse_queue_command_comment(comment: Mapping[str, object]) -> QueueCommandComment | None:
+    body = str(comment.get("body") or "").strip()
+    if not any(line.strip().lower() == "@mergifyio queue" for line in body.splitlines()):
+        return None
+    author = comment.get("user") if isinstance(comment.get("user"), Mapping) else comment.get("author")
+    login = ""
+    if isinstance(author, Mapping):
+        login = str(author.get("login") or "")
+    elif isinstance(author, str):
+        login = author
+    return QueueCommandComment(
+        comment_id=str(comment.get("id") or comment.get("databaseId") or ""),
+        body=body,
+        updated_at=str(comment.get("updated_at") or comment.get("created_at") or comment.get("createdAt") or ""),
+        author_login=login,
+    )
+
+
 def parse_stack_metadata(comments: Sequence[Mapping[str, object]]) -> tuple[str, tuple[int, ...]] | None:
     ordered = sorted(comments, key=lambda c: str(c.get("updated_at") or c.get("created_at") or ""), reverse=True)
     for comment in ordered:
@@ -391,6 +411,8 @@ def snapshot_from_detail(detail: Mapping[str, object], comments: Sequence[Mappin
     head = str(detail.get("headRefOid") or detail.get("head_ref_oid") or "")
     events = [event for comment in comments for event in [parse_mergify_queue_event(comment)] if event]
     events.sort(key=lambda event: event.queued_at, reverse=True)
+    queue_commands = [command for comment in comments for command in [parse_queue_command_comment(comment)] if command]
+    queue_commands.sort(key=lambda command: command.updated_at, reverse=True)
     stop_comments = [stop for comment in comments for stop in [parse_repair_stop_comment(comment)] if stop]
     stop_comments.sort(key=lambda comment: comment.updated_at, reverse=True)
     return PrSnapshot(
@@ -409,5 +431,6 @@ def snapshot_from_detail(detail: Mapping[str, object], comments: Sequence[Mappin
         checks=latest_contexts_by_required_check(raw_contexts(detail), head, required_checks),
         review_threads=review_threads(detail.get("reviewThreads")),
         latest_mergify=events[0] if events else None,
+        latest_queue_command=queue_commands[0] if queue_commands else None,
         repair_stop_comments=tuple(stop_comments),
     )

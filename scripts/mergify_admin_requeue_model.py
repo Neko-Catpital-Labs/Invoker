@@ -55,6 +55,14 @@ class RepairStopComment:
 
 
 @dataclass(frozen=True)
+class QueueCommandComment:
+    comment_id: str
+    body: str
+    updated_at: str
+    author_login: str
+
+
+@dataclass(frozen=True)
 class PrSnapshot:
     number: int
     title: str
@@ -71,6 +79,7 @@ class PrSnapshot:
     checks: Mapping[str, CheckContext]
     review_threads: tuple[ReviewThread, ...]
     latest_mergify: MergifyQueueEvent | None
+    latest_queue_command: QueueCommandComment | None = None
     repair_stop_comments: tuple[RepairStopComment, ...] = ()
 
 @dataclass(frozen=True)
