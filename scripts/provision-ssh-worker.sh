@@ -526,7 +526,7 @@ ensure_repo_ready() {
 }
 
 print_provision_command() {
-  printf 'bash scripts/provision-ssh-worker.sh ensure-repo-ready && . "$HOME/.invoker/env.sh"\n'
+  printf 'bash scripts/provision-ssh-worker.sh ensure-repo-ready && . "${INVOKER_ENV_FILE:-$HOME/.invoker/env.sh}"\n'
 }
 
 while [[ "$#" -gt 0 ]]; do

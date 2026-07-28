@@ -22,7 +22,7 @@ STB=$(invoker_e2e_task_status e2e-g335-taskB)
 STC=$(invoker_e2e_task_status e2e-g335-taskC)
 if [ "$STA" != "completed" ] || [ "$STB" != "failed" ] || [ "$STC" != "pending" ]; then
   echo "FAIL case 3.5: expected A=completed B=failed C=pending, got A='$STA' B='$STB' C='$STC'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_run_headless query tasks 2>&1 || true
   exit 1
 fi
 echo "==> case 3.5: confirmed A=completed, B=failed, C=pending"
@@ -33,7 +33,7 @@ invoker_e2e_run_headless fix e2e-g335-taskB
 STB=$(invoker_e2e_task_status e2e-g335-taskB)
 if [ "$STB" != "awaiting_approval" ]; then
   echo "FAIL case 3.5: expected B=awaiting_approval after fix, got '$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_run_headless query tasks 2>&1 || true
   exit 1
 fi
 echo "==> case 3.5: confirmed B=awaiting_approval"
@@ -46,7 +46,7 @@ STB=$(invoker_e2e_task_status e2e-g335-taskB)
 STC=$(invoker_e2e_task_status e2e-g335-taskC)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ] || [ "$STC" != "completed" ]; then
   echo "FAIL case 3.5: expected all completed, got A='$STA' B='$STB' C='$STC'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_run_headless query tasks 2>&1 || true
   exit 1
 fi
 
