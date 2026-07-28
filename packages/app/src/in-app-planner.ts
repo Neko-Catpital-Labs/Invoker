@@ -425,7 +425,7 @@ export function hydrateRemotePlanningTerminalSession(summary: InAppPlanningSessi
     id: summary.id,
     title: summary.title,
     presetKey: summary.presetKey,
-    confirmationMode: summary.confirmationMode,
+    confirmationMode: summary.confirmationMode ?? 'require',
     status: summary.status,
     messages: summary.messages,
     conversation: null as unknown as PlanConversation,
