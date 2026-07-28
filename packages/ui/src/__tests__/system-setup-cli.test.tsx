@@ -315,7 +315,7 @@ describe('SystemSetupModal — Invoker CLI section', () => {
     expect(screen.getByText(/Git: git found/)).toBeInTheDocument();
   });
 
-  it('renders the first agent workflow tutorial link on the finish step', () => {
+  it('shows the first agent workflow tutorial link on the finish step', () => {
     render(
       <SystemSetupModal
         diagnostics={makeDiagnostics({ supported: true, bundledVersion: '0.0.3', upToDate: true })}
@@ -326,6 +326,7 @@ describe('SystemSetupModal — Invoker CLI section', () => {
     );
 
     const tutorialLink = screen.getByRole('link', { name: 'Open the First Agent Workflow Tutorial' });
+    expect(tutorialLink).toBeInTheDocument();
     expect(tutorialLink).toHaveAttribute(
       'href',
       'https://github.com/Neko-Catpital-Labs/Invoker/blob/main/docs/tutorial-first-agent-workflow.md',
