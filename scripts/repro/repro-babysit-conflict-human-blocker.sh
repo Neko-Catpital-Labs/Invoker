@@ -104,7 +104,30 @@ state = {
             "checks": {"*": "SUCCESS"},
         }
     ],
-    "issue_comments": {"6118": []},
+    "issue_comments": {
+        "6118": [
+            {
+                "id": "m6118",
+                "user": {"login": "mergify"},
+                "updated_at": "2026-07-28T09:21:31Z",
+                "html_url": "https://github.com/fake/repo/pull/6118#m6118",
+                "body": (
+                    "<!---\n"
+                    "DO NOT EDIT\n"
+                    "-*- Mergify Payload -*-\n"
+                    "{\"version\":1,\"state\":\"queued\",\"queue_rule_name\":\"admin-bypass\"}\n"
+                    "-*- Mergify Payload End -*-\n"
+                    "-->\n\n"
+                    "# Merge Queue Status\n\n"
+                    "- Waiting for queue conditions\n\n"
+                    "<details>\n"
+                    "<summary><strong>Waiting for</strong></summary>\n\n"
+                    "- [ ] `-conflict` [queue requirement]\n\n"
+                    "</details>\n"
+                ),
+            }
+        ]
+    },
     "job_logs": {},
 }
 Path(os.environ["STATE_PATH"]).write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -125,10 +148,11 @@ from pathlib import Path
 expected = int(os.environ["expected"])
 state = json.loads(Path(os.environ["STATE_PATH"]).read_text(encoding="utf-8"))
 comments = state.get("issue_comments", {}).get("6118", [])
-if len(comments) != expected:
-    raise SystemExit(f"expected {expected} stop comment(s), saw {len(comments)}")
+stop_comments = [comment for comment in comments if str(comment.get("body", "")).startswith("Mergify repair stopped: ")]
+if len(stop_comments) != expected:
+    raise SystemExit(f"expected {expected} stop comment(s), saw {len(stop_comments)}")
 reason = os.environ["EXACT_REASON"]
-for comment in comments:
+for comment in stop_comments:
     body = comment.get("body", "")
     if body != f"Mergify repair stopped: {reason}":
         raise SystemExit(f"unexpected stop comment body: {body!r}")
@@ -165,6 +189,9 @@ if ! out1="$(run_worker)"; then
   fail 'tick 1: worker failed' "$out1"
 fi
 printf '%s\n' "$out1"
+case "$out1" in
+  *'bottom-already-queued'*) fail 'tick 1: queued conflict was treated as healthy queue progress' "$out1" ;;
+esac
 case "$out1" in
   *'repair-conflict PR #6118 GitHub reports merge conflict'*) ;;
   *) fail 'tick 1: expected conflict repair action' "$out1" ;;

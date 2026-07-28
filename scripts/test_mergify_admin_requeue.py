@@ -55,6 +55,10 @@ def mergify(state="dequeued", comment_id="m1", sha=HEAD):
     return MergifyQueueEvent(comment_id, state, "admin-bypass", "2026-07-03T00:00:00Z", sha, (), (), "https://example.invalid/comment")
 
 
+def queued_mergify_waiting_for_conflict():
+    return MergifyQueueEvent("m-conflict", "queued", "admin-bypass", "2026-07-03T00:00:00Z", "", ("-conflict",), (), "https://example.invalid/comment")
+
+
 def pr(number, *, base="master", head=None, labels=None, threads=(), latest=None, merge_state="CLEAN", mergeable="MERGEABLE", state="OPEN", draft=False, body="", repair_stop_comments=(), checks=None):
     return PrSnapshot(
         number=number,
@@ -456,6 +460,17 @@ Failing checks
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
+    def test_queued_conflict_still_uses_conflict_repair(self):
+        item = pr(
+            6118,
+            labels={"admin-bypass"},
+            latest=queued_mergify_waiting_for_conflict(),
+            merge_state="DIRTY",
+            mergeable="CONFLICTING",
+        )
+        actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("repair_conflict", 6118)])
+
     def test_conflict_repair_human_blocker_file_returns_invalid_outcome(self):
         reason = (
             "Conflict is human-only: PR #6118 is superseded by the already-merged "
@@ -495,9 +510,18 @@ Failing checks
         )
         ledger = self.ledger()
         ledger.record("repair-invalid", 6118, HEAD, "conflict", 1, meta={"errors": [reason]})
-        item = pr(6118, merge_state="DIRTY", mergeable="CONFLICTING")
-        actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 2)
+        item = pr(
+            6118,
+            labels={"admin-bypass"},
+            latest=queued_mergify_waiting_for_conflict(),
+            merge_state="DIRTY",
+            mergeable="CONFLICTING",
+        )
+        stack = StackGroup("s", (item,))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual(actions, ())
+        plan = plan_stack_execution(stack, REQUIRED, ledger, 2, (), {}, 2, 3, "master")
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
 
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())
