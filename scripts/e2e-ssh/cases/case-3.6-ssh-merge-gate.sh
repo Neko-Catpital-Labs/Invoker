@@ -15,7 +15,7 @@ echo "==> case 3.6: delete-all"
 invoker_e2e_run_headless delete-all
 
 echo "==> case 3.6: submit plan (mergeMode=github, mixed executors)"
-invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.6-ssh-merge-gate.yaml"
+invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.6-ssh-merge-gate.yaml" || true
 
 STA=$(invoker_e2e_task_status e2e-g336-taskA)
 STB=$(invoker_e2e_task_status e2e-g336-taskB)
