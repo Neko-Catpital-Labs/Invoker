@@ -26,6 +26,7 @@ _INVOKER_E2E_SSH_TAG="invoker-e2e-ssh-$$"
 # Temp directory for SSH key pair, config, and remote invoker home.
 _INVOKER_E2E_SSH_TMPDIR=""
 _INVOKER_E2E_SSH_REMOTE_HOME=""
+_INVOKER_E2E_SSH_LOCK_FD=""
 
 # SSH login user and passwd-backed home directory used by sshd.
 _INVOKER_E2E_SSH_USER=""
@@ -50,6 +51,54 @@ invoker_e2e_ssh_resolve_home() {
     resolved_home="$(eval "printf '%s' ~$user")"
   fi
   printf '%s\n' "$resolved_home"
+}
+
+invoker_e2e_ssh_with_lock() {
+  local lock_path="$1"
+  shift
+
+  mkdir -p "$(dirname "$lock_path")"
+  if command -v flock >/dev/null 2>&1; then
+    (
+      flock 9
+      "$@"
+    ) 9>"$lock_path"
+    return $?
+  fi
+
+  local lock_dir="${lock_path}.d"
+  local waited=0
+  while ! mkdir "$lock_dir" 2>/dev/null; do
+    waited=$((waited + 1))
+    if [ "$waited" -ge 100 ]; then
+      echo "ERROR: timed out waiting for SSH e2e lock: $lock_path" >&2
+      return 1
+    fi
+    sleep 0.1
+  done
+  "$@"
+  local status=$?
+  rmdir "$lock_dir" 2>/dev/null || true
+  return "$status"
+}
+
+invoker_e2e_ssh_append_authorized_key() {
+  local authorized_keys="$1"
+  local public_key="$2"
+
+  cat "$public_key" >> "$authorized_keys"
+  chmod 600 "$authorized_keys"
+}
+
+invoker_e2e_ssh_remove_authorized_key() {
+  local authorized_keys="$1"
+  local tmp_file
+
+  [ -f "$authorized_keys" ] || return 0
+  tmp_file="$(mktemp "${authorized_keys}.invoker-e2e.XXXXXX")"
+  grep -v "$_INVOKER_E2E_SSH_TAG" "$authorized_keys" > "$tmp_file" || true
+  mv "$tmp_file" "$authorized_keys"
+  chmod 600 "$authorized_keys"
 }
 
 # --------------------------------------------------------------------------- #
@@ -81,7 +130,11 @@ invoker_e2e_ssh_setup_keys() {
   chmod 600 "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
 
   # Append public key (comment already contains tag).
-  cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
+  invoker_e2e_ssh_with_lock \
+    "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys.invoker-e2e.lock" \
+    invoker_e2e_ssh_append_authorized_key \
+    "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys" \
+    "${keyfile}.pub"
 
   export INVOKER_E2E_SSH_KEY="$keyfile"
   export INVOKER_SSH_USER_KNOWN_HOSTS_FILE="$known_hosts_file"
@@ -94,9 +147,10 @@ invoker_e2e_ssh_cleanup_keys() {
   local authorized_keys="${_INVOKER_E2E_SSH_HOME:-}/.ssh/authorized_keys"
   local env_path="${_INVOKER_E2E_SSH_REMOTE_HOME:-}/env.sh"
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$authorized_keys" ]; then
-    grep -v "$_INVOKER_E2E_SSH_TAG" "$authorized_keys" > "${authorized_keys}.tmp" || true
-    mv "${authorized_keys}.tmp" "$authorized_keys"
-    chmod 600 "$authorized_keys"
+    invoker_e2e_ssh_with_lock \
+      "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys.invoker-e2e.lock" \
+      invoker_e2e_ssh_remove_authorized_key \
+      "$authorized_keys" || true
   fi
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$env_path" ]; then
     # Remove the marker line and the following PATH export we appended.
@@ -122,7 +176,7 @@ invoker_e2e_ssh_provision_command() {
 }
 
 invoker_e2e_ssh_config_provision_command() {
-  printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+  printf 'INVOKER_SKIP_SHELL_HOOKS=1 INVOKER_SKIP_AGENT_TOOLS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
 }
 
 # --------------------------------------------------------------------------- #
@@ -204,14 +258,13 @@ invoker_e2e_ssh_install_login_path() {
   node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
 
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
-  touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
+  {
+    printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
+    printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
+    printf 'export INVOKER_SKIP_SHELL_HOOKS=1\n'
+    printf 'export INVOKER_SKIP_AGENT_TOOLS=1\n'
+  } > "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   chmod 600 "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
-  if ! grep -Fq "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
-    {
-      printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
-      printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
-    } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
-  fi
 
   # Verify via non-login bash — matches the executor sourcing remoteInvokerHome/env.sh explicitly.
   if ! ssh -o BatchMode=yes \
