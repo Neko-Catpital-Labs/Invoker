@@ -903,6 +903,33 @@ branch refs/heads/${targetBranch}
     expect(bootstrapScript).toContain('CLONE="$INVOKER_HOME/repos/$H"');
   });
 
+  it('sources the configured remote env before utility SSH scripts', async () => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      remoteInvokerHome: '~/custom-invoker',
+    }) as any;
+
+    const result = ssh.runBash('printf utility-ok', '/unused') as Promise<string>;
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const remoteScript = writeMock.mock.calls[0]![0] as string;
+
+    expect(remoteScript).toContain("INVOKER_SSH_UTILITY_HOME='~/custom-invoker'");
+    expect(remoteScript).toContain('INVOKER_ENV_FILE="$INVOKER_SSH_UTILITY_HOME/env.sh"');
+    expect(remoteScript).toContain('. "$INVOKER_ENV_FILE"');
+    expect(remoteScript).toContain('printf utility-ok');
+
+    proc.stdout?.emit('data', Buffer.from('utility-ok'));
+    proc.emit('close', 0, null);
+    await expect(result).resolves.toBe('utility-ok');
+  });
+
   it('BYO mode unchanged when managedWorkspaces=false', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

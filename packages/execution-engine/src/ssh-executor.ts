@@ -330,6 +330,11 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     return ['bash', '-s'];
   }
 
+  private buildUtilityRemoteScript(script: string): string {
+    return `${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_SSH_UTILITY_HOME')}
+${script}`;
+  }
+
   private async execRemoteCapture(script: string, phase?: string): Promise<string> {
     const bench = createExecutionBench({
       module: 'ssh-executor-start-bench',
@@ -346,8 +351,6 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
         env: cleanElectronEnv(),
       });
       bench('SshExecutor.execRemoteCapture.spawned');
-      child.stdin.write(script);
-      child.stdin.end();
       let out = '';
       let err = '';
       child.stdout?.on('data', (c: Buffer) => { out += c.toString(); });
@@ -367,6 +370,8 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
           reject(createSshRemoteScriptError(code, out, err, phase));
         }
       });
+      child.stdin.write(this.buildUtilityRemoteScript(script));
+      child.stdin.end();
     });
   }
 

@@ -26,6 +26,7 @@ _INVOKER_E2E_SSH_TAG="invoker-e2e-ssh-$$"
 # Temp directory for SSH key pair, config, and remote invoker home.
 _INVOKER_E2E_SSH_TMPDIR=""
 _INVOKER_E2E_SSH_REMOTE_HOME=""
+_INVOKER_E2E_SSH_TOOLCHAIN_ENV=""
 
 # SSH login user and passwd-backed home directory used by sshd.
 _INVOKER_E2E_SSH_USER=""
@@ -102,11 +103,12 @@ invoker_e2e_ssh_cleanup_keys() {
     # Remove the marker line and the following PATH export we appended.
     awk -v marker="# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" '
       $0 == marker { skip=1; next }
-      skip && /^export PATH=/ { skip=0; next }
+      skip && (/^export PATH=/ || /^\.[[:space:]]/) { skip=0; next }
       { skip=0; print }
     ' "$env_path" > "${env_path}.tmp" || true
     mv "${env_path}.tmp" "$env_path"
   fi
+  rm -f "${_INVOKER_E2E_SSH_TOOLCHAIN_ENV:-}" 2>/dev/null || true
   rm -rf "${_INVOKER_E2E_SSH_TMPDIR:-}" 2>/dev/null || true
   unset INVOKER_SSH_USER_KNOWN_HOSTS_FILE
 }
@@ -122,7 +124,12 @@ invoker_e2e_ssh_provision_command() {
 }
 
 invoker_e2e_ssh_config_provision_command() {
-  printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+  local provision_command toolchain_env_q
+  provision_command="$(invoker_e2e_ssh_provision_command)"
+  printf -v toolchain_env_q '%q' "$_INVOKER_E2E_SSH_TOOLCHAIN_ENV"
+  printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s && . "$INVOKER_ENV_FILE" && . %s\n' \
+    "$provision_command" \
+    "$toolchain_env_q"
 }
 
 # --------------------------------------------------------------------------- #
@@ -169,7 +176,6 @@ NODE
 invoker_e2e_ssh_init() {
   invoker_e2e_init
   invoker_e2e_ssh_setup_keys
-  invoker_e2e_ssh_write_config
 
   # Verify SSH works with the generated key.
   if ! ssh -o BatchMode=yes \
@@ -186,6 +192,8 @@ invoker_e2e_ssh_init() {
     invoker_e2e_ssh_cleanup_keys
     return 1
   fi
+
+  invoker_e2e_ssh_write_config
 }
 
 # --------------------------------------------------------------------------- #
@@ -202,14 +210,23 @@ invoker_e2e_ssh_install_login_path() {
   fi
   pnpm_dir="$(cd "$(dirname "$pnpm_bin")" && pwd)"
   node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
+  _INVOKER_E2E_SSH_TOOLCHAIN_ENV="$_INVOKER_E2E_SSH_REMOTE_HOME/e2e-toolchain-env.sh"
 
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
+  {
+    printf '%s\n' "# invoker-e2e-ssh-toolchain ${_INVOKER_E2E_SSH_TAG}"
+    printf 'export PATH="%s:%s:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"\n' \
+      "$node_dir" \
+      "$pnpm_dir"
+  } > "$_INVOKER_E2E_SSH_TOOLCHAIN_ENV"
+  chmod 600 "$_INVOKER_E2E_SSH_TOOLCHAIN_ENV"
+
   touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   chmod 600 "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   if ! grep -Fq "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
     {
       printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
-      printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
+      printf '. "%s"\n' "$_INVOKER_E2E_SSH_TOOLCHAIN_ENV"
     } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   fi
 
@@ -227,6 +244,14 @@ EOF
     echo "ERROR: 'pnpm' not found after sourcing $_INVOKER_E2E_SSH_REMOTE_HOME/env.sh." >&2
     return 1
   fi
+}
+
+invoker_e2e_task_status() {
+  local task_id="$1"
+  invoker_e2e_run_headless query task "$task_id" 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g' \
+    | grep -E '^(pending|queued|running|completed|failed|blocked|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
+    | tail -1
 }
 
 # --------------------------------------------------------------------------- #
