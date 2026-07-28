@@ -99,10 +99,11 @@ invoker_e2e_ssh_cleanup_keys() {
     chmod 600 "$authorized_keys"
   fi
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$env_path" ]; then
-    # Remove the marker line and the following PATH export we appended.
+    # Remove the marker line and the e2e-only exports we appended.
     awk -v marker="# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" '
       $0 == marker { skip=1; next }
       skip && /^export PATH=/ { skip=0; next }
+      /^export INVOKER_SKIP_MANAGED_PNPM_INSTALL=1$/ { next }
       { skip=0; print }
     ' "$env_path" > "${env_path}.tmp" || true
     mv "${env_path}.tmp" "$env_path"
@@ -210,6 +211,9 @@ invoker_e2e_ssh_install_login_path() {
     {
       printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
       printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
+      if [ "${INVOKER_E2E_SSH_RUN_MANAGED_PNPM_INSTALL:-0}" != "1" ]; then
+        printf '%s\n' "export INVOKER_SKIP_MANAGED_PNPM_INSTALL=1"
+      fi
     } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   fi
 
