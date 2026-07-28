@@ -187,7 +187,10 @@ const PLANNING_TERMINAL_BRIDGE_TEXT_LIMIT = 220;
 const PLANNING_TERMINAL_BRIDGE_STEP_LIMIT = 3;
 
 function oneLine(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
+  return value
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function truncatedLine(value: string, limit = PLANNING_TERMINAL_BRIDGE_TEXT_LIMIT): string {
@@ -284,21 +287,37 @@ export function buildPlanningTerminalSummaryBridge(session: InAppPlanningChatSes
 export function ensurePlanningTerminalSummaryBridge(
   session: InAppPlanningChatSession,
   outputSnapshot: string | null | undefined,
+  maxLength?: number,
 ): string {
   const snapshot = outputSnapshot ?? '';
   const bridge = buildPlanningTerminalSummaryBridge(session);
   const startIndex = snapshot.indexOf(PLANNING_TERMINAL_SUMMARY_BRIDGE_START);
+  let prefix = '';
+  let suffix: string;
   if (startIndex === -1) {
-    return `${bridge}${snapshot}`;
+    suffix = snapshot;
+  } else {
+    const endIndex = snapshot.indexOf(PLANNING_TERMINAL_SUMMARY_BRIDGE_END, startIndex);
+    if (endIndex === -1) {
+      return maxLength === undefined || snapshot.length <= maxLength
+        ? snapshot
+        : snapshot.slice(snapshot.length - maxLength);
+    }
+    const suffixStartIndex = endIndex + PLANNING_TERMINAL_SUMMARY_BRIDGE_END.length;
+    prefix = snapshot.slice(0, startIndex);
+    suffix = snapshot.slice(suffixStartIndex).replace(/^(?:\r?\n){1,2}/, '');
   }
-  const endIndex = snapshot.indexOf(PLANNING_TERMINAL_SUMMARY_BRIDGE_END, startIndex);
-  if (endIndex === -1) {
-    return snapshot;
+  if (maxLength === undefined) {
+    return `${prefix}${bridge}${suffix}`;
   }
-  const suffixStartIndex = endIndex + PLANNING_TERMINAL_SUMMARY_BRIDGE_END.length;
-  const prefix = snapshot.slice(0, startIndex);
-  const suffix = snapshot.slice(suffixStartIndex).replace(/^(?:\r?\n){1,2}/, '');
-  return `${prefix}${bridge}${suffix}`;
+  // Reserve room for the full bridge so a near-cap persisted snapshot can't push it
+  // out immediately; trim the older raw output instead of the freshly composed bridge.
+  const rest = `${prefix}${suffix}`;
+  const keepableRestLength = Math.max(0, maxLength - bridge.length);
+  const trimmedRest = rest.length <= keepableRestLength
+    ? rest
+    : rest.slice(rest.length - keepableRestLength);
+  return `${bridge}${trimmedRest}`;
 }
 
 function titleFromMessage(message: string): string {

@@ -101,7 +101,7 @@ async function submitPlanningText(page: Page, text: string): Promise<void> {
 
 async function planningTmuxPaneText(page: Page): Promise<string> {
   const pane = page.getByTestId('invoker-terminal-tmux-pane');
-  const rowsText = await pane.locator('.xterm-rows').textContent().catch(() => null);
+  const rowsText = await pane.locator('.xterm-rows').textContent({ timeout: 1000 }).catch(() => null);
   const paneText = await pane.textContent().catch(() => '');
   return rowsText ?? paneText ?? '';
 }

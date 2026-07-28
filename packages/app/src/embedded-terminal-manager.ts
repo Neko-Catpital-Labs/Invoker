@@ -25,7 +25,7 @@ import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-
 export type EmbeddedTerminalBackendName = 'bash' | 'pty';
 export type EmbeddedTerminalSessionKind = 'task' | 'planning';
 
-const MAX_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+export const MAX_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
 
 export interface PtyForkOptionsLike {
   name: string;

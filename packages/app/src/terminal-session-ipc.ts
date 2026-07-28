@@ -1,6 +1,7 @@
 import type { IpcMain } from 'electron';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 import type { SQLiteAdapter, TerminalSessionRecord } from '@invoker/data-store';
+import { MAX_OUTPUT_SNAPSHOT_CHARS } from './embedded-terminal-manager.js';
 import type { EmbeddedTerminalManager, TerminalSessionPersistenceRecord } from './embedded-terminal-manager.js';
 import {
   timeTerminalResize,
@@ -439,6 +440,7 @@ export function bindPlanningTerminalSessionState(deps: {
         const outputSnapshot = ensurePlanningTerminalSummaryBridge(
           session,
           session.terminalOutputSnapshot ?? '',
+          MAX_OUTPUT_SNAPSHOT_CHARS,
         );
         embeddedTerminalManager.restoreSpawnSession({
           sessionId: session.terminalSessionId,
@@ -507,6 +509,7 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
       const outputSnapshot = ensurePlanningTerminalSummaryBridge(
         planningSession,
         planningSession.terminalOutputSnapshot ?? '',
+        MAX_OUTPUT_SNAPSHOT_CHARS,
       );
       const session = embeddedTerminalManager.openOrReuse({
         kind: 'planning',

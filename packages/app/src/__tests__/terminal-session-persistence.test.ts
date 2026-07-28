@@ -3,6 +3,7 @@ import type { IpcMain } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
   EmbeddedTerminalManager,
+  MAX_OUTPUT_SNAPSHOT_CHARS,
   createBashTerminalBackend,
   type BashSpawnFn,
 } from '../embedded-terminal-manager.js';
@@ -613,5 +614,25 @@ describe('planning terminal summary bridge persistence', () => {
     expect(restoredSnapshot).not.toContain('Planning session: Stale title');
     expect(restoredSnapshot).toContain('previous terminal output\n');
     expect(countOccurrences(restoredSnapshot, PLANNING_TERMINAL_SUMMARY_BRIDGE_START)).toBe(1);
+  });
+
+  it('keeps the fresh bridge intact when restoring a near-cap persisted snapshot', () => {
+    const { mgr, planningChatSessions, restorePersistedPlanningTerminals } = setupPlanningTerminal();
+    const previousOutput = 'x'.repeat(MAX_OUTPUT_SNAPSHOT_CHARS);
+    const planningSession = makePlanningSession('plan-near-cap', {
+      terminalMode: 'tmux',
+      terminalSessionId: 'term-planning-near-cap',
+      terminalStatus: 'running',
+      terminalOutputSnapshot: previousOutput,
+      terminalUpdatedAt: '2026-07-07T00:00:02.000Z',
+    });
+    planningChatSessions.set(planningSession.id, planningSession);
+
+    restorePersistedPlanningTerminals();
+
+    const restoredSnapshot = mgr.get('term-planning-near-cap')?.outputSnapshot ?? '';
+    expect(restoredSnapshot.length).toBeLessThanOrEqual(MAX_OUTPUT_SNAPSHOT_CHARS);
+    expect(restoredSnapshot).toContain(PLANNING_TERMINAL_SUMMARY_BRIDGE_START);
+    expect(restoredSnapshot).toContain('Planning session: Planning terminal bridge');
   });
 });

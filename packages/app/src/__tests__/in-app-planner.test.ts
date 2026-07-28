@@ -124,6 +124,31 @@ describe('buildPlanningTerminalSummaryBridge', () => {
     expect(bridge).not.toContain('tail-marker');
     expect(bridge).not.toContain('raw assistant draft');
   });
+
+  it('strips ANSI escape and control characters from embedded chat text', () => {
+    const bridge = buildPlanningTerminalSummaryBridge({
+      id: 'planning-bridge-controls',
+      title: 'Planning bridge terminal',
+      presetKey: 'codex',
+      status: 'still_discussing',
+      messages: [
+        {
+          id: 1,
+          role: 'user',
+          text: '\x1b[31mred\x1b[0m text\x07with bell and \x1b]0;title\x07osc',
+          createdAt: '2026-07-07T00:00:00.000Z',
+        },
+      ],
+      conversation: new PlanConversation({}),
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+      nextMessageId: 2,
+    });
+
+    expect(bridge).toContain('Latest user: [31mred[0m textwith bell and ]0;titleosc');
+    // eslint-disable-next-line no-control-regex
+    expect(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(bridge)).toBe(false);
+  });
 });
 
 describe('planFromGoal', () => {
