@@ -16,20 +16,22 @@ export const CODERABBIT_ADDRESS_WORKER_KIND = 'coderabbit-address';
 export const PR_CONFLICT_REBASE_WORKER_KIND = 'pr-conflict-rebase';
 export const PR_CI_FAILURE_SCAN_WORKER_KIND = 'pr-ci-failure-scan';
 export const PR_ADMIN_BYPASS_LAND_WORKER_KIND = 'pr-admin-bypass-land';
+export const PR_ADMIN_BYPASS_QUEUE_WORKER_KIND = 'pr-admin-bypass-queue';
 export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
 /**
- * Even spacing between each PR-maintenance worker's first tick, so the 5
+ * Even spacing between each PR-maintenance worker's first tick, so the 6
  * workers sharing the cron lock (scripts/cron-pr-lib.sh) don't all wake on
  * the same intervalMs boundary and race for it every cycle.
  */
-export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 5;
+export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 6;
 
 export type PrMaintenanceWorkerKind =
   | typeof CODERABBIT_ADDRESS_WORKER_KIND
   | typeof PR_CONFLICT_REBASE_WORKER_KIND
   | typeof PR_CI_FAILURE_SCAN_WORKER_KIND
   | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
+  | typeof PR_ADMIN_BYPASS_QUEUE_WORKER_KIND
   | typeof PR_ORPHAN_REPAIR_WORKER_KIND;
 
 type EnvOverrides = Record<string, string | undefined>;
@@ -59,7 +61,12 @@ const PR_CI_FAILURE_SCAN_ENTRYPOINT: PrMaintenanceEntrypoint = {
 const PR_ADMIN_BYPASS_LAND_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh',
-  note: 'Runs the admin-bypass land babysitting cron entrypoint under worker scheduling.',
+  note: 'Runs the admin-bypass requeue-only babysitting cron entrypoint under worker scheduling (repair is delegated to pr-admin-bypass-queue).',
+};
+const PR_ADMIN_BYPASS_QUEUE_ENTRYPOINT: PrMaintenanceEntrypoint = {
+  kind: PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
+  scriptRelativePath: 'scripts/cron-admin-bypass-queue.sh',
+  note: 'Scans admin-bypass-labeled PRs once, classifies each, and submits one fast Invoker repair task per PR.',
 };
 const PR_ORPHAN_REPAIR_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_ORPHAN_REPAIR_WORKER_KIND,
@@ -130,6 +137,7 @@ export function registerPrMaintenanceWorkers(
   registerPrConflictRebaseWorker(registry);
   registerPrCiFailureScanWorker(registry);
   registerPrAdminBypassLandWorker(registry);
+  registerPrAdminBypassQueueWorker(registry);
   registerPrOrphanRepairWorker(registry);
   return registry;
 }
@@ -201,6 +209,23 @@ export function registerPrAdminBypassLandWorker(
   return registry;
 }
 
+export function registerPrAdminBypassQueueWorker(
+  registry: WorkerRegistry<WorkerRuntimeDependencies>,
+): WorkerRegistry<WorkerRuntimeDependencies> {
+  registry.register({
+    kind: PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
+    note: PR_ADMIN_BYPASS_QUEUE_ENTRYPOINT.note,
+    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
+      createPrAdminBypassQueueWorker({
+        logger: deps.logger,
+        ...deps.prMaintenance,
+        store: deps.store,
+        startDelayMs: 4 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
+      }),
+  });
+  return registry;
+}
+
 export function registerPrOrphanRepairWorker(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
@@ -212,7 +237,7 @@ export function registerPrOrphanRepairWorker(
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
-        startDelayMs: 4 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
+        startDelayMs: 5 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
   });
   return registry;
@@ -232,6 +257,10 @@ export function createPrCiFailureScanWorker(options: PrMaintenanceWorkerOptions)
 
 export function createPrAdminBypassLandWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
   return createPrMaintenanceWorker(PR_ADMIN_BYPASS_LAND_ENTRYPOINT, options);
+}
+
+export function createPrAdminBypassQueueWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
+  return createPrMaintenanceWorker(PR_ADMIN_BYPASS_QUEUE_ENTRYPOINT, options);
 }
 
 export function createPrOrphanRepairWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
