@@ -346,6 +346,14 @@ class AdminBypassRepairer:
         args.extend(["origin", f"HEAD:{branch_name}"])
         self.git_output(work_root, *args)
 
+    def remote_branch_head(self, work_root: Path, branch_name: str) -> str:
+        output = self.git_output(work_root, "ls-remote", "origin", f"refs/heads/{branch_name}")
+        for line in output.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == f"refs/heads/{branch_name}":
+                return parts[0]
+        return ""
+
     def terminal_repair_outcome(
         self,
         pr: PrSnapshot,
@@ -660,5 +668,35 @@ class AdminBypassRepairer:
                 start_head,
                 end_head,
                 errors=(blocker,),
+            )
+        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        if status_lines:
+            self.hard_reset_work_root(work_root, start_head)
+            return self.blocked_outcome(
+                "blocked_dirty",
+                "conflict",
+                start_head,
+                end_head,
+                status_lines=status_lines,
+            )
+        if end_head != start_head:
+            repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
+            remote_head = self.remote_branch_head(work_root, pr.head_ref_name)
+            if remote_head != end_head:
+                self.push_branch(work_root, pr.head_ref_name, force_with_lease=True, expected_head=start_head)
+            self.logger.trace(
+                "admin-bypass-repair-conflict-pushed",
+                repo=self.repo,
+                pr_number=pr.number,
+                start_head=start_head,
+                end_head=end_head,
+                already_pushed=remote_head == end_head,
+            )
+            return self.blocked_outcome(
+                "pushed",
+                "conflict",
+                start_head,
+                end_head,
+                repair_commits=repair_commits,
             )
         return None

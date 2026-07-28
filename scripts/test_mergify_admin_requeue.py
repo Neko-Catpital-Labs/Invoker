@@ -503,6 +503,43 @@ Failing checks
         self.assertEqual(outcome.errors, (reason,))
         reset.assert_called_once_with(work_root, HEAD)
 
+    def test_conflict_repair_pushes_clean_local_rebase(self):
+        item = pr(6315, head="stack/6315", merge_state="DIRTY", mergeable="CONFLICTING")
+        repairer = self.repairer(object(), self.ledger())
+        revs = iter([HEAD, NEW])
+        work_root = Path("/tmp/home/.invoker/mergify-admin-requeue-work/6315")
+
+        def git_output(_work_root, *args):
+            if args == ("rev-parse", "HEAD"):
+                return next(revs)
+            if args == ("ls-remote", "origin", "refs/heads/stack/6315"):
+                return f"{HEAD}\trefs/heads/stack/6315\n"
+            return ""
+
+        def git_lines(_work_root, *args):
+            if args == ("status", "--porcelain"):
+                return ()
+            if args == ("rev-list", "--reverse", f"{HEAD}..{NEW}"):
+                return (NEW,)
+            raise AssertionError(f"unexpected git_lines args: {args}")
+
+        with mock.patch.dict(os.environ, {"HOME": "/tmp/home"}):
+            with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                with mock.patch.object(repairer, "git_output", side_effect=git_output):
+                    with mock.patch.object(repairer, "git_lines", side_effect=git_lines):
+                        with mock.patch.object(repairer, "run_claude_repair"):
+                            with mock.patch.object(repairer, "push_branch") as push:
+                                outcome = repairer.repair_conflict(item, "GitHub reports merge conflict")
+
+        self.assertIsNotNone(outcome)
+        assert outcome is not None
+        self.assertEqual(outcome.status, "pushed")
+        self.assertEqual(outcome.check_name, "conflict")
+        self.assertEqual(outcome.start_head, HEAD)
+        self.assertEqual(outcome.end_head, NEW)
+        self.assertEqual(outcome.repair_commits, (NEW,))
+        push.assert_called_once_with(work_root, "stack/6315", force_with_lease=True, expected_head=HEAD)
+
     def test_conflict_human_blocker_stops_retries(self):
         reason = (
             "Conflict is human-only: PR #6118 is superseded by the already-merged "

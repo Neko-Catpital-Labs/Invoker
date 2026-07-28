@@ -16,6 +16,7 @@ REPROS=(
   scripts/repro/repro-babysit-pr-body-metadata-update-noop.sh
   scripts/repro/repro-babysit-pr-body-stale-base-rebase-push.sh
   scripts/repro/repro-babysit-amended-repair-push.sh
+  scripts/repro/repro-babysit-conflict-local-rebase-push.sh
   scripts/repro/repro-babysit-conflict-human-blocker.sh
   scripts/repro/repro-babysit-outdated-bot-thread.sh
   scripts/repro/repro-babysit-headless-queued-comment.sh
