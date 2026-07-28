@@ -730,8 +730,8 @@ jobs:
           INVOKER_PLAYWRIGHT_ARGS: --reporter=line
         run: bash scripts/test-suites/optional/40-playwright-app.sh
 
-      - name: Upload Playwright artifacts on failure
-        if: failure()
+      - name: Upload Playwright artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-artifacts-${{ matrix.name }}
