@@ -48,6 +48,36 @@ vi.mock('../components/WorkflowGraph.js', async () => {
   };
 });
 
+const xtermMock = vi.hoisted(() => {
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    loadAddon = vi.fn();
+    open = vi.fn((host: HTMLElement) => {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      terminalElement.textContent = 'mock planning terminal';
+      host.appendChild(terminalElement);
+    });
+    write = vi.fn();
+    onData = vi.fn(() => ({ dispose: vi.fn() }));
+    focus = vi.fn();
+    dispose = vi.fn();
+  }
+
+  class MockFitAddon {
+    fit = vi.fn();
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+  };
+});
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
+
 const fitViewMock = (ReactFlowModule as unknown as { __fitViewMock: Mock }).__fitViewMock;
 const setCenterMock = (ReactFlowModule as unknown as { __setCenterMock: Mock }).__setCenterMock;
 const setViewportMock = (ReactFlowModule as unknown as { __setViewportMock: Mock }).__setViewportMock;
@@ -230,6 +260,48 @@ describe('Browser-surface camera (component)', () => {
 
     fireEvent.click(screen.getByTestId('sidebar-home'));
     await screen.findByTestId('planning-session-rail');
+
+    fitViewMock.mockClear();
+    setCenterMock.mockClear();
+    setViewportMock.mockClear();
+    workflowGraphSpy.reset();
+
+    fireEvent.click(screen.getByTestId('sidebar-planning'));
+
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument());
+    await waitFor(() => expect(setViewportMock).toHaveBeenCalledWith(savedViewport, { duration: 0 }));
+    await flushFrames(4);
+
+    expect(fitViewMock).not.toHaveBeenCalled();
+    expect(setCenterMock).not.toHaveBeenCalled();
+    expect(workflowGraphSpy.commands.some((command) => (
+      command?.kind === 'fitInitial'
+      && command.scope === 'workflow'
+      && command.reason === 'sidebar-planning'
+    ))).toBe(false);
+  });
+
+  it('returns to the workflow graph from planning tmux by restoring the saved viewport instead of fitting', async () => {
+    const savedViewport = { x: -288, y: 172, zoom: 0.63 };
+    mock.setTasks([], workflows);
+    render(<App />);
+
+    fireEvent.click(await screen.findByTestId('sidebar-planning'));
+    await screen.findByTestId('workflow-node-wf-a');
+    await settleCamera();
+    getViewportMock.mockReturnValue(savedViewport);
+
+    fireEvent.click(screen.getByTestId('sidebar-home'));
+    await screen.findByTestId('planning-session-rail');
+    fireEvent.click(screen.getByRole('tab', { name: 'Tmux' }));
+
+    await waitFor(() => expect(mock.api.planningTerminalOpen).toHaveBeenCalledWith('session-1'));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute(
+        'data-session-id',
+        'mock-planning-terminal-session-1',
+      );
+    });
 
     fitViewMock.mockClear();
     setCenterMock.mockClear();
