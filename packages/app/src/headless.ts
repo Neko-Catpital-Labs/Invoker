@@ -45,7 +45,6 @@ import { LaunchDispatcher } from './launch-dispatcher.js';
 import {
   formatHeadlessSetSubcommands,
   isHeadlessHelpCommand,
-  isRemovedHeadlessCommandAlias,
 } from './headless-command-registry.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
@@ -244,10 +243,6 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
   if (isHeadlessHelpCommand(command)) {
     printHeadlessUsage();
     return;
-  }
-
-  if (isRemovedHeadlessCommandAlias(command)) {
-    throw new Error(`Unknown command: ${command}. Run with --help for usage.`);
   }
 
   switch (command) {
