@@ -8,3 +8,5 @@ export * from './slack-plan-draft-repository.js';
 export * from './sqlite-task-repository.js';
 export * from './workflow-channel-repository.js';
 export * from './sync-journal.js';
+export * from './sync-delta.js';
+export * from './sync-merge.js';
