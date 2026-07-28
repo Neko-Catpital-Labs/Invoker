@@ -483,14 +483,53 @@ print(matches[-1] if matches else '')
 PY
 }
 
+# Extract the last rendered status for a task from a captured submit/status log.
+# Usage: invoker_e2e_task_status_from_log <log-file> <taskId>
+invoker_e2e_task_status_from_log() {
+  local log_file="$1"
+  local task_id="$2"
+  python3 - <<'PY' "$log_file" "$task_id"
+import re
+import sys
+
+log_file, task_id = sys.argv[1:]
+ansi = re.compile(r'\x1b\[[0-9;]*m')
+statuses = (
+    'pending',
+    'queued',
+    'running',
+    'completed',
+    'failed',
+    'blocked',
+    'awaiting_approval',
+    'review_ready',
+    'fixing_with_ai',
+    'closed',
+    'skipped',
+)
+status_re = re.compile(r'\[(' + '|'.join(re.escape(status) for status in statuses) + r')\]')
+last = ''
+with open(log_file, encoding='utf-8', errors='ignore') as handle:
+    for raw_line in handle:
+        line = ansi.sub('', raw_line)
+        if task_id not in line:
+            continue
+        matches = status_re.findall(line)
+        if matches:
+            last = matches[-1]
+print(last)
+sys.exit(0 if last else 1)
+PY
+}
+
 # Query a single task's status via headless CLI (no sqlite3 dependency).
 # Pipes through tail -1 to strip Electron [init] noise from stdout.
 # Usage: ST=$(invoker_e2e_task_status <taskId>)
 invoker_e2e_task_status() {
   local task_id="$1"
-  invoker_e2e_run_headless task-status "$task_id" 2>/dev/null \
+  invoker_e2e_run_headless query task "$task_id" 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' \
-    | grep -E '^(pending|running|completed|failed|blocked|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
+    | grep -E '^(pending|queued|running|completed|failed|blocked|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
     | tail -1
 }
 
@@ -515,10 +554,10 @@ invoker_e2e_wait_task_status() {
   return 1
 }
 
-# Extract the __merge__<workflowId> task ID from headless status output.
+# Extract the __merge__<workflowId> task ID from headless task query output.
 # The merge gate task ID starts with "__merge__". Returns the first match.
 invoker_e2e_merge_gate_id() {
-  invoker_e2e_run_headless status 2>/dev/null \
+  invoker_e2e_run_headless query tasks --output label 2>/dev/null \
     | grep -oE '__merge__[^[:space:]]+' \
     | head -1 \
     | sed 's/\x1b\[[0-9;]*m//g'
@@ -635,7 +674,7 @@ invoker_e2e_assert_no_stale_running_tasks() {
   if [ -n "$stale" ]; then
     echo "FAIL: found stale running task(s) older than ${threshold_secs}s" >&2
     echo "$stale" >&2
-    invoker_e2e_run_headless status 2>&1 || true
+    invoker_e2e_run_headless query tasks 2>&1 || true
     return 1
   fi
 }

@@ -15,14 +15,25 @@ echo "==> case 3.2: delete-all"
 invoker_e2e_run_headless delete-all
 
 echo "==> case 3.2: submit plan"
-invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.2-fan-in-cross.yaml"
+# The manual merge gate stops at review_ready; this case owns the task fan-in
+# assertions below, not final gate approval.
+SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-ssh-3.2-submit.XXXXXX")"
+invoker_e2e_submit_plan_capture "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.2-fan-in-cross.yaml" "$SUBMIT_LOG" || true
+WF_ID="$(invoker_e2e_extract_workflow_id_from_log "$SUBMIT_LOG")"
+if [ -z "$WF_ID" ]; then
+  echo "FAIL case 3.2: could not extract workflow ID from submit output"
+  rm -f "$SUBMIT_LOG"
+  invoker_e2e_run_headless query tasks 2>&1 || true
+  exit 1
+fi
 
-STA=$(invoker_e2e_task_status e2e-g332-taskA)
-STB=$(invoker_e2e_task_status e2e-g332-taskB)
-STC=$(invoker_e2e_task_status e2e-g332-taskC)
+STA=$(invoker_e2e_task_status_from_log "$SUBMIT_LOG" "$WF_ID/e2e-g332-taskA" || true)
+STB=$(invoker_e2e_task_status_from_log "$SUBMIT_LOG" "$WF_ID/e2e-g332-taskB" || true)
+STC=$(invoker_e2e_task_status_from_log "$SUBMIT_LOG" "$WF_ID/e2e-g332-taskC" || true)
+rm -f "$SUBMIT_LOG"
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ] || [ "$STC" != "completed" ]; then
   echo "FAIL case 3.2: expected all completed, got A='$STA' B='$STB' C='$STC'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_run_headless query tasks 2>&1 || true
   exit 1
 fi
 
