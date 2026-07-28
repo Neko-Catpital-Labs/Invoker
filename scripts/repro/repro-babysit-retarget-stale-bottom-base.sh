@@ -24,8 +24,8 @@ export PATH="$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
 import sys
 from pathlib import Path
-sys.path.insert(0, 'scripts')
-from mergify_admin_requeue_model import load_mergify_rules
+sys.path.insert(0, 'packages/mergify-admin-requeue')
+from mergify_admin_requeue.model import load_mergify_rules
 _trunk, _labels, required = load_mergify_rules(Path('.mergify.yml'))
 print('\n'.join(sorted(required)))
 PY
