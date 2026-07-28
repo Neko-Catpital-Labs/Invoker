@@ -6,6 +6,7 @@
  */
 
 export * from './types.js';
+export * from './failure-classifier.js';
 export * from './runner-kind.js';
 export * from './workflow-rollup.js';
 export * from './dag.js';
