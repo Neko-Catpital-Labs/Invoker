@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+ADMIN_REQUEUE_PYTHONPATH="$PWD/packages/mergify-admin-requeue"
+export PYTHONPATH="$ADMIN_REQUEUE_PYTHONPATH${PYTHONPATH:+:$PYTHONPATH}"
 
 REPROS=(
   scripts/repro/repro-mergify-admin-requeue.sh
@@ -33,8 +35,7 @@ REPROS=(
 fail=0
 
 echo "== stage 1: unit tests =="
-if python3 -m unittest scripts/test_mergify_admin_requeue.py scripts/test_mergify_admin_requeue_model.py \
-    scripts/test_mergify_admin_requeue_plan.py scripts/test_mergify_admin_requeue_snapshot.py; then
+if python3 -m unittest discover -s packages/mergify-admin-requeue/tests -p 'test_mergify_admin_requeue*.py'; then
   echo "PASS: unit tests"
 else
   echo "FAIL: unit tests"

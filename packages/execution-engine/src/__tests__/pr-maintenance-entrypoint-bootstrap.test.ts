@@ -103,7 +103,7 @@ describe('PR maintenance entrypoints bootstrap', () => {
     expect(result.status).toBe(0);
     expect(readFileSync(capturePath, 'utf8')).toBe([
       `cwd=${repoRoot}`,
-      'args=<scripts/mergify_admin_requeue.py><--once><--repo><owner/repo><--author><octocat><--dry-run>',
+      'args=<-m><mergify_admin_requeue><--once><--repo><owner/repo><--author><octocat><--dry-run>',
       '',
     ].join('\n'));
   });

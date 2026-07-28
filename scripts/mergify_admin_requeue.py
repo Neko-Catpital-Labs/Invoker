@@ -1,38 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import sys
-from typing import Sequence
-
-try:
-    from . import mergify_admin_requeue_exec as exec_impl
-    from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
-    from .mergify_admin_requeue_loader import AdminBypassStackLoader
-    from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Action, Blocker, CheckContext, Ledger, MergifyQueueEvent, PrSnapshot, ReviewThread, StackGroup, latest_contexts_by_required_check, load_mergify_rules
-    from .mergify_admin_requeue_plan import classify_pr, plan_stack_actions
-    from .mergify_admin_requeue_repairer import AdminBypassRepairer
-    from .mergify_admin_requeue_snapshot import group_stack_prs, parse_mergify_queue_event, parse_stack_metadata
-except ImportError:
-    import mergify_admin_requeue_exec as exec_impl
-    from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
-    from mergify_admin_requeue_loader import AdminBypassStackLoader
-    from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Action, Blocker, CheckContext, Ledger, MergifyQueueEvent, PrSnapshot, ReviewThread, StackGroup, latest_contexts_by_required_check, load_mergify_rules
-    from mergify_admin_requeue_plan import classify_pr, plan_stack_actions
-    from mergify_admin_requeue_repairer import AdminBypassRepairer
-    from mergify_admin_requeue_snapshot import group_stack_prs, parse_mergify_queue_event, parse_stack_metadata
-
-parse_args = exec_impl.parse_args
-run_once = exec_impl.run_once
-run_loop = exec_impl.run_loop
-REPO_ROOT = exec_impl.REPO_ROOT
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parse_args(argv or sys.argv[1:])
-    return run_loop(args) if args.loop else run_once(args)
+def main() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    package_root = repo_root / "packages" / "mergify-admin-requeue"
+    env = os.environ.copy()
+    pythonpath = str(package_root)
+    if env.get("PYTHONPATH"):
+        pythonpath = pythonpath + os.pathsep + env["PYTHONPATH"]
+    env["PYTHONPATH"] = pythonpath
+    os.execvpe("python3", ["python3", "-m", "mergify_admin_requeue", *sys.argv[1:]], env)
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

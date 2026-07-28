@@ -1,14 +1,18 @@
 import io
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
-import scripts.mergify_admin_requeue as requeue
-import scripts.mergify_admin_requeue_exec as exec_impl
 
-from scripts.mergify_admin_requeue import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import mergify_admin_requeue as requeue
+import mergify_admin_requeue_exec as exec_impl
+
+from mergify_admin_requeue import (
     Action,
     Blocker,
     CheckContext,
@@ -26,11 +30,11 @@ from scripts.mergify_admin_requeue import (
     parse_stack_metadata,
     plan_stack_actions,
 )
-from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
-from scripts.mergify_admin_requeue_model import LoadedStacks
-from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
-from scripts.mergify_admin_requeue_logger import AdminBypassLogger
-from scripts.mergify_admin_requeue_repairer import (
+from mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
+from mergify_admin_requeue_model import LoadedStacks
+from mergify_admin_requeue_loader import AdminBypassStackLoader
+from mergify_admin_requeue_logger import AdminBypassLogger
+from mergify_admin_requeue_repairer import (
     NON_TRUNK_MANUAL_SPLIT_ERROR,
     NON_TRUNK_PREREQ_ERROR,
     PROOF_POLICY_LANE_ERROR,
@@ -340,7 +344,7 @@ Failing checks
         item = pr(2647, merge_state="DIRTY", latest=mergify())
         repairs = []
         repairer = self.repairer(FakeGh(), ledger, "Neko-Catpital-Labs/Invoker")
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+        with mock.patch("mergify_admin_requeue_repairer.checkout_pr_head"):
             with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, _prompt: repairs.append(item.number)):
                 for epoch in range(3):
                     ledger.record("conflict-repair", item.number, item.head_ref_oid, "conflict:2647", epoch)
@@ -352,7 +356,7 @@ Failing checks
 
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())
-        with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run") as run:
+        with mock.patch("mergify_admin_requeue_repairer.subprocess.run") as run:
             repairer.run_claude_repair(Path("/tmp/work"), "repair this")
         run.assert_called_once_with(
             ["claude", "-p", "repair this", "--dangerously-skip-permissions"],
@@ -402,7 +406,7 @@ Failing checks
         item = pr(2647, latest=mergify())
         repairer = self.repairer(object(), self.ledger())
         git_rev_parse = iter([HEAD, HEAD])
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+        with mock.patch("mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
                 with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
                     with mock.patch.object(repairer, "git_lines", return_value=()):
@@ -442,7 +446,7 @@ Failing checks
             "reviewUnits": ["routing", "tooling-policy", "proof"],
             "scopeKinds": ["product", "policy"],
         }
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+        with mock.patch("mergify_admin_requeue_repairer.checkout_pr_head"):
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
                 with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
                     with mock.patch.object(repairer, "git_lines", return_value=()):
@@ -475,7 +479,7 @@ Failing checks
         item = pr(5811, labels={"admin-bypass", "dequeued"}, checks={}, latest=latest)
         repairer = self.repairer(object(), self.ledger())
         git_rev_parse = iter([HEAD, HEAD])
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+        with mock.patch("mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
                 with mock.patch.object(repairer, "job_log_has_evidence", return_value=True):
                     with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
@@ -504,7 +508,7 @@ Failing checks
         )
         item = pr(5811, labels={"dequeued"}, checks={}, latest=latest)
         repairer = self.repairer(object(), self.ledger())
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+        with mock.patch("mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
                 with mock.patch.object(repairer, "job_log_has_evidence", return_value=False):
                     with mock.patch.object(repairer, "git_output", return_value=HEAD):
@@ -517,7 +521,7 @@ Failing checks
     def test_pr_body_valid_local_repair_returns_noop_without_claude(self):
         item = pr(5810, checks={"PR Body": check("PR Body", "failure")}, body=PROOF_BODY)
         repairer = self.repairer(object(), self.ledger())
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+        with mock.patch("mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log") as download:
                 with mock.patch.object(repairer, "job_log_is_empty", return_value=True):
                     with mock.patch.object(repairer, "git_output", return_value=HEAD):
@@ -625,7 +629,7 @@ Failing checks
             },
         ])
 
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+        with mock.patch("mergify_admin_requeue_repairer.checkout_pr_head"):
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
                 with mock.patch.object(repairer, "run_claude_repair"):
                     with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
