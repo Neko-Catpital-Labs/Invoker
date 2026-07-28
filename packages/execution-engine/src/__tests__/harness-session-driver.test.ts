@@ -48,6 +48,38 @@ describe('ExecutionHarnessSessionDriver', () => {
         'Now add a test',
       ]);
     });
+
+    it('start prepends --mcp-config before all other args when mcpConfigPath is set', () => {
+      const mcpDriver = new ExecutionHarnessSessionDriver(new ClaudeExecutionAgent(), undefined, '/tmp/planning/.mcp.json');
+      const result = mcpDriver.start('Fix the bug');
+
+      expect(result.args).toEqual([
+        '--mcp-config',
+        '/tmp/planning/.mcp.json',
+        '--session-id',
+        result.sessionId,
+        '--dangerously-skip-permissions',
+        '-p',
+        'Fix the bug',
+      ]);
+    });
+
+    it('append prepends --mcp-config before all other args when mcpConfigPath is set', () => {
+      const mcpDriver = new ExecutionHarnessSessionDriver(new ClaudeExecutionAgent(), undefined, '/tmp/planning/.mcp.json');
+      const result = mcpDriver.append('session-abc', 'Now add a test', { model: 'sonnet' });
+
+      expect(result.args).toEqual([
+        '--mcp-config',
+        '/tmp/planning/.mcp.json',
+        '--resume',
+        'session-abc',
+        '--dangerously-skip-permissions',
+        '--model',
+        'sonnet',
+        '-p',
+        'Now add a test',
+      ]);
+    });
   });
 
   describe('codex', () => {
@@ -103,6 +135,41 @@ describe('ExecutionHarnessSessionDriver', () => {
         sessionId: 'local-invoker-uuid',
       }, { startedNewSession: true })).toThrow(/thread\.started\.thread_id/);
     });
+
+    it('append appends -c mcp_servers.invoker overrides after all other args when mcpConfigPath is set', () => {
+      const mcpDriver = new ExecutionHarnessSessionDriver(new CodexExecutionAgent(), undefined, '/tmp/planning/.mcp.json');
+      const result = mcpDriver.append('session-xyz', 'Continue the task', { model: 'gpt-5.5' });
+
+      expect(result.args).toEqual([
+        'exec',
+        'resume',
+        '--dangerously-bypass-approvals-and-sandbox',
+        'session-xyz',
+        '--model',
+        'gpt-5.5',
+        'Continue the task',
+        '-c',
+        'mcp_servers.invoker.command="invoker-cli"',
+        '-c',
+        'mcp_servers.invoker.args=["mcp"]',
+      ]);
+    });
+
+    it('start appends -c mcp_servers.invoker overrides after all other args when mcpConfigPath is set', () => {
+      const mcpDriver = new ExecutionHarnessSessionDriver(new CodexExecutionAgent(), undefined, '/tmp/planning/.mcp.json');
+      const result = mcpDriver.start('Fix the bug');
+
+      expect(result.args).toEqual([
+        'exec',
+        '--json',
+        '--dangerously-bypass-approvals-and-sandbox',
+        'Fix the bug',
+        '-c',
+        'mcp_servers.invoker.command="invoker-cli"',
+        '-c',
+        'mcp_servers.invoker.args=["mcp"]',
+      ]);
+    });
   });
 
   describe('omp', () => {
@@ -114,6 +181,25 @@ describe('ExecutionHarnessSessionDriver', () => {
       expect(driver.harness).toBe('omp');
       expect(result.command).toBe('omp');
       expect(result.sessionId).toBe('session-123');
+      expect(result.args).toEqual([
+        '--session-dir',
+        '/tmp/omp-test-sessions/session-123',
+        '--continue',
+        '--model',
+        'chatgpt-5.4',
+        '-p',
+        'Ship it',
+      ]);
+    });
+
+    it('leaves argv unchanged for a non-claude/codex harness even when mcpConfigPath is set', () => {
+      const mcpDriver = new ExecutionHarnessSessionDriver(
+        new OmpExecutionAgent({ sessionDirRoot: '/tmp/omp-test-sessions' }),
+        undefined,
+        '/tmp/planning/.mcp.json',
+      );
+      const result = mcpDriver.append('session-123', 'Ship it', { model: 'chatgpt-5.4' });
+
       expect(result.args).toEqual([
         '--session-dir',
         '/tmp/omp-test-sessions/session-123',
