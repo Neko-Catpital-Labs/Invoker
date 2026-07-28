@@ -12,11 +12,26 @@ const repoRoot = resolveRepoRoot(process.cwd());
 // Every registered PR-maintenance cron entrypoint. Add a new worker's script
 // here so this guard proves the script can source its shared library.
 const PR_MAINTENANCE_ENTRYPOINTS = [
-  { kind: 'coderabbit-address', scriptRelativePath: 'scripts/cron-coderabbit-address.sh' },
-  { kind: 'pr-conflict-rebase', scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh' },
-  { kind: 'pr-ci-failure-scan', scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh' },
-  { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
-  { kind: 'pr-orphan-repair', scriptRelativePath: 'scripts/cron-pr-orphan-repair.sh' },
+  {
+    kind: 'coderabbit-address',
+    scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-coderabbit-address.sh',
+  },
+  {
+    kind: 'pr-conflict-rebase',
+    scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-pr-conflict-rebase.sh',
+  },
+  {
+    kind: 'pr-ci-failure-scan',
+    scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-pr-ci-failure.sh',
+  },
+  {
+    kind: 'pr-admin-bypass-land',
+    scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-pr-admin-bypass-land.sh',
+  },
+  {
+    kind: 'pr-orphan-repair',
+    scriptRelativePath: 'packages/execution-engine/scripts/pr-maintenance/cron-pr-orphan-repair.sh',
+  },
 ] as const;
 
 describe('PR maintenance entrypoints bootstrap', () => {
@@ -75,6 +90,7 @@ describe('PR maintenance entrypoints bootstrap', () => {
         '#!/usr/bin/env bash',
         '{',
         '  printf "cwd=%s\\n" "$PWD"',
+        '  printf "pythonpath=%s\\n" "$PYTHONPATH"',
         '  printf "args="',
         '  printf "<%s>" "$@"',
         '  printf "\\n"',
@@ -85,25 +101,30 @@ describe('PR maintenance entrypoints bootstrap', () => {
       { mode: 0o755 },
     );
 
-    const result = spawnSync('bash', [resolve(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh')], {
-      cwd: tmpdir(),
-      encoding: 'utf8',
-      timeout: 20_000,
-      env: {
-        ...process.env,
-        PATH: `${stubBin}:${process.env.PATH ?? ''}`,
-        INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
-        INVOKER_PR_CRON_AUTHOR: 'octocat',
-        INVOKER_PR_CRON_DRY_RUN: '1',
-        INVOKER_PR_CRON_LOCK: lockPath,
-        PYTHON_CAPTURE: capturePath,
+    const result = spawnSync(
+      'bash',
+      [resolve(repoRoot, 'packages/execution-engine/scripts/pr-maintenance/cron-pr-admin-bypass-land.sh')],
+      {
+        cwd: tmpdir(),
+        encoding: 'utf8',
+        timeout: 20_000,
+        env: {
+          ...process.env,
+          PATH: `${stubBin}:${process.env.PATH ?? ''}`,
+          INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
+          INVOKER_PR_CRON_AUTHOR: 'octocat',
+          INVOKER_PR_CRON_DRY_RUN: '1',
+          INVOKER_PR_CRON_LOCK: lockPath,
+          PYTHON_CAPTURE: capturePath,
+        },
       },
-    });
+    );
 
     expect(result.status).toBe(0);
     expect(readFileSync(capturePath, 'utf8')).toBe([
       `cwd=${repoRoot}`,
-      'args=<scripts/mergify_admin_requeue.py><--once><--repo><owner/repo><--author><octocat><--dry-run>',
+      'pythonpath=packages/mergify-admin-requeue',
+      'args=<-m><mergify_admin_requeue><--once><--repo><owner/repo><--author><octocat><--dry-run>',
       '',
     ].join('\n'));
   });

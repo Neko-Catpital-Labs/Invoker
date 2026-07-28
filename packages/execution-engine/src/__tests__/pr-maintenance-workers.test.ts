@@ -16,10 +16,12 @@ import {
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_ORPHAN_REPAIR_WORKER_KIND,
   createPrAdminBypassLandWorker,
   createCoderabbitAddressWorker,
   createPrCiFailureScanWorker,
   createPrConflictRebaseWorker,
+  createPrOrphanRepairWorker,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
 
@@ -127,7 +129,7 @@ describe('PR maintenance workers', () => {
     expect(spawnHarness.calls).toEqual([
       expect.objectContaining({
         command: 'bash',
-        args: [resolve(repoRoot, 'scripts/cron-coderabbit-address.sh')],
+        args: [resolve(repoRoot, 'packages/execution-engine/scripts/pr-maintenance/cron-coderabbit-address.sh')],
         options: expect.objectContaining({
           cwd: repoRoot,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -166,7 +168,7 @@ describe('PR maintenance workers', () => {
 
     expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
       command: 'bash',
-      args: [resolve(repoRoot, 'scripts/cron-pr-conflict-rebase.sh')],
+      args: [resolve(repoRoot, 'packages/execution-engine/scripts/pr-maintenance/cron-pr-conflict-rebase.sh')],
       options: expect.objectContaining({ cwd: repoRoot }),
     }));
   });
@@ -186,7 +188,7 @@ describe('PR maintenance workers', () => {
 
     expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
       command: 'bash',
-      args: [resolve(repoRoot, 'packages/execution-engine/scripts/cron-pr-ci-failure.sh')],
+      args: [resolve(repoRoot, 'packages/execution-engine/scripts/pr-maintenance/cron-pr-ci-failure.sh')],
       options: expect.objectContaining({ cwd: repoRoot }),
     }));
   });
@@ -207,10 +209,32 @@ describe('PR maintenance workers', () => {
 
     expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
       command: 'bash',
-      args: [resolve(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh')],
+      args: [resolve(repoRoot, 'packages/execution-engine/scripts/pr-maintenance/cron-pr-admin-bypass-land.sh')],
       options: expect.objectContaining({ cwd: repoRoot }),
     }));
     expect(worker.identity.kind).toBe(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
+  });
+
+  it('spawns the orphan-repair shell entrypoint', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    const worker = createPrOrphanRepairWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+    });
+
+    await worker.tick();
+
+    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
+      command: 'bash',
+      args: [resolve(repoRoot, 'packages/execution-engine/scripts/pr-maintenance/cron-pr-orphan-repair.sh')],
+      options: expect.objectContaining({ cwd: repoRoot }),
+    }));
+    expect(worker.identity.kind).toBe(PR_ORPHAN_REPAIR_WORKER_KIND);
   });
 
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {
