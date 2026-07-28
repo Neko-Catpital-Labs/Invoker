@@ -18,6 +18,12 @@ import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
 import {
+  buildRemoteProgressJournalBashLibrary,
+  REMOTE_PROGRESS_JOURNAL_FILENAME,
+  REMOTE_SYNC_SPOOL_FILENAME,
+} from './remote-progress-journal.js';
+import { SshSyncChannel, type SshSyncStore } from './ssh-sync-channel.js';
+import {
   shellPosixSingleQuote as sshGitShellQuote,
   sshInteractiveCdFragment,
   buildMirrorCloneScript,
@@ -62,11 +68,16 @@ export interface SshExecutorConfig {
    * Default: 30.
    */
   remoteHeartbeatIntervalSeconds?: number;
+  /** Optional owner-side SQLite executor used to sync remote progress journals. */
+  syncStore?: SshSyncStore;
+  /** Optional SSH journal sync interval. Default: 5000ms. */
+  syncIntervalMs?: number;
 }
 
 interface SshEntry extends BaseEntry {
   process: ChildProcess | null;
   agentSessionId?: string;
+  syncChannel?: SshSyncChannel;
 }
 
 /**
@@ -102,6 +113,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
   private readonly useApiKey: boolean;
   private readonly secretsFile: string | undefined;
   private readonly remoteHeartbeatIntervalSeconds: number;
+  private readonly syncStore: SshSyncStore | undefined;
+  private readonly syncIntervalMs: number | undefined;
 
   constructor(config: SshExecutorConfig) {
     super();
@@ -114,6 +127,8 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     this.remoteInvokerHome = config.remoteInvokerHome ?? '~/.invoker';
     this.useApiKey = config.useApiKey === true;
     this.secretsFile = config.secretsFile;
+    this.syncStore = config.syncStore;
+    this.syncIntervalMs = config.syncIntervalMs;
     this.setProvisionCommand(config.provisionCommand, '');
     const configuredRemoteHeartbeatInterval = config.remoteHeartbeatIntervalSeconds;
     this.remoteHeartbeatIntervalSeconds =
@@ -143,8 +158,16 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
     }, { batchMode: false });
   }
 
-  private buildRunnerScript(): string {
+  private buildRunnerScript(request: WorkRequest, workflowId: string): string {
     const intervalSeconds = this.remoteHeartbeatIntervalSeconds;
+    const journalLibrary = buildRemoteProgressJournalBashLibrary({
+      workflowId,
+      taskId: request.actionId,
+      request,
+      heartbeatMarker: SshExecutor.REMOTE_HEARTBEAT_MARKER,
+      journalFileExpression: '"${INVOKER_REMOTE_JOURNAL_FILE:?}"',
+      spoolFileExpression: '"${INVOKER_REMOTE_SYNC_SPOOL_FILE:?}"',
+    });
     return `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -153,19 +176,45 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
+${journalLibrary}
 PAYLOAD_PATH=$1
+OUTPUT_PIPE="$INVOKER_REMOTE_JOURNAL_FILE.output.$$"
+rm -f "$OUTPUT_PIPE"
+mkfifo "$OUTPUT_PIPE"
+cleanup_runner() {
+  rm -f "$OUTPUT_PIPE" >/dev/null 2>&1 || true
+}
+trap 'cleanup_runner' EXIT
+
 (
-  bash "$PAYLOAD_PATH"
+  while IFS= read -r line || [ -n "$line" ]; do
+    printf '%s\\n' "$line"
+    invoker_record_output_chunk "$line"$'\\n' || true
+  done < "$OUTPUT_PIPE"
+) &
+OUTPUT_RELAY_PID=$!
+
+(
+  bash "$PAYLOAD_PATH" > "$OUTPUT_PIPE" 2>&1
 ) &
 PAYLOAD_PID=$!
-INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
-printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+invoker_record_attempt_started || true
+invoker_record_heartbeat
 (
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
     sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
-    printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    if ! invoker_consume_sync_spool_for_tombstone; then
+      tombstone_status=$?
+      if [ "$tombstone_status" -eq 42 ]; then
+        kill -TERM "$PAYLOAD_PID" >/dev/null 2>&1 || true
+        sleep 5
+        kill -0 "$PAYLOAD_PID" 2>/dev/null && kill -KILL "$PAYLOAD_PID" >/dev/null 2>&1 || true
+        break
+      fi
+    fi
+    invoker_record_heartbeat
   done
 ) &
 HEARTBEAT_PID=$!
@@ -176,6 +225,8 @@ else
 fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
+wait "$OUTPUT_RELAY_PID" 2>/dev/null || true
+invoker_record_attempt_finished "$PAYLOAD_EXIT" || true
 exit "$PAYLOAD_EXIT"
 `;
   }
