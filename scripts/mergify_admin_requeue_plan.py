@@ -12,6 +12,7 @@ try:
         MergifyQueueEvent,
         PrSnapshot,
         RepairPrereqStatus,
+        STALE_STACK_RESTACK_UNAVAILABLE_ERROR,
         StackExecutionPlan,
         StackGroup,
     )
@@ -24,6 +25,7 @@ except ImportError:
         MergifyQueueEvent,
         PrSnapshot,
         RepairPrereqStatus,
+        STALE_STACK_RESTACK_UNAVAILABLE_ERROR,
         StackExecutionPlan,
         StackGroup,
     )
@@ -337,6 +339,18 @@ def has_recorded_queue_command_inflight(bottom: PrSnapshot, ledger: Ledger) -> b
     return ledger.latest("requeue", bottom.number, bottom.head_ref_oid, key) is not None
 
 
+def stale_trunk_pr_body_restack_candidate(pr: PrSnapshot, blocker: Blocker, detail: str = "") -> bool:
+    if blocker.kind != "failed_check" or blocker.key != "PR Body":
+        return False
+    if pr.base_ref_name != TRUNK or pr.mergeable != "MERGEABLE" or pr.merge_state_status != "BLOCKED":
+        return False
+    if not pr.head_ref_name.startswith("stack/"):
+        return False
+    if STALE_STACK_RESTACK_UNAVAILABLE_ERROR in detail or "human stack split required" in detail:
+        return False
+    return "Split this into one Review Unit per PR." in detail
+
+
 def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
     if blocker.kind not in {"failed_check", "conflict", "bot_review_thread"}:
         return None
@@ -348,6 +362,8 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
     if isinstance(errors, list):
         detail = "\n".join(str(error) for error in errors if str(error))
         if detail:
+            if stale_trunk_pr_body_restack_candidate(pr, blocker, detail):
+                return None
             return Blocker(blocker.key, "human_decision", pr.number, detail)
     return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
 
@@ -365,6 +381,8 @@ def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | N
         if not detail or not any(marker in detail for marker in MANUAL_SPLIT_STOP_MARKERS):
             continue
         if completed_at and comment.updated_at and comment.updated_at < completed_at:
+            continue
+        if stale_trunk_pr_body_restack_candidate(pr, blocker, detail):
             continue
         return Blocker(blocker.key, "human_decision", pr.number, detail)
     return None

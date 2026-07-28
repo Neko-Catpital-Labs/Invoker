@@ -1,5 +1,6 @@
 import io
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -28,6 +29,7 @@ from scripts.mergify_admin_requeue import (
 )
 from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
 from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
+from scripts.mergify_admin_requeue_model import STALE_STACK_RESTACK_UNAVAILABLE_ERROR
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
 from scripts.mergify_admin_requeue_repairer import (
@@ -605,10 +607,11 @@ This keeps the runtime routing change in its own review slice.
                     with mock.patch.object(repairer, "git_lines", return_value=()):
                         with mock.patch.object(repairer, "run_claude_repair", side_effect=update_body) as repair:
                             with mock.patch.object(repairer, "validate_current_pr_body", side_effect=validate_body):
-                                result = repairer.repair_check(item, "PR Body")
+                                with mock.patch.object(repairer, "has_merge_base", return_value=True):
+                                    result = repairer.repair_check(item, "PR Body")
 
         self.assertEqual(result.status, "noop")
-        self.assertEqual(validated_bodies, [fixed_body])
+        self.assertEqual(validated_bodies, [old_body, fixed_body])
         self.assertIn("update the pull request body on GitHub", repair.call_args.args[1])
         self.assertIn("--base master --json", repair.call_args.args[1])
 
@@ -643,6 +646,152 @@ This keeps the runtime routing change in its own review slice.
                                 result = repairer.repair_check(item, "PR Body")
         self.assertEqual(result.status, "blocked_invalid")
         self.assertIn(NON_TRUNK_MANUAL_SPLIT_ERROR, result.errors)
+
+    def test_repair_check_restacks_stale_trunk_pr_body_and_pushes(self):
+        validation_error = 'PR body Review Unit "contract" cannot ship with routing, activation-surface files in the same PR. Split this into one Review Unit per PR.'
+        body = "## Summary\n\nFailure classifier.\n"
+
+        def git(cwd: Path, *args: str) -> str:
+            completed = subprocess.run(
+                ["git", *args],
+                cwd=str(cwd),
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+            return completed.stdout.strip()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            seed = root / "seed"
+            remote = root / "origin.git"
+            home = root / "home"
+            work_root = home / ".invoker" / "mergify-admin-requeue-work" / "6325"
+            log_path = root / "pr-body.log"
+            log_path.write_text("PR Body failed\n", encoding="utf-8")
+
+            seed.mkdir()
+            git(seed, "init")
+            git(seed, "config", "user.email", "repro@example.test")
+            git(seed, "config", "user.name", "Repro Bot")
+            git(seed, "checkout", "-B", "master")
+            (seed / "README.md").write_text("root\n", encoding="utf-8")
+            git(seed, "add", "README.md")
+            git(seed, "commit", "-m", "root")
+            git(seed, "init", "--bare", str(remote))
+            git(seed, "remote", "add", "publish", str(remote))
+            git(seed, "push", "publish", "master")
+            git(seed, "switch", "-c", "old-lower", "master")
+            lower = seed / "packages" / "app" / "src" / "headless.ts"
+            lower.parent.mkdir(parents=True)
+            lower.write_text("lower stack work\n", encoding="utf-8")
+            git(seed, "add", str(lower.relative_to(seed)))
+            git(seed, "commit", "-m", "lower stack commit")
+            git(seed, "switch", "master")
+            lower.parent.mkdir(parents=True, exist_ok=True)
+            lower.write_text("lower stack work\n", encoding="utf-8")
+            git(seed, "add", str(lower.relative_to(seed)))
+            git(seed, "commit", "-m", "squash lower stack")
+            git(seed, "push", "publish", "master")
+            git(seed, "switch", "-c", "stack/6325", "old-lower")
+            top = seed / "packages" / "workflow-graph" / "src" / "failure-classifier.ts"
+            top.parent.mkdir(parents=True)
+            top.write_text("export const failureClass = 'infra';\n", encoding="utf-8")
+            git(seed, "add", str(top.relative_to(seed)))
+            git(seed, "commit", "-m", "[Failure Class Unification](1) Add failure-class taxonomy")
+            start_head = git(seed, "rev-parse", "HEAD")
+            git(seed, "push", "publish", "stack/6325")
+
+            work_root.parent.mkdir(parents=True)
+            git(root, "clone", str(remote), str(work_root))
+            git(work_root, "config", "user.email", "repro@example.test")
+            git(work_root, "config", "user.name", "Repro Bot")
+
+            class FakeGh:
+                def pr_detail(self, _repo, _number):
+                    return {"state": "OPEN", "body": body}
+
+            item = pr(
+                6325,
+                base="master",
+                head="stack/6325",
+                body=body,
+                merge_state="BLOCKED",
+                mergeable="MERGEABLE",
+                checks={"PR Body": check("PR Body", "failure")},
+            )
+            object.__setattr__(item, "head_ref_oid", start_head)
+            repairer = self.repairer(FakeGh(), self.ledger())
+
+            def validate(work_root_arg: Path, _body: str, _base: str):
+                changed = git(work_root_arg, "diff", "--name-only", "origin/master...HEAD").splitlines()
+                if "packages/app/src/headless.ts" in changed:
+                    return {
+                        "valid": False,
+                        "errors": [validation_error],
+                        "reviewLane": "refactor",
+                        "reviewUnit": "contract",
+                        "reviewUnits": ["routing", "activation-surface"],
+                        "scopeKinds": ["product", "product-test"],
+                    }
+                return {
+                    "valid": True,
+                    "errors": [],
+                    "reviewLane": "refactor",
+                    "reviewUnit": "contract",
+                    "reviewUnits": ["contract"],
+                    "scopeKinds": ["product"],
+                }
+
+            with mock.patch.dict(os.environ, {"HOME": str(home)}):
+                with mock.patch.object(repairer.executor, "download_job_log", return_value=str(log_path)):
+                    with mock.patch.object(repairer, "run_claude_repair") as repair:
+                        with mock.patch.object(repairer, "validate_current_pr_body", side_effect=validate):
+                            result = repairer.repair_check(item, "PR Body")
+
+            pushed_head = git(remote, "rev-parse", "refs/heads/stack/6325")
+            changed_after = git(work_root, "diff", "--name-only", "origin/master...HEAD").splitlines()
+            repair.assert_not_called()
+            self.assertEqual(result.status, "pushed")
+            self.assertEqual(result.start_head, start_head)
+            self.assertEqual(result.end_head, pushed_head)
+            self.assertNotEqual(pushed_head, start_head)
+            self.assertEqual(changed_after, ["packages/workflow-graph/src/failure-classifier.ts"])
+            self.assertEqual(result.repair_commits, (pushed_head,))
+
+    def test_repair_check_stale_trunk_pr_body_unavailable_is_terminal(self):
+        validation_error = 'PR body Review Unit "contract" cannot ship with routing, activation-surface files in the same PR. Split this into one Review Unit per PR.'
+        validation = {
+            "valid": False,
+            "errors": [validation_error],
+            "reviewLane": "refactor",
+            "reviewUnit": "contract",
+            "reviewUnits": ["routing", "activation-surface"],
+            "scopeKinds": ["product", "product-test"],
+        }
+        item = pr(
+            6325,
+            base="master",
+            head="stack/6325",
+            body="## Summary\n\nStill mixed.\n",
+            merge_state="BLOCKED",
+            mergeable="MERGEABLE",
+            checks={"PR Body": check("PR Body", "failure")},
+        )
+        repairer = self.repairer(object(), self.ledger())
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {"HOME": tmp}):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                    with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+                        with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: HEAD if args == ("rev-parse", "HEAD") else ""):
+                            with mock.patch.object(repairer, "is_ancestor", return_value=True):
+                                with mock.patch.object(repairer, "validate_current_pr_body", return_value=validation):
+                                    with mock.patch.object(repairer, "run_claude_repair") as repair:
+                                        with mock.patch.object(repairer, "has_merge_base", return_value=True):
+                                            result = repairer.repair_check(item, "PR Body")
+        repair.assert_not_called()
+        self.assertEqual(result.status, "blocked_invalid")
+        self.assertTrue(any(STALE_STACK_RESTACK_UNAVAILABLE_ERROR in error for error in result.errors))
 
     def test_plan_stack_actions_stop_retrying_after_repair_invalid(self):
         ledger = self.ledger()
@@ -850,6 +999,17 @@ This keeps the runtime routing change in its own review slice.
                 "scopeKinds": ["policy"],
             },
             {
+                "valid": False,
+                "errors": [
+                    PROOF_POLICY_LANE_ERROR,
+                    PROOF_TOOLING_POLICY_UNIT_ERROR,
+                ],
+                "reviewLane": "proof",
+                "reviewUnit": "proof",
+                "reviewUnits": ["tooling-policy"],
+                "scopeKinds": ["policy"],
+            },
+            {
                 "valid": True,
                 "errors": [],
                 "reviewLane": "policy",
@@ -865,7 +1025,8 @@ This keeps the runtime routing change in its own review slice.
                     with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
                         with mock.patch.object(repairer, "git_lines", side_effect=fake_git_lines):
                             with mock.patch.object(repairer, "validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
-                                result = repairer.repair_check(item, "PR Body", 123)
+                                with mock.patch.object(repairer, "has_merge_base", return_value=True):
+                                    result = repairer.repair_check(item, "PR Body", 123)
 
         self.assertEqual(result.status, "prereq_created")
         self.assertEqual(fake.created[0][0], "owner/repo")

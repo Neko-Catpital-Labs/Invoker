@@ -772,6 +772,67 @@ class PlanStackExecution(PlannerTestCase):
         self.assertEqual(blockers[0]["kind"], "human_decision")
         self.assertIn("outside the PR head", blockers[0]["detail"])
 
+    def test_stale_trunk_pr_body_split_blocker_allows_one_restack_repair(self):
+        ledger = self._ledger()
+        detail = 'PR body Review Unit "contract" cannot ship with routing, activation-surface files in the same PR. Split this into one Review Unit per PR.'
+        ledger.record("repair-invalid", 6325, HEAD, "PR Body", 1, meta={"errors": [detail]})
+        snapshot = pr(
+            number=6325,
+            head_ref_name="stack/6325",
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("success"), "PR Body": check("failure", "PR Body")},
+            repair_stop_comments=(
+                m.RepairStopComment(
+                    f"Mergify repair stopped: {detail}",
+                    "2026-07-07T05:02:00Z",
+                    "EdbertChan",
+                ),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"build", "PR Body"},
+            ledger,
+            now_epoch=2,
+            open_pr_numbers={6325},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual([(action.kind, action.key) for action in plan.actions], [("repair_check", "PR Body")])
+
+    def test_unavailable_stale_trunk_pr_body_restack_stops_retrying(self):
+        ledger = self._ledger()
+        detail = (
+            'PR body Review Unit "contract" cannot ship with routing, activation-surface files in the same PR. '
+            f"Split this into one Review Unit per PR.\n{m.STALE_STACK_RESTACK_UNAVAILABLE_ERROR}: master is already an ancestor"
+        )
+        ledger.record("repair-invalid", 6325, HEAD, "PR Body", 1, meta={"errors": [detail]})
+        snapshot = pr(
+            number=6325,
+            head_ref_name="stack/6325",
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("success"), "PR Body": check("failure", "PR Body")},
+            repair_stop_comments=(
+                m.RepairStopComment(
+                    f"Mergify repair stopped: {detail}",
+                    "2026-07-07T05:02:00Z",
+                    "EdbertChan",
+                ),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {"build", "PR Body"},
+            ledger,
+            now_epoch=2,
+            open_pr_numbers={6325},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "human_decision")
+        self.assertIn(m.STALE_STACK_RESTACK_UNAVAILABLE_ERROR, blockers[0]["detail"])
+
     def test_repair_invalid_conflict_stops_retrying(self):
         ledger = self._ledger()
         reason = (
