@@ -99,10 +99,11 @@ invoker_e2e_ssh_cleanup_keys() {
     chmod 600 "$authorized_keys"
   fi
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$env_path" ]; then
-    # Remove the marker line and the following PATH export we appended.
+    # Remove the marker line and exports we appended.
     awk -v marker="# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" '
       $0 == marker { skip=1; next }
-      skip && /^export PATH=/ { skip=0; next }
+      skip && /^export PATH=/ { next }
+      skip && /^export INVOKER_SKIP_MANAGED_PNPM_INSTALL=/ { skip=0; next }
       { skip=0; print }
     ' "$env_path" > "${env_path}.tmp" || true
     mv "${env_path}.tmp" "$env_path"
@@ -123,6 +124,18 @@ invoker_e2e_ssh_provision_command() {
 
 invoker_e2e_ssh_config_provision_command() {
   printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+}
+
+invoker_e2e_ssh_submit_plan() {
+  # Manual/external-review SSH workflows can park their merge gate in
+  # review_ready, which makes submit-plan exit nonzero even though the task
+  # statuses are the case's real assertion surface.
+  invoker_e2e_submit_plan "$@" || true
+}
+
+invoker_e2e_ssh_task_status() {
+  local task_id="$1"
+  invoker_e2e_task_status "$task_id" || true
 }
 
 # --------------------------------------------------------------------------- #
@@ -191,9 +204,12 @@ invoker_e2e_ssh_init() {
 # --------------------------------------------------------------------------- #
 # Ensure host pnpm/node are on the remote task PATH.
 # SshExecutor uses a non-login shell and sources remoteInvokerHome/env.sh.
+# The lightweight SSH handoff cases exercise git/worktree propagation and only
+# use shell builtins/coreutils, so skip managed pnpm provisioning by default.
+# Case 3.7 opts back in via INVOKER_E2E_SSH_SKIP_MANAGED_PNPM_INSTALL=0.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_install_login_path() {
-  local pnpm_bin node_bin pnpm_dir node_dir
+  local pnpm_bin node_bin pnpm_dir node_dir skip_managed_pnpm
   pnpm_bin="$(command -v pnpm || true)"
   node_bin="$(command -v node || true)"
   if [ -z "$pnpm_bin" ] || [ -z "$node_bin" ]; then
@@ -202,6 +218,7 @@ invoker_e2e_ssh_install_login_path() {
   fi
   pnpm_dir="$(cd "$(dirname "$pnpm_bin")" && pwd)"
   node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
+  skip_managed_pnpm="${INVOKER_E2E_SSH_SKIP_MANAGED_PNPM_INSTALL:-1}"
 
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
   touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
@@ -210,6 +227,7 @@ invoker_e2e_ssh_install_login_path() {
     {
       printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
       printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
+      printf 'export INVOKER_SKIP_MANAGED_PNPM_INSTALL="%s"\n' "$skip_managed_pnpm"
     } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   fi
 

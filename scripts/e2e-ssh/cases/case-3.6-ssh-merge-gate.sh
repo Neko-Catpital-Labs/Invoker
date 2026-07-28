@@ -15,10 +15,10 @@ echo "==> case 3.6: delete-all"
 invoker_e2e_run_headless delete-all
 
 echo "==> case 3.6: submit plan (mergeMode=github, mixed executors)"
-invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.6-ssh-merge-gate.yaml"
+invoker_e2e_ssh_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.6-ssh-merge-gate.yaml"
 
-STA=$(invoker_e2e_task_status e2e-g336-taskA)
-STB=$(invoker_e2e_task_status e2e-g336-taskB)
+STA=$(invoker_e2e_ssh_task_status e2e-g336-taskA)
+STB=$(invoker_e2e_ssh_task_status e2e-g336-taskB)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ]; then
   echo "FAIL case 3.6: expected A=completed B=completed, got A='$STA' B='$STB'"
   invoker_e2e_run_headless status 2>&1 || true
@@ -35,7 +35,7 @@ if [ -z "$MERGE_ID" ]; then
 fi
 echo "==> case 3.6: merge gate ID=$MERGE_ID"
 
-STM=$(invoker_e2e_task_status "$MERGE_ID")
+STM=$(invoker_e2e_ssh_task_status "$MERGE_ID")
 if [ "$STM" != "review_ready" ]; then
   echo "FAIL case 3.6: expected merge gate=review_ready, got '$STM'"
   invoker_e2e_run_headless status 2>&1 || true
@@ -73,14 +73,14 @@ echo "==> case 3.6: merge stub PR + reconcile via pr-status worker"
 touch "$INVOKER_E2E_MARKER_ROOT/pr-merged"
 for _ in $(seq 1 120); do
   invoker_e2e_run_headless worker pr-status >/dev/null 2>&1 || true
-  STM=$(invoker_e2e_task_status "$MERGE_ID")
+  STM=$(invoker_e2e_ssh_task_status "$MERGE_ID")
   if [ "$STM" = "completed" ]; then
     break
   fi
   sleep 2
 done
 
-STM=$(invoker_e2e_task_status "$MERGE_ID")
+STM=$(invoker_e2e_ssh_task_status "$MERGE_ID")
 if [ "$STM" != "completed" ]; then
   echo "FAIL case 3.6: expected merge gate=completed after PR merge, got '$STM'"
   invoker_e2e_run_headless status 2>&1 || true

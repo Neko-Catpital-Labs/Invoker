@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/../lib/ssh-common.sh"
 
+export INVOKER_E2E_SSH_SKIP_MANAGED_PNPM_INSTALL=0
 invoker_e2e_ssh_init
 trap invoker_e2e_ssh_full_cleanup EXIT
 
@@ -22,9 +23,9 @@ echo "==> case 3.7: delete-all"
 invoker_e2e_run_headless delete-all
 
 echo "==> case 3.7: submit plan"
-invoker_e2e_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.7-ssh-target-provision.yaml"
+invoker_e2e_ssh_submit_plan "$INVOKER_E2E_REPO_ROOT/plans/e2e-ssh/3.7-ssh-target-provision.yaml"
 
-STA=$(invoker_e2e_task_status e2e-g337-taskA)
+STA=$(invoker_e2e_ssh_task_status e2e-g337-taskA)
 if [ "$STA" != "completed" ]; then
   echo "FAIL case 3.7: expected SSH task=completed, got '$STA'"
   invoker_e2e_run_headless status 2>&1 || true
