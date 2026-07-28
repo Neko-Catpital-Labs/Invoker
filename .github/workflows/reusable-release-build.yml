@@ -1,0 +1,198 @@
+name: Reusable release build
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref or SHA to build (defaults to the caller workflow SHA)
+        type: string
+        required: false
+        default: ''
+
+env:
+  CI: true
+  NODE_VERSION: '26'
+
+jobs:
+  build-cli:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-latest
+            platform: darwin
+            arch: arm64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check release version sync
+        run: pnpm run check:versions
+
+      - name: Build standalone CLI
+        env:
+          INVOKER_TARGET_PLATFORM: ${{ matrix.platform }}
+          INVOKER_TARGET_ARCH: ${{ matrix.arch }}
+        run: pnpm run dist:cli
+
+      - name: Upload CLI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/invoker-cli-*
+          if-no-files-found: error
+
+  build-slack:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+          - runner: macos-15-intel
+            platform: darwin
+            arch: x64
+          - runner: macos-latest
+            platform: darwin
+            arch: arm64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check release version sync
+        run: pnpm run check:versions
+
+      - name: Build standalone Slack manager
+        env:
+          INVOKER_TARGET_PLATFORM: ${{ matrix.platform }}
+          INVOKER_TARGET_ARCH: ${{ matrix.arch }}
+        run: pnpm run dist:slack
+
+      - name: Upload Slack artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            release/invoker-slack-*
+          if-no-files-found: error
+
+  build-desktop:
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            build_command: pnpm run dist:desktop:linux
+            artifact_name: desktop-linux-x64
+            artifact_glob: |
+              release/*.AppImage
+              release/*.deb
+          - runner: ubuntu-24.04-arm
+            build_command: pnpm run dist:desktop:linux
+            artifact_name: desktop-linux-arm64
+            artifact_glob: |
+              release/*.AppImage
+              release/*.deb
+          - runner: macos-latest
+            build_command: pnpm run dist:desktop:mac:arm64
+            artifact_name: desktop-mac-arm64
+            artifact_glob: |
+              release/*.dmg
+              release/*.zip
+          - runner: macos-15-intel
+            build_command: pnpm run dist:desktop:mac:x64
+            artifact_name: desktop-mac-x64
+            artifact_glob: |
+              release/*.dmg
+              release/*.zip
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            .node-version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build desktop artifacts
+        run: ${{ matrix.build_command }}
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_glob }}
+          if-no-files-found: error

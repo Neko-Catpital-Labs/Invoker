@@ -1,0 +1,123 @@
+name: Daily release
+
+on:
+  schedule:
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CI: true
+  NODE_VERSION: '26'
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
+      previous_tag: ${{ steps.decide.outputs.previous_tag }}
+      sha: ${{ steps.decide.outputs.sha }}
+      should_run: ${{ steps.decide.outputs.should_run }}
+      skip_reason: ${{ steps.decide.outputs.skip_reason }}
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Decide daily cut
+        id: decide
+        run: bash scripts/daily-release-decide.sh --tip HEAD --out "$GITHUB_OUTPUT"
+
+      - name: Skip summary
+        if: steps.decide.outputs.should_run != 'true'
+        run: |
+          echo "Skipping daily cut: ${{ steps.decide.outputs.skip_reason }}"
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.should_run == 'true'
+    uses: ./.github/workflows/reusable-release-build.yml
+    with:
+      ref: ${{ needs.decide.outputs.sha }}
+
+  publish-daily:
+    needs:
+      - decide
+      - build
+    if: needs.decide.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout cut commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.decide.outputs.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          merge-multiple: true
+          path: release
+
+      - name: Generate combined checksums
+        run: bash scripts/release-sha256.sh
+
+      - name: Verify complete release asset set
+        run: bash scripts/verify-release-assets.sh
+
+      - name: Generate daily release notes
+        run: |
+          args=(
+            --tag "${{ needs.decide.outputs.tag }}"
+            --sha "${{ needs.decide.outputs.sha }}"
+            --out release/RELEASE_NOTES.md
+          )
+          previous_tag="${{ needs.decide.outputs.previous_tag }}"
+          if [ -n "$previous_tag" ]; then
+            args+=(--previous-tag "$previous_tag")
+          fi
+          bash scripts/generate-daily-release-notes.sh "${args[@]}"
+          cat release/RELEASE_NOTES.md
+
+      - name: Publish daily GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.decide.outputs.tag }}
+          name: Daily cut ${{ needs.decide.outputs.tag }}
+          target_commitish: ${{ needs.decide.outputs.sha }}
+          prerelease: true
+          make_latest: false
+          body_path: release/RELEASE_NOTES.md
+          files: |
+            release/*.dmg
+            release/*.deb
+            release/*.AppImage
+            release/*.zip
+            release/invoker-cli-*
+            release/invoker-slack-*
+            release/SHA256SUMS
+
+  cleanup:
+    needs:
+      - decide
+      - publish-daily
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Delete daily prereleases older than 14 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/cleanup-daily-releases.sh --days 14 --repo "${{ github.repository }}"
