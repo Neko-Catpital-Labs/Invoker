@@ -1010,6 +1010,84 @@ The merge conditions cannot be satisfied due to failing checks
         actions = plan_stack_actions(stack, REQUIRED | {"e2e-proof / aggregate"}, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 1814, "e2e-proof / aggregate")])
 
+    def test_mergify_reason_failure_preempts_orange_failing_check_order(self):
+        comment = {
+            "id": "m6245",
+            "user": {"login": "mergify"},
+            "updated_at": "2026-07-28T06:34:42Z",
+            "body": """
+-*- Mergify Payload -*-
+{"state":"dequeued","queue_rule_name":"admin-bypass"}
+
+- ❌ **Checks failed** · on draft #6379
+- 🚫 **Left the queue** — `2026-07-28 06:34 UTC` · at `c2532d229dbed2fd57419698c48d973001c78e9e`
+
+## Reason
+
+The merge conditions cannot be satisfied due to failing checks
+
+- `PR Body`
+
+Failing checks:
+- 🟠 [build-artifacts](https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30335190475/job/90198453004) ([job log](https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30335190475/job/90198453004))
+- 🛑 [PR Body](https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30335226215/job/90198558873) ([job log](https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30335226215/job/90198558873))
+- 🟠 [UI Vitest](https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30335190475/job/90198453060) ([job log](https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30335190475/job/90198453060))
+""",
+        }
+        event = parse_mergify_queue_event(comment)
+        self.assertIsNotNone(event)
+        self.assertEqual(event.failing_checks, ("PR Body",))
+        self.assertEqual([name for name, _urls in event.failing_check_urls], ["build-artifacts", "PR Body", "UI Vitest"])
+        self.assertEqual(event.failing_check_urls[1][1][0], "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/30335226215/job/90198558873")
+        stack = StackGroup("s", (pr(6245, latest=event),))
+        actions = plan_stack_actions(stack, REQUIRED | {"build-artifacts", "UI Vitest"}, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 6245, "PR Body")])
+
+    def test_mergify_reason_missing_aggregate_keeps_logged_failing_check(self):
+        comment = {
+            "id": "m2969",
+            "user": {"login": "mergify"},
+            "updated_at": "2026-07-03T06:14:00Z",
+            "body": """
+-*- Mergify Payload -*-
+{"state":"dequeued","queue_rule_name":"admin-bypass"}
+
+- ❌ **Checks failed** · on draft #2985
+- 🚫 **Left the queue** — `2026-07-03 06:13 UTC` · at `c2532d229dbed2fd57419698c48d973001c78e9e`
+
+<details>
+<summary><strong>Waiting for</strong></summary>
+
+- [ ] `check-success = e2e-proof / aggregate`
+
+</details>
+<details>
+<summary>All conditions</summary>
+
+- [ ] `check-success = e2e-proof / aggregate`
+- [X] `check-success = PR Body`
+- [X] `check-success = optional / Visual Proof Validate`
+
+</details>
+
+## Reason
+
+The merge conditions cannot be satisfied due to failing checks
+
+- `e2e-proof / aggregate`
+
+Failing checks:
+- 🛑 [PR Body](https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/28641642476/job/84938961337) ([job log](https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/28641642476/job/84938961337))
+""",
+        }
+        event = parse_mergify_queue_event(comment)
+        self.assertIsNotNone(event)
+        self.assertEqual(event.failing_checks, ("PR Body",))
+        checks = {"PR Body": check("PR Body"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stack = StackGroup("s", (pr(2969, checks=checks, latest=event),))
+        actions = plan_stack_actions(stack, REQUIRED | {"optional / Visual Proof Validate"}, self.ledger(), 1)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2969, "PR Body")])
+
     def test_closed_pr_never_requeues_even_when_manually_requested(self):
         stack = StackGroup("s", (pr(2999, state="CLOSED", latest=mergify()),))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)

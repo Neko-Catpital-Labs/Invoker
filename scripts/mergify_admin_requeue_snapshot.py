@@ -233,7 +233,14 @@ def parse_mergify_queue_event(comment: Mapping[str, object]) -> MergifyQueueEven
     head_sha = sha_match.group(1) if sha_match else ""
     queue_pr_match = re.search(r"on draft #(\d+)", body, re.I)
     queue_pr_number = int(queue_pr_match.group(1)) if queue_pr_match else 0
-    failing_checks = section_items(body, "Failing checks")
+    section_checks = section_items(body, "Failing checks")
+    reason_checks = reason_failed_checks(body)
+    failing_check_url_pairs = failing_check_urls(body)
+    checks_with_logs = {name for name, urls in failing_check_url_pairs if urls}
+    if reason_checks and (not section_checks or all(name in checks_with_logs for name in reason_checks)):
+        failing_checks = reason_checks
+    else:
+        failing_checks = section_checks or reason_checks
     return MergifyQueueEvent(
         comment_id=str(comment.get("id") or comment.get("databaseId") or ""),
         state=payload_state(payload, body),
@@ -244,7 +251,7 @@ def parse_mergify_queue_event(comment: Mapping[str, object]) -> MergifyQueueEven
         failing_checks=failing_checks or reason_failed_checks(body),
         comment_url=str(comment.get("html_url") or comment.get("url") or ""),
         queue_pr_number=queue_pr_number,
-        failing_check_urls=failing_check_urls(body),
+        failing_check_urls=failing_check_url_pairs,
         condition_states=all_condition_states(body),
     )
 
