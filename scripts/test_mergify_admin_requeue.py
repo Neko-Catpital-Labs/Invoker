@@ -523,6 +523,25 @@ Failing checks
         plan = plan_stack_execution(stack, REQUIRED, ledger, 2, (), {}, 2, 3, "master")
         self.assertEqual(plan.wait_reason, "blocked-needs-human")
 
+    def test_human_decision_suppresses_sibling_bot_thread_repairs(self):
+        reason = 'PR body Review Unit "routing" cannot ship with activation-surface files in the same PR.'
+        ledger = self.ledger()
+        ledger.record("repair-invalid", 6158, HEAD, "thread-human-only", 1, meta={"errors": [reason]})
+        item = pr(
+            6158,
+            threads=(
+                ReviewThread("thread-human-only", False, ("coderabbitai[bot]",)),
+                ReviewThread("thread-still-open", False, ("coderabbitai[bot]",)),
+            ),
+            merge_state="DIRTY",
+            mergeable="CONFLICTING",
+        )
+        stack = StackGroup("s", (item,))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
+        self.assertEqual(actions, ())
+        plan = plan_stack_execution(stack, REQUIRED, ledger, 2, (), {}, 2, 3, "master")
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+
     def test_claude_repair_uses_claude_cli(self):
         repairer = self.repairer(object(), self.ledger())
         with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run") as run:

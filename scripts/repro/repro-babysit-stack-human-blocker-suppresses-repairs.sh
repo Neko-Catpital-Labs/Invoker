@@ -61,8 +61,8 @@ state = {
             "baseRefName": "master",
             "headRefName": "stack/workflow-base-branch-1",
             "headRefOid": bottom_head,
-            "mergeStateStatus": "BLOCKED",
-            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "DIRTY",
+            "mergeable": "CONFLICTING",
             "labels": ["admin-bypass"],
             "reviewThreads": [
                 {
@@ -74,6 +74,19 @@ state = {
                                 "author": {"login": "coderabbitai[bot]"},
                                 "body": "Please split the mixed review unit.",
                                 "url": "https://github.com/fake/repo/pull/6158#discussion_r1",
+                            }
+                        ]
+                    },
+                },
+                {
+                    "id": "PRRT_kwDOSFkSDM6T97wJ",
+                    "isResolved": False,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": {"login": "coderabbitai[bot]"},
+                                "body": "Please address the remaining stacked base branch comment.",
+                                "url": "https://github.com/fake/repo/pull/6158#discussion_r2",
                             }
                         ]
                     },

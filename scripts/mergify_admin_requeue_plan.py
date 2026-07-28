@@ -613,6 +613,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+            continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
