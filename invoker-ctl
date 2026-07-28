@@ -13,7 +13,7 @@
 #   ./invoker-ctl audit <taskId>                   Show audit event log for a task
 #   ./invoker-ctl output <taskId>                  Show captured output for a task
 #   ./invoker-ctl cancel <taskId>                  Cancel a running task
-#   ./invoker-ctl restart <taskId>                 Restart a failed task
+#   ./invoker-ctl retry-task <taskId>              Retry a failed task
 #   ./invoker-ctl recreate-workflow <workflowId>    Recreate entire workflow (bump generation)
 #   ./invoker-ctl resolve-conflict <taskId> [agent] Resolve merge conflict (→ awaiting_approval)
 #   ./invoker-ctl approve <taskId>                 Approve a task awaiting approval
@@ -73,7 +73,7 @@ case "${1:-}" in
       echo "Usage: invoker-ctl recreate-workflow <workflowId>" >&2
       exit 1
     fi
-    curl -sf -X POST "$BASE/api/workflows/$2/restart" | fmt '.'
+    curl -sf -X POST "$BASE/api/workflows/$2/recreate" | fmt '.'
     ;;
 
   delete-workflow)
@@ -87,7 +87,7 @@ case "${1:-}" in
   set-merge-mode)
     if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
       echo "Usage: invoker-ctl set-merge-mode <workflowId> <mode>" >&2
-      echo "  mode: manual | automatic | github | external_review" >&2
+      echo "  mode: manual | automatic | external_review" >&2
       exit 1
     fi
     curl -sf -X POST -H 'Content-Type: application/json' \
@@ -127,12 +127,12 @@ case "${1:-}" in
     curl -sf -X POST "$BASE/api/tasks/$2/cancel" | fmt '.'
     ;;
 
-  restart)
+  retry-task)
     if [ -z "${2:-}" ]; then
-      echo "Usage: invoker-ctl restart <taskId>" >&2
+      echo "Usage: invoker-ctl retry-task <taskId>" >&2
       exit 1
     fi
-    curl -sf -X POST "$BASE/api/tasks/$2/restart" | fmt '.'
+    curl -sf -X POST "$BASE/api/tasks/$2/retry" | fmt '.'
     ;;
 
   resolve-conflict)
@@ -231,7 +231,7 @@ Usage:
   invoker-ctl audit <taskId>                   Show audit event log for a task
   invoker-ctl output <taskId>                  Show captured output for a task
   invoker-ctl cancel <taskId>                  Cancel a running task
-  invoker-ctl restart <taskId>                 Restart a failed task
+  invoker-ctl retry-task <taskId>              Retry a failed task
   invoker-ctl recreate-workflow <workflowId>    Recreate an entire workflow (bump generation)
   invoker-ctl resolve-conflict <taskId> [agent] Resolve merge conflict (→ awaiting_approval)
   invoker-ctl approve <taskId>                 Approve a task awaiting approval
@@ -241,7 +241,7 @@ Usage:
   invoker-ctl edit-type <taskId> <type>        Change a task's executor type
   invoker-ctl edit-agent <taskId> <agent>      Change a task's execution agent (claude|codex)
   invoker-ctl delete-workflow <workflowId>     Delete a workflow
-  invoker-ctl set-merge-mode <id> <mode>       Set merge mode (manual|automatic|github)
+  invoker-ctl set-merge-mode <id> <mode>       Set merge mode (manual|automatic|external_review)
 
 Environment:
   INVOKER_API_PORT    API port (default: 4100)

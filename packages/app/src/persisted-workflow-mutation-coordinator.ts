@@ -5,6 +5,7 @@ import {
   type WorkflowMutationPriority,
 } from '@invoker/data-store';
 import type { Logger, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import { parseReviewGateCiRepairWorkflowMutationArgs } from '@invoker/execution-engine';
 import { resolveHeadlessTarget } from './headless-command-classification.js';
 import { createWorkflowMutationTiming, type WorkflowMutationTiming } from './workflow-mutation-timing.js';
 import {
@@ -40,7 +41,7 @@ const TASK_SCOPED_MUTATION_CHANNELS = new Set([
   'invoker:reject',
   'invoker:provide-input',
   'invoker:select-experiment',
-  'invoker:restart-task',
+  'invoker:retry-task',
   'invoker:cancel-task',
   'invoker:recreate-task',
   'invoker:recreate-downstream',
@@ -593,6 +594,9 @@ export class PersistedWorkflowMutationCoordinator {
   private resolveIntentFailureTaskId(intent: WorkflowMutationIntent): string | undefined {
     if (intent.channel === 'headless.exec') {
       return this.resolveHeadlessIntentFailureTaskId(intent.args);
+    }
+    if (intent.channel === 'invoker:spawn-review-gate-ci-repair') {
+      return parseReviewGateCiRepairWorkflowMutationArgs(intent.args).sourceTaskId;
     }
     if (TARGET_RESOLVED_MUTATION_CHANNELS.has(intent.channel)) {
       return this.resolveTaskTarget(intent.args[0]);

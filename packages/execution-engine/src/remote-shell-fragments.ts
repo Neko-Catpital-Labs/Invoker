@@ -18,7 +18,9 @@ if [[ "$${varName}" == '~' ]]; then
 elif [[ "\${${varName}:0:2}" == '~/' ]]; then
   ${varName}="$HOME/\${${varName}:2}"
 fi
+export ${varName}
 INVOKER_ENV_FILE="$${varName}/env.sh"
+export INVOKER_ENV_FILE
 if [ -f "$INVOKER_ENV_FILE" ]; then
   . "$INVOKER_ENV_FILE"
 fi`;

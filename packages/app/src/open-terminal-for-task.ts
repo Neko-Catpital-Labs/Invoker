@@ -13,6 +13,7 @@ import {
   WorktreeExecutor,
   SshExecutor,
   type Executor,
+  type ExecutorHandle,
   type ExecutorRegistry,
   type AgentRegistry,
   type PersistedTaskMeta,
@@ -154,6 +155,13 @@ export type ResolveTaskTerminalSpecResult =
       executor: Executor;
     }
   | { ok: false; reason: string };
+
+export function shouldAttachEmbeddedTerminalToLiveExecutor(
+  meta: Pick<PersistedTaskMeta, 'agentSessionId'>,
+  liveHandle: { handle: Pick<ExecutorHandle, 'agentSessionId'>; executor: Pick<Executor, 'type'> } | undefined,
+): boolean {
+  return Boolean(liveHandle && (liveHandle.handle.agentSessionId || meta.agentSessionId));
+}
 
 export interface ResolveTaskTerminalSpecOptions {
   taskId: string;
@@ -354,12 +362,18 @@ export function openEmbeddedTerminalForTask(
   if (!resolved.ok) {
     return { opened: false, reason: resolved.reason };
   }
+  const attachToLiveExecutor = shouldAttachEmbeddedTerminalToLiveExecutor(
+    resolved.meta,
+    liveHandle,
+  );
   try {
     const session = embeddedTerminalManager.openOrReuse({
       taskId,
       spec: resolved.spec,
       cwd: resolved.cwd,
-      attach: liveHandle ? { handle: liveHandle.handle, executor: liveHandle.executor } : undefined,
+      attach: attachToLiveExecutor && liveHandle
+        ? { handle: liveHandle.handle, executor: liveHandle.executor }
+        : undefined,
     });
     return { opened: true, session };
   } catch (err) {

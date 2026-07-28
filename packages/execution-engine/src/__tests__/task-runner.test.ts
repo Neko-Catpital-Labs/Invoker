@@ -4222,6 +4222,145 @@ console.log(JSON.stringify(out));
       );
     });
 
+    it('publishes Invoker review stacks against master when workflow metadata says main', async () => {
+      const featureBranch = 'plan/planning-terminal-tmux-blank-repro';
+      const mergeTask = makeTask({
+        id: '__merge__wf-1',
+        status: 'running',
+        dependencies: ['t1'],
+        config: { isMergeNode: true, workflowId: 'wf-1' },
+      });
+      const allTasks = [
+        makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),
+        mergeTask,
+      ];
+      const orchestrator = {
+        getTask: (id: string) => allTasks.find(t => t.id === id),
+        getAllTasks: () => allTasks,
+        handleWorkerResponse: vi.fn(() => []),
+        setTaskAwaitingApproval: vi.fn(),
+        setTaskReviewReady: vi.fn(),
+        autoStartExternallyUnblockedReadyTasks: vi.fn(() => []),
+      };
+      const persistence = {
+        loadWorkflow: () => ({
+          id: 'wf-1',
+          onFinish: 'none',
+          mergeMode: 'external_review',
+          baseBranch: 'main',
+          featureBranch,
+          name: 'Planning Terminal Tmux Blank Repro',
+          repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker.git',
+          visualProof: true,
+        }),
+        updateTask: vi.fn(),
+      };
+      const mergeGateProvider = {
+        createReview: vi.fn(),
+      };
+      const executor = new TaskRunner({
+        orchestrator: orchestrator as any,
+        persistence: persistence as any,
+        executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+        cwd: '/tmp',
+        mergeGateProvider: mergeGateProvider as any,
+      });
+
+      const featureSha = 'feature-sha';
+      const gitCalls: string[][] = [];
+      (executor as any).execGitReadonly = async (args: string[]) => {
+        if (args[0] === 'rev-parse' && args[1] === '--verify') {
+          if (args[2] === 'refs/remotes/origin/master^{commit}') return 'origin-base-sha';
+          throw new Error(`missing ${args[2]}`);
+        }
+        if (args[0] === 'branch' && args[1] === '--show-current') return 'master';
+        return '';
+      };
+      (executor as any).execGitIn = async (args: string[], _dir: string) => {
+        gitCalls.push([...args]);
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return featureSha;
+        if (args[0] === 'rev-parse' && args[1] === '--verify') {
+          if (args[2] === `${featureBranch}^{commit}`) return featureSha;
+          if (args[2] === 'refs/remotes/origin/master^{commit}') return 'origin-base-sha';
+          if (args[2]?.includes('main')) throw new Error(`missing ${args[2]}`);
+          return 'task-sha';
+        }
+        if (args[0] === 'ls-remote') return `${featureSha}\trefs/heads/${featureBranch}`;
+        if (args[0] === 'diff' && args[1] === '--name-only') {
+          return 'packages/app/e2e/planning-terminal-tmux-blank-repro.spec.ts';
+        }
+        return '';
+      };
+      const createMergeWorktreeSpy = vi.fn().mockResolvedValue('/tmp/mock-wt');
+      (executor as any).createMergeWorktree = createMergeWorktreeSpy;
+      (executor as any).removeMergeWorktree = vi.fn();
+      (executor as any).runVisualProofCapture = vi.fn().mockResolvedValue('## Visual Proof');
+      (executor as any).publishReviewStackWithMakePrSkill = vi.fn().mockResolvedValue({
+        artifacts: [{
+          id: 'review-stack',
+          title: 'Planning Terminal Tmux Blank Repro',
+          url: 'https://github.com/owner/repo/pull/55',
+          providerId: 'owner/repo#55',
+          provider: 'github',
+          branch: featureBranch,
+          baseBranch: 'master',
+          required: true,
+          status: 'open',
+          generation: 0,
+        }],
+        sessionId: 'sess-review-stack',
+        agentName: 'codex',
+      });
+
+      await (executor as any).executeMergeNode(mergeTask);
+
+      expect(createMergeWorktreeSpy).toHaveBeenCalledWith(
+        'master',
+        expect.stringContaining('gate-__merge__wf-1'),
+        'https://github.com/Neko-Catpital-Labs/Invoker.git',
+      );
+      expect(gitCalls).toContainEqual([
+        'diff',
+        '--name-only',
+        `refs/remotes/origin/master...${featureBranch}`,
+        '--',
+      ]);
+      expect(gitCalls).not.toContainEqual([
+        'diff',
+        '--name-only',
+        `main...${featureBranch}`,
+        '--',
+      ]);
+      expect((executor as any).runVisualProofCapture).toHaveBeenCalledWith(
+        'master',
+        featureBranch,
+        'plan-planning-terminal-tmux-blank-repro',
+        'https://github.com/Neko-Catpital-Labs/Invoker.git',
+      );
+      expect((executor as any).publishReviewStackWithMakePrSkill).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseBranch: 'master',
+          featureBranch,
+          workflowSummary: expect.stringContaining('## Visual Proof'),
+        }),
+      );
+      expect(orchestrator.setTaskReviewReady).toHaveBeenCalledWith(
+        '__merge__wf-1',
+        expect.objectContaining({
+          execution: expect.objectContaining({
+            branch: featureBranch,
+            reviewGate: expect.objectContaining({
+              artifacts: [expect.objectContaining({
+                branch: featureBranch,
+                baseBranch: 'master',
+              })],
+            }),
+          }),
+        }),
+        expect.objectContaining({ generation: 0 }),
+      );
+    });
+
     it('executeMergeNode anchors external_review gate worktrees on the origin-backed base branch', async () => {
       const allTasks = [
         makeTask({ id: 't1', config: { workflowId: 'wf-1' }, status: 'completed', execution: { branch: 'experiment/t1' } }),

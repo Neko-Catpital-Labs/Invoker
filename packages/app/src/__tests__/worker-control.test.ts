@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_FIX_WORKER_KIND,
-  CI_FAILURE_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   CODERABBIT_ADDRESS_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
@@ -10,7 +9,6 @@ import {
   PR_CONFLICT_REBASE_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
-  REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
@@ -117,12 +115,10 @@ function controller(
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
   register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes pull request summaries.');
-  register(CI_FAILURE_WORKER_KIND, 'Repairs failed CI.');
   register(CODERABBIT_ADDRESS_WORKER_KIND, 'Addresses CodeRabbit review comments.');
   register(PR_CONFLICT_REBASE_WORKER_KIND, 'Rebases conflicted pull requests.');
   register(PR_CI_FAILURE_SCAN_WORKER_KIND, 'Scans mapped PRs for failing CI.');
   register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Lands eligible PRs via admin bypass.');
-  register(REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND, 'Orders rebase-recreate on merge conflicts.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
   register('external-preview', 'External preview worker.');
@@ -149,8 +145,6 @@ describe('createWorkerRuntimeController', () => {
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(snapshot.workers.find((worker) => worker.kind === CI_FAILURE_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(snapshot.workers.find((worker) => worker.kind === REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === CODERABBIT_ADDRESS_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CONFLICT_REBASE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_CI_FAILURE_SCAN_WORKER_KIND)?.lifecycle).toBe('running');
@@ -161,7 +155,7 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
 
-  it('gates PR-maintenance cron workers on prMaintenance.enabled but always starts review-gate-merge-conflict', () => {
+  it('gates PR-maintenance cron workers on prMaintenance.enabled', () => {
     const setup = controller(autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: false }));
 
     setup.controller.startAutoStartedWorkers();
@@ -172,7 +166,6 @@ describe('createWorkerRuntimeController', () => {
       expect(row?.lifecycle).toBe('stopped');
       expect(row?.startable).toBe(true);
     }
-    expect(snapshot.workers.find((worker) => worker.kind === REVIEW_GATE_MERGE_CONFLICT_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
   });
 
@@ -267,7 +260,6 @@ describe('createWorkerRuntimeController', () => {
 
     for (const kind of [
       AUTO_FIX_WORKER_KIND,
-      CI_FAILURE_WORKER_KIND,
       CODERABBIT_ADDRESS_WORKER_KIND,
       PR_CONFLICT_REBASE_WORKER_KIND,
       PR_CI_FAILURE_SCAN_WORKER_KIND,

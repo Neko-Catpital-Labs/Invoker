@@ -60,10 +60,8 @@ describe('resolveHeadlessOwnerLaunchSpec', () => {
       which: () => undefined,
       existsSync: (path) => path === '/repo/scripts/electron.cjs' || path === '/repo/packages/app/dist/main.js',
     })).toEqual({
-      command: 'xvfb-run',
+      command: './scripts/electron.cjs',
       args: [
-        '--auto-servernum',
-        './scripts/electron.cjs',
         ...LINUX_HEADLESS_ELECTRON_FLAGS,
         'packages/app/dist/main.js',
         '--headless',

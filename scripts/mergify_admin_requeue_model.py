@@ -78,6 +78,13 @@ class StackGroup:
     stack_id: str
     prs: tuple[PrSnapshot, ...]
 
+@dataclass(frozen=True)
+class LoadedStacks:
+    stacks: tuple[StackGroup, ...]
+    open_pr_numbers_by_head: Mapping[str, tuple[int, ...]]
+
+
+
 
 @dataclass(frozen=True)
 class Blocker:

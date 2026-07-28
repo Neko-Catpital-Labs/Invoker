@@ -456,7 +456,7 @@ describe('Parity: API endpoints wire to facade methods', () => {
     orchestratorMethod: string;
     expectTopup: boolean;
   }> = [
-    { name: 'POST /api/tasks/:id/restart', method: 'POST', path: '/api/tasks/task-1/restart', orchestratorMethod: 'retryTask', expectTopup: true },
+    { name: 'POST /api/tasks/:id/retry', method: 'POST', path: '/api/tasks/task-1/retry', orchestratorMethod: 'retryTask', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit', method: 'POST', path: '/api/tasks/task-1/edit', body: { command: 'echo ok' }, orchestratorMethod: 'editTaskCommand', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit-prompt', method: 'POST', path: '/api/tasks/task-1/edit-prompt', body: { prompt: 'do it' }, orchestratorMethod: 'editTaskPrompt', expectTopup: true },
     { name: 'POST /api/tasks/:id/edit-agent', method: 'POST', path: '/api/tasks/task-1/edit-agent', body: { agent: 'codex' }, orchestratorMethod: 'editTaskAgent', expectTopup: true },
@@ -498,13 +498,21 @@ describe('Parity: API endpoints wire to facade methods', () => {
     expect(mocks.orchestrator.provideInput).toHaveBeenCalledWith('task-1', 'yes');
   });
 
-  it('POST /api/workflows/:id/restart routes through facade recreateWorkflow', async () => {
-    const res = await httpRequest(port, 'POST', '/api/workflows/wf-1/restart');
+  it('POST /api/workflows/:id/recreate routes through facade recreateWorkflow', async () => {
+    const res = await httpRequest(port, 'POST', '/api/workflows/wf-1/recreate');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(mocks.persistence.loadWorkflow).toHaveBeenCalledWith('wf-1');
     expect(mocks.persistence.updateWorkflow).toHaveBeenCalled();
     expect(mocks.orchestrator.recreateWorkflow).toHaveBeenCalled();
+  });
+
+  it('removed legacy /restart API aliases return 404', async () => {
+    const taskRes = await httpRequest(port, 'POST', '/api/tasks/task-1/restart');
+    const workflowRes = await httpRequest(port, 'POST', '/api/workflows/wf-1/restart');
+
+    expect(taskRes.status).toBe(404);
+    expect(workflowRes.status).toBe(404);
   });
 });
 
@@ -607,16 +615,6 @@ describe('Parity: CommandService routes to correct orchestrator primitives', () 
     expect(result.ok).toBe(true);
     expect(orchestrator.revertFixSession).toHaveBeenCalledWith('task-1', { savedError: 'merge conflict' });
     expect(orchestrator.reject).not.toHaveBeenCalled();
-  });
-
-  it('restartTask (deprecated) delegates to recreateTask', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const result = await commandService.restartTask(envelope({ taskId: 'task-1' }));
-
-    expect(result.ok).toBe(true);
-    expect(orchestrator.recreateTask).toHaveBeenCalledWith('task-1');
-    expect(orchestrator.retryTask).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
   });
 
   it('all commands wrap OrchestratorError into { ok: false }', async () => {

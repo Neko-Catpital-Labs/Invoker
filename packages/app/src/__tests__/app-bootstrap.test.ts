@@ -5,12 +5,14 @@ import {
   shouldTreatAsDaemonOwnerLoss,
   configureEarlyElectronApp,
   formatGuiOwnerBootstrapFallbackMessage,
+  guiAutoOwnerBootstrapTimeoutMs,
   guiOwnerBootstrapTimeoutMs,
   isMutationOwnerUnavailableError,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
   resolveElectronUserDataDir,
   runElectronReadyBootstrap,
+  shouldBootstrapDaemonOwner,
   shouldRefreshGuiOwnerRoute,
   startGuiModeBootstrap,
   startMainProcessBootstrap,
@@ -241,11 +243,14 @@ describe('app-bootstrap', () => {
     expect(order).toEqual(['headless', 'gui']);
   });
 
-  it('defaults GUI owner startup to auto discovery instead of daemon bootstrap', () => {
+  it('keeps auto as the default owner preference while preferring daemon bootstrap', () => {
     expect(resolveGuiOwnerPreference({})).toBe('auto');
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'daemon' })).toBe('daemon');
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'local' })).toBe('gui');
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_DAEMON_OWNER: '1' })).toBe('daemon');
+    expect(shouldBootstrapDaemonOwner('auto')).toBe(true);
+    expect(shouldBootstrapDaemonOwner('daemon')).toBe(true);
+    expect(shouldBootstrapDaemonOwner('gui')).toBe(false);
   });
 
   it('refreshes GUI owner routing for daemon-backed GUI clients only', () => {
@@ -289,10 +294,12 @@ describe('app-bootstrap', () => {
     expect(isMutationOwnerUnavailableError(new Error('timeout'))).toBe(false);
   });
 
-  it('uses a bounded daemon bootstrap timeout and ignores invalid overrides', () => {
+  it('uses bounded daemon bootstrap timeouts and ignores invalid overrides', () => {
     expect(guiOwnerBootstrapTimeoutMs({ INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS: '2500' })).toBe(2500);
     expect(guiOwnerBootstrapTimeoutMs({ INVOKER_GUI_OWNER_BOOTSTRAP_TIMEOUT_MS: '-1' })).toBe(60000);
     expect(guiOwnerBootstrapTimeoutMs({ INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS: '1200' })).toBe(1200);
+    expect(guiAutoOwnerBootstrapTimeoutMs({ INVOKER_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS: '900' })).toBe(900);
+    expect(guiAutoOwnerBootstrapTimeoutMs({ INVOKER_GUI_AUTO_OWNER_BOOTSTRAP_TIMEOUT_MS: '0' })).toBe(5000);
   });
 
   it('formats daemon bootstrap failures with a local owner recovery path', () => {

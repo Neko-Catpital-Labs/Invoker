@@ -43,7 +43,6 @@ import {
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
-import { selectHarnessSessionDriver } from '@invoker/surfaces';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
@@ -119,6 +118,10 @@ interface PlannerSurfacesModule {
   DEFAULT_HARNESS_PRESET: string;
   PlanConversation: PlanConversationConstructor;
   extractYamlPlan: (output: string) => string | null;
+  selectHarnessSessionDriver: (
+    preset: HarnessPreset,
+    deps: Pick<InAppPlannerDeps, 'executionAgentRegistry' | 'planningCommandBuilder'>,
+  ) => PlanConversationConfig['harnessSessionDriver'];
 }
 
 async function loadPlannerSurfaces(): Promise<PlannerSurfacesModule> {
@@ -178,6 +181,146 @@ function labelForPresetKey(key: string): string {
     default:
       return key.replaceAll('+', ' + ');
   }
+}
+
+export const PLANNING_TERMINAL_SUMMARY_BRIDGE_START = '=== Invoker planning tmux bridge ===';
+export const PLANNING_TERMINAL_SUMMARY_BRIDGE_END = '=== End Invoker planning tmux bridge ===';
+
+const PLANNING_TERMINAL_BRIDGE_TEXT_LIMIT = 220;
+const PLANNING_TERMINAL_BRIDGE_STEP_LIMIT = 3;
+
+function oneLine(value: string): string {
+  return value
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function truncatedLine(value: string, limit = PLANNING_TERMINAL_BRIDGE_TEXT_LIMIT): string {
+  const normalized = oneLine(value);
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
+}
+
+function planningStatusLabel(status: InAppPlanningSessionStatus): string {
+  switch (status) {
+    case 'still_discussing':
+      return 'still discussing';
+    case 'waiting_for_answer':
+      return 'waiting for answer';
+    case 'draft_ready':
+      return 'draft ready';
+    case 'submitted':
+      return 'submitted';
+  }
+}
+
+function latestMessage(
+  session: InAppPlanningChatSession,
+  role: InAppPlanningChatLine['role'],
+): InAppPlanningChatLine | undefined {
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const message = session.messages[index];
+    if (message?.role === role) return message;
+  }
+  return undefined;
+}
+
+function draftSummaryLine(summary: InAppPlanningPlanSummary): string {
+  const workflowText = summary.workflowCount && summary.workflowCount > 1
+    ? `${summary.workflowCount} workflows, `
+    : '';
+  const taskText = `${summary.taskCount} ${summary.taskCount === 1 ? 'task' : 'tasks'}`;
+  const steps = summary.steps
+    .slice(0, PLANNING_TERMINAL_BRIDGE_STEP_LIMIT)
+    .map((step) => truncatedLine(step, 96))
+    .filter(Boolean)
+    .join('; ');
+  return steps
+    ? `${truncatedLine(summary.name, 96)} (${workflowText}${taskText}) - ${steps}`
+    : `${truncatedLine(summary.name, 96)} (${workflowText}${taskText})`;
+}
+
+function planningNextActionLine(session: InAppPlanningChatSession): string {
+  switch (session.status) {
+    case 'still_discussing':
+      return 'Next: Continue the planning chat to resolve the plan, or use this shell for repo inspection.';
+    case 'waiting_for_answer':
+      return 'Next: Answer the planner in chat, or inspect context here before replying.';
+    case 'draft_ready':
+      return 'Next: Review or submit the draft in chat; use this shell for manual context checks.';
+    case 'submitted':
+      return 'Next: Review the submitted workflow in Invoker; submitted planning sessions stay read-only.';
+  }
+}
+
+export function buildPlanningTerminalSummaryBridge(session: InAppPlanningChatSession): string {
+  const presetLabel = labelForPresetKey(session.presetKey);
+  const latestUser = latestMessage(session, 'user');
+  const latestAssistant = latestMessage(session, 'assistant');
+  const lines = [
+    PLANNING_TERMINAL_SUMMARY_BRIDGE_START,
+    `Planning session: ${truncatedLine(session.title, 96)}`,
+    `Status: ${planningStatusLabel(session.status)}`,
+    `Preset: ${presetLabel} (${session.presetKey})`,
+  ];
+
+  if (latestUser) {
+    lines.push(`Latest user: ${truncatedLine(latestUser.text)}`);
+  }
+  if (session.draftPlanSummary) {
+    lines.push(`Draft plan: ${draftSummaryLine(session.draftPlanSummary)}`);
+  } else if (latestAssistant) {
+    lines.push(`Latest assistant: ${truncatedLine(latestAssistant.text)}`);
+  }
+  if (session.submittedPlanName || session.submittedWorkflowId) {
+    const submittedName = session.submittedPlanName
+      ? truncatedLine(session.submittedPlanName, 96)
+      : 'unnamed plan';
+    const workflowText = session.submittedWorkflowId
+      ? ` (workflow ${session.submittedWorkflowId})`
+      : '';
+    lines.push(`Submitted plan: ${submittedName}${workflowText}`);
+  }
+
+  lines.push(planningNextActionLine(session), PLANNING_TERMINAL_SUMMARY_BRIDGE_END, '');
+  return `${lines.join('\n')}\n`;
+}
+
+export function ensurePlanningTerminalSummaryBridge(
+  session: InAppPlanningChatSession,
+  outputSnapshot: string | null | undefined,
+  maxLength?: number,
+): string {
+  const snapshot = outputSnapshot ?? '';
+  const bridge = buildPlanningTerminalSummaryBridge(session);
+  const startIndex = snapshot.indexOf(PLANNING_TERMINAL_SUMMARY_BRIDGE_START);
+  let prefix = '';
+  let suffix: string;
+  if (startIndex === -1) {
+    suffix = snapshot;
+  } else {
+    const endIndex = snapshot.indexOf(PLANNING_TERMINAL_SUMMARY_BRIDGE_END, startIndex);
+    if (endIndex === -1) {
+      return maxLength === undefined || snapshot.length <= maxLength
+        ? snapshot
+        : snapshot.slice(snapshot.length - maxLength);
+    }
+    const suffixStartIndex = endIndex + PLANNING_TERMINAL_SUMMARY_BRIDGE_END.length;
+    prefix = snapshot.slice(0, startIndex);
+    suffix = snapshot.slice(suffixStartIndex).replace(/^(?:\r?\n){1,2}/, '');
+  }
+  if (maxLength === undefined) {
+    return `${prefix}${bridge}${suffix}`;
+  }
+  // Reserve room for the full bridge so a near-cap persisted snapshot can't push it
+  // out immediately; trim the older raw output instead of the freshly composed bridge.
+  const rest = `${prefix}${suffix}`;
+  const keepableRestLength = Math.max(0, maxLength - bridge.length);
+  const trimmedRest = rest.length <= keepableRestLength
+    ? rest
+    : rest.slice(rest.length - keepableRestLength);
+  return `${bridge}${trimmedRest}`;
 }
 
 function titleFromMessage(message: string): string {
@@ -240,6 +383,8 @@ function clearStarterPromptIfUnused(session: InAppPlanningChatSession): void {
 function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary' | 'draftPlanText'>): boolean {
   return Boolean(session.draftPlanText || session.draftPlanSummary);
 }
+
+const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
   return {
@@ -372,6 +517,7 @@ function planConversationConfig(
   preset: HarnessPreset,
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'onRawPlannerOutput'>,
   threadTs: string,
+  selectHarnessSessionDriver: PlannerSurfacesModule['selectHarnessSessionDriver'],
   options: { conversationalPlanning?: boolean } = {},
 ): PlanConversationConfig {
   return {
@@ -417,7 +563,7 @@ async function createSession(
     return { error: `Unknown planner preset "${presetKey}".` };
   }
 
-  const { PlanConversation } = await loadPlannerSurfaces();
+  const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
   const createdAt = new Date().toISOString();
   const id = randomUUID();
   const confirmationMode = normalizePlanningConfirmationMode(
@@ -431,7 +577,7 @@ async function createSession(
     confirmationMode,
     status: 'still_discussing',
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id, { conversationalPlanning: true })),
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id, selectHarnessSessionDriver, { conversationalPlanning: true })),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
@@ -481,8 +627,8 @@ export async function planFromGoal(
   }
 
   try {
-    const { PlanConversation, extractYamlPlan } = await loadPlannerSurfaces();
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID()));
+    const { PlanConversation, extractYamlPlan, selectHarnessSessionDriver } = await loadPlannerSurfaces();
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, randomUUID(), selectHarnessSessionDriver));
     const plannerOutput = await conversation.sendMessage(goal);
     const planText = extractYamlPlan(plannerOutput);
     if (!planText) {
@@ -553,9 +699,21 @@ export async function sendPlanningChatMessage(
     return { ok: false, sessionId: rawRequest?.sessionId, error: 'Type a message first.' };
   }
 
-  let sessionId = rawRequest?.sessionId;
+  const suppliedSessionId = typeof rawRequest?.sessionId === 'string'
+    ? rawRequest.sessionId
+    : undefined;
+  let sessionId = suppliedSessionId;
   try {
-    let session = rawRequest?.sessionId ? deps.sessions.get(rawRequest.sessionId) : undefined;
+    let session = suppliedSessionId === undefined
+      ? undefined
+      : deps.sessions.get(suppliedSessionId);
+    if (suppliedSessionId !== undefined && !session) {
+      return {
+        ok: false,
+        sessionId: suppliedSessionId,
+        error: `Planning session "${suppliedSessionId}" was not found.`,
+      };
+    }
     if (!session) {
       const created = await createSession({
         presetKey: rawRequest?.presetKey,
@@ -703,6 +861,9 @@ export async function submitPlanningChatDraft(
   }
   if (session.pendingSubmit) {
     return session.pendingSubmit;
+  }
+  if (session.status !== 'draft_ready' || !session.draftPlanText?.trim()) {
+    return { ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR };
   }
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
@@ -860,13 +1021,13 @@ export async function restorePlanningChatSessions(
   // boots without surfaces/dist, so an eager load here would crash startup with no sessions.
   if (records.length === 0) return;
   const presets = await resolveHarnessPresets(deps.config);
-  const { PlanConversation } = await loadPlannerSurfaces();
+  const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
 
   for (const record of records) {
     const preset = presets[record.presetKey];
     if (!preset) continue;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id));
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id, selectHarnessSessionDriver));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;

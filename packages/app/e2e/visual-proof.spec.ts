@@ -797,6 +797,63 @@ test.describe('Visual proof capture', () => {
     });
   });
 
+  test('planning rail — per-row delete and clear-submitted controls', async ({ page }) => {
+    // Regression/visual proof for the Planning rail delete controls: a
+    // per-row trash button on every session row, and a header "Clear
+    // submitted" button. Needs at least one 'submitted' session (to enable
+    // "Clear submitted") and at least one other-status session (to show the
+    // rail with more than one row of trash buttons).
+    const plannedYaml = yamlStringify(TERMINAL_PLANNED_PLAN);
+    const fullPlanReply = `I drafted the plan.\n\n\`\`\`yaml\n${plannedYaml}\`\`\``;
+    await page.evaluate(async ({ planYaml, planName, reply }) => {
+      await window.invoker.setTestPlanningChatResponse({ planYaml, planName, reply });
+    }, { planYaml: plannedYaml, planName: 'Terminal Planned Flow', reply: fullPlanReply });
+
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+    await page.getByTestId('invoker-terminal-input').fill('Draft a plan to submit');
+    await page.getByRole('button', { name: 'Send' }).click();
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
+    await page.getByRole('button', { name: 'Review draft' }).click();
+    await expect(page.getByRole('heading', { name: 'Review draft' })).toBeVisible();
+    await page.getByTestId('planning-create-workflow').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+
+    // A second, non-submitted session alongside the now-submitted one:
+    // this is what makes the active session non-read-only, which is what
+    // reveals the per-row trash buttons on every row (including the
+    // submitted row) plus the enabled "Clear submitted" header button.
+    await page.getByRole('button', { name: 'New chat' }).click();
+
+    const rows = page.getByTestId('planning-session-row');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.first().getByRole('button', { name: 'Delete planning chat' })).toBeVisible();
+    await expect(rows.last().getByRole('button', { name: 'Delete planning chat' })).toBeVisible();
+
+    const clearSubmittedButton = page.getByRole('button', { name: 'Clear submitted' });
+    await expect(clearSubmittedButton).toBeEnabled();
+
+    await captureScreenshot(page, 'planning-rail-delete-controls');
+
+    // The native window.confirm() dialog Playwright/Electron shows for
+    // "Clear submitted" is an OS-level modal, not part of the page DOM, so
+    // it cannot be meaningfully captured via captureScreenshot (which
+    // screenshots the Electron page content). We only verify the dialog
+    // fires with the expected copy, then dismiss it without deleting
+    // anything, and skip a second screenshot of that moment.
+    let confirmDialogMessage: string | null = null;
+    page.once('dialog', (dialog) => {
+      confirmDialogMessage = dialog.message();
+      dialog.dismiss().catch(() => {});
+    });
+    await clearSubmittedButton.click();
+    await expect.poll(() => confirmDialogMessage).toBe('Clear all submitted planning chats? This cannot be undone.');
+    await expect(rows).toHaveCount(2);
+  });
+
   test('terminal planning captures long transcript follow surface', async ({ page }) => {
     const longTranscriptPlan = {
       ...TERMINAL_PLANNED_PLAN,

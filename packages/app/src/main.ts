@@ -10,8 +10,10 @@ import {
   configureEarlyElectronApp,
   createDaemonOwnerLossController,
   formatGuiOwnerBootstrapFallbackMessage,
+  guiAutoOwnerBootstrapTimeoutMs,
   guiOwnerBootstrapTimeoutMs,
   isMutationOwnerUnavailableError,
+  shouldBootstrapDaemonOwner,
   shouldTreatAsDaemonOwnerLoss,
   registerGuiLifecycleHandlers,
   resolveGuiOwnerPreference,
@@ -42,6 +44,7 @@ import {
   OrchestratorError,
   OrchestratorErrorCode,
   buildWorkflowInvalidationDeps,
+  normalizeWorkflowBaseBranch,
 } from '@invoker/workflow-core';
 import type {
   TaskDelta,
@@ -83,7 +86,6 @@ import {
   ExecutorRegistry,
   TaskRunner,
   WorktreeExecutor,
-  CI_FAILURE_WORKER_KIND,
   initializeShellEnvironment,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
@@ -94,8 +96,10 @@ import {
   registerBuiltinWorkers,
   parseRequeueMutationArgs,
   parseRequeueEscalateMutationArgs,
+  parseReviewGateCiRepairWorkflowMutationArgs,
+  parseReviewGateStackCiRepairWorkflowMutationArgs,
+  fetchOpenStackPrs,
   reconcileTerminalWorkerActionsOnStartup,
-  resetAutoFixBudgetForTasks,
   type AgentRegistry,
   type WorkerRegistry,
   type WorkerRuntimeDependencies,
@@ -105,6 +109,7 @@ import {
   DEFAULT_SLACK_HARNESS_PRESETS,
   loadConfig,
   resolveAutoFixExecutionModel,
+  resolveAutoFixPoolId,
   resolveConfigFileState,
   resolvePrMaintenanceWorkerConfig,
   type InvokerConfig,
@@ -130,6 +135,10 @@ import {
   isHeadlessReadOnlyCommand,
   resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
+import {
+  isHeadlessHelpCommand,
+  isRemovedHeadlessCommandAlias,
+} from './headless-command-registry.js';
 import { backupPlan } from './plan-backup.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
@@ -145,6 +154,7 @@ import {
   wireHeadlessApproveHook,
   type HeadlessDeps,
 } from './headless.js';
+import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
@@ -194,6 +204,8 @@ import {
   buildHeadlessFixArgs,
   parseFixWithAgentMutationArgs,
 } from './auto-fix-intents.js';
+import { spawnReviewGateCiRepairWorkflow } from './review-gate-ci-repair-workflow.js';
+import { spawnReviewGateStackCiRepairWorkflow } from './review-gate-stack-repair-workflow.js';
 import { persistShutdownDiagnostic } from './shutdown-diagnostic.js';
 import { buildCurrentActionGraphSnapshot } from './action-graph-snapshot.js';
 import { answerOwnerHeadlessQuery, buildOwnerReadQueryHandlers } from './owner-read-query.js';
@@ -329,6 +341,7 @@ function buildRegisteredOwnerWorkerDeps(
       attemptLedger: autoFixAttemptLedger,
       getAutoFixAgent: () => invokerConfig.autoFixAgent,
       getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+      getAutoFixPoolId: () => resolveAutoFixPoolId(invokerConfig),
     },
     requeue: {
       stallRequeueRetries: invokerConfig.stallRequeueRetries,
@@ -509,11 +522,10 @@ async function discoverStandaloneOwnerForGui(waitMs: number): Promise<boolean> {
   }
 }
 
-async function ensureStandaloneOwnerForGui(): Promise<void> {
+async function ensureStandaloneOwnerForGui(timeoutMs: number = guiOwnerBootstrapTimeoutMs()): Promise<void> {
   if (await discoverStandaloneOwnerForGui(2_000)) return;
 
   const invokerHomeRoot = resolveInvokerHomeRoot();
-  const timeoutMs = guiOwnerBootstrapTimeoutMs();
   const bootstrapLock = tryAcquireOwnerBootstrapLock(invokerHomeRoot);
   try {
     if (bootstrapLock) {
@@ -812,9 +824,6 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     defaultPoolId: invokerConfig.defaultPoolId,
     availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
     deferRunningUntilLaunch: true,
-    onRecreateTasksReset: (taskIds) => {
-      resetAutoFixBudgetForTasks(persistence, taskIds);
-    },
   });
   commandService = new CommandService(
     orchestrator,
@@ -865,6 +874,18 @@ function startHeadlessMode(): void {
     const mutatingMode = isHeadlessMutatingCommand(cliArgs);
     const standaloneMode = process.env.INVOKER_HEADLESS_STANDALONE === '1' || command === 'owner-serve';
     const ownsHeadlessShutdown = standaloneMode && !readOnlyMode && command === 'owner-serve';
+
+    if (isHeadlessHelpCommand(command)) {
+      printHeadlessUsage();
+      process.exit(0);
+      return;
+    }
+
+    if (isRemovedHeadlessCommandAlias(command)) {
+      process.stderr.write(`${RED}Error:${RESET} Unknown command: ${command}. Run with --help for usage.\n`);
+      process.exit(1);
+      return;
+    }
 
     // Try delegation for mutating commands first (owner mode).
     // In standalone mode we skip delegation and run locally.
@@ -1112,9 +1133,6 @@ function startHeadlessMode(): void {
               defaultPoolId: invokerConfig.defaultPoolId,
               availablePoolIds: Object.keys(invokerConfig.executionPools ?? {}),
               deferRunningUntilLaunch: true,
-              onRecreateTasksReset: (taskIds) => {
-                resetAutoFixBudgetForTasks(persistence, taskIds);
-              },
             });
             commandService = new CommandService(
               orchestrator,
@@ -1269,7 +1287,7 @@ function startHeadlessMode(): void {
           }
           case 'invoker:set-merge-branch': {
             const workflowId = String(payload.args[0]);
-            const baseBranch = String(payload.args[1]);
+            const baseBranch = normalizeWorkflowBaseBranch(String(payload.args[1]), 'master');
             persistence.updateWorkflow(workflowId, { baseBranch });
             const tasks = persistence.loadTasks(workflowId);
             const mergeTask = tasks.find((task) => task.config.isMergeNode);
@@ -1495,6 +1513,37 @@ function startHeadlessMode(): void {
             return { ok: true };
           });
         }
+        if (!workflowMutationDispatcher.has('invoker:spawn-review-gate-ci-repair')) {
+          workflowMutationDispatcher.set('invoker:spawn-review-gate-ci-repair', async (...repairArgs: unknown[]) => {
+            const args = parseReviewGateCiRepairWorkflowMutationArgs(repairArgs);
+            return spawnReviewGateCiRepairWorkflow(args, {
+              orchestrator,
+              persistence,
+              logger,
+              allowGraphMutation: invokerConfig.allowGraphMutation,
+            });
+          });
+        }
+        if (!workflowMutationDispatcher.has('invoker:spawn-review-gate-stack-ci-repair')) {
+          workflowMutationDispatcher.set('invoker:spawn-review-gate-stack-ci-repair', async (...repairArgs: unknown[]) => {
+            const args = parseReviewGateStackCiRepairWorkflowMutationArgs(repairArgs);
+            return spawnReviewGateStackCiRepairWorkflow(args, {
+              orchestrator,
+              persistence,
+              logger,
+              allowGraphMutation: invokerConfig.allowGraphMutation,
+              fetchOpenStackPrs: () => {
+                const repo = process.env.INVOKER_GITHUB_TARGET_REPO?.trim();
+                if (!repo) {
+                  throw new Error(
+                    'invoker:spawn-review-gate-stack-ci-repair requires INVOKER_GITHUB_TARGET_REPO to be set.',
+                  );
+                }
+                return fetchOpenStackPrs({ repo, cwd: repoRoot });
+              },
+            });
+          });
+        }
         if (!workflowMutationDispatcher.has('invoker:requeue')) {
           workflowMutationDispatcher.set('invoker:requeue', async (...requeueArgs: unknown[]) => {
             const { taskId } = parseRequeueMutationArgs(requeueArgs);
@@ -1616,6 +1665,8 @@ function startHeadlessMode(): void {
             ok: true,
             ownerId: workflowMutationOwnerId,
             mode: 'standalone',
+            buildVersion,
+            buildSha,
           };
         });
         messageBus.onRequest('headless.query', async (req: unknown) =>
@@ -1732,25 +1783,6 @@ function startHeadlessMode(): void {
           );
         }
         workerRuntimeController.startAutoStartedWorkers();
-        if (command === 'owner-serve') {
-          const ownerServeTaskExecutor = createStandaloneTaskExecutor();
-          const apiServerDeps = buildHeadlessApiServerDeps(headlessDeps, ownerServeTaskExecutor);
-          headlessWebBridge = startWebSurfaceForHeadless(
-            {
-              logger,
-              orchestrator,
-              persistence,
-              messageBus,
-              executionAgentRegistry: agentRegistry,
-              invokerConfig,
-              repoRoot,
-              executorRegistry,
-              appRootDir: __dirname,
-            },
-            apiServerDeps,
-          );
-        }
-
         // Owner discovery and exec handlers must exist before dispatch polling starts.
         if (!readOnlyMode) {
           standaloneLaunchDispatcherController = startStandaloneLaunchDispatcher({
@@ -1771,6 +1803,7 @@ function startHeadlessMode(): void {
               messageBus,
               executionAgentRegistry: agentRegistry,
               invokerConfig,
+              repoRoot,
               appRootDir: __dirname,
             },
             apiServerDeps,
@@ -2435,16 +2468,17 @@ startMainProcessBootstrap({
         process.stderr.write(`${YELLOW}Warning:${RESET} ${fallbackMessage}\n`);
         daemonGuiOwner = false;
       }
-    } else if (guiOwnerPreference === 'auto') {
-      recordStartupMark('daemonOwner.discover.start');
+    } else if (shouldBootstrapDaemonOwner(guiOwnerPreference)) {
+      recordStartupMark('daemonOwner.bootstrap.start');
       try {
-        daemonGuiOwner = await discoverStandaloneOwnerForGui(1_000);
+        await ensureStandaloneOwnerForGui(guiAutoOwnerBootstrapTimeoutMs());
+        daemonGuiOwner = true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        logger.warn(`daemon owner auto-discovery failed; starting GUI owner locally: ${message}`, { module: 'init' });
+        logger.warn(`daemon owner auto-bootstrap failed; starting GUI owner locally: ${message}`, { module: 'init' });
         daemonGuiOwner = false;
       }
-      recordStartupMark('daemonOwner.discover.end', { daemonOwner: daemonGuiOwner });
+      recordStartupMark('daemonOwner.bootstrap.end', { daemonOwner: daemonGuiOwner });
     }
 
     if (daemonGuiOwner) {
@@ -2669,6 +2703,8 @@ startMainProcessBootstrap({
         ok: true,
         ownerId: workflowMutationOwnerId,
         mode: 'gui',
+        buildVersion,
+        buildSha,
       }));
       messageBus.onRequest('headless.query', async (req: unknown) =>
         answerOwnerHeadlessQuery(req, buildOwnerReadQueryHandlers({

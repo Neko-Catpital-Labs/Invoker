@@ -42,7 +42,7 @@ export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
 const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
-const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:restart-task';
+const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:retry-task';
 const AUTO_FIX_ACTION_TYPE = 'auto-fix';
 const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
 
@@ -83,6 +83,8 @@ export interface AutoFixWorkerConfig {
   getAutoFixAgent?: () => string | undefined;
   /** Resolves the execution model used by worker-submitted auto-fixes. */
   getAutoFixExecutionModel?: () => string | undefined;
+  /** Resolves the execution pool/target used by worker-submitted auto-fixes. */
+  getAutoFixPoolId?: () => string | undefined;
 }
 
 

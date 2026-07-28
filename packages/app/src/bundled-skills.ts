@@ -56,6 +56,29 @@ function listBundledSkillNames(sourceRoot: string): string[] {
     .sort();
 }
 
+/** A SKILL.md must open with a YAML frontmatter block (`---` … `---`); the agent
+ * runtimes (codex, claude, omp) reject one without it. A botched stacked-PR
+ * conflict resolution has gutted plan-to-invoker/SKILL.md into a raw `git show`
+ * blob before (commit fd5c6bbfc), and the old blind cpSync then mirrored that
+ * corruption into every agent's global skill store — poisoning executions on
+ * every branch, since the store lives outside the per-worktree sandbox. Fail the
+ * install loudly instead of propagating a skill no agent can load. */
+function assertSkillSourceValid(sourceDir: string, skillName: string): void {
+  const skillMd = path.join(sourceDir, 'SKILL.md');
+  const content = readFileSync(skillMd, 'utf8');
+  const lines = content.split('\n');
+  const hasFrontmatter = lines[0]?.trim() === '---'
+    && lines.slice(1).some((line) => line.trim() === '---');
+  if (!hasFrontmatter) {
+    const preview = content.slice(0, 80).replace(/\s+/g, ' ').trim();
+    throw new Error(
+      `Bundled skill "${skillName}" has a corrupt SKILL.md at ${skillMd}: missing YAML `
+      + 'frontmatter delimited by ---. The bundled source looks damaged (starts with '
+      + `"${preview}"). Restore it from a clean checkout, then reinstall skills.`,
+    );
+  }
+}
+
 function hashDirectory(root: string): string {
   const hash = createHash('sha256');
 
@@ -465,6 +488,9 @@ export function installBundledSkills(
   }
 
   const bundledSkillNames = listBundledSkillNames(sourceRoot);
+  for (const skillName of bundledSkillNames) {
+    assertSkillSourceValid(path.join(sourceRoot, skillName), skillName);
+  }
   const bundledHash = hashDirectory(sourceRoot);
   const installedNames = prefixedSkillNames(bundledSkillNames);
   const targets = resolveManagedTargets();

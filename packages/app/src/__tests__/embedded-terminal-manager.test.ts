@@ -26,7 +26,10 @@ import {
   type PtyLike,
   type PtySpawnFn,
 } from '../embedded-terminal-manager.js';
-import { resolveTaskTerminalSpec } from '../open-terminal-for-task.js';
+import {
+  resolveTaskTerminalSpec,
+  shouldAttachEmbeddedTerminalToLiveExecutor,
+} from '../open-terminal-for-task.js';
 import {
   ExecutorRegistry,
   WorktreeExecutor,
@@ -366,6 +369,34 @@ describe('EmbeddedTerminalManager', () => {
     const snapshot = mgr.get(session.sessionId)?.outputSnapshot;
     expect(snapshot).toHaveLength(maxSnapshotChars);
     expect(snapshot).toBe(`${'a'.repeat(maxSnapshotChars - 'tail'.length)}tail`);
+  });
+
+  it('bounds restored spawn session snapshots to the most recent 64 KiB', () => {
+    const maxSnapshotChars = 64 * 1024;
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => spawned),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.restoreSpawnSession({
+      sessionId: 'restored-large-snapshot',
+      taskId: 'task-restored-large-snapshot',
+      targetKey: 'target-restored-large-snapshot',
+      spec: { command: 'bash', args: ['-l'] },
+      cwd: '/tmp/restored',
+      createdAt: '2026-07-07T00:00:00.000Z',
+      outputSnapshot: `${'a'.repeat(maxSnapshotChars)}tail`,
+    });
+
+    expect(session.outputSnapshot).toHaveLength(maxSnapshotChars);
+    expect(session.outputSnapshot).toBe(`${'a'.repeat(maxSnapshotChars - 'tail'.length)}tail`);
+    expect(mgr.get(session.sessionId)?.outputSnapshot).toBe(session.outputSnapshot);
   });
 
   it('emits session-updated on open, output, and natural exit', () => {
@@ -831,6 +862,82 @@ describe('GUI open-terminal embedded route', () => {
         allowRunning: true,
       });
       expect(allowed.ok).toBe(true);
+    } finally {
+      try { rmSync(wtBase, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  it('opens running command tasks as isolated shell sessions instead of attaching stdin', () => {
+    const wtBase = join(tmpdir(), `embedded-wt-${randomUUID()}`);
+    const workspacePath = join(wtBase, 'task-workspace');
+    mkdirSync(workspacePath, { recursive: true });
+    try {
+      const registry = new ExecutorRegistry();
+      registry.register('worktree', new WorktreeExecutor({
+        cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
+        worktreeBaseDir: wtBase,
+      }));
+      const persistence = {
+        getTaskStatus: vi.fn(() => 'running'),
+        getRunnerKind: vi.fn(() => 'worktree'),
+        getAgentSessionId: vi.fn(() => null),
+        getContainerId: vi.fn(() => null),
+        getWorkspacePath: vi.fn(() => workspacePath),
+        getBranch: vi.fn(() => null),
+      };
+      const resolved = resolveTaskTerminalSpec({
+        taskId: 'task-cat',
+        persistence: persistence as never,
+        executorRegistry: registry,
+        repoRoot: '/repo',
+        allowRunning: true,
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) return;
+
+      const commandChild = createFakeChild();
+      const bashSpawnFn = vi.fn(() => commandChild) as unknown as BashSpawnFn;
+      const liveExecutor = {
+        type: 'worktree',
+        onOutput: vi.fn(() => () => {}),
+        sendInput: vi.fn(),
+      };
+      const liveHandle = {
+        handle: { executionId: 'exec-cat', taskId: 'task-cat', workspacePath },
+        executor: liveExecutor as unknown as Executor,
+      };
+      const attachToLiveExecutor = shouldAttachEmbeddedTerminalToLiveExecutor(
+        resolved.meta,
+        liveHandle,
+      );
+      const mgr = new EmbeddedTerminalManager({
+        backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+      });
+
+      const session = mgr.openOrReuse({
+        taskId: 'task-cat',
+        spec: resolved.spec,
+        cwd: resolved.cwd,
+        attach: attachToLiveExecutor ? liveHandle : undefined,
+      });
+      const writeResult = mgr.write(session.sessionId, 'printf desktop-smoke\n');
+
+      expect(attachToLiveExecutor).toBe(false);
+      expect(session.mode).toBe('spawn');
+      expect(session.attached).toBe(false);
+      expect(bashSpawnFn).toHaveBeenCalledTimes(1);
+      expect(commandChild.__written).toEqual(['printf desktop-smoke\n']);
+      expect(liveExecutor.sendInput).not.toHaveBeenCalled();
+      expect(writeResult.ok).toBe(true);
+
+      expect(shouldAttachEmbeddedTerminalToLiveExecutor(
+        { ...resolved.meta, agentSessionId: 'agent-session-1' },
+        liveHandle,
+      )).toBe(true);
+      expect(shouldAttachEmbeddedTerminalToLiveExecutor(
+        resolved.meta,
+        { ...liveHandle, handle: { ...liveHandle.handle, agentSessionId: 'agent-session-2' } },
+      )).toBe(true);
     } finally {
       try { rmSync(wtBase, { recursive: true, force: true }); } catch { /* ignore */ }
     }

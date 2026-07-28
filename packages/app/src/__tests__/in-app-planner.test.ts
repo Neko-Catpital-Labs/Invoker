@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PlanConversation } from '../../../surfaces/src/index.ts';
 import {
+  PLANNING_TERMINAL_SUMMARY_BRIDGE_START,
+  buildPlanningTerminalSummaryBridge,
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
@@ -16,6 +18,7 @@ import {
   setPlanningChatTerminalMode,
   submitPlanningChatDraft,
   updatePlanningChatTerminalState,
+  type InAppPlanningChatSession,
   type LoadedGeneratedPlan,
 } from '../in-app-planner.js';
 import { ConversationRepository, SQLiteAdapter, type InAppPlanningSessionRecord } from '@invoker/data-store';
@@ -45,6 +48,24 @@ tasks:
     description: Second task
     dependencies: [first]
     command: echo second`;
+
+const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
+
+function planningSession(
+  overrides: Partial<InAppPlanningChatSession> & Pick<InAppPlanningChatSession, 'id' | 'title'>,
+): InAppPlanningChatSession {
+  return {
+    presetKey: 'codex',
+    confirmationMode: 'require',
+    status: 'still_discussing',
+    messages: [],
+    conversation: new PlanConversation({}),
+    createdAt: '2026-07-07T00:00:00.000Z',
+    updatedAt: '2026-07-07T00:00:00.000Z',
+    nextMessageId: 1,
+    ...overrides,
+  };
+}
 
 const VALID_PLAN_WITHOUT_CLOSING_FENCE = `Here is the plan.
 
@@ -87,6 +108,66 @@ workflows:
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('buildPlanningTerminalSummaryBridge', () => {
+  it('composes bounded planning tmux context from session metadata', () => {
+    const longUserMessage = `Please wire the tmux bridge ${'details '.repeat(40)}tail-marker`;
+    const bridge = buildPlanningTerminalSummaryBridge({
+      id: 'planning-bridge',
+      title: 'Planning bridge terminal',
+      presetKey: 'omp+codex',
+      status: 'draft_ready',
+      messages: [
+        { id: 1, role: 'user', text: longUserMessage, createdAt: '2026-07-07T00:00:00.000Z' },
+        { id: 2, role: 'assistant', text: 'raw assistant draft that should not be copied when a summary exists', createdAt: '2026-07-07T00:00:01.000Z' },
+      ],
+      conversation: new PlanConversation({}),
+      draftPlanSummary: {
+        name: 'Bridge Plan',
+        taskCount: 2,
+        steps: ['Wire helper', 'Persist snapshot'],
+        taskGroups: [],
+      },
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:01.000Z',
+      nextMessageId: 3,
+    });
+
+    expect(bridge).toContain(PLANNING_TERMINAL_SUMMARY_BRIDGE_START);
+    expect(bridge).toContain('Planning session: Planning bridge terminal');
+    expect(bridge).toContain('Status: draft ready');
+    expect(bridge).toContain('Preset: Codex via OMP (omp+codex)');
+    expect(bridge).toContain('Draft plan: Bridge Plan (2 tasks) - Wire helper; Persist snapshot');
+    expect(bridge).toContain('Next: Review or submit the draft in chat');
+    expect(bridge).not.toContain('tail-marker');
+    expect(bridge).not.toContain('raw assistant draft');
+  });
+
+  it('strips ANSI escape and control characters from embedded chat text', () => {
+    const bridge = buildPlanningTerminalSummaryBridge({
+      id: 'planning-bridge-controls',
+      title: 'Planning bridge terminal',
+      presetKey: 'codex',
+      status: 'still_discussing',
+      messages: [
+        {
+          id: 1,
+          role: 'user',
+          text: '\x1b[31mred\x1b[0m text\x07with bell and \x1b]0;title\x07osc',
+          createdAt: '2026-07-07T00:00:00.000Z',
+        },
+      ],
+      conversation: new PlanConversation({}),
+      createdAt: '2026-07-07T00:00:00.000Z',
+      updatedAt: '2026-07-07T00:00:00.000Z',
+      nextMessageId: 2,
+    });
+
+    expect(bridge).toContain('Latest user: [31mred[0m textwith bell and ]0;titleosc');
+    // eslint-disable-next-line no-control-regex
+    expect(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(bridge)).toBe(false);
+  });
 });
 
 describe('planFromGoal', () => {
@@ -295,6 +376,29 @@ describe('planning chat', () => {
     expect(spawnPlanner).toHaveBeenCalledTimes(2);
   });
 
+  it('rejects an unknown continuation session without creating a new chat', async () => {
+    const spawnPlanner = vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue('new chat');
+    const sessions = createInAppPlanningChatSessions();
+
+    await expect(sendPlanningChatMessage({
+      sessionId: 'missing-session',
+      message: 'continue planning',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    })).resolves.toEqual({
+      ok: false,
+      sessionId: 'missing-session',
+      error: 'Planning session "missing-session" was not found.',
+    });
+
+    expect(sessions.size).toBe(0);
+    expect(spawnPlanner).not.toHaveBeenCalled();
+  });
+
   it('returns the raw draft reply and keeps a draft plan summary for valid YAML', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
@@ -353,7 +457,7 @@ describe('planning chat', () => {
     }, {
       sessions,
       loadGeneratedPlan,
-    })).resolves.toMatchObject({ ok: false });
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
     expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
@@ -416,9 +520,9 @@ describe('planning chat', () => {
       await expect(submitPlanningChatDraft({ sessionId: session.id }, {
         sessions,
         loadGeneratedPlan,
-    })).resolves.toMatchObject({ ok: false });
-    expect(loadGeneratedPlan).not.toHaveBeenCalled();
-    expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
+      })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+      expect(loadGeneratedPlan).not.toHaveBeenCalled();
+      expect(sessions.get(session.id)?.draftPlanText).toBeUndefined();
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }
@@ -443,7 +547,7 @@ describe('planning chat', () => {
     await expect(submitPlanningChatDraft({ sessionId: result.sessionId }, {
       sessions,
       loadGeneratedPlan,
-    })).resolves.toMatchObject({ ok: false });
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
     expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
@@ -538,6 +642,7 @@ describe('planning chat', () => {
       planningCommandBuilder,
     });
     if (!sent.ok) throw new Error(sent.error);
+    expect(sessions.get(sent.sessionId)?.status).toBe('draft_ready');
     const loadGeneratedPlan = vi.fn().mockResolvedValue({
       planName: 'Mock Plan',
       workflowId: 'wf-1',
@@ -757,7 +862,53 @@ tasks:
     }, {
       sessions,
       loadGeneratedPlan: vi.fn(),
-    })).resolves.toEqual({ ok: false, error: 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.' });
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+  });
+
+  it('rejects submit when a saved draft snapshot is not draft-ready', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('not-ready-with-draft', planningSession({
+      id: 'not-ready-with-draft',
+      title: 'Not ready with draft',
+      status: 'still_discussing',
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+      draftPlanText: VALID_PLAN_TEXT,
+    }));
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    } satisfies LoadedGeneratedPlan);
+
+    await expect(submitPlanningChatDraft({
+      sessionId: 'not-ready-with-draft',
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
+  });
+
+  it('rejects submit when draft-ready state has empty draft text', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('empty-draft-ready', planningSession({
+      id: 'empty-draft-ready',
+      title: 'Empty draft ready',
+      status: 'draft_ready',
+      draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+      draftPlanText: '   ',
+    }));
+    const loadGeneratedPlan = vi.fn().mockResolvedValue({
+      planName: 'Mock Plan',
+      workflowId: 'wf-1',
+    } satisfies LoadedGeneratedPlan);
+
+    await expect(submitPlanningChatDraft({
+      sessionId: 'empty-draft-ready',
+    }, {
+      sessions,
+      loadGeneratedPlan,
+    })).resolves.toEqual({ ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR });
+    expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
   it('rejects submit when the draft summary cannot be read', async () => {

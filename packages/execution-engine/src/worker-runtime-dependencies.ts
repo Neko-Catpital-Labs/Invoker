@@ -8,7 +8,6 @@ import type {
   AutoFixWorkerConfig,
 } from './auto-fix-recovery.js';
 import type { ReviewGateCiRepairStore, ReviewGateCiRepairSubmitter } from './review-gate-ci-repair.js';
-import type { CiFailureWorkerStore, CiFailureWorkerSubmitter } from './workers/ci-failure-worker.js';
 import type {
   AutoApproveWorkerStore,
   AutoApproveWorkerSubmitter,
@@ -18,10 +17,6 @@ import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
 import type { PrStatusReviewGate } from './workers/pr-status-worker.js';
-import type {
-  ReviewGateMergeConflictWorkerStore,
-  ReviewGateMergeConflictWorkerSubmitter,
-} from './workers/review-gate-merge-conflict-worker.js';
 import type { RequeueWorkerConfig, RequeueWorkerSubmitter } from './workers/requeue-worker.js';
 import type {
   WorkflowResumeWorkerConfig,
@@ -34,19 +29,15 @@ import type { PrSummaryRefreshWorkerStore } from './workers/pr-summary-refresh-w
 export interface WorkerRuntimeDependencies {
   /** Persisted workflow/task state accessor. */
   store: AutoFixRecoveryStore
-    & CiFailureWorkerStore
     & ReviewGateCiRepairStore
     & AutoApproveWorkerStore
-    & ReviewGateMergeConflictWorkerStore
     & WorkflowResumeWorkerStore
     & PrSummaryRefreshWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
-    & CiFailureWorkerSubmitter
     & ReviewGateCiRepairSubmitter
     & RequeueWorkerSubmitter
     & AutoApproveWorkerSubmitter
-    & ReviewGateMergeConflictWorkerSubmitter
     & WorkflowResumeWorkerSubmitter;
   /** Operator logger. */
   logger: Logger;

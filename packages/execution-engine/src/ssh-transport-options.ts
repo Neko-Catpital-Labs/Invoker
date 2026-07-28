@@ -30,9 +30,11 @@ export function buildSshTransportOptions(opts: { batchMode: boolean }): string[]
     'INVOKER_SSH_SERVER_ALIVE_COUNT_MAX',
     DEFAULT_SERVER_ALIVE_COUNT_MAX,
   );
+  const userKnownHostsFile = process.env.INVOKER_SSH_USER_KNOWN_HOSTS_FILE?.trim();
 
   return [
     '-o', 'StrictHostKeyChecking=accept-new',
+    ...(userKnownHostsFile ? ['-o', `UserKnownHostsFile=${userKnownHostsFile}`] : []),
     '-o', `ConnectTimeout=${connectTimeout}`,
     '-o', `ServerAliveInterval=${serverAliveInterval}`,
     '-o', `ServerAliveCountMax=${serverAliveCountMax}`,

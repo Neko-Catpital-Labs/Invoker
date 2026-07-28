@@ -44,6 +44,9 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
         print(f"{prefix}comment-admin-bypass-nudge PR #{action.pr_number}")
     elif action.kind == "restore_admin_bypass_label":
         print(f"{prefix}restore-admin-bypass-label PR #{action.pr_number}")
+    elif action.kind == "retarget_base":
+        from_base = pr.base_ref_name if pr else ""
+        print(f"{prefix}retarget-base PR #{action.pr_number} from={from_base} to={action.key}")
     elif action.kind == "remove_merge_hold":
         print(f"{prefix}remove-merge-hold PR #{action.pr_number}")
     elif action.kind == "resolve_bot_threads":
@@ -139,7 +142,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
     loader = AdminBypassStackLoader(gh)
     executor = AdminBypassGhExecutor(gh, ledger, logger, args.repo)
     repairer = AdminBypassRepairer(gh, executor, logger, ledger, args.repo)
-    stacks = loader.load(args.repo, args.author, args.pr, required_checks, trunk)
+    loaded = loader.load(args.repo, args.author, args.pr, required_checks, trunk)
+    stacks = loaded.stacks
     now = int(time.time())
     pr_by_number = {pr.number: pr for stack in stacks for pr in stack.prs}
     logger.trace(
@@ -157,6 +161,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
             ledger,
             now,
             open_pr_numbers,
+            loaded.open_pr_numbers_by_head,
             args.max_requeue_attempts,
             args.max_repair_attempts,
             trunk,

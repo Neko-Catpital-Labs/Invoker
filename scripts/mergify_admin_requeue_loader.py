@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Mapping, Sequence
 
 try:
-    from .mergify_admin_requeue_model import StackGroup
+    from .mergify_admin_requeue_model import LoadedStacks, StackGroup
     from .mergify_admin_requeue_snapshot import GhClient, group_stack_prs, parse_stack_metadata, snapshot_from_detail
 except ImportError:
-    from mergify_admin_requeue_model import StackGroup
+    from mergify_admin_requeue_model import LoadedStacks, StackGroup
     from mergify_admin_requeue_snapshot import GhClient, group_stack_prs, parse_stack_metadata, snapshot_from_detail
 
 
@@ -21,17 +21,26 @@ class AdminBypassStackLoader:
         pr_numbers: Sequence[int],
         required_checks: Sequence[str],
         trunk: str,
-    ) -> tuple[StackGroup, ...]:
+    ) -> LoadedStacks:
         candidates = self.gh.list_candidate_prs(repo, author, pr_numbers)
         candidate_numbers = {int(pr.get("number") or 0) for pr in candidates}
         if not candidate_numbers:
-            return ()
+            return LoadedStacks(stacks=(), open_pr_numbers_by_head={})
 
         raw_by_number = {
             int(pr.get("number") or 0): pr
             for pr in self.gh.list_open_prs(repo)
         }
         raw_by_number.update({int(pr.get("number") or 0): pr for pr in candidates})
+        open_pr_numbers_by_head: dict[str, list[int]] = {}
+        for raw in raw_by_number.values():
+            if str(raw.get("state") or "").upper() != "OPEN":
+                continue
+            head_ref_name = str(raw.get("headRefName") or "")
+            number = int(raw.get("number") or 0)
+            if head_ref_name and number:
+                open_pr_numbers_by_head.setdefault(head_ref_name, []).append(number)
+
 
         comments_cache: dict[int, list[dict]] = {}
 
@@ -72,8 +81,14 @@ class AdminBypassStackLoader:
                 metadata[pr_number] = meta
             metadata[number] = meta
 
-        return tuple(
-            stack
-            for stack in group_stack_prs(snapshots, metadata, trunk)
-            if any(pr.number in candidate_numbers for pr in stack.prs)
+        return LoadedStacks(
+            stacks=tuple(
+                stack
+                for stack in group_stack_prs(snapshots, metadata, trunk)
+                if any(pr.number in candidate_numbers for pr in stack.prs)
+            ),
+            open_pr_numbers_by_head={
+                head_ref_name: tuple(sorted(numbers))
+                for head_ref_name, numbers in open_pr_numbers_by_head.items()
+            },
         )

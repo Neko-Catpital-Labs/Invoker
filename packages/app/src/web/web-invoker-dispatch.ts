@@ -90,7 +90,10 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       // ── Reads ─────────────────────────────────────────────
       case 'invoker:get-tasks':
         return buildTaskGraphSnapshot({
-          orchestrator,
+          orchestrator: {
+            syncAllFromDb: () => orchestrator.syncAllFromDb(),
+            getAllTasks: () => orchestrator.getAllTasks(),
+          },
           persistence,
           getStreamSequence: deps.getStreamSequence,
         });
@@ -192,7 +195,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.rejectTask(String(args[0]), args[1] === undefined ? undefined : String(args[1]));
       case 'invoker:provide-input':
         return mutations.provideInput(String(args[0]), String(args[1]));
-      case 'invoker:restart-task':
+      case 'invoker:retry-task':
         return mutations.retryTask(String(args[0]));
       case 'invoker:recreate-task':
         return mutations.recreateTask(String(args[0]));
@@ -284,6 +287,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:set-merge-branch':
       case 'invoker:approve-merge':
       case 'invoker:fix-with-agent':
+      case 'invoker:spawn-review-gate-ci-repair':
       case 'invoker:edit-task-pool':
       case 'invoker:replace-task':
       case 'invoker:load-plan':

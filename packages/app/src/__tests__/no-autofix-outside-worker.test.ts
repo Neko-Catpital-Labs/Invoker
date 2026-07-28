@@ -83,7 +83,6 @@ const ALLOWLIST: ReadonlySet<string> = new Set([
   'packages/execution-engine/src/auto-fix-recovery.ts',
   'packages/execution-engine/src/worker-runtime.ts',
   'packages/execution-engine/src/auto-fix-intents.ts',
-  'packages/execution-engine/src/workers/ci-failure-worker.ts',
   'packages/execution-engine/src/review-gate-ci-repair.ts',
   // (B) shared fix action + operator command route in @invoker/app
   // (`workers/auto-fix-recovery.ts` is the thin re-export shim for the engine).
