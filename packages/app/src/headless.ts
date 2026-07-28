@@ -421,6 +421,29 @@ export function resolveHeadlessDiskHeadroomConfig(
   };
 }
 
+export function resolveHeadlessInfraRepairConfig(
+  invokerConfig: HeadlessDeps['invokerConfig'],
+  repoRoot: string,
+): NonNullable<WorkerRuntimeDependencies['infraRepair']> {
+  return {
+    ownerRepoRoot: repoRoot,
+    ownerInvokerHome: resolveInvokerHomeRoot(),
+    remoteTargets: Object.fromEntries(
+      Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => [
+        name,
+        {
+          host: target.host,
+          user: target.user,
+          sshKeyPath: target.sshKeyPath,
+          port: target.port,
+          provisionCommand: target.provisionCommand,
+          remoteInvokerHome: target.remoteInvokerHome,
+        },
+      ]),
+    ),
+  };
+}
+
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
   const subCommand = args[0] ?? 'list';
   const registry = registerExternalWorkersFromConfig(
@@ -478,6 +501,7 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
       },
       prMaintenance: resolvePrMaintenanceWorkerConfig(deps.invokerConfig),
       diskHeadroom: resolveHeadlessDiskHeadroomConfig(deps.invokerConfig),
+      infraRepair: resolveHeadlessInfraRepairConfig(deps.invokerConfig, deps.repoRoot),
       mergeGateProvider: new GitHubMergeGateProvider(),
     });
     await worker.tick('manual');
