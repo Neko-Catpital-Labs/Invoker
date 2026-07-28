@@ -551,6 +551,12 @@ type InAppPlanningMessageRow = {
   created_at?: unknown;
 };
 
+type InAppPlanningMessagePersistState = {
+  count: number;
+  maxMessageId: number;
+  signature?: string;
+};
+
 function parseTerminalArgsJson(value: unknown): string[] {
   if (typeof value !== 'string' || value.length === 0) return [];
   try {
@@ -636,6 +642,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
   private dbPath: string | null;
   private readOnly: boolean;
   private dirty = false;
+  private readonly inAppPlanningMessagePersistStates = new Map<string, InAppPlanningMessagePersistState>();
+  private readonly inAppPlanningMessagePersistSignatures = new Map<string, string>();
   private outputTailLimit: number;
   private outputTailCache = new Map<string, OutputChunk[]>();
   private outputDir: string;
@@ -1268,7 +1276,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.updatedAt,
         ],
       );
-      this.replaceInAppPlanningMessages(record.id, record.messages, record.updatedAt);
+      this.persistInAppPlanningMessages(record.id, record.messages, record.updatedAt);
     });
   }
 
@@ -1360,7 +1368,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       }
       if (patch.messages) {
         const updatedAt = patch.updatedAt ?? new Date().toISOString();
-        this.replaceInAppPlanningMessages(sessionId, patch.messages, updatedAt);
+        this.persistInAppPlanningMessages(sessionId, patch.messages, updatedAt);
       }
     };
 
@@ -1377,6 +1385,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.runTransaction(() => {
       this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
       this.db.run('DELETE FROM in_app_planning_sessions WHERE session_id = ?', [sessionId]);
+      this.inAppPlanningMessagePersistStates.delete(sessionId);
+      this.inAppPlanningMessagePersistSignatures.delete(sessionId);
     });
   }
 
@@ -2774,25 +2784,120 @@ export class SQLiteAdapter implements PersistenceAdapter {
   ): void {
     this.db.run('DELETE FROM in_app_planning_messages WHERE session_id = ?', [sessionId]);
     for (const message of messages) {
-      this.db.run(
-        `INSERT INTO in_app_planning_messages (
-          session_id,
-          message_id,
-          role,
-          text,
-          tone,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
-        [
-          sessionId,
-          message.id,
-          message.role,
-          message.text,
-          message.tone ?? null,
-          message.createdAt || fallbackCreatedAt,
-        ],
-      );
+      this.insertInAppPlanningMessage(sessionId, message, fallbackCreatedAt);
     }
+    const state = this.stateForInAppPlanningMessages(messages);
+    this.inAppPlanningMessagePersistStates.set(sessionId, state);
+    if (state.signature !== undefined) {
+      this.inAppPlanningMessagePersistSignatures.set(sessionId, state.signature);
+    }
+  }
+
+  private persistInAppPlanningMessages(
+    sessionId: string,
+    messages: InAppPlanningChatLine[],
+    fallbackCreatedAt: string,
+  ): void {
+    const persistedState = this.getInAppPlanningMessagePersistState(sessionId);
+    if (!this.canAppendInAppPlanningMessages(messages, persistedState)) {
+      this.replaceInAppPlanningMessages(sessionId, messages, fallbackCreatedAt);
+      return;
+    }
+
+    for (const message of messages.slice(persistedState.count)) {
+      this.insertInAppPlanningMessage(sessionId, message, fallbackCreatedAt);
+    }
+    const state = this.stateForInAppPlanningMessages(messages);
+    this.inAppPlanningMessagePersistStates.set(sessionId, state);
+    if (state.signature !== undefined) {
+      this.inAppPlanningMessagePersistSignatures.set(sessionId, state.signature);
+    }
+  }
+
+  private getInAppPlanningMessagePersistState(sessionId: string): InAppPlanningMessagePersistState {
+    const cached = this.inAppPlanningMessagePersistStates.get(sessionId);
+    if (cached) return cached;
+
+    const row = this.queryOne(
+      `SELECT COUNT(*) AS message_count, COALESCE(MAX(message_id), 0) AS max_message_id
+        FROM in_app_planning_messages
+        WHERE session_id = ?`,
+      [sessionId],
+    ) as { message_count?: unknown; max_message_id?: unknown } | undefined;
+    const state = {
+      count: Number(row?.message_count ?? 0),
+      maxMessageId: Number(row?.max_message_id ?? 0),
+      signature: this.inAppPlanningMessagePersistSignatures.get(sessionId),
+    };
+    this.inAppPlanningMessagePersistStates.set(sessionId, state);
+    return state;
+  }
+
+  private canAppendInAppPlanningMessages(
+    messages: InAppPlanningChatLine[],
+    persistedState: InAppPlanningMessagePersistState,
+  ): boolean {
+    if (persistedState.count > messages.length) return false;
+
+    let previousMessageId = 0;
+    for (const message of messages) {
+      if (!Number.isSafeInteger(message.id) || message.id <= previousMessageId) {
+        return false;
+      }
+      previousMessageId = message.id;
+    }
+
+    if (persistedState.count === 0) return true;
+    if (messages[persistedState.count - 1]?.id !== persistedState.maxMessageId) {
+      return false;
+    }
+    if (persistedState.signature === undefined) {
+      return messages.length > persistedState.count;
+    }
+    return this.signatureForInAppPlanningMessages(messages, persistedState.count) === persistedState.signature;
+  }
+
+  private stateForInAppPlanningMessages(messages: InAppPlanningChatLine[]): InAppPlanningMessagePersistState {
+    return {
+      count: messages.length,
+      maxMessageId: messages.reduce((maxMessageId, message) => Math.max(maxMessageId, message.id), 0),
+      signature: this.signatureForInAppPlanningMessages(messages),
+    };
+  }
+
+  private signatureForInAppPlanningMessages(messages: InAppPlanningChatLine[], count = messages.length): string {
+    let signature = '';
+    for (let index = 0; index < count; index += 1) {
+      const message = messages[index];
+      if (!message) break;
+      signature += `${message.id}\x1f${message.role}\x1f${message.tone ?? ''}\x1f${message.createdAt ?? ''}\x1f${message.text.length}\x1f${message.text}\x1e`;
+    }
+    return signature;
+  }
+
+  private insertInAppPlanningMessage(
+    sessionId: string,
+    message: InAppPlanningChatLine,
+    fallbackCreatedAt: string,
+  ): void {
+    this.db.run(
+      `INSERT INTO in_app_planning_messages (
+        session_id,
+        message_id,
+        role,
+        text,
+        tone,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        sessionId,
+        message.id,
+        message.role,
+        message.text,
+        message.tone ?? null,
+        message.createdAt || fallbackCreatedAt,
+      ],
+    );
   }
 
   private mapInAppPlanningSessionRow(row: InAppPlanningSessionRow): InAppPlanningSessionRecord | undefined {
@@ -2858,6 +2963,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
           createdAt: messageRow.created_at,
         });
       }
+      this.inAppPlanningMessagePersistSignatures.set(id, this.signatureForInAppPlanningMessages(messages));
 
       return {
         id,
