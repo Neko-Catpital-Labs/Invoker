@@ -604,6 +604,8 @@ class AdminBypassRepairer:
             f"Resolve only the merge conflict that keeps this PR from merging. "
             f"Rebase the PR head branch onto its base branch, preserve the PR's intended changes, "
             f"run the narrow proof for the conflict resolution, then commit and push to the PR head branch. "
+            f"Do not use background tasks, scheduled wakeups, monitors, detached processes, or deferred continuation; "
+            f"run proof commands synchronously and do not exit until the proof has finished and the push has completed. "
             f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0. "
             f"If the conflict is human-only because resolving it would require choosing between this PR's intended behavior "
             f"and already-merged behavior, or because the PR/stack is superseded, do not push; write one exact human-only "
@@ -623,6 +625,13 @@ class AdminBypassRepairer:
         )
         self.run_claude_repair(work_root, prompt)
         end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        live_head = ""
+        live_state = pr.state
+        if hasattr(self.gh, "pr_detail"):
+            detail = self.gh.pr_detail(self.repo, pr.number)
+            if isinstance(detail, Mapping):
+                live_head = str(detail.get("headRefOid") or "")
+                live_state = str(detail.get("state") or pr.state)
         if human_blocker_path.exists():
             detail = human_blocker_path.read_text(encoding="utf-8").strip()
             human_blocker_path.unlink(missing_ok=True)
@@ -642,4 +651,21 @@ class AdminBypassRepairer:
                     end_head,
                     errors=(detail,),
                 )
+        if live_state != "OPEN":
+            self.hard_reset_work_root(work_root, start_head)
+            return self.blocked_outcome("noop", "conflict", start_head, end_head)
+        if end_head != start_head and live_head == start_head:
+            self.logger.trace(
+                "admin-bypass-repair-conflict-incomplete",
+                repo=self.repo,
+                pr_number=pr.number,
+                start_head=start_head,
+                end_head=end_head,
+                head_ref=pr.head_ref_name,
+            )
+            self.hard_reset_work_root(work_root, start_head)
+            raise RuntimeError(
+                f"conflict repair for PR #{pr.number} ended at local head {end_head} "
+                f"without pushing to {pr.head_ref_name}"
+            )
         return None

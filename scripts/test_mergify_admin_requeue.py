@@ -361,6 +361,8 @@ Failing checks
             def fake_run_claude_repair(path, prompt):
                 self.assertEqual(path, work_root)
                 self.assertIn("write one exact human-only reason", prompt)
+                self.assertIn("Do not use background tasks", prompt)
+                self.assertIn("do not exit until the proof has finished and the push has completed", prompt)
                 blocker_dir = path / ".git"
                 blocker_dir.mkdir(parents=True, exist_ok=True)
                 (blocker_dir / "mergify-admin-requeue-human-blocker.txt").write_text(reason + "\n", encoding="utf-8")
@@ -382,6 +384,36 @@ Failing checks
             self.assertEqual(result.check_name, "conflict")
             self.assertEqual(result.errors, (reason,))
             self.assertFalse((work_root / ".git" / "mergify-admin-requeue-human-blocker.txt").exists())
+
+    def test_conflict_repair_rejects_unpushed_local_head(self):
+        class FakeGh:
+            def pr_detail(self, _repo, _number):
+                return {"state": "OPEN", "headRefOid": HEAD}
+
+        new_head = "b" * 40
+        item = pr(6327, merge_state="DIRTY", mergeable="CONFLICTING", latest=mergify())
+        repairer = self.repairer(FakeGh(), self.ledger(), "Neko-Catpital-Labs/Invoker")
+        with tempfile.TemporaryDirectory() as home:
+            work_root = Path(home) / ".invoker" / "mergify-admin-requeue-work" / str(item.number)
+            rev_parse = iter([HEAD, new_head])
+            reset_calls = []
+
+            def fake_git_output(_work_root, *args):
+                if args == ("rev-parse", "HEAD"):
+                    return next(rev_parse)
+                if args in {("reset", "--hard", HEAD), ("clean", "-fd")}:
+                    reset_calls.append(args)
+                    return ""
+                return ""
+
+            with mock.patch.dict(os.environ, {"HOME": home}):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
+                    with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
+                        with mock.patch.object(repairer, "run_claude_repair"):
+                            with self.assertRaisesRegex(RuntimeError, "without pushing"):
+                                repairer.repair_conflict(item, "GitHub reports merge conflict")
+        self.assertIn(("reset", "--hard", HEAD), reset_calls)
+        self.assertIn(("clean", "-fd"), reset_calls)
 
     def test_run_cycle_records_conflict_human_blocker(self):
         class FakeGh:
