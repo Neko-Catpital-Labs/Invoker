@@ -584,6 +584,16 @@ export type InAppPlanningSetTerminalModeResponse =
   | { ok: true }
   | { ok: false; error: string };
 
+export interface InAppPlanningRebindRepoRequest {
+  sessionId: string;
+  repoUrl?: string;
+  baseBranch?: string;
+}
+
+export type InAppPlanningRebindRepoResponse =
+  | { ok: true; action: 'reuse' | 'provision' | 'invalidate_and_block_submit' }
+  | { ok: false; error: string };
+
 
 
 export interface WorkflowListEntry {
@@ -955,6 +965,10 @@ export const IpcChannels = {
   'invoker:planning-chat-set-terminal-mode': {} as {
     request: [request: InAppPlanningSetTerminalModeRequest];
     response: InAppPlanningSetTerminalModeResponse;
+  },
+  'invoker:planning-chat-rebind-repo': {} as {
+    request: [request: InAppPlanningRebindRepoRequest];
+    response: InAppPlanningRebindRepoResponse;
   },
   'invoker:planning-terminal-open': {} as {
     request: [planningSessionId: string];
