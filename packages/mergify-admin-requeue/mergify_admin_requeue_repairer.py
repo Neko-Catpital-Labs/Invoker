@@ -21,7 +21,16 @@ except ImportError:
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+def _repo_root() -> Path:
+    if os.environ.get("INVOKER_REPO_ROOT"):
+        return Path(os.environ["INVOKER_REPO_ROOT"]).resolve()
+    for parent in Path(__file__).resolve().parents:
+        if (parent / ".mergify.yml").exists():
+            return parent
+    return Path(__file__).resolve().parents[2]
+
+
+REPO_ROOT = _repo_root()
 PROOF_POLICY_LANE_ERROR = (
     "Review lane proof cannot ship with policy files in the same PR. "
     "Keep benchmarks, repros, and regression proof separate from behavior or policy changes."
