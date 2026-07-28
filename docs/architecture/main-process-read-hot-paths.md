@@ -16,11 +16,6 @@ A follow-on beachball class was DAG task selection: the inspector called
 unbounded `getEvents` on click, stalling main while marshaling full task
 history even though the UI only rendered 20 log rows.
 
-Planning-chat send is another main-process responsiveness hot path. Sending one
-new turn against a restored 1,000-message transcript must append only the new
-planning messages while cheap IPC, especially `listWorkflows`, remains
-responsive.
-
 ## Rules
 
 1. **No unbounded reads on timer, status, or user-gesture IPC paths.**
@@ -48,12 +43,6 @@ responsive.
    Attempt `error` blobs can be multi-MB. Projection helpers must not load every
    attempt row for a node just to pick the newest active one.
 
-7. **Planning-chat send must not rewrite restored transcripts.**
-   Monotonic planning histories append only unseen messages. Full transcript
-   replacement is reserved for edited or non-monotonic histories, because every
-   extra turn runs on the Electron main process while renderer IPC still needs
-   to be accepted.
-
 ## Known hot paths
 
 | Path | Cadence | Must stay cheap |
@@ -63,7 +52,6 @@ responsive.
 | `useActionGraphSnapshot` → `buildCurrentActionGraphSnapshot` | ~2s when Action Graph open (paused while hidden) | Per-task `getEvents` / `loadActionGraphAttempts` only for active/attention tasks — not every pending/completed node; never re-`refreshFromDb` inside the same snapshot |
 | Main `dbPollInterval` → `loadTasks` | ~2s | Projection must not unbounded-scan attempts |
 | Task inspector / History / Approval `getEvents` | on demand | Always paginated (`limit` required; History uses `beforeId` for Load more) |
-| Planning chat send → `upsertInAppPlanningSession` / `updateInAppPlanningSession` | user gesture | Append only the new planning messages on monotonic histories; no full transcript rewrite while concurrent `listWorkflows` probes are in flight |
 
 ## Visibility rule
 
@@ -107,11 +95,6 @@ timer ticks into a main-thread SQLite convoy (macOS beachball).
   within 100ms, then click task nodes and assert `listWorkflows` RTT stays under
   the hitch budget. Included in GitHub Playwright shards (merge-queue / master)
   and in the extended Playwright battery used by the twice-daily e2e worker.
-- Planning-chat send hitch e2e (`packages/app/e2e/planning-chat-hitch-responsiveness.spec.ts`):
-  seed a restored 1,000-message planning transcript, send one deterministic
-  turn, assert the observed message-row append count is 2 with no rewrite, and
-  keep concurrent `listWorkflows` RTT under p95 ≤ 100ms locally / ≤ 150ms in CI
-  and max ≤ 250ms.
 - Slow-query telemetry: `SQLiteAdapter` logs statements slower than 25ms
   (`slowQueryThresholdMs` / `onSlowQuery`) so the next spike shows up without
   attaching a sampler. Set `slowQueryThresholdMs: 0` to disable.
