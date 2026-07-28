@@ -38,10 +38,10 @@ describe('planning terminal failed first send session id persist repro', () => {
     fireEvent.submit(screen.getByTestId('invoker-terminal-input').closest('form')!);
   }
 
-  // Expected-failing proof: the first failing send may still create a real
-  // persisted session in the app process. The renderer must keep that id for
+  // Regression proof: the first failing send may still create a real
+  // persisted session in the app process. The renderer keeps that id for
   // the retry instead of sending a second "new chat" request.
-  it.fails('persists a real session id returned by a failed first send before retrying', async () => {
+  it('persists a real session id returned by a failed first send before retrying', async () => {
     mock.api.planningChatSend = vi
       .fn()
       .mockResolvedValueOnce({
