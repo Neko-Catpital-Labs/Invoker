@@ -19,6 +19,8 @@ import {
 } from './auto-fix-intents.js';
 import {
   autoFixAttemptLedgerKeyFromLifecycleEvent,
+  type AutoFixAttemptDecision,
+  type AutoFixAttemptLedgerKey,
   type AutoFixAttemptLedger,
 } from './auto-fix-attempt-ledger.js';
 import { normalizeAutoFixRetryBudget } from './auto-fix-gating.js';
@@ -517,9 +519,61 @@ function reconcileFinishedIntentAction(
   });
 }
 export interface ReviewGateCiRepairResult {
-  decision: 'queued' | 'skipped';
+  decision: 'queued' | 'skipped' | 'failed';
   reason: string;
   intentId?: number;
+}
+
+function recordCiRepairSubmitFailure(
+  options: ReviewGateCiRepairPolicyOptions,
+  event: ReviewGateCiFailedLifecycleEvent,
+  input: {
+    attemptLedgerKey: AutoFixAttemptLedgerKey;
+    attemptDecision: Extract<AutoFixAttemptDecision, { allowed: true }>;
+    channel: typeof SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL | typeof SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL;
+    selectedAgent?: string;
+    executionModel?: string;
+    error: unknown;
+  },
+): ReviewGateCiRepairResult {
+  options.attemptLedger.refund(input.attemptLedgerKey);
+  const errorMessage = input.error instanceof Error ? input.error.message : String(input.error);
+  recordCiFailureAction(
+    options,
+    event,
+    'failed',
+    'Failed to queue CI repair workflow',
+    {
+      reason: 'submit-failed',
+      error: errorMessage,
+      channel: input.channel,
+      workerRetryBudget: retryBudgetLabel(input.attemptDecision.workerRetryBudget),
+    },
+    undefined,
+    input.selectedAgent,
+    input.executionModel,
+  );
+  logCiFailureWorkerEvent(options, event, 'worker-ci-failure-submit-failed', {
+    error: errorMessage,
+    channel: input.channel,
+    agent: input.selectedAgent ?? null,
+    executionModel: input.executionModel ?? null,
+    workerRetryBudget: retryBudgetLabel(input.attemptDecision.workerRetryBudget),
+  });
+  options.logger.error(`[worker:${CI_FAILURE_WORKER_KIND}] worker-ci-failure-submit-failed`, {
+    module: 'review-gate-ci-repair',
+    taskId: event.taskId,
+    workflowId: event.workflowId,
+    reviewId: event.reviewId,
+    generation: event.generation,
+    attemptId: event.attemptId ?? null,
+    channel: input.channel,
+    agent: input.selectedAgent ?? null,
+    executionModel: input.executionModel ?? null,
+    workerRetryBudget: retryBudgetLabel(input.attemptDecision.workerRetryBudget),
+    error: errorMessage,
+  });
+  return { decision: 'failed', reason: 'submit-failed' };
 }
 
 export async function queueReviewGateCiRepair(
@@ -600,8 +654,9 @@ export async function queueReviewGateCiRepair(
     return { decision: 'skipped', reason: 'worker-retry-budget-exhausted' };
   }
 
+  const attemptLedgerKey = autoFixAttemptLedgerKeyFromLifecycleEvent(event);
   const attemptDecision = options.attemptLedger.consume(
-    autoFixAttemptLedgerKeyFromLifecycleEvent(event),
+    attemptLedgerKey,
     workerRetryBudget,
   );
   if (!attemptDecision.allowed) {
@@ -674,12 +729,24 @@ export async function queueReviewGateCiRepair(
         members: candidate.members,
         triggering: singlePrPayload,
       });
-      const stackIntentId = options.submitter.submit(
-        event.workflowId,
-        'normal',
-        SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL,
-        stackArgs,
-      );
+      let stackIntentId: number;
+      try {
+        stackIntentId = options.submitter.submit(
+          event.workflowId,
+          'normal',
+          SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL,
+          stackArgs,
+        );
+      } catch (error) {
+        return recordCiRepairSubmitFailure(options, event, {
+          attemptLedgerKey,
+          attemptDecision,
+          channel: SPAWN_REVIEW_GATE_STACK_CI_REPAIR_CHANNEL,
+          selectedAgent,
+          executionModel,
+          error,
+        });
+      }
       recordWorkerDecisionRow(options.store, {
         workerKind: CI_FAILURE_WORKER_KIND,
         actionType: CI_FAILURE_STACK_ACTION_TYPE,
@@ -714,12 +781,24 @@ export async function queueReviewGateCiRepair(
   }
 
   const args = buildReviewGateCiRepairWorkflowMutationArgs(singlePrPayload);
-  const intentId = options.submitter.submit(
-    event.workflowId,
-    'normal',
-    SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
-    args,
-  );
+  let intentId: number;
+  try {
+    intentId = options.submitter.submit(
+      event.workflowId,
+      'normal',
+      SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
+      args,
+    );
+  } catch (error) {
+    return recordCiRepairSubmitFailure(options, event, {
+      attemptLedgerKey,
+      attemptDecision,
+      channel: SPAWN_REVIEW_GATE_CI_REPAIR_CHANNEL,
+      selectedAgent,
+      executionModel,
+      error,
+    });
+  }
   recordCiFailureAction(
     options,
     event,
