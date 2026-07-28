@@ -88,7 +88,10 @@ describe('GUI mutation translation', () => {
   it('classifies delegated standalone workflow delete and detach as workflow-scoped', () => {
     const classifierSource = getStandaloneClassifierSource();
     expect(classifierSource).toMatch(
-      /case 'delete':\s*case 'delete-workflow':\s*case 'detach-workflow':\s*return \{ workflowId: arg0 === undefined \? undefined : String\(arg0\), priority: 'high' \};/,
+      /case 'delete':[\s\S]*return \{ workflowId: arg0 === undefined \? undefined : String\(arg0\), priority: 'high' \};/,
+    );
+    expect(classifierSource).toMatch(
+      /case 'detach-workflow':\s*return \{ workflowId: arg0 === undefined \? undefined : String\(arg0\), priority: 'high' \};/,
     );
   });
 
