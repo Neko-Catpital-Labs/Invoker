@@ -229,6 +229,24 @@ describe('infra-repair worker', () => {
     ]));
   });
 
+  it('reads the persisted failureClass subtype when the error text is opaque', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: 'Executor startup failed (ssh): opaque wrapper with no signature',
+          failureClass: 'ssh-env-invalid-export',
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.runRemoteProvisionRepairFn).toHaveBeenCalledTimes(1);
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RETRY_TASK_CHANNEL);
+    expect(parseInfraRepairRetryTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+  });
+
   it('repairs missing worktree owner path, updates workspacePath, and queues retry-task', async () => {
     const h = makeHarness([
       makeTask({

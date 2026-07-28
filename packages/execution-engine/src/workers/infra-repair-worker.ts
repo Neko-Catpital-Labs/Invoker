@@ -7,7 +7,8 @@ import type {
   WorkflowMutationPriority,
 } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
-import type { TaskState, TaskStateChanges } from '@invoker/workflow-core';
+import { FailureClassifier } from '@invoker/workflow-core';
+import type { SshInfraFailureClass, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 import { isLivenessFailureTask } from '../auto-fix-gating.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
@@ -58,10 +59,7 @@ const MAX_OUTPUT_TAIL_CHARS = 400;
 type InfraRepairTaskDecisionStatus = Extract<WorkerActionStatus, 'completed' | 'failed' | 'skipped'>;
 type InfraRepairTargetActionStatus = Extract<WorkerActionStatus, 'running' | 'completed' | 'failed'>;
 
-export type InfraRepairReason =
-  | 'ssh-env-invalid-export'
-  | 'ssh-worktree-missing'
-  | 'ssh-invalid-reference';
+export type InfraRepairReason = SshInfraFailureClass;
 
 export interface InfraRepairRemoteTargetConfig {
   host: string;
@@ -351,20 +349,7 @@ export function listInfraRepairScanCandidates(
 }
 
 export function classifyGenericSshInfraFailure(errorText: unknown): InfraRepairReason | undefined {
-  if (typeof errorText !== 'string') return undefined;
-  if (errorText.includes('.invoker/env.sh') && errorText.includes('not a valid identifier')) {
-    return 'ssh-env-invalid-export';
-  }
-  if (errorText.includes('.invoker/worktrees/') && errorText.includes('No such file or directory')) {
-    return 'ssh-worktree-missing';
-  }
-  if (
-    errorText.includes('fatal: invalid reference:')
-    || errorText.includes('Cannot apply a fix because this task has no saved workspace.')
-  ) {
-    return 'ssh-invalid-reference';
-  }
-  return undefined;
+  return FailureClassifier.classifyError(typeof errorText === 'string' ? errorText : undefined);
 }
 
 function resolveRemoteTargetId(
@@ -390,7 +375,9 @@ function validateGenericSshInfraCandidate(
   if (latest.config.runnerKind !== 'ssh') return undefined;
   if (isLivenessFailureTask(latest)) return undefined;
 
-  const reason = classifyGenericSshInfraFailure(latest.execution.error);
+  const reason = FailureClassifier.isSshInfra(latest.execution.failureClass)
+    ? latest.execution.failureClass
+    : classifyGenericSshInfraFailure(latest.execution.error);
   if (!reason) return undefined;
 
   const targetId = resolveRemoteTargetId(options.store, latest);
