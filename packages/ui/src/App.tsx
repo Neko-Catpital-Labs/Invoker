@@ -1341,10 +1341,13 @@ export function App() {
       if (event.kind !== 'planning' || typeof event.data !== 'string' || event.data.length === 0) return;
       setPlanningSessions((prev) =>
         prev.map((session) => {
-          const matchesSession =
-            session.terminalSession?.sessionId === event.sessionId
-            || session.terminalSessionId === event.sessionId
-            || (event.planningSessionId !== undefined && session.id === event.planningSessionId);
+          const planningSessionId = typeof event.planningSessionId === 'string' && event.planningSessionId.length > 0
+            ? event.planningSessionId
+            : null;
+          const matchesSession = planningSessionId !== null
+            ? session.id === planningSessionId
+            : session.terminalSession?.sessionId === event.sessionId
+              || session.terminalSessionId === event.sessionId;
           if (!matchesSession) return session;
 
           const outputSnapshot = appendPlanningTerminalSnapshot(
@@ -1353,7 +1356,6 @@ export function App() {
           );
           return {
             ...session,
-            terminalMode: 'tmux',
             terminalSessionId: session.terminalSession?.sessionId ?? session.terminalSessionId ?? event.sessionId,
             terminalStatus: session.terminalSession?.status ?? session.terminalStatus ?? 'running',
             terminalOutputSnapshot: outputSnapshot,
