@@ -8,6 +8,7 @@ import type {
   InAppPlanningChatRequest,
   InAppPlanningCreateSessionRequest,
   InAppPlanningDiscardDraftRequest,
+  InAppPlanningRebindRepoRequest,
   InAppPlanningResetRequest,
   InAppPlanningSetTerminalModeRequest,
   InAppPlanningStreamEvent,
@@ -87,6 +88,7 @@ import {
   listInAppPlanningPresets,
   listPlanningChatSessions,
   planFromGoal as planFromGoalInApp,
+  rebindPlanningChatRepo,
   resetPlanningChat,
   restorePlanningChatSessions,
   sendPlanningChatMessage,
@@ -1324,6 +1326,14 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return setPlanningChatTerminalMode(request as InAppPlanningSetTerminalModeRequest, {
       sessions: planningChatSessions,
       planningSessionStore: ownerMode ? persistence : undefined,
+    });
+  });
+  registerGuiMutationHandler('invoker:planning-chat-rebind-repo', async (request: unknown) => {
+    return rebindPlanningChatRepo(request as InAppPlanningRebindRepoRequest, {
+      config: invokerConfig,
+      sessions: planningChatSessions,
+      planningSessionStore: ownerMode ? persistence : undefined,
+      repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
     });
   });
   registerGuiMutationHandler('invoker:load-plan', async (planTextArg: unknown) => {
