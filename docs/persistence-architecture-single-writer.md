@@ -87,12 +87,12 @@ This table lists every mutating command path and how the owner-boundary contract
 | `query session` | headless.ts:308 | **Yes** (cli-query) | Owner answers over IPC, else opens `readOnly: true` | Safe: no writes |
 | **Workflow Actions** (shared library, always called by owner) |
 | `rejectTask()` | workflow-actions.ts:54 | N/A | Called by owner (GUI/headless standalone) → orchestrator → persistence | Shared library assumes writable context |
-| `restartTask()` | workflow-actions.ts:75 | N/A | Called by owner → orchestrator → persistence | |
+| `commandService.retryTask()` | command-service.ts:153 | N/A | Called by owner → `applyInvalidation('task', 'retryTask', ...)` → persistence | Canonical task retry path |
 | `retryWorkflow()` | workflow-actions.ts:82 | N/A | Called by owner → orchestrator → persistence | |
 | `recreateWorkflow()` | workflow-actions.ts:89 | N/A | Called by owner → `bumpGenerationAndRecreate()` → persistence | |
 | `recreateTask()` | workflow-actions.ts:96 | N/A | Called by owner → orchestrator → persistence | |
 | `cancelWorkflow()` | workflow-actions.ts:103 | N/A | Called by owner → orchestrator → persistence | |
-| `rebaseAndRetry()` | workflow-actions.ts:117 | N/A | Called by owner → `bumpGenerationAndRecreate()` → persistence | |
+| `rebaseRetry()` / `rebaseRecreate()` | workflow-actions.ts:583, workflow-actions.ts:610 | N/A | Called by owner → fresh-base workflow invalidation → persistence | |
 | `editTaskCommand()` | workflow-actions.ts:136 | N/A | Called by owner → orchestrator → persistence | |
 | `editTaskType()` | workflow-actions.ts:144 | N/A | Called by owner → orchestrator → persistence | |
 | `editTaskAgent()` | workflow-actions.ts:153 | N/A | Called by owner → orchestrator → persistence | |
