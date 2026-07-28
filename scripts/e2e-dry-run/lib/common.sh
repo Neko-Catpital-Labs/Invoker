@@ -590,7 +590,8 @@ invoker_e2e_task_status() {
   invoker_e2e_run_headless query task "$task_id" 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' \
     | grep -E '^(pending|running|completed|failed|blocked|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
-    | tail -1
+    | tail -1 \
+    || true
 }
 
 invoker_e2e_dump_tasks() {
@@ -624,7 +625,8 @@ invoker_e2e_merge_gate_id() {
   invoker_e2e_run_headless query tasks --output label 2>/dev/null \
     | grep -oE '__merge__[^[:space:]]+' \
     | head -1 \
-    | sed 's/\x1b\[[0-9;]*m//g'
+    | sed 's/\x1b\[[0-9;]*m//g' \
+    || true
 }
 
 # Poll a task until it leaves the "running" or "pending" state (i.e., reaches
