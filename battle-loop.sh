@@ -18,6 +18,7 @@ REPROS=(
   scripts/repro/repro-babysit-headless-queued-comment.sh
   scripts/repro/repro-babysit-queue-only-empty-log.sh
   scripts/repro/repro-babysit-queue-only-missing-requeues.sh
+  scripts/repro/repro-babysit-stale-green-queue-failure-noop.sh
   scripts/repro/repro-babysit-targeted-scan-light.sh
   scripts/repro/repro-babysit-queue-repair-invalid-stop.sh
   scripts/repro/repro-babysit-stack-human-blocker-suppresses-repairs.sh
