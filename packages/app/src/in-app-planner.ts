@@ -168,6 +168,8 @@ function labelForPresetKey(key: string): string {
   switch (key) {
     case 'codex':
       return 'Codex';
+    case 'claude':
+      return 'Claude';
     case 'omp':
       return 'OMP';
     case 'omp+claude':
