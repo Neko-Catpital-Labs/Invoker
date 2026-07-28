@@ -93,6 +93,9 @@ class ClassifyPr(unittest.TestCase):
     def test_closed_short_circuits(self):
         self.assertEqual(self._kinds(pr(state="CLOSED")), {"closed"})
 
+    def test_merged_short_circuits(self):
+        self.assertEqual(self._kinds(pr(state="MERGED")), {"merged"})
+
     def test_failed_required_check(self):
         self.assertEqual(self._kinds(pr(checks={"build": check("failure")})), {"failed_check"})
 
@@ -333,13 +336,86 @@ class PlanStackActions(PlannerTestCase):
     def test_pending_check_means_wait_do_nothing(self):
         self.assertEqual(self._plan(pr(checks={"build": check("pending")})), ())
 
+    def test_merged_pr_is_terminal_noop(self):
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (pr(number=6108, state="MERGED", labels=frozenset({"admin-bypass"})),)),
+            REQUIRED,
+            self._ledger(),
+            now_epoch=0,
+            open_pr_numbers=set(),
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "terminal-merged")
+
     def test_conflict_triggers_claude_repair(self):
         actions = self._plan(pr(merge_state_status="DIRTY"))
         self.assertEqual((actions[0].kind, actions[0].pr_number), ("repair_conflict", 1))
 
+    def test_repair_invalid_conflict_stops_retrying(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            6118,
+            HEAD,
+            "conflict",
+            1,
+            meta={"errors": ["requires a human to decide whether this stale duplicate stack is superseded"]},
+        )
+        snapshot = pr(
+            number=6118,
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+            latest_mergify=event(state="queued", head=""),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6118},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "human_decision")
+        self.assertIn("stale duplicate stack", blockers[0]["detail"])
+
     def test_failed_check_triggers_repair(self):
         actions = self._plan(pr(checks={"build": check("failure")}))
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
+
+    def test_repair_invalid_bot_thread_suppresses_other_repairs_on_same_pr(self):
+        ledger = self._ledger()
+        ledger.record(
+            "repair-invalid",
+            6158,
+            HEAD,
+            "PRRT_kwDOSFkSDM6T97v9",
+            1,
+            meta={"errors": ['PR body Review Unit "routing" cannot ship with activation-surface files in the same PR. Split this into one Review Unit per PR.']},
+        )
+        snapshot = pr(
+            number=6158,
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+            review_threads=(m.ReviewThread("PRRT_kwDOSFkSDM6T97v9", False, ("coderabbitai[bot]",)),),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6158},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "blocked-needs-human")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "human_decision")
+        self.assertEqual(blockers[1]["kind"], "failed_check")
 
     def test_mergify_dequeue_with_failing_check_repairs_first(self):
         # A Mergify dequeue naming a failing check outranks everything else.
