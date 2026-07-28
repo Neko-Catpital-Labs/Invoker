@@ -121,8 +121,19 @@ invoker_e2e_ssh_provision_command() {
   )
 }
 
+invoker_e2e_ssh_shell_quote() {
+  printf '%q' "$1"
+}
+
 invoker_e2e_ssh_config_provision_command() {
-  printf 'INVOKER_SKIP_SHELL_HOOKS=1 %s\n' "$(invoker_e2e_ssh_provision_command)"
+  local provision_cmd node_install_dir npm_global_prefix
+  provision_cmd="$(invoker_e2e_ssh_provision_command)"
+  node_install_dir="$_INVOKER_E2E_SSH_REMOTE_HOME/host-node"
+  npm_global_prefix="$_INVOKER_E2E_SSH_REMOTE_HOME/host-npm-global"
+  printf 'INVOKER_SKIP_SHELL_HOOKS=1 INVOKER_SKIP_SYSTEM_PACKAGES=1 INVOKER_SKIP_AGENT_TOOLS=1 INVOKER_AGENT_TOOLS= INVOKER_NODE_INSTALL_DIR=%s INVOKER_NPM_GLOBAL_PREFIX=%s %s\n' \
+    "$(invoker_e2e_ssh_shell_quote "$node_install_dir")" \
+    "$(invoker_e2e_ssh_shell_quote "$npm_global_prefix")" \
+    "$provision_cmd"
 }
 
 # --------------------------------------------------------------------------- #
@@ -169,7 +180,6 @@ NODE
 invoker_e2e_ssh_init() {
   invoker_e2e_init
   invoker_e2e_ssh_setup_keys
-  invoker_e2e_ssh_write_config
 
   # Verify SSH works with the generated key.
   if ! ssh -o BatchMode=yes \
@@ -186,6 +196,8 @@ invoker_e2e_ssh_init() {
     invoker_e2e_ssh_cleanup_keys
     return 1
   fi
+
+  invoker_e2e_ssh_write_config
 }
 
 # --------------------------------------------------------------------------- #
@@ -193,7 +205,7 @@ invoker_e2e_ssh_init() {
 # SshExecutor uses a non-login shell and sources remoteInvokerHome/env.sh.
 # --------------------------------------------------------------------------- #
 invoker_e2e_ssh_install_login_path() {
-  local pnpm_bin node_bin pnpm_dir node_dir
+  local pnpm_bin node_bin pnpm_dir node_dir node_shim_dir npm_global_bin
   pnpm_bin="$(command -v pnpm || true)"
   node_bin="$(command -v node || true)"
   if [ -z "$pnpm_bin" ] || [ -z "$node_bin" ]; then
@@ -204,12 +216,27 @@ invoker_e2e_ssh_install_login_path() {
   node_dir="$(cd "$(dirname "$node_bin")" && pwd)"
 
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
+  node_shim_dir="$_INVOKER_E2E_SSH_REMOTE_HOME/host-node/bin"
+  npm_global_bin="$_INVOKER_E2E_SSH_REMOTE_HOME/host-npm-global/bin"
+  mkdir -p "$node_shim_dir" "$npm_global_bin"
+  ln -sf "$node_bin" "$node_shim_dir/node"
+  if command -v npm >/dev/null 2>&1; then
+    ln -sf "$(command -v npm)" "$node_shim_dir/npm"
+  fi
+  if command -v npx >/dev/null 2>&1; then
+    ln -sf "$(command -v npx)" "$node_shim_dir/npx"
+  fi
+  if command -v corepack >/dev/null 2>&1; then
+    ln -sf "$(command -v corepack)" "$node_shim_dir/corepack"
+  fi
+  ln -sf "$pnpm_bin" "$npm_global_bin/pnpm"
+
   touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   chmod 600 "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   if ! grep -Fq "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
     {
       printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
-      printf 'export PATH="%s:%s:$PATH"\n' "$node_dir" "$pnpm_dir"
+      printf 'export PATH="%s:%s:%s:%s:$PATH"\n' "$node_shim_dir" "$npm_global_bin" "$node_dir" "$pnpm_dir"
     } >> "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   fi
 
@@ -223,6 +250,8 @@ invoker_e2e_ssh_install_login_path() {
 . "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
 command -v pnpm >/dev/null
 pnpm --version
+command -v node >/dev/null
+node --version
 EOF
     echo "ERROR: 'pnpm' not found after sourcing $_INVOKER_E2E_SSH_REMOTE_HOME/env.sh." >&2
     return 1
