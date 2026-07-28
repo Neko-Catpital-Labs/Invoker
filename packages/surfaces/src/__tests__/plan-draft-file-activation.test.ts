@@ -40,6 +40,8 @@ tasks:
     dependencies: []
 `;
 
+const SUBMIT_REPLY_LINE = 'Reply `submit` to submit it.';
+
 const INLINE_PLAN_RESPONSE = `Here is the plan:
 
 \`\`\`yaml
@@ -52,7 +54,7 @@ tasks:
     dependencies: []
 \`\`\`
 
-Reply \`submit\` to submit it.`;
+${SUBMIT_REPLY_LINE}`;
 
 describe('plan draft file - activation side', () => {
   let workingDir: string;
@@ -92,24 +94,30 @@ describe('plan draft file - activation side', () => {
     if (!path) throw new Error('expected a plan draft path');
 
     mockSpawn.mockReturnValueOnce(fakePlannerChild(
-      'Drafted the plan.\n\nReply `submit` to submit it.',
+      `Drafted the plan.\n\n${SUBMIT_REPLY_LINE}`,
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Draft it');
+    const firstReply = await conversation.sendMessage('Draft it');
+    expect(firstReply).toContain(SUBMIT_REPLY_LINE);
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('What does it do?');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_REPLY_LINE}`));
+    const followUpReply = await conversation.sendMessage('What does it do?');
 
     expect(existsSync(path)).toBe(false);
+    expect(followUpReply).toBe('Drafted the plan. Summary: one step.');
+    expect(conversation.history[conversation.history.length - 1]?.content).toBe(followUpReply);
     expect(conversation.getDraftedPlan()).toBe(VALID_PLAN_YAML.trim());
   });
 
   it('does not expose a plan when a summary-only turn has no prior draft', async () => {
     const conversation = new PlanConversation({ workingDir, threadTs: 'abc-123', plannerRetryLimit: 0 });
 
-    mockSpawn.mockReturnValueOnce(fakePlannerChild('Drafted the plan. Summary: one step.'));
-    await conversation.sendMessage('Draft it');
+    mockSpawn.mockReturnValueOnce(fakePlannerChild(`Drafted the plan. Summary: one step.\n\n${SUBMIT_REPLY_LINE}`));
+    const reply = await conversation.sendMessage('Draft it');
 
+    expect(reply).toBe('Drafted the plan. Summary: one step.');
+    expect(conversation.history[conversation.history.length - 1]?.content).toBe(reply);
+    expect(reply).not.toContain(SUBMIT_REPLY_LINE);
     expect(conversation.getDraftedPlan()).toBeNull();
   });
 
@@ -119,7 +127,7 @@ describe('plan draft file - activation side', () => {
 
     const prompt = conversation.buildCursorPrompt();
 
-    expect(prompt).not.toContain('Reply `submit` to submit it.');
+    expect(prompt).not.toContain(SUBMIT_REPLY_LINE);
     expect(prompt).toContain('wait for approval before any submission step');
     expect(prompt).toContain('Do not tell the user to reply `submit`');
   });
@@ -130,11 +138,12 @@ describe('plan draft file - activation side', () => {
     if (!path) throw new Error('expected a plan draft path');
 
     mockSpawn.mockReturnValueOnce(fakePlannerChild(
-      'Drafted the plan.\n\nReply `submit` to submit it.',
+      `Drafted the plan.\n\n${SUBMIT_REPLY_LINE}`,
       () => writeFileSync(path, VALID_PLAN_YAML, 'utf8'),
     ));
-    await conversation.sendMessage('Create the plan');
+    const reply = await conversation.sendMessage('Create the plan');
 
+    expect(reply).toContain(SUBMIT_REPLY_LINE);
     expect(isConfirmation('submit')).toBe(true);
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     expect(conversation.planSubmitted).toBe(false);
@@ -184,7 +193,7 @@ describe('plan draft-file activation prompt policy', () => {
     expect(prompt).toContain('explain like the user is five');
     expect(prompt).not.toContain('name: "Plan Name"');
     expect(prompt).not.toContain('When ready, output the plan inside a ```yaml code block');
-    expect(prompt).not.toContain('Reply `submit` to submit it.');
+    expect(prompt).not.toContain(SUBMIT_REPLY_LINE);
   });
 
   it('restores YAML drafting instructions after conversational authorization', () => {

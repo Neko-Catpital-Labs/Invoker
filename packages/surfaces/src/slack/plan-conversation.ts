@@ -411,6 +411,14 @@ export function isDangerousCommand(cmd: string): boolean {
 // ── Constants ───────────────────────────────────────────────
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const SUBMIT_INSTRUCTION_LINE = 'Reply `submit` to submit it.';
+
+function removeStandaloneSubmitInstruction(message: string): string {
+  const lines = message.split(/\r?\n/);
+  const filtered = lines.filter((line) => line.trim() !== SUBMIT_INSTRUCTION_LINE);
+  if (filtered.length === lines.length) return message;
+  return filtered.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+}
 
 // ── PlanConversation ────────────────────────────────────────
 
@@ -548,6 +556,9 @@ export class PlanConversation {
       : inlineDraft;
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
+    if (!nextDraft) {
+      message = removeStandaloneSubmitInstruction(message);
+    }
     this._lastTurnReasoning = formatted.reasoning;
     this.log('plan-conversation', 'info', `[CONV] Turn ${turn}: responseLen=${response.length}, messageLen=${message.length}, reasoningParts=${formatted.reasoning.length}, responsePreview="${message.slice(0, 500).replace(/\n/g, '\\n')}"`);
 
