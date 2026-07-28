@@ -11,7 +11,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
 import yaml from 'js-yaml';
-import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
+import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
 import type { SidebarSurface } from './lib/workflow-progress-surfaces.js';
 import { reportUiNavigation } from './lib/report-ui-navigation.js';
@@ -115,6 +115,35 @@ const EDITABLE_SELECTOR = [
 const SYSTEM_SETUP_AUTO_OPEN_DELAY_MS = 1200;
 const RAIL_LIST_FRAME_CLASS = 'flex min-h-0 flex-1 flex-col';
 const RAIL_SCROLL_BODY_CLASS = 'min-h-0 flex-1 overflow-y-auto';
+const PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+
+function appendPlanningTerminalSnapshot(snapshot: string | undefined, data: string): string {
+  const next = `${snapshot ?? ''}${data}`;
+  if (next.length <= PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS) return next;
+  return next.slice(next.length - PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS);
+}
+
+function planningTerminalSessionFromOutputEvent(
+  session: PlanningSessionView,
+  event: TerminalOutputEvent,
+  outputSnapshot: string,
+): TerminalSessionDescriptor {
+  return {
+    sessionId: session.terminalSession?.sessionId ?? session.terminalSessionId ?? event.sessionId,
+    taskId: session.terminalSession?.taskId ?? event.taskId,
+    kind: 'planning',
+    planningSessionId: session.id,
+    status: session.terminalSession?.status ?? session.terminalStatus ?? 'running',
+    exitCode: session.terminalSession?.exitCode ?? session.terminalExitCode,
+    cwd: session.terminalSession?.cwd,
+    command: session.terminalSession?.command,
+    args: session.terminalSession?.args,
+    mode: session.terminalSession?.mode ?? 'spawn',
+    attached: session.terminalSession?.attached ?? false,
+    createdAt: session.terminalSession?.createdAt ?? session.terminalUpdatedAt ?? session.updatedAt,
+    outputSnapshot,
+  };
+}
 
 function notifyMutationError(rawTitle: string, err: unknown): void {
   console.error(rawTitle, err);
@@ -371,18 +400,7 @@ function makeInitialPlanningSession(
 }
 
 function planningSessionSummaryToView(session: InAppPlanningSessionSummary): PlanningSessionView {
-  return {
-    ...session,
-    messages: session.messages.map((line) => ({
-      id: line.id,
-      text: line.text,
-      role: line.role,
-      ...(line.tone ? { tone: line.tone } : {}),
-    })),
-    input: '',
-    busy: false,
-    conversationKey: session.id,
-  };
+  return planningSessionFromSummary(session);
 }
 
 function planningNeedsAttention(status: InAppPlanningSessionStatus): boolean {
@@ -1293,17 +1311,54 @@ export function App() {
       );
       setPlanningSessions((prev) =>
         prev.map((session) => (
-          session.terminalSession?.sessionId === event.sessionId
+          session.terminalSession?.sessionId === event.sessionId || session.terminalSessionId === event.sessionId
             ? {
                 ...session,
+                terminalStatus: 'exited',
+                terminalExitCode: event.exitCode,
                 terminalSession: {
-                  ...session.terminalSession,
+                  ...(session.terminalSession ?? planningTerminalSessionFromOutputEvent(session, {
+                    sessionId: event.sessionId,
+                    taskId: event.taskId,
+                    kind: 'planning',
+                    planningSessionId: event.planningSessionId,
+                    data: '',
+                  }, session.terminalOutputSnapshot ?? '')),
                   status: 'exited',
                   exitCode: event.exitCode,
                 },
               }
             : session
         )),
+      );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || typeof event.data !== 'string' || event.data.length === 0) return;
+      setPlanningSessions((prev) =>
+        prev.map((session) => {
+          const matchesSession =
+            session.terminalSession?.sessionId === event.sessionId
+            || session.terminalSessionId === event.sessionId
+            || (event.planningSessionId !== undefined && session.id === event.planningSessionId);
+          if (!matchesSession) return session;
+
+          const outputSnapshot = appendPlanningTerminalSnapshot(
+            session.terminalSession?.outputSnapshot ?? session.terminalOutputSnapshot,
+            event.data,
+          );
+          return {
+            ...session,
+            terminalMode: 'tmux',
+            terminalSessionId: session.terminalSession?.sessionId ?? session.terminalSessionId ?? event.sessionId,
+            terminalStatus: session.terminalSession?.status ?? session.terminalStatus ?? 'running',
+            terminalOutputSnapshot: outputSnapshot,
+            terminalSession: planningTerminalSessionFromOutputEvent(session, event, outputSnapshot),
+          };
+        }),
       );
     });
     return () => { unsubscribe?.(); };
