@@ -1429,10 +1429,8 @@ describe('headless delegation enforcement', () => {
       // matrix at the headless surface in a single block. Each
       // cell asserts that the explicit verb routes to its
       // matching commandService method or orchestrator
-      // primitive, and ONLY that method (no legacy `restartTask`
-      // path, no cross-collapse, and no in-place re-routing
-      // through the deprecated `restart` shim — Step 13
-      // removed it from the headless verb table).
+      // primitive, and ONLY that method (no cross-collapse and
+      // no in-place re-routing through a removed alias).
       describe('Step 17: 5-cell canonical lifecycle matrix', () => {
         function seedHappyPath(): {
           preemptWorkflowExecution: ReturnType<typeof vi.fn>;
@@ -1489,7 +1487,6 @@ describe('headless delegation enforcement', () => {
           ) as any;
           mockDeps.orchestrator.cancelWorkflow = vi.fn(() => ({ cancelled: [], runningCancelled: [] }));
           mockDeps.orchestrator.cascadeInvalidationToDownstream = vi.fn(() => []);
-          (mockDeps.orchestrator as any).restartTask = vi.fn(() => []);
           mockDeps.commandService.retryTask = vi.fn(async () => ({ ok: true as const, data: [] }));
           mockDeps.commandService.retryWorkflow = vi.fn(async () => ({ ok: true as const, data: [] }));
           (mockDeps.commandService as any).recreateTask = vi.fn(async () => ({ ok: true as const, data: [] }));
@@ -1519,7 +1516,6 @@ describe('headless delegation enforcement', () => {
           expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
-          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
           preparePoolSpy.mockRestore();
         });
 
@@ -1539,7 +1535,6 @@ describe('headless delegation enforcement', () => {
           expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
-          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
           preparePoolSpy.mockRestore();
         });
 
@@ -1558,7 +1553,6 @@ describe('headless delegation enforcement', () => {
           expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
-          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
           preparePoolSpy.mockRestore();
         });
 
@@ -1578,7 +1572,6 @@ describe('headless delegation enforcement', () => {
           expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
-          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
           preparePoolSpy.mockRestore();
         });
 
@@ -1603,7 +1596,6 @@ describe('headless delegation enforcement', () => {
           expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflowFromFreshBase).not.toHaveBeenCalled();
-          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
           preparePoolSpy.mockRestore();
         });
 
@@ -1627,7 +1619,6 @@ describe('headless delegation enforcement', () => {
           expect(mockDeps.commandService.retryWorkflow).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateTask).not.toHaveBeenCalled();
           expect(mockDeps.orchestrator.recreateWorkflow).not.toHaveBeenCalled();
-          expect((mockDeps.orchestrator as any).restartTask).not.toHaveBeenCalled();
           preparePoolSpy.mockRestore();
         });
       });
