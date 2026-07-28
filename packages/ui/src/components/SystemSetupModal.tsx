@@ -218,7 +218,7 @@ export function SystemSetupModal({
     {
       checkId: 'slack',
       title: 'Set up Slack integration',
-      detail: 'Optional: opt in to Slack by adding app values here.',
+      detail: 'Slack is optional; turn it on to add app values.',
       status: slackFieldsComplete ? 'Ready to run' : 'Needs fields',
     },
   ];
