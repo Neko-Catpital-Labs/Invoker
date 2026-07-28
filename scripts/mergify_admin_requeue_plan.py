@@ -50,6 +50,13 @@ MANUAL_SPLIT_STOP_MARKERS = (
 )
 
 
+def is_stale_base_pr_body_invalid_detail(errors: Collection[object]) -> bool:
+    joined = "\n".join(str(error) for error in errors)
+    if "multiple review units" in joined or "proof" in joined:
+        return False
+    return "activation-surface" in joined and "tooling-policy" in joined
+
+
 def should_retry_stale_base_pr_body_invalid(
     pr: PrSnapshot,
     blocker: Blocker,
@@ -60,10 +67,7 @@ def should_retry_stale_base_pr_body_invalid(
         return False
     if ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key) != 1:
         return False
-    joined = "\n".join(str(error) for error in errors)
-    if "multiple review units" in joined or "proof" in joined:
-        return False
-    return "activation-surface" in joined and "tooling-policy" in joined
+    return is_stale_base_pr_body_invalid_detail(errors)
 
 
 @dataclass(frozen=True)
@@ -358,7 +362,7 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
     return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
 
 
-def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | None:
+def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
     if blocker.kind != "failed_check":
         return None
     ctx = pr.checks.get(blocker.key)
@@ -371,6 +375,8 @@ def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | N
         if not detail or not any(marker in detail for marker in MANUAL_SPLIT_STOP_MARKERS):
             continue
         if completed_at and comment.updated_at and comment.updated_at < completed_at:
+            continue
+        if should_retry_stale_base_pr_body_invalid(pr, blocker, ledger, detail.splitlines()):
             continue
         return Blocker(blocker.key, "human_decision", pr.number, detail)
     return None
@@ -465,7 +471,7 @@ def build_stack_facts(
     for pr in stack.prs:
         effective = effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
         blockers = [
-            latest_repair_invalid_blocker(pr, blocker, ledger) or existing_split_stop_blocker(pr, blocker) or blocker
+            latest_repair_invalid_blocker(pr, blocker, ledger) or existing_split_stop_blocker(pr, blocker, ledger) or blocker
             for blocker in effective
         ]
         existing_keys = {blocker.key for blocker in blockers}

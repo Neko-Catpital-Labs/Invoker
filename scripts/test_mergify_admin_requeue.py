@@ -28,6 +28,7 @@ from scripts.mergify_admin_requeue import (
 )
 from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
 from scripts.mergify_admin_requeue_model import LoadedStacks
+from scripts.mergify_admin_requeue_model import RepairStopComment
 from scripts.mergify_admin_requeue_plan import plan_stack_execution
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
@@ -53,7 +54,7 @@ def mergify(state="dequeued", comment_id="m1", sha=HEAD):
     return MergifyQueueEvent(comment_id, state, "admin-bypass", "2026-07-03T00:00:00Z", sha, (), (), "https://example.invalid/comment")
 
 
-def pr(number, *, base="master", head=None, labels=None, checks=None, threads=(), latest=None, merge_state="CLEAN", mergeable="MERGEABLE", state="OPEN", draft=False, body=""):
+def pr(number, *, base="master", head=None, labels=None, threads=(), latest=None, merge_state="CLEAN", mergeable="MERGEABLE", state="OPEN", draft=False, body="", repair_stop_comments=(), checks=None):
     return PrSnapshot(
         number=number,
         title=f"PR {number}",
@@ -70,6 +71,7 @@ def pr(number, *, base="master", head=None, labels=None, checks=None, threads=()
         checks=checks if checks is not None else {name: check(name) for name in REQUIRED},
         review_threads=tuple(threads),
         latest_mergify=latest,
+        repair_stop_comments=tuple(repair_stop_comments),
     )
 
 PROOF_BODY = """## Summary
@@ -568,6 +570,37 @@ Failing checks
         ledger.record("repair-check", 6099, HEAD, "PR Body", 1)
         ledger.record("repair-invalid", 6099, HEAD, "PR Body", 1, meta={"errors": errors})
         stack = StackGroup("s", (pr(6099, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
+        self.assertEqual([(action.kind, action.key) for action in actions], [("repair_check", "PR Body")])
+
+        ledger.record("repair-check", 6099, HEAD, "PR Body", 3)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
+        self.assertEqual(actions, ())
+
+    def test_plan_stack_actions_retries_stale_base_pr_body_stop_comment_once(self):
+        ledger = self.ledger()
+        errors = [
+            "Review lane behavior cannot ship with policy files in the same PR. Split behavior or cleanup from docs, policy, repro, and benchmark slices.",
+            'PR body Review Unit "routing" cannot ship with activation-surface, tooling-policy files in the same PR. Split this into one Review Unit per PR.',
+        ]
+        ledger.record("repair-check", 6099, HEAD, "PR Body", 1)
+        ledger.record("repair-invalid", 6099, HEAD, "PR Body", 1, meta={"errors": errors})
+        stop = RepairStopComment(
+            "Mergify repair stopped: " + "\n".join(errors),
+            "2026-07-03T00:00:01Z",
+            "EdbertChan",
+        )
+        stack = StackGroup(
+            "s",
+            (
+                pr(
+                    6099,
+                    labels={"admin-bypass"},
+                    checks={"PR Body": check("PR Body", "failure")},
+                    repair_stop_comments=(stop,),
+                ),
+            ),
+        )
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual([(action.kind, action.key) for action in actions], [("repair_check", "PR Body")])
 
