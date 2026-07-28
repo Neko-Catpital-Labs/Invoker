@@ -38,6 +38,8 @@ import type {
   PersistenceAdapter,
   ReviewGateLookup,
   Workflow,
+  WorkflowListOptions,
+  WorkflowReadOptions,
   WorkflowSaveInput,
   WorkflowTaskSnapshot,
   TaskEvent,
@@ -75,6 +77,7 @@ import {
 } from './sqlite-output-spool.js';
 import { SlowQueryAggregator, type SlowQueryShapeStats } from './slow-query-aggregator.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
+import { appendJournalEntry } from './sync-journal.js';
 import * as migrations from './sqlite-migrations.js';
 import { SqliteTaskAttemptRepository } from './sqlite-task-attempt-repository.js';
 import { SqliteWorkflowRepository, type WorkflowMetadataChanges } from './sqlite-workflow-repository.js';
@@ -415,6 +418,7 @@ class NativeStatementCompat {
 
 class NativeDatabaseCompat {
   private lastChanges = 0;
+  private lastInsertRowid = 0;
 
   constructor(private readonly db: DatabaseSync) {}
 
@@ -427,6 +431,7 @@ class NativeDatabaseCompat {
     }
     const result = this.db.prepare(sql).run(...(paramsToArgs(params) as any[]));
     this.lastChanges = Number(result.changes);
+    this.lastInsertRowid = Number(result.lastInsertRowid);
   }
 
   prepare(sql: string): NativeStatementCompat {
@@ -448,6 +453,10 @@ class NativeDatabaseCompat {
 
   getRowsModified(): number {
     return this.lastChanges;
+  }
+
+  getLastInsertRowid(): number {
+    return this.lastInsertRowid;
   }
 
   close(): void {
@@ -944,6 +953,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
       runTransaction: <T>(work: () => T): T => this.runTransaction<T>(work),
       run: (sql, params) => this.db.run(sql, params),
       getRowsModified: () => this.db.getRowsModified(),
+      getLastInsertRowid: () => this.db.getLastInsertRowid(),
       readOnly: this.readOnly,
       markDirty: () => {
         this.dirty = true;
@@ -1054,12 +1064,12 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.workflowRepo.updateWorkflow(workflowId, changes);
   }
 
-  loadWorkflow(workflowId: string): Workflow | undefined {
-    return this.workflowRepo.loadWorkflow(workflowId);
+  loadWorkflow(workflowId: string, opts?: WorkflowReadOptions): Workflow | undefined {
+    return this.workflowRepo.loadWorkflow(workflowId, opts);
   }
 
-  listWorkflows(): Workflow[] {
-    return this.workflowRepo.listWorkflows();
+  listWorkflows(opts?: WorkflowListOptions): Workflow[] {
+    return this.workflowRepo.listWorkflows(opts);
   }
 
   findReviewGateByPr(pr: string): ReviewGateLookup | undefined {
@@ -1557,7 +1567,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   deleteWorkflow(workflowId: string): void {
+    const existing = this.queryOne(
+      'SELECT id FROM workflows WHERE id = ? AND deleted_at IS NULL',
+      [workflowId],
+    );
+    if (!existing) return;
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
+    let didDelete = false;
     this.runTransaction(() => {
       this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
       this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
@@ -1598,9 +1614,33 @@ export class SQLiteAdapter implements PersistenceAdapter {
         )
       `, [workflowId]);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflows WHERE id = ?', [workflowId]);
+      const deletedAt = Date.now();
+      this.db.run(
+        `UPDATE workflows
+            SET deleted_at = ?,
+                updated_at = ?
+          WHERE id = ?
+            AND deleted_at IS NULL`,
+        [deletedAt, new Date(deletedAt).toISOString(), workflowId],
+      );
+      if (this.db.getRowsModified() <= 0) {
+        throw new Error(`Failed to soft-delete workflow "${workflowId}"`);
+      }
+      const row = this.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+      if (!row) {
+        throw new Error(`Cannot journal missing workflow "${workflowId}"`);
+      }
+      appendJournalEntry(this.executor, {
+        entityType: 'workflow',
+        entityId: workflowId,
+        op: 'tombstone',
+        payload: row,
+      });
+      didDelete = true;
     });
-    this.removeOutputFiles(taskIds);
+    if (didDelete) {
+      this.removeOutputFiles(taskIds);
+    }
   }
 
   // ── Events ────────────────────────────────────────────

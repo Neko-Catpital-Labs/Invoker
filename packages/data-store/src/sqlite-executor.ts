@@ -9,6 +9,8 @@ export interface SqliteExecutor {
   run(sql: string, params?: unknown[]): void;
   /** Rows changed by the most recent {@link SqliteExecutor.run}. */
   getRowsModified(): number;
+  /** Last inserted rowid from the most recent INSERT, when the executor exposes it. */
+  getLastInsertRowid?(): number;
   /** True when the adapter is read-only; migrations short-circuit on it. */
   readonly readOnly: boolean;
   /** Mark the connection dirty after a raw DDL mutation. */
