@@ -2091,6 +2091,27 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     expect(remoteBranches).toContain('invoker/task-push');
   });
 
+  it('fetches and retries when a task branch exists remotely without local lease state', async () => {
+    const branch = 'invoker/ref-lock-retry';
+    const baseSha = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+    execSync(`git checkout -b ${branch}`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'task.txt'), 'task result');
+    execSync('git add -A && git commit -m "task commit"', { cwd: cloneDir });
+    const taskSha = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+
+    execSync(`git --git-dir="${originDir}" update-ref "refs/heads/${branch}" "${baseSha}"`);
+    expect(() => execSync(`git rev-parse --verify "refs/remotes/origin/${branch}"`, { cwd: cloneDir }))
+      .toThrow();
+
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, branch);
+    expect(pushErr).toBeUndefined();
+
+    const remoteSha = execSync(`git --git-dir="${originDir}" rev-parse "refs/heads/${branch}"`)
+      .toString()
+      .trim();
+    expect(remoteSha).toBe(taskSha);
+  });
+
   it('returns an error message when branch does not exist on remote', async () => {
     const err = await executor.testPushBranchToRemote(cloneDir, 'nonexistent-branch');
     expect(err).toBeDefined();

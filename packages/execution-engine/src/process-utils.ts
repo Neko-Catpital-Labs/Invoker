@@ -262,6 +262,36 @@ export function cleanElectronEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * Strip Git repository-scoping environment variables from helper processes.
+ * These variables are valid inside Git hooks and parent Git subprocesses, but
+ * they make `git -C <repo>` ignore the intended repository or worktree.
+ */
+export function cleanGitRepositoryEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const clean = { ...env };
+  for (const key of [
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_COMMON_DIR',
+    'GIT_NAMESPACE',
+    'GIT_PREFIX',
+    'GIT_QUARANTINE_PATH',
+    'GIT_CONFIG_PARAMETERS',
+    'GIT_CONFIG_COUNT',
+  ]) {
+    delete clean[key];
+  }
+  for (const key of Object.keys(clean)) {
+    if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(key)) {
+      delete clean[key];
+    }
+  }
+  return clean;
+}
+
 const AGENT_OUTPUT_DETAIL_MAX_CHARS = 2000;
 
 const CODEX_STDIN_NOISE = /^Reading additional input from stdin\.\.\.$/;

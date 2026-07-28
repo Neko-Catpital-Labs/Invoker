@@ -8,7 +8,8 @@ import type { AgentRegistry } from './agent-registry.js';
 import { assertExecutionModelSupported, DEFAULT_EXECUTION_AGENT } from './agent.js';
 import { checkStaleness } from './git-staleness-detector.js';
 import { assertNotGitConfigMutation, ensureRemoteUrl } from './git-config-mutation.js';
-import { childProcessHasExited, cleanElectronEnv, killProcessGroup, SIGKILL_TIMEOUT_MS, terminateChildProcessGroup } from './process-utils.js';
+import { isGitRefLockRace } from './git-utils.js';
+import { childProcessHasExited, cleanElectronEnv, cleanGitRepositoryEnv, killProcessGroup, SIGKILL_TIMEOUT_MS, terminateChildProcessGroup } from './process-utils.js';
 import { getExecutorStartTimeoutMs } from './task-runner-launch-support.js';
 
 
@@ -574,6 +575,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       const child = spawn('git', args, {
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: cleanGitRepositoryEnv(),
         signal: opts?.signal,
       });
       let stdout = '';
@@ -989,24 +991,35 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
           context: { caller: `${this.type}.pushBranchToRemote`, detail: branch },
         });
       }
-      const branchRef = `${branch}:refs/heads/${branch}`;
+      const destinationRef = `refs/heads/${branch}`;
+      const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
+      const sourceRef = !currentBranch || currentBranch === branch
+        ? 'HEAD'
+        : `refs/heads/${branch}`;
+      const sourceSha = (await this.execGitSimple(['rev-parse', '--verify', `${sourceRef}^{commit}`], cwd)).trim();
+      const branchRef = `${sourceSha}:${destinationRef}`;
       try {
         await this.execGitSimpleWithNetworkTimeout(
           ['push', '--force-with-lease', remoteName, branchRef],
           cwd,
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        const missingLocalRef = message.includes('src refspec ')
-          && message.includes(' does not match any');
-        const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
-        if (!missingLocalRef || currentBranch.length > 0) {
+        if (!this.isRetryableLeasePublishError(err)) {
           throw err;
         }
+        await this.fetchRemoteBranchForLease(cwd, remoteName, branch);
         await this.execGitSimpleWithNetworkTimeout(
-          ['push', '--force-with-lease', remoteName, `HEAD:refs/heads/${branch}`],
+          ['push', '--force-with-lease', remoteName, branchRef],
           cwd,
         );
+      }
+      const verified = await this.pushedBranchMatchesSha(cwd, remoteName, branch, sourceSha);
+      if (!verified) {
+        await this.execGitSimpleWithNetworkTimeout(
+          ['push', '--force', remoteName, branchRef],
+          cwd,
+        );
+        await this.assertPushedBranchMatchesSha(cwd, remoteName, branch, sourceSha);
       }
       return undefined;
     } catch (err) {
@@ -1015,6 +1028,70 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       if (executionId) this.emitOutput(executionId, msg);
       return err instanceof Error ? err.message : String(err);
     }
+  }
+
+  private isRetryableLeasePublishError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return isGitRefLockRace(err) || /\bstale info\b/i.test(message);
+  }
+
+  private async fetchRemoteBranchForLease(
+    cwd: string,
+    remoteName: string,
+    branch: string,
+  ): Promise<void> {
+    await this.execGitSimpleWithNetworkTimeout(
+      ['fetch', remoteName, `+refs/heads/${branch}:refs/remotes/${remoteName}/${branch}`],
+      cwd,
+    );
+  }
+
+  private async pushedBranchMatchesSha(
+    cwd: string,
+    remoteName: string,
+    branch: string,
+    sourceSha: string,
+  ): Promise<boolean> {
+    const remoteSha = await this.readRemoteBranchSha(cwd, remoteName, branch);
+    return remoteSha === sourceSha;
+  }
+
+  private async assertPushedBranchMatchesSha(
+    cwd: string,
+    remoteName: string,
+    branch: string,
+    sourceSha: string,
+  ): Promise<void> {
+    const remoteSha = await this.readRemoteBranchSha(cwd, remoteName, branch);
+    const destinationRef = `refs/heads/${branch}`;
+    if (!remoteSha) {
+      throw new Error(
+        `Push verification failed: branch "${branch}" is not on ${remoteName} after push. ` +
+        `Expected ${sourceSha.slice(0, 12)} at ${destinationRef}.`,
+      );
+    }
+    if (remoteSha !== sourceSha) {
+      throw new Error(
+        `Push verification failed: ${remoteName} has "${branch}" at ${remoteSha.slice(0, 12)}, ` +
+        `but the task result is ${sourceSha.slice(0, 12)}.`,
+      );
+    }
+  }
+
+  private async readRemoteBranchSha(
+    cwd: string,
+    remoteName: string,
+    branch: string,
+  ): Promise<string | undefined> {
+    const destinationRef = `refs/heads/${branch}`;
+    const lsRemote = (await this.execGitSimpleWithNetworkTimeout(
+      ['ls-remote', '--heads', remoteName, '--', branch],
+      cwd,
+    )).trim();
+    return lsRemote
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .find((parts) => parts[1] === destinationRef)?.[0] ?? '';
   }
 
   protected isTransientGitTransportError(error: string): boolean {
