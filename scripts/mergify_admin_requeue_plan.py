@@ -40,6 +40,7 @@ ACTIVE_QUEUE_STATES = frozenset({"queued", "merging"})
 
 HUMAN_BLOCKER_KINDS = frozenset({"draft", "human_review_thread", "missing_check", "closed", "human_decision"})
 TERMINAL_BLOCKER_KINDS = frozenset({"merged"})
+IN_FLIGHT_REPAIR_BLOCKER_KINDS = frozenset({"repair_delegated"})
 REPAIR_INVALID_BLOCKER_KINDS = frozenset({"failed_check", "bot_review_thread", "conflict"})
 REPAIR_STOP_PREFIX = "Mergify repair stopped: "
 MANUAL_SPLIT_STOP_MARKERS = (
@@ -228,11 +229,18 @@ def classify_bottom_topology(
 
 
 
-def stack_has_unaccepted_upper_pr(stack: StackGroup, bottom: PrSnapshot | None) -> bool:
-    return bool(bottom) and any(
-        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
+def unaccepted_upper_prs(stack: StackGroup, bottom: PrSnapshot | None) -> tuple[PrSnapshot, ...]:
+    if not bottom:
+        return ()
+    return tuple(
+        pr
         for pr in stack.prs
+        if pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
     )
+
+
+def stack_has_unaccepted_upper_pr(stack: StackGroup, bottom: PrSnapshot | None) -> bool:
+    return bool(unaccepted_upper_prs(stack, bottom))
 
 
 def latest_repair_prereq_status(
@@ -338,6 +346,21 @@ def latest_repair_invalid_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledg
         if detail:
             return Blocker(blocker.key, "human_decision", pr.number, detail)
     return Blocker(blocker.key, "human_decision", pr.number, blocker.detail)
+
+
+def latest_repair_delegated_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Ledger) -> Blocker | None:
+    if blocker.kind not in REPAIR_INVALID_BLOCKER_KINDS:
+        return None
+    latest = None
+    for key in repair_invalid_keys_for_blocker(pr, blocker):
+        row = ledger.latest("repair-delegated", pr.number, pr.head_ref_oid, key)
+        if row is None:
+            continue
+        if latest is None or int(row.get("epoch", 0) or 0) >= int(latest.get("epoch", 0) or 0):
+            latest = row
+    if latest is None:
+        return None
+    return Blocker(blocker.key, "repair_delegated", pr.number, f"{blocker.detail}; repair already delegated for current head")
 
 
 def existing_split_stop_blocker(pr: PrSnapshot, blocker: Blocker) -> Blocker | None:
@@ -447,7 +470,10 @@ def build_stack_facts(
     for pr in stack.prs:
         effective = effective_blockers(pr, required, trunk, suppressed_failed_checks_by_pr.get(pr.number, ()))
         blockers = [
-            latest_repair_invalid_blocker(pr, blocker, ledger) or existing_split_stop_blocker(pr, blocker) or blocker
+            latest_repair_invalid_blocker(pr, blocker, ledger)
+            or existing_split_stop_blocker(pr, blocker)
+            or latest_repair_delegated_blocker(pr, blocker, ledger)
+            or blocker
             for blocker in effective
         ]
         existing_keys = {blocker.key for blocker in blockers}
@@ -518,6 +544,8 @@ def summarize_stack(facts: StackFacts) -> dict[str, object]:
 
 
 def wait_reason_for_facts(facts: StackFacts) -> str:
+    if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
+        return "repair-delegated"
     if facts.upper_stack_needs_acceptance:
         return "upper-stack-needs-acceptance"
     for pr in facts.stack.prs:
@@ -528,6 +556,8 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
             return "merge-hold-only"
         if TERMINAL_BLOCKER_KINDS & blocker_kinds:
             return "terminal-merged"
+        if IN_FLIGHT_REPAIR_BLOCKER_KINDS & blocker_kinds:
+            return "repair-delegated"
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
     if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
@@ -540,6 +570,7 @@ def _has_pending_or_human_blocker(facts: StackFacts) -> bool:
         blocker.kind == "pending_check"
         or blocker.kind in HUMAN_BLOCKER_KINDS
         or blocker.kind in TERMINAL_BLOCKER_KINDS
+        or blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS
         for blocker in facts.all_blockers
     )
 
@@ -553,6 +584,7 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
             blocker.kind == "pending_check"
             or blocker.kind in HUMAN_BLOCKER_KINDS
             or blocker.kind in TERMINAL_BLOCKER_KINDS
+            or blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS
         )
         for blocker in facts.all_blockers
     )
@@ -618,6 +650,24 @@ def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
                     return None
                 return Action("comment_blocked", pr.number, blocker.key, blocker.detail)
     return None
+
+
+def plan_upper_stack_acceptance_blocker(facts: StackFacts, ledger: Ledger) -> Action | None:
+    if not facts.upper_stack_needs_acceptance or not facts.bottom or facts.all_blockers:
+        return None
+    upper_prs = unaccepted_upper_prs(facts.stack, facts.bottom)
+    if not upper_prs:
+        return None
+    key = "upper-stack-needs-acceptance"
+    if ledger.count("comment-blocked", facts.bottom.number, facts.bottom.head_ref_oid, key) > 0:
+        return None
+    upper_list = ", ".join(f"#{pr.number}" for pr in upper_prs)
+    return Action(
+        "comment_blocked",
+        facts.bottom.number,
+        key,
+        f"PR #{facts.bottom.number} is ready to land, but upper stack PR(s) {upper_list} are open without `admin-bypass`; a human must decide whether to include them in the admin-bypass landing stack or land them separately.",
+    )
 
 
 def plan_merge_hold_cleanup(facts: StackFacts, ledger: Ledger) -> Action | None:
@@ -697,6 +747,8 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
+    if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
+        return ()
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)
@@ -707,6 +759,9 @@ def plan_actions_from_facts(
     if action is not None:
         return (action,)
     action = plan_hard_blockers(facts, ledger)
+    if action is not None:
+        return (action,)
+    action = plan_upper_stack_acceptance_blocker(facts, ledger)
     if action is not None:
         return (action,)
     action = plan_merge_hold_cleanup(facts, ledger)
