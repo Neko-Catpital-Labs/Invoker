@@ -64,6 +64,7 @@ interface InvokerTerminalProps {
   terminalSession?: TerminalSessionDescriptor | null;
   terminalBusy?: boolean;
   terminalError?: string | null;
+  terminalActive?: boolean;
   onValueChange: (value: string) => void;
   onSubmit: () => void;
   onPresetChange: (presetKey: string) => void;
@@ -182,9 +183,10 @@ interface PlanningTmuxPaneProps {
   busy: boolean;
   error?: string | null;
   readOnly?: boolean;
+  terminalActive?: boolean;
 }
 
-function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTmuxPaneProps): JSX.Element {
+function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActive = true }: PlanningTmuxPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -192,7 +194,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
 
   useEffect(() => {
     const host = containerRef.current;
-    if (!host || !session) return;
+    if (!terminalActive || !host || !session) return;
 
     let term: XTermTerminal;
     let fit: FitAddon;
@@ -274,15 +276,17 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [readOnly, session?.sessionId]);
+  }, [readOnly, session?.sessionId, terminalActive]);
 
   useEffect(() => {
+    if (!terminalActive) return;
     const term = termRef.current;
     if (!term || !session) return;
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
-  }, [session?.outputSnapshot, session?.sessionId]);
+  }, [session?.outputSnapshot, session?.sessionId, terminalActive]);
 
   useEffect(() => {
+    if (!terminalActive) return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit || !session) return;
@@ -296,7 +300,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
     } catch {
       /* fit failed (e.g., hidden) */
     }
-  }, [session?.sessionId]);
+  }, [session?.sessionId, terminalActive]);
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
@@ -349,6 +353,7 @@ export function InvokerTerminal({
   terminalSession = null,
   terminalBusy = false,
   terminalError = null,
+  terminalActive = true,
   onValueChange,
   onSubmit,
   onPresetChange,
@@ -623,7 +628,13 @@ export function InvokerTerminal({
       </div>
 
       {mode === 'tmux' ? (
-        <PlanningTmuxPane session={terminalSession} busy={terminalBusy} error={terminalError} readOnly={readOnly} />
+        <PlanningTmuxPane
+          session={terminalSession}
+          busy={terminalBusy}
+          error={terminalError}
+          readOnly={readOnly}
+          terminalActive={terminalActive}
+        />
       ) : (
         <>
           <div
