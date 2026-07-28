@@ -17,8 +17,13 @@ import {
 import { mapRowToTask, mapRowToAttempt } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
 import type { CostAttributionAttempt } from './attempt-read-models.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
+
+function isOutcomeTerminalAttemptStatus(status: unknown): boolean {
+  return status === 'completed' || status === 'failed';
+}
 
 /**
  * Adapter-side task/attempt mutators that {@link SqliteTaskAttemptRepository.failTaskAndAttempt}
@@ -113,6 +118,11 @@ export class SqliteTaskAttemptRepository {
     assertTaskConsistent(task);
     const cfg = task.config;
     const exec = task.execution;
+    this.exec.runTransaction(() => {
+    const before = this.exec.queryOne(
+      'SELECT status FROM tasks WHERE id = ?',
+      [task.id],
+    ) as { status?: string } | undefined;
     this.exec.execRun(`
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
@@ -224,14 +234,20 @@ export class SqliteTaskAttemptRepository {
       task.taskStateVersion ?? 1,
     ]);
     this.syncCrashPreservationState(task.id, undefined, task.execution);
+    if (!before || before.status !== task.status) {
+      this.appendTaskJournalEntry(task.id);
+      this.appendWorkflowJournalEntry(workflowId);
+    }
+    });
   }
 
   updateTask(taskId: string, changes: TaskStateChanges): void {
-    const beforeTask = this.loadTask(taskId);
-    if (!beforeTask) return;
+    this.exec.runTransaction(() => {
+      const beforeTask = this.loadTask(taskId);
+      if (!beforeTask) return;
 
-    const setClauses: string[] = [];
-    const values: unknown[] = [];
+      const setClauses: string[] = [];
+      const values: unknown[] = [];
 
     if (changes.description !== undefined) {
       setClauses.push('description = ?');
@@ -418,6 +434,17 @@ export class SqliteTaskAttemptRepository {
       console.log(`[persist-sql] taskId=${taskId} columns=[${cols}]`);
     }
     this.exec.execRun(`UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    if (changes.status !== undefined && changes.status !== beforeTask.status) {
+      this.appendTaskJournalEntry(taskId);
+      const workflowIdForJournal =
+        changes.config && 'workflowId' in changes.config
+          ? changes.config.workflowId
+          : beforeTask.config.workflowId;
+      if (workflowIdForJournal) {
+        this.appendWorkflowJournalEntry(workflowIdForJournal);
+      }
+    }
+    });
   }
 
   loadTasks(workflowId: string): TaskState[] {
@@ -594,6 +621,7 @@ export class SqliteTaskAttemptRepository {
   // ── Attempt CRUD ─────────────────────────────────────────
 
   saveAttempt(attempt: Attempt): void {
+    this.exec.runTransaction(() => {
     this.exec.execRun(`
       INSERT OR REPLACE INTO attempts (
         id, node_id, attempt_number, queue_priority, status,
@@ -628,6 +656,8 @@ export class SqliteTaskAttemptRepository {
       attempt.createdAt.toISOString(),
       attempt.mergeConflict ? JSON.stringify(attempt.mergeConflict) : null,
     ]);
+    this.appendAttemptJournalEntry(attempt.id);
+    });
   }
 
   loadAttempts(nodeId: string): Attempt[] {
@@ -689,8 +719,13 @@ export class SqliteTaskAttemptRepository {
   }
 
   updateAttempt(attemptId: string, changes: Partial<Pick<Attempt, 'status' | 'claimedAt' | 'startedAt' | 'completedAt' | 'exitCode' | 'error' | 'lastHeartbeatAt' | 'leaseExpiresAt' | 'branch' | 'commit' | 'summary' | 'queuePriority' | 'workspacePath' | 'agentSessionId' | 'containerId' | 'mergeConflict'>>): void {
-    const setClauses: string[] = [];
-    const values: unknown[] = [];
+    this.exec.runTransaction(() => {
+      const before = this.exec.queryOne(
+        'SELECT status FROM attempts WHERE id = ?',
+        [attemptId],
+      ) as { status?: string } | undefined;
+      const setClauses: string[] = [];
+      const values: unknown[] = [];
 
     if (changes.status !== undefined) { setClauses.push('status = ?'); values.push(changes.status); }
     if (changes.claimedAt !== undefined) { setClauses.push('claimed_at = ?'); values.push(changes.claimedAt instanceof Date ? changes.claimedAt.toISOString() : changes.claimedAt ?? null); }
@@ -712,6 +747,16 @@ export class SqliteTaskAttemptRepository {
     if (setClauses.length === 0) return;
     values.push(attemptId);
     this.exec.execRun(`UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    const updated = this.exec.getRowsModified() > 0;
+    const completed =
+      changes.completedAt !== undefined ||
+      (changes.status !== undefined &&
+        changes.status !== before?.status &&
+        isOutcomeTerminalAttemptStatus(changes.status));
+    if (updated && completed) {
+      this.appendAttemptJournalEntry(attemptId);
+    }
+    });
   }
 
   claimAttemptForLaunch(
@@ -873,6 +918,45 @@ export class SqliteTaskAttemptRepository {
     }
 
     return task;
+  }
+
+  private appendTaskJournalEntry(taskId: string): void {
+    const payload = this.exec.queryOne('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    if (!payload) {
+      throw new Error(`Cannot journal missing task "${taskId}"`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType: 'task',
+      entityId: taskId,
+      op: 'upsert',
+      payload,
+    });
+  }
+
+  private appendAttemptJournalEntry(attemptId: string): void {
+    const payload = this.exec.queryOne('SELECT * FROM attempts WHERE id = ?', [attemptId]);
+    if (!payload) {
+      throw new Error(`Cannot journal missing attempt "${attemptId}"`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType: 'attempt',
+      entityId: attemptId,
+      op: 'upsert',
+      payload,
+    });
+  }
+
+  private appendWorkflowJournalEntry(workflowId: string): void {
+    const payload = this.exec.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+    if (!payload) {
+      throw new Error(`Cannot journal missing workflow "${workflowId}"`);
+    }
+    appendJournalEntry(this.exec, {
+      entityType: 'workflow',
+      entityId: workflowId,
+      op: 'upsert',
+      payload,
+    });
   }
 
   private findActiveAttemptsAfter(nodeId: string, selected: Attempt, limit = 1): Attempt[] {
