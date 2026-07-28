@@ -18,6 +18,12 @@ import { createExecutionBench } from './execution-bench.js';
 import { buildRemoteAgentEnvExports } from './remote-agent-env.js';
 import { buildSourceInvokerEnvScript } from './remote-shell-fragments.js';
 import {
+  buildRemoteProgressJournalRunnerFragment,
+  REMOTE_DELTA_SPOOL_FILENAME,
+  REMOTE_PROGRESS_JOURNAL_FILENAME,
+  REMOTE_SYNC_DIR_RELATIVE,
+} from './remote-progress-journal.js';
+import {
   shellPosixSingleQuote as sshGitShellQuote,
   sshInteractiveCdFragment,
   buildMirrorCloneScript,
@@ -145,6 +151,7 @@ export class SshExecutor extends BaseExecutor<SshEntry> {
 
   private buildRunnerScript(): string {
     const intervalSeconds = this.remoteHeartbeatIntervalSeconds;
+    const journalFragment = buildRemoteProgressJournalRunnerFragment();
     return `#!/usr/bin/env bash
 set -euo pipefail
 
@@ -153,19 +160,55 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
+${journalFragment}
+invoker_remote_progress_enabled() {
+  [ -n "\${INVOKER_REMOTE_SYNC_DIR:-}" ] && [ -n "\${INVOKER_SYNC_ATTEMPT_ID:-}" ] && [ -n "\${INVOKER_SYNC_TASK_ID:-}" ]
+}
+
 PAYLOAD_PATH=$1
 (
   bash "$PAYLOAD_PATH"
+) > >(
+  while IFS= read -r line || [ -n "$line" ]; do
+    if invoker_remote_progress_enabled; then
+      invoker_remote_journal_output stdout "$line"$'\\n' || true
+    fi
+    printf '%s\\n' "$line"
+  done
+) 2> >(
+  while IFS= read -r line || [ -n "$line" ]; do
+    if invoker_remote_progress_enabled; then
+      invoker_remote_journal_output stderr "$line"$'\\n' || true
+    fi
+    printf '%s\\n' "$line" >&2
+  done
 ) &
 PAYLOAD_PID=$!
+if invoker_remote_progress_enabled; then
+  rm -f "$INVOKER_REMOTE_CANCEL_FILE" >/dev/null 2>&1 || true
+  invoker_remote_journal_attempt_started || true
+fi
 INVOKER_HEARTBEAT_MARKER=${this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER)}
 INVOKER_HEARTBEAT_INTERVAL_SECONDS=${intervalSeconds}
 printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+if invoker_remote_progress_enabled; then
+  invoker_remote_journal_heartbeat || true
+fi
 (
   while kill -0 "$PAYLOAD_PID" 2>/dev/null; do
     sleep "$INVOKER_HEARTBEAT_INTERVAL_SECONDS"
     kill -0 "$PAYLOAD_PID" 2>/dev/null || break
+    if invoker_remote_progress_enabled && invoker_remote_should_stop_for_tombstone; then
+      touch "$INVOKER_REMOTE_CANCEL_FILE" >/dev/null 2>&1 || true
+      kill "$PAYLOAD_PID" >/dev/null 2>&1 || true
+      sleep 2
+      kill -0 "$PAYLOAD_PID" 2>/dev/null && kill -KILL "$PAYLOAD_PID" >/dev/null 2>&1 || true
+      break
+    fi
     printf '%s %s\\n' "$INVOKER_HEARTBEAT_MARKER" "$(date +%s)"
+    if invoker_remote_progress_enabled; then
+      invoker_remote_journal_heartbeat || true
+    fi
   done
 ) &
 HEARTBEAT_PID=$!
@@ -176,6 +219,16 @@ else
 fi
 kill "$HEARTBEAT_PID" >/dev/null 2>&1 || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
+if invoker_remote_progress_enabled; then
+  JOURNAL_STATUS=failed
+  if [ -f "$INVOKER_REMOTE_CANCEL_FILE" ]; then
+    JOURNAL_STATUS=cancelled
+    PAYLOAD_EXIT=143
+  elif [ "$PAYLOAD_EXIT" -eq 0 ]; then
+    JOURNAL_STATUS=completed
+  fi
+  invoker_remote_journal_attempt_finished "$JOURNAL_STATUS" "$PAYLOAD_EXIT" || true
+fi
 exit "$PAYLOAD_EXIT"
 `;
   }
@@ -237,12 +290,21 @@ ${content}${content.endsWith('\n') ? '' : '\n'}${delimiter}
     payload: string;
     managed: boolean;
     envExports: string;
+    attemptId?: string;
+    workflowId?: string;
+    branch?: string;
+    agentSessionId?: string;
   }): string {
     const runner = this.buildRunnerScript();
     const payload = this.buildPayloadScript(options.payload);
     const heartbeatMarker = this.shellQuote(SshExecutor.REMOTE_HEARTBEAT_MARKER);
     const heartbeatIntervalSeconds = this.remoteHeartbeatIntervalSeconds;
     const stagingTokenExpression = this.buildStagingDirExpression(options.executionId, options.actionId);
+    const syncAttemptId = options.attemptId ?? options.executionId;
+    const syncToken = this.safePathToken(syncAttemptId).slice(0, 120);
+    const syncWorkflowId = options.workflowId ?? '';
+    const syncBranch = options.branch ?? '';
+    const syncAgentSessionId = options.agentSessionId ?? '';
     const managedWorkspaceBootstrap = options.managed && this.provisionCommand
       ? `ensure_managed_pnpm_workspace() {
   if [ "\${INVOKER_SKIP_MANAGED_PNPM_INSTALL:-}" = "1" ]; then
@@ -264,6 +326,19 @@ ensure_managed_pnpm_workspace
 ${this.remotePathNormalizeFunction()}
 ${buildSourceInvokerEnvScript(this.remoteInvokerHome, 'INVOKER_HOME')}
 STAGING_DIR="$INVOKER_HOME/runtime/ssh-executor/${stagingTokenExpression}"
+INVOKER_REMOTE_SYNC_DIR="$INVOKER_HOME/${REMOTE_SYNC_DIR_RELATIVE}"
+INVOKER_REMOTE_PROGRESS_JOURNAL="$INVOKER_REMOTE_SYNC_DIR/${REMOTE_PROGRESS_JOURNAL_FILENAME}"
+INVOKER_REMOTE_DELTA_SPOOL="$INVOKER_REMOTE_SYNC_DIR/${REMOTE_DELTA_SPOOL_FILENAME}"
+INVOKER_REMOTE_OUTPUT_OFFSET_FILE="$INVOKER_REMOTE_SYNC_DIR/output-offset-${syncToken}.txt"
+INVOKER_REMOTE_CANCEL_FILE="$INVOKER_REMOTE_SYNC_DIR/cancelled-${syncToken}.flag"
+INVOKER_SYNC_TASK_ID=${this.shellQuote(options.actionId)}
+INVOKER_SYNC_ATTEMPT_ID=${this.shellQuote(syncAttemptId)}
+INVOKER_SYNC_WORKFLOW_ID=${this.shellQuote(syncWorkflowId)}
+INVOKER_SYNC_BRANCH=${this.shellQuote(syncBranch)}
+INVOKER_SYNC_AGENT_SESSION_ID=${this.shellQuote(syncAgentSessionId)}
+export INVOKER_REMOTE_SYNC_DIR INVOKER_REMOTE_PROGRESS_JOURNAL INVOKER_REMOTE_DELTA_SPOOL
+export INVOKER_REMOTE_OUTPUT_OFFSET_FILE INVOKER_REMOTE_CANCEL_FILE
+export INVOKER_SYNC_TASK_ID INVOKER_SYNC_ATTEMPT_ID INVOKER_SYNC_WORKFLOW_ID INVOKER_SYNC_BRANCH INVOKER_SYNC_AGENT_SESSION_ID
 RUNNER_PATH="$STAGING_DIR/runner.sh"
 PAYLOAD_PATH="$STAGING_DIR/payload.sh"
 cleanup_runtime() {
@@ -304,6 +379,8 @@ mkdir -p "$STAGING_DIR"
 chmod 700 "$STAGING_DIR"
 ${this.renderHeredocFile('"$RUNNER_PATH"', runner, 'runner')}${this.renderHeredocFile('"$PAYLOAD_PATH"', payload, 'payload')}chmod 700 "$RUNNER_PATH" "$PAYLOAD_PATH"
 WT=$(normalize_remote_path ${this.shellQuote(options.workspacePath)})
+INVOKER_SYNC_WORKSPACE_PATH="$WT"
+export INVOKER_SYNC_WORKSPACE_PATH
 cd "$WT"
 ${options.envExports}
 start_bootstrap_heartbeat
