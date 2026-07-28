@@ -1626,6 +1626,71 @@ describe('planning chat worktree provisioning', () => {
       rmSync(existingWorktreePath, { recursive: true, force: true });
     }
   });
+
+  it('writes a .mcp.json with the invoker MCP server into a freshly provisioned worktree', async () => {
+    const worktreePath = mkdtempSync(join(tmpdir(), 'in-app-mcp-config-'));
+    try {
+      const repoPool = createFakeRepoPool(worktreePath);
+      const sessions = createInAppPlanningChatSessions();
+
+      const created = await createPlanningChatSession({}, {
+        config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        repoPool,
+      });
+      if (!created.ok) throw new Error(created.error);
+
+      const mcpConfigPath = join(worktreePath, '.mcp.json');
+      expect(existsSync(mcpConfigPath)).toBe(true);
+      const parsed = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
+      expect(parsed.mcpServers.invoker.command).toBe('invoker-cli');
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('writes a .mcp.json when recreating a wiped worktree during restore', async () => {
+    const worktreePath = mkdtempSync(join(tmpdir(), 'in-app-mcp-config-restore-'));
+    try {
+      const repoPool = createFakeRepoPool(worktreePath);
+      repoPool.externalWorktreePath = vi.fn(() => '/fake/worktree/restore-mcp-nonexistent');
+
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-mcp-restore',
+        title: 'Restored plan with mcp config',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        confirmationMode: 'require',
+        repoUrl: 'https://example.com/repo.git',
+        baseBranch: 'main',
+        baseCommit: 'stored-base-commit',
+        worktreePath: '/fake/worktree/restore-mcp-nonexistent',
+        worktreeBranch: 'invoker/planning/planning-mcp-restore',
+        messages: [],
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:00.000Z',
+      };
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        repoPool,
+      });
+
+      const mcpConfigPath = join(worktreePath, '.mcp.json');
+      expect(existsSync(mcpConfigPath)).toBe(true);
+      const parsed = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
+      expect(parsed.mcpServers.invoker.command).toBe('invoker-cli');
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('rebindPlanningChatRepo', () => {
@@ -1728,6 +1793,37 @@ describe('rebindPlanningChatRepo', () => {
     expect(stored?.worktreeBranch).toBe('invoker/planning/provision-session');
     expect(stored?.conversation).not.toBe(originalConversation);
     expect(stored?.conversation.workingDir).toBe(worktreePath);
+  });
+
+  it('writes a .mcp.json into the newly provisioned worktree when rebinding', async () => {
+    const worktreePath = mkdtempSync(join(tmpdir(), 'in-app-rebind-mcp-config-'));
+    try {
+      const repoPool = createFakeRebindRepoPool(worktreePath, 'new-head-sha');
+      const sessions = createInAppPlanningChatSessions();
+      const session = planningSession({
+        id: 'rebind-mcp-session',
+        title: 'Rebind mcp test',
+      });
+      sessions.set(session.id, session);
+
+      const result = await rebindPlanningChatRepo({
+        sessionId: session.id,
+        repoUrl: 'https://example.com/new-repo.git',
+        baseBranch: 'main',
+      }, {
+        config: {},
+        sessions,
+        repoPool,
+      });
+
+      expect(result).toEqual({ ok: true, action: 'provision' });
+      const mcpConfigPath = join(worktreePath, '.mcp.json');
+      expect(existsSync(mcpConfigPath)).toBe(true);
+      const parsed = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
+      expect(parsed.mcpServers.invoker.command).toBe('invoker-cli');
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
   });
 
   it('invalidates and clears a draft (session, DB, and sidecar) when rebinding to a different repo', async () => {
