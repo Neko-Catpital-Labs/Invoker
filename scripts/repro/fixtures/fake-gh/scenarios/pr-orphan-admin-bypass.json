@@ -1,0 +1,23 @@
+{
+  "prs": [
+    {
+      "number": 6106,
+      "title": "Admin-bypass PR that admin-bypass-land already owns",
+      "url": "https://github.com/fake/repo/pull/6106",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "stack/6106",
+      "headRefOid": "1111111111111111111111111111111111111111",
+      "mergeStateStatus": "BLOCKED",
+      "mergeable": "MERGEABLE",
+      "reviewDecision": "",
+      "labels": ["admin-bypass"],
+      "reviewThreads": [],
+      "checks": {"quality / TypeScript Types": "FAILURE", "Lint": "SUCCESS"}
+    }
+  ],
+  "issue_comments": {
+    "6106": []
+  }
+}
