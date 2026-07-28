@@ -185,6 +185,7 @@ describe('Start and recreate failed and pending', () => {
     await waitFor(() => {
       expect(mock.api.startReady).toHaveBeenCalledWith({ freshBaseScope: 'failed' });
     });
+    expect(await screen.findByText('Recreated 1 workflow from fresh base')).toBeInTheDocument();
   });
 
   it('opens the fresh-base preview for failed-and-pending and confirms with the fresh-base scope', async () => {

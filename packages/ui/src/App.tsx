@@ -2672,8 +2672,11 @@ export function App() {
             result.recreatedWorkflowIds.length > 0
               ? formatCount(result.recreatedWorkflowIds.length, 'workflow')
               : null,
-            freshBaseRecreatedCount > 0
+            result.partial && freshBaseRecreatedCount > 0
               ? `${formatCount(freshBaseRecreatedCount, 'workflow')} from fresh base`
+              : null,
+            !result.partial && freshBaseRecreatedCount > 0 && result.started.length > 0
+              ? `Started ${formatCount(result.started.length, 'task')}`
               : null,
             result.preview.recoverableTaskIds.length > 0
               ? formatCount(result.preview.recoverableTaskIds.length, 'recovered task')
@@ -2682,10 +2685,13 @@ export function App() {
               ? `${formatCount(failedOutcomeCount, 'workflow')} failed`
               : null,
           ].filter(Boolean);
+          const title = result.partial
+            ? 'Start Ready finished with partial fresh-base results'
+            : freshBaseRecreatedCount > 0
+              ? `Recreated ${formatCount(freshBaseRecreatedCount, 'workflow')} from fresh base`
+              : `Started ${formatCount(result.started.length, 'task')}`;
           toast.success(
-            result.partial
-              ? 'Start Ready finished with partial fresh-base results'
-              : `Started ${formatCount(result.started.length, 'task')}`,
+            title,
             descriptionParts.length > 0 ? { description: descriptionParts.join(' · ') } : undefined,
           );
         } else {
