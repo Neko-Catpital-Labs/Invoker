@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import { PlanConversation } from '../../../surfaces/src/index.ts';
 import {
   PLANNING_TERMINAL_SUMMARY_BRIDGE_START,
@@ -9,6 +10,7 @@ import {
   createInAppPlanningChatSessions,
   createPlanningChatSession,
   createPlanningCommandBuilderFromRegistry,
+  discardPlanningChatDraft,
   listInAppPlanningPresets,
   listPlanningChatSessions,
   planFromGoal,
@@ -1046,6 +1048,7 @@ tasks:
       expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.stringContaining('name: Mock Plan'));
       expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.not.stringContaining('```yaml'));
     } finally {
+      rmSync(join(resolveInvokerHomeRoot(), 'plan-drafts', 'planning-restored.yaml'), { force: true });
       adapter.close();
     }
   });
@@ -1299,6 +1302,163 @@ tasks:
 
     expect(resetPlanningChat({ sessionId: 'session-1' }, { sessions })).toEqual({ ok: true });
     expect(sessions.has('session-1')).toBe(false);
+  });
+});
+
+describe('plan draft sidecar mirror', () => {
+  const planningCommandBuilder = vi.fn(() => ({ command: 'planner', args: ['prompt'] }));
+
+  function sidecarPathFor(sessionId: string): string {
+    return join(resolveInvokerHomeRoot(), 'plan-drafts', `${sessionId}.yaml`);
+  }
+
+  it('writes the sidecar file to match the DB-persisted draft when a draft is approved', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
+    const adapter = await SQLiteAdapter.create(':memory:');
+    let sessionId: string | undefined;
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const sent = await sendPlanningChatMessage({
+        message: 'draft',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        planningSessionStore: adapter,
+      });
+      if (!sent.ok) throw new Error(sent.error);
+      sessionId = sent.sessionId;
+
+      const session = sessions.get(sessionId);
+      if (!session?.draftPlanText) throw new Error('expected a draft plan on the session');
+      const persistedDraftText = adapter.loadInAppPlanningSession(sessionId)?.draftPlanText;
+      expect(persistedDraftText).toBe(session.draftPlanText);
+
+      const sidecarPath = sidecarPathFor(sessionId);
+      expect(sidecarPath).toContain(join('.invoker', 'test', 'plan-drafts'));
+      expect(existsSync(sidecarPath)).toBe(true);
+      expect(readFileSync(sidecarPath, 'utf8')).toBe(persistedDraftText);
+    } finally {
+      if (sessionId) rmSync(sidecarPathFor(sessionId), { force: true });
+      adapter.close();
+    }
+  });
+
+  it('removes the sidecar file when a draft is discarded', async () => {
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
+    const adapter = await SQLiteAdapter.create(':memory:');
+    let sessionId: string | undefined;
+    try {
+      const sessions = createInAppPlanningChatSessions();
+      const sent = await sendPlanningChatMessage({
+        message: 'draft',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        planningSessionStore: adapter,
+      });
+      if (!sent.ok) throw new Error(sent.error);
+      sessionId = sent.sessionId;
+      expect(existsSync(sidecarPathFor(sessionId))).toBe(true);
+
+      const discarded = discardPlanningChatDraft({ sessionId }, {
+        sessions,
+        planningSessionStore: adapter,
+      });
+      expect(discarded).toEqual({ ok: true });
+      expect(existsSync(sidecarPathFor(sessionId))).toBe(false);
+      expect(adapter.loadInAppPlanningSession(sessionId)?.draftPlanText).toBeUndefined();
+    } finally {
+      if (sessionId) rmSync(sidecarPathFor(sessionId), { force: true });
+      adapter.close();
+    }
+  });
+
+  it('reconstructs a missing sidecar file for a draft_ready session on restore', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    const sessionId = 'planning-sidecar-restore';
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const record: InAppPlanningSessionRecord = {
+        id: sessionId,
+        title: 'Restored draft with missing sidecar',
+        presetKey: 'codex',
+        status: 'draft_ready',
+        messages: [
+          { id: 1, role: 'user', text: 'Draft it', createdAt: '2026-07-07T00:00:01.000Z' },
+          { id: 2, role: 'assistant', text: VALID_PLAN, createdAt: '2026-07-07T00:00:02.000Z' },
+        ],
+        draftPlanSummary: { name: 'Mock Plan', taskCount: 2, steps: ['First task', 'Second task'] },
+        draftPlanText: VALID_PLAN_TEXT,
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:02.000Z',
+      };
+
+      expect(existsSync(sidecarPathFor(sessionId))).toBe(false);
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+
+      const sidecarPath = sidecarPathFor(sessionId);
+      expect(existsSync(sidecarPath)).toBe(true);
+      expect(readFileSync(sidecarPath, 'utf8')).toBe(VALID_PLAN_TEXT);
+    } finally {
+      rmSync(sidecarPathFor(sessionId), { force: true });
+      adapter.close();
+    }
+  });
+
+  it('removes the sidecar file when restore invalidates an unreadable draft', async () => {
+    const adapter = await SQLiteAdapter.create(':memory:');
+    const sessionId = 'planning-sidecar-invalidated';
+    try {
+      const conversationRepo = new ConversationRepository(adapter);
+      const record: InAppPlanningSessionRecord = {
+        id: sessionId,
+        title: 'Restored draft that cannot be read',
+        presetKey: 'codex',
+        status: 'draft_ready',
+        messages: [
+          { id: 1, role: 'assistant', text: VALID_PLAN, createdAt: '2026-07-07T00:00:01.000Z' },
+        ],
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:01.000Z',
+      };
+
+      mkdirSync(dirname(sidecarPathFor(sessionId)), { recursive: true });
+      writeFileSync(sidecarPathFor(sessionId), 'stale sidecar contents', 'utf8');
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions([record], {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo,
+        planningSessionStore: adapter,
+      });
+
+      expect(sessions.get(sessionId)?.status).toBe('still_discussing');
+      expect(sessions.get(sessionId)?.draftPlanText).toBeUndefined();
+      expect(existsSync(sidecarPathFor(sessionId))).toBe(false);
+    } finally {
+      rmSync(sidecarPathFor(sessionId), { force: true });
+      adapter.close();
+    }
   });
 });
 
