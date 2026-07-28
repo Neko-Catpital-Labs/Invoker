@@ -114,6 +114,8 @@ export async function ensurePlanningWorktreeReady(
     return { worktreePath: expectedPath, recreated: false };
   }
   await pool.ensureCloneThroughRepoQueue(state.repoUrl);
+  // Recreate at the previously-resolved commit, not a freshly resolved HEAD, so a
+  // disk-headroom wipe restores exactly what was there rather than silently rebasing.
   const acquired = await acquireProvisionAndSoftRelease(pool, state.repoUrl, branch, state.baseCommit, state.sessionId);
   return { worktreePath: acquired.worktreePath, recreated: true };
 }
