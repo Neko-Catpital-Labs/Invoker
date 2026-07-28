@@ -33,7 +33,7 @@ import type {
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import type { AgentRegistry, HarnessSessionDriver } from '@invoker/execution-engine';
 import {
   evaluatePlanningTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
@@ -43,7 +43,6 @@ import {
   summarizePlanText,
   type PlanningMessage,
 } from '@invoker/planning-core';
-import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
 
 export interface LoadedGeneratedPlan {
@@ -57,6 +56,67 @@ export interface InAppPlanningSessionStore {
   upsertInAppPlanningSession(record: InAppPlanningSessionRecord): void;
   updateInAppPlanningSession(sessionId: string, patch: InAppPlanningSessionPatch): void;
   deleteInAppPlanningSession(sessionId: string): void;
+}
+
+interface HarnessPreset {
+  tool: string;
+  model?: string;
+}
+
+interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+type ConversationMode = 'agent' | 'plan';
+
+export type PlanningCommandBuilder = (opts: {
+  tool: string;
+  model?: string;
+  prompt: string;
+}) => { command: string; args: string[] };
+
+interface PlanConversationConfig {
+  cursorCommand?: string;
+  tool?: string;
+  model?: string;
+  mode?: ConversationMode;
+  planningCommandBuilder?: PlanningCommandBuilder;
+  workingDir?: string;
+  timeoutMs?: number;
+  threadTs?: string;
+  conversationRepo?: ConversationRepository;
+  defaultBranch?: string;
+  repoUrl?: string;
+  experimentalPlanner?: boolean;
+  preferStackedWorkflows?: boolean;
+  onRawPlannerOutput?: (chunk: string) => void;
+  harnessSessionDriver?: HarnessSessionDriver;
+  harnessSessionId?: string;
+  onHarnessSessionId?: (sessionId: string) => void;
+  conversationalPlanning?: boolean;
+  log?: (source: string, level: string, message: string) => void;
+  plannerRetryLimit?: number;
+  plannerRetryBaseDelayMs?: number;
+}
+
+interface PlanConversation {
+  readonly workingDir?: string;
+  readonly lastTurnReasoning: string[];
+  readonly lastTurnDraftPlanText: string | null;
+  readonly submittedPlanText: string | null;
+  readonly planSubmitted: boolean;
+  readonly conversationMode: ConversationMode;
+  readonly harnessSessionId?: string;
+  readonly history: readonly ConversationMessage[];
+  init(): Promise<void>;
+  sendMessage(message: string): Promise<string>;
+  runPlanConversion(): Promise<string>;
+  getDraftedPlan(): string | null;
+  planDraftFilePath(): string | null;
+  reset(): void;
+  buildCursorPrompt(): string;
+  spawnPlanner(prompt: string): Promise<string>;
 }
 
 export interface InAppPlannerDeps {
