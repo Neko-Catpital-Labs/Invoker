@@ -538,6 +538,7 @@ describe('SQLiteAdapter', () => {
 
     it('updates planning sessions and replaces visible messages', () => {
       adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+      const runSpy = vi.spyOn((adapter as any).db, 'run');
       adapter.updateInAppPlanningSession('planning-1', {
         status: 'still_discussing',
         terminalMode: 'tmux',
@@ -557,6 +558,13 @@ describe('SQLiteAdapter', () => {
         pendingResponse: false,
         updatedAt: '2026-07-07T00:00:05.000Z',
       });
+
+      const messageDeletes = runSpy.mock.calls.filter(([sql]) =>
+        String(sql).includes('DELETE FROM in_app_planning_messages WHERE session_id = ?'));
+      const messageInserts = runSpy.mock.calls.filter(([sql]) =>
+        String(sql).includes('INSERT INTO in_app_planning_messages'));
+      expect(messageDeletes).toHaveLength(1);
+      expect(messageInserts).toHaveLength(1);
 
       const loaded = adapter.loadInAppPlanningSession('planning-1');
       expect(loaded).toMatchObject({
@@ -578,6 +586,114 @@ describe('SQLiteAdapter', () => {
       });
       expect(loaded?.draftPlanSummary).toBeUndefined();
       expect(loaded?.draftPlanText).toBeUndefined();
+    });
+
+    it('appends unseen monotonic planning messages without reloading or rewriting the transcript', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-append-'));
+      const dbPath = join(dir, 'invoker.db');
+      const initial = makePlanningSession('planning-append');
+      const userMessage = {
+        id: 4,
+        role: 'user' as const,
+        text: 'Add another task',
+        createdAt: '2026-07-07T00:00:04.000Z',
+      };
+      const assistantMessage = {
+        id: 5,
+        role: 'assistant' as const,
+        text: 'Added another task.',
+        createdAt: '2026-07-07T00:00:05.000Z',
+      };
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.upsertInAppPlanningSession(initial);
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        try {
+          const runSpy = vi.spyOn((reopened as any).db, 'run');
+          const queryOneSpy = vi.spyOn(reopened as any, 'queryOne');
+          const queryAllSpy = vi.spyOn(reopened as any, 'queryAll');
+
+          reopened.updateInAppPlanningSession(initial.id, {
+            messages: [...initial.messages, userMessage],
+            pendingResponse: true,
+            updatedAt: userMessage.createdAt,
+          });
+          reopened.updateInAppPlanningSession(initial.id, {
+            messages: [...initial.messages, userMessage, assistantMessage],
+            pendingResponse: false,
+            updatedAt: assistantMessage.createdAt,
+          });
+
+          const messageDeletes = runSpy.mock.calls.filter(([sql]) =>
+            String(sql).includes('DELETE FROM in_app_planning_messages WHERE session_id = ?'));
+          const messageInserts = runSpy.mock.calls.filter(([sql]) =>
+            String(sql).includes('INSERT INTO in_app_planning_messages'));
+          const countQueries = queryOneSpy.mock.calls.filter(([sql]) =>
+            String(sql).includes('COUNT(*) AS message_count'));
+          const messageReloads = queryAllSpy.mock.calls.filter(([sql]) =>
+            String(sql).includes('FROM in_app_planning_messages'));
+
+          expect(messageDeletes).toHaveLength(0);
+          expect(messageInserts).toHaveLength(2);
+          expect(countQueries).toHaveLength(1);
+          expect(messageReloads).toHaveLength(0);
+          expect(sqliteScalar(reopened, `SELECT COUNT(*) FROM in_app_planning_messages WHERE session_id = '${initial.id}'`)).toBe(5);
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('rewrites planning messages when a restored history is edited before append', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'sqlite-planning-edit-fallback-'));
+      const dbPath = join(dir, 'invoker.db');
+      const initial = makePlanningSession('planning-edit-fallback');
+      const appendedMessage = {
+        id: 4,
+        role: 'assistant' as const,
+        text: 'Edited history acknowledged.',
+        createdAt: '2026-07-07T00:00:04.000Z',
+      };
+      try {
+        const first = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        first.upsertInAppPlanningSession(initial);
+        first.close();
+
+        const reopened = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+        try {
+          const restored = reopened.loadInAppPlanningSession(initial.id);
+          if (!restored) throw new Error('planning session did not restore');
+          const firstMessage = restored.messages[0];
+          if (!firstMessage) throw new Error('planning session restored without messages');
+          const editedMessages = [
+            { ...firstMessage, text: 'Edited starter prompt.' },
+            ...restored.messages.slice(1),
+            appendedMessage,
+          ];
+          const runSpy = vi.spyOn((reopened as any).db, 'run');
+
+          reopened.updateInAppPlanningSession(initial.id, {
+            messages: editedMessages,
+            updatedAt: appendedMessage.createdAt,
+          });
+
+          const messageDeletes = runSpy.mock.calls.filter(([sql]) =>
+            String(sql).includes('DELETE FROM in_app_planning_messages WHERE session_id = ?'));
+          const messageInserts = runSpy.mock.calls.filter(([sql]) =>
+            String(sql).includes('INSERT INTO in_app_planning_messages'));
+          expect(messageDeletes).toHaveLength(1);
+          expect(messageInserts).toHaveLength(editedMessages.length);
+          expect(reopened.loadInAppPlanningSession(initial.id)?.messages).toEqual(editedMessages);
+        } finally {
+          reopened.close();
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it('deletes planning sessions and their visible messages', () => {
