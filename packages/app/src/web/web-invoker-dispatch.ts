@@ -20,7 +20,7 @@ import type {
   WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import { parseSpawnRepairWorkflowMutationArgs, type AgentRegistry } from '@invoker/execution-engine';
 import type { ExternalGatePolicyUpdate, Orchestrator } from '@invoker/workflow-core';
 import { resolveDefaultTaskExecutionSettings, type InvokerConfig } from '../config.js';
 import { listInAppPlanningPresets } from '../in-app-planner.js';
@@ -215,6 +215,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return mutations.rebaseRetry(String(args[0]));
       case 'invoker:rebase-recreate':
         return mutations.rebaseRecreate(String(args[0]));
+      case 'invoker:spawn-repair-workflow':
+        return mutations.spawnRepairWorkflow(parseSpawnRepairWorkflowMutationArgs(args));
       case 'invoker:edit-task-command':
         return mutations.editTaskCommand(String(args[0]), String(args[1]));
       case 'invoker:edit-task-prompt':
@@ -288,6 +290,7 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
       case 'invoker:approve-merge':
       case 'invoker:fix-with-agent':
       case 'invoker:spawn-review-gate-ci-repair':
+      case 'invoker:spawn-review-gate-stack-ci-repair':
       case 'invoker:edit-task-pool':
       case 'invoker:replace-task':
       case 'invoker:load-plan':

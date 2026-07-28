@@ -55,6 +55,7 @@ describe('GUI mutation translation', () => {
     'invoker:start-ready',
     'invoker:select-experiment',
     'invoker:edit-task-pool',
+    'invoker:spawn-repair-workflow',
   ])('routes %s to the owner GUI mutation handler', (channel) => {
     const translatorSource = getTranslatorSource();
     expect(translatorSource).toMatch(

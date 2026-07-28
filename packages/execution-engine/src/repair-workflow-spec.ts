@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { Logger } from '@invoker/contracts';
 import type {
   WorkerActionRecord,
@@ -13,7 +15,6 @@ import type {
   ReviewGateCiFailedLifecycleEvent,
   ReviewGateFailedCheck,
 } from './lifecycle-events.js';
-import { ciFailureChecksHash } from './review-gate-ci-repair.js';
 import { recordWorkerDecisionRow } from './worker-decision-ledger.js';
 
 export const SPAWN_REPAIR_WORKFLOW_CHANNEL = 'invoker:spawn-repair-workflow';
@@ -128,16 +129,32 @@ export function failedCheckNamesFromCiFailureEvent(
   return event.failedChecks.map((check) => check.name);
 }
 
+function ciFailureChecksHash(failedChecks: readonly ReviewGateFailedCheck[]): string {
+  const normalized = failedChecks
+    .map((check) => ({
+      name: check.name,
+      conclusion: check.conclusion ?? '',
+      detailsUrl: check.detailsUrl ?? '',
+    }))
+    .sort((a, b) =>
+      a.name.localeCompare(b.name)
+      || a.conclusion.localeCompare(b.conclusion)
+      || a.detailsUrl.localeCompare(b.detailsUrl),
+    );
+  return createHash('sha256')
+    .update(JSON.stringify(normalized))
+    .digest('hex');
+}
+
 export function repairWorkflowActionKey(event: Pick<
   ReviewGateCiFailedLifecycleEvent,
-  'taskId' | 'reviewId' | 'headSha' | 'failedChecks'
+  'taskId' | 'reviewId' | 'headSha'
 >): string {
   return [
     'ci-failure',
     event.taskId,
     event.reviewId,
     event.headSha ?? NO_HEAD_SHA,
-    ciFailureChecksHash(event.failedChecks),
   ].join(':');
 }
 
@@ -186,18 +203,23 @@ export function parseSpawnRepairWorkflowMutationArgs(args: readonly unknown[]): 
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('spawn-repair-workflow expects a command payload object');
   }
-  const payload = raw as Partial<SpawnRepairWorkflowCommandPayload>;
+  const payload = raw as Record<string, unknown>;
   const event = payload.event;
-  if (!event || typeof event !== 'object' || event.kind !== 'review_gate.ci_failed') {
+  if (!event || typeof event !== 'object' || (event as { kind?: unknown }).kind !== 'review_gate.ci_failed') {
     throw new Error('spawn-repair-workflow payload.event must be a review_gate.ci_failed event');
   }
-  return buildSpawnRepairWorkflowCommandPayload(event, {
-    upstreamWorkflowId: payload.upstreamWorkflowId,
-    upstreamFeatureBranch: payload.upstreamFeatureBranch,
-    prHeadSha: payload.prHeadSha,
-    failedCheckNames: payload.failedCheckNames,
-    source: payload.source ?? 'human',
-    queuedByRepairWorkflowGuard: payload.queuedByRepairWorkflowGuard,
+  const source = payload.source;
+  if (source !== undefined && source !== 'worker' && source !== 'human') {
+    throw new Error('spawn-repair-workflow payload.source must be worker or human');
+  }
+  const failedCheckNames = optionalStringArray(payload.failedCheckNames, 'failedCheckNames');
+  return buildSpawnRepairWorkflowCommandPayload(event as ReviewGateCiFailedLifecycleEvent, {
+    upstreamWorkflowId: optionalString(payload.upstreamWorkflowId, 'upstreamWorkflowId'),
+    upstreamFeatureBranch: optionalString(payload.upstreamFeatureBranch, 'upstreamFeatureBranch'),
+    prHeadSha: optionalString(payload.prHeadSha, 'prHeadSha'),
+    failedCheckNames,
+    source: source ?? 'human',
+    queuedByRepairWorkflowGuard: payload.queuedByRepairWorkflowGuard === true,
   });
 }
 
@@ -290,9 +312,9 @@ export function buildFastForwardRepairCommand(input: {
     '  echo "Repair head is not a descendant of captured PR head ${expected_head}. Refusing repair publish." >&2',
     '  exit 43',
     'fi',
-    'git branch -f "$repair_branch" HEAD',
-    'git push --force-with-lease "$remote" "HEAD:refs/heads/${repair_branch}"',
-    'git push "$remote" "HEAD:refs/heads/${feature_branch}"',
+    'git update-ref "refs/heads/${repair_branch}" HEAD',
+    'git push "$remote" "refs/heads/${repair_branch}:refs/heads/${repair_branch}"',
+    'git push "$remote" "refs/heads/${repair_branch}:refs/heads/${feature_branch}"',
   ].join('\n');
 }
 
@@ -577,6 +599,20 @@ function requiredString(value: string | undefined, label: string): string {
   const trimmed = value?.trim();
   if (!trimmed) throw new Error(`${label} is required`);
   return trimmed;
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`spawn-repair-workflow payload.${label} must be a string`);
+  return value;
+}
+
+function optionalStringArray(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+    throw new Error(`spawn-repair-workflow payload.${label} must be a string array`);
+  }
+  return value;
 }
 
 function nonEmpty(value: string | undefined): string | undefined {

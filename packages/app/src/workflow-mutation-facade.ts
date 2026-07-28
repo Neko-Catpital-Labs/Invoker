@@ -20,7 +20,12 @@ import { makeEnvelope } from '@invoker/contracts';
 import { OrchestratorError, OrchestratorErrorCode } from '@invoker/workflow-core';
 import type { CommandService, Orchestrator, ExternalGatePolicyUpdate, TaskState } from '@invoker/workflow-core';
 import type { SQLiteAdapter } from '@invoker/data-store';
-import type { TaskRunner } from '@invoker/execution-engine';
+import {
+  submitRepairWorkflowFromCiFailure,
+  type RepairWorkflowSpawnResult,
+  type SpawnRepairWorkflowCommandPayload,
+  type TaskRunner,
+} from '@invoker/execution-engine';
 import {
   approveTask as sharedApproveTask,
   rejectTask as sharedRejectTask,
@@ -91,6 +96,10 @@ export interface FixMutationResult extends MutationResult {
   detail: FixWithAgentActionResult;
 }
 
+export interface SpawnRepairWorkflowMutationResult extends MutationResult {
+  detail: RepairWorkflowSpawnResult;
+}
+
 export interface ResolveConflictMutationResult extends MutationResult {
   autoApproved: boolean;
 }
@@ -110,6 +119,10 @@ export interface WorkflowMutationFacadeDeps {
   taskExecutor: TaskRunner;
   dispatchMode?: 'await' | 'fire-and-forget';
   autoApproveAIFixes?: boolean;
+  allowGraphMutation?: boolean;
+  defaultAutoFixRetries?: number;
+  getAutoFixAgent?: () => string | undefined;
+  getAutoFixExecutionModel?: () => string | undefined;
   /** Optional pre-kill hook for active task executions. */
   killRunningTask?: (taskId: string) => Promise<void>;
 }
@@ -472,6 +485,33 @@ export class WorkflowMutationFacade {
         : { scopedTaskIds: [taskId] },
     );
     return { detail, started, runnable, topup };
+  }
+
+  async spawnRepairWorkflow(
+    payload: SpawnRepairWorkflowCommandPayload,
+  ): Promise<SpawnRepairWorkflowMutationResult> {
+    const detail = submitRepairWorkflowFromCiFailure({
+      store: this.deps.persistence,
+      orchestrator: this.deps.orchestrator,
+      logger: this.deps.logger,
+      allowGraphMutation: this.deps.allowGraphMutation,
+      defaultAutoFixRetries: this.deps.defaultAutoFixRetries,
+      getAutoFixAgent: this.deps.getAutoFixAgent,
+      getAutoFixExecutionModel: this.deps.getAutoFixExecutionModel,
+    }, payload);
+    const { runnable, topup } = detail.decision === 'spawned' && detail.workflowId
+      ? await this.dispatchWithTopup(
+        detail.started,
+        'facade.spawn-repair-workflow',
+        { scopedWorkflowId: detail.workflowId },
+      )
+      : { runnable: [], topup: [] };
+    return {
+      detail,
+      started: detail.started,
+      runnable,
+      topup,
+    };
   }
 
   // ── Internal helpers ─────────────────────────────────────

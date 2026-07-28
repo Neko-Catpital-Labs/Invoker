@@ -98,6 +98,8 @@ import {
   parseRequeueEscalateMutationArgs,
   parseReviewGateCiRepairWorkflowMutationArgs,
   parseReviewGateStackCiRepairWorkflowMutationArgs,
+  parseSpawnRepairWorkflowMutationArgs,
+  submitRepairWorkflowFromCiFailure,
   fetchOpenStackPrs,
   reconcileTerminalWorkerActionsOnStartup,
   type AgentRegistry,
@@ -1025,6 +1027,31 @@ function startHeadlessMode(): void {
         return executor;
       };
 
+      const executeStandaloneSpawnRepairWorkflow = async (...spawnArgs: unknown[]) => {
+        const payload = parseSpawnRepairWorkflowMutationArgs(spawnArgs);
+        const result = submitRepairWorkflowFromCiFailure({
+          store: persistence,
+          orchestrator,
+          logger,
+          allowGraphMutation: invokerConfig.allowGraphMutation,
+          defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+          getAutoFixAgent: () => invokerConfig.autoFixAgent,
+          getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+        }, payload);
+        if (result.decision === 'spawned' && result.workflowId) {
+          await dispatchStartedTasksWithGlobalTopup({
+            orchestrator,
+            taskExecutor: createStandaloneTaskExecutor(),
+            logger,
+            context: 'standalone.spawn-repair-workflow',
+            started: result.started,
+            mutationTiming: activeMutationContext?.mutationTiming,
+            scopedWorkflowId: result.workflowId,
+          });
+        }
+        return result;
+      };
+
       const executeStandaloneHeadlessRun = async (payload: HeadlessRunMutationPayload): Promise<unknown> => {
         const { applyConfiguredPlanDefaults, parsePlanFile } = await import('./plan-parser.js');
         const plan = applyConfiguredPlanDefaults(await parsePlanFile(payload.planPath));
@@ -1329,6 +1356,9 @@ function startHeadlessMode(): void {
             await Promise.all(awaitingMergeGates.map((task) => executor.checkPrApprovalNow(task.id)));
             return undefined;
           }
+          case 'invoker:spawn-repair-workflow': {
+            return executeStandaloneSpawnRepairWorkflow(...payload.args);
+          }
           case 'invoker:select-experiment': {
             const taskId = String(payload.args[0]);
             const experimentId = payload.args[1] as string | string[];
@@ -1512,6 +1542,11 @@ function startHeadlessMode(): void {
             });
             return { ok: true };
           });
+        }
+        if (!workflowMutationDispatcher.has('invoker:spawn-repair-workflow')) {
+          workflowMutationDispatcher.set('invoker:spawn-repair-workflow', async (...spawnArgs: unknown[]) => (
+            executeStandaloneSpawnRepairWorkflow(...spawnArgs)
+          ));
         }
         if (!workflowMutationDispatcher.has('invoker:spawn-review-gate-ci-repair')) {
           workflowMutationDispatcher.set('invoker:spawn-review-gate-ci-repair', async (...repairArgs: unknown[]) => {
@@ -2358,6 +2393,10 @@ startMainProcessBootstrap({
         commandService,
         taskExecutor: requireTaskExecutor(),
         autoApproveAIFixes: resolveAutoApproveAIFixes(invokerConfig),
+        allowGraphMutation: invokerConfig.allowGraphMutation,
+        defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+        getAutoFixAgent: () => invokerConfig.autoFixAgent,
+        getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
         killRunningTask,
       });
       apiServer = startApiServer({
@@ -2686,6 +2725,30 @@ startMainProcessBootstrap({
       workflowMutationDispatcher.set('invoker:start-ready', async (requestArg: unknown) =>
         executeStartReady(requestArg as StartReadyRequest | undefined),
       );
+      workflowMutationDispatcher.set('invoker:spawn-repair-workflow', async (...spawnArgs: unknown[]) => {
+        const payload = parseSpawnRepairWorkflowMutationArgs(spawnArgs);
+        const result = submitRepairWorkflowFromCiFailure({
+          store: persistence,
+          orchestrator,
+          logger,
+          allowGraphMutation: invokerConfig.allowGraphMutation,
+          defaultAutoFixRetries: resolveAutoFixRetries(invokerConfig),
+          getAutoFixAgent: () => invokerConfig.autoFixAgent,
+          getAutoFixExecutionModel: () => resolveAutoFixExecutionModel(invokerConfig),
+        }, payload);
+        if (result.decision === 'spawned' && result.workflowId) {
+          await dispatchStartedTasksWithGlobalTopup({
+            orchestrator,
+            taskExecutor: requireTaskExecutor(),
+            logger,
+            context: 'gui.spawn-repair-workflow',
+            started: result.started,
+            mutationTiming: activeMutationContext?.mutationTiming,
+            scopedWorkflowId: result.workflowId,
+          });
+        }
+        return result;
+      });
       workflowMutationDispatcher.set('api:approve-task', async (taskIdArg: unknown) => {
         await mutationActions.performSharedApproveTask(String(taskIdArg), 'api');
       });
