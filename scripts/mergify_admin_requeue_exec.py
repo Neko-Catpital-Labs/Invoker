@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import sys
 import time
-from typing import Sequence
+from typing import Mapping, Sequence
 
 try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
@@ -82,6 +82,50 @@ def record_repair_outcome(
         )
 
 
+def stale_repair_outcome(
+    executor: AdminBypassGhExecutor,
+    logger: AdminBypassLogger,
+    repo: str,
+    pr: PrSnapshot,
+    outcome: RepairOutcome,
+) -> bool:
+    if outcome.status not in {"blocked_dirty", "blocked_invalid"}:
+        return False
+    if not hasattr(executor.gh, "pr_detail"):
+        return False
+    try:
+        detail = executor.gh.pr_detail(repo, pr.number)
+    except RuntimeError as exc:
+        logger.trace(
+            "admin-bypass-repair-outcome-live-check-failed",
+            repo=repo,
+            pr_number=pr.number,
+            check_name=outcome.check_name,
+            start_head=outcome.start_head,
+            snapshot_head=pr.head_ref_oid,
+            error=str(exc),
+        )
+        return False
+    if not isinstance(detail, Mapping):
+        return False
+    live_head = str(detail.get("headRefOid") or "")
+    live_state = str(detail.get("state") or pr.state)
+    if live_state == "OPEN" and (not live_head or live_head == outcome.start_head):
+        return False
+    logger.trace(
+        "admin-bypass-repair-outcome-stale",
+        repo=repo,
+        pr_number=pr.number,
+        check_name=outcome.check_name,
+        status=outcome.status,
+        start_head=outcome.start_head,
+        snapshot_head=pr.head_ref_oid,
+        live_head=live_head,
+        live_state=live_state,
+    )
+    return True
+
+
 def handle_repair_outcome(
     executor: AdminBypassGhExecutor,
     ledger: Ledger,
@@ -93,6 +137,16 @@ def handle_repair_outcome(
 ) -> None:
 
     ledger.record("repair-evaluated", pr.number, pr.head_ref_oid, outcome.check_name, now)
+    if stale_repair_outcome(executor, logger, repo, pr, outcome):
+        ledger.record(
+            "repair-stale",
+            pr.number,
+            pr.head_ref_oid,
+            outcome.check_name,
+            now,
+            meta={"status": outcome.status, "startHead": outcome.start_head, "endHead": outcome.end_head},
+        )
+        return
     if outcome.status == "blocked_dirty":
         executor.comment_blocked(
             pr,
