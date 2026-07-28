@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Root-cause repro: the 5 PR-maintenance workers (coderabbit-address,
-# pr-conflict-rebase, pr-ci-failure-scan, pr-admin-bypass-land,
-# pr-orphan-repair) all share one intervalMs
-# (DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS) with zero jitter, and
-# registerPrMaintenanceWorkers() starts them in a fixed order. Node fires
-# same-tick setInterval callbacks in registration order, so whichever worker
-# registers first tends to win the shared cron lock almost every cycle,
-# starving workers registered later — especially pr-admin-bypass-land, 4th of 5.
+# Root-cause repro + fix verification: the 5 PR-maintenance workers
+# (coderabbit-address, pr-conflict-rebase, pr-ci-failure-scan,
+# pr-admin-bypass-land, pr-orphan-repair) all share one intervalMs
+# (DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS) and one shared cron lock.
+# Without a stagger, Node fires same-tick setInterval callbacks in
+# registration order, so whichever worker registers first wins the shared
+# lock almost every cycle, starving the rest — proven in the prior slice of
+# this stack. This slice's worker factories are called with the same
+# startDelayMs offsets registerPrMaintenanceWorkers now assigns each worker,
+# verifying the stagger fix actually restores a fair distribution.
 #
 # Drives the REAL production worker runtimes (createCoderabbitAddressWorker
 # etc., the same factories registerPrMaintenanceWorkers uses), with only the
@@ -94,14 +96,17 @@ const FACTORIES = [
 const logger = { info: () => {}, warn: () => {}, error: (...a: unknown[]) => console.error('[worker error]', ...a), debug: () => {}, trace: () => {}, child: () => logger };
 
 describe('PR-maintenance shared-lock starvation repro', () => {
-  it('runs all 5 real worker runtimes with zero jitter and records who wins the shared lock', async () => {
-    const workers = FACTORIES.map(({ kind, create }) =>
+  it('runs all 5 real worker runtimes staggered (matching production registerPrMaintenanceWorkers) and records who wins the shared lock', async () => {
+    const REPRO_INTERVAL_MS = 400;
+    const STAGGER_STEP_MS = REPRO_INTERVAL_MS / 5; // same proportion as PR_MAINTENANCE_WORKER_STAGGER_STEP_MS
+    const workers = FACTORIES.map(({ kind, create }, index) =>
       (create as (options: unknown) => { start: () => void; stop: () => Promise<void> })({
         logger,
         repoRoot: '$ROOT',
         lockPath: '$TMP/crons.lock',
         shell: '$FAKE_SCRIPT',
-        intervalMs: 400,
+        intervalMs: REPRO_INTERVAL_MS,
+        startDelayMs: index * STAGGER_STEP_MS,
         env: { INVOKER_PR_MAINTENANCE_KIND: kind, INVOKER_PR_CRON_LOCK: '$TMP/crons.lock' },
       }),
     );
@@ -114,7 +119,7 @@ describe('PR-maintenance shared-lock starvation repro', () => {
 TS
 
 ensure_execution_engine_vitest
-echo "[repro] starting 5 real PR-maintenance worker runtimes, intervalMs=400ms, no jitter (matches production)"
+echo "[repro] starting 5 real PR-maintenance worker runtimes, intervalMs=400ms, staggered startDelayMs (matches production)"
 set +e
 vitest_out="$(pnpm --filter @invoker/execution-engine exec vitest run "src/$(basename "$PROOF_TEST")" 2>&1)"
 code=$?
