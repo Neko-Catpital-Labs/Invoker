@@ -338,10 +338,7 @@ function buildConversationalPlanSystemPrompt(
   const draftingAuthorized = options.draftingAuthorized ?? false;
   const draftingInstructions = draftingAuthorized
     ? `
-The user has explicitly approved drafting. You may now produce the YAML task plan.
-
-Use the authorized drafting contract below:
-${buildDirectPlanSystemPrompt(defaultBranch, repoUrl, options.preferStackedWorkflows ?? true, options.planFilePath)}`
+The user has explicitly approved drafting. Follow the plan-to-invoker skill's Harness handoff mode now: first produce a Markdown planning artifact, then convert the approved Markdown plan into a full Invoker YAML task plan, and proceed through the skill's review/submission steps (\`skill-doctor.sh\` when inside an Invoker source checkout, the MCP review/submit flow as the canonical path otherwise). Read \`skills/plan-to-invoker/SKILL.md\` for the exact steps if you need them.`
     : `
 Drafting is not authorized yet. Do NOT output a \`\`\`yaml code block, do NOT write a draft plan file, and do NOT tell the user the plan can be executed.
 
