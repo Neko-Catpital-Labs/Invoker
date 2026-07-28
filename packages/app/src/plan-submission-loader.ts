@@ -1,0 +1,84 @@
+import type { Logger } from '@invoker/contracts';
+import type { PlanDefinition } from '@invoker/workflow-core';
+import { backupPlan } from './plan-backup.js';
+
+export interface PlanSubmissionLoadResult {
+  planName: string;
+  workflowId: string;
+  workflowIds?: string[];
+  workflowCount?: number;
+}
+
+export interface PlanSubmissionLoadDeps {
+  persistence: { listWorkflows(): Array<{ id: string; featureBranch?: string }> };
+  orchestrator: { loadPlan(plan: PlanDefinition, opts: { allowGraphMutation?: boolean }): void };
+  allowGraphMutation?: boolean;
+  logger?: Logger;
+}
+
+export interface PlanSubmissionLoadOptions {
+  logLabel?: string;
+  preserveTaskHandles?: boolean;
+  taskHandles?: { clear(): void };
+}
+
+export async function loadPlanSubmissionBundle(
+  planText: string,
+  deps: PlanSubmissionLoadDeps,
+  options?: PlanSubmissionLoadOptions,
+): Promise<PlanSubmissionLoadResult> {
+  const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
+  const submission = parsePlanSubmissionBundle(planText);
+  const existingWorkflowIds = new Set(deps.persistence.listWorkflows().map((workflow) => workflow.id));
+  const loadedWorkflowIds: string[] = [];
+  let upstream: { workflowId: string; featureBranch: string } | undefined;
+
+  if (options?.logLabel) {
+    deps.logger?.info(
+      `${options.logLabel}: loading "${submission.name}" (${submission.plans.length} workflow${submission.plans.length === 1 ? '' : 's'})`,
+      { module: 'ipc' },
+    );
+  }
+  if (options?.taskHandles && !options.preserveTaskHandles) {
+    options.taskHandles.clear();
+  }
+
+  for (const parsedPlan of submission.plans) {
+    let plan = applyConfiguredPlanDefaults(parsedPlan);
+    if (upstream) {
+      plan = {
+        ...plan,
+        baseBranch: upstream.featureBranch,
+        externalDependencies: [
+          ...(plan.externalDependencies ?? []),
+          {
+            workflowId: upstream.workflowId,
+            taskId: '__merge__',
+            requiredStatus: 'completed',
+            gatePolicy: 'review_ready',
+          } as const,
+        ],
+      };
+    }
+    backupPlan(plan, undefined, deps.logger);
+    deps.orchestrator.loadPlan(plan, { allowGraphMutation: deps.allowGraphMutation });
+    const workflow = deps.persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
+    if (!workflow) {
+      throw new Error('Loaded plan did not create a workflow.');
+    }
+    existingWorkflowIds.add(workflow.id);
+    loadedWorkflowIds.push(workflow.id);
+    upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
+  }
+
+  const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
+  if (!workflowId) {
+    throw new Error('Loaded plan did not create a workflow.');
+  }
+  return {
+    planName: submission.name,
+    workflowId,
+    workflowIds: loadedWorkflowIds,
+    workflowCount: loadedWorkflowIds.length,
+  };
+}
