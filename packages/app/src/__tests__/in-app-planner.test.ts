@@ -253,6 +253,7 @@ describe('listInAppPlanningPresets', () => {
       },
     })).resolves.toEqual(expect.arrayContaining([
       { key: 'codex', label: 'Codex', tool: 'codex', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
+      { key: 'claude', label: 'Claude', tool: 'claude', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
       { key: 'omp', label: 'OMP', tool: 'omp', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
       { key: 'omp+claude', label: 'Claude via OMP', tool: 'omp', model: 'claude', isDefault: true, defaultConfirmationMode: 'require' },
       { key: 'custom', label: 'custom', tool: 'codex', model: undefined, isDefault: false, defaultConfirmationMode: 'require' },
