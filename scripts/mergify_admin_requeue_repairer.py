@@ -11,12 +11,14 @@ try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
+    from .mergify_admin_requeue_model import STALE_STACK_RESTACK_UNAVAILABLE_ERROR
     from .mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
+    from mergify_admin_requeue_model import STALE_STACK_RESTACK_UNAVAILABLE_ERROR
     from mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
 
@@ -80,6 +82,18 @@ class AdminBypassRepairer:
             capture_output=True,
         )
         return completed.returncode == 0
+
+    def has_merge_base(self, work_root: Path, left: str, right: str) -> bool:
+        if not work_root.exists():
+            return False
+        completed = subprocess.run(
+            ["git", "merge-base", left, right],
+            cwd=str(work_root),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        return completed.returncode == 0 and bool(completed.stdout.strip())
 
     def normalize_repair_commit(self, work_root: Path, start_head: str, end_head: str, check_name: str) -> str:
         if self.is_ancestor(work_root, start_head, end_head):
@@ -318,6 +332,15 @@ class AdminBypassRepairer:
     def push_branch(self, work_root: Path, branch_name: str) -> None:
         self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
 
+    def push_branch_force_with_lease(self, work_root: Path, branch_name: str, expected_head: str) -> None:
+        self.git_output(
+            work_root,
+            "push",
+            f"--force-with-lease=refs/heads/{branch_name}:{expected_head}",
+            "origin",
+            f"HEAD:refs/heads/{branch_name}",
+        )
+
     def terminal_repair_outcome(
         self,
         pr: PrSnapshot,
@@ -403,6 +426,139 @@ class AdminBypassRepairer:
         detail = self.gh.pr_detail(self.repo, pr.number)
         body = detail.get("body") if isinstance(detail, Mapping) else None
         return str(body) if body is not None else pr.body
+
+    def pr_body_stale_stack_restack_candidate(self, pr: PrSnapshot, value: Mapping[str, object]) -> bool:
+        return (
+            pr.base_ref_name == TRUNK
+            and pr.mergeable == "MERGEABLE"
+            and pr.merge_state_status == "BLOCKED"
+            and pr.head_ref_name.startswith("stack/")
+            and self.is_manual_split_validation(value)
+        )
+
+    def stale_stack_restack_unavailable_outcome(
+        self,
+        pr: PrSnapshot,
+        check_name: str,
+        start_head: str,
+        end_head: str,
+        value: Mapping[str, object],
+        reason: str,
+    ) -> RepairOutcome:
+        errors = self.invalid_repair_errors(value, pr)
+        detail = f"{STALE_STACK_RESTACK_UNAVAILABLE_ERROR}: {reason}"
+        if detail not in errors:
+            errors = [*errors, detail]
+        return self.blocked_outcome(
+            "blocked_invalid",
+            check_name,
+            start_head,
+            end_head,
+            errors=errors,
+        )
+
+    def try_restack_stale_pr_body(
+        self,
+        pr: PrSnapshot,
+        check_name: str,
+        work_root: Path,
+        start_head: str,
+        body: str,
+        validation: Mapping[str, object],
+    ) -> RepairOutcome | None:
+        if check_name != "PR Body" or not self.pr_body_stale_stack_restack_candidate(pr, validation):
+            return None
+        base_ref = f"origin/{pr.base_ref_name}"
+        self.git_output(work_root, "fetch", "origin", f"+refs/heads/{pr.base_ref_name}:refs/remotes/origin/{pr.base_ref_name}")
+        if self.is_ancestor(work_root, base_ref, "HEAD"):
+            return self.stale_stack_restack_unavailable_outcome(
+                pr,
+                check_name,
+                start_head,
+                start_head,
+                validation,
+                f"{pr.base_ref_name} is already an ancestor of the PR head",
+            )
+        parents = self.git_output(work_root, "rev-list", "--parents", "-n", "1", start_head).split()
+        if len(parents) != 2:
+            return self.stale_stack_restack_unavailable_outcome(
+                pr,
+                check_name,
+                start_head,
+                start_head,
+                validation,
+                "the PR head is not a single-parent commit",
+            )
+        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        if status_lines:
+            return self.blocked_outcome(
+                "blocked_dirty",
+                check_name,
+                start_head,
+                start_head,
+                status_lines=status_lines,
+            )
+        self.logger.trace(
+            "admin-bypass-pr-body-stale-stack-restack-start",
+            repo=self.repo,
+            pr_number=pr.number,
+            check_name=check_name,
+            base_ref=pr.base_ref_name,
+            head_ref=pr.head_ref_name,
+            head_sha=start_head,
+        )
+        try:
+            self.git_output(work_root, "checkout", "-B", pr.head_ref_name, base_ref)
+            self.git_output(work_root, "cherry-pick", start_head)
+        except subprocess.CalledProcessError:
+            subprocess.run(
+                ["git", "cherry-pick", "--abort"],
+                cwd=str(work_root),
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+            self.git_output(work_root, "checkout", "-B", pr.head_ref_name, start_head)
+            self.hard_reset_work_root(work_root, start_head)
+            return self.stale_stack_restack_unavailable_outcome(
+                pr,
+                check_name,
+                start_head,
+                start_head,
+                validation,
+                f"the top commit could not be cherry-picked onto {pr.base_ref_name}",
+            )
+        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        restacked_validation = self.validate_current_pr_body(work_root, body, pr.base_ref_name)
+        if not restacked_validation.get("valid"):
+            self.git_output(work_root, "checkout", "-B", pr.head_ref_name, start_head)
+            self.hard_reset_work_root(work_root, start_head)
+            return self.stale_stack_restack_unavailable_outcome(
+                pr,
+                check_name,
+                start_head,
+                end_head,
+                restacked_validation,
+                "the restacked top commit still fails PR Body validation",
+            )
+        self.push_branch_force_with_lease(work_root, pr.head_ref_name, start_head)
+        self.logger.trace(
+            "admin-bypass-pr-body-stale-stack-restack-pushed",
+            repo=self.repo,
+            pr_number=pr.number,
+            check_name=check_name,
+            base_ref=pr.base_ref_name,
+            head_ref=pr.head_ref_name,
+            start_head=start_head,
+            end_head=end_head,
+        )
+        return self.blocked_outcome(
+            "pushed",
+            check_name,
+            start_head,
+            end_head,
+            repair_commits=(end_head,),
+        )
 
     def job_log_has_evidence(self, log_path: str) -> bool:
         if not log_path:
@@ -495,6 +651,40 @@ class AdminBypassRepairer:
                 start_head,
                 start_head,
             )
+        if check_name == "PR Body" and not queue_only:
+            base_ref = f"origin/{pr.base_ref_name}"
+            try:
+                self.git_output(work_root, "fetch", "origin", f"+refs/heads/{pr.base_ref_name}:refs/remotes/origin/{pr.base_ref_name}")
+                if not self.has_merge_base(work_root, base_ref, "HEAD"):
+                    self.logger.trace(
+                        "admin-bypass-pr-body-preflight-validation-skipped",
+                        repo=self.repo,
+                        pr_number=pr.number,
+                        check_name=check_name,
+                        head_sha=pr.head_ref_oid,
+                        reason=f"preflight skipped because {base_ref} and HEAD do not share an ancestor",
+                    )
+                else:
+                    validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
+                    stale_stack_restack = self.try_restack_stale_pr_body(
+                        pr,
+                        check_name,
+                        work_root,
+                        start_head,
+                        pr.body,
+                        validation,
+                    )
+                    if stale_stack_restack is not None:
+                        return stale_stack_restack
+            except (RuntimeError, subprocess.CalledProcessError) as exc:
+                self.logger.trace(
+                    "admin-bypass-pr-body-preflight-validation-skipped",
+                    repo=self.repo,
+                    pr_number=pr.number,
+                    check_name=check_name,
+                    head_sha=pr.head_ref_oid,
+                    reason=str(exc),
+                )
         queue_pr_number = latest.queue_pr_number if latest else 0
         prompt = (
             f"Fix only the failing check. Add or update a repro if the failure is reproducible. "
@@ -541,6 +731,16 @@ class AdminBypassRepairer:
             if not queue_only:
                 validation = self.validate_current_pr_body(work_root, body_after_repair, pr.base_ref_name)
                 if not validation.get("valid"):
+                    stale_stack_restack = self.try_restack_stale_pr_body(
+                        pr,
+                        check_name,
+                        work_root,
+                        start_head,
+                        body_after_repair,
+                        validation,
+                    )
+                    if stale_stack_restack is not None:
+                        return stale_stack_restack
                     return self.invalid_repair_outcome(pr, check_name, start_head, end_head, validation)
             return self.blocked_outcome(
                 "queue_only_noop" if queue_only else "noop",
