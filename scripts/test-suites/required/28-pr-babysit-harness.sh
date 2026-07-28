@@ -10,3 +10,4 @@ bash scripts/repro/repro-babysit-conflict-cron.sh
 bash scripts/repro/repro-babysit-ci-cron.sh
 bash scripts/repro/repro-babysit-land-dryrun.sh
 bash scripts/repro/repro-pr-orphan-repair.sh
+bash scripts/repro/repro-pr-orphan-admin-bypass-race.sh
