@@ -565,6 +565,30 @@ describe('planning terminal summary bridge persistence', () => {
     expect(child.stdin.write).not.toHaveBeenCalled();
   });
 
+  it('planningTerminalOpen preserves the current live snapshot when the planning summary is stale', async () => {
+    const {
+      child,
+      handlers,
+      planningChatSessions,
+    } = setupPlanningTerminal();
+    const planningSession = makePlanningSession('plan-live-snapshot');
+    planningChatSessions.set(planningSession.id, planningSession);
+
+    const first = await handlers.get('invoker:planning-terminal-open')?.({}, planningSession.id);
+    child.stdout.emit('data', Buffer.from('live tmux sentinel\n'));
+    const staleSummarySnapshot = first.session.outputSnapshot;
+    planningChatSessions.set(planningSession.id, {
+      ...planningChatSessions.get(planningSession.id)!,
+      terminalOutputSnapshot: staleSummarySnapshot,
+    });
+
+    const reopened = await handlers.get('invoker:planning-terminal-open')?.({}, planningSession.id);
+
+    expect(reopened.session.sessionId).toBe(first.session.sessionId);
+    expect(reopened.session.outputSnapshot).toContain('live tmux sentinel\n');
+    expect(planningChatSessions.get(planningSession.id)?.terminalOutputSnapshot).toContain('live tmux sentinel\n');
+  });
+
   it('restores a tmux planning session with one bridge copy and previous output', () => {
     const {
       child,

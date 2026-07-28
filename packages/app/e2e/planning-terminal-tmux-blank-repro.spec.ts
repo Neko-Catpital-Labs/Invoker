@@ -218,10 +218,11 @@ async function captureTerminalEvidence(
   return evidence;
 }
 
-function expectBuggyBlankedTmuxOutput(evidence: PlanningTerminalEvidence, sentinel: string): void {
+function expectVisibleTmuxOutput(evidence: PlanningTerminalEvidence, sentinel: string): void {
   expect(evidence.backendStatus).toBe('running');
   expect(evidence.backendOutputSnapshot).toContain(sentinel);
-  expect(evidence.visibleText).not.toContain(sentinel);
+  expect(evidence.visibleText).toContain(sentinel);
+  expect(evidence.normalizedVisibleText.length).toBeGreaterThan(0);
   expect(evidence.normalizedVisibleText).toContain('Invoker planning tmux bridge');
 }
 
@@ -233,8 +234,8 @@ async function selectPlanningSessionByPrompt(page: Page, prompt: string, expecte
   await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', expectedTerminalSessionId, { timeout: 10000 });
 }
 
-base.describe('Planning Terminal tmux blank repro', () => {
-  base('records blank tmux pane after switching planning tmux sessions and back', async ({}, testInfo) => {
+base.describe('Planning Terminal tmux blank regression', () => {
+  base('keeps tmux pane output after switching planning tmux sessions and back', async ({}, testInfo) => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-planning-tmux-blank-switch-'));
     const configPath = path.join(testDir, 'e2e-config.json');
     const userDataDir = path.join(testDir, 'electron-user-data');
@@ -269,11 +270,11 @@ base.describe('Planning Terminal tmux blank repro', () => {
 
       await selectPlanningSessionByPrompt(page, alphaPrompt, alphaSessionId);
       const alphaEvidence = await captureTerminalEvidence(page, testInfo, 'after-switch-back-to-alpha', alphaSessionId);
-      expectBuggyBlankedTmuxOutput(alphaEvidence, alphaSentinel);
+      expectVisibleTmuxOutput(alphaEvidence, alphaSentinel);
 
       await selectPlanningSessionByPrompt(page, betaPrompt, betaSessionId);
       const betaEvidence = await captureTerminalEvidence(page, testInfo, 'after-switch-back-to-beta', betaSessionId);
-      expectBuggyBlankedTmuxOutput(betaEvidence, betaSentinel);
+      expectVisibleTmuxOutput(betaEvidence, betaSentinel);
     } finally {
       if (page) await closePlanningTerminalSessions(page);
       if (app) await closeApp(app).catch(() => undefined);
@@ -282,7 +283,7 @@ base.describe('Planning Terminal tmux blank repro', () => {
     }
   });
 
-  base('records blank tmux pane after navigating away and back while tmux remains active', async ({}, testInfo) => {
+  base('keeps tmux pane output after navigating away and back while tmux remains active', async ({}, testInfo) => {
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-planning-tmux-blank-nav-'));
     const configPath = path.join(testDir, 'e2e-config.json');
     const userDataDir = path.join(testDir, 'electron-user-data');
@@ -316,7 +317,7 @@ base.describe('Planning Terminal tmux blank repro', () => {
       await expect(page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' })).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', terminalSessionId, { timeout: 10000 });
       const evidence = await captureTerminalEvidence(page, testInfo, 'after-navigation-back-to-planning-tmux', terminalSessionId);
-      expectBuggyBlankedTmuxOutput(evidence, sentinel);
+      expectVisibleTmuxOutput(evidence, sentinel);
     } finally {
       if (page) await closePlanningTerminalSessions(page);
       if (app) await closeApp(app).catch(() => undefined);

@@ -4,6 +4,7 @@ import { vi } from 'vitest';
 import { useState } from 'react';
 import { createMockInvoker, makePlanningSessionSummary, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { TaskState, WorkflowMeta } from '../types.js';
+import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 vi.mock('@xyflow/react', async () => {
   // Dynamic import is required because Vitest hoists mock factories before test imports.
@@ -11,9 +12,72 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+const xtermMock = vi.hoisted(() => {
+  type DataHandler = (data: string) => void;
+
+  const instances: MockTerminal[] = [];
+  const fitInstances: MockFitAddon[] = [];
+  const writeLog: string[] = [];
+
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    dataHandler: DataHandler | null = null;
+    loadAddon = vi.fn();
+    open = vi.fn((host: HTMLElement) => {
+      const terminalElement = document.createElement('div');
+      terminalElement.className = 'xterm';
+      const rows = document.createElement('div');
+      rows.className = 'xterm-rows';
+      terminalElement.appendChild(rows);
+      host.appendChild(terminalElement);
+    });
+    write = vi.fn((data: string) => {
+      writeLog.push(data);
+    });
+    onData = vi.fn((cb: DataHandler) => {
+      this.dataHandler = cb;
+      return { dispose: vi.fn() };
+    });
+    focus = vi.fn();
+    dispose = vi.fn();
+
+    constructor() {
+      instances.push(this);
+    }
+  }
+
+  class MockFitAddon {
+    fit = vi.fn();
+
+    constructor() {
+      fitInstances.push(this);
+    }
+  }
+
+  return {
+    Terminal: MockTerminal,
+    FitAddon: MockFitAddon,
+    instances,
+    fitInstances,
+    writeLog,
+    reset: () => {
+      instances.length = 0;
+      fitInstances.length = 0;
+      writeLog.length = 0;
+    },
+  };
+});
+
+vi.mock('xterm', () => ({ Terminal: xtermMock.Terminal }));
+vi.mock('xterm-addon-fit', () => ({ FitAddon: xtermMock.FitAddon }));
+
 // Dynamic imports are required so modules see the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
-const { InvokerTerminal } = await import('../components/InvokerTerminal.js');
+const {
+  InvokerTerminal,
+  __INVOKER_TERMINAL_TESTING__,
+} = await import('../components/InvokerTerminal.js');
 
 const COMPONENT_INPUT_HANDLER_BUDGET_MS = 16;
 
@@ -21,6 +85,8 @@ describe('Invoker terminal (component)', () => {
   let mock: MockInvoker;
 
   beforeEach(() => {
+    xtermMock.reset();
+    __INVOKER_TERMINAL_TESTING__.clearPlanningTerminalOutputSnapshotForTests();
     mock = createMockInvoker();
     mock.install();
   });
@@ -170,15 +236,164 @@ describe('Invoker terminal (component)', () => {
       value: '',
       selectedPresetKey: 'codex',
       presetOptions: [{ key: 'codex', label: 'Codex' }],
+      selectedConfirmationMode: 'require' as const,
       draftPlanAvailable: false,
       onValueChange: vi.fn(),
       onSubmit: vi.fn(),
       onSubmitDraft: vi.fn(),
       onPresetChange: vi.fn(),
+      onConfirmationModeChange: vi.fn(),
       onExpand: vi.fn(),
       ...overrides,
     };
   }
+
+  function makePlanningTerminalSession(
+    sessionId: string,
+    outputSnapshot: string,
+  ): TerminalSessionDescriptor {
+    return {
+      sessionId,
+      taskId: 'planning:plan-1',
+      kind: 'planning',
+      planningSessionId: 'plan-1',
+      status: 'running',
+      cwd: '/repo',
+      mode: 'spawn',
+      attached: false,
+      createdAt: '2026-07-07T00:00:00.000Z',
+      outputSnapshot,
+    };
+  }
+
+  it('does not replay updated planning tmux snapshots over live output', async () => {
+    const session = makePlanningTerminalSession('planning-terminal-1', 'bridge\n');
+    const { rerender } = render(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalSession: session,
+    })} />);
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['bridge\n']);
+    });
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        kind: 'planning',
+        planningSessionId: session.planningSessionId,
+        data: 'live sentinel\n',
+      });
+    });
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['bridge\n', 'live sentinel\n']);
+    });
+
+    rerender(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalSession: {
+        ...session,
+        outputSnapshot: 'bridge\nlive sentinel\n',
+      },
+    })} />);
+
+    expect(xtermMock.writeLog).toEqual(['bridge\n', 'live sentinel\n']);
+  });
+
+  it('reseeds a remounted planning tmux pane with the live cached snapshot', async () => {
+    const session = makePlanningTerminalSession('planning-terminal-2', 'bridge\n');
+    const { unmount } = render(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalSession: session,
+    })} />);
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['bridge\n']);
+    });
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: session.sessionId,
+        taskId: session.taskId,
+        kind: 'planning',
+        planningSessionId: session.planningSessionId,
+        data: 'live sentinel\n',
+      });
+    });
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['bridge\n', 'live sentinel\n']);
+    });
+
+    unmount();
+    render(<InvokerTerminal {...terminalProps({
+      mode: 'tmux',
+      terminalSession: session,
+    })} />);
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual([
+        'bridge\n',
+        'live sentinel\n',
+        'bridge\nlive sentinel\n',
+      ]);
+    });
+  });
+
+  it('keeps App planning tmux snapshots fresh across chat and tmux switches', async () => {
+    const terminalSession = makePlanningTerminalSession('planning-terminal-app', 'bridge\n');
+    (mock.api.planningChatList as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'plan-1',
+          title: 'Planning tmux app snapshot',
+          terminalMode: 'tmux',
+          terminalSessionId: terminalSession.sessionId,
+          terminalStatus: 'running',
+          terminalOutputSnapshot: terminalSession.outputSnapshot,
+          terminalUpdatedAt: terminalSession.createdAt,
+        }),
+      ],
+    });
+    (mock.api.planningTerminalList as ReturnType<typeof vi.fn>).mockResolvedValue([terminalSession]);
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['bridge\n']);
+    });
+
+    act(() => {
+      mock.fireTerminalOutput({
+        sessionId: terminalSession.sessionId,
+        taskId: terminalSession.taskId,
+        kind: 'planning',
+        planningSessionId: terminalSession.planningSessionId,
+        data: 'app sentinel\n',
+      });
+    });
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual(['bridge\n', 'app sentinel\n']);
+    });
+
+    const modeToggle = await screen.findByTestId('invoker-terminal-mode-toggle');
+    fireEvent.click(within(modeToggle).getByRole('tab', { name: 'Chat' }));
+    await waitFor(() => {
+      expect(within(modeToggle).getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true');
+    });
+    __INVOKER_TERMINAL_TESTING__.clearPlanningTerminalOutputSnapshotForTests();
+    fireEvent.click(within(modeToggle).getByRole('tab', { name: 'Tmux' }));
+
+    await waitFor(() => {
+      expect(xtermMock.writeLog).toEqual([
+        'bridge\n',
+        'app sentinel\n',
+        'bridge\napp sentinel\n',
+      ]);
+    });
+  });
 
   it('generates a planning reply from plain language', async () => {
     render(<App />);

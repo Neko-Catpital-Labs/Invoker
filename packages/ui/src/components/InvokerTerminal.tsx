@@ -26,6 +26,8 @@ interface PlanningPresetOptionView {
 }
 
 const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
+const MAX_PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+const planningTerminalOutputSnapshots = new Map<string, string>();
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -141,37 +143,96 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+function trimPlanningTerminalOutputSnapshot(snapshot: string): string {
+  if (snapshot.length <= MAX_PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS) return snapshot;
+  return snapshot.slice(snapshot.length - MAX_PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS);
+}
+
+function rememberPlanningTerminalOutputSnapshot(sessionId: string, snapshot: string): string {
+  const trimmed = trimPlanningTerminalOutputSnapshot(snapshot);
+  planningTerminalOutputSnapshots.set(sessionId, trimmed);
+  return trimmed;
+}
+
+function appendPlanningTerminalOutputSnapshot(sessionId: string, baseSnapshot: string, data: string): string {
+  const currentSnapshot = planningTerminalOutputSnapshots.get(sessionId) ?? baseSnapshot;
+  return rememberPlanningTerminalOutputSnapshot(sessionId, `${currentSnapshot}${data}`);
+}
+
+function resolvePlanningTerminalOutputSnapshot(session: TerminalSessionDescriptor): string {
+  const outputSnapshot = session.outputSnapshot ?? '';
+  const cachedSnapshot = planningTerminalOutputSnapshots.get(session.sessionId);
+  if (!cachedSnapshot) {
+    return outputSnapshot
+      ? rememberPlanningTerminalOutputSnapshot(session.sessionId, outputSnapshot)
+      : '';
+  }
+  if (!outputSnapshot || outputSnapshot.length < cachedSnapshot.length) {
+    return cachedSnapshot;
+  }
+  if (outputSnapshot !== cachedSnapshot) {
+    return rememberPlanningTerminalOutputSnapshot(session.sessionId, outputSnapshot);
+  }
+  return cachedSnapshot;
+}
+
 function seedTerminalOutputSnapshot(
   term: XTermTerminal,
   session: TerminalSessionDescriptor,
   seededSnapshotRef: { current: SeededOutputSnapshot | null },
 ): void {
-  const outputSnapshot = session.outputSnapshot;
+  const outputSnapshot = resolvePlanningTerminalOutputSnapshot(session);
   const seededSnapshot = seededSnapshotRef.current;
   if (
-    outputSnapshot &&
-    (
-      !seededSnapshot ||
-      seededSnapshot.sessionId !== session.sessionId ||
-      seededSnapshot.snapshot !== outputSnapshot ||
-      seededSnapshot.term !== term
-    )
+    seededSnapshot &&
+    seededSnapshot.sessionId === session.sessionId &&
+    seededSnapshot.term === term
   ) {
-    try {
-      term.write(outputSnapshot);
-      seededSnapshotRef.current = {
-        sessionId: session.sessionId,
-        snapshot: outputSnapshot,
-        term,
-      };
-    } catch (err) {
-      console.warn(
-        `Failed to seed output snapshot for planning terminal session ${session.sessionId}:`,
-        err,
-      );
-    }
+    return;
+  }
+  if (!outputSnapshot) {
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      snapshot: '',
+      term,
+    };
+    return;
+  }
+  try {
+    term.write(outputSnapshot);
+    seededSnapshotRef.current = {
+      sessionId: session.sessionId,
+      snapshot: outputSnapshot,
+      term,
+    };
+  } catch (err) {
+    console.warn(
+      `Failed to seed output snapshot for planning terminal session ${session.sessionId}:`,
+      err,
+    );
   }
 }
+
+function writePlanningTerminalOutput(
+  term: XTermTerminal,
+  session: TerminalSessionDescriptor,
+  data: string,
+): void {
+  appendPlanningTerminalOutputSnapshot(session.sessionId, session.outputSnapshot ?? '', data);
+  try {
+    term.write(data);
+  } catch {
+    /* terminal disposed */
+  }
+}
+
+function clearPlanningTerminalOutputSnapshotForTests(): void {
+  planningTerminalOutputSnapshots.clear();
+}
+
+export const __INVOKER_TERMINAL_TESTING__ = {
+  clearPlanningTerminalOutputSnapshotForTests,
+};
 
 interface PlanningTmuxPaneProps {
   session: TerminalSessionDescriptor | null;
@@ -220,11 +281,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false }: PlanningTm
     const subscribeToOutput = window.__INVOKER_TEST_ON_TERMINAL_OUTPUT__ ?? window.invoker?.onTerminalOutput;
     const unsubscribeOutput = subscribeToOutput?.((event) => {
       if (event.sessionId !== session.sessionId) return;
-      try {
-        term.write(event.data);
-      } catch {
-        /* terminal disposed */
-      }
+      writePlanningTerminalOutput(term, session, event.data);
     });
 
     const tryFit = () => {

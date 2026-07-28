@@ -88,6 +88,7 @@ type ContextMenuCloseOptions = { restoreFocus?: boolean };
 type ContextMenuState = { x: number; y: number; taskId: string; returnFocusRegion?: GraphKeyboardRegion };
 type WorkflowContextMenuState = { x: number; y: number; workflowId: string; returnFocusRegion?: GraphKeyboardRegion };
 const KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['planning', 'workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
+const MAX_PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
 const GRAPH_KEYBOARD_REGION_ORDER: readonly KeyboardRegion[] = ['workflowGraph', 'taskGraph', 'inspector', 'bottomBar'];
 const SIDEBAR_NAV_ITEM_SELECTOR = '[data-sidebar-nav-item]';
 export const SELECTED_WORKFLOW_VANISH_GRACE_MS = 1000;
@@ -339,6 +340,12 @@ function planningSessionFromSummary(
     terminalError: null,
     ...overrides,
   };
+}
+
+function appendPlanningTerminalOutputSnapshot(snapshot: string | null | undefined, data: string): string {
+  const next = `${snapshot ?? ''}${data}`;
+  if (next.length <= MAX_PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS) return next;
+  return next.slice(next.length - MAX_PLANNING_TERMINAL_OUTPUT_SNAPSHOT_CHARS);
 }
 
 type PlanningStreamState = {
@@ -1305,6 +1312,33 @@ export function App() {
             : session
         )),
       );
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = window.invoker?.onTerminalOutput?.((event) => {
+      if (event.kind !== 'planning' || !event.planningSessionId) return;
+      setPlanningSessions((prev) => prev.map((session) => {
+        const terminalSession = session.terminalSession;
+        const matchesPlanningSession = session.id === event.planningSessionId;
+        const matchesTerminalSession = terminalSession?.sessionId === event.sessionId;
+        if (!matchesPlanningSession && !matchesTerminalSession) return session;
+
+        const baseSnapshot = terminalSession?.outputSnapshot ?? session.terminalOutputSnapshot ?? '';
+        const outputSnapshot = appendPlanningTerminalOutputSnapshot(baseSnapshot, event.data);
+        return {
+          ...session,
+          terminalOutputSnapshot: outputSnapshot,
+          terminalUpdatedAt: new Date().toISOString(),
+          terminalSession: terminalSession && matchesTerminalSession
+            ? {
+                ...terminalSession,
+                outputSnapshot,
+              }
+            : terminalSession,
+        };
+      }));
     });
     return () => { unsubscribe?.(); };
   }, []);
@@ -3191,6 +3225,8 @@ export function App() {
           terminalSession: result.session,
           terminalBusy: false,
           terminalError: null,
+          terminalOutputSnapshot: result.session.outputSnapshot ?? session.terminalOutputSnapshot ?? '',
+          terminalUpdatedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         }));
       } else {
