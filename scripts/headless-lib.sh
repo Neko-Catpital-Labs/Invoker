@@ -54,11 +54,44 @@ headless_query() {
 
 # Mutating command — delegates to the owner (standalone or IPC).
 headless_mutation() {
+  local ipc_args=()
+  local headless_args=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-track|--do-not-track)
+        ipc_args+=(--no-track)
+        shift
+        ;;
+      --wait-for-approval)
+        ipc_args+=(--wait-for-approval)
+        shift
+        ;;
+      --timeout-ms)
+        if [ "$#" -lt 2 ]; then
+          echo "ERROR: --timeout-ms requires a value" >&2
+          return 2
+        fi
+        ipc_args+=(--timeout-ms "$2")
+        shift 2
+        ;;
+      --)
+        shift
+        headless_args+=("$@")
+        break
+        ;;
+      *)
+        headless_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
   if [ "$STANDALONE_MODE" = "1" ]; then
-    "$RUNNER" --headless "$@"
+    "$RUNNER" --headless "${ipc_args[@]}" "${headless_args[@]}"
     return $?
   fi
-  node "$IPC_HELPER" exec -- "$@"
+  INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER=1 node "$IPC_HELPER" exec "${ipc_args[@]}" -- "${headless_args[@]}"
 }
 
 # Extract workflow IDs (label format) from a query.
@@ -198,8 +231,10 @@ for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
     queued = (
         item.get("ok") is True
         and isinstance(response, dict)
-        and response.get("ok") is True
-        and response.get("intentId") not in (None, "")
+        and (
+            (response.get("ok") is True and response.get("intentId") not in (None, ""))
+            or response.get("workflowId") not in (None, "")
+        )
     )
     (log_dir / f"{workflow_id}.log").write_text(raw + "\n", encoding="utf-8")
     with result_file.open("a", encoding="utf-8") as handle:
