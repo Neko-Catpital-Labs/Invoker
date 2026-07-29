@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ExecutionAgent } from './agent.js';
+import type { SessionDriver } from './session-driver.js';
 
 export interface HarnessSessionCommand {
   command: string;
@@ -13,13 +14,21 @@ export interface HarnessSessionDriver {
   readonly supportsSessionContinuity: boolean;
   start(prompt: string, options?: { model?: string }): HarnessSessionCommand;
   append(sessionId: string, prompt: string, options?: { model?: string }): HarnessSessionCommand;
+  resolveSessionId?(
+    rawStdout: string,
+    command: HarnessSessionCommand,
+    options: { startedNewSession: boolean },
+  ): string | undefined;
 }
 
 export class ExecutionHarnessSessionDriver implements HarnessSessionDriver {
   readonly harness: string;
   readonly supportsSessionContinuity = true;
 
-  constructor(private readonly agent: ExecutionAgent) {
+  constructor(
+    private readonly agent: ExecutionAgent,
+    private readonly sessionDriver?: Pick<SessionDriver, 'extractSessionId'>,
+  ) {
     this.harness = agent.name;
   }
 
@@ -42,6 +51,22 @@ export class ExecutionHarnessSessionDriver implements HarnessSessionDriver {
       args: this.appendPromptArgs(resumed.args, prompt, options?.model),
       sessionId,
     };
+  }
+
+  resolveSessionId(
+    rawStdout: string,
+    command: HarnessSessionCommand,
+    options: { startedNewSession: boolean },
+  ): string | undefined {
+    const extracted = this.sessionDriver?.extractSessionId?.(rawStdout);
+    if (extracted) return extracted;
+    if (options.startedNewSession && this.agent.name === 'codex') {
+      throw new Error(
+        'Harness "codex" did not emit a resumable session id (thread.started.thread_id); '
+        + `refusing to persist provisional session id "${command.sessionId}".`,
+      );
+    }
+    return command.sessionId;
   }
 
   private appendPromptArgs(resumeArgs: string[], prompt: string, model?: string): string[] {
