@@ -88,11 +88,11 @@ On owner boot `startAutoStartedWorkers()` starts two tiers of built-in workers
   `review-gate-merge-conflict` (queues `invoker:rebase-recreate` when a
   review-gate PR reports a merge conflict), `disk-headroom`, `requeue`, and
   `auto-approve`.
-- **Gated on `prMaintenance.enabled`:** the cron-scan PR-maintenance kinds
-  `coderabbit-address`, `pr-conflict-rebase`, `pr-ci-failure-scan`, and
-  `pr-admin-bypass-land` (the mergify admin-bypass landing scan). With the
-  config flag absent or false these do not auto-start; they remain registered
-  and startable on demand.
+- **Gated on `prMaintenance.enabled`:** `pr-admin-bypass-land` (the mergify
+  admin-bypass landing scan) auto-starts only when the flag is true.
+- **Registered but manual by default:** `pr-orphan-repair` stays in the built-in
+  registry and can be started on demand, but it does not auto-start from the
+  `prMaintenance.enabled` gate.
 
 Saved per-worker desired state (Workers tab / `worker start|stop`) overrides
 the auto-start default in both directions.
