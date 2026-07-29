@@ -96,6 +96,35 @@ function hasActiveLaunchAttempt(
     || attempt?.status === 'running';
 }
 
+function isReusableLaunchAttempt(
+  host: SchedulerDomainHost,
+  task: TaskState,
+  attempt: Attempt | undefined,
+): boolean {
+  if (!attempt || isDiscardedAttempt(attempt)) return false;
+  if (attempt.status === 'pending') return !hasPendingLaunchRuntimeState(task);
+  if (attempt.status === 'claimed' || attempt.status === 'running') {
+    return host.isAttemptLeaseActive(attempt);
+  }
+  return false;
+}
+
+function hasPendingLaunchRuntimeState(task: TaskState): boolean {
+  return Boolean(
+    task.execution.phase
+    || task.execution.startedAt
+    || task.execution.launchStartedAt
+    || task.execution.launchCompletedAt
+    || task.execution.lastHeartbeatAt
+    || task.execution.agentSessionId
+    || task.execution.containerId
+    || task.execution.error
+    || task.execution.exitCode !== undefined
+    || task.execution.inputPrompt
+    || task.execution.pendingFixError,
+  );
+}
+
 function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): TaskJob[] {
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
@@ -363,13 +392,15 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
     const task = readiness.task;
 
     const now = new Date();
-    let attemptId = job.attemptId ?? host.ensureCurrentPendingAttempt(task);
+    let launchTask = task;
+    let attemptId = job.attemptId;
     let currentAttempt = host.loadAttemptById(attemptId);
-    if (!currentAttempt || isDiscardedAttempt(currentAttempt)) {
+    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
       attemptId = host.ensureCurrentPendingAttempt(task);
+      launchTask = host.stateGetTask(job.taskId) ?? task;
       currentAttempt = host.loadAttemptById(attemptId);
     }
-    if (!currentAttempt || isDiscardedAttempt(currentAttempt)) {
+    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
       host.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
         taskId: job.taskId,
         attemptId,

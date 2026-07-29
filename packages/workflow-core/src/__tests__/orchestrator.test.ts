@@ -3303,6 +3303,76 @@ describe('Orchestrator', () => {
       expect(resumePersistence.loadAttempt(oldAttempt.id)?.status).toBe('superseded');
       expect(resumePersistence.loadAttempt(resumed.execution.selectedAttemptId!)?.status).toBe('running');
     });
+
+    it('supersedes stale claimed pending launches on explicit resume', () => {
+      const resumePersistence = new InMemoryPersistence();
+      const staleAt = new Date('2025-01-01T00:00:00.000Z');
+      const oldAttempt: Attempt = {
+        id: 't1-aold-claimed',
+        nodeId: 't1',
+        queuePriority: 0,
+        status: 'claimed',
+        upstreamAttemptIds: [],
+        createdAt: staleAt,
+        claimedAt: staleAt,
+        startedAt: staleAt,
+        lastHeartbeatAt: staleAt,
+        branch: 'stale-branch',
+        commit: 'stale-commit',
+        workspacePath: '/tmp/stale-workspace',
+        agentSessionId: 'stale-session',
+      };
+      resumePersistence.saveTask('wf-resume', {
+        id: 't1',
+        description: 'Pending task with a stale claimed launch',
+        status: 'pending',
+        dependencies: [],
+        createdAt: new Date(),
+        config: {},
+        execution: {
+          phase: 'launching',
+          startedAt: staleAt,
+          launchStartedAt: staleAt,
+          launchCompletedAt: staleAt,
+          lastHeartbeatAt: staleAt,
+          selectedAttemptId: oldAttempt.id,
+          branch: 'stale-branch',
+          commit: 'stale-commit',
+          workspacePath: '/tmp/stale-workspace',
+          agentSessionId: 'stale-session',
+          error: 'stale launch error',
+          exitCode: 123,
+          inputPrompt: 'stale prompt',
+          pendingFixError: 'stale fix error',
+        },
+      });
+      resumePersistence.saveAttempt(oldAttempt);
+
+      const resumeOrchestrator = new Orchestrator({
+        persistence: resumePersistence,
+        messageBus: bus,
+        maxConcurrency: 3,
+      });
+
+      const started = resumeOrchestrator.resumeWorkflow('wf-resume');
+
+      expect(started).toHaveLength(1);
+      const resumed = resumeOrchestrator.getTask('t1')!;
+      expect(resumed.status).toBe('running');
+      expect(resumed.execution.selectedAttemptId).toBeTruthy();
+      expect(resumed.execution.selectedAttemptId).not.toBe(oldAttempt.id);
+      expect(resumed.execution.startedAt?.toISOString()).not.toBe(staleAt.toISOString());
+      expect(resumed.execution.launchStartedAt?.toISOString()).not.toBe(staleAt.toISOString());
+      expect(resumed.execution.launchCompletedAt).toBeUndefined();
+      expect(resumed.execution.workspacePath).toBeUndefined();
+      expect(resumed.execution.agentSessionId).toBeUndefined();
+      expect(resumed.execution.error).toBeUndefined();
+      expect(resumed.execution.exitCode).toBeUndefined();
+      expect(resumed.execution.inputPrompt).toBeUndefined();
+      expect(resumed.execution.pendingFixError).toBeUndefined();
+      expect(resumePersistence.loadAttempt(oldAttempt.id)?.status).toBe('superseded');
+      expect(resumePersistence.loadAttempt(resumed.execution.selectedAttemptId!)?.status).toBe('running');
+    });
   });
 
   describe('prepareTaskForNewAttempt', () => {
