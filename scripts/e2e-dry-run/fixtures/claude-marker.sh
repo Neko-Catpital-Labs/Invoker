@@ -2,6 +2,7 @@
 # Dummy Claude CLI for e2e-dry-run: no network, instant exit 0.
 # Invoked like: claude --session-id <uuid> ... (prompt) or via INVOKER_CLAUDE_FIX_COMMAND (fix).
 set -eu
+ALL_ARGS="$*"
 SESSION_ID=""
 RESUME_ID=""
 while [ "$#" -gt 0 ]; do
@@ -44,6 +45,77 @@ if [ -n "$ROOT" ] && [ -n "$SESSION_ID" ]; then
   # Portable timestamp (no %N on macOS bash)
   ts="$(date +%s)"
   echo ok >"$ROOT/${SESSION_ID}-${ts}-$$.marker"
+fi
+
+if printf '%s' "$ALL_ARGS" | grep -Fq 'Publish the Invoker-on-Invoker review PR stack'; then
+  if command -v gh >/dev/null 2>&1; then
+    gh api repos/Neko-Catpital-Labs/Invoker/pulls --method GET -f state=open -f head=Neko-Catpital-Labs:e2e-review-stack -f per_page=1 >/dev/null 2>&1 || true
+    gh api repos/Neko-Catpital-Labs/Invoker/pulls --method POST -f base=master -f head=e2e-review-stack -f title='E2E review stack' -f body='E2E review body' >/dev/null 2>&1 || true
+  fi
+  node <<'NODE'
+const body = [
+  '## Summary',
+  '',
+  'E2E review stack publication for the dry-run workflow.',
+  '',
+  '## Review Claim',
+  '',
+  'This proof-only change validates the review gate publication path.',
+  '',
+  '## Review Lane',
+  '',
+  'proof',
+  '',
+  '## Review Unit',
+  '',
+  'proof',
+  '',
+  '## Safety Invariant',
+  '',
+  'Only e2e fixture output is affected; production behavior is unchanged.',
+  '',
+  '## Slice Rationale',
+  '',
+  'The dry-run fixture must publish the single review artifact expected by the gate.',
+  '',
+  '## Non-goals',
+  '',
+  'No production behavior change.',
+  '',
+  '## Test Plan',
+  '',
+  '<details>',
+  '<summary>Test Plan</summary>',
+  '',
+  '- [x] e2e dry-run review stack fixture',
+  '',
+  '</details>',
+  '',
+  '## Revert Plan',
+  '',
+  '<details>',
+  '<summary>Revert Plan</summary>',
+  '',
+  '- Safe to revert? Yes',
+  '- Revert command: `git revert <sha>`',
+  '- Post-revert steps: None',
+  '- Data migration? No',
+  '',
+  '</details>',
+].join('\n');
+const artifact = {
+  id: 'e2e-review-stack',
+  title: 'E2E review stack',
+  url: 'https://github.com/test/repo/pull/99',
+  providerId: '99',
+  branch: 'e2e-review-stack',
+  baseBranch: 'master',
+  dependsOn: [],
+  body,
+};
+process.stdout.write(JSON.stringify({ artifacts: [artifact] }));
+NODE
+  exit 0
 fi
 
 # Auto-resolve merge conflicts (no-op when none exist).
