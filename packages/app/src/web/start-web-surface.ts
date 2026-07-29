@@ -15,7 +15,6 @@
 import type {
   BundledSkillsStatus,
   Logger,
-  WorkflowMeta,
 } from '@invoker/contracts';
 import { Channels, type MessageBus } from '@invoker/transport';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -40,6 +39,7 @@ import {
 } from '../task-terminal-adapter.js';
 import { createTaskGraphEventPublisher } from '../task-graph-event-publisher.js';
 import { createTaskDeltaStreamSequence } from '../task-delta-stream-sequence.js';
+import { publishForcedRefreshTaskGraphSnapshot } from '../refresh-task-graph.js';
 import {
   createTerminalUiPerfCounters,
   createTerminalUiPerfReporter,
@@ -181,13 +181,12 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
   const refreshTaskGraph = async (): Promise<void> => {
     deps.orchestrator.syncAllFromDb();
     const tasks = deps.orchestrator.getAllTasks();
+    const workflows = deps.persistence.listWorkflows();
     projection.replaceAll(tasks);
-    publisher.publishSnapshot(
-      'refresh-task-graph',
+    publishForcedRefreshTaskGraphSnapshot(publisher, 'refresh-task-graph', {
       tasks,
-      deps.persistence.listWorkflows() as WorkflowMeta[],
-      true,
-    );
+      workflows,
+    });
   };
 
   const dispatch = buildWebInvokerDispatch({
