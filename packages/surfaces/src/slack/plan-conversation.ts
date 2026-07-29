@@ -539,7 +539,7 @@ export class PlanConversation {
     const repoStateBefore = this.mode === 'agent'
       ? await captureRepoState(this.workingDir)
       : null;
-    const response = await this.spawnPlanner(prompt);
+    const response = await this.spawnPlanner(prompt, turn);
     const tCursor = Date.now();
     const formatted = formatCodexPlannerStdout(response);
     let message = formatted.message;
@@ -736,9 +736,9 @@ export class PlanConversation {
 
   // ── Planner CLI Subprocess ─────────────────────────────
 
-  async spawnPlanner(prompt: string): Promise<string> {
+  async spawnPlanner(prompt: string, turn?: number): Promise<string> {
     if (this.harnessSessionDriver) {
-      return this.spawnPlannerWithDriver(prompt, this.harnessSessionDriver);
+      return this.spawnPlannerWithDriver(prompt, this.harnessSessionDriver, turn);
     }
 
     const requiresRegisteredBuilder = this.tool === 'omp' || this.tool === 'codex';
@@ -755,13 +755,22 @@ export class PlanConversation {
     return this.runSpawnWithRetry(prompt, command, args, plannerLabel);
   }
 
-  private async spawnPlannerWithDriver(prompt: string, driver: HarnessSessionDriver): Promise<string> {
+  private async spawnPlannerWithDriver(prompt: string, driver: HarnessSessionDriver, turn?: number): Promise<string> {
     const priorSessionId = this._harnessSessionId;
+    const startedNewSession = !priorSessionId;
     const built = priorSessionId
       ? driver.append(priorSessionId, prompt, { model: this.model })
       : driver.start(prompt, { model: this.model });
     const reply = await this.runSpawnWithRetry(prompt, built.command, built.args, driver.harness);
-    this.setHarnessSessionId(built.sessionId);
+    const resolvedSessionId = driver.resolveSessionId?.(reply, built, { startedNewSession }) ?? built.sessionId;
+    if (resolvedSessionId !== built.sessionId) {
+      this.log(
+        'plan-conversation',
+        'info',
+        `[TRACE] planner_session_id_promoted planner=${driver.harness} turn=${turn ?? 'unknown'} source=stdout provisionalSessionId=${built.sessionId} resolvedSessionId=${resolvedSessionId}`,
+      );
+    }
+    this.setHarnessSessionId(resolvedSessionId);
     return reply;
   }
 
