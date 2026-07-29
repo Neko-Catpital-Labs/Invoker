@@ -14,7 +14,7 @@ import { normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
-/** Workflow base branches are pinned to master, regardless of YAML/config input. */
+/** Workflow base branches default to master, while explicit stack bases are preserved. */
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
   return normalizeWorkflowBaseBranch(plan.baseBranch);
 }
