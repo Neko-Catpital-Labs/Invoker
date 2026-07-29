@@ -18,7 +18,7 @@ trap 'rm -f "$LOG_FILE"' EXIT
 
 echo "[repro] queue chips can lag behind running workflow/task state."
 
-if pnpm -C "$REPO_ROOT" --filter @invoker/ui exec vitest run   src/__tests__/queue-status-stale-repro.test.tsx   >"$LOG_FILE" 2>&1; then
+if pnpm -C "$REPO_ROOT" --filter @invoker/ui test -- src/__tests__/queue-status-stale-repro.test.tsx >"$LOG_FILE" 2>&1; then
   echo "[repro] PASS: the test reproduced four stale queue-chip cases, then showed the chips catch up after a later successful poll / visibility restore."
   cat "$LOG_FILE"
   exit 0
