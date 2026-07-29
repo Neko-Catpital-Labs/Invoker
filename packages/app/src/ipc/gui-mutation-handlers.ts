@@ -1,4 +1,7 @@
 import type { App, BrowserWindow, IpcMain } from 'electron';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { CommandError, IpcChannels, makeEnvelope } from '@invoker/contracts';
@@ -15,6 +18,7 @@ import type {
   Logger,
   StartReadyRequest,
   StartReadyResult,
+  TaskGraphEvent,
   WorkflowMutationAcceptedResult,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
@@ -1830,6 +1834,32 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
     } catch {
       // DB might be locked
+    }
+  });
+
+  const traceRendererTaskGraphEvents = process.env.INVOKER_TRACE_RENDERER_TASK_GRAPH === '1';
+  const rendererTaskGraphTracePath = join(homedir(), '.invoker', 'ui-task-graph-events.jsonl');
+  let rendererTaskGraphTraceWriteFailed = false;
+  ipcMain.handle('invoker:trace-renderer-task-graph-event', (_event, event: TaskGraphEvent) => {
+    if (!traceRendererTaskGraphEvents) return;
+    try {
+      mkdirSync(dirname(rendererTaskGraphTracePath), { recursive: true });
+      appendFileSync(
+        rendererTaskGraphTracePath,
+        JSON.stringify({
+          time: new Date().toISOString(),
+          source: 'renderer',
+          event,
+        }) + '\n',
+      );
+    } catch (err) {
+      if (!rendererTaskGraphTraceWriteFailed) {
+        rendererTaskGraphTraceWriteFailed = true;
+        logger.warn(
+          `renderer task graph trace write failed: ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ui' },
+        );
+      }
     }
   });
 
