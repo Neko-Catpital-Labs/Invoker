@@ -293,6 +293,75 @@ describe('Orchestrator launch claims', () => {
     expect(persistence.loadAttempt(attemptId)?.leaseExpiresAt).toEqual(leaseExpiresAt);
   });
 
+  it('supersedes a normalized stale selected launch attempt before startup auto-run can relaunch it', () => {
+    const { orchestrator, persistence } = makeOrchestrator({
+      deferRunningUntilLaunch: true,
+      enqueueLaunchDispatchEnabled: true,
+    });
+    orchestrator.loadPlan({
+      name: 'expired-claim-relaunch',
+      onFinish: 'none',
+      tasks: [{ id: 't1', description: 'one', command: 'echo one' }],
+    });
+    const taskId = taskIdBySuffix(orchestrator, 't1');
+    const staleAt = new Date('2025-01-01T00:00:00.000Z');
+    const oldAttemptId = `${taskId}-old-claim`;
+    persistence.saveAttempt({
+      id: oldAttemptId,
+      nodeId: taskId,
+      queuePriority: 0,
+      status: 'pending',
+      upstreamAttemptIds: [],
+      claimedAt: staleAt,
+      startedAt: staleAt,
+      lastHeartbeatAt: staleAt,
+      createdAt: staleAt,
+      branch: 'stale-branch',
+      commit: 'stale-commit',
+      workspacePath: '/tmp/stale-workspace',
+      agentSessionId: 'stale-session',
+    });
+    persistence.updateTask(taskId, {
+      status: 'pending',
+      execution: {
+        selectedAttemptId: oldAttemptId,
+        phase: 'launching',
+        startedAt: staleAt,
+        launchStartedAt: staleAt,
+        launchCompletedAt: staleAt,
+        lastHeartbeatAt: staleAt,
+        branch: 'stale-branch',
+        commit: 'stale-commit',
+        workspacePath: '/tmp/stale-workspace',
+        agentSessionId: 'stale-session',
+        error: 'stale launch error',
+        exitCode: 123,
+        inputPrompt: 'stale prompt',
+        pendingFixError: 'stale fix error',
+      },
+    });
+    orchestrator.syncAllFromDb();
+
+    const [claim] = orchestrator.startExecution();
+
+    expect(claim).toBeTruthy();
+    const newAttemptId = claim!.execution.selectedAttemptId!;
+    expect(newAttemptId).not.toBe(oldAttemptId);
+    expect(claim!.status).toBe('queued');
+    expect(claim!.execution.startedAt?.toISOString()).not.toBe(staleAt.toISOString());
+    expect(claim!.execution.launchStartedAt?.toISOString()).not.toBe(staleAt.toISOString());
+    expect(claim!.execution.launchCompletedAt).toBeUndefined();
+    expect(claim!.execution.workspacePath).toBeUndefined();
+    expect(claim!.execution.agentSessionId).toBeUndefined();
+    expect(claim!.execution.error).toBeUndefined();
+    expect(claim!.execution.exitCode).toBeUndefined();
+    expect(claim!.execution.inputPrompt).toBeUndefined();
+    expect(claim!.execution.pendingFixError).toBeUndefined();
+    expect(persistence.loadAttempt(oldAttemptId)?.status).toBe('superseded');
+    expect(persistence.loadAttempt(newAttemptId)?.status).toBe('claimed');
+    expect(persistence.launchDispatchRows.map((row) => row.attemptId)).toEqual([newAttemptId]);
+  });
+
   it('returns launch claims for restart/retry/recreate entrypoints', () => {
     const { orchestrator } = makeOrchestrator();
     orchestrator.loadPlan({
