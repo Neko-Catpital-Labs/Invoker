@@ -1,4 +1,4 @@
-import { E2E_REPO_URL, expect, injectTaskStates, loadPlan, startPlan, test } from './fixtures/electron-app.js';
+import { E2E_REPO_URL, expect, injectTaskStates, loadPlan, openPlanGraph, startPlan, test } from './fixtures/electron-app.js';
 import type { Page } from '@playwright/test';
 import { stringify as yamlStringify } from 'yaml';
 
@@ -52,6 +52,7 @@ async function seedStressScene(page: Page, scale: (typeof SCALES)[number]) {
     const workflows = await page.evaluate(() => window.invoker.listWorkflows());
     return workflows.length;
   }, { timeout: 120_000 }).toBe(scale.workflowCount + 1);
+  await openPlanGraph(page);
   await page.getByRole('button', { name: 'Refresh' }).click();
   await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 30_000 });
   return seeded as {
