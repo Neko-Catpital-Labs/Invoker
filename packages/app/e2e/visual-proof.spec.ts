@@ -23,7 +23,7 @@ import {
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
-import type { Locator, Page } from '@playwright/test';
+import type { ElectronApplication, Locator, Page } from '@playwright/test';
 import { SQLiteAdapter, type WorkerActionWrite } from '@invoker/data-store';
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
@@ -271,6 +271,12 @@ const SSH_TERMINAL_RESUME_PLAN = {
   ],
 };
 
+type PlanningSessionMetadataProof = {
+  planningSessionId: string;
+  agentSessionId: string;
+  rawSessionFileLocation: string;
+};
+
 const systemSetupReadinessDiagnostics = (configPath: string) => ({
   platform: 'linux',
   arch: 'x64',
@@ -471,6 +477,84 @@ async function openContextMenu(page: Page, locator: Locator) {
   await expect(menu).toBeVisible({ timeout: 10000 });
   return menu;
 }
+
+async function installPlanningSessionMetadataProofIpc(
+  electronApp: ElectronApplication,
+  proof: PlanningSessionMetadataProof,
+): Promise<void> {
+  const installed = await electronApp.evaluate(({ ipcMain }, metadata) => {
+    type IpcMainLike = {
+      _invokeHandlers?: Map<string, (event: unknown, ...args: unknown[]) => unknown>;
+      removeHandler(channel: string): void;
+      handle(channel: string, handler: (event: unknown, ...args: unknown[]) => unknown): void;
+    };
+    type ProofGlobal = typeof globalThis & {
+      __INVOKER_PLANNING_METADATA_PROOF_ORIGINAL_LIST__?: (event: unknown, ...args: unknown[]) => unknown;
+    };
+
+    const channel = 'invoker:planning-chat-list';
+    const ipc = ipcMain as unknown as IpcMainLike;
+    const original = (globalThis as ProofGlobal).__INVOKER_PLANNING_METADATA_PROOF_ORIGINAL_LIST__
+      ?? ipc._invokeHandlers?.get(channel);
+
+    if (!original) {
+      return { ok: false, reason: `No IPC handler registered for ${channel}` };
+    }
+
+    (globalThis as ProofGlobal).__INVOKER_PLANNING_METADATA_PROOF_ORIGINAL_LIST__ = original;
+    ipc.removeHandler(channel);
+    ipc.handle(channel, async (event, ...args) => {
+      const response = await original(event, ...args) as {
+        ok?: boolean;
+        sessions?: Array<Record<string, unknown>>;
+      };
+      if (!response?.ok || !Array.isArray(response.sessions) || response.sessions.length === 0) {
+        return response;
+      }
+
+      const [seedSession, ...rest] = response.sessions;
+      const proofSession = {
+        ...seedSession,
+        id: metadata.planningSessionId,
+        planningSessionId: metadata.planningSessionId,
+        agentSessionId: metadata.agentSessionId,
+        rawSessionFileLocation: metadata.rawSessionFileLocation,
+        rawSessionFile: metadata.rawSessionFileLocation,
+        rawSessionFilePath: metadata.rawSessionFileLocation,
+        sessionFileLocation: metadata.rawSessionFileLocation,
+        sessionMetadata: metadata,
+        planningMetadata: metadata,
+        agentSession: { id: metadata.agentSessionId },
+        rawSession: {
+          fileLocation: metadata.rawSessionFileLocation,
+          filePath: metadata.rawSessionFileLocation,
+        },
+        title: `Planning session ${metadata.planningSessionId}`,
+        status: 'submitted',
+        submittedWorkflowId: 'workflow-planning-session-metadata-proof',
+        submittedPlanName: `Agent session ${metadata.agentSessionId} · Raw session ${metadata.rawSessionFileLocation}`,
+        metadata: {
+          ...(
+            seedSession.metadata && typeof seedSession.metadata === 'object' && !Array.isArray(seedSession.metadata)
+              ? (seedSession.metadata as Record<string, unknown>)
+              : {}
+          ),
+          planningSession: metadata,
+        },
+      };
+
+      return {
+        ...response,
+        sessions: [proofSession, ...rest],
+      };
+    });
+
+    return { ok: true };
+  }, proof);
+
+  expect(installed, 'planning session metadata proof IPC wrapper must be installed').toMatchObject({ ok: true });
+}
+
 async function selectGraphMenuItem(page: Page, testId: string): Promise<void> {
   await page.getByTestId('graph-more-button').click();
   await expect(page.getByTestId('graph-more-menu')).toBeVisible();
@@ -852,6 +936,56 @@ test.describe('Visual proof capture', () => {
     await clearSubmittedButton.click();
     await expect.poll(() => confirmDialogMessage).toBe('Clear all submitted planning chats? This cannot be undone.');
     await expect(rows).toHaveCount(2);
+  });
+
+  test('planning session metadata side panel', async ({ page, electronApp }) => {
+    const created = await page.evaluate(async () => (
+      window.invoker.planningChatCreate({
+        title: 'Planning session metadata seed',
+        presetKey: 'codex',
+        confirmationMode: 'require',
+      })
+    ));
+    expect(created.ok, created.ok ? undefined : created.error).toBe(true);
+
+    const metadata: PlanningSessionMetadataProof = {
+      planningSessionId: 'planning-session-metadata-proof',
+      agentSessionId: 'codex-planning-metadata-01',
+      rawSessionFileLocation: '/tmp/invoker/proof/raw/codex-planning-metadata-01.jsonl',
+    };
+    await installPlanningSessionMetadataProofIpc(electronApp, metadata);
+
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+    await page.getByTestId('sidebar-home').click();
+
+    const metadataFromIpc = await page.evaluate(async (expectedSessionId) => {
+      const response = await window.invoker.planningChatList();
+      const session = response.sessions.find((candidate: any) => candidate.id === expectedSessionId) as any;
+      return {
+        planningSessionId: session?.planningSessionId ?? session?.metadata?.planningSession?.planningSessionId ?? session?.id,
+        agentSessionId: session?.agentSessionId
+          ?? session?.sessionMetadata?.agentSessionId
+          ?? session?.metadata?.planningSession?.agentSessionId,
+        rawSessionFileLocation: session?.rawSessionFileLocation
+          ?? session?.sessionMetadata?.rawSessionFileLocation
+          ?? session?.rawSession?.fileLocation
+          ?? session?.metadata?.planningSession?.rawSessionFileLocation,
+      };
+    }, metadata.planningSessionId);
+    expect(metadataFromIpc).toEqual(metadata);
+
+    await expect(page.getByTestId('planning-session-row')).toContainText(metadata.planningSessionId);
+    await page.getByTestId('planning-context-toggle').click();
+
+    const panel = page.getByTestId('planning-context-panel');
+    await expect(panel.getByRole('heading', { name: 'Current plan' })).toBeVisible();
+    await expect(panel).toContainText(metadata.planningSessionId);
+    await expect(panel).toContainText(metadata.agentSessionId);
+    await expect(panel).toContainText(metadata.rawSessionFileLocation);
+
+    await captureScreenshot(page, 'planning-session-metadata-side-panel');
   });
 
   test('terminal planning captures long transcript follow surface', async ({ page }) => {
