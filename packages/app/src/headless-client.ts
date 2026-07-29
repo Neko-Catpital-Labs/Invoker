@@ -99,12 +99,17 @@ const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 15_000;
 const GENERIC_READ_OWNER_PING_TIMEOUT_MS = 10_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
+const REQUIRE_EXISTING_OWNER_ENV = 'INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER';
 
 function standaloneOwnerBootstrapTimeoutMs(): number {
   const raw = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   return DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS;
+}
+
+function requireExistingSharedMutationOwner(): boolean {
+  return process.env[REQUIRE_EXISTING_OWNER_ENV] === '1';
 }
 
 export class SharedMutationOwnerTimeoutError extends Error {
@@ -612,12 +617,19 @@ async function resolveOwnerAndDelegate(
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   };
+  const ensureStandaloneOwner = requireExistingSharedMutationOwner()
+    ? async () => {
+        const message = `Existing shared mutation owner is required; bootstrap disabled by ${REQUIRE_EXISTING_OWNER_ENV}=1`;
+        delegationClientLog(message);
+        throw new SharedMutationOwnerTimeoutError(message);
+      }
+    : deps.ensureStandaloneOwner;
 
   const resolver = createOwnerResolver(
     {
       messageBus: deps.messageBus,
       refreshMessageBus: deps.refreshMessageBus,
-      ensureStandaloneOwner: deps.ensureStandaloneOwner,
+      ensureStandaloneOwner,
       isRetryableBootstrapError: isSharedMutationOwnerTimeoutError,
     },
     {
