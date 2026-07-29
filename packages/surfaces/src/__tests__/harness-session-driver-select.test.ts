@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ExecutionHarnessSessionDriver, ReplayHarnessSessionDriver } from '@invoker/execution-engine';
-import type { ExecutionAgent } from '@invoker/execution-engine';
+import type { ExecutionAgent, SessionDriver } from '@invoker/execution-engine';
 import { selectHarnessSessionDriver } from '../slack/harness-session-driver-select.js';
 
 function fakeExecutionAgent(name: string): ExecutionAgent {
@@ -23,6 +23,29 @@ describe('selectHarnessSessionDriver', () => {
     expect(driver).toBeInstanceOf(ExecutionHarnessSessionDriver);
     expect(driver?.supportsSessionContinuity).toBe(true);
     expect(driver?.harness).toBe('claude');
+  });
+
+  it('passes the registered session driver into execution-backed planning drivers', () => {
+    const codex = fakeExecutionAgent('codex');
+    const sessionDriver: SessionDriver = {
+      processOutput: () => '',
+      loadSession: () => null,
+      parseSession: () => [],
+      inspectSession: () => ({ state: 'finished' }),
+      extractSessionId: () => 'real-codex-thread-id',
+    };
+    const driver = selectHarnessSessionDriver(
+      { tool: 'codex' },
+      {
+        executionAgentRegistry: {
+          get: (name) => (name === 'codex' ? codex : undefined),
+          getSessionDriver: (name) => (name === 'codex' ? sessionDriver : undefined),
+        },
+      },
+    );
+
+    const started = driver?.start('Plan the change');
+    expect(driver?.resolveSessionId?.('', started!, { startedNewSession: true })).toBe('real-codex-thread-id');
   });
 
   it('falls back to a ReplayHarnessSessionDriver when no execution agent matches the preset tool', () => {
