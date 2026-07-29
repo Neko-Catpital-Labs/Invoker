@@ -69,8 +69,8 @@ export function isHeadlessHelpCommand(command: string | undefined): boolean {
   return command === undefined || command === '--help' || command === '-h';
 }
 
-export function isRemovedHeadlessCommandAlias(command: string | undefined): boolean {
-  return command === 'set-merge-mode';
+export function isRemovedHeadlessCommandAlias(_command: string | undefined): boolean {
+  return false;
 }
 
 export function isMutatingSetSubcommand(subcommand: string | undefined): boolean {
