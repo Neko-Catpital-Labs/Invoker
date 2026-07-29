@@ -75,6 +75,38 @@ export function isRunningTask(task: TaskState): boolean {
   return RUNNING_TASK_STATUS[task.status] === true;
 }
 
+export interface LiveQueueCounts {
+  readonly runningCount: number;
+  readonly activeExecutionCount: number;
+  readonly launchingCount: number;
+}
+
+export function getLiveQueueCounts(tasks: Map<string, TaskState>): LiveQueueCounts {
+  let activeExecutionCount = 0;
+  let launchingCount = 0;
+
+  for (const task of tasks.values()) {
+    if (task.execution.crashPreservedAt) continue;
+    if (task.status === 'running' || task.status === 'fixing_with_ai') {
+      activeExecutionCount += 1;
+      continue;
+    }
+    if (
+      (task.status === 'pending' || (task.status as string) === 'queued')
+      && task.execution.phase === 'launching'
+      && Boolean(task.execution.selectedAttemptId)
+    ) {
+      launchingCount += 1;
+    }
+  }
+
+  return {
+    runningCount: activeExecutionCount + launchingCount,
+    activeExecutionCount,
+    launchingCount,
+  };
+}
+
 export function getWorkflowTaskCounts(tasks: Map<string, TaskState>): Map<string, number> {
   const counts = new Map<string, number>();
   for (const task of tasks.values()) {

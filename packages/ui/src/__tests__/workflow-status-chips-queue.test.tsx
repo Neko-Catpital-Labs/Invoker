@@ -1,27 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { WorkflowStatusChips } from '../components/WorkflowStatusChips.js';
-import type { QueueStatus, WorkflowMeta } from '../types.js';
+import type { WorkflowMeta } from '../types.js';
 
 describe('WorkflowStatusChips queue capacity', () => {
-  it('shows executing and queued counts from queue status on the home bottom chrome', () => {
+  it('shows executing and queued counts from queue chrome on the home bottom chrome', () => {
     const workflows = new Map<string, WorkflowMeta>([
       ['wf-1', { id: 'wf-1', name: 'One', status: 'running' }],
     ]);
-    const queueStatus: QueueStatus = {
+    const queueChrome = {
       maxConcurrency: 8,
       runningCount: 3,
       activeExecutionCount: 1,
       launchingCount: 2,
-      running: [
-        { taskId: 'a', description: 'a' },
-        { taskId: 'b', description: 'b' },
-        { taskId: 'c', description: 'c' },
-      ],
-      queued: [
-        { taskId: 'd', priority: 0, description: 'd' },
-        { taskId: 'e', priority: 0, description: 'e' },
-      ],
+      queuedCount: 2,
     };
     const onOpenRunningSurface = vi.fn();
 
@@ -30,7 +22,7 @@ describe('WorkflowStatusChips queue capacity', () => {
         workflows={workflows}
         activeFilters={new Set()}
         onStatusClick={() => {}}
-        queueStatus={queueStatus}
+        queueChrome={queueChrome}
         onOpenRunningSurface={onOpenRunningSurface}
       />,
     );
