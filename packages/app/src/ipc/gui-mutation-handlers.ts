@@ -1667,7 +1667,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     const taskId = String(taskIdArg);
     logger.info(`retry-task: "${taskId}"`, { module: 'ipc' });
     try {
-      await preemptTaskSubgraph(taskId);
       const envelope = makeEnvelope('retry-task', 'ui', 'task', { taskId });
       const result = await commandService.retryTask(envelope);
       if (!result.ok) throw new Error(result.error.message);
