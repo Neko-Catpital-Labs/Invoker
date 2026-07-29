@@ -1,4 +1,7 @@
 import type { App, BrowserWindow, IpcMain } from 'electron';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { CommandError, IpcChannels, makeEnvelope } from '@invoker/contracts';
@@ -15,6 +18,7 @@ import type {
   Logger,
   StartReadyRequest,
   StartReadyResult,
+  TaskGraphEvent,
   WorkflowMutationAcceptedResult,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
@@ -42,6 +46,7 @@ import {
 } from '../config.js';
 import { resolveAutoApproveAIFixes, resolveAutoFixRetries } from '../autofix-defaults.js';
 import { backupPlan } from '../plan-backup.js';
+import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
 import { resolveRefreshTaskGraphSnapshot } from '../refresh-task-graph.js';
@@ -904,7 +909,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'invoker:stop-worker':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
-        const workflows = rendererTaskFeed.getDetachedViewerWorkflows() ?? persistence.listWorkflows();
+        const workflows = persistence.listWorkflows();
         const firstWorkflow = workflows[0] as { id?: unknown } | undefined;
         const workflowId = context.getStartupWorkflowId()
           ?? (typeof firstWorkflow?.id === 'string' ? firstWorkflow.id : undefined);
@@ -1199,57 +1204,16 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     planText: string,
     options?: { preserveTaskHandles?: boolean; logLabel?: string },
   ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> {
-    const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('../plan-parser.js');
-    const submission = parsePlanSubmissionBundle(planText);
-    const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-    const loadedWorkflowIds: string[] = [];
-    let upstream: { workflowId: string; featureBranch: string } | undefined;
-    logger.info(
-      `${options?.logLabel ?? 'plan-from-goal'}: loading "${submission.name}" (${submission.plans.length} workflow${submission.plans.length === 1 ? '' : 's'})`,
-      { module: 'ipc' },
-    );
-    if (!options?.preserveTaskHandles) {
-      taskHandles.clear();
-    }
-
-    for (const parsedPlan of submission.plans) {
-      let plan = applyConfiguredPlanDefaults(parsedPlan);
-      if (upstream) {
-        plan = {
-          ...plan,
-          baseBranch: upstream.featureBranch,
-          externalDependencies: [
-            ...(plan.externalDependencies ?? []),
-            {
-              workflowId: upstream.workflowId,
-              taskId: '__merge__',
-              requiredStatus: 'completed',
-              gatePolicy: 'review_ready',
-            } as const,
-          ],
-        };
-      }
-      backupPlan(plan, undefined, logger);
-      orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-      const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-      if (!workflow) {
-        throw new Error('Loaded plan did not create a workflow.');
-      }
-      existingWorkflowIds.add(workflow.id);
-      loadedWorkflowIds.push(workflow.id);
-      upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-    }
-
-    const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
-    if (!workflowId) {
-      throw new Error('Loaded plan did not create a workflow.');
-    }
-    return {
-      planName: submission.name,
-      workflowId,
-      workflowIds: loadedWorkflowIds,
-      workflowCount: loadedWorkflowIds.length,
-    };
+    return loadPlanSubmissionBundle(planText, {
+      persistence,
+      orchestrator,
+      allowGraphMutation: invokerConfig.allowGraphMutation,
+      logger,
+    }, {
+      logLabel: options?.logLabel ?? 'plan-from-goal',
+      preserveTaskHandles: options?.preserveTaskHandles,
+      taskHandles,
+    });
   }
 
   const planningConversationRepo = new ConversationRepository(persistence, {
@@ -1266,6 +1230,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     loadGeneratedPlan: loadGeneratedPlanPreview,
     conversationRepo: planningConversationRepo,
     planningSessionStore: ownerMode ? persistence : undefined,
+    logger,
     onRawPlannerOutput: emitPlanningChatStream,
   });
   let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
@@ -1302,6 +1267,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      logger,
       onRawPlannerOutput: emitPlanningChatStream,
     });
   });
@@ -1330,6 +1296,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      logger,
       plannerReplyOverride,
       onRawPlannerOutput: emitPlanningChatStream,
     });
@@ -1870,6 +1837,32 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       persistence.writeActivityLog('ui-perf', 'info', JSON.stringify(payload));
     } catch {
       // DB might be locked
+    }
+  });
+
+  const traceRendererTaskGraphEvents = process.env.INVOKER_TRACE_RENDERER_TASK_GRAPH === '1';
+  const rendererTaskGraphTracePath = join(homedir(), '.invoker', 'ui-task-graph-events.jsonl');
+  let rendererTaskGraphTraceWriteFailed = false;
+  ipcMain.handle('invoker:trace-renderer-task-graph-event', (_event, event: TaskGraphEvent) => {
+    if (!traceRendererTaskGraphEvents) return;
+    try {
+      mkdirSync(dirname(rendererTaskGraphTracePath), { recursive: true });
+      appendFileSync(
+        rendererTaskGraphTracePath,
+        JSON.stringify({
+          time: new Date().toISOString(),
+          source: 'renderer',
+          event,
+        }) + '\n',
+      );
+    } catch (err) {
+      if (!rendererTaskGraphTraceWriteFailed) {
+        rendererTaskGraphTraceWriteFailed = true;
+        logger.warn(
+          `renderer task graph trace write failed: ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ui' },
+        );
+      }
     }
   });
 

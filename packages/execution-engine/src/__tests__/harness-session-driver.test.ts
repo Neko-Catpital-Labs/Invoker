@@ -69,6 +69,40 @@ describe('ExecutionHarnessSessionDriver', () => {
         'Continue the task',
       ]);
     });
+
+    it('promotes the real Codex thread id from stdout for new sessions', () => {
+      const driver = new ExecutionHarnessSessionDriver(new CodexExecutionAgent(), {
+        extractSessionId: () => 'real-codex-thread-id',
+      });
+
+      expect(driver.resolveSessionId?.('', {
+        command: 'codex',
+        args: [],
+        sessionId: 'local-invoker-uuid',
+      }, { startedNewSession: true })).toBe('real-codex-thread-id');
+    });
+
+    it('rejects a new Codex session when stdout has no resumable thread id', () => {
+      const driver = new ExecutionHarnessSessionDriver(new CodexExecutionAgent(), {
+        extractSessionId: () => undefined,
+      });
+
+      expect(() => driver.resolveSessionId?.('', {
+        command: 'codex',
+        args: [],
+        sessionId: 'local-invoker-uuid',
+      }, { startedNewSession: true })).toThrow(/thread\.started\.thread_id/);
+    });
+
+    it('rejects a new Codex session when no session extractor is registered', () => {
+      const driver = new ExecutionHarnessSessionDriver(new CodexExecutionAgent());
+
+      expect(() => driver.resolveSessionId?.('', {
+        command: 'codex',
+        args: [],
+        sessionId: 'local-invoker-uuid',
+      }, { startedNewSession: true })).toThrow(/thread\.started\.thread_id/);
+    });
   });
 
   describe('omp', () => {

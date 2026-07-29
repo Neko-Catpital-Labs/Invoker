@@ -357,6 +357,7 @@ declare global {
       appStartedAtEpochMs?: number;
       streamSequence?: number;
     };
+    __INVOKER_TRACE_RENDERER_TASK_GRAPH__?: boolean;
     __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => ReturnType<InvokerAPI['openTerminal']>;
     __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: (cb: (event: TerminalOutputEvent) => void) => () => void;
   }
