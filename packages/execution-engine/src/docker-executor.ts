@@ -14,6 +14,7 @@ import { syncPlanBaseRemoteForRef } from './plan-base-remote.js';
 const CONTAINER_STOP_TIMEOUT_S = 5;
 const TAG = '[DockerExecutor]';
 const CONTAINER_CWD = '/app';
+const FULL_SHA_RE = /^[0-9a-f]{40}$/i;
 
 /**
  * Secret-bearing environment variable keys that must be redacted from logs.
@@ -94,6 +95,12 @@ interface ContainerEntry extends BaseEntry {
 
 function shellEscape(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+function isMissingOriginRemoteError(errorMsg: string): boolean {
+  return /No such remote/i.test(errorMsg)
+    || /'origin' does not appear to be a git repository/i.test(errorMsg)
+    || /Could not read from remote repository/i.test(errorMsg);
 }
 
 /**
@@ -224,7 +231,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       await this.execGitSimple(['remote', 'get-url', 'origin'], cwd);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      if (/No such remote/i.test(errorMsg)) {
+      if (isMissingOriginRemoteError(errorMsg)) {
         const msg = '[Git Fetch] Status: skipped | Remote: origin missing | Using image-baked repo state\n';
         traceExecution(msg);
         if (executionId) this.emitOutput(executionId, msg);
@@ -245,7 +252,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
       await this.execGitSimple(['remote', 'get-url', 'origin'], cwd);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      if (/No such remote/i.test(errorMsg)) {
+      if (isMissingOriginRemoteError(errorMsg)) {
         const msg = `[docker] pushBranchToRemote skipped for ${branch}: origin missing; using image-baked repo state\n`;
         traceExecution(msg);
         if (executionId) this.emitOutput(executionId, msg);
@@ -379,9 +386,12 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     return await this.containerContext.run(container.id, async () => {
       await this.syncFromRemote(CONTAINER_CWD, executionId);
 
-      const baseRef = request.inputs.baseBranch ?? 'HEAD';
+      const upstreamBaseCommit = request.inputs.upstreamBase?.commitHash?.trim();
+      const baseRef = upstreamBaseCommit || request.inputs.baseBranch || 'HEAD';
       await syncPlanBaseRemoteForRef((args) => this.execGitSimple(args, CONTAINER_CWD), baseRef);
-      const baseHead = (await this.execGitSimple(['rev-parse', baseRef], CONTAINER_CWD)).trim();
+      const baseHead = FULL_SHA_RE.test(baseRef)
+        ? baseRef
+        : (await this.execGitSimple(['rev-parse', baseRef], CONTAINER_CWD)).trim();
       const upstreamCommits = (request.inputs.upstreamContext ?? [])
         .map(c => c.commitHash)
         .filter((h): h is string => !!h);
@@ -407,7 +417,8 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
         // Best-effort early persistence; the post-start path persists the
         // same value again.
       }
-      const baseBranch = request.inputs.upstreamBranches?.[0]
+      const baseBranch = upstreamBaseCommit
+        ?? request.inputs.upstreamBranches?.[0]
         ?? request.inputs.baseBranch
         ?? 'HEAD';
 

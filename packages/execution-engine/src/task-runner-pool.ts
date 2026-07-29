@@ -668,7 +668,7 @@ export function selectExecutor(
     if (
       registered
       && (effectiveType !== 'merge' || registered.type === 'merge')
-      && effectiveType !== 'worktree'
+      && (effectiveType !== 'worktree' || !selectedWorktreeTargetId)
     ) {
       traceExecution(`[trace] TaskRunner.selectExecutor: task=${task.id} effectiveType=${effectiveType} → ${registered.type}`);
       return { executor: registered, resolvedExecution, selectedPoolMemberId };
