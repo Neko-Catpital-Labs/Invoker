@@ -12,23 +12,17 @@ import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.j
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
-export const CODERABBIT_ADDRESS_WORKER_KIND = 'coderabbit-address';
-export const PR_CONFLICT_REBASE_WORKER_KIND = 'pr-conflict-rebase';
-export const PR_CI_FAILURE_SCAN_WORKER_KIND = 'pr-ci-failure-scan';
 export const PR_ADMIN_BYPASS_LAND_WORKER_KIND = 'pr-admin-bypass-land';
 export const PR_ORPHAN_REPAIR_WORKER_KIND = 'pr-orphan-repair';
 export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
 /**
- * Even spacing between each PR-maintenance worker's first tick, so the 5
+ * Even spacing between each PR-maintenance worker's first tick, so the 2
  * workers sharing the cron lock (scripts/cron-pr-lib.sh) don't all wake on
  * the same intervalMs boundary and race for it every cycle.
  */
 export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 5;
 
 export type PrMaintenanceWorkerKind =
-  | typeof CODERABBIT_ADDRESS_WORKER_KIND
-  | typeof PR_CONFLICT_REBASE_WORKER_KIND
-  | typeof PR_CI_FAILURE_SCAN_WORKER_KIND
   | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
   | typeof PR_ORPHAN_REPAIR_WORKER_KIND;
 
@@ -40,22 +34,6 @@ export interface PrMaintenanceEntrypoint {
   note: string;
 }
 
-const CODERABBIT_ADDRESS_ENTRYPOINT: PrMaintenanceEntrypoint = {
-  kind: CODERABBIT_ADDRESS_WORKER_KIND,
-  scriptRelativePath: 'scripts/cron-coderabbit-address.sh',
-  note: 'Runs the CodeRabbit review-address cron entrypoint under worker scheduling.',
-};
-
-const PR_CONFLICT_REBASE_ENTRYPOINT: PrMaintenanceEntrypoint = {
-  kind: PR_CONFLICT_REBASE_WORKER_KIND,
-  scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh',
-  note: 'Runs the PR conflict rebase-recreate cron entrypoint under worker scheduling.',
-};
-const PR_CI_FAILURE_SCAN_ENTRYPOINT: PrMaintenanceEntrypoint = {
-  kind: PR_CI_FAILURE_SCAN_WORKER_KIND,
-  scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh',
-  note: 'Runs the mapped-PR CI scan cron entrypoint under worker scheduling.',
-};
 const PR_ADMIN_BYPASS_LAND_ENTRYPOINT: PrMaintenanceEntrypoint = {
   kind: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh',
@@ -126,61 +104,8 @@ export interface PrMaintenanceTickOptions extends PrMaintenanceWorkerConfig {
 export function registerPrMaintenanceWorkers(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
-  registerCoderabbitAddressWorker(registry);
-  registerPrConflictRebaseWorker(registry);
-  registerPrCiFailureScanWorker(registry);
   registerPrAdminBypassLandWorker(registry);
   registerPrOrphanRepairWorker(registry);
-  return registry;
-}
-
-export function registerCoderabbitAddressWorker(
-  registry: WorkerRegistry<WorkerRuntimeDependencies>,
-): WorkerRegistry<WorkerRuntimeDependencies> {
-  registry.register({
-    kind: CODERABBIT_ADDRESS_WORKER_KIND,
-    note: CODERABBIT_ADDRESS_ENTRYPOINT.note,
-    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
-      createCoderabbitAddressWorker({
-        logger: deps.logger,
-        ...deps.prMaintenance,
-        store: deps.store,
-        startDelayMs: 0 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
-      }),
-  });
-  return registry;
-}
-
-export function registerPrConflictRebaseWorker(
-  registry: WorkerRegistry<WorkerRuntimeDependencies>,
-): WorkerRegistry<WorkerRuntimeDependencies> {
-  registry.register({
-    kind: PR_CONFLICT_REBASE_WORKER_KIND,
-    note: PR_CONFLICT_REBASE_ENTRYPOINT.note,
-    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
-      createPrConflictRebaseWorker({
-        logger: deps.logger,
-        ...deps.prMaintenance,
-        store: deps.store,
-        startDelayMs: 1 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
-      }),
-  });
-  return registry;
-}
-export function registerPrCiFailureScanWorker(
-  registry: WorkerRegistry<WorkerRuntimeDependencies>,
-): WorkerRegistry<WorkerRuntimeDependencies> {
-  registry.register({
-    kind: PR_CI_FAILURE_SCAN_WORKER_KIND,
-    note: PR_CI_FAILURE_SCAN_ENTRYPOINT.note,
-    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
-      createPrCiFailureScanWorker({
-        logger: deps.logger,
-        ...deps.prMaintenance,
-        store: deps.store,
-        startDelayMs: 2 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
-      }),
-  });
   return registry;
 }
 
@@ -195,7 +120,7 @@ export function registerPrAdminBypassLandWorker(
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
-        startDelayMs: 3 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
+        startDelayMs: 0 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
   });
   return registry;
@@ -212,22 +137,10 @@ export function registerPrOrphanRepairWorker(
         logger: deps.logger,
         ...deps.prMaintenance,
         store: deps.store,
-        startDelayMs: 4 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
+        startDelayMs: 1 * PR_MAINTENANCE_WORKER_STAGGER_STEP_MS,
       }),
   });
   return registry;
-}
-
-
-export function createCoderabbitAddressWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
-  return createPrMaintenanceWorker(CODERABBIT_ADDRESS_ENTRYPOINT, options);
-}
-
-export function createPrConflictRebaseWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
-  return createPrMaintenanceWorker(PR_CONFLICT_REBASE_ENTRYPOINT, options);
-}
-export function createPrCiFailureScanWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
-  return createPrMaintenanceWorker(PR_CI_FAILURE_SCAN_ENTRYPOINT, options);
 }
 
 export function createPrAdminBypassLandWorker(options: PrMaintenanceWorkerOptions): WorkerRuntime {
