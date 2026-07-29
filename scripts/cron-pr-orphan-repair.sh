@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Orphan-PR repair cron (Job 5) — owns open PRs that have NO Invoker workflow
-# mapping. The mapped-PR workers (conflict-rebase, ci-failure-scan,
-# coderabbit-address, admin-bypass-land) skip unmapped PRs; this job is their
-# counterpart: it classifies EVERYTHING blocking an unmapped PR (merge
-# conflict, failing required checks, changes-requested review) into one
-# combined brief and submits ONE real Invoker repair task via the owner's
-# `run` command. One task per broken head-state: the ledger fingerprints
-# (headOid + blockers) so a tick never re-submits the same breakage, and an
-# attempt cap posts a single "gave up" PR comment before going quiet.
+# Orphan-PR repair cron — owns open PRs that have NO Invoker workflow mapping
+# and are not already owned by the admin-bypass path. `pr-admin-bypass-land`
+# owns mapped/admin-bypass repairs (failed checks, conflicts, bot threads, and
+# landable stacks); this job is its counterpart for unmapped broken PRs. It
+# classifies EVERYTHING blocking an unmapped PR (merge conflict, failing
+# required checks, changes-requested review) into one combined brief and
+# submits ONE real Invoker repair task via the owner's `run` command. One task
+# per broken head-state: the ledger fingerprints (headOid + blockers) so a tick
+# never re-submits the same breakage, and an attempt cap posts a single "gave
+# up" PR comment before going quiet.
 #
 # Coordination contract:
-#   - mapped PRs      -> skipped here (existing workers own them)
-#   - unmapped broken -> owned here; coderabbit/ci crons skip them
-#   - unmapped clean  -> nobody's business
+#   - mapped/admin-bypass PRs -> skipped here; admin-bypass-land owns them
+#   - unmapped broken PRs     -> owned here
+#   - unmapped clean PRs      -> nobody's business
 #
 # Env (all optional):
 #   INVOKER_PR_ORPHAN_STATE_FILE    ledger path   (default ~/.invoker/pr-orphan-repair.tsv)

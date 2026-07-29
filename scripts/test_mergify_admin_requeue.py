@@ -1,10 +1,12 @@
 import io
 import os
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import scripts.mergify_admin_requeue as requeue
 import scripts.mergify_admin_requeue_exec as exec_impl
 

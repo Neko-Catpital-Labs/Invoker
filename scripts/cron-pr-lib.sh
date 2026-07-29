@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
-# Shared helpers for the two PR-maintenance cron jobs that run co-located with
-# the Invoker owner:
+# Shared helpers for the two surviving PR-maintenance cron jobs that run
+# co-located with the Invoker owner:
 #
-#   scripts/cron-coderabbit-address.sh  (Job 1) — address new CodeRabbit reviews
-#   scripts/cron-pr-conflict-rebase.sh  (Job 2) — rebase-recreate conflicting PRs
-#
+#   scripts/cron-pr-admin-bypass-land.sh
+#   scripts/cron-pr-orphan-repair.sh
 # Source this AFTER `set -euo pipefail`:
 #   source "$(dirname "$0")/cron-pr-lib.sh"
 #
 # Provides:
 #   Variables: REPO_ROOT, RUNNER, IPC_HELPER (from headless-lib.sh),
-#              TARGET_REPO, PR_AUTHOR, CODERABBIT_LOGIN, CRON_LOCK, DRY_RUN
+#              TARGET_REPO, PR_AUTHOR, CRON_LOCK, DRY_RUN
 #   Functions: log_line, cron_lock, ledger_init, ledger_record, ledger_count,
 #              ledger_marker_seen, ledger_max_marker, gh_json,
 #              resolve_workflow_for_pr, prune_stale_pr_workdirs
 #
 # Both jobs run their mutating operation SYNCHRONOUSLY while holding a single
-# shared lock, so only one PR cron operation runs at a time (the other exits
-# this tick and retries in 5 min). The lock prefers flock (Linux owner host)
+# shared lock, so only one PR-maintenance operation runs at a time (the other
+# exits this tick and retries in 5 min). The lock prefers flock (Linux owner host)
 # and falls back to an atomic mkdir lock where flock is absent (e.g. macOS).
 
 # headless-lib.sh: REPO_ROOT, RUNNER, IPC_HELPER, headless_query, ... It keys
@@ -31,7 +30,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/headless-lib.sh"
 
 TARGET_REPO="${INVOKER_GITHUB_TARGET_REPO:-Neko-Catpital-Labs/Invoker}"
 PR_AUTHOR="${INVOKER_PR_CRON_AUTHOR:-EdbertChan}"
-CODERABBIT_LOGIN="${INVOKER_CODERABBIT_LOGIN:-coderabbitai[bot]}"
 CRON_LOCK="${INVOKER_PR_CRON_LOCK:-${TMPDIR:-/tmp}/invoker-pr-crons.lock}"
 DRY_RUN="${INVOKER_PR_CRON_DRY_RUN:-0}"
 
@@ -182,8 +180,8 @@ resolve_workflow_for_pr() {
 
 # ---------------------------------------------------------------------------
 # Local disk guardrail: prune stale PR checkout workdirs.
-# This is only used by Job 1 (cron-coderabbit-address) today, but lives here so
-# both jobs share the same policy when/if Job 2 needs checkouts later.
+# Shared helper for whichever surviving PR-maintenance path needs a temporary
+# checkout.
 # ---------------------------------------------------------------------------
 
 PR_CRON_WORKDIR_STAMP_NAME=".invoker-pr-cron-last-used"
