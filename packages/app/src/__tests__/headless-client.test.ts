@@ -105,7 +105,6 @@ describe('headless-client', () => {
       rmSync(homeRoot, { recursive: true, force: true });
     }
   });
-
   it('falls back to direct execution for generic standalone reads when no owner exists', async () => {
     process.env.INVOKER_HEADLESS_STANDALONE = '1';
     const firstBus = new LocalBus();

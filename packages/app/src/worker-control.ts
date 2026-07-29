@@ -15,14 +15,12 @@ import type { SQLiteAdapter, TaskEvent, WorkerActionRecord } from '@invoker/data
 import {
   AUTO_FIX_WORKER_KIND,
   AUTO_APPROVE_WORKER_KIND,
-  CODERABBIT_ADDRESS_WORKER_KIND,
   DISK_HEADROOM_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   INFRA_REPAIR_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_ORPHAN_REPAIR_WORKER_KIND,
   PR_SUMMARY_REFRESH_WORKER_KIND,
-  PR_CI_FAILURE_SCAN_WORKER_KIND,
-  PR_CONFLICT_REBASE_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REQUEUE_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
@@ -42,19 +40,16 @@ export const ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS = [
   AUTO_APPROVE_WORKER_KIND,
 ] as const;
 
-/** Cron-scan PR-maintenance worker kinds, auto-started only when `prMaintenance.enabled` is true. */
+/** PR-maintenance worker kind auto-started only when `prMaintenance.enabled` is true. */
 export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
-  CODERABBIT_ADDRESS_WORKER_KIND,
-  PR_CONFLICT_REBASE_WORKER_KIND,
-  PR_CI_FAILURE_SCAN_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
 ] as const;
 
 /**
  * Compute the owner worker kinds that auto-start on boot. The PR-maintenance
- * cron kinds are gated on `prMaintenance.enabled` (matching the config
- * docstring); everything else always auto-starts. Saved per-worker desired
- * state still overrides in both directions.
+ * worker is gated on `prMaintenance.enabled` (matching the config docstring);
+ * everything else always auto-starts. Saved per-worker desired state still
+ * overrides in both directions.
  */
 export function autoStartedOwnerWorkerKinds(options: { prMaintenanceEnabled: boolean }): readonly string[] {
   return options.prMaintenanceEnabled
@@ -201,10 +196,9 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   E2E_AUTOFIX_WORKER_KIND,
   REQUEUE_WORKER_KIND,
   AUTO_APPROVE_WORKER_KIND,
-  CODERABBIT_ADDRESS_WORKER_KIND,
-  PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_ORPHAN_REPAIR_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
-  PR_CI_FAILURE_SCAN_WORKER_KIND,
 ]);
 
 export function createWorkerRuntimeController(options: {
