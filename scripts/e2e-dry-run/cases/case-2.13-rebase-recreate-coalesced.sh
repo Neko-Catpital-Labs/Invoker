@@ -25,7 +25,7 @@ STA=$(invoker_e2e_task_status e2e-g2213-taskA)
 STB=$(invoker_e2e_task_status e2e-g2213-taskB)
 if [ "$STA" != "failed" ] || [ "$STB" != "pending" ]; then
   echo "FAIL case 2.13: expected A=failed B=pending, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
@@ -33,7 +33,7 @@ WF_ID="$(invoker_e2e_run_headless query workflows --output label | grep -E '^wf-
 TASK_ID="$(invoker_e2e_run_headless query tasks --workflow "$WF_ID" --no-merge --output label | grep '/' | head -1)"
 if [ -z "${WF_ID:-}" ] || [ -z "${TASK_ID:-}" ]; then
   echo "FAIL case 2.13: could not resolve workflow/task ids"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
@@ -89,7 +89,7 @@ if [ "$DELTA" -lt 1 ]; then
     echo "--- recreate $i output ---"
     sed -n '1,40p' "$TMP_DIR/recreate-$i.out" || true
   done
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

@@ -227,7 +227,7 @@ for _ in $(seq 1 40); do
 done
 if [[ -z "$RESOLVED_ID" ]]; then
   echo "repro: task never entered running" >&2
-  invoker_e2e_run_headless status >&2 || true
+  invoker_e2e_dump_tasks >&2
   exit 1
 fi
 echo "stage: task running as $RESOLVED_ID"

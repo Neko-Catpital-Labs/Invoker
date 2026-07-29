@@ -21,7 +21,7 @@ STA=$(invoker_e2e_task_status e2e-g2212-taskA)
 STB=$(invoker_e2e_task_status e2e-g2212-taskB)
 if [ "$STA" != "awaiting_approval" ] || [ "$STB" != "pending" ]; then
   echo "FAIL case 2.12: expected A=awaiting_approval B=pending, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 2.12: confirmed A=awaiting_approval, B=pending"
@@ -33,7 +33,7 @@ STA=$(invoker_e2e_task_status e2e-g2212-taskA)
 STB=$(invoker_e2e_task_status e2e-g2212-taskB)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ]; then
   echo "FAIL case 2.12: expected A=completed B=completed, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

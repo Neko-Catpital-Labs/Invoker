@@ -37,7 +37,7 @@ invoker_e2e_run_headless fix e2e-g441-taskA
 STA=$(invoker_e2e_task_status e2e-g441-taskA)
 if [ "$STA" != "awaiting_approval" ]; then
   echo "FAIL case 4.1: expected A=awaiting_approval after fix, got '$STA'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 4.1: confirmed A=awaiting_approval"
@@ -49,7 +49,7 @@ STA=$(invoker_e2e_task_status e2e-g441-taskA)
 STB=$(invoker_e2e_task_status e2e-g441-taskB)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ]; then
   echo "FAIL case 4.1: expected A=completed B=completed, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

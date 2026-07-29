@@ -94,7 +94,7 @@ KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
 FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
 if [ "$KEEP_ST" != "completed" ] || [ "$FAIL_ST" != "failed" ]; then
   echo "FAIL case 2.16: expected seed states completed+failed, got keep=$KEEP_ST fail=$FAIL_ST"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
@@ -125,7 +125,7 @@ esac
 
 if [ "$retry_fail_left_failed" -ne 1 ]; then
   echo "FAIL case 2.16: retry did not move failed task out of failed within 5s"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
@@ -195,7 +195,7 @@ fi
 
 if [ "$recreate_snapshot_has_reset_state" -ne 1 ]; then
   echo "FAIL case 2.16: recreate did not show pending or queued state in first 5s snapshots"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

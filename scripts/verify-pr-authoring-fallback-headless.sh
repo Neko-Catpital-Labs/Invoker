@@ -42,7 +42,7 @@ STA=$(invoker_e2e_task_status verify-pr-fallback-taskA)
 STB=$(invoker_e2e_task_status verify-pr-fallback-taskB)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ]; then
   echo "FAIL: expected taskA=completed taskB=completed, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "PASS: both command tasks completed (A=$STA, B=$STB)"
@@ -52,7 +52,7 @@ echo "PASS: both command tasks completed (A=$STA, B=$STB)"
 MERGE_ID=$(invoker_e2e_merge_gate_id)
 if [ -z "$MERGE_ID" ]; then
   echo "FAIL: could not find merge gate task ID"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> merge gate ID=$MERGE_ID"
@@ -60,7 +60,7 @@ echo "==> merge gate ID=$MERGE_ID"
 STM=$(invoker_e2e_task_status "$MERGE_ID")
 if [ "$STM" != "awaiting_approval" ] && [ "$STM" != "review_ready" ]; then
   echo "FAIL: expected merge gate=awaiting_approval|review_ready, got '$STM'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "PASS: merge gate status=$STM"
