@@ -811,7 +811,7 @@ export async function resolveAgentSession(
 }
 
 export async function headlessSession(taskId: string | undefined, deps: Pick<HeadlessDeps, 'orchestrator' | 'persistence' | 'executionAgentRegistry' | 'invokerConfig'>): Promise<void> {
-  if (!taskId) throw new Error('Usage: --headless session <taskId>');
+  if (!taskId) throw new Error('Usage: --headless query session <taskId>');
   taskId = restoreWorkflowForTask(taskId, deps).resolvedTaskId;
   const task = deps.orchestrator.getTask(taskId);
   if (!task) throw new Error(`Task "${taskId}" not found`);
