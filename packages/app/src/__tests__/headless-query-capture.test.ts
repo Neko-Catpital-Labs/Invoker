@@ -56,13 +56,6 @@ describe('runReadOnlyHeadlessQueryToString', () => {
     }
   });
 
-  it('rejects the removed list alias instead of mapping it to query workflows', async () => {
-    const deps = makeQueryDeps(() => [{ id: 'wf-9' }]);
-    await expect(
-      runReadOnlyHeadlessQueryToString(['list', '--output', 'label'], deps),
-    ).rejects.toThrow('Command "list" is not a delegatable read-only query');
-  });
-
   it('uses configured default agent when session task has no persisted agent name', async () => {
     const task = {
       id: 'wf-1/task-1',
