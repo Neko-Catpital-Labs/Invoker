@@ -116,6 +116,7 @@ export interface TaskExecution {
   readonly launchStartedAt?: Date;
   readonly launchCompletedAt?: Date;
   readonly actionRequestId?: string;
+  readonly selectedAttemptId?: string;
   readonly branch?: string;
   readonly commit?: string;
   readonly agentSessionId?: string;
@@ -134,6 +135,10 @@ export interface TaskExecution {
   readonly reviewId?: string;
   readonly reviewStatus?: string;
   readonly reviewProviderId?: string;
+  readonly crashPreservedAt?: Date;
+  readonly crashPreservedOwnerPid?: number;
+  readonly crashPreservedReportPath?: string;
+  readonly crashPreservedDiagnosticSummary?: string;
   readonly mergeConflict?: {
     readonly failedBranch: string;
     readonly conflictFiles: readonly string[];

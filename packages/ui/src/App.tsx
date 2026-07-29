@@ -53,6 +53,7 @@ import { ChevronDownIcon, PlayIcon } from './components/icons/index.js';
 import { CommandPalette, COMMAND_PALETTE_MAX_ROWS } from './components/CommandPalette.js';
 import {
   getAttentionTaskEntries,
+  getLiveQueueCounts,
   getRunningTaskEntries,
   getSortedWorkflows,
   formatTaskStatus,
@@ -991,6 +992,16 @@ export function App() {
   );
   const invoker = useInvoker();
   const queueStatus = useQueueStatus();
+  const liveQueueCounts = useMemo(() => getLiveQueueCounts(tasks), [tasks]);
+  const queueChrome = useMemo(() => (
+    queueStatus
+      ? {
+          maxConcurrency: queueStatus.maxConcurrency,
+          queuedCount: queueStatus.queued.length,
+          ...liveQueueCounts,
+        }
+      : null
+  ), [liveQueueCounts, queueStatus]);
   const [workerStatus, refreshWorkerStatus] = useWorkerStatus();
   const handleStartWorker = useCallback(async (kind: string) => {
     await invoker.startWorker(kind);
@@ -4744,7 +4755,7 @@ export function App() {
           activeFilters={statusFilters}
           keyboardActiveKey={keyboardRegion === 'bottomBar' ? visibleStatusKeys[bottomStatusIndex] ?? null : null}
           onStatusClick={handleStatusClick}
-          queueStatus={queueStatus}
+          queueChrome={queueChrome}
           onOpenRunningSurface={() => selectViewMode('queue')}
         />
       )}

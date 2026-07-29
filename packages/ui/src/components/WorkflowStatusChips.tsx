@@ -1,13 +1,21 @@
 import type { MouseEvent } from 'react';
-import type { QueueStatus, WorkflowMeta, WorkflowStatus } from '../types.js';
+import type { WorkflowMeta, WorkflowStatus } from '../types.js';
 import { workflowStatusVisual } from '../lib/workflow-status.js';
+
+interface WorkflowStatusChipsQueueChrome {
+  readonly maxConcurrency: number;
+  readonly runningCount: number;
+  readonly activeExecutionCount: number;
+  readonly launchingCount: number;
+  readonly queuedCount: number;
+}
 
 interface WorkflowStatusChipsProps {
   workflows: Map<string, WorkflowMeta>;
   activeFilters: Set<WorkflowStatus>;
   onStatusClick: (status: WorkflowStatus, event: MouseEvent<HTMLButtonElement>) => void;
   keyboardActiveKey?: WorkflowStatus | null;
-  queueStatus?: QueueStatus | null;
+  queueChrome?: WorkflowStatusChipsQueueChrome | null;
   onOpenRunningSurface?: () => void;
 }
 
@@ -29,7 +37,7 @@ export function WorkflowStatusChips({
   activeFilters,
   onStatusClick,
   keyboardActiveKey = null,
-  queueStatus = null,
+  queueChrome = null,
   onOpenRunningSurface,
 }: WorkflowStatusChipsProps): JSX.Element {
   const counts = new Map<WorkflowStatus, number>();
@@ -39,16 +47,16 @@ export function WorkflowStatusChips({
   }
 
   const hasFilters = activeFilters.size > 0;
-  const queueSlots = queueStatus?.runningCount ?? 0;
-  const queueExecuting = queueStatus?.activeExecutionCount ?? queueSlots;
-  const queueLaunching = queueStatus?.launchingCount
+  const queueSlots = queueChrome?.runningCount ?? 0;
+  const queueExecuting = queueChrome?.activeExecutionCount ?? queueSlots;
+  const queueLaunching = queueChrome?.launchingCount
     ?? Math.max(0, queueSlots - queueExecuting);
-  const queueMax = queueStatus?.maxConcurrency ?? 0;
-  const queueQueued = queueStatus?.queued.length ?? 0;
+  const queueMax = queueChrome?.maxConcurrency ?? 0;
+  const queueQueued = queueChrome?.queuedCount ?? 0;
 
   return (
     <div data-testid="workflow-status-chips" className="flex items-center gap-6 px-4 py-2 bg-secondary border-t border-border text-sm">
-      {queueStatus && (
+      {queueChrome && (
         <div data-testid="queue-capacity-chips" className="flex items-center gap-3 border-r border-border pr-6">
           <button
             type="button"

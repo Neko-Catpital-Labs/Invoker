@@ -1,8 +1,10 @@
+import { useMemo } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import { WorkflowStatusChips } from '../components/WorkflowStatusChips.js';
 import { useQueueStatus } from '../hooks/useQueueStatus.js';
 import { useTasks } from '../hooks/useTasks.js';
+import { getLiveQueueCounts } from '../lib/workflow-progress-surfaces.js';
 import type { QueueStatus, WorkflowMeta } from '../types.js';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 
@@ -21,20 +23,30 @@ async function flushTaskAndWorkflowEvents(): Promise<void> {
 }
 
 function QueueStatusProbe(): JSX.Element {
-  const { workflows } = useTasks();
+  const { tasks, workflows } = useTasks();
   const queueStatus = useQueueStatus();
+  const liveQueueCounts = useMemo(() => getLiveQueueCounts(tasks), [tasks]);
+  const queueChrome = useMemo(() => (
+    queueStatus
+      ? {
+          maxConcurrency: queueStatus.maxConcurrency,
+          queuedCount: queueStatus.queued.length,
+          ...liveQueueCounts,
+        }
+      : null
+  ), [liveQueueCounts, queueStatus]);
 
   return (
     <WorkflowStatusChips
       workflows={workflows}
       activeFilters={new Set()}
       onStatusClick={() => {}}
-      queueStatus={queueStatus}
+      queueChrome={queueChrome}
     />
   );
 }
 
-describe('queue status can lag behind live workflow/task updates', () => {
+describe('queue chips stay live even when queue status polling lags', () => {
   let mock: MockInvoker;
   let visibility: DocumentVisibilityState;
   let queueStatus: QueueStatus;
@@ -79,7 +91,7 @@ describe('queue status can lag behind live workflow/task updates', () => {
     vi.useRealTimers();
   });
 
-  it('shows a running workflow while the queue chips still read 0/13 until the next queue poll', async () => {
+  it('keeps next-poll lag from freezing executing and slot counts', async () => {
     render(<QueueStatusProbe />);
     await flushInitialQueuePoll();
 
@@ -116,14 +128,14 @@ describe('queue status can lag behind live workflow/task updates', () => {
     await flushTaskAndWorkflowEvents();
 
     expect(screen.getByTestId('workflow-status-pill-running')).toHaveTextContent('workflows running (1)');
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
-    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
+    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(4_899);
     });
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
-    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
+    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
@@ -132,7 +144,7 @@ describe('queue status can lag behind live workflow/task updates', () => {
     expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
   });
 
-  it('stays stale while a queue poll is in flight, because later ticks are skipped', async () => {
+  it('keeps in-flight poll blocking from freezing executing and slot counts', async () => {
     const slowPoll = Promise.withResolvers<QueueStatus>();
     let pollCount = 0;
     mock.api.getQueueStatus = vi.fn(async () => {
@@ -196,24 +208,24 @@ describe('queue status can lag behind live workflow/task updates', () => {
     await flushTaskAndWorkflowEvents();
 
     expect(screen.getByTestId('workflow-status-pill-running')).toHaveTextContent('workflows running (1)');
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(4_899);
     });
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
       await Promise.resolve();
     });
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000);
     });
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
-    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
+    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
 
     await act(async () => {
       slowPoll.resolve({
@@ -230,7 +242,7 @@ describe('queue status can lag behind live workflow/task updates', () => {
     expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
   });
 
-  it('keeps the old queue numbers after a poll error until a later poll succeeds', async () => {
+  it('keeps poll error persistence from freezing executing and slot counts', async () => {
     let pollCount = 0;
     mock.api.getQueueStatus = vi.fn(async () => {
       pollCount += 1;
@@ -293,19 +305,19 @@ describe('queue status can lag behind live workflow/task updates', () => {
     await flushTaskAndWorkflowEvents();
 
     expect(screen.getByTestId('workflow-status-pill-running')).toHaveTextContent('workflows running (1)');
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(4_899);
     });
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
       await Promise.resolve();
     });
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
-    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
+    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
@@ -315,7 +327,7 @@ describe('queue status can lag behind live workflow/task updates', () => {
     expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
   });
 
-  it('stays stale while the window is hidden, then catches up on visibility restore', async () => {
+  it('keeps hidden-window pause from freezing executing and slot counts', async () => {
     render(<QueueStatusProbe />);
     await flushInitialQueuePoll();
 
@@ -357,20 +369,22 @@ describe('queue status can lag behind live workflow/task updates', () => {
     await flushTaskAndWorkflowEvents();
 
     expect(screen.getByTestId('workflow-status-pill-running')).toHaveTextContent('workflows running (1)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
+    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
-    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
+    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
 
     await act(async () => {
       visibility = 'visible';
       document.dispatchEvent(new Event('visibilitychange'));
       await vi.advanceTimersByTimeAsync(249);
     });
-    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (0/13)');
-    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (0/13)');
+    expect(screen.getByTestId('queue-chip-running')).toHaveTextContent('Executing (1/13)');
+    expect(screen.getByTestId('queue-chip-slots')).toHaveTextContent('Slots (1/13)');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
