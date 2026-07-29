@@ -730,6 +730,39 @@ describe('LaunchDispatcher', () => {
       expect(dispatch?.taskId).toBe(task?.id);
     });
 
+    it('can dispatch existing launch rows while ready-task top-up is disabled', () => {
+      const task = seedWorkflowAndTask('wf-a/t-no-topup', 'wf-a', {
+        selectedAttemptId: 'attempt-no-topup',
+        generation: 0,
+      });
+      const enqueued = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-no-topup',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      const executeTask = vi.fn().mockResolvedValue(undefined);
+      const startExecution = vi.fn(() => []);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-no-topup',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: () => task as any,
+          startExecution,
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+        topUpReadyLaunchesEnabled: () => false,
+      });
+
+      dispatcher.poll();
+
+      expect(startExecution).not.toHaveBeenCalled();
+      expect(executeTask).toHaveBeenCalledTimes(1);
+      expect(executeTask.mock.calls[0]?.[0].id).toBe(task.id);
+      expect(adapter.loadLaunchDispatchById(enqueued.id)?.state).toBe('leased');
+    });
+
     it('abandons a dispatch row when the selected attempt changed after lease', () => {
       const task = seedWorkflowAndTask('wf-a/t-stale', 'wf-a', {
         selectedAttemptId: 'attempt-old',

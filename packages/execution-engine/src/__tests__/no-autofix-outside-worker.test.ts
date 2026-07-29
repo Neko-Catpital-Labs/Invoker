@@ -11,6 +11,10 @@ import { createWorkerRegistry } from '../worker-registry.js';
 const SOURCE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BUILTIN_WORKERS_SOURCE = 'builtin-workers.ts';
 const RECOVERY_ACTION_TRIGGER_PATTERN = /\bsubmitter\.submit\s*\(/g;
+const SANCTIONED_RECOVERY_HELPER_SOURCE_FILES = new Set([
+  'repair-workflow-spec.ts',
+  'review-gate-ci-repair.ts',
+]);
 
 type SourceFiles = ReadonlyMap<string, string>;
 
@@ -143,6 +147,9 @@ function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<strin
         queue.push(importedPath);
       }
     }
+  }
+  for (const file of SANCTIONED_RECOVERY_HELPER_SOURCE_FILES) {
+    if (sourceFiles.has(file)) allowedFiles.add(file);
   }
 
   return allowedFiles;
