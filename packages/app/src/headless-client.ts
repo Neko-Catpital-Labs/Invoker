@@ -51,7 +51,6 @@ import {
 import { printHeadlessUsage } from './headless-usage.js';
 
 const RED = '\x1b[31m';
-const RESET = '\x1b[0m';
 const repoRoot = resolveRepoRoot(__dirname);
 
 function delegationClientLog(message: string): void {
