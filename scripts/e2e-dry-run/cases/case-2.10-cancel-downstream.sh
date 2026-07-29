@@ -38,7 +38,7 @@ echo "==> case 2.10: wait for task A to reach failed after cancel"
 if ! invoker_e2e_wait_task_status e2e-g2210-taskA failed 180; then
   STA=$(invoker_e2e_task_status e2e-g2210-taskA 2>/dev/null || true)
   echo "FAIL case 2.10: expected A=failed, got A='$STA'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
@@ -47,7 +47,7 @@ STB=$(invoker_e2e_task_status e2e-g2210-taskB)
 # 'blocked' (#3473). 'pending' is valid if the cascade hasn't reached it yet.
 if [ "$STB" != "blocked" ] && [ "$STB" != "pending" ]; then
   echo "FAIL case 2.10: expected B=blocked|pending, got B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

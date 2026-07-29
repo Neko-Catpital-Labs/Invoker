@@ -277,6 +277,95 @@ invoker_e2e_ensure_workspace_dependencies() {
   )
 }
 
+invoker_e2e_lock_mtime_epoch() {
+  local path="$1"
+  stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null || printf '0'
+}
+
+invoker_e2e_build_lock_pid() {
+  local owner_file="$1/owner"
+  if [ -r "$owner_file" ]; then
+    sed -n 's/^pid=//p' "$owner_file" 2>/dev/null | head -1
+  fi
+}
+
+invoker_e2e_describe_build_lock() {
+  local lock_dir="$1"
+  if [ -r "$lock_dir/owner" ]; then
+    sed 's/^/  /' "$lock_dir/owner" >&2
+  elif [ -d "$lock_dir" ]; then
+    ls -ld "$lock_dir" >&2 || true
+  else
+    echo "  <lock no longer exists>" >&2
+  fi
+}
+
+invoker_e2e_write_build_lock_owner() {
+  local lock_dir="$1"
+  {
+    printf 'pid=%s\n' "${BASHPID:-$$}"
+    printf 'host=%s\n' "$(hostname 2>/dev/null || printf unknown)"
+    printf 'started_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf 'repo=%s\n' "$INVOKER_E2E_REPO_ROOT"
+  } > "$lock_dir/owner"
+}
+
+invoker_e2e_try_acquire_build_lock() {
+  local lock_dir="$1"
+  if mkdir "$lock_dir" 2>/dev/null; then
+    invoker_e2e_write_build_lock_owner "$lock_dir"
+    return 0
+  fi
+  return 1
+}
+
+invoker_e2e_release_build_lock() {
+  local lock_dir="$1"
+  local owner_pid=""
+  owner_pid="$(invoker_e2e_build_lock_pid "$lock_dir")"
+  if [ -n "$owner_pid" ] && [ "$owner_pid" != "${BASHPID:-$$}" ]; then
+    echo "WARN: not removing shared app/ui build lock owned by pid=$owner_pid" >&2
+    return 0
+  fi
+  rm -f "$lock_dir/owner" 2>/dev/null || true
+  rmdir "$lock_dir" 2>/dev/null || true
+}
+
+invoker_e2e_reclaim_stale_build_lock() {
+  local lock_dir="$1"
+  local stale_after_secs="$2"
+  local owner_pid=""
+  local mtime_epoch=0
+  local now_epoch=0
+  local age_secs=0
+  local reason=""
+
+  [ -d "$lock_dir" ] || return 1
+  [ "$(basename "$lock_dir")" = "invoker-e2e-build.lock" ] || return 1
+
+  owner_pid="$(invoker_e2e_build_lock_pid "$lock_dir")"
+  if [ -n "$owner_pid" ] && ! kill -0 "$owner_pid" 2>/dev/null; then
+    reason="owner pid $owner_pid is no longer running"
+  fi
+
+  if [ -z "$reason" ]; then
+    mtime_epoch="$(invoker_e2e_lock_mtime_epoch "$lock_dir")"
+    now_epoch="$(date +%s)"
+    if [ "$mtime_epoch" -gt 0 ] 2>/dev/null; then
+      age_secs=$((now_epoch - mtime_epoch))
+      if [ "$age_secs" -ge "$stale_after_secs" ]; then
+        reason="lock age ${age_secs}s exceeded ${stale_after_secs}s"
+      fi
+    fi
+  fi
+
+  [ -n "$reason" ] || return 1
+  echo "WARN: reclaiming stale shared app/ui build lock: $reason" >&2
+  invoker_e2e_describe_build_lock "$lock_dir"
+  rm -f "$lock_dir/owner" 2>/dev/null || true
+  rmdir "$lock_dir" 2>/dev/null
+}
+
 invoker_e2e_ensure_app_built() {
   # Containerized CI steps can lose checkout's temporary safe.directory config
   # before this helper runs, so re-establish it before the first git call.
@@ -284,13 +373,15 @@ invoker_e2e_ensure_app_built() {
   local git_dir
   git_dir="$(git -C "$INVOKER_E2E_REPO_ROOT" rev-parse --git-dir)"
   local build_lock_dir="$git_dir/invoker-e2e-build.lock"
+  local build_lock_stale_secs="${INVOKER_E2E_BUILD_LOCK_STALE_SECS:-600}"
   local wait_secs=0
+  local acquired_build_lock=0
   if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && invoker_e2e_workspace_dependencies_are_ready && invoker_e2e_app_ui_build_is_fresh; then
     echo "==> e2e: reusing existing app/ui build artifacts"
     return 0
   fi
-  if mkdir "$build_lock_dir" 2>/dev/null; then
-    trap 'rmdir "$build_lock_dir" 2>/dev/null || true' RETURN
+  if invoker_e2e_try_acquire_build_lock "$build_lock_dir"; then
+    acquired_build_lock=1
   else
     echo "==> e2e: waiting for shared app/ui build lock"
     while [ -d "$build_lock_dir" ]; do
@@ -298,23 +389,31 @@ invoker_e2e_ensure_app_built() {
         echo "==> e2e: shared build completed by another shard"
         return 0
       fi
+      if invoker_e2e_reclaim_stale_build_lock "$build_lock_dir" "$build_lock_stale_secs"; then
+        if invoker_e2e_try_acquire_build_lock "$build_lock_dir"; then
+          acquired_build_lock=1
+          break
+        fi
+      fi
       sleep 1
       wait_secs=$((wait_secs + 1))
       if [ "$wait_secs" -ge 300 ]; then
         echo "ERROR: timed out waiting for shared app/ui build lock" >&2
+        invoker_e2e_describe_build_lock "$build_lock_dir"
         return 1
       fi
     done
-    if [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && invoker_e2e_workspace_dependencies_are_ready && invoker_e2e_app_ui_build_is_fresh; then
+    if [ "$acquired_build_lock" != "1" ] && [ "${INVOKER_E2E_FORCE_BUILD:-0}" != "1" ] && invoker_e2e_workspace_dependencies_are_ready && invoker_e2e_app_ui_build_is_fresh; then
       echo "==> e2e: shared build completed by another shard"
       return 0
     fi
-    if ! mkdir "$build_lock_dir" 2>/dev/null; then
+    if [ "$acquired_build_lock" != "1" ] && ! invoker_e2e_try_acquire_build_lock "$build_lock_dir"; then
       echo "ERROR: unable to acquire shared app/ui build lock" >&2
+      invoker_e2e_describe_build_lock "$build_lock_dir"
       return 1
     fi
-    trap 'rmdir "$build_lock_dir" 2>/dev/null || true' RETURN
   fi
+  trap 'invoker_e2e_release_build_lock "$build_lock_dir"' RETURN
   invoker_e2e_ensure_workspace_dependencies
   echo "==> e2e: building @invoker/ui and @invoker/app"
   (
@@ -494,6 +593,10 @@ invoker_e2e_task_status() {
     | tail -1
 }
 
+invoker_e2e_dump_tasks() {
+  invoker_e2e_run_headless query tasks --output label 2>&1 || true
+}
+
 # Poll until task status equals expected (1s interval). Use after cancel/restart
 # where a fixed sleep is flaky under load or without GNU timeout(1) on macOS.
 # Usage: invoker_e2e_wait_task_status <taskId> <expectedStatus> [maxSeconds]
@@ -635,7 +738,7 @@ invoker_e2e_assert_no_stale_running_tasks() {
   if [ -n "$stale" ]; then
     echo "FAIL: found stale running task(s) older than ${threshold_secs}s" >&2
     echo "$stale" >&2
-    invoker_e2e_run_headless status 2>&1 || true
+    invoker_e2e_dump_tasks
     return 1
   fi
 }

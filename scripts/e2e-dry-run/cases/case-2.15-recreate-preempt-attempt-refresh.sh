@@ -31,7 +31,7 @@ invoker_e2e_submit_plan_no_track_capture "$PLAN_PATH" "$SUBMIT_LOG"
 WF_ID="$(invoker_e2e_extract_workflow_id_from_log "$SUBMIT_LOG")"
 if [ -z "$WF_ID" ]; then
   echo "FAIL case 2.15: could not resolve workflow id"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
@@ -60,7 +60,7 @@ done
 
 if [ "$IN_FLIGHT" != "yes" ]; then
   echo "FAIL case 2.15: task did not become in-flight before recreate"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
@@ -98,7 +98,7 @@ fi
 
 if [ "$STATUS_AFTER" != "running" ] && [ "$STATUS_AFTER" != "pending" ] && [ "$STATUS_AFTER" != "queued" ] && [ "$STATUS_AFTER" != "completed" ]; then
   echo "FAIL case 2.15: expected task to be queued|pending|running after recreate, got '$STATUS_AFTER'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
