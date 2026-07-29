@@ -1266,6 +1266,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     loadGeneratedPlan: loadGeneratedPlanPreview,
     conversationRepo: planningConversationRepo,
     planningSessionStore: ownerMode ? persistence : undefined,
+    logger,
     onRawPlannerOutput: emitPlanningChatStream,
   });
   let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
@@ -1302,6 +1303,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      logger,
       onRawPlannerOutput: emitPlanningChatStream,
     });
   });
@@ -1330,6 +1332,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       loadGeneratedPlan: loadGeneratedPlanPreview,
       conversationRepo: planningConversationRepo,
       planningSessionStore: ownerMode ? persistence : undefined,
+      logger,
       plannerReplyOverride,
       onRawPlannerOutput: emitPlanningChatStream,
     });
