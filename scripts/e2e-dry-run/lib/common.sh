@@ -488,7 +488,7 @@ PY
 # Usage: ST=$(invoker_e2e_task_status <taskId>)
 invoker_e2e_task_status() {
   local task_id="$1"
-  invoker_e2e_run_headless task-status "$task_id" 2>/dev/null \
+  invoker_e2e_run_headless query task "$task_id" 2>/dev/null \
     | sed 's/\x1b\[[0-9;]*m//g' \
     | grep -E '^(pending|running|completed|failed|blocked|awaiting_approval|review_ready|fixing_with_ai|closed|skipped)$' \
     | tail -1
@@ -518,7 +518,7 @@ invoker_e2e_wait_task_status() {
 # Extract the __merge__<workflowId> task ID from headless status output.
 # The merge gate task ID starts with "__merge__". Returns the first match.
 invoker_e2e_merge_gate_id() {
-  invoker_e2e_run_headless status 2>/dev/null \
+  invoker_e2e_run_headless query tasks --output label 2>/dev/null \
     | grep -oE '__merge__[^[:space:]]+' \
     | head -1 \
     | sed 's/\x1b\[[0-9;]*m//g'

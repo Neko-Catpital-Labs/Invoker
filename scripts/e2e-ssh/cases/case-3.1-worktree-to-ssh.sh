@@ -21,7 +21,7 @@ STA=$(invoker_e2e_task_status e2e-g331-taskA)
 STB=$(invoker_e2e_task_status e2e-g331-taskB)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ]; then
   echo "FAIL case 3.1: expected A=completed B=completed, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_run_headless query tasks 2>&1 || true
   exit 1
 fi
 
