@@ -21,8 +21,8 @@ must_appear_before() {
   local hint="$3"
   local first_line
   local second_line
-  first_line="$(rg -nF -- "$first" "$SKILL_MD" | awk -F: 'NR == 1 { print $1 }')"
-  second_line="$(rg -nF -- "$second" "$SKILL_MD" | awk -F: 'NR == 1 { print $1 }')"
+  first_line="$(grep -nF -- "$first" "$SKILL_MD" | awk -F: 'NR == 1 { print $1 }')"
+  second_line="$(grep -nF -- "$second" "$SKILL_MD" | awk -F: 'NR == 1 { print $1 }')"
   [[ -n "$first_line" && -n "$second_line" && "$first_line" -lt "$second_line" ]] || fail "$hint"
 }
 
