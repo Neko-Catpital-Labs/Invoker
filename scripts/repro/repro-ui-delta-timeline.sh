@@ -282,14 +282,15 @@ copy_trace_artifacts() {
 
 compare_timelines() {
   local workflow_id="$1"
-  python3 - "$workflow_id" "$BACKEND_RAW" "$RENDERER_RAW" "$COMPARISON_JSON" <<'PY'
+  python3 - "$workflow_id" "$BACKEND_RAW" "$RENDERER_RAW" "$WORKFLOW_STATUS_JSON" "$COMPARISON_JSON" <<'PY'
 import copy
 import json
 import pathlib
 import sys
 
-workflow_id, backend_path, renderer_path, comparison_path = sys.argv[1:5]
+workflow_id, backend_path, renderer_path, workflow_status_path, comparison_path = sys.argv[1:6]
 merge_id = f"__merge__{workflow_id}"
+hello_suffix = "/hello-world"
 
 def belongs(delta):
     if not isinstance(delta, dict):
@@ -302,12 +303,65 @@ def belongs(delta):
     task_id = str(delta.get("taskId") or "")
     return task_id == merge_id or task_id.startswith(f"{workflow_id}/")
 
+def task_id_for(delta):
+    if not isinstance(delta, dict):
+        return None
+    if delta.get("type") == "created":
+        task = delta.get("task") or {}
+        task_id = task.get("id")
+        return str(task_id) if task_id else None
+    task_id = delta.get("taskId")
+    return str(task_id) if task_id else None
+
+def is_hello_task_id(task_id):
+    return task_id == "hello-world" or str(task_id or "").endswith(hello_suffix)
+
+def nested_get(value, *keys):
+    current = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
 def scrub(value):
     if isinstance(value, dict):
         return {k: scrub(v) for k, v in value.items() if k != "streamSequence"}
     if isinstance(value, list):
         return [scrub(v) for v in value]
     return value
+
+def summarize_delta(delta):
+    task_id = task_id_for(delta)
+    if not isinstance(delta, dict):
+        return None
+    if delta.get("type") == "created":
+        task = delta.get("task") or {}
+        status = task.get("status")
+        phase = nested_get(task, "execution", "phase")
+        version = task.get("taskStateVersion")
+    elif delta.get("type") == "updated":
+        changes = delta.get("changes") or {}
+        status = changes.get("status")
+        phase = nested_get(changes, "execution", "phase")
+        version = delta.get("taskStateVersion")
+    elif delta.get("type") == "removed":
+        status = "removed"
+        phase = None
+        version = None
+    else:
+        status = None
+        phase = None
+        version = None
+    return {
+        "type": delta.get("type"),
+        "taskId": task_id,
+        "status": status,
+        "phase": phase,
+        "taskStateVersion": version,
+        "previousTaskStateVersion": delta.get("previousTaskStateVersion"),
+        "streamSequence": delta.get("streamSequence"),
+    }
 
 def load_backend(path):
     marker = "delta\u2192ui:"
@@ -329,6 +383,7 @@ def load_backend(path):
                 "line": line_no,
                 "time": row.get("time"),
                 "delta": delta,
+                "summary": summarize_delta(delta),
                 "canonical": scrub(copy.deepcopy(delta)),
             })
     return records
@@ -349,9 +404,162 @@ def load_renderer(path):
                 "line": line_no,
                 "time": row.get("time"),
                 "delta": delta,
+                "workflowRollups": event.get("workflowRollups") or [],
+                "summary": summarize_delta(delta),
                 "canonical": scrub(copy.deepcopy(delta)),
             })
     return records
+
+def merge_task(previous, delta):
+    if delta.get("type") == "created":
+        task = copy.deepcopy(delta.get("task") or {})
+        task_id = task.get("id")
+        return str(task_id) if task_id else None, task
+    task_id = task_id_for(delta)
+    if not task_id:
+        return None, None
+    if delta.get("type") == "removed":
+        return task_id, None
+    previous_task = copy.deepcopy(previous.get(task_id) or {"id": task_id, "config": {}, "execution": {}})
+    changes = copy.deepcopy(delta.get("changes") or {})
+    config_changes = changes.pop("config", None)
+    execution_changes = changes.pop("execution", None)
+    previous_task.update(changes)
+    if config_changes is not None:
+        previous_task["config"] = {**(previous_task.get("config") or {}), **config_changes}
+    if execution_changes is not None:
+        previous_task["execution"] = {**(previous_task.get("execution") or {}), **execution_changes}
+    if "taskStateVersion" in delta:
+        previous_task["taskStateVersion"] = delta.get("taskStateVersion")
+    return task_id, previous_task
+
+def final_task_state(records):
+    tasks = {}
+    last_seen = {}
+    for record in records:
+        task_id, task = merge_task(tasks, record["delta"])
+        if not task_id:
+            continue
+        last_seen[task_id] = record["summary"]
+        if task is None:
+            tasks.pop(task_id, None)
+        else:
+            tasks[task_id] = task
+    return tasks, last_seen
+
+def summarize_task(task, last_seen):
+    return {
+        "status": task.get("status"),
+        "phase": nested_get(task, "execution", "phase"),
+        "taskStateVersion": task.get("taskStateVersion"),
+        "generation": nested_get(task, "execution", "generation"),
+        "workflowId": nested_get(task, "config", "workflowId"),
+        "lastStreamSequence": (last_seen or {}).get("streamSequence"),
+    }
+
+def summarize_tasks(tasks, last_seen):
+    return {
+        task_id: summarize_task(task, last_seen.get(task_id))
+        for task_id, task in sorted(tasks.items())
+    }
+
+def comparable_tasks(summary):
+    return {
+        task_id: {key: value for key, value in task.items() if key != "lastStreamSequence"}
+        for task_id, task in summary.items()
+    }
+
+def infer_workflow(tasks):
+    statuses = [task.get("status") for task in tasks.values()]
+    if not statuses:
+        status = "empty"
+    elif any(status in {"failed", "blocked"} for status in statuses):
+        status = "failed"
+    elif any(status in {"running", "fixing_with_ai"} for status in statuses):
+        status = "running"
+    elif any(status in {"pending", "queued"} for status in statuses):
+        status = "pending"
+    elif all(status in {"completed", "review_ready", "skipped"} for status in statuses):
+        status = "completed"
+    else:
+        status = "unknown"
+    counts = {}
+    for status_value in statuses:
+        counts[status_value or "unknown"] = counts.get(status_value or "unknown", 0) + 1
+    return {"status": status, "countsByStatus": counts, "taskCount": len(statuses)}
+
+def load_backend_workflow(path):
+    text = pathlib.Path(path).read_text(errors="ignore")
+    start = text.find("[")
+    if start < 0:
+        return None
+    workflows = json.loads(text[start:])
+    workflow = next((item for item in workflows if item.get("id") == workflow_id), None)
+    if not workflow:
+        return None
+    return {
+        "source": "headless query workflows",
+        "id": workflow.get("id"),
+        "status": workflow.get("status"),
+        "generation": workflow.get("generation"),
+        "updatedAt": workflow.get("updatedAt"),
+    }
+
+def renderer_workflow_rollup(records):
+    latest = None
+    for record in records:
+        for patch in record.get("workflowRollups") or []:
+            if patch.get("workflowId") == workflow_id:
+                latest = patch
+    if latest is None:
+        return None
+    rollup = latest.get("rollup") or {}
+    return {
+        "source": "renderer workflowRollups",
+        "id": workflow_id,
+        "status": latest.get("status"),
+        "removed": latest.get("removed") is True,
+        "countsByStatus": rollup.get("countsByStatus"),
+    }
+
+def comparable_workflow(state):
+    return {
+        "status": state.get("status") if isinstance(state, dict) else None,
+        "removed": bool(state.get("removed") is True) if isinstance(state, dict) else False,
+    }
+
+def delta_has_status(record, status):
+    summary = record.get("summary") or {}
+    task_id = summary.get("taskId")
+    return is_hello_task_id(task_id) and summary.get("status") == status
+
+def removed_hello_ids(records):
+    return {
+        (record.get("summary") or {}).get("taskId")
+        for record in records
+        if (record.get("summary") or {}).get("type") == "removed"
+        and is_hello_task_id((record.get("summary") or {}).get("taskId"))
+    }
+
+def compact_record(record):
+    if record is None:
+        return None
+    return {
+        "line": record.get("line"),
+        "time": record.get("time"),
+        **(record.get("summary") or {}),
+    }
+
+def compare_compact(left, right):
+    if left is None and right is None:
+        return None
+    if left is None:
+        return "renderer has extra event"
+    if right is None:
+        return "backend has extra event"
+    fields = ["type", "taskId", "status", "phase", "taskStateVersion", "previousTaskStateVersion"]
+    mismatched = [field for field in fields if left.get(field) != right.get(field)]
+    return ", ".join(mismatched) if mismatched else None
 
 backend = load_backend(backend_path)
 renderer = load_renderer(renderer_path)
@@ -376,18 +584,89 @@ if first_mismatch is None and len(backend_canonical) != len(renderer_canonical):
         "renderer": renderer[index] if index < len(renderer) else None,
     }
 
+backend_tasks, backend_last_seen = final_task_state(backend)
+renderer_tasks, renderer_last_seen = final_task_state(renderer)
+backend_summary = summarize_tasks(backend_tasks, backend_last_seen)
+renderer_summary = summarize_tasks(renderer_tasks, renderer_last_seen)
+backend_workflow = load_backend_workflow(workflow_status_path) or {
+    "source": "inferred from backend task deltas",
+    **infer_workflow(backend_tasks),
+}
+renderer_workflow = renderer_workflow_rollup(renderer) or {
+    "source": "inferred from renderer task deltas",
+    **infer_workflow(renderer_tasks),
+}
+reasons = []
+
+backend_sent_running = any(delta_has_status(record, "running") for record in backend)
+renderer_observed_running = any(delta_has_status(record, "running") for record in renderer)
+if backend_sent_running and not renderer_observed_running:
+    reasons.append({
+        "kind": "missing-renderer-running",
+        "message": "backend sent hello-world -> running but renderer never observed running",
+        "backendRunningEvents": [compact_record(record) for record in backend if delta_has_status(record, "running")],
+    })
+
+backend_removed = removed_hello_ids(backend)
+for task_id in sorted(removed_hello_ids(renderer)):
+    if task_id not in backend_removed:
+        reasons.append({
+            "kind": "renderer-removed-without-backend-remove",
+            "message": f"renderer emitted removed for {task_id} without a backend remove/delete",
+            "taskId": task_id,
+        })
+
+if comparable_tasks(backend_summary) != comparable_tasks(renderer_summary):
+    reasons.append({
+        "kind": "final-task-state-mismatch",
+        "message": "final backend and renderer task states disagree",
+        "backend": backend_summary,
+        "renderer": renderer_summary,
+    })
+
+if comparable_workflow(backend_workflow) != comparable_workflow(renderer_workflow):
+    reasons.append({
+        "kind": "final-workflow-state-mismatch",
+        "message": "final backend and renderer workflow states disagree",
+        "backend": backend_workflow,
+        "renderer": renderer_workflow,
+    })
+
+timeline = []
+for index in range(max(len(backend), len(renderer))):
+    left = compact_record(backend[index]) if index < len(backend) else None
+    right = compact_record(renderer[index]) if index < len(renderer) else None
+    timeline.append({
+        "index": index,
+        "backend": left,
+        "renderer": right,
+        "mismatchReason": compare_compact(left, right),
+    })
+
 result = {
-    "ok": first_mismatch is None,
+    "ok": len(reasons) == 0,
     "workflowId": workflow_id,
     "backendCount": len(backend),
     "rendererCount": len(renderer),
-    "firstMismatch": first_mismatch,
+    "acceptanceFailures": reasons,
+    "sequenceFirstMismatch": first_mismatch,
+    "finalState": {
+        "tasks": {
+            "backend": backend_summary,
+            "renderer": renderer_summary,
+        },
+        "workflow": {
+            "backend": backend_workflow,
+            "renderer": renderer_workflow,
+        },
+    },
+    "timeline": timeline,
     "backendLog": backend_path,
     "rendererLog": renderer_path,
 }
 pathlib.Path(comparison_path).write_text(json.dumps(result, indent=2) + "\n")
 
-if first_mismatch is not None:
+if reasons:
     print(json.dumps(result, indent=2), file=sys.stderr)
     raise SystemExit(1)
 
