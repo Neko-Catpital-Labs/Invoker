@@ -50,6 +50,10 @@ the critical path.
 PR CI keeps the narrow hitch gate. The full interaction matrix runs only on the twice-daily
 extended e2e worker (`scripts/daily-e2e-do-submit.sh` / `INVOKER_TEST_ALL_EXTENDED=1`).
 
+When the graph is responsive but shows stale or contradictory task state, use
+[UI/backend drift tracing](../ui-backend-drift-tracing.md) to compare the main
+process `delta→ui:` stream with renderer task-graph events.
+
 ## Design notes
 
 - Worker runtime `stop()` aborts via `AbortSignal` and defaults `settleTimeoutMs: 0` (GUI IPC).
