@@ -10,7 +10,15 @@ export interface MainProcessDatabaseOptions {
 
 export async function openMainProcessDatabase(options: MainProcessDatabaseOptions): Promise<SQLiteAdapter> {
   if (options.detachedViewer) {
-    return openDetachedViewerDatabase();
+    if (!existsSync(options.dbPath)) {
+      return openDetachedViewerDatabase();
+    }
+
+    return SQLiteAdapter.create(options.dbPath, {
+      readOnly: true,
+      ownerCapability: false,
+      exclusiveLocking: false,
+    });
   }
 
   // Read-only headless snapshots should report an empty store before the first

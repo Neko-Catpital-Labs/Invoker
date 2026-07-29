@@ -8,25 +8,25 @@ The Invoker persistence layer (SQLiteAdapter, backed by `node:sqlite`) stores st
 
 **Single-writer owner model**: exactly one process owns writable access to the database. All other processes delegate mutations via IPC or open the database in read-only mode.
 
-## Update: Sole-Owner Read Path & Exclusive Locking
+## Update: Read-Only Viewers & Exclusive Locking
 
-The owner boundary now covers **reads** as well as writes, so the writable owner can be the *only* process that opens `invoker.db`. See Linear [INV-240](https://linear.app/invokerorchestrator/issue/INV-240) for the full design and rationale.
+The owner boundary covers writes. Normal WAL mode allows the writable owner and read-only viewers to open `invoker.db` concurrently.
 
-- **GUI viewer** runs against a private empty in-memory database and never opens `invoker.db`; its renderer reads delegate to the owner over IPC and live updates arrive via `TASK_DELTA` / `TASK_OUTPUT`.
+- **GUI viewer** opens `invoker.db` read-only when the file exists; its renderer still reads only through Electron IPC, and live updates arrive via `TASK_DELTA` / `TASK_OUTPUT`.
 - **Read-only headless commands** delegate to the owner over IPC (`headless.query` `cli-query`) when an owner is present, and open the file directly only when none is. In that fallback path they remain read-only callers that may coexist with other readers; this does not imply exclusive ownership.
-- **The owner opens WAL in `locking_mode = EXCLUSIVE`**, keeping the wal-index in heap so no `-shm` file exists. This makes the `-shm`-truncation SIGBUS (crash report `Electron-2026-06-24-222052.ips`; repro `scripts/repro/repro-wal-shm-sigbus.sh`) impossible. Kill-switch: `INVOKER_DISABLE_EXCLUSIVE_LOCKING=1` reverts to shared-`-shm` WAL.
+- **Exclusive locking is opt-in** with `INVOKER_ENABLE_EXCLUSIVE_LOCKING=1`. It keeps the wal-index in heap so no `-shm` file exists, but it is incompatible with delegated read-only viewers because the owner must be the sole opener. `INVOKER_DISABLE_EXCLUSIVE_LOCKING=1` still wins if both variables are set.
 
 ## Owner Boundary Contract
 
 ### Acceptance Rules
 
 1. **Owner process**: GUI process (main.ts) or standalone headless process (when `INVOKER_HEADLESS_STANDALONE=1`).
-2. **GUI viewer** opens no shared database file. `openMainProcessDatabase({ detachedViewer: true })` returns process-local placeholder persistence, while renderer reads delegate to the owner over IPC and live updates arrive via `TASK_DELTA` / `TASK_OUTPUT`.
+2. **GUI viewer** opens the shared database read-only when it exists. `openMainProcessDatabase({ detachedViewer: true })` falls back to process-local placeholder persistence only before `invoker.db` has been created.
 3. **Non-owner processes**: headless CLI invocations (when GUI is running).
 4. **Non-owner processes CANNOT initialize writable persistence**. Attempting to do so throws or delegates.
 5. **All non-owner mutations MUST traverse RPC** (`headless.run`, `headless.resume`, `headless.exec` channels via IpcBus).
 
-Implementation note: today's placeholder is SQLite ephemeral storage via `SQLiteAdapter.createEphemeral()`. The raw SQLite `:memory:` sentinel is private to the data-store adapter so viewer startup code cannot accidentally switch back to opening `invoker.db`.
+Implementation note: the missing-file placeholder is SQLite ephemeral storage via `SQLiteAdapter.createEphemeral()`. The raw SQLite `:memory:` sentinel is private to the data-store adapter so viewer startup code cannot accidentally create `invoker.db`.
 
 ### Implementation Map
 
@@ -137,5 +137,5 @@ This table lists every mutating command path and how the owner-boundary contract
 
 ### Future Work
 
-- **Lock-free reads**: sql.js doesn't support multi-reader MVCC. If read-only processes need fresher data, they must re-open the DB (current behavior: query commands open fresh each time).
+- **Lock-free reads**: normal WAL mode supports one writer with concurrent read-only viewers. If a long-lived read-only process needs a newer snapshot than its current connection can see, it may need to refresh from the DB.
 - **Leader election**: If multiple GUI instances are allowed (not currently), use file lock or PID file to elect single writer.

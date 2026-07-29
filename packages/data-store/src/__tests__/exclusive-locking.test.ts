@@ -57,7 +57,7 @@ describe('SQLiteAdapter exclusiveLocking', () => {
     }
   });
 
-  it('rejects read-only file-backed opens while live WAL sidecars exist', async () => {
+  it('allows read-only file-backed opens while a normal WAL owner is live', async () => {
     const dir = makeDir();
     const dbPath = join(dir, 'invoker.db');
     const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
@@ -65,13 +65,32 @@ describe('SQLiteAdapter exclusiveLocking', () => {
       owner.saveWorkflow(wf);
       expect(existsSync(`${dbPath}-shm`)).toBe(true);
       expect(existsSync(`${dbPath}.owner`)).toBe(true);
-      await expect(
-        SQLiteAdapter.create(dbPath, { readOnly: true }),
-      ).rejects.toThrow(/writable owner PID \d+ holds live WAL sidecars/i);
+      const reader = await SQLiteAdapter.create(dbPath, { readOnly: true });
+      try {
+        expect(reader.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
+      } finally {
+        reader.close();
+      }
     } finally {
       owner.close();
     }
     expect(existsSync(`${dbPath}.owner`)).toBe(false);
+  });
+
+  it('rejects read-only viewers while an exclusive-locking owner is live', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true, exclusiveLocking: true });
+    try {
+      owner.saveWorkflow(wf);
+      expect(existsSync(`${dbPath}-wal`)).toBe(true);
+      expect(existsSync(`${dbPath}-shm`)).toBe(false);
+      await expect(
+        SQLiteAdapter.create(dbPath, { readOnly: true }),
+      ).rejects.toThrow(/exclusive locking.*read-only viewers/i);
+    } finally {
+      owner.close();
+    }
   });
 
   it('read-only opens are still allowed after a clean close', async () => {

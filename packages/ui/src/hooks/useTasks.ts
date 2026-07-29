@@ -123,6 +123,9 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
   const traceTaskDeltas =
     typeof window !== 'undefined' &&
     window.location.search.includes('traceTaskDeltas=1');
+  const traceRendererTaskGraphEvents =
+    typeof window !== 'undefined' &&
+    window.__INVOKER_TRACE_RENDERER_TASK_GRAPH__ === true;
   const bootstrapState =
     typeof window !== 'undefined' ? window.__INVOKER_BOOTSTRAP__ : undefined;
   const [tasks, setTasks] = useState<Map<string, TaskState>>(() => {
@@ -442,6 +445,12 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
 
     const handleTaskGraphEvent = (event: TaskGraphEvent) => {
       invalidateStartupSnapshot();
+      if (traceRendererTaskGraphEvents) {
+        const traceRendererTaskGraphEvent = window.invoker.traceRendererTaskGraphEvent;
+        if (traceRendererTaskGraphEvent) {
+          void traceRendererTaskGraphEvent(event).catch(() => undefined);
+        }
+      }
       deltaPerfRef.current.received += 1;
       if (event.type === 'snapshot') {
         const snapshotStreamSequence = event.streamSequence;
@@ -543,7 +552,7 @@ export function useTasks({ onTaskGraphSnapshotApplied }: UseTasksOptions = {}): 
       unsub();
       unsubWf?.();
     };
-  }, [invalidateStartupSnapshot, loadStartupSnapshot, onTaskGraphSnapshotApplied, refreshTaskGraph, refreshWorkflowMetadata]);
+  }, [invalidateStartupSnapshot, loadStartupSnapshot, onTaskGraphSnapshotApplied, refreshTaskGraph, refreshWorkflowMetadata, traceRendererTaskGraphEvents]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.invoker) return;

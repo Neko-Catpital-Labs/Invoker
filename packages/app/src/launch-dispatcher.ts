@@ -132,7 +132,17 @@ export class LaunchDispatcher {
   }
 
   private shouldTopUpReadyLaunches(): boolean {
-    return this.topUpReadyLaunchesEnabled?.() ?? true;
+    if (!this.topUpReadyLaunchesEnabled) return true;
+    try {
+      return this.topUpReadyLaunchesEnabled();
+    } catch (err) {
+      this.logger?.warn?.('[launch-dispatcher] ready launch top-up predicate failed', {
+        ownerId: this.ownerId,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      });
+      return false;
+    }
   }
 
   private sweepExpiredResourceLeases(): void {

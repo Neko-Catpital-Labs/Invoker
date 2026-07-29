@@ -1,5 +1,5 @@
 import { ExecutionHarnessSessionDriver, ReplayHarnessSessionDriver } from '@invoker/execution-engine';
-import type { ExecutionAgent, HarnessSessionDriver } from '@invoker/execution-engine';
+import type { ExecutionAgent, HarnessSessionDriver, SessionDriver } from '@invoker/execution-engine';
 import type { PlanningCommandBuilder } from './plan-conversation.js';
 
 export interface HarnessPresetLike {
@@ -9,7 +9,10 @@ export interface HarnessPresetLike {
 
 export interface HarnessSessionDriverDeps {
   /** Looks up a registered execution agent (claude/codex/omp) by harness tool name. */
-  executionAgentRegistry?: { get(name: string): ExecutionAgent | undefined };
+  executionAgentRegistry?: {
+    get(name: string): ExecutionAgent | undefined;
+    getSessionDriver?(name: string): SessionDriver | undefined;
+  };
   /** Builds the planner CLI command for harnesses without real session resume (e.g. cursor). */
   planningCommandBuilder?: PlanningCommandBuilder;
 }
@@ -21,7 +24,7 @@ export function selectHarnessSessionDriver(
 ): HarnessSessionDriver | undefined {
   const agent = deps.executionAgentRegistry?.get(preset.tool);
   if (agent) {
-    return new ExecutionHarnessSessionDriver(agent);
+    return new ExecutionHarnessSessionDriver(agent, deps.executionAgentRegistry?.getSessionDriver?.(preset.tool));
   }
   if (!deps.planningCommandBuilder) return undefined;
   const planningCommandBuilder = deps.planningCommandBuilder;
