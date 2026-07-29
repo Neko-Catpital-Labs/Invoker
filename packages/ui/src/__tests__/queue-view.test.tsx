@@ -310,28 +310,20 @@ describe('QueueView', () => {
           stoppable: true,
         }),
         makeWorker({
-          kind: 'coderabbit-address',
-          note: 'Addresses CodeRabbit review comments.',
+          kind: 'pr-admin-bypass-land',
+          note: 'Runs the admin-bypass land babysitting cron entrypoint under worker scheduling.',
           lifecycle: 'running',
           autoStarts: true,
           startable: false,
           stoppable: true,
         }),
         makeWorker({
-          kind: 'pr-conflict-rebase',
-          note: 'Rebases conflicted pull requests.',
-          lifecycle: 'running',
-          autoStarts: true,
-          startable: false,
-          stoppable: true,
-        }),
-        makeWorker({
-          kind: 'pr-ci-failure-scan',
-          note: 'Scans mapped PRs for failing CI.',
-          lifecycle: 'running',
-          autoStarts: true,
-          startable: false,
-          stoppable: true,
+          kind: 'pr-orphan-repair',
+          note: 'Classifies unmapped broken PRs and submits one combined Invoker repair task per PR.',
+          lifecycle: 'stopped',
+          autoStarts: false,
+          startable: true,
+          stoppable: false,
         }),
       ]),
     );
@@ -341,19 +333,17 @@ describe('QueueView', () => {
       'worker-row-autofix',
       'worker-row-pr-status',
       'worker-row-ci-failure',
-      'worker-row-coderabbit-address',
-      'worker-row-pr-conflict-rebase',
-      'worker-row-pr-ci-failure-scan',
+      'worker-row-pr-admin-bypass-land',
+      'worker-row-pr-orphan-repair',
     ]);
-    expect(screen.queryByText('Worker processes (6)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Worker processes (5)')).not.toBeInTheDocument();
     expect(screen.getByText('Autofix')).toBeInTheDocument();
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('CI failure repair')).toBeInTheDocument();
-    expect(screen.getByText('Coderabbit Address')).toBeInTheDocument();
-    expect(screen.getByText('Pr Conflict Rebase')).toBeInTheDocument();
-    expect(screen.getByText('PR CI scan')).toBeInTheDocument();
-  });
+    expect(screen.getByText('Pr Admin Bypass Land')).toBeInTheDocument();
+    expect(screen.getByText('Pr Orphan Repair')).toBeInTheDocument();
 
+  });
   it('shows disabled Autofix and CI rows when policy is disabled', () => {
     renderQueueView(
       new Map(),
