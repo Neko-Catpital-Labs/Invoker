@@ -195,6 +195,50 @@ describe('PR maintenance workers', () => {
     );
   });
 
+  it('forces admin-bypass queue children into existing-owner submitter mode', async () => {
+    const previousStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+
+    try {
+      const repoRoot = makeRepoRoot();
+      const logger = makeLogger();
+      const spawnHarness = makeSpawnHarness();
+      const lockProbe = vi.fn((_options: PrMaintenanceLockProbeOptions) => ({ held: false }));
+      const worker = createPrAdminBypassQueueWorker({
+        logger,
+        repoRoot,
+        env: {
+          INVOKER_HEADLESS_STANDALONE: '1',
+        },
+        spawnProcess: spawnHarness.spawnProcess,
+        lockProbe,
+        installSignalHandlers: false,
+      });
+
+      await worker.tick();
+
+      const lockProbeEnv = lockProbe.mock.calls[0]?.[0].env;
+      expect(lockProbeEnv).not.toHaveProperty('INVOKER_HEADLESS_STANDALONE');
+      expect(lockProbeEnv).toMatchObject({
+        INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER: '1',
+        INVOKER_REPO_ROOT: repoRoot,
+      });
+      const spawnedEnv = spawnHarness.calls[0]?.options.env;
+      expect(spawnedEnv).toBe(lockProbeEnv);
+      expect(spawnedEnv).not.toHaveProperty('INVOKER_HEADLESS_STANDALONE');
+      expect(spawnedEnv).toMatchObject({
+        INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER: '1',
+        INVOKER_REPO_ROOT: repoRoot,
+      });
+    } finally {
+      if (previousStandalone === undefined) {
+        delete process.env.INVOKER_HEADLESS_STANDALONE;
+      } else {
+        process.env.INVOKER_HEADLESS_STANDALONE = previousStandalone;
+      }
+    }
+  });
+
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {
     const repoRoot = makeRepoRoot();
     const logger = makeLogger();

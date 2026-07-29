@@ -464,6 +464,8 @@ function buildPrMaintenanceEnv(repoRoot: string, overrides: EnvOverrides | undef
       env[key] = value;
     }
   }
+  delete env.INVOKER_HEADLESS_STANDALONE;
+  env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER = '1';
   env.INVOKER_REPO_ROOT = repoRoot;
   return env;
 }
