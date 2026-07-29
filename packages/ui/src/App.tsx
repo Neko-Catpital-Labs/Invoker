@@ -376,6 +376,131 @@ type PlanningStreamState = {
   status: 'streaming' | 'failed';
 };
 
+type PlanningSessionMetadataResponse = {
+  ok?: boolean;
+  metadata?: Record<string, unknown> | null;
+  planningSessionId?: unknown;
+  sessionId?: unknown;
+  agentName?: unknown;
+  agentSessionId?: unknown;
+  codexSessionId?: unknown;
+  rawSessionFileLocation?: unknown;
+  rawSessionFilePath?: unknown;
+  rawSessionPath?: unknown;
+  rawSessionFile?: unknown;
+  unavailableReason?: unknown;
+  reason?: unknown;
+  error?: unknown;
+};
+
+type PlanningSessionMetadataQuery = (request: { sessionId: string }) => Promise<PlanningSessionMetadataResponse | null | undefined>;
+
+type PlanningSessionMetadataState = {
+  status: 'idle' | 'loading' | 'ready' | 'unavailable';
+  planningSessionId?: string;
+  agentName?: string;
+  agentSessionId?: string;
+  rawSessionFileLocation?: string;
+  message?: string;
+};
+
+function asMetadataRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function firstMetadataString(record: Record<string, unknown> | null, keys: string[]): string | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return undefined;
+}
+
+function getPlanningSessionMetadataQuery(invoker: unknown): PlanningSessionMetadataQuery | undefined {
+  const record = asMetadataRecord(invoker);
+  const query = record?.planningSessionMetadata;
+  return typeof query === 'function' ? query as PlanningSessionMetadataQuery : undefined;
+}
+
+function normalizePlanningSessionMetadataResponse(
+  response: PlanningSessionMetadataResponse | null | undefined,
+): PlanningSessionMetadataState {
+  const responseRecord = asMetadataRecord(response);
+  const metadataRecord = asMetadataRecord(responseRecord?.metadata);
+  const record = responseRecord ? { ...responseRecord, ...(metadataRecord ?? {}) } : null;
+  const message = firstMetadataString(responseRecord, ['unavailableReason', 'reason', 'error'])
+    ?? firstMetadataString(record, ['unavailableReason', 'reason', 'error']);
+
+  if (!responseRecord || responseRecord.ok === false) {
+    return {
+      status: 'unavailable',
+      message: message ?? 'Session metadata is unavailable.',
+    };
+  }
+
+  const planningSessionId = firstMetadataString(record, ['planningSessionId', 'sessionId']);
+  const agentName = firstMetadataString(record, ['agentName']);
+  const agentSessionId = firstMetadataString(record, ['agentSessionId', 'codexSessionId']);
+  const rawSessionFileLocation = firstMetadataString(record, [
+    'rawSessionFileLocation',
+    'rawSessionFilePath',
+    'rawSessionPath',
+    'rawSessionFile',
+  ]);
+
+  if (!planningSessionId && !agentSessionId && !rawSessionFileLocation) {
+    return {
+      status: 'unavailable',
+      message: message ?? 'No agent session metadata has been captured for this planning chat.',
+    };
+  }
+
+  return {
+    status: 'ready',
+    planningSessionId,
+    agentName,
+    agentSessionId,
+    rawSessionFileLocation,
+  };
+}
+
+function PlanningMetadataRow({
+  label,
+  testId,
+  value,
+}: {
+  label: string;
+  testId: string;
+  value?: string;
+}): JSX.Element {
+  return (
+    <div>
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      {value ? (
+        <code
+          data-testid={testId}
+          title={value}
+          className="mt-1 block select-text break-all rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[11px] leading-5 text-foreground"
+        >
+          {value}
+        </code>
+      ) : (
+        <span
+          data-testid={testId}
+          className="mt-1 block rounded-md border border-border bg-background px-2 py-1.5 text-[11px] leading-5 text-muted-foreground"
+        >
+          Unavailable
+        </span>
+      )}
+    </div>
+  );
+}
+
 function makeInitialPlanningSession(
   now: string = new Date().toISOString(),
   confirmationMode: PlanningConfirmationMode = 'require',
@@ -1041,6 +1166,7 @@ export function App() {
   const [planningSubmitError, setPlanningSubmitError] = useState<{ title: string; message: string } | null>(null);
   const [planningTerminalExpanded, setPlanningTerminalExpanded] = useState(false);
   const [reviewDraftSessionId, setReviewDraftSessionId] = useState<string | null>(null);
+  const [planningSessionMetadata, setPlanningSessionMetadata] = useState<PlanningSessionMetadataState>({ status: 'idle' });
   const activePlanningSession = useMemo(
     () => planningSessions.find((session) => session.id === activePlanningSessionId) ?? planningSessions[0] ?? makeInitialPlanningSession(),
     [activePlanningSessionId, planningSessions],
@@ -1067,6 +1193,43 @@ export function App() {
   useEffect(() => {
     planningSessionsRef.current = planningSessions;
   }, [planningSessions]);
+  useEffect(() => {
+    if (!planningSessionId) {
+      setPlanningSessionMetadata({
+        status: 'unavailable',
+        message: 'Session metadata is available after this planning chat is saved.',
+      });
+      return;
+    }
+
+    const query = getPlanningSessionMetadataQuery(invoker);
+    if (!query) {
+      setPlanningSessionMetadata({
+        status: 'unavailable',
+        message: 'Session metadata is unavailable.',
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setPlanningSessionMetadata({ status: 'loading' });
+    void query({ sessionId: planningSessionId })
+      .then((response) => {
+        if (cancelled) return;
+        setPlanningSessionMetadata(normalizePlanningSessionMetadataResponse(response));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPlanningSessionMetadata({
+          status: 'unavailable',
+          message: 'Session metadata could not be loaded.',
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [invoker, planningSessionId]);
   const [graphMaximized, setGraphMaximized] = useState(false);
   const { theme, toggleTheme } = useTheme();
   const [selectedActionNodeId, setSelectedActionNodeId] = useState<string | null>(null);
@@ -4450,6 +4613,46 @@ export function App() {
     .filter((tool) => (tool.id === 'claude' || tool.id === 'codex') && tool.installed)
     .map((tool) => tool.name.replace(/\s+CLI$/i, ''));
 
+  const renderPlanningSessionMetadata = (): JSX.Element => (
+    <section data-testid="planning-session-metadata" className="space-y-3 border-t border-border pt-3">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Session metadata</div>
+      {planningSessionMetadata.status === 'loading' ? (
+        <p
+          role="status"
+          data-testid="planning-session-metadata-loading"
+          className="text-xs leading-5 text-muted-foreground"
+        >
+          Loading session metadata...
+        </p>
+      ) : planningSessionMetadata.status === 'unavailable' || planningSessionMetadata.status === 'idle' ? (
+        <p
+          data-testid="planning-session-metadata-unavailable"
+          className="text-xs leading-5 text-muted-foreground"
+        >
+          {planningSessionMetadata.message ?? 'Session metadata is unavailable.'}
+        </p>
+      ) : (
+        <div className="space-y-3">
+          <PlanningMetadataRow
+            label="Planning session ID"
+            testId="planning-metadata-planning-session-id"
+            value={planningSessionMetadata.planningSessionId}
+          />
+          <PlanningMetadataRow
+            label={planningSessionMetadata.agentName ? `${planningSessionMetadata.agentName} session ID` : 'Agent/Codex session ID'}
+            testId="planning-metadata-agent-session-id"
+            value={planningSessionMetadata.agentSessionId}
+          />
+          <PlanningMetadataRow
+            label="Raw session file location"
+            testId="planning-metadata-raw-session-file-location"
+            value={planningSessionMetadata.rawSessionFileLocation}
+          />
+        </div>
+      )}
+    </section>
+  );
+
   const renderPlanningContextPanel = (): JSX.Element => {
     const reviewingDraft = reviewDraftSessionId === activePlanningSession.id && Boolean(draftPlanSummary);
     const draftTaskGroups = draftPlanSummary?.taskGroups ?? (
@@ -4568,6 +4771,7 @@ export function App() {
                   Open graph
                 </button>
               )}
+              {renderPlanningSessionMetadata()}
             </div>
           )
         )}

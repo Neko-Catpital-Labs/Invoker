@@ -33,9 +33,33 @@ import type {
   WorkflowMutationFailedEvent,
 } from '@invoker/contracts';
 
+export type MockPlanningSessionMetadataResponse = {
+  ok?: boolean;
+  metadata?: {
+    planningSessionId?: string | null;
+    agentName?: string | null;
+    agentSessionId?: string | null;
+    rawSessionFilePath?: string | null;
+    rawSessionFileLocation?: string | null;
+    unavailableReason?: string | null;
+  } | null;
+  planningSessionId?: string | null;
+  agentName?: string | null;
+  agentSessionId?: string | null;
+  rawSessionFilePath?: string | null;
+  rawSessionFileLocation?: string | null;
+  unavailableReason?: string | null;
+  reason?: string | null;
+  error?: string | null;
+};
+
+type MockInvokerAPI = InvokerAPI & {
+  planningSessionMetadata: (request: { sessionId: string }) => Promise<MockPlanningSessionMetadataResponse>;
+};
+
 export interface MockInvoker {
   /** The mock InvokerAPI object installed on window.invoker. */
-  api: InvokerAPI;
+  api: MockInvokerAPI;
   /** Replace the task snapshot and fire matching 'created' graph events. */
   setTasks: (tasks: TaskState[], workflows?: WorkflowMeta[]) => void;
   /** Replace the history list returned by getHistoryTasks. */
@@ -454,6 +478,11 @@ export function createMockInvoker(
     getClaudeSession: vi.fn(async () => null),
     getAgentSession: vi.fn(async () => null),
   };
+  const mockApi = api as MockInvokerAPI;
+  mockApi.planningSessionMetadata = vi.fn(async () => ({
+    ok: false,
+    unavailableReason: 'Planning session metadata is unavailable.',
+  }));
 
   function setTasks(tasks: TaskState[], workflows?: WorkflowMeta[]) {
     taskSnapshot = tasks;
@@ -536,7 +565,7 @@ export function createMockInvoker(
   }
 
   function install() {
-    (window as unknown as { invoker: InvokerAPI }).invoker = api;
+    (window as unknown as { invoker: InvokerAPI }).invoker = mockApi;
     (window as unknown as { __INVOKER_BOOTSTRAP__?: { tasks: TaskState[]; workflows: WorkflowMeta[]; runtimeStatus?: RuntimeStatus } }).__INVOKER_BOOTSTRAP__ = {
       tasks: taskSnapshot,
       workflows: workflowSnapshot,
@@ -556,7 +585,7 @@ export function createMockInvoker(
   }
 
   return {
-    api,
+    api: mockApi,
     setTasks,
     setHistoryTasks,
     setEvents,
