@@ -50,6 +50,19 @@ async function removeTestDir(dir: string): Promise<void> {
   throw lastError;
 }
 
+async function deleteAllWorkflowsFast(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const invoker = window.invoker as typeof window.invoker & {
+      deleteAllWorkflowsBulk?: () => Promise<unknown>;
+    };
+    if (typeof invoker.deleteAllWorkflowsBulk === 'function') {
+      await invoker.deleteAllWorkflowsBulk();
+      return;
+    }
+    await invoker.deleteAllWorkflows();
+  });
+}
+
 export const test = base.extend<ElectronFixtures>({
   guiOwnerMode: [process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui', { option: true }],
   breakTerminalSpawn: [false, { option: true }],
@@ -180,6 +193,10 @@ exit 64
         INVOKER_TEST_FIXED_NOW: '2025-01-01T00:00:00.000Z',
         INVOKER_CLAUDE_COMMAND: claudeMarker,
         INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+        GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME ?? 'Invoker E2E',
+        GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL ?? 'ci@invoker.dev',
+        GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME ?? 'Invoker E2E',
+        GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL ?? 'ci@invoker.dev',
         HOME: homeDir,
         ...(process.env.INVOKER_E2E_CODEX_DEMO
           ? { INVOKER_E2E_CODEX_DEMO: process.env.INVOKER_E2E_CODEX_DEMO }
@@ -209,17 +226,15 @@ exit 64
     // Clear state from previous runs and reload for clean React state
     await page.evaluate(async () => {
       await window.invoker.clear();
-      await window.invoker.deleteAllWorkflows();
     });
+    await deleteAllWorkflowsFast(page);
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
     await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
 
     await use(page);
     try {
-      await page.evaluate(async () => {
-        await window.invoker.deleteAllWorkflows();
-      });
+      await deleteAllWorkflowsFast(page);
     } catch {
       // Best-effort cleanup; the test failure itself should remain the signal.
     }
