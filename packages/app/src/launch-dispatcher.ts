@@ -79,6 +79,7 @@ export interface LaunchDispatcherOptions {
   logger?: Logger;
   maxAttempts?: number;
   maxLeasesPerPoll?: number;
+  topUpReadyLaunchesEnabled?: () => boolean;
 }
 
 
@@ -90,6 +91,7 @@ export class LaunchDispatcher {
   private readonly logger?: Logger;
   private readonly maxAttempts: number;
   private readonly maxLeasesPerPoll: number;
+  private readonly topUpReadyLaunchesEnabled?: () => boolean;
 
   constructor(options: LaunchDispatcherOptions) {
     this.persistence = options.persistence;
@@ -98,6 +100,7 @@ export class LaunchDispatcher {
     this.ownerId = options.ownerId;
     this.logger = options.logger;
     this.maxAttempts = options.maxAttempts ?? DISPATCH_MAX_ATTEMPTS;
+    this.topUpReadyLaunchesEnabled = options.topUpReadyLaunchesEnabled;
     // Bound a single poll's work so the dispatcher cannot starve other
     // owner-loop ticks; the leftover rows are picked up on the next tick.
     this.maxLeasesPerPoll = options.maxLeasesPerPoll ?? 32;
@@ -122,8 +125,24 @@ export class LaunchDispatcher {
     this.sweepExpiredResourceLeases();
     this.abandonStuckLeases();
     this.reapExpiredLeases();
-    this.topUpReadyLaunches();
+    if (this.shouldTopUpReadyLaunches()) {
+      this.topUpReadyLaunches();
+    }
     this.dispatchActive();
+  }
+
+  private shouldTopUpReadyLaunches(): boolean {
+    if (!this.topUpReadyLaunchesEnabled) return true;
+    try {
+      return this.topUpReadyLaunchesEnabled();
+    } catch (err) {
+      this.logger?.warn?.('[launch-dispatcher] ready launch top-up predicate failed', {
+        ownerId: this.ownerId,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      });
+      return false;
+    }
   }
 
   private sweepExpiredResourceLeases(): void {
@@ -572,4 +591,3 @@ export class LaunchDispatcher {
     return accepted;
   }
 }
-
