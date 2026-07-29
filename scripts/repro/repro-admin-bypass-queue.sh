@@ -28,7 +28,11 @@ ln -s "$ROOT/scripts/repro/fixtures/fake-gh/bin/gh" "$TMP/bin/gh"
 NODE_LOG="$TMP/node-calls.log"; : > "$NODE_LOG"
 cat > "$TMP/bin/node" <<EOF
 #!/usr/bin/env bash
-printf 'node %s\n' "\$*" >> "$NODE_LOG"
+printf 'node env require=%s args=%s\n' "\${INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER:-}" "\$*" >> "$NODE_LOG"
+if [ "\${FAKE_NODE_FAIL:-0}" = "1" ]; then
+  echo "simulated ipc failure" >&2
+  exit 42
+fi
 exit 0
 EOF
 chmod +x "$TMP/bin/node"
@@ -76,9 +80,11 @@ echo "$out" | grep -q "PR #906: draft; skipping" \
 # rebase-recreate must never be routed for a non-conflict category, and
 # repair-review-gate-ci must never fire here (no mapped failed_checks PR in
 # this scenario). Assert the exact node call shape landed.
-grep -q "exec -- rebase-recreate wf-mapped-901" "$NODE_LOG" \
+grep -q "exec --no-track -- rebase-recreate wf-mapped-901" "$NODE_LOG" \
   || fail "tick 1: rebase-recreate wf-mapped-901 not dispatched" "$(cat "$NODE_LOG")"
-runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
+grep -q "require=1" "$NODE_LOG" \
+  || fail "tick 1: worker IPC dispatch must require an existing owner" "$(cat "$NODE_LOG")"
+runs="$(grep -c "exec --no-track -- run " "$NODE_LOG" || true)"
 [ "$runs" -eq 2 ] || fail "tick 1: expected exactly 2 ad-hoc plan submissions, got $runs" "$(cat "$NODE_LOG")"
 
 plan902="$TMP/plans/repair-pr-902.yaml"
@@ -115,6 +121,16 @@ comments="$(grep -c "^gh pr comment 902" "$FAKE_GH_STATE_DIR/calls.log" || true)
 out="$(run_cron)" || fail "tick 4 exited non-zero" "$out"
 comments="$(grep -c "^gh pr comment 902" "$FAKE_GH_STATE_DIR/calls.log" || true)"
 [ "$comments" -eq 1 ] || fail "exhausted comment must be one-time; got $comments"
+
+# Submission failure: transient IPC failures do not consume attempt budget.
+: > "$TMP/ledger.tsv"
+: > "$NODE_LOG"
+out="$(run_cron env FAKE_NODE_FAIL=1)" || fail "submit-failure tick exited non-zero" "$out"
+echo "$out" | grep -q "PR #902: plan submit failed: simulated ipc failure" \
+  || fail "submit-failure tick: expected ad-hoc plan failure to be logged" "$out"
+attempts="$(awk -F '\t' '$1 == "queue-attempt" { c++ } END { print c + 0 }' "$TMP/ledger.tsv")"
+[ "$attempts" -eq 0 ] \
+  || fail "submit failures must not consume queue attempts" "$(cat "$TMP/ledger.tsv")"
 
 # DRY_RUN: route logged, nothing submitted.
 : > "$TMP/ledger.tsv"
