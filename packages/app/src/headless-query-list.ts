@@ -1,8 +1,8 @@
 /**
- * Headless "query" command family: the read-only `query <sub>` router
+ * Headless "query" command family: the mostly read-only `query <sub>` router
  * (workflows · tasks · task · queue · review-gate · action-graph · audit ·
- * session · workers · worker-actions · cost · cost-events · costs · ui-perf · stats), the cost-event
- * collection/rollup
+ * session · workers · worker-actions · admin-bypass-queue · cost · cost-events ·
+ * costs · ui-perf · stats), the cost-event collection/rollup
  * helpers, agent session resolution, and `query-select`.
  *
  * It depends on `headless-shared.ts` and reuses `worker-control.ts` for the
@@ -10,8 +10,16 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { Attempt, TaskState } from '@invoker/workflow-core';
-import type { AgentSessionData, NormalizedCostEvent, WorkerActionSummary, WorkerStatusSnapshot } from '@invoker/contracts';
+import {
+  resolveInvokerHomeRoot,
+  type AgentSessionData,
+  type NormalizedCostEvent,
+  type WorkerActionSummary,
+  type WorkerStatusSnapshot,
+} from '@invoker/contracts';
 import { AUTO_FIX_WORKER_KIND, createWorkerRegistry, registerBuiltinWorkers, type AgentRegistry, type WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import type { CostAttributionAttempt } from '@invoker/data-store';
 import type { CostGroupDimension } from './cost-rollup.js';
@@ -47,6 +55,8 @@ import {
  * per request, so concurrent delegated queries never cross output.
  */
 const queryOutputSink = new AsyncLocalStorage<(chunk: string) => void>();
+const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, admin-bypass-queue, cost, cost-events, costs, ui-perf, stats, execution-leases';
+const QUERY_SUBCOMMAND_USAGE = QUERY_SUBCOMMANDS.replaceAll(', ', '|');
 
 function writeOut(chunk: string): void {
   const sink = queryOutputSink.getStore();
@@ -67,7 +77,7 @@ export type HeadlessQueryDeps = Pick<
 export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Promise<void> {
   const subCommand = args[0];
   if (!subCommand) {
-    throw new Error('Missing query sub-command. Usage: --headless query <workflows|workflow|tasks|task|task-output|container-id|queue|review-gate|action-graph|audit|session|workers|worker-actions|worker-decisions|cost|cost-events|costs|ui-perf|stats|execution-leases>');
+    throw new Error(`Missing query sub-command. Usage: --headless query <${QUERY_SUBCOMMAND_USAGE}>`);
   }
   const flags = parseQueryFlags(args.slice(1));
 
@@ -334,6 +344,24 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       }
       break;
     }
+    case 'admin-bypass-queue': {
+      const summary = resetOrReadAdminBypassQueueLedger(flags.reset === true);
+      switch (flags.output) {
+        case 'label':
+          writeOut(`${summary.queueAttempts}\t${summary.queueExhausted}\n`);
+          break;
+        case 'json':
+          writeOut(formatAsJson(summary) + '\n');
+          break;
+        case 'jsonl':
+          writeOut(formatAsJsonl([summary]) + '\n');
+          break;
+        default:
+          writeOut(formatAdminBypassQueueLedger(summary) + '\n');
+          break;
+      }
+      break;
+    }
     case 'ui-perf': {
       if (flags.reset) {
         deps.resetUiPerfStats?.();
@@ -482,8 +510,83 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
       break;
     }
     default:
-      throw new Error(`Unknown query sub-command: "${subCommand}". Use: workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats, execution-leases`);
+      throw new Error(`Unknown query sub-command: "${subCommand}". Use: ${QUERY_SUBCOMMANDS}`);
   }
+}
+
+interface AdminBypassQueueLedgerSummary {
+  path: string;
+  reset: boolean;
+  totalRows: number;
+  queueAttempts: number;
+  queueExhausted: number;
+  queueSubmitted: number;
+  removedRows: number;
+  removedQueueAttempts: number;
+  removedQueueExhausted: number;
+  remainingRows: number;
+}
+
+function adminBypassQueueLedgerPath(): string {
+  return process.env.INVOKER_ADMIN_BYPASS_QUEUE_STATE_FILE
+    ?? join(resolveInvokerHomeRoot(), 'admin-bypass-queue.tsv');
+}
+
+function parseLedgerRows(text: string): string[][] {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== '')
+    .map((line) => line.split('\t'));
+}
+
+function countLedgerKind(rows: readonly string[][], kind: string): number {
+  return rows.filter((row) => row[0] === kind).length;
+}
+
+function resetOrReadAdminBypassQueueLedger(reset: boolean): AdminBypassQueueLedgerSummary {
+  const path = adminBypassQueueLedgerPath();
+  const rows = existsSync(path)
+    ? parseLedgerRows(readFileSync(path, 'utf8'))
+    : [];
+  const queueAttempts = countLedgerKind(rows, 'queue-attempt');
+  const queueExhausted = countLedgerKind(rows, 'queue-exhausted');
+  const keepRows = reset
+    ? rows.filter((row) => row[0] !== 'queue-attempt' && row[0] !== 'queue-exhausted')
+    : rows;
+
+  if (reset) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, keepRows.map((row) => row.join('\t')).join('\n') + (keepRows.length > 0 ? '\n' : ''), 'utf8');
+  }
+
+  return {
+    path,
+    reset,
+    totalRows: rows.length,
+    queueAttempts,
+    queueExhausted,
+    queueSubmitted: countLedgerKind(rows, 'queue-submitted'),
+    removedRows: rows.length - keepRows.length,
+    removedQueueAttempts: queueAttempts - countLedgerKind(keepRows, 'queue-attempt'),
+    removedQueueExhausted: queueExhausted - countLedgerKind(keepRows, 'queue-exhausted'),
+    remainingRows: keepRows.length,
+  };
+}
+
+function formatAdminBypassQueueLedger(summary: AdminBypassQueueLedgerSummary): string {
+  const lines = [
+    `${BOLD}Admin-bypass queue ledger${RESET}`,
+    `  path: ${summary.path}`,
+    `  rows: ${summary.totalRows}`,
+    `  queue-attempt: ${summary.queueAttempts}`,
+    `  queue-exhausted: ${summary.queueExhausted}`,
+    `  queue-submitted: ${summary.queueSubmitted}`,
+  ];
+  if (summary.reset) {
+    lines.push(`  removed: ${summary.removedRows}`);
+    lines.push(`  remaining: ${summary.remainingRows}`);
+  }
+  return lines.join('\n');
 }
 
 /**
