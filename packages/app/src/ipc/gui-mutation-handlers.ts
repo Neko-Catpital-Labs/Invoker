@@ -52,7 +52,7 @@ import { backupPlan } from '../plan-backup.js';
 import { loadPlanSubmissionBundle } from '../plan-submission-loader.js';
 import { runHeadless, resolveAgentSession } from '../headless.js';
 import type { HeadlessDeps } from '../headless.js';
-import { resolveRefreshTaskGraphSnapshot } from '../refresh-task-graph.js';
+import { publishForcedRefreshTaskGraphSnapshot, resolveRefreshTaskGraphSnapshot } from '../refresh-task-graph.js';
 import { resolveHeadlessTarget, resolveHeadlessTargetWorkflowId } from '../headless-command-classification.js';
 import {
   fixWithAgentAction,
@@ -1542,10 +1542,10 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       logger,
     });
 
-    taskGraphEventPublisher.publishSnapshot(
+    publishForcedRefreshTaskGraphSnapshot(
+      taskGraphEventPublisher,
       ownerMode ? 'refresh-task-graph' : 'refresh-task-graph-delegated',
-      snapshot.tasks,
-      snapshot.workflows,
+      snapshot,
     );
     recordStartupDuration('refresh-task-graph.return', startedAtMs, {
       taskCount: snapshot.tasks.length,
@@ -1880,6 +1880,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       metric === 'startup_snapshot_skipped_bootstrap_complete' ||
       metric === 'startup_workflow_graph_visible' ||
       metric === 'ui_delta_stream_gap_detected' ||
+      metric === 'ui_task_graph_stale_snapshot_ignored' ||
       (metric === 'useTasks_snapshot_replace' && data?.workflowCount === 0)
     ) {
       logger.info(`ui metric ${metric} ${JSON.stringify(data ?? {})}`, { module: 'ui-state' });
