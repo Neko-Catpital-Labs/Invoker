@@ -658,12 +658,10 @@ function assertDeleteAllEnabled(): void {
 interface InitServicesOptions {
   readOnly?: boolean;
   /**
-   * GUI viewer mode: never open `invoker.db`. A writable owner is always present
-   * in this mode, so the renderer's reads delegate to the owner over IPC and
-   * live updates arrive via TASK_DELTA/TASK_OUTPUT. We back the in-process
-   * services with a private empty in-memory database so no `-shm` is mapped on
-   * the real file — that is what lets the owner run WAL exclusive locking and be
-   * immune to the `-shm` truncation SIGBUS. Implies non-owner (readOnly) semantics.
+   * GUI viewer mode: opens `invoker.db` read-only when it exists, so renderer
+   * bootstrap and gap recovery use the same database as the owner while all
+   * mutations still delegate over IPC. If the file is absent, startup uses a
+   * private empty placeholder. Implies non-owner (readOnly) semantics.
    */
   detachedViewer?: boolean;
   executionAgentRegistry?: AgentRegistry;
@@ -738,7 +736,8 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     dbPath,
     detachedViewer,
     readOnly,
-    exclusiveLocking: process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1'
+    exclusiveLocking: process.env.INVOKER_ENABLE_EXCLUSIVE_LOCKING === '1'
+      && process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1'
       && process.env.INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK !== '1',
   });
   // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
@@ -2975,9 +2974,6 @@ startMainProcessBootstrap({
     logger.info('Effective configuration', { config: getSafeInvokerConfigForLogging(invokerConfig), module: 'startup' });
     recordStartupMark('startup.ready-for-window');
 
-    if (!ownerMode) {
-      requireRendererTaskFeed().beginDetachedViewerBuffering();
-    }
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
       requireRendererTaskFeed().receiveTaskDelta(delta as TaskDelta);
     });
@@ -3004,9 +3000,7 @@ startMainProcessBootstrap({
     registerBootstrapStateIpc({
       ipcMain,
       getTasks: () => (ownerMode ? orchestrator.getAllTasks() : requireRendererTaskFeed().getDetachedViewerTasks()),
-      getWorkflows: () =>
-        requireRendererTaskFeed().getDetachedViewerWorkflows()
-          ?? startupWorkflowCache.takeOrLoad(listWorkflowsByStartupRecency),
+      getWorkflows: () => startupWorkflowCache.takeOrLoad(listWorkflowsByStartupRecency),
       getInitialWorkflowId: () => startupWorkflowId,
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
@@ -3179,11 +3173,10 @@ startMainProcessBootstrap({
       ),
     );
 
-    if (ownerMode) {
-      requireRendererTaskFeed().seedUiSnapshotCache();
-    } else {
-      await requireRendererTaskFeed().hydrateDetachedViewerFromOwner();
+    if (!ownerMode) {
+      bootstrapInitialWorkflowState();
     }
+    requireRendererTaskFeed().seedUiSnapshotCache();
     createWindow();
     recordStartupMark('createWindow.end');
 
