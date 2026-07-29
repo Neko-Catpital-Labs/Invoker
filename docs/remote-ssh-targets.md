@@ -45,13 +45,12 @@ Managed SSH checkouts only run repo bootstrap when the target defines `provision
 
 Remote SSH targets execute workflow tasks only. Long-lived operator automation belongs on the Invoker owner host, where the process owns the workflow database and worker registry.
 
-For the supported PR-maintenance setup, enable `prMaintenance` in `~/.invoker/config.json` on the owner host and run the built-in worker kinds from the Workers tab or headless CLI:
+For the supported PR-maintenance setup, enable `prMaintenance` in `~/.invoker/config.json` on the owner host and run the surviving built-in worker kinds from the Workers tab or headless CLI:
 
 ```bash
 ./run.sh --headless worker status --output text
-./run.sh --headless worker coderabbit-address
-./run.sh --headless worker pr-conflict-rebase
-./run.sh --headless worker pr-ci-failure-scan
+./run.sh --headless worker pr-admin-bypass-land
+./run.sh --headless worker pr-orphan-repair
 ```
 
 Do not install separate cron jobs on SSH targets for these maintenance paths. The workers share the owner process, owner database, and per-kind worker locks; SSH targets stay disposable execution capacity.

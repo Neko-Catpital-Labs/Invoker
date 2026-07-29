@@ -102,7 +102,7 @@ Invoker background work is owned by the built-in worker registry. `autofix` is t
 
 Run workers on the Invoker owner host. Operators can start and stop them from the desktop Workers tab, inspect them with `./run.sh --headless worker status --output text|json|jsonl`, or trigger one explicit scan with `./run.sh --headless worker <kind>`. Each kind takes its own single-instance lock, so a second scan of the same worker is refused without blocking other worker kinds.
 
-PR maintenance uses the same owner-host worker path. Enable the built-in `coderabbit-address`, `pr-conflict-rebase`, and `pr-ci-failure-scan` workers with the `prMaintenance` config block; do not install separate cron jobs or external worker launchers for the supported setup.
+PR maintenance uses the same owner-host worker path. Enable `prMaintenance` to launch `pr-admin-bypass-land`, keep `pr-orphan-repair` available from the same built-in registry, and do not install separate cron jobs or external worker launchers for the supported setup.
 
 ## Install
 
