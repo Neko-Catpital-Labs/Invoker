@@ -1063,6 +1063,58 @@ describe('PlanConversation harness session driver', () => {
     expect(secondSpawnArgs).toEqual(['append', 'session-1']);
   });
 
+  it('promotes the provider session id before appending later turns', async () => {
+    const resolveSessionId = vi.fn((raw: string, command: { sessionId: string }, options: { startedNewSession: boolean }) => {
+      if (!options.startedNewSession) return command.sessionId;
+      const match = raw.match(/"thread_id":"([^"]+)"/);
+      return match?.[1] ?? command.sessionId;
+    });
+    const driver = {
+      ...createMockDriver({ supportsSessionContinuity: true }),
+      harness: 'codex',
+      resolveSessionId,
+    };
+    const onHarnessSessionId = vi.fn();
+    const log = vi.fn();
+    const conv = new PlanConversation({ harnessSessionDriver: driver, onHarnessSessionId, log });
+
+    mockCursorResponse([
+      JSON.stringify({ type: 'thread.started', thread_id: 'real-codex-thread-id' }),
+      JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Turn one reply' } }),
+      JSON.stringify({ type: 'turn.completed' }),
+    ].join('\n'));
+    await conv.sendMessage('First message');
+
+    expect(conv.harnessSessionId).toBe('real-codex-thread-id');
+    expect(onHarnessSessionId).toHaveBeenCalledWith('real-codex-thread-id');
+    expect(log.mock.calls.some((call) => String(call[2]).includes('planner_session_id_promoted'))).toBe(true);
+
+    mockCursorResponse('Turn two reply');
+    await conv.sendMessage('Second message');
+
+    expect(driver.append).toHaveBeenCalledTimes(1);
+    expect(driver.append.mock.calls[0][0]).toBe('real-codex-thread-id');
+    expect(driver.append.mock.calls[0][1]).toBe('Second message');
+  });
+
+  it('does not persist a provisional session id when session resolution rejects it', async () => {
+    const driver = {
+      ...createMockDriver({ supportsSessionContinuity: true }),
+      harness: 'codex',
+      resolveSessionId: vi.fn(() => {
+        throw new Error('missing thread.started.thread_id');
+      }),
+    };
+    const onHarnessSessionId = vi.fn();
+    const conv = new PlanConversation({ harnessSessionDriver: driver, onHarnessSessionId });
+
+    mockCursorResponse('Turn one reply');
+    await expect(conv.sendMessage('First message')).rejects.toThrow(/thread\.started\.thread_id/);
+
+    expect(conv.harnessSessionId).toBeUndefined();
+    expect(onHarnessSessionId).not.toHaveBeenCalled();
+  });
+
   it('fires onHarnessSessionId once when a new session id is established', async () => {
     const driver = createMockDriver({ supportsSessionContinuity: true });
     const onHarnessSessionId = vi.fn();
