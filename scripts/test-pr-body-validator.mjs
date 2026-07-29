@@ -182,6 +182,36 @@ assert((await validatePrBody(validMinimal)).length === 0, 'valid minimal body sh
 assert((await validatePrBody(validArchitecture)).length === 0, 'valid architecture body should pass');
 assert(getPrBodyWarnings(validMinimal).length === 0, 'short summary should produce no warnings');
 
+const dependencyLiteTmp = mkdtempSync(join(tmpdir(), 'pr-body-validator-lite-'));
+try {
+  const bodyPath = join(dependencyLiteTmp, 'body.md');
+  const scriptsDir = join(dependencyLiteTmp, 'scripts');
+  mkdirSync(scriptsDir, { recursive: true });
+  for (const scriptName of [
+    'lint-pr-diff-atomicity.mjs',
+    'review-unit-rules.mjs',
+    'validate-pr-body.mjs',
+  ]) {
+    cpSync(join(repoRoot, 'scripts', scriptName), join(scriptsDir, scriptName));
+  }
+  writeFileSync(bodyPath, validMinimal);
+  const liteCli = spawnSync(
+    process.execPath,
+    ['scripts/validate-pr-body.mjs', '--body-file', bodyPath],
+    { cwd: dependencyLiteTmp, encoding: 'utf8' },
+  );
+  assert(
+    liteCli.status === 0,
+    `CLI validator should not require Mermaid render dependencies for a body without Mermaid blocks: ${liteCli.stderr}`,
+  );
+  assert(
+    liteCli.stdout.includes('PR body validation passed.'),
+    'dependency-light CLI validator should report success for a non-Mermaid body',
+  );
+} finally {
+  rmSync(dependencyLiteTmp, { recursive: true, force: true });
+}
+
 const hiddenMetadataErrors = await validatePrBody(`## Summary
 
 Small fix.
