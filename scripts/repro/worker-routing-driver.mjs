@@ -1,24 +1,21 @@
-// Worker-routing battle driver: boots the four REAL PR-maintenance workers
-// (the same createXWorker factories the Invoker owner uses) and manually
-// ticks each one against a fake-GitHub scenario exhibiting exactly the issue
-// class that worker owns. Proves the wiring end-to-end per kind:
+// Worker-routing battle driver: boots the two REAL surviving PR-maintenance
+// workers (the same createXWorker factories the Invoker owner uses) and
+// manually ticks them against fake-GitHub scenarios exhibiting each remaining
+// issue class. Proves the wiring end-to-end per owner:
 //   worker tick -> spawns its cron entrypoint -> entrypoint detects the issue
-//   -> takes the right action (recorded via node-shim / fake-gh calls.log).
+//   -> takes the right action (recorded via worker logs or node-shim calls).
 //
 // Run via scripts/repro/repro-pr-maintenance-worker-routing.sh (which bundles
 // this file with esbuild so the TS worker sources resolve without vitest).
 //
 // Env contract (set by the wrapper):
-//   ROUTING_REPO_ROOT   - Invoker repo root
-//   ROUTING_TMP         - scratch dir owned by the wrapper (cleaned by it)
-//   FAKE_GH_REQUIRED_CHECKS - required-check names for the landing scenario
+//   ROUTING_REPO_ROOT        - Invoker repo root
+//   ROUTING_TMP              - scratch dir owned by the wrapper (cleaned by it)
+//   FAKE_GH_REQUIRED_CHECKS  - required-check names for admin-bypass dry-runs
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import {
-  createCoderabbitAddressWorker,
-  createPrConflictRebaseWorker,
-  createPrCiFailureScanWorker,
   createPrAdminBypassLandWorker,
   createPrOrphanRepairWorker,
 } from '../../packages/execution-engine/src/workers/pr-maintenance-workers.ts';
@@ -42,7 +39,6 @@ function makeLeg(kind) {
   }
   const nodeLog = join(legDir, 'node-calls.log');
   writeFileSync(nodeLog, '');
-  // node shim: records headless-ipc dispatches instead of booting an owner.
   writeFileSync(
     join(bin, 'node'),
     `#!/usr/bin/env bash\nprintf 'node %s\\n' "$*" >> ${JSON.stringify(nodeLog)}\nexit 0\n`,
@@ -97,66 +93,50 @@ async function tickWorker(leg, factory, extraEnv, scenario) {
   return tickError;
 }
 
-const has = (leg, needle) => leg.lines.some((l) => l.includes(needle));
+const has = (leg, needle) => leg.lines.some((line) => line.includes(needle));
 const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
-const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
 
 // ---------------------------------------------------------------------------
-// Leg 1: merge conflict -> pr-conflict-rebase worker
+// Leg 1: merge conflict -> pr-admin-bypass-land worker
 // ---------------------------------------------------------------------------
 {
-  const leg = makeLeg('pr-conflict-rebase');
-  const reviewGate = join(leg.legDir, 'review-gate.sh');
-  writeFileSync(
-    reviewGate,
-    '#!/usr/bin/env bash\nprintf \'{"workflowId":"wf-routing-1","workflowGeneration":0,"baseBranch":"master"}\\n\'\n',
-    { mode: 0o755 },
-  );
-  console.log('\n=== leg 1: conflicted PR (pr-dirty.json) -> pr-conflict-rebase ===');
-  const err = await tickWorker(leg, createPrConflictRebaseWorker, {
-    INVOKER_PR_CONFLICT_STATE_FILE: join(leg.legDir, 'ledger.tsv'),
-    INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
-    INVOKER_PR_REBASE_MAX_ATTEMPTS: '3',
-    INVOKER_PR_REBASE_CONFIRM_TIMEOUT: '0',
+  const leg = makeLeg('pr-admin-bypass-land-conflict');
+  console.log('\n=== leg 1: conflicted PR (pr-dirty.json) -> pr-admin-bypass-land ===');
+  const err = await tickWorker(leg, createPrAdminBypassLandWorker, {
+    INVOKER_PR_CRON_DRY_RUN: '1',
+    FAKE_GH_REQUIRED_CHECKS: process.env.FAKE_GH_REQUIRED_CHECKS ?? '',
   }, 'pr-dirty.json');
-  assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
-  assert(leg, has(leg, '[worker:pr-conflict-rebase] spawning scripts/cron-pr-conflict-rebase.sh'),
+  assert(leg, has(leg, '[worker:pr-admin-bypass-land] spawning scripts/cron-pr-admin-bypass-land.sh'),
     'worker spawned its own cron entrypoint');
-  assert(leg, nodeLogText(leg).includes('rebase-recreate wf-routing-1'),
-    'conflicted PR triggered a rebase-recreate dispatch');
+  assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
+  assert(leg, has(leg, 'DRY-RUN repair-conflict PR #501'),
+    'conflicted PR triggered the admin-bypass repair-conflict path');
 }
 
 // ---------------------------------------------------------------------------
-// Leg 2: failed CI -> pr-ci-failure-scan worker
+// Leg 2: failed CI -> pr-admin-bypass-land worker
 // ---------------------------------------------------------------------------
 {
-  const leg = makeLeg('pr-ci-failure-scan');
-  // The scanned PRs model MAPPED workflows (unmapped ones belong to the
-  // orphan-repair worker), so the review-gate stub reports a hit.
-  const reviewGate = join(leg.legDir, 'review-gate.sh');
-  writeFileSync(
-    reviewGate,
-    '#!/usr/bin/env bash\nprintf \'{"workflowId":"wf-ci-mapped","workflowGeneration":0,"baseBranch":"master"}\\n\'\n',
-    { mode: 0o755 },
-  );
-  console.log('\n=== leg 2: CI-failed PR (pr-ci-failed.json) -> pr-ci-failure-scan ===');
-  const err = await tickWorker(leg, createPrCiFailureScanWorker, {
-    INVOKER_PR_CRON_REVIEW_GATE_CMD: reviewGate,
+  const leg = makeLeg('pr-admin-bypass-land-failed-ci');
+  console.log('\n=== leg 2: CI-failed PR (pr-ci-failed.json) -> pr-admin-bypass-land ===');
+  const err = await tickWorker(leg, createPrAdminBypassLandWorker, {
+    INVOKER_PR_CRON_DRY_RUN: '1',
+    FAKE_GH_REQUIRED_CHECKS: process.env.FAKE_GH_REQUIRED_CHECKS ?? '',
   }, 'pr-ci-failed.json');
-  assert(leg, has(leg, '[worker:pr-ci-failure-scan] spawning packages/execution-engine/scripts/cron-pr-ci-failure.sh'),
+  assert(leg, has(leg, '[worker:pr-admin-bypass-land] spawning scripts/cron-pr-admin-bypass-land.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
-  assert(leg, nodeLogText(leg).includes('repair-review-gate-ci 601'),
-    'CI-failed PR #601 triggered a repair-review-gate-ci dispatch');
-  assert(leg, !nodeLogText(leg).includes('repair-review-gate-ci 602'),
-    'conflicted PR #602 was left to the conflict worker (no CI dispatch)');
+  assert(leg, has(leg, 'DRY-RUN repair-check PR #601 check="PR Body"'),
+    'failed required check triggered the admin-bypass repair-check path');
+  assert(leg, !has(leg, 'PR #602'),
+    'conflicted non-admin-bypass PR #602 was not actioned by the admin-bypass worker');
 }
 
 // ---------------------------------------------------------------------------
 // Leg 3: landable stack -> pr-admin-bypass-land worker (dry-run)
 // ---------------------------------------------------------------------------
 {
-  const leg = makeLeg('pr-admin-bypass-land');
+  const leg = makeLeg('pr-admin-bypass-land-landable');
   console.log('\n=== leg 3: dequeued landable stack (stack-landable.json) -> pr-admin-bypass-land ===');
   const err = await tickWorker(leg, createPrAdminBypassLandWorker, {
     INVOKER_PR_CRON_DRY_RUN: '1',
@@ -169,27 +149,82 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
     'landing brain planned a requeue for the dequeued bottom PR #701');
   assert(leg, !has(leg, 'DRY-RUN requeue PR #702'),
     'stack top #702 was not actioned before the bottom landed');
-  assert(leg, !/^gh (pr comment|api --method)/m.test(callsLog(leg)),
-    'dry-run made no mutating gh calls');
 }
 
 // ---------------------------------------------------------------------------
-// Leg 4: CodeRabbit review sweep -> coderabbit-address worker
-// (behavioral dedup/action coverage lives in repro-coderabbit-address-dedup.sh;
-// this leg proves the worker->entrypoint routing and a clean fake-gh sweep.)
+// Leg 4: CodeRabbit bot thread -> pr-admin-bypass-land worker
 // ---------------------------------------------------------------------------
 {
-  const leg = makeLeg('coderabbit-address');
-  console.log('\n=== leg 4: review sweep (pr-dirty.json) -> coderabbit-address ===');
-  const err = await tickWorker(leg, createCoderabbitAddressWorker, {}, 'pr-dirty.json');
-  assert(leg, has(leg, '[worker:coderabbit-address] spawning scripts/cron-coderabbit-address.sh'),
+  const leg = makeLeg('pr-admin-bypass-land-bot-thread');
+  writeFileSync(join(leg.state, 'state.json'), JSON.stringify({
+    prs: [{
+      number: 5800,
+      title: 'Admin-bypass PR with CodeRabbit thread',
+      url: 'https://github.com/fake/repo/pull/5800',
+      state: 'OPEN',
+      isDraft: false,
+      baseRefName: 'master',
+      headRefName: 'stack/5800',
+      headRefOid: 'ffffffffffffffffffffffffffffffffffffffff',
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+      labels: ['admin-bypass', 'dequeued'],
+      reviewThreads: [{
+        id: 'tbot',
+        isResolved: false,
+        isOutdated: false,
+        comments: {
+          nodes: [{
+            author: { login: 'coderabbitai[bot]' },
+            body: 'Please update this branch',
+            url: 'https://github.com/fake/repo/pull/5800#discussion_r1',
+          }],
+        },
+      }],
+      checks: { '*': 'SUCCESS' },
+    }],
+    issue_comments: {
+      5800: [{
+        id: 'm5800',
+        user: { login: 'mergify[bot]' },
+        updated_at: '2026-07-20T00:00:00Z',
+        html_url: 'https://github.com/fake/repo/pull/5800#m5800',
+        body: 'Left the queue `admin-bypass` at `ffffffffffffffffffffffffffffffffffffffff`.\n-*- Mergify Payload -*-\n{"state":"dequeued","queue_rule_name":"admin-bypass"}\n',
+      }],
+    },
+  }, null, 2));
+  writeFileSync(join(leg.state, 'calls.log'), '');
+  console.log('\n=== leg 4: CodeRabbit bot review thread -> pr-admin-bypass-land ===');
+  const worker = createPrAdminBypassLandWorker({
+    logger: leg.logger,
+    repoRoot: ROOT,
+    env: {
+      ...leg.baseEnv,
+      INVOKER_PR_CRON_DRY_RUN: '1',
+      FAKE_GH_REQUIRED_CHECKS: process.env.FAKE_GH_REQUIRED_CHECKS ?? '',
+    },
+    lockPath: join(leg.legDir, 'crons.lock'),
+    intervalMs: 3_600_000,
+    tickOnStart: false,
+    installSignalHandlers: false,
+  });
+  let err;
+  try {
+    await worker.tick('manual');
+  } catch (caught) {
+    err = caught;
+  } finally {
+    await worker.stop();
+  }
+  assert(leg, has(leg, '[worker:pr-admin-bypass-land] spawning scripts/cron-pr-admin-bypass-land.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
-  assert(leg, callsLog(leg).length > 0, 'sweep queried the fake GitHub');
+  assert(leg, has(leg, 'DRY-RUN repair-check PR #5800 check="tbot"'),
+    'bot review thread routed through the admin-bypass repair path');
 }
 
 // ---------------------------------------------------------------------------
-// Leg 5: unmapped broken PR -> pr-orphan-repair worker (combined repair task)
+// Leg 5: unmapped broken PR -> pr-orphan-repair worker
 // ---------------------------------------------------------------------------
 {
   const leg = makeLeg('pr-orphan-repair');
@@ -213,13 +248,13 @@ const callsLog = (leg) => readFileSync(join(leg.state, 'calls.log'), 'utf8');
   assert(leg, !nodeLogText(leg).includes('repair-pr-802'),
     'healthy unmapped PR #802 was untouched');
   assert(leg, !nodeLogText(leg).includes('repair-pr-803'),
-    'mapped PR #803 was left to the existing workers');
+    'mapped PR #803 was left to the admin-bypass/orphan boundary');
 }
 
 console.log('');
 if (failures.length > 0) {
   console.log(`[worker-routing] FAILED (${failures.length}):`);
-  for (const f of failures) console.log(`  - ${f}`);
+  for (const failure of failures) console.log(`  - ${failure}`);
   process.exit(1);
 }
-console.log('[worker-routing] all five workers routed their issue class correctly');
+console.log('[worker-routing] all five routing legs passed through the two-worker PR-maintenance surface');

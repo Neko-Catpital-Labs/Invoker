@@ -129,26 +129,26 @@ describe('WorkerDetailsPanel', () => {
     expect(screen.getByText('PR status')).toBeInTheDocument();
     expect(screen.getByText('No persisted PR status actions. This worker updates review gates directly.')).toBeInTheDocument();
   });
-  it('shows PR CI scan copy when no actions are persisted', () => {
+  it('shows admin-bypass fallback copy when no actions are persisted', () => {
     renderPanel(makeWorker({
-      kind: 'pr-ci-failure-scan',
-      note: 'Scans mapped PRs for failing CI.',
+      kind: 'pr-admin-bypass-land',
+      note: 'Runs the admin-bypass land babysitting cron entrypoint under worker scheduling.',
       recentActions: [],
     }));
 
-    expect(screen.getByTestId('worker-details-title')).toHaveTextContent('PR CI scan');
-    expect(screen.getByText('Idle. Scans mapped PRs for failing CI and queues repairs.')).toBeInTheDocument();
-    expect(screen.getByText('No PR CI scan runs recorded yet.')).toBeInTheDocument();
+    expect(screen.getByTestId('worker-details-title')).toHaveTextContent('Pr Admin Bypass Land');
+    expect(screen.getByText('Idle. Waiting for worker-owned work.')).toBeInTheDocument();
+    expect(screen.getByText('No worker actions recorded yet.')).toBeInTheDocument();
   });
 
-  it('shows coderabbit-address as a built-in worker when no actions are persisted', () => {
+  it('shows orphan-repair fallback copy when no actions are persisted', () => {
     renderPanel(makeWorker({
-      kind: 'coderabbit-address',
-      note: 'Runs the CodeRabbit review-address cron entrypoint under worker scheduling.',
+      kind: 'pr-orphan-repair',
+      note: 'Classifies unmapped broken PRs and submits one combined Invoker repair task per PR.',
       recentActions: [],
     }));
 
-    expect(screen.getByTestId('worker-details-title')).toHaveTextContent('Coderabbit Address');
+    expect(screen.getByTestId('worker-details-title')).toHaveTextContent('Pr Orphan Repair');
     expect(screen.getByText('Idle. Waiting for worker-owned work.')).toBeInTheDocument();
     expect(screen.getByText('No worker actions recorded yet.')).toBeInTheDocument();
   });

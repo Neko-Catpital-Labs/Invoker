@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Battle-test: each of the four PR-maintenance WORKERS (the real
-# createXWorker runtimes the owner boots) detects its own issue class and
-# routes it to the right cron entrypoint against a fake GitHub:
-#   pr-conflict-rebase   <- conflicted PR        (pr-dirty.json)
-#   pr-ci-failure-scan   <- CI-failed PR         (pr-ci-failed.json)
-#   pr-admin-bypass-land <- dequeued landable PR (stack-landable.json)
-#   coderabbit-address   <- review sweep         (routing + clean sweep)
+# Battle-test: the two surviving PR-maintenance WORKERS (the real
+# createXWorker runtimes the owner boots) still route every remaining issue
+# class to the right owner path against a fake GitHub:
+#   pr-admin-bypass-land <- conflicted admin-bypass PR        (pr-dirty.json)
+#   pr-admin-bypass-land <- CI-failed admin-bypass PR         (pr-ci-failed.json)
+#   pr-admin-bypass-land <- dequeued landable stack           (stack-landable.json)
+#   pr-admin-bypass-land <- CodeRabbit bot review thread      (inline fixture)
+#   pr-orphan-repair     <- unmapped broken PR                (pr-orphan-broken.json)
 #
 # The driver imports the worker factories straight from the TypeScript
 # sources; esbuild bundles them so no vitest/node_modules are needed at the
@@ -34,7 +35,7 @@ if [ -z "$DRIVER" ]; then
 fi
 
 # The fake gh expands its "*" checks default to the repo's real required-check
-# names so the landing brain sees every .mergify.yml-required check green.
+# names so the admin-bypass brain sees every .mergify.yml-required check green.
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
 import sys
 from pathlib import Path

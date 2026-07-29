@@ -23,7 +23,7 @@ import os, re, sys
 root = Path(os.environ['ROOT'])
 tmp = Path(os.environ['TMP'])
 source = (root / 'scripts/repro/worker-routing-driver.mjs').read_text()
-start = source.index('// Leg 1: merge conflict -> pr-conflict-rebase worker')
+start = source.index('// Leg 1: merge conflict -> pr-admin-bypass-land worker')
 block_start = source.index('{', start)
 scan = block_start
 depth = 0
@@ -48,18 +48,17 @@ function makeLeg(kind) {{
   return {{
     kind,
     legDir: '/tmp/leg',
-    lines: ['[worker:pr-conflict-rebase] spawning scripts/cron-pr-conflict-rebase.sh'],
+    lines: ['[worker:pr-admin-bypass-land] spawning scripts/cron-pr-admin-bypass-land.sh'],
   }};
 }}
 async function tickWorker() {{
   return new Error('boom after dispatch');
 }}
-const createPrConflictRebaseWorker = {{}};
+const createPrAdminBypassLandWorker = {{}};
 function assert(leg, ok, what) {{
   if (!ok) throw new Error(what);
 }}
 const has = (leg, needle) => leg.lines.some((line) => line.includes(needle));
-const nodeLogText = () => 'rebase-recreate wf-routing-1';
 (async () => {leg1})().catch((err) => {{
   console.error(err.message);
   process.exit(1);
