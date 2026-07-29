@@ -119,7 +119,7 @@ jobs:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Reclaim workspace
@@ -591,7 +591,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: 1-of-7
+          - name: 1-of-9
             files: >-
               e2e/visual-proof.spec.ts
               e2e/edit-task-command.spec.ts
@@ -599,60 +599,64 @@ jobs:
               e2e/launching-stall-watchdog.spec.ts
               e2e/embedded-terminal-pty.spec.ts
               e2e/keyboard-navigation.spec.ts
+          - name: 2-of-9
+            files: >-
               e2e/claude-planning-preset-visual-proof.spec.ts
               e2e/planning-presets-load-failure.spec.ts
-          - name: 2-of-7
-            files: >-
               e2e/action-graph-visual-proof.spec.ts
               e2e/invalid-merge-workspace-visual.spec.ts
               e2e/invalid-task-workspace-visual.spec.ts
               e2e/persistence-lifecycle.spec.ts
+          - name: 3-of-9
+            files: >-
               e2e/task-death-logs.spec.ts
               e2e/restart-failed-task.spec.ts
-          - name: 3-of-7
-            files: >-
               e2e/ui-graph-drag-performance.spec.ts
               e2e/pending-review-gate-target-repo.proof.spec.ts
               e2e/workflow-status-composition.spec.ts
               e2e/queue-running-vs-queued.spec.ts
+          - name: 4-of-9
+            files: >-
               e2e/startup-window-liveness.spec.ts
               e2e/workflow-lifecycle.spec.ts
               e2e/base-branch-normalization.proof.spec.ts
-          - name: 4-of-7
-            files: >-
               e2e/edit-task-prompt.spec.ts
               e2e/fix-with-claude.spec.ts
               e2e/fix-with-agent-transition.spec.ts
+          - name: 5-of-9
+            files: >-
               e2e/autofix-worker-ui.spec.ts
               e2e/orphan-relaunch.spec.ts
               e2e/gap-recovery-bench.spec.ts
               e2e/planning-chat-send-long-deadline.spec.ts
-          - name: 5-of-7
-            files: >-
               e2e/system-setup-visual-proof.spec.ts
               e2e/startup-nonempty-responsiveness.spec.ts
+          - name: 6-of-9
+            files: >-
               e2e/embedded-terminal-spawn-failure.spec.ts
               e2e/embedded-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
-              e2e/worker-tab-scroll.spec.ts
-          - name: 6-of-7
+          - name: 7-of-9
             files: >-
+              e2e/worker-tab-scroll.spec.ts
               e2e/workflow-delete-latency.spec.ts
               e2e/main-process-hitch-responsiveness.spec.ts
               e2e/dag-click-hitch-responsiveness.spec.ts
               e2e/terminal-upsert-hitch-responsiveness.spec.ts
               e2e/attention-click-hitch-responsiveness.spec.ts
+          - name: 8-of-9
+            files: >-
               e2e/focus-switch-hitch-responsiveness.spec.ts
               e2e/planning-chat-hitch-responsiveness.spec.ts
-          - name: 7-of-7
-            files: >-
               e2e/command-palette-open.spec.ts
               e2e/task-new-attempt-reset.spec.ts
               e2e/persistence-recovery.spec.ts
               e2e/start-ready-production-click.spec.ts
+          - name: 9-of-9
+            files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
               e2e/workers-surface.spec.ts
