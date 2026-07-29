@@ -183,6 +183,8 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
         return {};
       case 'invoker:report-ui-perf':
         return undefined;
+      case 'invoker:trace-renderer-task-graph-event':
+        return undefined;
       case 'invoker:check-pr-statuses':
       case 'invoker:check-pr-status':
         await deps.checkPrStatuses?.();
