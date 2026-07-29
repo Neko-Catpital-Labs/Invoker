@@ -32,6 +32,12 @@ describe('seedMainProcessHitchFixture', () => {
     expect(seeded.eventCount).toBe(40);
     expect(seeded.workerActionCount).toBeGreaterThan(0);
     expect(adapter.listWorkflows().some((wf) => wf.id === seeded.workflowId)).toBe(true);
+    expect(adapter.loadTasks(seeded.workflowId).map((task) => task.status)).toEqual([
+      'completed',
+      'completed',
+      'completed',
+      'completed',
+    ]);
     expect(adapter.listWorkerActions({ limit: 5 }).length).toBeGreaterThan(0);
   });
 });

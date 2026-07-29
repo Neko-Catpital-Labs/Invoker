@@ -6,7 +6,6 @@ import {
   recoveryWorkerEventType,
 } from './recovery-worker-observability.js';
 
-const DEFAULT_NOW_ISO = '2026-07-01T00:00:00.000Z';
 const DEFAULT_WORKFLOW_COUNT = 57;
 const DEFAULT_TASKS_PER_WORKFLOW = 4;
 const DEFAULT_EVENTS_PER_TASK = 0;
@@ -32,6 +31,7 @@ export interface StressFixtureOptions {
   nowIso?: string;
   stuckLaunchingSlots?: number;
   launchAgeMs?: number;
+  taskStatusMode?: 'mixed' | 'pending' | 'completed';
 }
 
 export interface StressFixtureResult {
@@ -42,6 +42,7 @@ export interface StressFixtureResult {
   fixing: number;
   pending: number;
   failed: number;
+  completed: number;
 }
 
 function makeWorkflow(id: string, name: string, nowIso: string): Workflow {
@@ -183,7 +184,8 @@ export function seedStressFixture(
   const eventsPerTask = options.eventsPerTask ?? DEFAULT_EVENTS_PER_TASK;
   const stuckLaunchingSlots = options.stuckLaunchingSlots ?? 0;
   const launchAgeMs = options.launchAgeMs ?? LAUNCH_STUCK_ABANDON_MS;
-  const nowIso = options.nowIso ?? DEFAULT_NOW_ISO;
+  const taskStatusMode = options.taskStatusMode ?? 'mixed';
+  const nowIso = options.nowIso ?? new Date().toISOString();
   const now = new Date(nowIso);
   const result: StressFixtureResult = {
     workflowCount,
@@ -193,6 +195,7 @@ export function seedStressFixture(
     fixing: 0,
     pending: 0,
     failed: 0,
+    completed: 0,
   };
   let seededStuckLaunchingSlots = 0;
 
@@ -203,6 +206,25 @@ export function seedStressFixture(
     for (let taskIndex = 0; taskIndex < tasksPerWorkflow; taskIndex += 1) {
       const taskId = `${workflowId}/t${taskIndex}`;
       const task = makeBaseTask(taskId, workflowId, now);
+      if (taskStatusMode === 'pending') {
+        persistence.saveTask(workflowId, task);
+        addRecoveryEvents(persistence, taskId, workflowId, eventsPerTask);
+        result.pending += 1;
+        continue;
+      }
+      if (taskStatusMode === 'completed') {
+        task.status = 'completed';
+        task.execution = {
+          ...task.execution,
+          startedAt: now,
+          completedAt: now,
+          exitCode: 0,
+        };
+        persistence.saveTask(workflowId, task);
+        addRecoveryEvents(persistence, taskId, workflowId, eventsPerTask);
+        result.completed += 1;
+        continue;
+      }
       switch (classifyState(taskIndex)) {
         case 'running': {
           const attempt = withLeasedAttempt(taskId, 'running', now);
