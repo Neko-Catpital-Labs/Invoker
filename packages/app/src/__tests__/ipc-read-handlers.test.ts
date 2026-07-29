@@ -77,6 +77,155 @@ describe('registerReadOnlyIpcHandlers', () => {
     expect(getAllTasks).toHaveBeenCalledTimes(1);
   });
 
+  it('get-queue-status uses the owner fast path in owner mode', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    const ownerQueue = {
+      maxConcurrency: 13,
+      runningCount: 1,
+      activeExecutionCount: 1,
+      launchingCount: 0,
+      running: [{ taskId: 'wf-1/t1', description: 'running task' }],
+      queued: [],
+    };
+    const getQueueStatus = vi.fn(() => ownerQueue);
+    const request = vi.fn();
+
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: {} as never,
+      getOrchestrator: () => ({ getQueueStatus }) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      getOwnerMode: () => true,
+      getMessageBus: () => ({ request }),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 0,
+    });
+
+    await expect(handlers.get('invoker:get-queue-status')?.({})).resolves.toEqual(ownerQueue);
+    expect(request).not.toHaveBeenCalled();
+    expect(getQueueStatus).toHaveBeenCalledWith({ refresh: false });
+  });
+
+  it('get-queue-status delegates to the owner in viewer mode', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    const delegatedQueue = {
+      maxConcurrency: 13,
+      runningCount: 1,
+      activeExecutionCount: 1,
+      launchingCount: 0,
+      running: [{ taskId: 'wf-1/t1', description: 'owner running task' }],
+      queued: [],
+    };
+    const getQueueStatus = vi.fn(() => ({
+      maxConcurrency: 13,
+      runningCount: 0,
+      activeExecutionCount: 0,
+      launchingCount: 0,
+      running: [],
+      queued: [],
+    }));
+    const request = vi.fn(async () => delegatedQueue);
+
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: {} as never,
+      getOrchestrator: () => ({ getQueueStatus }) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      getOwnerMode: () => false,
+      getMessageBus: () => ({ request }),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 0,
+    });
+
+    await expect(handlers.get('invoker:get-queue-status')?.({})).resolves.toEqual(delegatedQueue);
+    expect(request).toHaveBeenCalledWith('headless.query', { kind: 'queue' });
+    expect(getQueueStatus).not.toHaveBeenCalled();
+  });
+
+  it('get-queue-status falls back to a refreshed local read only when the owner has no handler', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    const localQueue = {
+      maxConcurrency: 13,
+      runningCount: 1,
+      activeExecutionCount: 1,
+      launchingCount: 0,
+      running: [{ taskId: 'wf-1/t1', description: 'db-backed running task' }],
+      queued: [],
+    };
+    const getQueueStatus = vi.fn(() => localQueue);
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error('No request handler registered for channel: headless.query'), { code: 'NO_HANDLER' });
+    });
+
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: {} as never,
+      getOrchestrator: () => ({ getQueueStatus }) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      getOwnerMode: () => false,
+      getMessageBus: () => ({ request }),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 0,
+    });
+
+    await expect(handlers.get('invoker:get-queue-status')?.({})).resolves.toEqual(localQueue);
+    expect(getQueueStatus).toHaveBeenCalledWith({ refresh: true });
+  });
+
+  it('get-queue-status propagates owner timeouts instead of serving follower-local zeros', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const ipcMain = {
+      handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler);
+      }),
+    };
+    const getQueueStatus = vi.fn();
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error('owner timed out'), { code: 'REQUEST_TIMEOUT' });
+    });
+
+    registerReadOnlyIpcHandlers({
+      ipcMain: ipcMain as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: {} as never,
+      getOrchestrator: () => ({ getQueueStatus }) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      getOwnerMode: () => false,
+      getMessageBus: () => ({ request }),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 0,
+    });
+
+    await expect(handlers.get('invoker:get-queue-status')?.({})).rejects.toThrow(/owner timed out/);
+    expect(getQueueStatus).not.toHaveBeenCalled();
+  });
+
   it('get-review-gate returns the shared review gate shape', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>();
     const ipcMain = {
