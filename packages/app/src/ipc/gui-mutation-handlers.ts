@@ -909,7 +909,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       case 'invoker:stop-worker':
         return { channel: 'headless.gui-mutation', request: payload };
       case 'invoker:resume-workflow': {
-        const workflows = rendererTaskFeed.getDetachedViewerWorkflows() ?? persistence.listWorkflows();
+        const workflows = persistence.listWorkflows();
         const firstWorkflow = workflows[0] as { id?: unknown } | undefined;
         const workflowId = context.getStartupWorkflowId()
           ?? (typeof firstWorkflow?.id === 'string' ? firstWorkflow.id : undefined);

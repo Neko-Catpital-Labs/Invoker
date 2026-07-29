@@ -62,7 +62,7 @@ export interface RendererTaskFeedUiPerfStats {
 export interface RendererTaskFeedDeps {
   logger: Logger;
   persistence: RendererTaskFeedPersistence;
-  messageBus: Pick<MessageBus, 'publish' | 'request'>;
+  messageBus: Pick<MessageBus, 'publish'>;
   getOrchestrator: () => RendererTaskFeedOrchestrator;
   taskHandles: { has(taskId: string): boolean };
   taskGraphEventPublisher: Pick<TaskGraphEventPublisher, 'publishDelta'>;
@@ -83,9 +83,7 @@ export interface RendererTaskFeed {
   enqueueTaskOutput(taskId: string, data: string): void;
   flushTaskOutput(taskId: string): void;
   seedUiSnapshotCache(): void;
-  hydrateDetachedViewerFromOwner(): Promise<void>;
   getDetachedViewerTasks(): TaskState[];
-  getDetachedViewerWorkflows(): unknown[] | null;
   publishTaskDeltaToRenderer(delta: TaskDelta): void;
   getLastKnownWorkflowCount(): number;
   setLastKnownWorkflowCount(count: number): void;
@@ -95,7 +93,6 @@ export interface RendererTaskFeed {
   replaceWorkflowRollups(tasks: TaskState[]): void;
   rememberTaskState(task: TaskState): void;
   resetSnapshotState(): void;
-  beginDetachedViewerBuffering(): void;
   receiveTaskDelta(delta: TaskDelta): void;
   startDbPolling(): RendererTaskFeedStopHandle;
   startActivityPolling(): RendererTaskFeedStopHandle;
@@ -107,8 +104,6 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, RendererTaskFeedTimer>();
   let lastKnownWorkflowCount = 0;
-  let detachedViewerWorkflows: unknown[] | null = null;
-  let detachedDeltaBuffer: TaskDelta[] | null = null;
 
   const flushTaskOutput = (taskId: string): void => {
     const timer = outputFlushTimers.get(taskId);
@@ -178,54 +173,12 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
     seedTaskCachesFromSnapshot(deps.getOrchestrator().getAllTasks(), { lastKnownTaskStates, workflowRollupProjection });
   };
 
-  // Detached viewer: the local DB is empty, so seed the delta caches and
-  // bootstrap snapshot from the owner. Without this, the empty cache quarantines
-  // every `updated` delta for a task the viewer has not seen (dropping live
-  // updates), and bootstrap getters return nothing. Failures are non-fatal — the
-  // renderer's delegated reads still populate the view.
-  const hydrateDetachedViewerFromOwner = async (): Promise<void> => {
-    try {
-      const snapshot = await deps.messageBus.request<{ kind: string }, { tasks?: TaskState[]; workflows?: unknown[] }>(
-        'headless.query',
-        { kind: 'tasks' },
-      );
-      const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks : [];
-      const workflows = Array.isArray(snapshot?.workflows) ? snapshot.workflows : [];
-      detachedViewerWorkflows = workflows;
-      seedTaskCachesFromSnapshot(tasks, { lastKnownTaskStates, workflowRollupProjection });
-      lastKnownWorkflowCount = workflows.length;
-      deps.setStartupWorkflowId(
-        [...workflows]
-          .map((wf) => wf as { id?: string; updatedAt?: string; createdAt?: string })
-          .sort((left, right) => (Date.parse(right.updatedAt ?? '') || 0) - (Date.parse(left.updatedAt ?? '') || 0))[0]?.id ?? null,
-      );
-      deps.logger.info(
-        `[init] Hydrated detached viewer from owner: ${tasks.length} tasks across ${workflows.length} workflows`,
-        { module: 'init' },
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      deps.logger.warn(`detached viewer hydration from owner failed; relying on delegated reads: ${message}`, { module: 'init' });
-    } finally {
-      // Resume direct delta processing and replay anything buffered during
-      // hydration (in arrival order). Always runs, so a hydration failure can
-      // never leave deltas buffered forever.
-      const buffered = detachedDeltaBuffer ?? [];
-      detachedDeltaBuffer = null;
-      for (const delta of buffered) processIncomingTaskDelta(delta);
-    }
-  };
-
   // Current task states for the detached viewer's bootstrap getter, derived from
-  // the live delta cache so a renderer reload never sees the stale hydration
-  // snapshot.
+  // the same cache owner mode uses for delta gap recovery.
   const getDetachedViewerTasks = (): TaskState[] => [...lastKnownTaskStates.keys()].map(
     (taskId) => JSON.parse(lastKnownTaskStates.get(taskId) ?? '{}') as TaskState,
   );
 
-  // Apply one owner task delta to the local cache and forward results to the
-  // renderer. Extracted so the detached viewer can replay deltas that were
-  // buffered during hydration.
   const processIncomingTaskDelta = (delta: TaskDelta): void => {
     deps.uiPerfStats.mainDeltaToUi += 1;
     if (deps.traceUiDeltaFlow) {
@@ -445,9 +398,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
     enqueueTaskOutput,
     flushTaskOutput,
     seedUiSnapshotCache,
-    hydrateDetachedViewerFromOwner,
     getDetachedViewerTasks,
-    getDetachedViewerWorkflows: () => detachedViewerWorkflows,
     publishTaskDeltaToRenderer,
     getLastKnownWorkflowCount: () => lastKnownWorkflowCount,
     setLastKnownWorkflowCount: (count) => { lastKnownWorkflowCount = count; },
@@ -461,14 +412,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
       workflowRollupProjection.clear();
       lastKnownWorkflowCount = 0;
     },
-    beginDetachedViewerBuffering: () => { detachedDeltaBuffer = []; },
-    receiveTaskDelta: (delta) => {
-      if (detachedDeltaBuffer) {
-        detachedDeltaBuffer.push(delta);
-        return;
-      }
-      processIncomingTaskDelta(delta);
-    },
+    receiveTaskDelta: processIncomingTaskDelta,
     startDbPolling,
     startActivityPolling,
   };
