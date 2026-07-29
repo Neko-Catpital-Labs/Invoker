@@ -12,6 +12,7 @@ import {
   createPlanningCommandBuilderFromRegistry,
   discardPlanningChatDraft,
   listInAppPlanningPresets,
+  hydrateRemotePlanningTerminalSession,
   listPlanningChatSessions,
   planFromGoal,
   rebindPlanningChatRepo,
@@ -1500,6 +1501,26 @@ describe('planning chat worktree provisioning', () => {
       worktreePath,
       worktreeBranch: expectedBranch,
     }));
+  });
+
+  it('preserves repo binding fields across the summary-to-hydrated-session round trip', async () => {
+    const worktreePath = '/fake/worktree/hydrate-round-trip';
+    const repoPool = createFakeRepoPool(worktreePath);
+    const sessions = createInAppPlanningChatSessions();
+
+    const created = await createPlanningChatSession({}, {
+      config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      repoPool,
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const hydrated = hydrateRemotePlanningTerminalSession(created.session);
+    expect(hydrated.repoUrl).toBe('https://example.com/repo.git');
+    expect(hydrated.baseBranch).toBe('main');
+    expect(hydrated.baseCommit).toBe('fake-head-sha');
   });
 
   it('falls back to deps.workingDir exactly as before when no repoPool is supplied', async () => {
