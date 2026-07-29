@@ -21,10 +21,12 @@ const RETIRED_PR_MAINTENANCE_WORKER_KINDS = [
 
 describe('headless-client', () => {
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+  const savedRequireExistingOwner = process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER;
   const savedDbDir = process.env.INVOKER_DB_DIR;
   let dbDir: string;
   beforeEach(() => {
     delete process.env.INVOKER_HEADLESS_STANDALONE;
+    delete process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER;
     // Isolate the resolved DB path so the owner-marker liveness check in
     // delegateGenericReadQuery cannot see a real ~/.invoker owner on the dev box.
     dbDir = mkdtempSync(join(tmpdir(), 'headless-client-'));
@@ -35,6 +37,11 @@ describe('headless-client', () => {
       delete process.env.INVOKER_HEADLESS_STANDALONE;
     } else {
       process.env.INVOKER_HEADLESS_STANDALONE = savedStandalone;
+    }
+    if (savedRequireExistingOwner === undefined) {
+      delete process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER;
+    } else {
+      process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER = savedRequireExistingOwner;
     }
     if (savedDbDir === undefined) {
       delete process.env.INVOKER_DB_DIR;
@@ -738,6 +745,23 @@ describe('headless-client', () => {
     expect(refreshMessageBus).toHaveBeenCalled();
     expect(firstExecHandler).not.toHaveBeenCalled();
     expect(secondExecHandler).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  it('does not bootstrap a standalone owner when an existing mutation owner is required', async () => {
+    process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER = '1';
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['rebase-recreate', 'wf-3', '--no-track'], {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner,
+      refreshMessageBus: vi.fn(async () => new LocalBus()),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).not.toHaveBeenCalled();
   }, 15_000);
 
   it('falls back to the host runtime for non-mutating commands', async () => {
