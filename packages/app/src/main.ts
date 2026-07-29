@@ -149,6 +149,7 @@ import {
   isRemovedHeadlessCommandAlias,
 } from './headless-command-registry.js';
 import { backupPlan } from './plan-backup.js';
+import { loadPlanSubmissionBundle } from './plan-submission-loader.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
@@ -657,12 +658,10 @@ function assertDeleteAllEnabled(): void {
 interface InitServicesOptions {
   readOnly?: boolean;
   /**
-   * GUI viewer mode: never open `invoker.db`. A writable owner is always present
-   * in this mode, so the renderer's reads delegate to the owner over IPC and
-   * live updates arrive via TASK_DELTA/TASK_OUTPUT. We back the in-process
-   * services with a private empty in-memory database so no `-shm` is mapped on
-   * the real file — that is what lets the owner run WAL exclusive locking and be
-   * immune to the `-shm` truncation SIGBUS. Implies non-owner (readOnly) semantics.
+   * GUI viewer mode: opens `invoker.db` read-only when it exists, so renderer
+   * bootstrap and gap recovery use the same database as the owner while all
+   * mutations still delegate over IPC. If the file is absent, startup uses a
+   * private empty placeholder. Implies non-owner (readOnly) semantics.
    */
   detachedViewer?: boolean;
   executionAgentRegistry?: AgentRegistry;
@@ -737,7 +736,8 @@ async function initServices(options?: InitServicesOptions): Promise<void> {
     dbPath,
     detachedViewer,
     readOnly,
-    exclusiveLocking: process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1'
+    exclusiveLocking: process.env.INVOKER_ENABLE_EXCLUSIVE_LOCKING === '1'
+      && process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1'
       && process.env.INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK !== '1',
   });
   // Upgrade root logger with DB persistence now that SQLiteAdapter is ready.
@@ -1082,53 +1082,14 @@ function startHeadlessMode(): void {
 
       const loadGeneratedPlan = async (
         planText: string,
-      ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => {
-        const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
-        const submission = parsePlanSubmissionBundle(planText);
-        const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-        const loadedWorkflowIds: string[] = [];
-        let upstream: { workflowId: string; featureBranch: string } | undefined;
-
-        for (const parsedPlan of submission.plans) {
-          let plan = applyConfiguredPlanDefaults(parsedPlan);
-          if (upstream) {
-            plan = {
-              ...plan,
-              baseBranch: upstream.featureBranch,
-              externalDependencies: [
-                ...(plan.externalDependencies ?? []),
-                {
-                  workflowId: upstream.workflowId,
-                  taskId: '__merge__',
-                  requiredStatus: 'completed',
-                  gatePolicy: 'review_ready',
-                } as const,
-              ],
-            };
-          }
-          backupPlan(plan, undefined, logger);
-          orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-          const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-          if (!workflow) {
-            throw new Error('Loaded plan did not create a workflow.');
-          }
-          existingWorkflowIds.add(workflow.id);
-          loadedWorkflowIds.push(workflow.id);
-          upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-        }
-
-        const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
-        if (!workflowId) {
-          throw new Error('Loaded plan did not create a workflow.');
-        }
-
-        return {
-          planName: submission.name,
-          workflowId,
-          workflowIds: loadedWorkflowIds,
-          workflowCount: loadedWorkflowIds.length,
-        };
-      };
+      ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => (
+        loadPlanSubmissionBundle(planText, {
+          persistence,
+          orchestrator,
+          allowGraphMutation: invokerConfig.allowGraphMutation,
+          logger,
+        })
+      );
 
       const planningConversationRepo = new ConversationRepository(persistence, {
         info: (message) => logger.info(message, { module: 'planning-chat' }),
@@ -1144,6 +1105,7 @@ function startHeadlessMode(): void {
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
+        logger,
       });
 
       let testPlanningChatResponse:
@@ -1199,6 +1161,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              logger,
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1226,6 +1189,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              logger,
               plannerReplyOverride,
             });
           }
@@ -3012,9 +2976,6 @@ startMainProcessBootstrap({
     logger.info('Effective configuration', { config: getSafeInvokerConfigForLogging(invokerConfig), module: 'startup' });
     recordStartupMark('startup.ready-for-window');
 
-    if (!ownerMode) {
-      requireRendererTaskFeed().beginDetachedViewerBuffering();
-    }
     messageBus.subscribe(Channels.TASK_DELTA, (delta: unknown) => {
       requireRendererTaskFeed().receiveTaskDelta(delta as TaskDelta);
     });
@@ -3041,9 +3002,7 @@ startMainProcessBootstrap({
     registerBootstrapStateIpc({
       ipcMain,
       getTasks: () => (ownerMode ? orchestrator.getAllTasks() : requireRendererTaskFeed().getDetachedViewerTasks()),
-      getWorkflows: () =>
-        requireRendererTaskFeed().getDetachedViewerWorkflows()
-          ?? startupWorkflowCache.takeOrLoad(listWorkflowsByStartupRecency),
+      getWorkflows: () => startupWorkflowCache.takeOrLoad(listWorkflowsByStartupRecency),
       getInitialWorkflowId: () => startupWorkflowId,
       appStartedAtEpochMs: appProcessStartedAt,
       getTaskDeltaStreamSequence,
@@ -3216,11 +3175,10 @@ startMainProcessBootstrap({
       ),
     );
 
-    if (ownerMode) {
-      requireRendererTaskFeed().seedUiSnapshotCache();
-    } else {
-      await requireRendererTaskFeed().hydrateDetachedViewerFromOwner();
+    if (!ownerMode) {
+      bootstrapInitialWorkflowState();
     }
+    requireRendererTaskFeed().seedUiSnapshotCache();
     createWindow();
     recordStartupMark('createWindow.end');
 

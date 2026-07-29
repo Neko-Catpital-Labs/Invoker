@@ -27,16 +27,16 @@ function ownerUpdateDelta(): TaskDelta {
   } as unknown as TaskDelta;
 }
 
-describe('detached viewer cache hydration', () => {
-  it('repro: an empty viewer cache quarantines (drops) an owner task update', () => {
-    // A detached viewer backed by an empty in-memory DB has an empty cache.
+describe('viewer cache hydration', () => {
+  it('repro: an empty viewer cache quarantines (drops) a task update', () => {
+    // A viewer that has not loaded an initial DB snapshot has an empty cache.
     const cache = new TaskSnapshotCache();
     const { quarantined, accepted } = applyDelta(ownerUpdateDelta(), cache);
     expect(accepted).toBe(false);
     expect(quarantined).toEqual(['wf-1/task-1']); // the live update is lost
   });
 
-  it('hydrating the caches from the owner snapshot lets the same update apply', () => {
+  it('hydrating the caches from an authoritative DB snapshot lets the same update apply', () => {
     const lastKnownTaskStates = new TaskSnapshotCache();
     const workflowRollupProjection = new WorkflowRollupProjection();
     seedTaskCachesFromSnapshot([ownerTask(1)], { lastKnownTaskStates, workflowRollupProjection });
@@ -49,7 +49,7 @@ describe('detached viewer cache hydration', () => {
     expect(merged.taskStateVersion).toBe(2);
   });
 
-  it('hydrates and clears the workflow rollup projection from the owner snapshot', () => {
+  it('hydrates and clears the workflow rollup projection from a DB snapshot', () => {
     const lastKnownTaskStates = new TaskSnapshotCache();
     const workflowRollupProjection = new WorkflowRollupProjection();
     seedTaskCachesFromSnapshot([ownerTask(1)], { lastKnownTaskStates, workflowRollupProjection });

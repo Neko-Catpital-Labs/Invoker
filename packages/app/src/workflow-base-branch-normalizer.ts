@@ -19,7 +19,7 @@ export function normalizePersistedWorkflowBaseBranches(
   }
   if (updated > 0) {
     logger?.info?.(
-      `[init] normalized ${updated} workflow base branch${updated === 1 ? '' : 'es'} to ${PINNED_WORKFLOW_BASE_BRANCH}`,
+      `[init] defaulted ${updated} missing workflow base branch${updated === 1 ? '' : 'es'} to ${PINNED_WORKFLOW_BASE_BRANCH}`,
       { module: 'init', workflowCount: updated, baseBranch: PINNED_WORKFLOW_BASE_BRANCH },
     );
   }

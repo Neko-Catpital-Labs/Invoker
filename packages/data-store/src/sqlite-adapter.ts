@@ -174,7 +174,9 @@ interface SQLiteAdapterOptions {
    * Open WAL in exclusive locking mode: the wal-index lives in heap memory and
    * no `-shm` file is created, making the process immune to the SIGBUS that a
    * truncated memory-mapped `-shm` causes. Requires this process to be the SOLE
-   * opener of the database file — a concurrent open is rejected with SQLITE_BUSY.
+   * opener of the database file and is incompatible with delegated read-only
+   * viewers. Normal WAL mode is the default and supports one writer with
+   * concurrent read-only viewers.
    */
   exclusiveLocking?: boolean;
   slowQueryThresholdMs?: number;
@@ -740,17 +742,20 @@ export class SQLiteAdapter implements PersistenceAdapter {
       );
     }
 
-    // Sidecar files alone cannot prove a writable owner is live: opening a
-    // WAL-mode database read-only creates -wal/-shm itself, and a read-only
-    // connection has no write access to checkpoint them away on close. Gating
-    // on mere existence therefore lets the first reader wedge every reader
-    // after it. Only a live owner may turn a reader away.
-    if (isFile && options?.readOnly === true && (existsSync(`${dbPath}-wal`) || existsSync(`${dbPath}-shm`))) {
+    // In normal WAL mode, read-only viewers are allowed to coexist with the
+    // writable owner. Exclusive locking is the opt-in exception: it keeps the
+    // wal-index in heap memory and requires the owner to be the sole opener.
+    if (
+      isFile
+      && options?.readOnly === true
+      && existsSync(`${dbPath}-wal`)
+      && !existsSync(`${dbPath}-shm`)
+    ) {
       const ownerPid = readLiveOwnerPid(dbPath);
       if (ownerPid !== null) {
         throw new Error(
-          `Cannot open SQLite database read-only while writable owner PID ${ownerPid} holds live WAL sidecars for ${dbPath}. ` +
-          'Close the writable owner cleanly before opening a file-backed read-only adapter.',
+          `Cannot open SQLite database read-only while writable owner PID ${ownerPid} is using exclusive locking for ${dbPath}. ` +
+          'exclusiveLocking is incompatible with delegated read-only viewers; restart the owner in normal WAL mode.',
         );
       }
     }

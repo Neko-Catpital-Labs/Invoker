@@ -1266,6 +1266,10 @@ export const IpcChannels = {
     request: [metric: string, data?: Record<string, unknown>];
     response: void;
   },
+  'invoker:trace-renderer-task-graph-event': {} as {
+    request: [event: TaskGraphEvent];
+    response: void;
+  },
   'invoker:get-ui-perf-stats': {} as {
     request: [];
     response: Record<string, unknown>;
