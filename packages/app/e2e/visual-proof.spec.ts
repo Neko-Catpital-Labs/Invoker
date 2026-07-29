@@ -18,6 +18,7 @@ import {
   captureScreenshot,
   assertPageScreenshot,
   getTasks,
+  openPlanGraph,
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
 import * as fs from 'node:fs/promises';
@@ -357,30 +358,53 @@ function statusProofLabel(status: string) {
   return status.replaceAll('_', ' ');
 }
 
+const STATUS_PROOF_CLEARED_EXECUTION = {
+  blockedBy: undefined,
+  inputPrompt: undefined,
+  exitCode: undefined,
+  error: undefined,
+  startedAt: undefined,
+  completedAt: undefined,
+  lastHeartbeatAt: undefined,
+  remoteHeartbeatAt: undefined,
+  heartbeatSource: undefined,
+  actionRequestId: undefined,
+  pendingFixError: undefined,
+  isFixingWithAI: undefined,
+  reviewUrl: undefined,
+  reviewId: undefined,
+  reviewStatus: undefined,
+  reviewGate: undefined,
+  phase: undefined,
+  launchStartedAt: undefined,
+  launchCompletedAt: undefined,
+  selectedAttemptId: undefined,
+};
+
 function taskStatusExecution(status: string, now: Date, earlier: Date) {
   switch (status) {
     case 'running':
-      return { startedAt: earlier };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, startedAt: earlier };
     case 'fixing_with_ai':
-      return { startedAt: earlier, isFixingWithAI: true };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, startedAt: earlier, isFixingWithAI: true };
     case 'completed':
-      return { startedAt: earlier, completedAt: now, exitCode: 0 };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, startedAt: earlier, completedAt: now, exitCode: 0 };
     case 'failed':
-      return { startedAt: earlier, completedAt: now, exitCode: 1, error: 'status proof failure' };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, startedAt: earlier, completedAt: now, exitCode: 1, error: 'status proof failure' };
     case 'needs_input':
-      return { startedAt: earlier, inputPrompt: 'Choose a status proof option' };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, startedAt: earlier, inputPrompt: 'Choose a status proof option' };
     case 'blocked':
-      return { blockedBy: 'proof-task-failed' };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, blockedBy: 'proof-task-failed' };
     case 'review_ready':
-      return { startedAt: earlier, reviewUrl: 'https://example.test/status-proof' };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, startedAt: earlier, reviewUrl: 'https://example.test/status-proof' };
     case 'awaiting_approval':
-      return { startedAt: earlier };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, startedAt: earlier };
     case 'stale':
-      return { startedAt: earlier, completedAt: now };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, startedAt: earlier, completedAt: now };
     case 'closed':
-      return { completedAt: now };
+      return { ...STATUS_PROOF_CLEARED_EXECUTION, completedAt: now };
     default:
-      return {};
+      return { ...STATUS_PROOF_CLEARED_EXECUTION };
   }
 }
 
@@ -471,7 +495,20 @@ async function openContextMenu(page: Page, locator: Locator) {
   await expect(menu).toBeVisible({ timeout: 10000 });
   return menu;
 }
+
+async function ensureAppSidebarExpanded(page: Page): Promise<void> {
+  const sidebar = page.getByTestId('app-sidebar');
+  await expect(sidebar).toBeVisible();
+  const className = await sidebar.getAttribute('class');
+  if (className?.includes('w-60')) return;
+  await page.getByTestId('sidebar-collapse-toggle').click();
+  await expect(sidebar).toHaveClass(/w-60/);
+}
+
 async function selectGraphMenuItem(page: Page, testId: string): Promise<void> {
+  if (!(await page.getByTestId('graph-more-button').isVisible().catch(() => false))) {
+    await openPlanGraph(page);
+  }
   await page.getByTestId('graph-more-button').click();
   await expect(page.getByTestId('graph-more-menu')).toBeVisible();
   await page.getByTestId(testId).click({ force: true });
@@ -484,9 +521,10 @@ async function expectQueueViewVisible(page: Page): Promise<void> {
 }
 
 
-async function selectWorkflowNode(page: Page, workflowId: string): Promise<void> {
-  const node = workflowNode(page, workflowId);
+async function selectWorkflowNode(page: Page, workflowId: string, expectedTitle?: string): Promise<void> {
+  const node = page.getByTestId(`workflow-node-${workflowId}`).first();
   const miniDag = page.getByTestId('selected-workflow-mini-dag');
+  const inspectorTitle = page.getByTestId('workflow-inspector-title');
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await node.waitFor({ state: 'attached', timeout: 15000 });
@@ -499,17 +537,33 @@ async function selectWorkflowNode(page: Page, workflowId: string): Promise<void>
     if (!(await miniDag.isVisible({ timeout: 1500 }).catch(() => false))) {
       await node.dispatchEvent('click', { bubbles: true });
     }
-    if (await miniDag.isVisible({ timeout: 1500 }).catch(() => false)) {
+    if (expectedTitle) {
+      if (await inspectorTitle.textContent({ timeout: 1500 }).then((text) => text?.trim() === expectedTitle).catch(() => false)) {
+        return;
+      }
+      await node.dispatchEvent('click', { bubbles: true });
+      if (await inspectorTitle.textContent({ timeout: 1500 }).then((text) => text?.trim() === expectedTitle).catch(() => false)) {
+        return;
+      }
+    }
+    if (!expectedTitle && await miniDag.isVisible({ timeout: 1500 }).catch(() => false)) {
       return;
     }
-    await page.getByRole('button', { name: 'Refresh' }).click();
+    await page.getByTestId('rail-refresh').click();
     await page.waitForTimeout(300);
   }
 
+  if (expectedTitle) {
+    await expect(inspectorTitle).toHaveText(expectedTitle, { timeout: 10000 });
+    return;
+  }
   await expect(miniDag).toBeVisible({ timeout: 10000 });
 }
 
 async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<string> {
+  const expectedTitle = typeof (plan as { name?: unknown }).name === 'string'
+    ? (plan as { name: string }).name
+    : undefined;
   const beforeIds = await page.evaluate(async () => {
     const workflows = await window.invoker.listWorkflows();
     return workflows.map((workflow: { id: string }) => workflow.id);
@@ -522,11 +576,10 @@ async function loadPlanAndSelectWorkflow(page: Page, plan: unknown): Promise<str
       ?? null;
   }, beforeIds);
   expect(workflow?.id).toBeTruthy();
-  await page.getByTestId('sidebar-planning').click();
-  await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible();
-  await page.getByRole('button', { name: 'Refresh' }).click();
+  await openPlanGraph(page);
+  await page.getByTestId('rail-refresh').click();
   await page.waitForTimeout(300);
-  await selectWorkflowNode(page, workflow!.id);
+  await selectWorkflowNode(page, workflow!.id, expectedTitle);
   return workflow!.id;
 }
 async function seedActiveLaunchAttempt(dbPath: string, taskId: string, attemptId: string, now: Date): Promise<void> {
@@ -949,10 +1002,8 @@ test.describe('Visual proof capture', () => {
     // with attemptCount > 1. The visual proof shows that the raw error
     // message (including "after N attempts" and the stderr tail) is rendered
     // both as an error-toned SYSTEM line in the transcript AND as a
-    // prominent "Planner could not respond" card with Copy error / Keep
-    // chatting affordances, even on a first-message failure with no draft
-    // plan available. The Retry submit button is intentionally absent when
-    // there is no draft to retry.
+    // failed planning activity in the transcript and keeps a concise stopped
+    // state visible so the failure is not mistaken for an idle chat.
     const exhaustedRetryError = 'agent exited 0 but produced no output after 3 attempts — stderr tail: cursor: session expired; run `cursor login` to re-authenticate';
     await page.evaluate(async (throwError) => {
       await window.invoker.setTestPlanningChatResponse({ throwError });
@@ -963,18 +1014,13 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('invoker-terminal-input').fill('Draft me an Invoker plan');
     await page.getByRole('button', { name: 'Send' }).click();
 
-    const submitError = page.getByTestId('invoker-terminal-submit-error');
-    await expect(submitError).toBeVisible();
-    await expect(submitError).toContainText('Planner could not respond');
-    await expect(submitError).toContainText('after 3 attempts');
-    await expect(submitError).toContainText('cursor: session expired');
-    await expect(submitError.getByRole('button', { name: 'Copy error' })).toBeVisible();
-    await expect(submitError.getByRole('button', { name: 'Keep chatting' })).toBeVisible();
-    await expect(submitError.getByRole('button', { name: 'Retry submit' })).toHaveCount(0);
-
     const transcript = page.getByTestId('invoker-terminal-transcript');
     await expect(transcript).toContainText('after 3 attempts');
     await expect(transcript).toContainText('cursor: session expired');
+    const streamStatus = page.getByTestId('invoker-terminal-planner-stream');
+    await expect(streamStatus).toHaveAttribute('data-state', 'failed');
+    await expect(streamStatus).toContainText('Planning stopped. Try again when ready.');
+    await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
 
     await captureScreenshot(page, 'planner-retry-exhausted-error');
 
@@ -1061,16 +1107,17 @@ test.describe('Visual proof capture', () => {
     await page.getByTestId('invoker-terminal-input').fill('Draft a YAML plan for the Workers Surface');
     await page.getByRole('button', { name: 'Send' }).click();
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toBeVisible();
-    await page.getByRole('button', { name: 'Submit to Invoker' }).click();
+    await page.getByRole('button', { name: 'Review draft' }).click();
+    await page.getByTestId('planning-create-workflow').click();
 
     const transcript = page.getByTestId('invoker-terminal-transcript');
     await expect(transcript).toContainText('Plan "Workers Surface" submitted as 2 stacked workflows.');
-    await expect(page.getByTestId('sidebar-planning')).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('heading', { name: 'Planning chat window' })).toBeVisible();
+    await expect(page.getByTestId('sidebar-home')).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Plan graph' })).toHaveCount(0);
     await expect(page.getByTestId('workflow-inspector-title')).toHaveCount(0);
     await expect(page.getByTestId('invoker-terminal-ready-bar')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Submit to Invoker' })).toHaveCount(0);
+    await expect(page.getByTestId('planning-create-workflow')).toHaveCount(0);
     await captureScreenshot(page, 'planning-submit-no-jump-stacked-workflows');
 
     const stack = await page.evaluate(async () => {
@@ -1108,6 +1155,7 @@ test.describe('Visual proof capture', () => {
 
   test('workflows browser and home return', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await ensureAppSidebarExpanded(page);
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
     await expect(page.getByRole('button', { name: /Menu Proof Workflow/ }).first()).toBeVisible();
@@ -1117,10 +1165,11 @@ test.describe('Visual proof capture', () => {
 
     await page.getByTestId('browser-rail-dismiss').click();
     await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
-    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-16/);
+    await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
   test('needs attention browser focuses the selected task', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await ensureAppSidebarExpanded(page);
     await injectTaskStates(page, [
       {
         taskId: 'task-alpha',
@@ -1174,6 +1223,7 @@ test.describe('Visual proof capture', () => {
 
   test('collapsible workflow browsers', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await ensureAppSidebarExpanded(page);
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
@@ -1194,9 +1244,10 @@ test.describe('Visual proof capture', () => {
     await expect(page.getByTestId('app-sidebar')).toHaveClass(/w-60/);
   });
 
-  test('sidebar-default-width — home to workflows keeps default full width', async ({ page }) => {
+  test('sidebar-expanded-width — home to workflows keeps manual full width', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+    await ensureAppSidebarExpanded(page);
     const sidebar = page.getByTestId('app-sidebar');
 
     await page.getByTestId('sidebar-home').click();
@@ -1220,6 +1271,7 @@ test.describe('Visual proof capture', () => {
   test('sidebar-collapse-state — manual sidebar width survives left rail navigation', async ({ page }) => {
     const sidebar = page.getByTestId('app-sidebar');
 
+    await ensureAppSidebarExpanded(page);
     await page.getByTestId('sidebar-workflows').click();
     await expect(page.getByRole('heading', { name: 'Workflows' })).toBeVisible();
     await expect(sidebar).toHaveClass(/w-60/);
@@ -2005,16 +2057,11 @@ test.describe('Visual proof capture', () => {
     const workflowIds = new Map<string, string>();
     const loadStatusWorkflow = async (
       status: (typeof WORKFLOW_STATUS_PROOF_STATUSES)[number],
-      dependencies: readonly string[] = [],
     ) => {
       const workflowId = await loadPlanAndSelectWorkflow(page, {
         name: `Status proof ${statusProofLabel(status)}`,
         repoUrl: E2E_REPO_URL,
         onFinish: 'none' as const,
-        externalDependencies: dependencies.map((workflowId) => ({
-          workflowId,
-          gatePolicy: 'review_ready' as const,
-        })),
         tasks: [
           {
             id: statusProofWorkflowTaskId(status),
@@ -2028,16 +2075,9 @@ test.describe('Visual proof capture', () => {
       return workflowId;
     };
 
-    const pendingId = await loadStatusWorkflow('pending');
-    const runningId = await loadStatusWorkflow('running');
-    const fixingId = await loadStatusWorkflow('fixing_with_ai');
-    const completedId = await loadStatusWorkflow('completed', [pendingId]);
-    const failedId = await loadStatusWorkflow('failed', [runningId]);
-    const closedId = await loadStatusWorkflow('closed', [fixingId]);
-    const blockedId = await loadStatusWorkflow('blocked', [completedId]);
-    await loadStatusWorkflow('review_ready', [failedId]);
-    await loadStatusWorkflow('awaiting_approval', [closedId]);
-    await loadStatusWorkflow('stale', [blockedId]);
+    for (const status of WORKFLOW_STATUS_PROOF_STATUSES) {
+      await loadStatusWorkflow(status);
+    }
 
     const now = new Date();
     const earlier = new Date(Date.now() - 5000);
@@ -2050,6 +2090,7 @@ test.describe('Visual proof capture', () => {
         ...WORKFLOW_STATUS_PROOF_STATUSES.map((status) => ({
           taskId: statusProofWorkflowTaskId(status),
           changes: {
+            ...(status === 'pending' ? { dependencies: ['status-proof-not-ready'] as string[] } : {}),
             status,
             execution: taskStatusExecution(status, now, earlier),
           },
@@ -2064,7 +2105,17 @@ test.describe('Visual proof capture', () => {
         })),
       ],
     );
-    await page.getByRole('button', { name: 'Refresh' }).click();
+    await openPlanGraph(page);
+    await page.getByTestId('rail-refresh').click();
+    await page.waitForFunction(
+      (expected) => window.invoker.listWorkflows().then((workflows) => {
+        const byId = new Map(workflows.map((workflow: { id: string; status: string }) => [workflow.id, workflow.status]));
+        return expected.every(({ workflowId, status }) => byId.get(workflowId) === status);
+      }),
+      Array.from(workflowIds.entries()).map(([status, workflowId]) => ({ status, workflowId })),
+      { timeout: 15000 },
+    );
+    await page.getByTestId('rail-refresh').click();
     await page.waitForTimeout(300);
 
     await hideSelectedWorkflowMiniDagIfVisible(page);
@@ -2077,7 +2128,7 @@ test.describe('Visual proof capture', () => {
       expect(workflowId).toBeTruthy();
       const node = workflowNode(page, workflowId!);
       await expect(node).toBeVisible({ timeout: 10000 });
-      await expect(node.getByText(statusProofLabel(status), { exact: true })).toBeVisible();
+      await expect(node.getByText(statusProofLabel(status), { exact: true })).toBeVisible({ timeout: 15000 });
     }
 
     await captureScreenshot(page, 'workflow-status-all-states');
@@ -2373,7 +2424,8 @@ test.describe('Visual proof capture', () => {
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq2Plan));
     await page.evaluate((p) => window.invoker.loadPlan(p), yamlStringify(prereq3Plan));
     await page.waitForFunction(() => window.invoker.listWorkflows().then((workflows) => workflows.length >= 3), null, { timeout: 10000 });
-    await page.getByRole('button', { name: 'Refresh' }).click();
+    await openPlanGraph(page);
+    await page.getByTestId('rail-refresh').click();
     await selectFirstWorkflow(page);
 
     // Get the workflow IDs from the loaded plans

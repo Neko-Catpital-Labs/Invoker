@@ -1372,6 +1372,7 @@ export const IpcTestOnlyChannels = {
       nowIso?: string;
       stuckLaunchingSlots?: number;
       launchAgeMs?: number;
+      taskStatusMode?: 'mixed' | 'pending' | 'completed';
     }];
     response: {
       workflowCount: number;
@@ -1381,6 +1382,7 @@ export const IpcTestOnlyChannels = {
       fixing: number;
       pending: number;
       failed: number;
+      completed: number;
     };
   },
 } as const;
