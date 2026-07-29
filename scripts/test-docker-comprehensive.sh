@@ -101,14 +101,18 @@ FROM invoker-agent:latest
 ARG CURRENT_BRANCH
 
 USER root
-RUN cd /app \
-    && git init . \
-    && git config --global --add safe.directory /app \
-    && printf '# docker comprehensive fixture\n' > README.md \
-    && git add . \
-    && git -c user.email="test@invoker.local" -c user.name="Invoker Docker Test" commit -m "seed" \
-    && git checkout -B "${CURRENT_BRANCH}" \
-    && chown -R invoker:invoker /app
+RUN set -eu; \
+    git config --global --add safe.directory /app; \
+    git init --bare /tmp/invoker-docker-comprehensive-origin.git; \
+    cd /app; \
+    git init .; \
+    printf '# docker comprehensive fixture\n' > README.md; \
+    git add .; \
+    git -c user.email="test@invoker.local" -c user.name="Invoker Docker Test" commit -m "seed"; \
+    git checkout -B "${CURRENT_BRANCH}"; \
+    git remote add origin /tmp/invoker-docker-comprehensive-origin.git; \
+    git push -u origin "${CURRENT_BRANCH}"; \
+    chown -R invoker:invoker /app /tmp/invoker-docker-comprehensive-origin.git
 
 USER invoker
 WORKDIR /app
