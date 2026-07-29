@@ -9,7 +9,6 @@ import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import {
   E2E_REPO_URL,
-  TEST_PLAN,
   expect,
   loadPlan,
   startPlan,
@@ -32,6 +31,7 @@ const HEADLESS_DELEGATED_WORKFLOW_COUNT = 8;
 const MAX_RETRY_BURST_WALL_MS = 120000;
 const MAX_RENDERER_EVENT_LOOP_LAG_MS = 1000;
 const MAX_RENDERER_LONG_TASK_MS = 1500;
+const STANDALONE_OWNER_IDLE_GRACE_MS = 15000;
 
 const HEADLESS_HERD_BUDGETS = {
   maxInspectorToggleMs: MAX_INSPECTOR_TOGGLE_MS,
@@ -40,6 +40,20 @@ const HEADLESS_HERD_BUDGETS = {
   minRetryCommandCount: HEADLESS_DELEGATED_WORKFLOW_COUNT + 1,
   maxRendererEventLoopLagMs: MAX_RENDERER_EVENT_LOOP_LAG_MS,
   maxRendererLongTaskMs: MAX_RENDERER_LONG_TASK_MS,
+};
+
+const HEADLESS_HERD_UI_PLAN = {
+  name: 'Headless Herd UI Seed',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    {
+      id: 'herd-ui-root',
+      description: 'Herd UI seed',
+      command: 'echo herd-ui-root',
+      dependencies: [],
+    },
+  ],
 };
 
 async function ensureHeadlessTestConfig(testDir: string): Promise<void> {
@@ -116,11 +130,15 @@ async function measureInspectorToggleResponsive(page: Page, timeoutMs: number, l
   return Date.now() - startedAt;
 }
 
+async function settleHeadlessHerdWorkflows(page: Page): Promise<void> {
+  await page.waitForTimeout(STANDALONE_OWNER_IDLE_GRACE_MS);
+}
+
 test.describe('Headless thundering herd', () => {
   test('burst headless restarts do not spawn headless electron herds or freeze the UI', async ({ page, testDir }) => {
-    await loadPlan(page, TEST_PLAN);
+    await loadPlan(page, HEADLESS_HERD_UI_PLAN);
     await startPlan(page);
-    await page.locator('.react-flow__node[data-testid$="task-alpha"]').waitFor({ state: 'visible', timeout: 10000 });
+    await page.locator('.react-flow__node[data-testid$="herd-ui-root"]').waitFor({ state: 'visible', timeout: 10000 });
 
     // Discover the active workflow through the renderer bridge API
     // (listWorkflows) rather than reaching into task config internals.
@@ -138,7 +156,7 @@ test.describe('Headless thundering herd', () => {
         {
           id: 'burst-root',
           description: 'Burst root',
-          command: 'sleep 1 && echo burst-root',
+          command: 'echo burst-root',
           dependencies: [],
         },
       ],
@@ -214,6 +232,8 @@ test.describe('Headless thundering herd', () => {
     expect(maxPayloadNumber(perfPayloads, 'renderer_event_loop_lag', 'lagMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
     expect(maxPayloadNumber(perfPayloads, 'renderer_long_task', 'durationMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
     expect(delegatedPerf.ownerMode, evidenceMessage).toBe('standalone');
+
+    await settleHeadlessHerdWorkflows(page);
   });
 
   test('standalone owner serves delegated headless commands from isolated test paths', async ({ testDir }) => {
