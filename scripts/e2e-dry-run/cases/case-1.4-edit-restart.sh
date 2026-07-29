@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Group 1.4 — fail then edit+restart to success.
+# Group 1.4 — fail then set command + restart to success.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
@@ -24,14 +24,14 @@ if [ "$ST" != "failed" ]; then
 fi
 echo "==> case 1.4: confirmed intermediate status=failed"
 
-echo "==> case 1.4: edit command + restart"
-invoker_e2e_run_headless edit e2e-g114-task echo ok
+echo "==> case 1.4: set command + restart"
+invoker_e2e_run_headless set command e2e-g114-task echo ok
 
 ST=$(invoker_e2e_task_status e2e-g114-task)
 if [ "$ST" != "completed" ]; then
   echo "FAIL case 1.4: expected final status=completed, got '$ST'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
-echo "PASS case 1.4 (e2e-g114-task edit+restart → completed)"
+echo "PASS case 1.4 (e2e-g114-task set command + restart → completed)"

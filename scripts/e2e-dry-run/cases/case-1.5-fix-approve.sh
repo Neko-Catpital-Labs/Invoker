@@ -32,7 +32,7 @@ invoker_e2e_wait_settled e2e-g115-task
 ST=$(invoker_e2e_task_status e2e-g115-task)
 if [ "$ST" != "awaiting_approval" ]; then
   echo "FAIL case 1.5: expected status=awaiting_approval after fix, got '$ST'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 1.5: confirmed status=awaiting_approval"
@@ -44,7 +44,7 @@ invoker_e2e_wait_settled e2e-g115-task
 ST=$(invoker_e2e_task_status e2e-g115-task)
 if [ "$ST" != "completed" ]; then
   echo "FAIL case 1.5: expected status=completed after approve, got '$ST'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

@@ -23,7 +23,7 @@ STC=$(invoker_e2e_task_status e2e-g226-taskC)
 STD=$(invoker_e2e_task_status e2e-g226-taskD)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ] || [ "$STC" != "completed" ] || [ "$STD" != "completed" ]; then
   echo "FAIL case 2.6: expected all completed, got A='$STA' B='$STB' C='$STC' D='$STD'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

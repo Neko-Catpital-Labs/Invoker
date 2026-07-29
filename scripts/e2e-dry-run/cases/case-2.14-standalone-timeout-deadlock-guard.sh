@@ -34,7 +34,7 @@ fi
 STA="$(invoker_e2e_task_status e2e-g2214-taskA)"
 if [ "$STA" != "failed" ]; then
   echo "FAIL case 2.14: expected taskA=failed, got '$STA'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
@@ -111,7 +111,7 @@ for line in sys.stdin:
 if [ -n "$STALE_RUNNING" ]; then
   echo "FAIL case 2.14: found stale running task(s) after guarded rebase-retry-all"
   echo "$STALE_RUNNING"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

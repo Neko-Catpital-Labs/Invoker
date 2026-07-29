@@ -21,7 +21,7 @@ STA=$(invoker_e2e_task_status e2e-g228-taskA)
 STB=$(invoker_e2e_task_status e2e-g228-taskB)
 if [ "$STA" != "failed" ] || [ "$STB" != "pending" ]; then
   echo "FAIL case 2.8: expected A=failed B=pending, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 2.8: confirmed A=failed, B=pending"
@@ -32,7 +32,7 @@ invoker_e2e_run_headless fix e2e-g228-taskA
 STA=$(invoker_e2e_task_status e2e-g228-taskA)
 if [ "$STA" != "awaiting_approval" ]; then
   echo "FAIL case 2.8: expected A=awaiting_approval after fix, got '$STA'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 2.8: confirmed A=awaiting_approval"
@@ -44,7 +44,7 @@ STA=$(invoker_e2e_task_status e2e-g228-taskA)
 STB=$(invoker_e2e_task_status e2e-g228-taskB)
 if [ "$STA" != "failed" ] || [ "$STB" != "pending" ]; then
   echo "FAIL case 2.8: expected A=failed B=pending after reject, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

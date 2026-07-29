@@ -21,7 +21,7 @@ STA=$(invoker_e2e_task_status e2e-g442-taskA)
 STB=$(invoker_e2e_task_status e2e-g442-taskB)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ]; then
   echo "FAIL case 4.2: expected A=completed B=completed, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 4.2: confirmed A=completed, B=completed"
@@ -31,7 +31,7 @@ echo "==> case 4.2: confirmed A=completed, B=completed"
 MERGE_ID=$(invoker_e2e_merge_gate_id)
 if [ -z "$MERGE_ID" ]; then
   echo "FAIL case 4.2: could not find merge gate task ID"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 4.2: merge gate ID=$MERGE_ID"
@@ -39,7 +39,7 @@ echo "==> case 4.2: merge gate ID=$MERGE_ID"
 STM=$(invoker_e2e_task_status "$MERGE_ID")
 if [ "$STM" != "awaiting_approval" ] && [ "$STM" != "review_ready" ]; then
   echo "FAIL case 4.2: expected merge gate=awaiting_approval|review_ready, got '$STM'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 4.2: confirmed merge gate status=$STM"
@@ -83,7 +83,7 @@ done
 
 if [ "$STM" != "completed" ]; then
   echo "FAIL case 4.2: expected merge gate=completed after PR merge, got '$STM'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 

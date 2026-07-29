@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Group 2.11 — A fails, edit command to fix, B runs after restart succeeds.
+# Group 2.11 — A fails, set command to fix, B runs after restart succeeds.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
@@ -21,20 +21,20 @@ STA=$(invoker_e2e_task_status e2e-g2211-taskA)
 STB=$(invoker_e2e_task_status e2e-g2211-taskB)
 if [ "$STA" != "failed" ] || [ "$STB" != "pending" ]; then
   echo "FAIL case 2.11: expected A=failed B=pending, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 2.11: confirmed A=failed, B=pending"
 
-echo "==> case 2.11: edit A command + restart"
-invoker_e2e_run_headless edit e2e-g2211-taskA echo ok
+echo "==> case 2.11: set A command + restart"
+invoker_e2e_run_headless set command e2e-g2211-taskA echo ok
 
 STA=$(invoker_e2e_task_status e2e-g2211-taskA)
 STB=$(invoker_e2e_task_status e2e-g2211-taskB)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ]; then
   echo "FAIL case 2.11: expected A=completed B=completed, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 
-echo "PASS case 2.11 (edit A → restart → A=completed, B=completed)"
+echo "PASS case 2.11 (set A command → restart → A=completed, B=completed)"

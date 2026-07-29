@@ -32,7 +32,7 @@ invoker_e2e_case43_dump_state() {
   fi
 
   echo "DIAG case 4.3: headless status begin"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   echo "DIAG case 4.3: headless status end"
 }
 
@@ -86,7 +86,7 @@ invoker_e2e_wait_settled e2e-g443-taskA
 STA=$(invoker_e2e_case43_task_status e2e-g443-taskA)
 if [ "$STA" != "awaiting_approval" ]; then
   echo "FAIL case 4.3: expected A=awaiting_approval after fix, got '$STA'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 4.3: confirmed A=awaiting_approval"
@@ -106,7 +106,7 @@ STA=$(invoker_e2e_case43_task_status e2e-g443-taskA)
 STB=$(invoker_e2e_case43_task_status e2e-g443-taskB)
 if [ "$STA" != "completed" ] || [ "$STB" != "completed" ]; then
   echo "FAIL case 4.3: expected A=completed B=completed, got A='$STA' B='$STB'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 4.3: confirmed A=completed, B=completed"
@@ -115,7 +115,7 @@ echo "==> case 4.3: confirmed A=completed, B=completed"
 MERGE_ID=$(invoker_e2e_merge_gate_id)
 if [ -z "$MERGE_ID" ]; then
   echo "FAIL case 4.3: could not find merge gate task ID"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 4.3: merge gate ID=$MERGE_ID"
@@ -147,7 +147,7 @@ done
 
 if [ "$STM" != "awaiting_approval" ] && [ "$STM" != "review_ready" ]; then
   echo "FAIL case 4.3: expected merge gate=awaiting_approval|review_ready, got '$STM'"
-  invoker_e2e_run_headless status 2>&1 || true
+  invoker_e2e_dump_tasks
   exit 1
 fi
 echo "==> case 4.3: confirmed merge gate status=$STM"
