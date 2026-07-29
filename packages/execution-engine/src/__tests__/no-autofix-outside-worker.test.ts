@@ -11,6 +11,10 @@ import { createWorkerRegistry } from '../worker-registry.js';
 const SOURCE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BUILTIN_WORKERS_SOURCE = 'builtin-workers.ts';
 const RECOVERY_ACTION_TRIGGER_PATTERN = /\bsubmitter\.submit\s*\(/g;
+const SANCTIONED_RECOVERY_ACTION_SOURCE_FILES = new Set([
+  'repair-workflow-spec.ts',
+  'review-gate-ci-repair.ts',
+]);
 
 type SourceFiles = ReadonlyMap<string, string>;
 
@@ -111,7 +115,9 @@ function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<strin
     registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()).list().map((worker) => worker.kind),
   );
   const registerImports = importedRegisterFunctions(builtinWorkers ?? '');
-  const allowedFiles = new Set<string>();
+  // CI-repair submitters are lifecycle/command-dispatcher owned, not runtime
+  // factories in registerBuiltinWorkers, so they must stay explicit here.
+  const allowedFiles = new Set<string>(SANCTIONED_RECOVERY_ACTION_SOURCE_FILES);
 
   for (const [registerFunction, moduleSpecifier] of registerImports) {
     const callPattern = new RegExp(`\\b${escapeRegExp(registerFunction)}\\(registry\\)`);
@@ -143,6 +149,10 @@ function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<strin
         queue.push(importedPath);
       }
     }
+  }
+
+  for (const file of SANCTIONED_RECOVERY_ACTION_SOURCE_FILES) {
+    expect(sourceFiles.get(file), `${file} must exist while it is sanctioned for recovery actions`).toBeDefined();
   }
 
   return allowedFiles;

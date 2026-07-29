@@ -63,7 +63,6 @@ export * from './repair-workflow-spec.js';
 export * from './ci-failure-infra-classifier.js';
 export * from './pr-stack-detection.js';
 export * from './workers/pr-status-worker.js';
-export * from './workers/pr-summary-refresh-worker.js';
 export * from './workers/infra-repair-worker.js';
 export * from './workers/auto-approve-worker.js';
 export * from './workers/disk-headroom-worker.js';

@@ -7,7 +7,6 @@ import {
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
   INFRA_REPAIR_WORKER_KIND,
-  PR_SUMMARY_REFRESH_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRuntime,
@@ -114,7 +113,6 @@ function controller(
   };
   register(AUTO_FIX_WORKER_KIND, 'Auto-fixes failed tasks.', 'recovery');
   register(PR_STATUS_WORKER_KIND, 'Checks pull request status.');
-  register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes pull request summaries.');
   register(INFRA_REPAIR_WORKER_KIND, 'Repairs infra-owned SSH and CI failures.');
   register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Lands eligible PRs via admin bypass.');
   register(PR_ADMIN_BYPASS_QUEUE_WORKER_KIND, 'Submits admin-bypass repair work.');
@@ -144,7 +142,6 @@ describe('createWorkerRuntimeController', () => {
     const snapshot = setup.controller.snapshot();
 
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
-    expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === INFRA_REPAIR_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_LAND_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_QUEUE_WORKER_KIND)?.lifecycle).toBe('running');
