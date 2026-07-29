@@ -92,7 +92,7 @@ for task_id in e2e-headless-agent-codex e2e-headless-agent-claude; do
   status="$(invoker_e2e_task_status "$task_id")"
   if [ "$status" != "completed" ]; then
     echo "FAIL: expected $task_id status=completed, got '$status'" >&2
-    invoker_e2e_run_headless status 2>&1 || true
+    invoker_e2e_dump_tasks || true
     exit 1
   fi
 done
