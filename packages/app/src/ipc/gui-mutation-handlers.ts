@@ -1801,13 +1801,6 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return workerRuntimeController.stop(String(kindArg));
   });
 
-  ipcMain.handle('invoker:get-queue-status', () => resolveGuiQueueStatusRead({
-    ownerMode,
-    messageBus,
-    orchestrator,
-    logger,
-    markDaemonOwnerUnavailable,
-  }));
   ipcMain.handle('invoker:get-worker-status', async () => {
     if (!ownerMode) {
       try {
