@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 
 const DEFAULT_BASE_BRANCH = 'master';
 const DEFAULT_BASE_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'origin';
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 function usage() {
   console.error(`Usage: node scripts/validate-pr-body-local.mjs --body-file <file> [--base <branch>] [--base-remote <remote>] [--json]
@@ -107,12 +108,20 @@ function runTrustedBaseValidator({ repoRoot, baseRef, body, changedFiles, diffTe
     if (nodeModules && !existsSync(validatorNodeModules)) {
       symlinkSync(nodeModules, validatorNodeModules, 'dir');
     }
+    const trustedValidatorPath = join(validatorWorktree, 'scripts', 'validate-pr-body.mjs');
+    const trustedReviewRulesPath = join(validatorWorktree, 'scripts', 'review-unit-rules.mjs');
+    const validatorModulePath = existsSync(trustedValidatorPath)
+      ? trustedValidatorPath
+      : join(SCRIPT_DIR, 'validate-pr-body.mjs');
+    const reviewRulesModulePath = existsSync(trustedReviewRulesPath)
+      ? trustedReviewRulesPath
+      : join(SCRIPT_DIR, 'review-unit-rules.mjs');
     writeFileSync(bodyPath, body);
     writeFileSync(changedFilesPath, `${changedFiles.join('\n')}\n`);
     writeFileSync(diffPath, diffText);
     writeFileSync(scriptPath, `import { readFileSync } from 'node:fs';
-import { getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validatePrBody } from ${JSON.stringify(join(validatorWorktree, 'scripts', 'validate-pr-body.mjs'))};
-import { reviewUnitsForChangedFiles } from ${JSON.stringify(join(validatorWorktree, 'scripts', 'review-unit-rules.mjs'))};
+import { getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validatePrBody } from ${JSON.stringify(validatorModulePath)};
+import { reviewUnitsForChangedFiles } from ${JSON.stringify(reviewRulesModulePath)};
 
 const [bodyPath, changedFilesPath, diffPath] = process.argv.slice(2);
 const body = readFileSync(bodyPath, 'utf8');
