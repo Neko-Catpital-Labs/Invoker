@@ -28,7 +28,6 @@ import type {
   WorkflowResumeWorkerStore,
   WorkflowResumeWorkerSubmitter,
 } from './workers/workflow-resume-worker.js';
-import type { PrSummaryRefreshWorkerStore } from './workers/pr-summary-refresh-worker.js';
 
 /** Dependencies injected into a built-in worker factory when its runtime is built. */
 export interface WorkerRuntimeDependencies {
@@ -37,8 +36,7 @@ export interface WorkerRuntimeDependencies {
     & ReviewGateCiRepairStore
     & AutoApproveWorkerStore
     & InfraRepairWorkerStore
-    & WorkflowResumeWorkerStore
-    & PrSummaryRefreshWorkerStore;
+    & WorkflowResumeWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & ReviewGateCiRepairSubmitter
