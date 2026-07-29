@@ -22,6 +22,10 @@ export interface ResolveRefreshTaskGraphSnapshotDeps {
   persistence: Pick<SQLiteAdapter, 'listWorkflows'>;
   logger: Logger;
 }
+export interface RefreshTaskGraphSnapshotPublisher {
+  publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[], forced?: boolean): void;
+}
+
 
 function parseDelegatedRefreshTaskGraphSnapshot(
   value: unknown,
@@ -81,4 +85,11 @@ export async function resolveRefreshTaskGraphSnapshot(
     );
     return readLocalSnapshot();
   }
+}
+export function publishForcedRefreshTaskGraphSnapshot(
+  publisher: RefreshTaskGraphSnapshotPublisher,
+  reason: string,
+  snapshot: RefreshTaskGraphSnapshot,
+): void {
+  publisher.publishSnapshot(reason, snapshot.tasks, snapshot.workflows, true);
 }

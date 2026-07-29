@@ -159,6 +159,61 @@ describe('startHeadlessWebSurface', () => {
     expect(mocks.startWebBridge).not.toHaveBeenCalled();
   });
 
+  it('publishes a forced snapshot when the web refresh route runs', async () => {
+    const tasks = [
+      {
+        id: 'wf-1/task-1',
+        description: 'task 1',
+        status: 'running',
+        dependencies: [],
+        createdAt: new Date('2026-01-01'),
+        config: {},
+        execution: {},
+      },
+    ];
+    const workflows = [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }];
+    const deps = makeDeps({
+      config: { webToken: 'secret' },
+      orchestrator: {
+        syncAllFromDb: vi.fn(),
+        getAllTasks: vi.fn(() => tasks),
+      } as unknown as Orchestrator,
+      persistence: {
+        listWorkflows: vi.fn(() => workflows),
+        getActivityLogs: vi.fn(() => []),
+        writeActivityLog: vi.fn(),
+        listTerminalSessions: vi.fn(() => []),
+        loadTask: vi.fn(() => undefined),
+        deleteTerminalSession: vi.fn(),
+        updateTerminalSession: vi.fn(),
+        upsertTerminalSession: vi.fn(),
+      } as unknown as SQLiteAdapter,
+    });
+
+    const result = startHeadlessWebSurface(deps);
+    const dispatch = mocks.startWebBridge.mock.calls[0]?.[0].dispatch as (
+      channel: string,
+      args: unknown[],
+    ) => Promise<unknown>;
+
+    await expect(dispatch('invoker:refresh-task-graph', [])).resolves.toBeUndefined();
+    expect(deps.orchestrator.syncAllFromDb).toHaveBeenCalledTimes(1);
+    expect(deps.orchestrator.getAllTasks).toHaveBeenCalledTimes(1);
+    expect(deps.persistence.listWorkflows).toHaveBeenCalledTimes(1);
+    expect(mocks.bridgeBroadcast).toHaveBeenCalledWith(
+      'invoker:task-graph-event',
+      expect.objectContaining({
+        type: 'snapshot',
+        reason: 'refresh-task-graph',
+        tasks,
+        workflows,
+        forced: true,
+      }),
+    );
+
+    await result?.close();
+  });
+
   it('keeps browser task terminals disabled when terminal deps are absent', async () => {
     const deps = makeDeps({ config: { webToken: 'secret' } });
 
