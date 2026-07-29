@@ -911,15 +911,24 @@ export class SlackSurface implements Surface {
       this.log('slack', 'info', `[MENTION_RECEIVED] instance=${this.instanceId} event_ts=${event.ts} thread_ts=${threadTs} channel=${channel ?? 'unknown'} user=${event.user ?? 'unknown'}`);
 
       const mapping = channel ? this.workflowChannelRepo?.getByChannelId(channel) : null;
-      if (mapping) {
-        this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=workflow workflow=${mapping.workflowId}`);
-        await this.handleWorkflowAssistantMention(mapping, event, say);
-        return;
-      }
-
-      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=planning`);
-      await this.handlePlanningMention(event, say, channel ?? this.lobbyChannelId);
+      await this.handleMention(event, say, channel ?? this.lobbyChannelId, mapping ?? undefined);
     });
+  }
+
+  private async handleMention(
+    event: SlackMentionEvent,
+    say: SayFn,
+    channel: string,
+    mapping?: WorkflowChannel,
+  ): Promise<void> {
+    if (mapping) {
+      this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=workflow workflow=${mapping.workflowId}`);
+      await this.handleWorkflowAssistantMention(mapping, event, say);
+      return;
+    }
+
+    this.log('slack', 'info', `[MENTION_ROUTE] instance=${this.instanceId} event_ts=${event.ts} route=planning`);
+    await this.handlePlanningMention(event, say, channel);
   }
 
   // ── Planning mention (lobby) ───────────────────────────
@@ -2485,6 +2494,19 @@ ${text}`;
     let heartbeatTimer: NodeJS.Timeout | undefined;
     const heartbeatTimestamps: string[] = [];
     let heartbeatInFlight = false;
+    const cleanupHeartbeats = async (): Promise<void> => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
+      for (const hbTs of heartbeatTimestamps) {
+        try {
+          await this.deleteMessage(channel, hbTs);
+        } catch (err) {
+          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${err}`);
+        }
+      }
+    };
     if (heartbeatMs > 0) {
       heartbeatTimer = setInterval(async () => {
         if (heartbeatInFlight) return;
@@ -2507,15 +2529,6 @@ ${text}`;
     try {
       const reply = await conversation.sendMessage(text);
       const tCursor = Date.now();
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      for (const hbTs of heartbeatTimestamps) {
-        try {
-          await this.deleteMessage(channel, hbTs);
-        } catch (err) {
-          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${err}`);
-        }
-      }
-      const tHeartbeatCleanup = Date.now();
       this.log('slack', 'info', `[TRACE] conversation.sendMessage returned (threadTs=${threadTs}, replyLen=${reply.length}, planSubmitted=${conversation.planSubmitted})`);
 
       if (typingStarted) {
@@ -2562,18 +2575,16 @@ ${text}`;
       const tPosting = Date.now();
 
       await this.uploadLinkedArtifacts(reply, conversation.workingDir, channel, threadTs);
+      await cleanupHeartbeats();
+      const tHeartbeatCleanup = Date.now();
 
       const tEnd = Date.now();
 
-      this.log('slack', 'info', `[PERF] thread_ts=${threadTs} setup=${tSetup - tEntry}ms cursor=${tCursor - tSetup}ms heartbeatCleanup=${tHeartbeatCleanup - tCursor}ms posting=${tPosting - tHeartbeatCleanup}ms chunks=${chunks.length} total=${tEnd - tEntry}ms`);
+      this.log('slack', 'info', `[PERF] thread_ts=${threadTs} setup=${tSetup - tEntry}ms cursor=${tCursor - tSetup}ms posting=${tPosting - tCursor}ms heartbeatCleanup=${tHeartbeatCleanup - tPosting}ms chunks=${chunks.length} total=${tEnd - tEntry}ms`);
     } catch (err) {
-      if (heartbeatTimer) clearInterval(heartbeatTimer);
-      for (const hbTs of heartbeatTimestamps) {
-        try {
-          await this.deleteMessage(channel, hbTs);
-        } catch (deleteErr) {
-          this.log('slack', 'warn', `[HEARTBEAT] Failed to delete heartbeat message ${hbTs}: ${deleteErr}`);
-        }
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
       }
       if (typingStarted) {
         await this.stopTypingIndicator(channel, threadTs);
@@ -2589,10 +2600,14 @@ ${text}`;
         );
       }
       this.sessionMetrics.errors++;
-      await this.sayWithRateLimitRetry(say, {
-        text: `Error: ${err instanceof Error ? err.message : String(err)}`,
-        thread_ts: threadTs,
-      });
+      try {
+        await this.sayWithRateLimitRetry(say, {
+          text: `Error: ${err instanceof Error ? err.message : String(err)}`,
+          thread_ts: threadTs,
+        });
+      } finally {
+        await cleanupHeartbeats();
+      }
     }
   }
 
