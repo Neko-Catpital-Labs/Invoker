@@ -12,14 +12,11 @@ import type { Logger } from '@invoker/contracts';
 import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
 
 import {
-  CODERABBIT_ADDRESS_WORKER_KIND,
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
-  PR_CONFLICT_REBASE_WORKER_KIND,
+  PR_ORPHAN_REPAIR_WORKER_KIND,
   createPrAdminBypassLandWorker,
-  createCoderabbitAddressWorker,
-  createPrCiFailureScanWorker,
-  createPrConflictRebaseWorker,
+  createPrOrphanRepairWorker,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
 
@@ -94,13 +91,13 @@ describe('PR maintenance workers', () => {
     return tmpRoot;
   }
 
-  it('spawns the CodeRabbit shell entrypoint with the configured cwd and env', async () => {
+  it('spawns the admin-bypass shell entrypoint with the configured cwd and env', async () => {
     const repoRoot = makeRepoRoot();
     const lockPath = join(repoRoot, 'locks', 'pr-crons.lock');
     const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness({ stdout: 'addressed one PR\n', stderr: 'diagnostic line\n' });
+    const spawnHarness = makeSpawnHarness({ stdout: 'planned one PR\n', stderr: 'diagnostic line\n' });
     const lockProbe = vi.fn((_options: PrMaintenanceLockProbeOptions) => ({ held: false }));
-    const worker = createCoderabbitAddressWorker({
+    const worker = createPrAdminBypassLandWorker({
       logger,
       repoRoot,
       env: {
@@ -127,7 +124,7 @@ describe('PR maintenance workers', () => {
     expect(spawnHarness.calls).toEqual([
       expect.objectContaining({
         command: 'bash',
-        args: [resolve(repoRoot, 'scripts/cron-coderabbit-address.sh')],
+        args: [resolve(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh')],
         options: expect.objectContaining({
           cwd: repoRoot,
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -141,20 +138,20 @@ describe('PR maintenance workers', () => {
       }),
     ]);
     expect(logger.info).toHaveBeenCalledWith(
-      `[worker:${CODERABBIT_ADDRESS_WORKER_KIND}] addressed one PR`,
+      `[worker:${PR_ADMIN_BYPASS_LAND_WORKER_KIND}] planned one PR`,
       expect.objectContaining({ stream: 'stdout' }),
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      `[worker:${CODERABBIT_ADDRESS_WORKER_KIND}] diagnostic line`,
+      `[worker:${PR_ADMIN_BYPASS_LAND_WORKER_KIND}] diagnostic line`,
       expect.objectContaining({ stream: 'stderr' }),
     );
   });
 
-  it('spawns the PR conflict rebase shell entrypoint', async () => {
+  it('spawns the orphan-repair shell entrypoint', async () => {
     const repoRoot = makeRepoRoot();
     const logger = makeLogger();
     const spawnHarness = makeSpawnHarness();
-    const worker = createPrConflictRebaseWorker({
+    const worker = createPrOrphanRepairWorker({
       logger,
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
@@ -166,58 +163,16 @@ describe('PR maintenance workers', () => {
 
     expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
       command: 'bash',
-      args: [resolve(repoRoot, 'scripts/cron-pr-conflict-rebase.sh')],
+      args: [resolve(repoRoot, 'scripts/cron-pr-orphan-repair.sh')],
       options: expect.objectContaining({ cwd: repoRoot }),
     }));
-  });
-  it('spawns the PR CI scan shell entrypoint', async () => {
-    const repoRoot = makeRepoRoot();
-    const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness();
-    const worker = createPrCiFailureScanWorker({
-      logger,
-      repoRoot,
-      spawnProcess: spawnHarness.spawnProcess,
-      lockProbe: () => ({ held: false }),
-      installSignalHandlers: false,
-    });
-
-    await worker.tick();
-
-    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
-      command: 'bash',
-      args: [resolve(repoRoot, 'packages/execution-engine/scripts/cron-pr-ci-failure.sh')],
-      options: expect.objectContaining({ cwd: repoRoot }),
-    }));
-  });
-
-  it('spawns the admin-bypass land shell entrypoint', async () => {
-    const repoRoot = makeRepoRoot();
-    const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness();
-    const worker = createPrAdminBypassLandWorker({
-      logger,
-      repoRoot,
-      spawnProcess: spawnHarness.spawnProcess,
-      lockProbe: () => ({ held: false }),
-      installSignalHandlers: false,
-    });
-
-    await worker.tick();
-
-    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
-      command: 'bash',
-      args: [resolve(repoRoot, 'scripts/cron-pr-admin-bypass-land.sh')],
-      options: expect.objectContaining({ cwd: repoRoot }),
-    }));
-    expect(worker.identity.kind).toBe(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
   });
 
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {
     const repoRoot = makeRepoRoot();
     const logger = makeLogger();
     const spawnHarness = makeSpawnHarness();
-    const worker = createPrConflictRebaseWorker({
+    const worker = createPrOrphanRepairWorker({
       logger,
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
@@ -229,9 +184,9 @@ describe('PR maintenance workers', () => {
 
     expect(spawnHarness.calls).toEqual([]);
     expect(logger.info).toHaveBeenCalledWith(
-      `[worker:${PR_CONFLICT_REBASE_WORKER_KIND}] shared PR maintenance lock held; skipping tick`,
+      `[worker:${PR_ORPHAN_REPAIR_WORKER_KIND}] shared PR maintenance lock held; skipping tick`,
       expect.objectContaining({
-        worker: PR_CONFLICT_REBASE_WORKER_KIND,
+        worker: PR_ORPHAN_REPAIR_WORKER_KIND,
         reason: 'test-lock-held',
       }),
     );
@@ -258,7 +213,7 @@ describe('PR maintenance workers', () => {
         return saved;
       }),
     };
-    const worker = createCoderabbitAddressWorker({
+    const worker = createPrAdminBypassLandWorker({
       logger,
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
@@ -272,7 +227,7 @@ describe('PR maintenance workers', () => {
     const statuses = store.upsertWorkerAction.mock.calls.map((call) => call[0].status);
     expect(statuses).toEqual(['running', 'completed']);
     expect(store.upsertWorkerAction.mock.calls[0]?.[0]).toMatchObject({
-      workerKind: CODERABBIT_ADDRESS_WORKER_KIND,
+      workerKind: PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       actionType: 'pr-maintenance-run',
       subjectType: 'repo',
       subjectId: repoRoot,
@@ -285,7 +240,7 @@ describe('PR maintenance workers', () => {
       getWorkerAction: vi.fn(() => undefined),
       upsertWorkerAction: vi.fn(),
     };
-    const worker = createPrConflictRebaseWorker({
+    const worker = createPrOrphanRepairWorker({
       logger: makeLogger(),
       repoRoot,
       spawnProcess: makeSpawnHarness().spawnProcess,
@@ -304,7 +259,7 @@ describe('PR maintenance workers', () => {
     const repoRoot = makeRepoRoot();
     const logger = makeLogger();
     const spawnHarness = makeSpawnHarness();
-    const worker = createCoderabbitAddressWorker({
+    const worker = createPrAdminBypassLandWorker({
       logger,
       repoRoot,
       spawnProcess: spawnHarness.spawnProcess,
