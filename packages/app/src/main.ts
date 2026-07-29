@@ -1857,6 +1857,7 @@ function startHeadlessMode(): void {
             ownerId: workflowMutationOwnerId,
             createTaskExecutor: createStandaloneTaskExecutor,
             setLatestTaskExecutor: (executor) => { latestTaskExecutor = executor; },
+            topUpReadyLaunchesEnabled: () => !invokerConfig.disableAutoRunOnStartup,
           });
         }
         if (command === 'owner-serve') {
@@ -2045,8 +2046,8 @@ startMainProcessBootstrap({
     uiPerfStats,
   );
   const taskTerminals = createTaskTerminalAdapter({
-    persistence,
-    executorRegistry,
+    getPersistence: () => persistence,
+    getExecutorRegistry: () => executorRegistry,
     executionAgentRegistry: agentRegistry,
     repoRoot,
     taskHandles,
@@ -2737,6 +2738,7 @@ startMainProcessBootstrap({
         taskRunnerProvider: () => taskExecutor,
         ownerId: workflowMutationOwnerId,
         logger,
+        topUpReadyLaunchesEnabled: () => !invokerConfig.disableAutoRunOnStartup,
       });
       const sweptLeases = persistence.releaseExpiredExecutionResourceLeases?.() ?? 0;
       if (sweptLeases > 0) {
