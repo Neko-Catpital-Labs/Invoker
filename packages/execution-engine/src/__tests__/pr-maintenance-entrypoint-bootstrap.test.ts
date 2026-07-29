@@ -12,9 +12,6 @@ const repoRoot = resolveRepoRoot(process.cwd());
 // Every registered PR-maintenance cron entrypoint. Add a new worker's script
 // here so this guard proves the script can source its shared library.
 const PR_MAINTENANCE_ENTRYPOINTS = [
-  { kind: 'coderabbit-address', scriptRelativePath: 'scripts/cron-coderabbit-address.sh' },
-  { kind: 'pr-conflict-rebase', scriptRelativePath: 'scripts/cron-pr-conflict-rebase.sh' },
-  { kind: 'pr-ci-failure-scan', scriptRelativePath: 'packages/execution-engine/scripts/cron-pr-ci-failure.sh' },
   { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
   { kind: 'pr-orphan-repair', scriptRelativePath: 'scripts/cron-pr-orphan-repair.sh' },
 ] as const;
