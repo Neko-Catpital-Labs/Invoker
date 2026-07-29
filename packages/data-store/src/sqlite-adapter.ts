@@ -529,6 +529,9 @@ type InAppPlanningSessionRow = {
   preset_key?: unknown;
   status?: unknown;
   confirmation_mode?: unknown;
+  agent_name?: unknown;
+  agent_session_id?: unknown;
+  raw_session_file_path?: unknown;
   draft_plan_summary_json?: unknown;
   draft_plan_text?: unknown;
   submitted_workflow_id?: unknown;
@@ -1228,6 +1231,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
           preset_key,
           status,
           confirmation_mode,
+          agent_name,
+          agent_session_id,
+          raw_session_file_path,
           draft_plan_summary_json,
           draft_plan_text,
           submitted_workflow_id,
@@ -1241,12 +1247,15 @@ export class SQLiteAdapter implements PersistenceAdapter {
           pending_response,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
           status = excluded.status,
           confirmation_mode = excluded.confirmation_mode,
+          agent_name = excluded.agent_name,
+          agent_session_id = excluded.agent_session_id,
+          raw_session_file_path = excluded.raw_session_file_path,
           draft_plan_summary_json = excluded.draft_plan_summary_json,
           draft_plan_text = excluded.draft_plan_text,
           submitted_workflow_id = excluded.submitted_workflow_id,
@@ -1266,6 +1275,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.presetKey,
           record.status,
           record.confirmationMode ?? 'require',
+          record.agentName ?? null,
+          record.agentSessionId ?? null,
+          record.rawSessionFilePath ?? null,
           record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
           record.draftPlanText ?? null,
           record.submittedWorkflowId ?? null,
@@ -1318,6 +1330,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (Object.hasOwn(patch, 'confirmationMode')) {
         setClauses.push('confirmation_mode = ?');
         values.push(patch.confirmationMode ?? 'require');
+      }
+      if (Object.hasOwn(patch, 'agentName')) {
+        setClauses.push('agent_name = ?');
+        values.push(patch.agentName ?? null);
+      }
+      if (Object.hasOwn(patch, 'agentSessionId')) {
+        setClauses.push('agent_session_id = ?');
+        values.push(patch.agentSessionId ?? null);
+      }
+      if (Object.hasOwn(patch, 'rawSessionFilePath')) {
+        setClauses.push('raw_session_file_path = ?');
+        values.push(patch.rawSessionFilePath ?? null);
       }
       if (Object.hasOwn(patch, 'draftPlanSummary')) {
         setClauses.push('draft_plan_summary_json = ?');
@@ -2976,6 +3000,9 @@ export class SQLiteAdapter implements PersistenceAdapter {
         presetKey,
         status: row.status,
         confirmationMode: row.confirmation_mode,
+        ...(typeof row.agent_name === 'string' ? { agentName: row.agent_name } : {}),
+        ...(typeof row.agent_session_id === 'string' ? { agentSessionId: row.agent_session_id } : {}),
+        ...(typeof row.raw_session_file_path === 'string' ? { rawSessionFilePath: row.raw_session_file_path } : {}),
         messages,
         ...(draftPlanSummary ? { draftPlanSummary } : {}),
         ...(typeof row.draft_plan_text === 'string' ? { draftPlanText: row.draft_plan_text } : {}),

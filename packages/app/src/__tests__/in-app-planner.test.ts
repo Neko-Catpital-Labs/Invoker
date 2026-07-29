@@ -973,6 +973,50 @@ tasks:
     }
   });
 
+  it('persists harness session metadata when the planner reports a Codex session id', async () => {
+    const invokerDbDir = mkdtempSync(join(tmpdir(), 'in-app-codex-session-path-'));
+    const originalInvokerDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = invokerDbDir;
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementation(async function () {
+      (this as unknown as { setHarnessSessionId: (sessionId: string) => void })
+        .setHarnessSessionId('codex-thread-1');
+      return 'What should the README include?';
+    });
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const sessions = createInAppPlanningChatSessions();
+
+      const result = await sendPlanningChatMessage({
+        message: 'Add README',
+        presetKey: 'codex',
+      }, {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        planningSessionStore: adapter,
+      });
+
+      if (!result.ok) throw new Error(result.error);
+      const expectedRawPath = join(invokerDbDir, 'agent-sessions', 'codex-thread-1.jsonl');
+      expect(sessions.get(result.sessionId)).toMatchObject({
+        agentName: 'codex',
+        agentSessionId: 'codex-thread-1',
+        rawSessionFilePath: expectedRawPath,
+      });
+      expect(adapter.loadInAppPlanningSession(result.sessionId)).toMatchObject({
+        agentName: 'codex',
+        agentSessionId: 'codex-thread-1',
+        rawSessionFilePath: expectedRawPath,
+      });
+    } finally {
+      adapter.close();
+      if (originalInvokerDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = originalInvokerDbDir;
+      rmSync(invokerDbDir, { recursive: true, force: true });
+    }
+  });
+
   it('does not submit hidden planner context without a persisted draft snapshot', async () => {
     const sessions = createInAppPlanningChatSessions();
     const conversation = new PlanConversation({}) as PlanConversation & { getDraftedPlan: () => string };
@@ -1047,6 +1091,60 @@ tasks:
       expect(loadGeneratedPlan).toHaveBeenCalledWith(expect.not.stringContaining('```yaml'));
     } finally {
       adapter.close();
+    }
+  });
+
+  it('restores planning session agent metadata and backfills a resolvable Codex raw file path', async () => {
+    const invokerDbDir = mkdtempSync(join(tmpdir(), 'in-app-codex-session-restore-'));
+    const originalInvokerDbDir = process.env.INVOKER_DB_DIR;
+    process.env.INVOKER_DB_DIR = invokerDbDir;
+    const adapter = await SQLiteAdapter.create(':memory:');
+    try {
+      const record: InAppPlanningSessionRecord = {
+        id: 'planning-codex-session-restored',
+        title: 'Restored Codex session',
+        presetKey: 'codex',
+        status: 'still_discussing',
+        confirmationMode: 'require',
+        agentName: 'codex',
+        agentSessionId: 'codex-thread-restored',
+        messages: [
+          { id: 1, role: 'user', text: 'Add README', createdAt: '2026-07-07T00:00:00.000Z' },
+        ],
+        pendingResponse: false,
+        createdAt: '2026-07-07T00:00:00.000Z',
+        updatedAt: '2026-07-07T00:00:01.000Z',
+      };
+      adapter.upsertInAppPlanningSession(record);
+
+      const sessions = createInAppPlanningChatSessions();
+      await restorePlanningChatSessions(adapter.listInAppPlanningSessions(), {
+        config: {},
+        loadGeneratedPlan: vi.fn(),
+        sessions,
+        planningCommandBuilder,
+        conversationRepo: new ConversationRepository(adapter),
+        planningSessionStore: adapter,
+      });
+
+      const expectedRawPath = join(invokerDbDir, 'agent-sessions', 'codex-thread-restored.jsonl');
+      const restored = sessions.get('planning-codex-session-restored');
+      expect(restored).toMatchObject({
+        agentName: 'codex',
+        agentSessionId: 'codex-thread-restored',
+        rawSessionFilePath: expectedRawPath,
+      });
+      expect(restored?.conversation.harnessSessionId).toBe('codex-thread-restored');
+      expect(adapter.loadInAppPlanningSession('planning-codex-session-restored')).toMatchObject({
+        agentName: 'codex',
+        agentSessionId: 'codex-thread-restored',
+        rawSessionFilePath: expectedRawPath,
+      });
+    } finally {
+      adapter.close();
+      if (originalInvokerDbDir === undefined) delete process.env.INVOKER_DB_DIR;
+      else process.env.INVOKER_DB_DIR = originalInvokerDbDir;
+      rmSync(invokerDbDir, { recursive: true, force: true });
     }
   });
 

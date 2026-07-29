@@ -293,6 +293,9 @@ export interface InAppPlanningSessionRecord {
   presetKey: string;
   status: InAppPlanningSessionStatus;
   confirmationMode: PlanningConfirmationMode;
+  agentName?: string;
+  agentSessionId?: string;
+  rawSessionFilePath?: string;
   messages: InAppPlanningChatLine[];
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
@@ -314,6 +317,9 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'title'
   | 'status'
   | 'confirmationMode'
+  | 'agentName'
+  | 'agentSessionId'
+  | 'rawSessionFilePath'
   | 'messages'
   | 'draftPlanSummary'
   | 'draftPlanText'

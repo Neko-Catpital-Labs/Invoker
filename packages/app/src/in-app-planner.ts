@@ -34,7 +34,7 @@ import type {
   InAppPlanningSessionPatch,
   InAppPlanningSessionRecord,
 } from '@invoker/data-store';
-import type { AgentRegistry } from '@invoker/execution-engine';
+import { resolveCodexSessionFilePath, type AgentRegistry } from '@invoker/execution-engine';
 import {
   evaluatePlanningTurn,
   hasExplicitDraftIntent as hasCoreExplicitDraftIntent,
@@ -78,6 +78,9 @@ export interface InAppPlanningChatSession {
   presetKey: string;
   confirmationMode: PlanningConfirmationMode;
   status: InAppPlanningSessionStatus;
+  agentName?: string;
+  agentSessionId?: string;
+  rawSessionFilePath?: string;
   messages: InAppPlanningChatLine[];
   conversation: PlanConversation;
   draftPlanSummary?: InAppPlanningPlanSummary;
@@ -388,6 +391,72 @@ function hasDraftPlan(session: Pick<InAppPlanningChatSession, 'draftPlanSummary'
   return Boolean(session.draftPlanText || session.draftPlanSummary);
 }
 
+function nonEmptyPlanningMetadata(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function resolvePlanningAgentName(preset: HarnessPreset): string | undefined {
+  return nonEmptyPlanningMetadata(preset.tool);
+}
+
+function resolvePlanningRawSessionFilePath(
+  agentName: string | undefined,
+  agentSessionId: string | undefined,
+): string | undefined {
+  return agentName?.toLowerCase() === 'codex'
+    ? resolveCodexSessionFilePath(agentSessionId)
+    : undefined;
+}
+
+function applyPlanningAgentMetadata(
+  session: InAppPlanningChatSession,
+  metadata: {
+    agentName?: string;
+    agentSessionId?: string;
+    rawSessionFilePath?: string;
+  },
+): InAppPlanningSessionPatch | undefined {
+  const patch: InAppPlanningSessionPatch = {};
+
+  if (metadata.agentName !== undefined && session.agentName !== metadata.agentName) {
+    session.agentName = metadata.agentName;
+    patch.agentName = metadata.agentName;
+  }
+  if (metadata.agentSessionId !== undefined && session.agentSessionId !== metadata.agentSessionId) {
+    session.agentSessionId = metadata.agentSessionId;
+    patch.agentSessionId = metadata.agentSessionId;
+  }
+  if (metadata.rawSessionFilePath !== undefined && session.rawSessionFilePath !== metadata.rawSessionFilePath) {
+    session.rawSessionFilePath = metadata.rawSessionFilePath;
+    patch.rawSessionFilePath = metadata.rawSessionFilePath;
+  }
+
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+function capturePlanningHarnessSessionId(
+  session: InAppPlanningChatSession,
+  agentName: string | undefined,
+  agentSessionId: string,
+  store: InAppPlanningSessionStore | undefined,
+): void {
+  const normalizedSessionId = nonEmptyPlanningMetadata(agentSessionId);
+  if (!normalizedSessionId) return;
+  const normalizedAgentName = nonEmptyPlanningMetadata(agentName);
+  const rawSessionFilePath = resolvePlanningRawSessionFilePath(normalizedAgentName, normalizedSessionId);
+  const patch = applyPlanningAgentMetadata(session, {
+    agentName: normalizedAgentName,
+    agentSessionId: normalizedSessionId,
+    rawSessionFilePath,
+  });
+  if (!patch) return;
+
+  const updatedAt = new Date().toISOString();
+  session.updatedAt = updatedAt;
+  store?.updateInAppPlanningSession(session.id, { ...patch, updatedAt });
+}
+
 const NO_COMPLETE_PLAN_DRAFTED_ERROR = 'No complete plan drafted yet. Ask the AI to create a full plan, then submit again.';
 
 function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boolean): InAppPlanningSessionRecord {
@@ -397,6 +466,9 @@ function sessionToRecord(session: InAppPlanningChatSession, pendingResponse: boo
     presetKey: session.presetKey,
     status: session.status,
     confirmationMode: session.confirmationMode ?? 'require',
+    agentName: session.agentName,
+    agentSessionId: session.agentSessionId,
+    rawSessionFilePath: session.rawSessionFilePath,
     messages: session.messages,
     draftPlanSummary: session.draftPlanSummary,
     draftPlanText: session.draftPlanText,
@@ -546,7 +618,11 @@ function planConversationConfig(
   deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput'>,
   threadTs: string,
   selectHarnessSessionDriver: PlannerSurfacesModule['selectHarnessSessionDriver'],
-  options: { conversationalPlanning?: boolean } = {},
+  options: {
+    conversationalPlanning?: boolean;
+    harnessSessionId?: string;
+    onHarnessSessionId?: (sessionId: string) => void;
+  } = {},
 ): PlanConversationConfig {
   return {
     threadTs,
@@ -565,6 +641,8 @@ function planConversationConfig(
       executionAgentRegistry: deps.executionAgentRegistry,
       planningCommandBuilder: deps.planningCommandBuilder,
     }),
+    harnessSessionId: options.harnessSessionId,
+    onHarnessSessionId: options.onHarnessSessionId,
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
     onRawPlannerOutput: deps.onRawPlannerOutput
@@ -605,20 +683,37 @@ async function createSession(
     request?.confirmationMode,
     resolveDefaultPlanningConfirmationMode(deps.config),
   );
-  const session: InAppPlanningChatSession = {
+  const agentName = resolvePlanningAgentName(preset);
+  let session: InAppPlanningChatSession | undefined;
+  let pendingHarnessSessionId: string | undefined;
+  const onHarnessSessionId = (harnessSessionId: string): void => {
+    if (!session) {
+      pendingHarnessSessionId = harnessSessionId;
+      return;
+    }
+    capturePlanningHarnessSessionId(session, agentName, harnessSessionId, deps.planningSessionStore);
+  };
+  session = {
     id,
     title: typeof request?.title === 'string' && request.title.trim() ? request.title.trim() : 'Untitled plan',
     presetKey,
     confirmationMode,
     status: 'still_discussing',
+    agentName,
     messages: [],
-    conversation: new PlanConversation(planConversationConfig(preset, deps, id, selectHarnessSessionDriver, { conversationalPlanning: true })),
+    conversation: new PlanConversation(planConversationConfig(preset, deps, id, selectHarnessSessionDriver, {
+      conversationalPlanning: true,
+      onHarnessSessionId,
+    })),
     createdAt,
     updatedAt: createdAt,
     nextMessageId: 1,
     terminalMode: 'chat',
     terminalOutputSnapshot: '',
   };
+  if (pendingHarnessSessionId) {
+    capturePlanningHarnessSessionId(session, agentName, pendingHarnessSessionId, deps.planningSessionStore);
+  }
   deps.sessions.set(session.id, session);
   persistPlanningSession(session, deps.planningSessionStore, false);
   return session;
@@ -1062,16 +1157,38 @@ export async function restorePlanningChatSessions(
     const preset = presets[record.presetKey];
     if (!preset) continue;
 
-    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id, selectHarnessSessionDriver));
+    const recordAgentName = nonEmptyPlanningMetadata(record.agentName);
+    const restoredAgentName = recordAgentName ?? resolvePlanningAgentName(preset);
+    const restoredAgentSessionId = nonEmptyPlanningMetadata(record.agentSessionId);
+    const recordRawSessionFilePath = nonEmptyPlanningMetadata(record.rawSessionFilePath);
+    const restoredRawSessionFilePath = recordRawSessionFilePath
+      ?? resolvePlanningRawSessionFilePath(restoredAgentName, restoredAgentSessionId);
+    let session: InAppPlanningChatSession | undefined;
+    let pendingHarnessSessionId: string | undefined;
+    const onHarnessSessionId = (harnessSessionId: string): void => {
+      if (!session) {
+        pendingHarnessSessionId = harnessSessionId;
+        return;
+      }
+      capturePlanningHarnessSessionId(session, restoredAgentName, harnessSessionId, deps.planningSessionStore);
+    };
+
+    const conversation = new PlanConversation(planConversationConfig(preset, deps, record.id, selectHarnessSessionDriver, {
+      harnessSessionId: restoredAgentSessionId,
+      onHarnessSessionId,
+    }));
     await conversation.init();
 
     const nextMessageId = Math.max(0, ...record.messages.map((message) => message.id)) + 1;
-    const session: InAppPlanningChatSession = {
+    session = {
       id: record.id,
       title: record.title,
       presetKey: record.presetKey,
       confirmationMode: normalizePlanningConfirmationMode(record.confirmationMode, resolveDefaultPlanningConfirmationMode(deps.config)),
       status: record.status,
+      agentName: restoredAgentName,
+      agentSessionId: restoredAgentSessionId,
+      rawSessionFilePath: restoredRawSessionFilePath,
       messages: [...record.messages],
       conversation,
       draftPlanSummary: record.draftPlanSummary,
@@ -1089,7 +1206,15 @@ export async function restorePlanningChatSessions(
       nextMessageId,
     };
 
-    let shouldPersist = false;
+    let shouldPersist = (
+      restoredAgentName !== recordAgentName
+      || restoredAgentSessionId !== nonEmptyPlanningMetadata(record.agentSessionId)
+      || restoredRawSessionFilePath !== recordRawSessionFilePath
+    );
+    if (pendingHarnessSessionId) {
+      capturePlanningHarnessSessionId(session, restoredAgentName, pendingHarnessSessionId, deps.planningSessionStore);
+      shouldPersist = true;
+    }
     if (record.pendingResponse) {
       if (record.status !== 'submitted') {
         appendSessionMessage(

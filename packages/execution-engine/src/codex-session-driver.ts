@@ -16,10 +16,20 @@ import { parseCodexSessionJsonl, toReadableText, extractCodexSessionId, extractC
 import type { AgentMessage } from './codex-session.js';
 import { buildSshConnectionArgs } from './ssh-transport-options.js';
 
+export function resolveCodexSessionStorageDir(): string {
+  const base = process.env.INVOKER_DB_DIR || join(homedir(), '.invoker');
+  return join(base, 'agent-sessions');
+}
+
+export function resolveCodexSessionFilePath(sessionId: string | null | undefined): string | undefined {
+  const normalized = sessionId?.trim();
+  if (!normalized) return undefined;
+  return join(resolveCodexSessionStorageDir(), `${normalized}.jsonl`);
+}
+
 export class CodexSessionDriver implements SessionDriver {
   private getStorageDir(): string {
-    const base = process.env.INVOKER_DB_DIR || join(homedir(), '.invoker');
-    return join(base, 'agent-sessions');
+    return resolveCodexSessionStorageDir();
   }
 
   extractSessionId(rawStdout: string): string | undefined {
@@ -34,7 +44,8 @@ export class CodexSessionDriver implements SessionDriver {
   }
 
   loadSession(sessionId: string): string | null {
-    const filePath = join(this.getStorageDir(), `${sessionId}.jsonl`);
+    const filePath = resolveCodexSessionFilePath(sessionId);
+    if (!filePath) return null;
     if (!existsSync(filePath)) return null;
     return readFileSync(filePath, 'utf-8');
   }
