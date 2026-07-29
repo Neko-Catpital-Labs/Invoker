@@ -854,6 +854,154 @@ test.describe('Visual proof capture', () => {
     await expect(rows).toHaveCount(2);
   });
 
+  test('planning session metadata side panel', async ({ page, electronApp, testDir }) => {
+    const planningSessionId = 'planning-session-metadata-proof';
+    const agentSessionId = 'codex-planning-session-metadata-proof';
+    const rawSessionFileLocation = path.join(testDir, 'agent-sessions', `${agentSessionId}.jsonl`);
+    await fs.mkdir(path.dirname(rawSessionFileLocation), { recursive: true });
+    await fs.writeFile(
+      rawSessionFileLocation,
+      `${JSON.stringify({ type: 'thread.started', thread_id: agentSessionId })}\n`,
+      'utf8',
+    );
+
+    const createdAt = '2025-01-01T00:00:00.000Z';
+    const updatedAt = '2025-01-01T00:00:05.000Z';
+    const metadata = {
+      planningSessionId,
+      agentSessionId,
+      rawSessionFileLocation,
+      rawSessionFilePath: rawSessionFileLocation,
+      rawSessionPath: rawSessionFileLocation,
+    };
+    const planningSession = {
+      id: planningSessionId,
+      title: `Planning session id: ${planningSessionId}`,
+      status: 'submitted',
+      presetKey: 'codex',
+      confirmationMode: 'require',
+      messages: [
+        {
+          id: 1,
+          role: 'user',
+          text: 'Draft the planning metadata visual proof.',
+          createdAt,
+        },
+        {
+          id: 2,
+          role: 'assistant',
+          text: `Metadata ready for ${agentSessionId}.`,
+          createdAt: updatedAt,
+        },
+      ],
+      draftPlanAvailable: true,
+      draftPlanSummary: {
+        name: `Agent session id: ${agentSessionId}`,
+        taskCount: 1,
+        steps: ['Capture the metadata side panel'],
+        taskGroups: [{ workflow: null, tasks: ['Capture the metadata side panel'] }],
+      },
+      submittedWorkflowId: 'workflow-planning-session-metadata-proof',
+      submittedPlanName: `Raw session file: ${rawSessionFileLocation}`,
+      terminalMode: 'chat',
+      createdAt,
+      updatedAt,
+      metadata,
+      planningSessionId,
+      agentSessionId,
+      rawSessionFileLocation,
+      rawSessionFilePath: rawSessionFileLocation,
+      rawSessionPath: rawSessionFileLocation,
+    };
+
+    await electronApp.evaluate(({ ipcMain }, payload) => {
+      const session = payload.planningSession;
+      const metadataResponse = {
+        ok: true,
+        ...payload.metadata,
+        metadata: payload.metadata,
+      };
+      ipcMain.removeHandler('invoker:planning-chat-list');
+      ipcMain.handle('invoker:planning-chat-list', () => ({
+        ok: true,
+        sessions: [session],
+      }));
+      ipcMain.removeHandler('invoker:get-agent-session');
+      ipcMain.handle('invoker:get-agent-session', (_event, sessionId: string, agentName?: string) => {
+        if (sessionId !== payload.metadata.agentSessionId) return null;
+        return {
+          agentName: agentName ?? 'codex',
+          sessionId,
+          state: 'finished',
+          messages: [],
+          source: 'local',
+          ...payload.metadata,
+        };
+      });
+      for (const channel of [
+        'invoker:get-planning-session-metadata',
+        'invoker:planning-session-metadata',
+        'invoker:planning-chat-session-metadata',
+      ]) {
+        ipcMain.removeHandler(channel);
+        ipcMain.handle(channel, (_event, request?: string | { sessionId?: string; planningSessionId?: string }) => {
+          const requestedSessionId = typeof request === 'string'
+            ? request
+            : request?.sessionId ?? request?.planningSessionId;
+          if (requestedSessionId && requestedSessionId !== payload.metadata.planningSessionId) {
+            return { ok: false, error: `Unknown planning session "${requestedSessionId}"` };
+          }
+          return metadataResponse;
+        });
+      }
+    }, { planningSession, metadata });
+
+    await page.reload();
+    await page.waitForLoadState('domcontentloaded');
+    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+    const queriedMetadata = await page.evaluate(
+      async ({ planningSessionId: expectedPlanningSessionId, agentSessionId: expectedAgentSessionId }) => {
+        const invoker = window.invoker as typeof window.invoker & {
+          getPlanningSessionMetadata?: (sessionId: string) => Promise<unknown>;
+          planningSessionMetadata?: (sessionId: string) => Promise<unknown>;
+          planningChatSessionMetadata?: (request: { sessionId: string }) => Promise<unknown>;
+        };
+        if (typeof invoker.getPlanningSessionMetadata === 'function') {
+          return invoker.getPlanningSessionMetadata(expectedPlanningSessionId);
+        }
+        if (typeof invoker.planningSessionMetadata === 'function') {
+          return invoker.planningSessionMetadata(expectedPlanningSessionId);
+        }
+        if (typeof invoker.planningChatSessionMetadata === 'function') {
+          return invoker.planningChatSessionMetadata({ sessionId: expectedPlanningSessionId });
+        }
+        return window.invoker.getAgentSession(expectedAgentSessionId, 'codex');
+      },
+      { planningSessionId, agentSessionId },
+    );
+    expect(queriedMetadata).toMatchObject({
+      planningSessionId,
+      agentSessionId,
+      rawSessionFileLocation,
+    });
+
+    await page.getByTestId('sidebar-home').click();
+    const rows = page.getByTestId('planning-session-row');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toContainText(planningSessionId);
+    await rows.first().click();
+
+    const panel = page.getByTestId('planning-context-panel');
+    await expect(panel).toBeVisible();
+    await panel.getByTestId('planning-context-toggle').click();
+    await expect(panel.getByRole('heading', { name: 'Current plan' })).toBeVisible();
+    await expect(panel).toContainText(planningSessionId);
+    await expect(panel).toContainText(agentSessionId);
+    await expect(panel).toContainText(rawSessionFileLocation);
+
+    await captureScreenshot(page, 'planning-session-metadata-side-panel');
+  });
+
   test('terminal planning captures long transcript follow surface', async ({ page }) => {
     const longTranscriptPlan = {
       ...TERMINAL_PLANNED_PLAN,
