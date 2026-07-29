@@ -1106,6 +1106,7 @@ function startHeadlessMode(): void {
         loadGeneratedPlan,
         conversationRepo: planningConversationRepo,
         planningSessionStore: readOnlyMode ? undefined : persistence,
+        logger,
       });
 
       let testPlanningChatResponse:
@@ -1161,6 +1162,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              logger,
             });
           }
           case 'invoker:planning-chat-list': {
@@ -1188,6 +1190,7 @@ function startHeadlessMode(): void {
               loadGeneratedPlan,
               conversationRepo: planningConversationRepo,
               planningSessionStore: readOnlyMode ? undefined : persistence,
+              logger,
               plannerReplyOverride,
             });
           }
