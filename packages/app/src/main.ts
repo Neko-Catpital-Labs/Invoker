@@ -149,6 +149,7 @@ import {
   isRemovedHeadlessCommandAlias,
 } from './headless-command-registry.js';
 import { backupPlan } from './plan-backup.js';
+import { loadPlanSubmissionBundle } from './plan-submission-loader.js';
 import { startApiServer, type ApiServer } from './api-server.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
 import {
@@ -1082,53 +1083,14 @@ function startHeadlessMode(): void {
 
       const loadGeneratedPlan = async (
         planText: string,
-      ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => {
-        const { applyConfiguredPlanDefaults, parsePlanSubmissionBundle } = await import('./plan-parser.js');
-        const submission = parsePlanSubmissionBundle(planText);
-        const existingWorkflowIds = new Set(persistence.listWorkflows().map((workflow) => workflow.id));
-        const loadedWorkflowIds: string[] = [];
-        let upstream: { workflowId: string; featureBranch: string } | undefined;
-
-        for (const parsedPlan of submission.plans) {
-          let plan = applyConfiguredPlanDefaults(parsedPlan);
-          if (upstream) {
-            plan = {
-              ...plan,
-              baseBranch: upstream.featureBranch,
-              externalDependencies: [
-                ...(plan.externalDependencies ?? []),
-                {
-                  workflowId: upstream.workflowId,
-                  taskId: '__merge__',
-                  requiredStatus: 'completed',
-                  gatePolicy: 'review_ready',
-                } as const,
-              ],
-            };
-          }
-          backupPlan(plan, undefined, logger);
-          orchestrator.loadPlan(plan, { allowGraphMutation: invokerConfig.allowGraphMutation });
-          const workflow = persistence.listWorkflows().find((candidate) => !existingWorkflowIds.has(candidate.id));
-          if (!workflow) {
-            throw new Error('Loaded plan did not create a workflow.');
-          }
-          existingWorkflowIds.add(workflow.id);
-          loadedWorkflowIds.push(workflow.id);
-          upstream = { workflowId: workflow.id, featureBranch: workflow.featureBranch ?? plan.featureBranch ?? plan.baseBranch ?? 'main' };
-        }
-
-        const workflowId = loadedWorkflowIds[loadedWorkflowIds.length - 1];
-        if (!workflowId) {
-          throw new Error('Loaded plan did not create a workflow.');
-        }
-
-        return {
-          planName: submission.name,
-          workflowId,
-          workflowIds: loadedWorkflowIds,
-          workflowCount: loadedWorkflowIds.length,
-        };
-      };
+      ): Promise<{ planName: string; workflowId: string; workflowIds?: string[]; workflowCount?: number }> => (
+        loadPlanSubmissionBundle(planText, {
+          persistence,
+          orchestrator,
+          allowGraphMutation: invokerConfig.allowGraphMutation,
+          logger,
+        })
+      );
 
       const planningConversationRepo = new ConversationRepository(persistence, {
         info: (message) => logger.info(message, { module: 'planning-chat' }),
