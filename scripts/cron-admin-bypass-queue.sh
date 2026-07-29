@@ -122,10 +122,9 @@ while IFS= read -r pr; do
     continue
   fi
 
-  ledger_record queue-attempt "$num" "$fingerprint"
-
   if [ -n "$wf" ] && [ "$category" = "conflict" ]; then
-    if output="$(headless_mutation rebase-recreate "$wf" 2>&1)"; then
+    if output="$(headless_mutation --no-track rebase-recreate "$wf" 2>&1)"; then
+      ledger_record queue-attempt "$num" "$fingerprint"
       ledger_record queue-submitted "$num" "$fingerprint"
       submitted=$((submitted + 1))
       log_line "PR #$num: submitted rebase-recreate for workflow $wf ($fingerprint)"
@@ -136,7 +135,8 @@ while IFS= read -r pr; do
   fi
 
   if [ -n "$wf" ] && [ "$category" = "failed_checks" ]; then
-    if output="$(headless_mutation repair-review-gate-ci "$num" 2>&1)"; then
+    if output="$(headless_mutation --no-track repair-review-gate-ci "$num" 2>&1)"; then
+      ledger_record queue-attempt "$num" "$fingerprint"
       ledger_record queue-submitted "$num" "$fingerprint"
       submitted=$((submitted + 1))
       log_line "PR #$num: submitted repair-review-gate-ci for PR #$num ($fingerprint)"
@@ -181,7 +181,8 @@ while IFS= read -r pr; do
     } | sed 's/^/      /'
   } > "$plan_file"
 
-  if output="$(headless_mutation run "$plan_file" 2>&1)"; then
+  if output="$(headless_mutation --no-track run "$plan_file" 2>&1)"; then
+    ledger_record queue-attempt "$num" "$fingerprint"
     ledger_record queue-submitted "$num" "$fingerprint"
     submitted=$((submitted + 1))
     log_line "PR #$num: submitted ad-hoc repair plan (category=$category, $fingerprint)"
