@@ -167,7 +167,7 @@ import {
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
-import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
+import { publishForcedRefreshTaskGraphSnapshot, resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
   startStandaloneLaunchDispatcher,
   type StandaloneLaunchDispatcherController,
@@ -2466,7 +2466,7 @@ startMainProcessBootstrap({
               persistence,
               logger,
             });
-            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+            publishForcedRefreshTaskGraphSnapshot(taskGraphEventPublisher, 'refresh-task-graph', snapshot);
           },
           deleteWorkflow: (workflowId) => requireGuiMutationTaskActions().performDeleteWorkflow(workflowId),
           detachWorkflow: (workflowId, upstreamWorkflowId) =>
