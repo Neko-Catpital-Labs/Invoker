@@ -171,6 +171,7 @@ describe('checkConfigContents', () => {
 
   it('warns without failing when one member is shared across pools', () => {
     const check = checkConfigContents({
+      worktreeTargets: { local: { repoPath: '/repo' } },
       executionPools: {
         fast: { members: [{ type: 'worktree', id: 'local' }] },
         slow: { members: [{ type: 'worktree', id: 'local' }] },
