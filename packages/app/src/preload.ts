@@ -110,6 +110,10 @@ for (const channel of Object.keys(IpcEventChannels)) {
 
 contextBridge.exposeInMainWorld('invoker', api as InvokerAPI);
 contextBridge.exposeInMainWorld('__INVOKER_BOOTSTRAP__', bootstrapState ?? { tasks: [], workflows: [] });
+contextBridge.exposeInMainWorld(
+  '__INVOKER_TRACE_RENDERER_TASK_GRAPH__',
+  process.env.INVOKER_TRACE_RENDERER_TASK_GRAPH === '1',
+);
 
 setTimeout(() => {
   ipcRenderer.invoke('invoker:report-ui-perf', 'preload_bootstrap_sync', {
