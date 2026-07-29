@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { readFileSync } from 'node:fs';
-import { JSDOM } from 'jsdom';
 import { collectDiffAtomicityFindings, formatDiffAtomicityFindings } from './lint-pr-diff-atomicity.mjs';
 import {
   formatReviewUnits,
@@ -72,6 +71,7 @@ function summarizeMermaidError(error) {
 async function getMermaidApi() {
   if (!mermaidApiPromise) {
     mermaidApiPromise = (async () => {
+      const { JSDOM } = await import('jsdom');
       const { window } = new JSDOM('<body></body>', { pretendToBeVisual: true });
       globalThis.window = window;
       globalThis.document = window.document;

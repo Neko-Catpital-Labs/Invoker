@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
+
+const require = createRequire(import.meta.url);
+let typescriptModule;
 
 const CODE_EXTENSIONS = new Set(['.cjs', '.js', '.jsx', '.mjs', '.ts', '.tsx']);
 const LOCKFILES = new Set(['pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'bun.lockb']);
@@ -81,7 +84,14 @@ function classifyPath(filePath) {
   return 'other';
 }
 
-function scriptKindFor(filePath) {
+function getTypeScript() {
+  if (!typescriptModule) {
+    typescriptModule = require('typescript');
+  }
+  return typescriptModule;
+}
+
+function scriptKindFor(ts, filePath) {
   const extension = path.extname(filePath);
   if (extension === '.tsx') {
     return ts.ScriptKind.TSX;
@@ -213,7 +223,7 @@ export function parseUnifiedDiff(diffText, source = 'diff') {
   return files;
 }
 
-function rootIdentifier(node) {
+function rootIdentifier(ts, node) {
   let expression = node;
   while (ts.isPropertyAccessExpression(expression)) {
     expression = expression.expression;
@@ -225,8 +235,9 @@ function collectAstFindings(file) {
   if (!CODE_EXTENSIONS.has(path.extname(file.path)) || file.category === 'generated') {
     return [];
   }
+  const ts = getTypeScript();
   const findings = [];
-  const sourceFile = ts.createSourceFile(file.path, file.newContent, ts.ScriptTarget.Latest, true, scriptKindFor(file.path));
+  const sourceFile = ts.createSourceFile(file.path, file.newContent, ts.ScriptTarget.Latest, true, scriptKindFor(ts, file.path));
 
   const record = (kind, node) => {
     const lineNumber = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
@@ -240,7 +251,7 @@ function collectAstFindings(file) {
       record('debugger-statement', node);
     } else if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.name)) {
       const member = node.name.text;
-      if ((member === 'only' || member === 'skip') && TEST_FUNCTIONS.has(rootIdentifier(node.expression))) {
+      if ((member === 'only' || member === 'skip') && TEST_FUNCTIONS.has(rootIdentifier(ts, node.expression))) {
         record(member === 'only' ? 'focused-test' : 'skipped-test', node);
       }
     }
