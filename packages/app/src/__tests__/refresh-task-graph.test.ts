@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { resolveRefreshTaskGraphSnapshot } from '../refresh-task-graph.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  publishForcedRefreshTaskGraphSnapshot,
+  resolveRefreshTaskGraphSnapshot,
+} from '../refresh-task-graph.js';
 
 function makeTask(id: string) {
   return {
@@ -27,6 +30,28 @@ function makeLogger() {
     warnings,
   };
 }
+
+describe('publishForcedRefreshTaskGraphSnapshot', () => {
+  it('always publishes the refresh snapshot as forced', () => {
+    const publisher = {
+      publishSnapshot: vi.fn(),
+    };
+    const task = makeTask('wf-1/task-1');
+    const workflow = { id: 'wf-1', name: 'Workflow 1', status: 'running' };
+
+    publishForcedRefreshTaskGraphSnapshot(publisher, 'refresh-task-graph', {
+      tasks: [task],
+      workflows: [workflow],
+    });
+
+    expect(publisher.publishSnapshot).toHaveBeenCalledWith(
+      'refresh-task-graph',
+      [task],
+      [workflow],
+      true,
+    );
+  });
+});
 
 describe('resolveRefreshTaskGraphSnapshot fallback', () => {
   it('falls back to the local snapshot when owner delegation disappears', async () => {
