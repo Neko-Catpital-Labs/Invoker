@@ -57,4 +57,22 @@ describe('standalone owner web surface wiring', () => {
       runHeadlessIdx,
     );
   });
+
+  it('delegates query workers through the owner runtime snapshot instead of cli-query', () => {
+    const source = readFileSync(MAIN, 'utf8');
+
+    const readOnlyDelegationIdx = source.indexOf("if (readOnlyMode && command !== 'owner-serve') {");
+    const workerStatusQueryIdx = source.indexOf('const workerStatusQuery = isHeadlessWorkersQuery(cliArgs);');
+    const structuredQueryIdx = source.indexOf("workerStatusQuery ? { kind: 'workers' } : { kind: 'cli-query', args: cliArgs }");
+    const renderSnapshotIdx = source.indexOf('writeHeadlessWorkersSnapshot(delegated as WorkerStatusSnapshot, cliArgs);');
+    const genericCliQueryIdx = source.indexOf("{ kind: 'cli-query', args: cliArgs }", readOnlyDelegationIdx);
+
+    expect(readOnlyDelegationIdx, 'read-only delegation block not found').toBeGreaterThan(-1);
+    expect(workerStatusQueryIdx, 'query workers guard not found').toBeGreaterThan(-1);
+    expect(structuredQueryIdx, 'structured workers query delegation not found').toBeGreaterThan(-1);
+    expect(renderSnapshotIdx, 'worker snapshot renderer not found').toBeGreaterThan(-1);
+    expect(workerStatusQueryIdx).toBeGreaterThan(readOnlyDelegationIdx);
+    expect(workerStatusQueryIdx).toBeLessThan(genericCliQueryIdx);
+    expect(structuredQueryIdx).toBeLessThan(renderSnapshotIdx);
+  });
 });

@@ -1,10 +1,12 @@
 import type { TaskState, WorkerActionSummary, WorkerStatusEntry, WorkflowMeta } from '../types.js';
 import {
+  displayWorkerLifecycle,
   displayWorkerTaskId,
   formatWorkerValue,
   getActiveWorkerAction,
   getWorkerDisplayCopy,
   resolveWorkerActionTarget,
+  type WorkerDisplayLifecycle,
 } from '../lib/worker-display.js';
 import { WorkerDecisionsSection } from './WorkerDecisionsSection.js';
 
@@ -17,29 +19,31 @@ interface WorkerDetailsPanelProps {
   onTaskClick: (task: TaskState) => void;
 }
 
-function processClass(worker: WorkerStatusEntry): string {
-  if (worker.lifecycle === 'running') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
-  if (worker.lifecycle === 'exited') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
+function processClass(lifecycle: WorkerDisplayLifecycle): string {
+  if (lifecycle === 'running') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
+  if (lifecycle === 'exited') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
   return 'border-border-strong bg-muted/60 text-muted-foreground';
 }
 
-function activityClass(worker: WorkerStatusEntry): string {
+function activityClass(worker: WorkerStatusEntry, lifecycle: WorkerDisplayLifecycle): string {
   if (getActiveWorkerAction(worker)) return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
-  if (worker.lifecycle === 'running') return 'border-border-strong bg-muted/60 text-muted-foreground';
-  if (worker.lifecycle === 'exited') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
+  if (lifecycle === 'running') return 'border-border-strong bg-muted/60 text-muted-foreground';
+  if (lifecycle === 'exited') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
   return 'border-border-strong bg-muted/60 text-muted-foreground';
 }
 
-function activityLabel(worker: WorkerStatusEntry): string {
+function activityLabel(worker: WorkerStatusEntry, lifecycle: WorkerDisplayLifecycle): string {
   if (getActiveWorkerAction(worker)) return 'Active work';
-  if (worker.lifecycle === 'running') return 'Idle';
-  if (worker.lifecycle === 'exited') return 'Exited';
+  if (lifecycle === 'running') return 'Idle';
+  if (lifecycle === 'exited') return 'Exited';
+  if (lifecycle === 'unknown') return 'Unknown';
   return 'Stopped';
 }
 
-function idleExplanation(worker: WorkerStatusEntry): string {
-  if (worker.lifecycle === 'running') return getWorkerDisplayCopy(worker.kind).idleText;
-  if (worker.lifecycle === 'exited') return 'Process exited. Start it to create a fresh runtime.';
+function idleExplanation(worker: WorkerStatusEntry, lifecycle: WorkerDisplayLifecycle): string {
+  if (lifecycle === 'running') return getWorkerDisplayCopy(worker.kind).idleText;
+  if (lifecycle === 'exited') return 'Process exited. Start it to create a fresh runtime.';
+  if (lifecycle === 'unknown') return 'Runtime status is unavailable from this window.';
   return 'Process stopped. Start it to listen for work.';
 }
 
@@ -144,6 +148,7 @@ export function WorkerDetailsPanel({
   const copy = worker ? getWorkerDisplayCopy(worker.kind) : null;
   const activeAction = worker ? getActiveWorkerAction(worker) : undefined;
   const latestAction = worker?.recentActions[0];
+  const lifecycle = worker ? displayWorkerLifecycle(worker) : 'unknown';
 
   return (
     <aside className="flex h-full w-full flex-col border-l border-border bg-background">
@@ -177,11 +182,11 @@ export function WorkerDetailsPanel({
           <>
             <section className="rounded border border-border bg-card/60 p-3">
               <div className="flex flex-wrap items-center gap-2">
-                <span className={`rounded-full border px-2 py-0.5 text-[11px] ${processClass(worker)}`}>
-                  Process: {formatWorkerValue(worker.lifecycle)}
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] ${processClass(lifecycle)}`}>
+                  Process: {formatWorkerValue(lifecycle)}
                 </span>
-                <span className={`rounded-full border px-2 py-0.5 text-[11px] ${activityClass(worker)}`}>
-                  {activityLabel(worker)}
+                <span className={`rounded-full border px-2 py-0.5 text-[11px] ${activityClass(worker, lifecycle)}`}>
+                  {activityLabel(worker, lifecycle)}
                 </span>
               </div>
             </section>
@@ -197,7 +202,7 @@ export function WorkerDetailsPanel({
             ) : (
               <section className="rounded border border-border bg-card/60 p-3">
                 <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Current work</h3>
-                <div className="mt-2 text-sm text-muted-foreground">{idleExplanation(worker)}</div>
+                <div className="mt-2 text-sm text-muted-foreground">{idleExplanation(worker, lifecycle)}</div>
               </section>
             )}
 

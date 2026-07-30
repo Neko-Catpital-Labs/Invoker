@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { WorkerStatusEntry, WorkerStatusSnapshot } from '../types.js';
-import { formatWorkerValue, getActiveWorkerAction, getWorkerDisplayCopy } from '../lib/worker-display.js';
+import {
+  displayWorkerLifecycle,
+  formatWorkerValue,
+  getActiveWorkerAction,
+  getWorkerDisplayCopy,
+  type WorkerDisplayLifecycle,
+} from '../lib/worker-display.js';
 
 interface WorkerActivityCardProps {
   snapshot: WorkerStatusSnapshot | null;
@@ -14,13 +20,13 @@ interface WorkerActivityCardProps {
 
 type OptimisticLifecycle = 'running' | 'stopped';
 
-function processClass(lifecycle: string): string {
+function processClass(lifecycle: WorkerDisplayLifecycle): string {
   if (lifecycle === 'running') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200';
   if (lifecycle === 'exited') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
   return 'border-border-strong bg-muted/60 text-muted-foreground';
 }
 
-function activityClass(worker: WorkerStatusEntry, lifecycle: string): string {
+function activityClass(worker: WorkerStatusEntry, lifecycle: WorkerDisplayLifecycle): string {
   if (getActiveWorkerAction(worker)) return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
   if (lifecycle === 'running') return 'border-border-strong bg-muted/60 text-muted-foreground';
   if (lifecycle === 'exited') return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
@@ -32,18 +38,20 @@ function policyClass(worker: WorkerStatusEntry): string {
   return 'border-amber-500/40 bg-amber-500/10 text-amber-200';
 }
 
-function activityLabel(worker: WorkerStatusEntry, lifecycle: string): string {
+function activityLabel(worker: WorkerStatusEntry, lifecycle: WorkerDisplayLifecycle): string {
   if (getActiveWorkerAction(worker)) return 'Active work';
   if (lifecycle === 'running') return 'Idle';
   if (lifecycle === 'exited') return 'Exited';
+  if (lifecycle === 'unknown') return 'Unknown';
   return 'Stopped';
 }
 
-function activityExplanation(worker: WorkerStatusEntry, lifecycle: string): string {
+function activityExplanation(worker: WorkerStatusEntry, lifecycle: WorkerDisplayLifecycle): string {
   const action = getActiveWorkerAction(worker);
   if (action) return `Active work: ${formatWorkerValue(action.actionType)} · ${formatWorkerValue(action.status)}`;
   if (lifecycle === 'running') return getWorkerDisplayCopy(worker.kind).idleText;
   if (lifecycle === 'exited') return 'Process exited. Enable it to create a fresh runtime.';
+  if (lifecycle === 'unknown') return 'Runtime status is unavailable from this window.';
   return 'Worker disabled. Enable it to listen for work.';
 }
 
@@ -66,7 +74,7 @@ export function WorkerActivityCard({
       const next = { ...prev };
       for (const worker of snapshot.workers) {
         if (!(worker.kind in next)) continue;
-        const serverRunning = worker.lifecycle === 'running';
+        const serverRunning = worker.running === true;
         const optimisticRunning = next[worker.kind] === 'running';
         if (serverRunning === optimisticRunning) {
           delete next[worker.kind];
@@ -86,7 +94,7 @@ export function WorkerActivityCard({
           changed = true;
           continue;
         }
-        const serverRunning = worker.lifecycle === 'running';
+        const serverRunning = worker.running === true;
         const optimisticRunning = optimistic === 'running';
         if (serverRunning === optimisticRunning) {
           delete next[worker.kind];
@@ -106,12 +114,14 @@ export function WorkerActivityCard({
           {snapshot.workers.map((worker) => {
             const copy = getWorkerDisplayCopy(worker.kind);
             const disabledTitle = readOnly ? 'Read-only window' : worker.controlDisabledReason;
-            const lifecycle = optimisticByKind[worker.kind] ?? worker.lifecycle;
+            const lifecycle = optimisticByKind[worker.kind] ?? displayWorkerLifecycle(worker);
+            const runtimeUnknown = lifecycle === 'unknown';
             const showStart = lifecycle !== 'running';
             const pending = Boolean(pendingByKind[worker.kind]);
-            const controlUnavailable = showStart ? !onStartWorker : !onStopWorker;
+            const controlUnavailable = runtimeUnknown || (showStart ? !onStartWorker : !onStopWorker);
             const isControlDisabled = Boolean(disabledTitle) || pending || controlUnavailable;
-            const controlTitle = disabledTitle ?? (controlUnavailable ? 'Worker control unavailable' : undefined);
+            const controlTitle = disabledTitle
+              ?? (runtimeUnknown ? 'Runtime status unavailable' : controlUnavailable ? 'Worker control unavailable' : undefined);
             const selected = selectedWorkerKind === worker.kind;
             const launchesOnStart = worker.desiredEnabled ?? worker.autoStarts;
             const recentLogs = worker.recentLogs ?? [];

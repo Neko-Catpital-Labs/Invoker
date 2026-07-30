@@ -71,6 +71,7 @@ import type {
   Logger,
   StartReadyRequest,
   StartReadyResult,
+  WorkerStatusSnapshot,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
 import type { SQLiteAdapter } from '@invoker/data-store';
@@ -166,6 +167,7 @@ import {
 } from './headless.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
+import { renderWorkerLifecycle } from './headless-worker-lifecycle.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
@@ -893,6 +895,42 @@ const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
 
+function isHeadlessWorkersQuery(args: string[]): boolean {
+  return args[0] === 'query' && args[1] === 'workers';
+}
+
+function readHeadlessOutputFormat(args: string[]): string | undefined {
+  const outputIndex = args.indexOf('--output');
+  if (outputIndex < 0) return undefined;
+  return args[outputIndex + 1];
+}
+
+function writeHeadlessWorkersSnapshot(snapshot: WorkerStatusSnapshot, args: string[]): void {
+  const output = readHeadlessOutputFormat(args);
+  if (output === 'label') {
+    process.stdout.write(`${snapshot.workers.map((worker) => worker.kind).join('\n')}\n`);
+    return;
+  }
+  if (output === 'jsonl') {
+    process.stdout.write(`${JSON.stringify(snapshot)}\n`);
+    return;
+  }
+  if (output === 'json') {
+    process.stdout.write(`${JSON.stringify(snapshot)}\n`);
+    return;
+  }
+
+  process.stdout.write(`${BOLD}Workers${RESET}\n`);
+  process.stdout.write(`  generatedAt: ${snapshot.generatedAt}\n`);
+  process.stdout.write(`  count: ${snapshot.workers.length}\n`);
+  for (const worker of snapshot.workers) {
+    const policy = worker.policyReason ? `${worker.policy} (${worker.policyReason})` : worker.policy;
+    const source = worker.source ? ` · ${worker.source}` : '';
+    const desired = worker.desiredEnabled === undefined ? '' : ` · desired=${worker.desiredEnabled}`;
+    process.stdout.write(`  - ${worker.kind}: ${renderWorkerLifecycle(worker)} · ${policy}${desired}${source}\n`);
+  }
+}
+
 function startHeadlessMode(): void {
   const runHeadlessMain = async (): Promise<void> => {
     const agentRegistry = registerBuiltinAgents();
@@ -972,8 +1010,18 @@ function startHeadlessMode(): void {
       const delegationBus = new IpcBus(undefined, { allowServe: false });
       try {
         await delegationBus.ready();
-        const delegated = await tryDelegateQuery(delegationBus, { kind: 'cli-query', args: cliArgs }, 5_000);
+        const workerStatusQuery = isHeadlessWorkersQuery(cliArgs);
+        const delegated = await tryDelegateQuery(
+          delegationBus,
+          workerStatusQuery ? { kind: 'workers' } : { kind: 'cli-query', args: cliArgs },
+          5_000,
+        );
         delegationBus.disconnect();
+        if (workerStatusQuery && delegated && Array.isArray((delegated as WorkerStatusSnapshot).workers)) {
+          writeHeadlessWorkersSnapshot(delegated as WorkerStatusSnapshot, cliArgs);
+          process.exit(0);
+          return;
+        }
         if (delegated && typeof delegated.output === 'string') {
           process.stdout.write(delegated.output);
           process.exit(0);

@@ -376,6 +376,27 @@ describe('QueueView', () => {
     expect(within(screen.getByTestId('worker-row-ci-failure')).getByText('Starts on launch')).toBeInTheDocument();
   });
 
+  it('shows unknown process state when runtime liveness is unavailable', () => {
+    renderQueueView(
+      new Map(),
+      makeWorkerStatus([
+        makeWorker({
+          running: undefined,
+          lifecycle: 'stopped',
+          desiredEnabled: true,
+          controlDisabledReason: 'Controls unavailable',
+          startable: false,
+          stoppable: false,
+        }),
+      ]),
+    );
+
+    const row = screen.getByTestId('worker-row-autofix');
+    expect(within(row).getByText('Process: Unknown')).toBeInTheDocument();
+    expect(within(row).getByText('Runtime status is unavailable from this window.')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Enable worker' })).toBeDisabled();
+  });
+
   it('calls start worker for a stopped row', () => {
     renderQueueView(
       new Map(),
