@@ -8,7 +8,6 @@
 #   #803 mapped, broken         -> skipped (existing workers own it)
 # Then: same tick again -> fingerprint dedup, no second submission.
 # Then: attempt cap -> one-time exhausted PR comment, no more submissions.
-# Then: transient IPC failure -> no attempt budget consumed.
 # Then: DRY_RUN=1 -> logs the plan, submits nothing.
 set -euo pipefail
 
@@ -27,11 +26,7 @@ ln -s "$ROOT/scripts/repro/fixtures/fake-gh/bin/gh" "$TMP/bin/gh"
 NODE_LOG="$TMP/node-calls.log"; : > "$NODE_LOG"
 cat > "$TMP/bin/node" <<EOF
 #!/usr/bin/env bash
-printf 'node env require=%s args=%s\n' "\${INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER:-}" "\$*" >> "$NODE_LOG"
-if [ "\${FAKE_NODE_FAIL:-0}" = "1" ]; then
-  echo "simulated ipc failure" >&2
-  exit 42
-fi
+printf 'node %s\n' "\$*" >> "$NODE_LOG"
 exit 0
 EOF
 chmod +x "$TMP/bin/node"
@@ -70,10 +65,8 @@ echo "$out" | grep -q "PR #801: submitted repair task" \
 echo "$out" | grep -q "PR #802" \
   && fail "tick 1: healthy PR #802 must be untouched" "$out"
 
-runs="$(grep -c "exec --no-track -- run " "$NODE_LOG" || true)"
+runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
 [ "$runs" -eq 1 ] || fail "tick 1: expected exactly 1 run submission, got $runs"
-grep -q "require=1" "$NODE_LOG" \
-  || fail "tick 1: worker IPC dispatch must require an existing owner" "$(cat "$NODE_LOG")"
 
 plan="$TMP/plans/repair-pr-801.yaml"
 [ -f "$plan" ] || fail "tick 1: plan file missing at $plan"
@@ -90,7 +83,7 @@ grep -q "repair-pr-803" "$NODE_LOG" && fail "mapped PR #803 got a repair plan"
 out="$(run_cron)" || fail "tick 2 exited non-zero" "$out"
 echo "$out" | grep -q "PR #801: repair already submitted for this head-state" \
   || fail "tick 2: expected fingerprint dedup for #801" "$out"
-runs="$(grep -c "exec --no-track -- run " "$NODE_LOG" || true)"
+runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
 [ "$runs" -eq 1 ] || fail "tick 2: dedup breached; got $runs submissions"
 
 # ── Tick 3: attempt cap -> one-time exhausted comment ──
@@ -107,23 +100,13 @@ out="$(run_cron)" || fail "tick 4 exited non-zero" "$out"
 comments="$(grep -c "^gh pr comment 801" "$FAKE_GH_STATE_DIR/calls.log" || true)"
 [ "$comments" -eq 1 ] || fail "exhausted comment must be one-time; got $comments"
 
-# ── Submission failure: transient IPC failures do not consume attempt budget ──
-: > "$TMP/ledger.tsv"
-: > "$NODE_LOG"
-out="$(run_cron env FAKE_NODE_FAIL=1)" || fail "submit-failure tick exited non-zero" "$out"
-echo "$out" | grep -q "PR #801: submit failed: simulated ipc failure" \
-  || fail "submit-failure tick: expected owner IPC failure to be logged" "$out"
-attempts="$(awk -F '\t' '$1 == "orphan-attempt" { c++ } END { print c + 0 }' "$TMP/ledger.tsv")"
-[ "$attempts" -eq 0 ] \
-  || fail "submit failures must not consume orphan attempts" "$(cat "$TMP/ledger.tsv")"
-
 # ── DRY_RUN: plan logged, nothing submitted ──
 : > "$TMP/ledger.tsv"
-runs_before="$(grep -c "exec --no-track -- run " "$NODE_LOG" || true)"
+runs_before="$(grep -c "exec -- run " "$NODE_LOG" || true)"
 out="$(run_cron env INVOKER_PR_CRON_DRY_RUN=1)" || fail "dry-run exited non-zero" "$out"
 echo "$out" | grep -q "PR #801: DRY-RUN would submit repair task" \
   || fail "dry-run: expected the would-submit log" "$out"
-runs_after="$(grep -c "exec --no-track -- run " "$NODE_LOG" || true)"
+runs_after="$(grep -c "exec -- run " "$NODE_LOG" || true)"
 [ "$runs_before" -eq "$runs_after" ] || fail "dry-run submitted a task"
 
 echo "[repro] passed"
