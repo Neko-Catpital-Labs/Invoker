@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type {
   InAppPlanRequest,
   InAppPlanResponse,
@@ -28,6 +30,7 @@ import type {
   PlanningTerminalMode,
   PlanningPresetOption,
 } from '@invoker/contracts';
+import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import type {
   ConversationMessageEntry,
   ConversationRepository,
@@ -479,6 +482,42 @@ function assertPersistablePlanningSession(
   }
 }
 
+function planDraftSidecarPath(sessionId: string): string {
+  return join(resolveInvokerHomeRoot(), 'plan-drafts', `${sessionId}.yaml`);
+}
+
+function logPlanDraftSidecarError(sessionId: string, step: string, error: unknown): void {
+  console.error(`[planning-chat] plan draft sidecar ${step} failed session="${sessionId}": ${
+    error instanceof Error ? error.message : String(error)
+  }`);
+}
+
+function writePlanDraftSidecar(sessionId: string, planText: string): void {
+  try {
+    const sidecarPath = planDraftSidecarPath(sessionId);
+    mkdirSync(dirname(sidecarPath), { recursive: true });
+    writeFileSync(sidecarPath, planText, 'utf8');
+  } catch (error) {
+    logPlanDraftSidecarError(sessionId, 'write', error);
+  }
+}
+
+function removePlanDraftSidecarIfPresent(sessionId: string): void {
+  try {
+    rmSync(planDraftSidecarPath(sessionId), { force: true });
+  } catch (error) {
+    logPlanDraftSidecarError(sessionId, 'remove', error);
+  }
+}
+
+function syncPlanDraftSidecar(session: Pick<InAppPlanningChatSession, 'id' | 'draftPlanText'>): void {
+  if (session.draftPlanText && session.draftPlanText.trim()) {
+    writePlanDraftSidecar(session.id, session.draftPlanText);
+  } else {
+    removePlanDraftSidecarIfPresent(session.id);
+  }
+}
+
 function persistPlanningSession(
   session: InAppPlanningChatSession,
   store: InAppPlanningSessionStore | undefined,
@@ -487,6 +526,7 @@ function persistPlanningSession(
   if (!store) return;
   assertPersistablePlanningSession(session, pendingResponse);
   store.upsertInAppPlanningSession(sessionToRecord(session, pendingResponse));
+  syncPlanDraftSidecar(session);
 }
 
 function saveOverrideConversation(
@@ -1133,6 +1173,7 @@ export async function restorePlanningChatSessions(
     }
 
     deps.sessions.set(session.id, session);
+    syncPlanDraftSidecar(session);
     if (shouldPersist) {
       persistPlanningSession(session, deps.planningSessionStore, false);
     }
