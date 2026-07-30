@@ -28,6 +28,7 @@ import {
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
 import { loadConfig, type InvokerConfig } from './config.js';
+import { BOLD, RESET } from './headless-shared.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   discoverOwner,
@@ -50,7 +51,6 @@ import {
 import { printHeadlessUsage } from './headless-usage.js';
 
 const RED = '\x1b[31m';
-const RESET = '\x1b[0m';
 const repoRoot = resolveRepoRoot(__dirname);
 
 function delegationClientLog(message: string): void {
@@ -203,6 +203,9 @@ function isGenericDelegatableReadCommand(args: string[]): boolean {
   if (command === 'query') {
     const sub = args[1];
     return sub !== undefined && sub !== 'workers' && sub !== 'queue' && sub !== 'ui-perf' && sub !== 'action-graph';
+  }
+  if (command === 'worker') {
+    return (args[1] ?? 'list') === 'status';
   }
   return command !== undefined && GENERIC_DELEGATABLE_READ_COMMANDS.has(command);
 }
@@ -488,6 +491,20 @@ async function tryDelegateWorkersQuery(
   return true;
 }
 
+function isLocalWorkerListCommand(args: string[]): boolean {
+  return args[0] === 'worker' && (args[1] ?? 'list') === 'list';
+}
+
+function writeLocalWorkerList(invokerConfig: InvokerConfig): void {
+  const registry = registerExternalWorkersFromConfig(
+    invokerConfig.externalWorkers,
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+  );
+  process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
+  for (const worker of registry.list()) {
+    process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
+  }
+}
 async function runLocalWorkersQuery(args: string[], invokerConfig: InvokerConfig): Promise<number> {
   const dbPath = join(resolveInvokerHomeRoot(), 'invoker.db');
   const persistence = await openMainProcessDatabase({
@@ -688,6 +705,11 @@ export async function runHeadlessClientCommand(
   if (!internalOwnerServe && await delegateWorkerControl(args, deps.messageBus, invokerConfig, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
+  }
+
+  if (!internalOwnerServe && isLocalWorkerListCommand(args)) {
+    writeLocalWorkerList(invokerConfig);
+    return 0;
   }
 
   if (
