@@ -275,7 +275,7 @@ export async function headlessWatch(workflowId: string | undefined, deps: Headle
     syncFromDb: true,
     setExitCodeOnFailure: true,
   });
-  process.stdout.write(`\n[watch] done — ${result.status.completed} completed, ${result.status.failed} failed, ${result.status.closed} closed\n`);
+  process.stdout.write(`\n[watch] done — ${result.status.completed} completed, ${result.status.failed} failed, ${result.status.closed} Closed\n`);
 }
 
 export async function headlessRun(

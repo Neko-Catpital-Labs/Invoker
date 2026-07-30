@@ -154,4 +154,29 @@ describe('trackWorkflow', () => {
     expect(result.tasks.find((task) => task.id === 'wf-1/c')?.status).toBe('completed');
     expect(result.status.failed).toBe(1);
   });
+
+  it('settles closed tasks without counting them as completed', async () => {
+    const tasks = [
+      makeWorkflowTask('wf-1/a', 'completed'),
+      makeWorkflowTask('wf-1/review', 'closed', {
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { reviewStatus: 'Closed' },
+      }),
+    ];
+
+    const result = await trackWorkflow({
+      workflowId: 'wf-1',
+      loadTasks: () => tasks,
+      printSnapshot: false,
+      printSummary: false,
+      printTaskOutput: false,
+      setExitCodeOnFailure: false,
+      pollIntervalMs: 5,
+      maxWaitMs: 500,
+    });
+
+    expect(result.status.completed).toBe(1);
+    expect(result.status.closed).toBe(1);
+    expect(result.status.failed).toBe(0);
+  });
 });

@@ -122,6 +122,10 @@ const STATUS_ICONS: Record<TaskStatus, string> = {
   stale: '◌',
 };
 
+function formatCliStatusLabel(status: string): string {
+  return status === 'closed' ? 'Closed' : status;
+}
+
 // ── Public API ───────────────────────────────────────────────
 
 /**
@@ -136,7 +140,7 @@ export function formatTaskStatus(task: TaskState): string {
   const isFixApproval = task.status === 'awaiting_approval' && task.execution.pendingFixError;
   const color = isFixing ? MAGENTA : isFixApproval ? YELLOW : (STATUS_COLORS[task.status] ?? RESET);
   const icon = isFixing ? '🔧' : isFixApproval ? '🔧' : (STATUS_ICONS[task.status] ?? '?');
-  const label = isFixing ? 'fixing_with_ai' : isFixApproval ? 'fix_approval' : task.status;
+  const label = isFixing ? 'fixing_with_ai' : isFixApproval ? 'fix_approval' : formatCliStatusLabel(task.status);
   const phaseSuffix = (task.status === 'running' || task.status === 'queued') && task.execution.phase
     ? ` (phase=${task.execution.phase})`
     : '';
@@ -163,7 +167,7 @@ export function formatWorkflowStatus(status: {
     `${BOLD}Workflow:${RESET} ${status.total} total`,
     `${GREEN}${status.completed} completed${RESET}`,
     `${RED}${status.failed} failed${RESET}`,
-    `${DIM}${status.closed ?? 0} closed${RESET}`,
+    `${DIM}${status.closed ?? 0} Closed${RESET}`,
     `${YELLOW}${status.running} running${RESET}`,
     `${DIM}${status.pending} pending${RESET}`,
   ];
@@ -186,11 +190,12 @@ export function formatWorkflowList(
     running: YELLOW,
     completed: GREEN,
     failed: RED,
+    closed: DIM,
   };
 
   const lines = workflows.map((wf) => {
     const color = WORKFLOW_STATUS_COLORS[wf.status] ?? DIM;
-    return `${color}  ${BOLD}${wf.id}${RESET}${color} — ${wf.name} [${wf.status}] ${DIM}(${wf.createdAt})${RESET}`;
+    return `${color}  ${BOLD}${wf.id}${RESET}${color} — ${wf.name} [${formatCliStatusLabel(wf.status)}] ${DIM}(${wf.createdAt})${RESET}`;
   });
 
   return lines.join('\n');

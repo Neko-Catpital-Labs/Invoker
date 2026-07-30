@@ -7,7 +7,7 @@
 
 import { Handle, Position } from '@xyflow/react';
 import type { TaskStatus } from '../types.js';
-import { getStatusColor, getEffectiveVisualStatus } from '../lib/colors.js';
+import { getStatusColor, getEffectiveVisualStatus, formatStatusLabel } from '../lib/colors.js';
 import type { MergeGateKind } from '../lib/merge-gate.js';
 import { GitMergeIcon, GitPullRequestIcon } from './icons/index.js';
 
@@ -62,14 +62,14 @@ export function MergeGateNode({ data }: MergeGateNodeProps) {
   const IconComponent = usePrIcon ? GitPullRequestIcon : GitMergeIcon;
 
   const statusLabel =
+    visualStatus === 'closed' ? 'Closed' :
     visualStatus === 'completed' ? 'Completed' :
     visualStatus === 'fix_approval' ? 'Approve fix' :
-    visualStatus === 'review_ready' ? 'Review ready' :
+    visualStatus === 'review_ready' ? 'Review Ready' :
     visualStatus === 'awaiting_approval' ? 'Approve' :
     visualStatus === 'running' ? 'Running' :
-    visualStatus === 'closed' ? 'Closed' :
     visualStatus === 'failed' ? 'Blocked' :
-    'Pending';
+    formatStatusLabel(visualStatus);
 
   return (
     <div
