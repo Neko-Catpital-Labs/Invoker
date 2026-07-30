@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Shared helpers for the two surviving PR-maintenance cron jobs that run
+# Shared helpers for the three surviving PR-maintenance cron jobs that run
 # co-located with the Invoker owner:
 #
 #   scripts/cron-pr-admin-bypass-land.sh
+#   scripts/cron-admin-bypass-queue.sh
 #   scripts/cron-pr-orphan-repair.sh
 # Source this AFTER `set -euo pipefail`:
 #   source "$(dirname "$0")/cron-pr-lib.sh"
@@ -14,10 +15,10 @@
 #              ledger_marker_seen, ledger_max_marker, gh_json,
 #              resolve_workflow_for_pr, prune_stale_pr_workdirs
 #
-# Both jobs run their mutating operation SYNCHRONOUSLY while holding a single
-# shared lock, so only one PR-maintenance operation runs at a time (the other
-# exits this tick and retries in 5 min). The lock prefers flock (Linux owner host)
-# and falls back to an atomic mkdir lock where flock is absent (e.g. macOS).
+# Each job runs its scan or submission pass while holding a single shared lock,
+# so only one PR-maintenance operation runs at a time (the others exit this tick
+# and retry in 5 min). The lock prefers flock (Linux owner host) and falls back
+# to an atomic mkdir lock where flock is absent (e.g. macOS).
 
 # headless-lib.sh: REPO_ROOT, RUNNER, IPC_HELPER, headless_query, ... It keys
 # off ${BASH_SOURCE[0]} so it resolves correctly no matter the caller's cwd.
@@ -57,7 +58,7 @@ _cron_lock_reap_stale() {
   local holder=""
   [ -f "$pid_file" ] && holder="$(cat "$pid_file" 2>/dev/null || true)"
   if [ -n "$holder" ]; then
-    kill -0 "$holder" 2>/dev/null && return 0   # holder alive — do not reap
+    kill -0 "$holder" 2>/dev/null && return 0   # holder alive; do not reap
     rm -rf "$lockdir" 2>/dev/null || true
     return 0
   fi
