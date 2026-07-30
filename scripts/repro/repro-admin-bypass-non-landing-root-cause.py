@@ -12,7 +12,7 @@ from typing import Mapping
 DB_PATH = Path.home() / ".invoker" / "invoker.db"
 LEDGER_PATH = Path.home() / ".invoker" / "mergify-admin-requeue-state.jsonl"
 REPO = "Neko-Catpital-Labs/Invoker"
-TARGET_PRS = (6118, 6158)
+TARGET_PRS = (6118, 6158, 6435)
 WORKER_SOURCE = "pr-maintenance-worker"
 REPAIR_STOP_PREFIX = "Mergify repair stopped: "
 
@@ -88,6 +88,18 @@ def latest_row(rows: list[dict], kind: str, head: str, key: str | None = None) -
     return max(matches, key=lambda row: int(row.get("epoch", 0) or 0))
 
 
+def latest_row_any_head(rows: list[dict], kind: str, key: str | None = None) -> dict | None:
+    matches = [
+        row
+        for row in rows
+        if row.get("kind") == kind
+        and (key is None or row.get("key") == key)
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda row: int(row.get("epoch", 0) or 0))
+
+
 def row_errors(row: Mapping[str, object]) -> list[str]:
     meta = row.get("meta") if isinstance(row.get("meta"), Mapping) else {}
     errors = meta.get("errors") if isinstance(meta, Mapping) else []
@@ -123,10 +135,21 @@ def require_stop_comment(snapshot: Mapping[str, object], fragment: str, label: s
 def summarize_6118(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
     snapshot = gh_pr_snapshot(6118)
     head = str(snapshot["headRefOid"])
-    assert snapshot["state"] == "OPEN", "6118 is no longer open"
-    assert snapshot["mergeStateStatus"] == "DIRTY", "6118 is no longer dirty"
-
     rows = load_ledger_rows(6118)
+    if snapshot["state"] != "OPEN":
+        attempts = sum(1 for row in rows if row.get("kind") == "conflict-repair")
+        return {
+            "pr": 6118,
+            "state": snapshot["state"],
+            "merge_state": snapshot["mergeStateStatus"],
+            "labels": [label["name"] for label in snapshot["labels"]],
+            "head": head,
+            "attempts": attempts,
+            "resolved_at": "live state",
+            "root_cause": "no longer a stuck open target during this pass.",
+        }, check_names(snapshot)
+    assert snapshot["mergeStateStatus"] in {"DIRTY", "BLOCKED"}, "6118 is no longer blocked or dirty"
+
     invalid = latest_row(rows, "repair-invalid", head, "conflict")
     assert invalid is not None, "6118 missing conflict repair-invalid evidence"
     errors = row_errors(invalid)
@@ -187,15 +210,55 @@ def summarize_6158(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
     }, check_names(snapshot)
 
 
+def summarize_6435(conn: sqlite3.Connection) -> tuple[dict, list[str]]:
+    snapshot = gh_pr_snapshot(6435)
+    current_head = str(snapshot["headRefOid"])
+
+    rows = load_ledger_rows(6435)
+    delegated = latest_row_any_head(rows, "repair-delegated", "conflict:6435")
+    assert delegated is not None, "6435 missing same-head repair-delegated evidence"
+    delegated_head = str(delegated.get("headSha") or "")
+    attempts = sum(1 for row in rows if row.get("kind") == "conflict-repair" and row.get("headSha") == delegated_head and row.get("key") == "conflict:6435")
+    assert attempts >= 3, "6435 missing repeated conflict-repair proof"
+    generic_cap = latest_row(rows, "comment-blocked", delegated_head)
+    assert generic_cap is not None, "6435 missing generic cap proof after delegated repair"
+
+    logs = fetch_worker_logs(conn, 6435)
+    delegated_log = require_line(logs, "admin-bypass-repair-delegated", "6435 delegated repair")
+    queue_log = require_line(logs, "PR #6435: repair already submitted for this head-state", "6435 queued repair wait")
+    cap_log = require_line(logs, "The retry cap was reached for current head " + delegated_head, "6435 bad generic cap")
+
+    return {
+        "pr": 6435,
+        "state": snapshot["state"],
+        "merge_state": snapshot["mergeStateStatus"],
+        "labels": [label["name"] for label in snapshot["labels"]],
+        "head": current_head if current_head == delegated_head else f"{delegated_head} -> {current_head}",
+        "attempts": attempts,
+        "delegated_at": delegated_log.timestamp,
+        "generic_cap_at": cap_log.timestamp,
+        "queue_wait_at": queue_log.timestamp,
+        "root_cause": "same-head conflict repair was delegated, but the landing planner ignored the repair-delegated marker and emitted a generic retry-cap blocker instead of waiting; the repair workflow later changed the head.",
+    }, check_names(snapshot)
+
+
 def print_summary(row: Mapping[str, object], names: list[str]) -> None:
     labels = ",".join(row["labels"]) if isinstance(row.get("labels"), list) else ""
     print(
         f"| {row['pr']} | {labels} | {row['state']} / {row['merge_state']} | {row['head']} | "
-        f"{row['attempts']} conflict attempts | exact stop at {row['exact_stop_at']} | "
-        f"generic cap at {row['generic_cap_at']} | {row['root_cause']} |"
+        f"{row['attempts']} conflict attempts | {row.get('exact_stop_at', row.get('delegated_at', ''))} | "
+        f"{row.get('generic_cap_at', row.get('queue_wait_at', ''))} | {row['root_cause']} |"
     )
-    print(f"  exact: {row['exact_comment']}")
-    print(f"  generic: {row['generic_comment']}")
+    if "exact_comment" in row:
+        print(f"  exact: {row['exact_comment']}")
+    if "generic_comment" in row:
+        print(f"  generic: {row['generic_comment']}")
+    if "delegated_at" in row:
+        print(f"  delegated: {row['delegated_at']}")
+    if "queue_wait_at" in row:
+        print(f"  queue wait: {row['queue_wait_at']}")
+    if "resolved_at" in row:
+        print(f"  resolved: {row['resolved_at']}")
     print("  checks:")
     for name in names:
         print(f"    - {name}")
@@ -206,6 +269,7 @@ def main() -> int:
     try:
         summary_6118, names_6118 = summarize_6118(conn)
         summary_6158, names_6158 = summarize_6158(conn)
+        summary_6435, names_6435 = summarize_6435(conn)
     finally:
         conn.close()
 
@@ -217,8 +281,9 @@ def main() -> int:
     print("|---|---|---|---|---|---|---|---|")
     print_summary(summary_6118, names_6118)
     print_summary(summary_6158, names_6158)
+    print_summary(summary_6435, names_6435)
     print()
-    print("Shared signature: exact human-only repair-invalid evidence exists, but subsequent planner passes treated the PR as repairable and emitted generic retry-cap blockers.")
+    print("Shared signature: durable stop/wait evidence exists, but subsequent planner passes treated the PR as repairable and could emit generic retry-cap blockers.")
     return 0
 
 
