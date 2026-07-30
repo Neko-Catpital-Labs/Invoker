@@ -47,9 +47,9 @@ export interface DefaultExecutionConfig {
  * Owner-side PR-maintenance worker config.
  *
  * Disabled by default: `enabled` is the gate for building launch dependencies
- * for the surviving `pr-admin-bypass-land`, `pr-admin-bypass-queue`, and
- * `pr-orphan-repair` worker paths. The remaining fields tune those shell
- * entrypoints and fall back to the worker defaults when omitted.
+ * for the surviving `pr-admin-bypass-land` and `pr-orphan-repair` worker
+ * paths. The remaining fields tune those shell entrypoints and fall back to
+ * the worker defaults when omitted.
  */
 export interface PrMaintenanceConfig {
   /**
