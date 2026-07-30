@@ -8,4 +8,5 @@ cd "$ROOT"
 bash scripts/repro/repro-babysit-land-dryrun.sh
 bash scripts/repro/repro-pr-maintenance-worker-routing.sh
 bash scripts/repro/repro-pr-orphan-repair.sh
+bash scripts/test-pr-orphan-repair-submit-failure.sh
 bash scripts/repro/repro-pr-orphan-admin-bypass-race.sh
