@@ -92,6 +92,7 @@ describe('--no-track microtask dispatch (no deferRunnableTasks)', () => {
     await headlessRetryTask('wf-1/task-1', deps);
     await flushMicrotasks();
 
+    expect(deps.preemptTaskSubgraph).not.toHaveBeenCalled();
     expect(executeTasks).toHaveBeenCalledTimes(1);
     expect(executeTasks).toHaveBeenCalledWith([task]);
   });
