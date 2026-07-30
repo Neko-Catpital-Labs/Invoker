@@ -20,6 +20,7 @@ import type { WorkerActionSummary } from '@invoker/contracts';
 // ── ANSI Code Constants ──────────────────────────────────────
 
 const RESET = '\x1b[0m';
+const BOLD = '\x1b[1m';
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
 const YELLOW = '\x1b[33m';
@@ -63,6 +64,7 @@ describe('formatTaskStatus', () => {
   it('shows correct label, icon, and color for closed status', () => {
     const task = makeTask({ status: 'closed' });
     const output = formatTaskStatus(task);
+    expect(output).toBe(`${DIM}  ◼ ${BOLD}test-task${RESET}${DIM} — A test task [closed]${RESET}`);
     expect(output).toContain(DIM);
     expect(output).toContain('◼');
     expect(output).toContain('[closed]');

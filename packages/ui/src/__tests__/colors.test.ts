@@ -103,6 +103,20 @@ describe('getStatusColor', () => {
     expect(closed.text).not.toBe(reviewReady.text);
   });
 
+  it('pins closed to the neutral zinc palette and Closed label', () => {
+    expect(formatStatusLabel('closed')).toBe('Closed');
+    expect(getStatusVisual('closed')).toMatchObject({
+      text: 'text-zinc-400',
+      dot: 'bg-zinc-500',
+      rail: 'bg-zinc-500',
+      active: false,
+      pulse: false,
+      inline: {
+        text: '#a1a1aa',
+      },
+    });
+  });
+
   it('uses shared urgency color for fix and input states while keeping approval distinct', () => {
     const fixingWithAI = getStatusColor('fixing_with_ai');
     const needsInput = getStatusColor('needs_input');
