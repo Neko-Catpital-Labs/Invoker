@@ -11,17 +11,15 @@ try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_loader import AdminBypassStackLoader
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, RepairOutcome, load_mergify_rules
+    from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
     from .mergify_admin_requeue_plan import plan_stack_execution
-    from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, RepairOutcome, load_mergify_rules
+    from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
     from mergify_admin_requeue_plan import plan_stack_execution
-    from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -55,71 +53,6 @@ def print_action(action: Action, pr: PrSnapshot | None, dry_run: bool, as_json: 
         print(f"{prefix}repair-conflict PR #{action.pr_number} {action.detail}")
 
 
-def record_repair_outcome(
-    ledger: Ledger,
-    logger: AdminBypassLogger,
-    repo: str,
-    pr: PrSnapshot,
-    outcome: RepairOutcome,
-    now: int,
-) -> None:
-    if outcome.status == "queue_only_noop":
-        ledger.record("queue-only-noop", pr.number, pr.head_ref_oid, outcome.check_name, now)
-        logger.trace(
-            "admin-bypass-queue-only-noop",
-            repo=repo,
-            pr_number=pr.number,
-            check_name=outcome.check_name,
-            queue_pr_number=pr.latest_mergify.queue_pr_number if pr.latest_mergify else 0,
-        )
-    if outcome.status == "noop" and outcome.check_name == "PR Body":
-        ledger.record("repair-noop", pr.number, pr.head_ref_oid, outcome.check_name, now)
-        logger.trace(
-            "admin-bypass-repair-noop",
-            repo=repo,
-            pr_number=pr.number,
-            check_name=outcome.check_name,
-        )
-
-
-def handle_repair_outcome(
-    executor: AdminBypassGhExecutor,
-    ledger: Ledger,
-    logger: AdminBypassLogger,
-    repo: str,
-    pr: PrSnapshot,
-    outcome: RepairOutcome,
-    now: int,
-) -> None:
-
-    ledger.record("repair-evaluated", pr.number, pr.head_ref_oid, outcome.check_name, now)
-    if outcome.status == "blocked_dirty":
-        executor.comment_blocked(
-            pr,
-            "repair left uncommitted changes:\n" + "\n".join(outcome.status_lines),
-            f"repair-dirty:{outcome.check_name}:{outcome.start_head}",
-            now,
-        )
-        return
-    if outcome.status == "blocked_invalid":
-        ledger.record(
-            "repair-invalid",
-            pr.number,
-            pr.head_ref_oid,
-            outcome.check_name,
-            now,
-            meta={"errors": list(outcome.errors)},
-        )
-        executor.comment_blocked(
-            pr,
-            "\n".join(outcome.errors),
-            f"repair-invalid:{outcome.check_name}:{outcome.start_head}",
-            now,
-        )
-        return
-    record_repair_outcome(ledger, logger, repo, pr, outcome, now)
-
-
 def run_cycle(args: argparse.Namespace) -> bool:
     rule_path = REPO_ROOT / ".mergify.yml"
     try:
@@ -141,7 +74,6 @@ def run_cycle(args: argparse.Namespace) -> bool:
     ledger = Ledger(Path(args.state_file).expanduser())
     loader = AdminBypassStackLoader(gh)
     executor = AdminBypassGhExecutor(gh, ledger, logger, args.repo)
-    repairer = AdminBypassRepairer(gh, executor, logger, ledger, args.repo)
     loaded = loader.load(args.repo, args.author, args.pr, required_checks, trunk)
     stacks = loaded.stacks
     now = int(time.time())
@@ -189,14 +121,29 @@ def run_cycle(args: argparse.Namespace) -> bool:
             if pr is None:
                 raise RuntimeError(f"missing PR snapshot for #{action.pr_number}")
             if action.kind == "repair_check":
+                # Repair is delegated to the admin-bypass-queue Invoker worker
+                # (scripts/cron-admin-bypass-queue.sh), which submits a fast
+                # repair task instead of running an AI repair synchronously
+                # here while holding the shared PR-maintenance lock.
                 check_name = action.key.split(":", 1)[-1]
                 kind = "repair-bot-thread" if action.key.startswith("bot_review_thread:") else "repair-check"
                 ledger.record(kind, action.pr_number, pr.head_ref_oid, check_name, now)
-                outcome = repairer.repair_check(pr, check_name, now)
-                handle_repair_outcome(executor, ledger, logger, args.repo, pr, outcome, now)
+                ledger.record("repair-delegated", action.pr_number, pr.head_ref_oid, check_name, now)
+                logger.trace(
+                    "admin-bypass-repair-delegated",
+                    repo=args.repo,
+                    pr_number=action.pr_number,
+                    check_name=check_name,
+                )
             elif action.kind == "repair_conflict":
                 ledger.record("conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now)
-                repairer.repair_conflict(pr, action.detail)
+                ledger.record("repair-delegated", action.pr_number, pr.head_ref_oid, action.key, now)
+                logger.trace(
+                    "admin-bypass-repair-delegated",
+                    repo=args.repo,
+                    pr_number=action.pr_number,
+                    check_name=action.key,
+                )
             else:
                 executor.execute(action, pr, now)
                 if action.kind == "requeue":
@@ -220,7 +167,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
                             pr_number=pr.number,
                             check_name=queue_only_noop_check,
                         )
-            if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
+            if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge", "repair_check", "repair_conflict"}:
                 return True
     if not stacks:
         logger.trace("admin-bypass-scan-empty")

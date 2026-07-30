@@ -13,6 +13,7 @@ const repoRoot = resolveRepoRoot(process.cwd());
 // here so this guard proves the script can source its shared library.
 const PR_MAINTENANCE_ENTRYPOINTS = [
   { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
+  { kind: 'pr-admin-bypass-queue', scriptRelativePath: 'scripts/cron-admin-bypass-queue.sh' },
   { kind: 'pr-orphan-repair', scriptRelativePath: 'scripts/cron-pr-orphan-repair.sh' },
 ] as const;
 
