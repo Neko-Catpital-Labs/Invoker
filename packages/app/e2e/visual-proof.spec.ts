@@ -1751,7 +1751,7 @@ test.describe('Visual proof capture', () => {
   });
 
   test('closed-status-merge-gate — merge gate renders the terminal Closed status', async ({ page }) => {
-    await loadPlanAndSelectWorkflow(page, MERGE_GATE_CLOSED_PLAN);
+    const workflowId = await loadPlanAndSelectWorkflow(page, MERGE_GATE_CLOSED_PLAN);
     await page
       .locator('.react-flow__node[data-testid$="mg-closed-work"]')
       .first()
@@ -1765,30 +1765,57 @@ test.describe('Visual proof capture', () => {
     });
     expect(mergeGateTaskId).toBeTruthy();
 
-    // Deterministic setup: drive the merge gate to `closed` directly — no real GitHub PR.
+    const startedAt = new Date('2025-01-01T00:00:00.000Z');
+    const completedAt = new Date('2025-01-01T00:00:05.000Z');
+
+    // Deterministic setup: drive the prerequisite work and merge gate directly. No real PR lookup.
     await injectTaskStates(page, [
+      {
+        taskId: 'mg-closed-work',
+        changes: {
+          status: 'completed',
+          execution: {
+            startedAt,
+            completedAt,
+            exitCode: 0,
+          },
+        },
+      },
       {
         taskId: mergeGateTaskId!,
         changes: {
           status: 'closed',
           execution: {
-            startedAt: new Date(Date.now() - 5000),
-            completedAt: new Date(),
+            startedAt,
+            completedAt,
             reviewStatus: 'Closed without merge',
-            reviewUrl: 'https://github.com/Neko-Catpital-Labs/Invoker/pull/123',
+            reviewUrl: 'https://example.test/closed-merge-gate',
           },
         },
       },
     ]);
+    await page.waitForFunction(
+      (id) => window.invoker.listWorkflows().then((workflows) =>
+        workflows.some((workflow: { id: string; status: string }) =>
+          workflow.id === id && workflow.status === 'closed')),
+      workflowId,
+      { timeout: 15000 },
+    );
+    await page.getByTestId('rail-refresh').click();
+    await page.waitForTimeout(300);
 
     const mergeGateNode = page
       .locator(`.react-flow__node[data-testid="${mergeGateTaskId}"], .react-flow__node[data-testid$="${mergeGateTaskId}"]`)
       .first();
     await expect(mergeGateNode).toBeVisible({ timeout: 15000 });
 
-    // Closed is the terminal status the gate displays — distinct from Failed (BLOCKED) and Review Ready.
-    await expect(mergeGateNode.getByText('BLOCKED', { exact: true })).toHaveCount(0);
-    await expect(mergeGateNode.getByText('REVIEW READY', { exact: true })).toHaveCount(0);
+    // Closed is the terminal status the gate displays, distinct from Failed and Review Ready labels.
+    await expect(mergeGateNode.getByText('Closed', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(mergeGateNode.getByText('Blocked', { exact: true })).toHaveCount(0);
+    await expect(mergeGateNode.getByText('Review ready', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('workflow-status-pill-closed')).toHaveText('Closed (1)');
+    await expect(page.getByTestId('workflow-status-pill-closed')).not.toContainText('Failed');
+    await expect(page.getByTestId('workflow-status-pill-closed')).not.toContainText('Review Ready');
 
     await captureScreenshot(page, 'closed-status-merge-gate');
   });
