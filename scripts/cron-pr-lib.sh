@@ -20,6 +20,11 @@
 # and retry in 5 min). The lock prefers flock (Linux owner host) and falls back
 # to an atomic mkdir lock where flock is absent (e.g. macOS).
 
+# PR-maintenance workers run inside the owner process. A standalone owner can
+# export INVOKER_HEADLESS_STANDALONE=1, but these cron submissions must still go
+# through the existing owner IPC path instead of starting a second writer.
+export INVOKER_HEADLESS_FORCE_OWNER_IPC="${INVOKER_HEADLESS_FORCE_OWNER_IPC:-1}"
+
 # headless-lib.sh: REPO_ROOT, RUNNER, IPC_HELPER, headless_query, ... It keys
 # off ${BASH_SOURCE[0]} so it resolves correctly no matter the caller's cwd.
 # shellcheck source=scripts/headless-lib.sh
