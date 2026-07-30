@@ -6,7 +6,7 @@
 #
 # Provides:
 #   Variables  — REPO_ROOT, RUNNER, ELECTRON, MAIN, IPC_HELPER,
-#                STANDALONE_MODE, FORCE_OWNER_IPC, SANDBOX_FLAG
+#                STANDALONE_MODE, SANDBOX_FLAG
 #   Functions  — headless_query, headless_mutation, headless_workflow_ids,
 #                headless_task_ids, run_with_optional_timeout,
 #                batch_dispatch, parse_batch_results, count_results
