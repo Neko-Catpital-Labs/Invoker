@@ -143,6 +143,10 @@ function setupSpawnMock(): {
           finish(2, null);
           return;
         }
+        if (argsArr?.[0] === 'ls-remote' && argsArr?.[1] === '--heads') {
+          const branch = argsArr[argsArr.length - 1];
+          gitProc.stdout!.emit('data', Buffer.from(`abc123def456\trefs/heads/${branch}\n`));
+        }
         if (argsArr?.includes('rev-parse')) {
           gitProc.stdout!.emit('data', Buffer.from('abc123def456\n'));
         }

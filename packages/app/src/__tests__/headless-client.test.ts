@@ -5,8 +5,19 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LocalBus } from '@invoker/transport';
+import {
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
+  PR_ORPHAN_REPAIR_WORKER_KIND,
+} from '@invoker/execution-engine';
 
 import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
+
+const RETIRED_PR_MAINTENANCE_WORKER_KINDS = [
+  'coderabbit-address',
+  'pr-conflict-rebase',
+  'pr-ci-failure-scan',
+] as const;
 
 describe('headless-client', () => {
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
@@ -127,9 +138,12 @@ describe('headless-client', () => {
       expect(exitCode).toBe(0);
       expect(runElectronHeadless).not.toHaveBeenCalled();
       expect(output).toContain('Worker kinds');
-      expect(output).toContain('pr-admin-bypass-land');
-      expect(output).toContain('pr-admin-bypass-queue');
-      expect(output).toContain('pr-orphan-repair');
+      expect(output).toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
+      expect(output).toContain(PR_ADMIN_BYPASS_QUEUE_WORKER_KIND);
+      expect(output).toContain(PR_ORPHAN_REPAIR_WORKER_KIND);
+      for (const workerKind of RETIRED_PR_MAINTENANCE_WORKER_KINDS) {
+        expect(output).not.toContain(workerKind);
+      }
     } finally {
       stdout.mockRestore();
     }
