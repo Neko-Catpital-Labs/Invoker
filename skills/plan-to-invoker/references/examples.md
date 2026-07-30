@@ -60,6 +60,18 @@ Complex plan with diamond dependencies. Uses `onFinish: pull_request` for manual
 
 All anti-patterns are validated by `scripts/test-fixtures.sh` with deterministic error detection.
 
+**Narrative anti-pattern (no fixture — see rationale in
+review-compression's Rehome / Relocation Refactors section):**
+relocating an already-cohesive package by copying it into a new location in
+one PR (zero deletions), leaving the old copy live and independently
+editable, and deleting the old copy only in a much later, disconnected PR.
+This looks like a smaller version of the Decomposition & Extraction
+Refactors sequence but is a misapplication of it: nothing is being split,
+so there is no reason to defer the deletion, and doing so creates a window
+where a hotfix to the old copy can be silently lost when it is later
+deleted. Land the move (and its deletion, or a same-slice forwarding shim)
+atomically instead.
+
 ---
 
 ## 6. Delegation hints and bugfix repro
