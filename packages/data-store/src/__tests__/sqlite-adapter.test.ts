@@ -477,6 +477,11 @@ describe('SQLiteAdapter', () => {
         'pending_response',
         'created_at',
         'updated_at',
+        'repo_url',
+        'base_branch',
+        'base_commit',
+        'worktree_path',
+        'worktree_branch',
       ]);
       expect(tableColumns(adapter, 'in_app_planning_messages')).toEqual([
         'session_id',
@@ -694,6 +699,56 @@ describe('SQLiteAdapter', () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    });
+
+    it('round-trips repo/HEAD/worktree binding columns when populated', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-binding', {
+        repoUrl: 'https://github.com/example/repo.git',
+        baseBranch: 'main',
+        baseCommit: 'abc1234',
+        worktreePath: '/tmp/invoker-worktrees/planning-binding',
+        worktreeBranch: 'plan/planning-binding',
+      }));
+
+      const loaded = adapter.loadInAppPlanningSession('planning-binding');
+      expect(loaded).toEqual(makePlanningSession('planning-binding', {
+        repoUrl: 'https://github.com/example/repo.git',
+        baseBranch: 'main',
+        baseCommit: 'abc1234',
+        worktreePath: '/tmp/invoker-worktrees/planning-binding',
+        worktreeBranch: 'plan/planning-binding',
+      }));
+    });
+
+    it('round-trips omitted repo/HEAD/worktree binding columns as undefined', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+
+      const loaded = adapter.loadInAppPlanningSession('planning-1');
+      expect(loaded?.repoUrl).toBeUndefined();
+      expect(loaded?.baseBranch).toBeUndefined();
+      expect(loaded?.baseCommit).toBeUndefined();
+      expect(loaded?.worktreePath).toBeUndefined();
+      expect(loaded?.worktreeBranch).toBeUndefined();
+    });
+
+    it('patches repo/HEAD/worktree binding columns independently', () => {
+      adapter.upsertInAppPlanningSession(makePlanningSession('planning-1'));
+
+      adapter.updateInAppPlanningSession('planning-1', {
+        repoUrl: 'https://github.com/example/repo.git',
+        baseCommit: 'def5678',
+        worktreePath: '/tmp/invoker-worktrees/planning-1',
+      });
+
+      const loaded = adapter.loadInAppPlanningSession('planning-1');
+      expect(loaded).toMatchObject({
+        title: 'Planning planning-1',
+        repoUrl: 'https://github.com/example/repo.git',
+        baseCommit: 'def5678',
+        worktreePath: '/tmp/invoker-worktrees/planning-1',
+      });
+      expect(loaded?.baseBranch).toBeUndefined();
+      expect(loaded?.worktreeBranch).toBeUndefined();
     });
 
     it('deletes planning sessions and their visible messages', () => {

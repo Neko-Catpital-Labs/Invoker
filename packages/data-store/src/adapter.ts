@@ -293,6 +293,11 @@ export interface InAppPlanningSessionRecord {
   presetKey: string;
   status: InAppPlanningSessionStatus;
   confirmationMode: PlanningConfirmationMode;
+  repoUrl?: string;
+  baseBranch?: string;
+  baseCommit?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
   messages: InAppPlanningChatLine[];
   draftPlanSummary?: InAppPlanningPlanSummary;
   draftPlanText?: string;
@@ -314,6 +319,11 @@ export type InAppPlanningSessionPatch = Partial<Pick<
   | 'title'
   | 'status'
   | 'confirmationMode'
+  | 'repoUrl'
+  | 'baseBranch'
+  | 'baseCommit'
+  | 'worktreePath'
+  | 'worktreeBranch'
   | 'messages'
   | 'draftPlanSummary'
   | 'draftPlanText'

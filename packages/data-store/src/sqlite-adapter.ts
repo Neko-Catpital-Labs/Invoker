@@ -529,6 +529,11 @@ type InAppPlanningSessionRow = {
   preset_key?: unknown;
   status?: unknown;
   confirmation_mode?: unknown;
+  repo_url?: unknown;
+  base_branch?: unknown;
+  base_commit?: unknown;
+  worktree_path?: unknown;
+  worktree_branch?: unknown;
   draft_plan_summary_json?: unknown;
   draft_plan_text?: unknown;
   submitted_workflow_id?: unknown;
@@ -1228,6 +1233,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
           preset_key,
           status,
           confirmation_mode,
+          repo_url,
+          base_branch,
+          base_commit,
+          worktree_path,
+          worktree_branch,
           draft_plan_summary_json,
           draft_plan_text,
           submitted_workflow_id,
@@ -1241,12 +1251,17 @@ export class SQLiteAdapter implements PersistenceAdapter {
           pending_response,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
           title = excluded.title,
           preset_key = excluded.preset_key,
           status = excluded.status,
           confirmation_mode = excluded.confirmation_mode,
+          repo_url = excluded.repo_url,
+          base_branch = excluded.base_branch,
+          base_commit = excluded.base_commit,
+          worktree_path = excluded.worktree_path,
+          worktree_branch = excluded.worktree_branch,
           draft_plan_summary_json = excluded.draft_plan_summary_json,
           draft_plan_text = excluded.draft_plan_text,
           submitted_workflow_id = excluded.submitted_workflow_id,
@@ -1266,6 +1281,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
           record.presetKey,
           record.status,
           record.confirmationMode ?? 'require',
+          record.repoUrl ?? null,
+          record.baseBranch ?? null,
+          record.baseCommit ?? null,
+          record.worktreePath ?? null,
+          record.worktreeBranch ?? null,
           record.draftPlanSummary ? JSON.stringify(record.draftPlanSummary) : null,
           record.draftPlanText ?? null,
           record.submittedWorkflowId ?? null,
@@ -1318,6 +1338,26 @@ export class SQLiteAdapter implements PersistenceAdapter {
       if (Object.hasOwn(patch, 'confirmationMode')) {
         setClauses.push('confirmation_mode = ?');
         values.push(patch.confirmationMode ?? 'require');
+      }
+      if (Object.hasOwn(patch, 'repoUrl')) {
+        setClauses.push('repo_url = ?');
+        values.push(patch.repoUrl ?? null);
+      }
+      if (Object.hasOwn(patch, 'baseBranch')) {
+        setClauses.push('base_branch = ?');
+        values.push(patch.baseBranch ?? null);
+      }
+      if (Object.hasOwn(patch, 'baseCommit')) {
+        setClauses.push('base_commit = ?');
+        values.push(patch.baseCommit ?? null);
+      }
+      if (Object.hasOwn(patch, 'worktreePath')) {
+        setClauses.push('worktree_path = ?');
+        values.push(patch.worktreePath ?? null);
+      }
+      if (Object.hasOwn(patch, 'worktreeBranch')) {
+        setClauses.push('worktree_branch = ?');
+        values.push(patch.worktreeBranch ?? null);
       }
       if (Object.hasOwn(patch, 'draftPlanSummary')) {
         setClauses.push('draft_plan_summary_json = ?');
@@ -2976,6 +3016,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
         presetKey,
         status: row.status,
         confirmationMode: row.confirmation_mode,
+        ...(typeof row.repo_url === 'string' ? { repoUrl: row.repo_url } : {}),
+        ...(typeof row.base_branch === 'string' ? { baseBranch: row.base_branch } : {}),
+        ...(typeof row.base_commit === 'string' ? { baseCommit: row.base_commit } : {}),
+        ...(typeof row.worktree_path === 'string' ? { worktreePath: row.worktree_path } : {}),
+        ...(typeof row.worktree_branch === 'string' ? { worktreeBranch: row.worktree_branch } : {}),
         messages,
         ...(draftPlanSummary ? { draftPlanSummary } : {}),
         ...(typeof row.draft_plan_text === 'string' ? { draftPlanText: row.draft_plan_text } : {}),

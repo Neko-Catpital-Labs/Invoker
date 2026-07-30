@@ -597,6 +597,11 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_exit_code INTEGER',
   "ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_output_snapshot TEXT NOT NULL DEFAULT ''",
   'ALTER TABLE in_app_planning_sessions ADD COLUMN terminal_updated_at TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN repo_url TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN base_branch TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN base_commit TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN worktree_path TEXT',
+  'ALTER TABLE in_app_planning_sessions ADD COLUMN worktree_branch TEXT',
 ];
 
 /**
