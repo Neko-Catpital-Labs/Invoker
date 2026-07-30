@@ -14,8 +14,10 @@ import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store'
 import {
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   createPrAdminBypassLandWorker,
+  createPrAdminBypassQueueWorker,
   createPrOrphanRepairWorker,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
@@ -166,6 +168,31 @@ describe('PR maintenance workers', () => {
       args: [resolve(repoRoot, 'scripts/cron-pr-orphan-repair.sh')],
       options: expect.objectContaining({ cwd: repoRoot }),
     }));
+  });
+
+  it('spawns the admin-bypass queue shell entrypoint', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeSpawnHarness();
+    const worker = createPrAdminBypassQueueWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+    });
+
+    await worker.tick();
+
+    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
+      command: 'bash',
+      args: [resolve(repoRoot, 'scripts/cron-admin-bypass-queue.sh')],
+      options: expect.objectContaining({ cwd: repoRoot }),
+    }));
+    expect(logger.info).toHaveBeenCalledWith(
+      `[worker:${PR_ADMIN_BYPASS_QUEUE_WORKER_KIND}] spawning scripts/cron-admin-bypass-queue.sh`,
+      expect.objectContaining({ worker: PR_ADMIN_BYPASS_QUEUE_WORKER_KIND }),
+    );
   });
 
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {

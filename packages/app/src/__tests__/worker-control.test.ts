@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AUTO_FIX_WORKER_KIND,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   E2E_AUTOFIX_WORKER_KIND,
   createWorkerRegistry,
@@ -116,6 +117,7 @@ function controller(
   register(PR_SUMMARY_REFRESH_WORKER_KIND, 'Refreshes pull request summaries.');
   register(INFRA_REPAIR_WORKER_KIND, 'Repairs infra-owned SSH and CI failures.');
   register(PR_ADMIN_BYPASS_LAND_WORKER_KIND, 'Lands eligible PRs via admin bypass.');
+  register(PR_ADMIN_BYPASS_QUEUE_WORKER_KIND, 'Submits admin-bypass repair work.');
   register(PR_ORPHAN_REPAIR_WORKER_KIND, 'Repairs unmapped broken pull requests.');
   register(WORKFLOW_RESUME_WORKER_KIND, 'Resumes incomplete workflows.');
   register(E2E_AUTOFIX_WORKER_KIND, 'Runs the extended e2e battery on a schedule.');
@@ -145,6 +147,7 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === PR_SUMMARY_REFRESH_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === INFRA_REPAIR_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_LAND_WORKER_KIND)?.lifecycle).toBe('running');
+    expect(snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_QUEUE_WORKER_KIND)?.lifecycle).toBe('running');
     expect(snapshot.workers.find((worker) => worker.kind === PR_ORPHAN_REPAIR_WORKER_KIND)?.lifecycle).toBe('stopped');
     expect(snapshot.workers.find((worker) => worker.kind === PR_ORPHAN_REPAIR_WORKER_KIND)?.startable).toBe(true);
     expect(snapshot.workers.find((worker) => worker.kind === WORKFLOW_RESUME_WORKER_KIND)?.lifecycle).toBe('stopped');
@@ -153,7 +156,7 @@ describe('createWorkerRuntimeController', () => {
     expect(snapshot.workers.find((worker) => worker.kind === 'external-preview')?.lifecycle).toBe('stopped');
   });
 
-  it('gates the admin-bypass PR-maintenance worker on prMaintenance.enabled', () => {
+  it('gates the admin-bypass PR-maintenance workers on prMaintenance.enabled', () => {
     const setup = controller(autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: false }));
 
     setup.controller.startAutoStartedWorkers();
@@ -162,6 +165,9 @@ describe('createWorkerRuntimeController', () => {
     const row = snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_LAND_WORKER_KIND);
     expect(row?.lifecycle).toBe('stopped');
     expect(row?.startable).toBe(true);
+    const queueRow = snapshot.workers.find((worker) => worker.kind === PR_ADMIN_BYPASS_QUEUE_WORKER_KIND);
+    expect(queueRow?.lifecycle).toBe('stopped');
+    expect(queueRow?.startable).toBe(true);
     expect(snapshot.workers.find((worker) => worker.kind === PR_STATUS_WORKER_KIND)?.lifecycle).toBe('running');
   });
 
@@ -257,6 +263,7 @@ describe('createWorkerRuntimeController', () => {
     for (const kind of [
       AUTO_FIX_WORKER_KIND,
       PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+      PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
       PR_ORPHAN_REPAIR_WORKER_KIND,
     ] as const) {
       expect(setup.controller.start(kind)).toMatchObject({

@@ -89,7 +89,8 @@ On owner boot `startAutoStartedWorkers()` starts two tiers of built-in workers
   review-gate PR reports a merge conflict), `disk-headroom`, `requeue`, and
   `auto-approve`.
 - **Gated on `prMaintenance.enabled`:** `pr-admin-bypass-land` (the mergify
-  admin-bypass landing scan) auto-starts only when the flag is true.
+  admin-bypass landing scan) and `pr-admin-bypass-queue` (fast repair-task
+  submission for blocked admin-bypass PRs) auto-start only when the flag is true.
 - **Registered but manual by default:** `pr-orphan-repair` stays in the built-in
   registry and can be started on demand, but it does not auto-start from the
   `prMaintenance.enabled` gate.
