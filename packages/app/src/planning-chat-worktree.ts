@@ -59,8 +59,6 @@ async function acquireProvisionAndSoftRelease(
 ): Promise<AcquiredWorktree> {
   const acquired = await pool.acquireWorktree(repoUrl, branch, baseCommit, sessionId);
   await runBestEffortInstall(acquired.worktreePath);
-  // A planning-chat worktree lives for the whole chat session, not a single task run,
-  // so it must not hold one of RepoPool's limited concurrent-worktree slots the whole time.
   acquired.softRelease();
   return acquired;
 }
@@ -87,8 +85,6 @@ export async function ensurePlanningWorktreeReady(
     return { worktreePath: expectedPath, recreated: false };
   }
   await pool.ensureCloneThroughRepoQueue(state.repoUrl);
-  // Recreate at the previously-resolved commit, not a freshly resolved HEAD, so a
-  // disk-headroom wipe restores exactly what was there rather than silently rebasing.
   const acquired = await acquireProvisionAndSoftRelease(pool, state.repoUrl, branch, state.baseCommit, state.sessionId);
   return { worktreePath: acquired.worktreePath, recreated: true };
 }
