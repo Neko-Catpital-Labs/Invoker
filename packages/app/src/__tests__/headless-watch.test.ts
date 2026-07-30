@@ -111,6 +111,31 @@ describe('headless watch', () => {
 });
 
 describe('trackWorkflow', () => {
+  it('settles closed tasks without counting them as completed or failed', async () => {
+    const tasks = [
+      makeWorkflowTask('wf-1/a', 'completed'),
+      makeWorkflowTask('wf-1/merge', 'closed', {
+        config: { workflowId: 'wf-1', isMergeNode: true },
+        execution: { reviewUrl: 'https://github.com/example/repo/pull/1' },
+      }),
+    ];
+
+    const result = await trackWorkflow({
+      workflowId: 'wf-1',
+      loadTasks: () => tasks,
+      printSnapshot: false,
+      printSummary: false,
+      printTaskOutput: false,
+      setExitCodeOnFailure: false,
+      pollIntervalMs: 5,
+      maxWaitMs: 500,
+    });
+
+    expect(result.status.completed).toBe(1);
+    expect(result.status.failed).toBe(0);
+    expect(result.status.closed).toBe(1);
+  });
+
   it('does not settle a failed workflow while a sibling launch is still queued', async () => {
     const tasks = [
       makeWorkflowTask('wf-1/a', 'completed'),

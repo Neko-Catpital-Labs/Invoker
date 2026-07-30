@@ -49,7 +49,7 @@ describe('formatTaskStatus', () => {
     const task = makeTask({ status: 'completed' });
     const output = formatTaskStatus(task);
     expect(output).toContain(GREEN);
-    expect(output).toContain('[completed]');
+    expect(output).toContain('[Completed]');
     expect(output).toContain(RESET);
   });
 
@@ -57,7 +57,7 @@ describe('formatTaskStatus', () => {
     const task = makeTask({ status: 'failed' });
     const output = formatTaskStatus(task);
     expect(output).toContain(RED);
-    expect(output).toContain('[failed]');
+    expect(output).toContain('[Failed]');
   });
 
   it('shows correct label, icon, and color for closed status', () => {
@@ -65,32 +65,32 @@ describe('formatTaskStatus', () => {
     const output = formatTaskStatus(task);
     expect(output).toContain(DIM);
     expect(output).toContain('◼');
-    expect(output).toContain('[closed]');
+    expect(output).toContain('[Closed]');
     // Closed is terminal-neutral, not failed: it must not borrow the failed icon/color.
     expect(output).not.toContain(RED);
     expect(output).not.toContain('✗');
-    expect(output).not.toContain('[failed]');
+    expect(output).not.toContain('[Failed]');
   });
 
   it('shows correct color for running status', () => {
     const task = makeTask({ status: 'running' });
     const output = formatTaskStatus(task);
     expect(output).toContain(YELLOW);
-    expect(output).toContain('[running]');
+    expect(output).toContain('[Running]');
   });
 
   it('shows correct color for needs_input status', () => {
     const task = makeTask({ status: 'needs_input' });
     const output = formatTaskStatus(task);
     expect(output).toContain(BLUE);
-    expect(output).toContain('[needs_input]');
+    expect(output).toContain('[Needs Input]');
   });
 
   it('shows correct color for awaiting_approval status', () => {
     const task = makeTask({ status: 'awaiting_approval' });
     const output = formatTaskStatus(task);
     expect(output).toContain(CYAN);
-    expect(output).toContain('[awaiting_approval]');
+    expect(output).toContain('[Awaiting Approval]');
   });
 
   it('includes task id and description', () => {
@@ -115,11 +115,11 @@ describe('formatWorkflowStatus', () => {
     };
     const output = formatWorkflowStatus(status);
     expect(output).toContain('5 total');
-    expect(output).toContain('2 completed');
-    expect(output).toContain('1 failed');
-    expect(output).toContain('1 closed');
-    expect(output).toContain('1 running');
-    expect(output).toContain('0 pending');
+    expect(output).toContain('2 Completed');
+    expect(output).toContain('1 Failed');
+    expect(output).toContain('1 Closed');
+    expect(output).toContain('1 Running');
+    expect(output).toContain('0 Pending');
   });
 
   it('uses colored output', () => {

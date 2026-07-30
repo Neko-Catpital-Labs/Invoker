@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react';
 import type { QueueStatus, WorkflowMeta, WorkflowStatus } from '../types.js';
-import { workflowStatusVisual } from '../lib/workflow-status.js';
+import { formatWorkflowStatusLabel, workflowStatusVisual } from '../lib/workflow-status.js';
 
 interface WorkflowStatusChipsProps {
   workflows: Map<string, WorkflowMeta>;
@@ -23,6 +23,10 @@ const DISPLAY_ORDER: WorkflowStatus[] = [
   'stale',
   'completed',
 ];
+
+function workflowChipLabel(status: WorkflowStatus): string {
+  return status === 'running' ? 'workflows running' : formatWorkflowStatusLabel(status);
+}
 
 export function WorkflowStatusChips({
   workflows,
@@ -102,7 +106,7 @@ export function WorkflowStatusChips({
               keyboardActiveKey === status ? 'ring-2 ring-ring/90 ring-offset-1 ring-offset-background' : '',
             ].join(' ')}
           >
-            {status === 'running' ? 'workflows running' : status.replaceAll('_', ' ')} ({count})
+            {workflowChipLabel(status)} ({count})
           </button>
         );
       })}

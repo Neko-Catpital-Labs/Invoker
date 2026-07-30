@@ -14,6 +14,19 @@ const WORKFLOW_STATUS_SET: ReadonlySet<WorkflowStatus> = new Set<WorkflowStatus>
   'stale',
 ]);
 
+const WORKFLOW_STATUS_LABELS: Record<WorkflowStatus, string> = {
+  pending: 'Pending',
+  running: 'Running',
+  fixing_with_ai: 'Fixing With AI',
+  completed: 'Completed',
+  failed: 'Failed',
+  closed: 'Closed',
+  blocked: 'Blocked',
+  review_ready: 'Review Ready',
+  awaiting_approval: 'Awaiting Approval',
+  stale: 'Stale',
+};
+
 export function normalizeWorkflowStatus(rawStatus: string | undefined): WorkflowStatus {
   if (!rawStatus) return 'pending';
   const normalized = rawStatus.toLowerCase() as WorkflowStatus;
@@ -39,4 +52,8 @@ export function workflowStatusVisual(status: WorkflowStatus): WorkflowStatusVisu
 
 export function isWorkflowStatusActive(status: WorkflowStatus): boolean {
   return status === 'running';
+}
+
+export function formatWorkflowStatusLabel(status: WorkflowStatus): string {
+  return WORKFLOW_STATUS_LABELS[status];
 }

@@ -10,6 +10,7 @@ import type { TaskStatus } from '../types.js';
 describe('getStatusColor', () => {
   const allStatuses: TaskStatus[] = [
     'pending',
+    'queued',
     'running',
     'fixing_with_ai',
     'completed',
@@ -17,6 +18,7 @@ describe('getStatusColor', () => {
     'closed',
     'blocked',
     'needs_input',
+    'review_ready',
     'awaiting_approval',
     'stale',
   ];

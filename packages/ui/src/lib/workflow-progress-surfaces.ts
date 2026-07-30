@@ -1,5 +1,7 @@
 import type { QueueStatus } from '@invoker/contracts';
 import type { TaskState, TaskStatus, WorkflowMeta, WorkflowStatus } from '../types.js';
+import { formatStatusLabel } from './colors.js';
+import { formatWorkflowStatusLabel } from './workflow-status.js';
 
 export type SidebarSurface = 'home' | 'planning' | 'workflows' | 'attention' | 'workers';
 
@@ -60,11 +62,11 @@ function compareTimestamps(a?: string, b?: string): number {
 }
 
 export function formatWorkflowStatus(status: WorkflowStatus): string {
-  return status.replaceAll('_', ' ');
+  return status === 'closed' ? formatWorkflowStatusLabel(status) : status.replaceAll('_', ' ');
 }
 
 export function formatTaskStatus(status: TaskStatus): string {
-  return status.replaceAll('_', ' ');
+  return status === 'closed' ? formatStatusLabel(status) : status.replaceAll('_', ' ');
 }
 
 export function isAttentionTask(task: TaskState): boolean {

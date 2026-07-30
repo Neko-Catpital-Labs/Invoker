@@ -87,4 +87,18 @@ describe('MergeGateNode', () => {
     });
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
+
+  it('renders closed merge gates with the Closed label', () => {
+    renderNode({
+      status: 'closed',
+      label: 'Plan',
+      gateKind: 'external_review',
+      mergeMode: 'external_review',
+      workflowId: 'wf-123',
+    });
+
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.queryByText('Review Ready')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pending')).not.toBeInTheDocument();
+  });
 });

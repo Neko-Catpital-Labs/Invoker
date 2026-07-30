@@ -122,12 +122,34 @@ const STATUS_ICONS: Record<TaskStatus, string> = {
   stale: '◌',
 };
 
+const STATUS_LABELS: Record<TaskStatus | 'fix_approval', string> = {
+  pending: 'Pending',
+  queued: 'Queued',
+  running: 'Running',
+  fixing_with_ai: 'Fixing With AI',
+  completed: 'Completed',
+  failed: 'Failed',
+  closed: 'Closed',
+  needs_input: 'Needs Input',
+  review_ready: 'Review Ready',
+  blocked: 'Blocked',
+  awaiting_approval: 'Awaiting Approval',
+  stale: 'Stale',
+  fix_approval: 'Fix Approval',
+};
+
+export function formatStatusLabel(status: TaskStatus | 'fix_approval' | string): string {
+  return STATUS_LABELS[status as TaskStatus | 'fix_approval']
+    ?? status.replace(/(^|_)([a-z])/g, (_match, prefix: string, letter: string) =>
+      `${prefix === '_' ? ' ' : ''}${letter.toUpperCase()}`);
+}
+
 // ── Public API ───────────────────────────────────────────────
 
 /**
  * Format a single task as a colored one-line summary.
  *
- * Example: "  ✓ greet — Say hello [completed]"
+ * Example: "  ✓ greet — Say hello [Completed]"
  */
 export function formatTaskStatus(task: TaskState): string {
   const isFixing =
@@ -136,7 +158,7 @@ export function formatTaskStatus(task: TaskState): string {
   const isFixApproval = task.status === 'awaiting_approval' && task.execution.pendingFixError;
   const color = isFixing ? MAGENTA : isFixApproval ? YELLOW : (STATUS_COLORS[task.status] ?? RESET);
   const icon = isFixing ? '🔧' : isFixApproval ? '🔧' : (STATUS_ICONS[task.status] ?? '?');
-  const label = isFixing ? 'fixing_with_ai' : isFixApproval ? 'fix_approval' : task.status;
+  const label = formatStatusLabel(isFixing ? 'fixing_with_ai' : isFixApproval ? 'fix_approval' : task.status);
   const phaseSuffix = (task.status === 'running' || task.status === 'queued') && task.execution.phase
     ? ` (phase=${task.execution.phase})`
     : '';
@@ -161,11 +183,11 @@ export function formatWorkflowStatus(status: {
 }): string {
   const parts = [
     `${BOLD}Workflow:${RESET} ${status.total} total`,
-    `${GREEN}${status.completed} completed${RESET}`,
-    `${RED}${status.failed} failed${RESET}`,
-    `${DIM}${status.closed ?? 0} closed${RESET}`,
-    `${YELLOW}${status.running} running${RESET}`,
-    `${DIM}${status.pending} pending${RESET}`,
+    `${GREEN}${status.completed} Completed${RESET}`,
+    `${RED}${status.failed} Failed${RESET}`,
+    `${DIM}${status.closed ?? 0} Closed${RESET}`,
+    `${YELLOW}${status.running} Running${RESET}`,
+    `${DIM}${status.pending} Pending${RESET}`,
   ];
   return parts.join(' | ');
 }
@@ -186,11 +208,12 @@ export function formatWorkflowList(
     running: YELLOW,
     completed: GREEN,
     failed: RED,
+    closed: DIM,
   };
 
   const lines = workflows.map((wf) => {
     const color = WORKFLOW_STATUS_COLORS[wf.status] ?? DIM;
-    return `${color}  ${BOLD}${wf.id}${RESET}${color} — ${wf.name} [${wf.status}] ${DIM}(${wf.createdAt})${RESET}`;
+    return `${color}  ${BOLD}${wf.id}${RESET}${color} — ${wf.name} [${formatStatusLabel(wf.status)}] ${DIM}(${wf.createdAt})${RESET}`;
   });
 
   return lines.join('\n');

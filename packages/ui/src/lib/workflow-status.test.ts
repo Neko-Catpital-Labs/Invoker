@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeWorkflowStatus, workflowStatusVisual } from './workflow-status.js';
+import { formatWorkflowStatusLabel, normalizeWorkflowStatus, workflowStatusVisual } from './workflow-status.js';
 import { getStatusVisual } from './status-colors.js';
 import type { WorkflowStatus } from '../types.js';
 
@@ -46,6 +46,12 @@ describe('workflow-status', () => {
     expect(normalizeWorkflowStatus('CLOSED')).toBe('closed');
     // Closed is terminal-neutral, not a fallback to pending.
     expect(normalizeWorkflowStatus('closed')).not.toBe('pending');
+  });
+
+  it('formats closed as a user-facing label', () => {
+    expect(formatWorkflowStatusLabel('closed')).toBe('Closed');
+    expect(formatWorkflowStatusLabel('closed')).not.toBe(formatWorkflowStatusLabel('failed'));
+    expect(formatWorkflowStatusLabel('closed')).not.toBe(formatWorkflowStatusLabel('review_ready'));
   });
 
   it('gives closed a non-pulsing visual distinct from failed and review_ready', () => {
