@@ -1,16 +1,14 @@
 /**
- * Repro contracts for issue 2: clicking Approve must never report
- * "This confirmation has expired." — every drafted plan stays tied to the
- * message that presented it and is submittable any time.
+ * Repro contracts for issue 2: clicking Approve on the current Slack plan
+ * review must act on that exact durable PlanDraft record, not on mutable
+ * thread state or a 24h pending-confirm TTL.
  *
  * Root causes under test:
- *  - one pending confirmation per thread keyed by threadTs, so a newer draft
- *    silently replaces an older draft's staged plan (B1);
- *  - submitting one draft poisons recovery for every other draft message in
- *    the thread via planSubmitted (B2);
- *  - a 24h persistence TTL makes restart-surviving confirmations expire (B3);
- *  - the pending confirmation is deleted before dispatch, so a failed
- *    dispatch leaves nothing to retry (B4).
+ *  - approval values carry draftId/version, so the current draft cannot be
+ *    confused with arbitrary latest thread state (B1);
+ *  - superseded and failed cards report their real state instead of an
+ *    expired pending-confirm message (B2/B4);
+ *  - review records survive SlackSurface restarts without expiring at 24h (B3).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +16,7 @@ import type { Mock } from 'vitest';
 import { EventEmitter } from 'node:events';
 import * as childProcess from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { ConversationRepository, SlackSessionRepository, SQLiteAdapter } from '@invoker/data-store';
+import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
 
@@ -59,6 +57,7 @@ const sharedSlack = vi.hoisted(() => ({
       update: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue({}),
     },
+    files: { uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F-proof' }] }) },
     reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
     conversations: { replies: vi.fn().mockResolvedValue({ messages: [] }) },
   },
@@ -155,32 +154,31 @@ async function slashCommand(surface: SlackSurface, text: string): Promise<Mock> 
   return respond;
 }
 
-function confirmValueFrom(mock: Mock): string {
-  for (const call of mock.mock.calls) {
+function actionValueFromLatestUpdatedCard(actionId: string): string {
+  for (const call of [...sharedSlack.client.chat.update.mock.calls].reverse()) {
     const message = call[0] as SaidMessage | undefined;
     for (const block of message?.blocks ?? []) {
       for (const element of block.elements ?? []) {
-        if (element.action_id === 'lobby_confirm' && typeof element.value === 'string') {
+        if (element.action_id === actionId && typeof element.value === 'string') {
           return element.value;
         }
       }
     }
   }
-  throw new Error('No lobby_confirm button found');
+  throw new Error(`No ${actionId} button found`);
 }
 
-async function clickConfirm(
+async function clickPlanDraftApprove(
   surface: SlackSurface,
   value: string,
-  thread?: { threadTs: string; messageTs: string },
+  thread: { threadTs: string },
 ): Promise<Mock> {
   const respond = vi.fn().mockResolvedValue(undefined);
-  await actionHandler(surface, 'lobby_confirm')({
+  await actionHandler(surface, 'plan_draft_approve')({
     action: { type: 'button', value },
     body: {
-      ...(thread
-        ? { channel: { id: 'C_LOBBY' }, message: { ts: thread.messageTs, thread_ts: thread.threadTs } }
-        : {}),
+      channel: { id: 'C_LOBBY' },
+      message: { ts: 'review-message', thread_ts: thread.threadTs },
       user: { id: 'U_PROOF' },
     },
     ack: vi.fn().mockResolvedValue(undefined),
@@ -189,10 +187,10 @@ async function clickConfirm(
   return respond;
 }
 
-function respondedWithExpired(respond: Mock): boolean {
+function respondedWithText(respond: Mock, text: string): boolean {
   return respond.mock.calls.some((call) => {
     const message = call[0] as { text?: string } | undefined;
-    return typeof message?.text === 'string' && message.text.includes('expired');
+    return typeof message?.text === 'string' && message.text.includes(text);
   });
 }
 
@@ -200,6 +198,7 @@ describe('Slack confirmation expiry repro contracts', () => {
   let adapter: SQLiteAdapter;
   let repo: ConversationRepository;
   let slackSessions: SlackSessionRepository;
+  let slackPlanDrafts: SlackPlanDraftRepository;
   let surfaces: SlackSurface[];
 
   beforeEach(async () => {
@@ -207,9 +206,11 @@ describe('Slack confirmation expiry repro contracts', () => {
     sharedSlack.client.chat.postMessage.mockClear();
     sharedSlack.client.chat.update.mockClear();
     sharedSlack.client.chat.delete.mockClear();
+    sharedSlack.client.files.uploadV2.mockClear();
     adapter = await SQLiteAdapter.create(':memory:');
     repo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
     slackSessions = new SlackSessionRepository(adapter);
+    slackPlanDrafts = new SlackPlanDraftRepository(adapter);
     surfaces = [];
   });
 
@@ -229,27 +230,39 @@ describe('Slack confirmation expiry repro contracts', () => {
       lobbyChannelId: 'C_LOBBY',
       conversationRepo: repo,
       slackSessionRepo: slackSessions,
+      slackPlanDraftRepo: slackPlanDrafts,
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
+      workingDir: process.cwd(),
       log: silentLog,
     });
     surfaces.push(created);
     return created;
   }
 
-  it('submits the plan presented by the clicked message, not the latest draft in the thread', async () => {
+  async function startThread(slack: SlackSurface, threadTs: string): Promise<void> {
+    mockSpawn.mockImplementationOnce(() => processWith('Scope captured.'));
+    await mention(slack, 'build this', threadTs);
+  }
+
+  async function draftPlan(slack: SlackSurface, threadTs: string, planText: string, turnTs: string): Promise<string> {
+    mockSpawn.mockImplementationOnce(() => processWith(planText));
+    await mention(slack, '/plan', turnTs, threadTs);
+    const value = actionValueFromLatestUpdatedCard('plan_draft_approve');
+    const draft = slackPlanDrafts.getReady('C_LOBBY', threadTs);
+    expect(value).toBe(`${draft?.draftId}:${draft?.version}`);
+    return value;
+  }
+
+  it('submits the PlanDraft presented by the clicked review card', async () => {
     const commands: SurfaceCommand[] = [];
     const slack = surface(commands);
     await slack.start(async (command) => { commands.push(command); });
 
-    mockSpawn.mockImplementationOnce(() => processWith(planFirst));
-    const sayFirst = await mention(slack, 'plan: draft one', 'thread-b1');
-    const valueFirst = confirmValueFrom(sayFirst);
+    await startThread(slack, 'thread-b1');
+    const valueFirst = await draftPlan(slack, 'thread-b1', planFirst, 'b1-plan');
 
-    mockSpawn.mockImplementationOnce(() => processWith(planSecond));
-    await mention(slack, 'plan: draft two instead', 'b1-turn2', 'thread-b1');
-
-    await clickConfirm(slack, valueFirst, { threadTs: 'thread-b1', messageTs: 'msg-first' });
+    await clickPlanDraftApprove(slack, valueFirst, { threadTs: 'thread-b1' });
 
     expect(commands).toContainEqual(expect.objectContaining({
       type: 'start_plan',
@@ -257,29 +270,25 @@ describe('Slack confirmation expiry repro contracts', () => {
     }));
   });
 
-  it('submits an older draft message after a sibling draft in the thread was already approved', async () => {
+  it('reports a superseded sibling draft honestly after the current draft is approved', async () => {
     const commands: SurfaceCommand[] = [];
     const slack = surface(commands);
     await slack.start(async (command) => { commands.push(command); });
 
-    mockSpawn.mockImplementationOnce(() => processWith(planFirst));
-    const sayFirst = await mention(slack, 'plan: draft one', 'thread-b2');
-    const valueFirst = confirmValueFrom(sayFirst);
+    await startThread(slack, 'thread-b2');
+    const valueFirst = await draftPlan(slack, 'thread-b2', planFirst, 'b2-plan-1');
+    const valueSecond = await draftPlan(slack, 'thread-b2', planSecond, 'b2-plan-2');
 
-    mockSpawn.mockImplementationOnce(() => processWith(planSecond));
-    const saySecond = await mention(slack, 'plan: draft two instead', 'b2-turn2', 'thread-b2');
-    const valueSecond = confirmValueFrom(saySecond);
-
-    await clickConfirm(slack, valueSecond, { threadTs: 'thread-b2', messageTs: 'msg-second' });
+    await clickPlanDraftApprove(slack, valueSecond, { threadTs: 'thread-b2' });
     expect(commands).toContainEqual(expect.objectContaining({
       type: 'start_plan',
       planText: expect.stringContaining('name: Second'),
     }));
 
-    const respond = await clickConfirm(slack, valueFirst, { threadTs: 'thread-b2', messageTs: 'msg-first' });
+    const respond = await clickPlanDraftApprove(slack, valueFirst, { threadTs: 'thread-b2' });
 
-    expect(respondedWithExpired(respond)).toBe(false);
-    expect(commands).toContainEqual(expect.objectContaining({
+    expect(respondedWithText(respond, 'superseded')).toBe(true);
+    expect(commands).not.toContainEqual(expect.objectContaining({
       type: 'start_plan',
       planText: expect.stringContaining('name: First'),
     }));
@@ -290,12 +299,8 @@ describe('Slack confirmation expiry repro contracts', () => {
     const first = surface(commands);
     await first.start(async (command) => { commands.push(command); });
 
-    mockSpawn.mockImplementationOnce(() => processWith(planFirst));
-    await mention(first, 'plan: draft one', 'thread-b3');
-    // Stage via /invoker submit: the confirmation key is not the threadTs, so
-    // the persisted row is the only recovery source after a restart.
-    const respondSlash = await slashCommand(first, 'submit');
-    const value = confirmValueFrom(respondSlash);
+    await startThread(first, 'thread-b3');
+    const value = await draftPlan(first, 'thread-b3', planFirst, 'b3-plan');
 
     await first.stop();
     surfaces = surfaces.filter((candidate) => candidate !== first);
@@ -307,9 +312,9 @@ describe('Slack confirmation expiry repro contracts', () => {
     const second = surface(commands);
     await second.start(async (command) => { commands.push(command); });
 
-    const respond = await clickConfirm(second, value);
+    const respond = await clickPlanDraftApprove(second, value, { threadTs: 'thread-b3' });
 
-    expect(respondedWithExpired(respond)).toBe(false);
+    expect(respondedWithText(respond, 'expired')).toBe(false);
     expect(commands).toContainEqual(expect.objectContaining({
       type: 'start_plan',
       planText: expect.stringContaining('name: First'),
@@ -328,20 +333,16 @@ describe('Slack confirmation expiry repro contracts', () => {
       commands.push(command);
     });
 
-    mockSpawn.mockImplementationOnce(() => processWith(planFirst));
-    const say = await mention(slack, 'plan: draft one', 'thread-b4');
-    const value = confirmValueFrom(say);
+    await startThread(slack, 'thread-b4');
+    const value = await draftPlan(slack, 'thread-b4', planFirst, 'b4-plan');
 
-    const firstRespond = await clickConfirm(slack, value, { threadTs: 'thread-b4', messageTs: 'msg-b4' });
+    const firstRespond = await clickPlanDraftApprove(slack, value, { threadTs: 'thread-b4' });
     expect(commands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
-    expect(respondedWithExpired(firstRespond)).toBe(false);
+    expect(respondedWithText(firstRespond, 'dispatch pipe broke')).toBe(true);
 
-    const secondRespond = await clickConfirm(slack, value, { threadTs: 'thread-b4', messageTs: 'msg-b4' });
+    const secondRespond = await clickPlanDraftApprove(slack, value, { threadTs: 'thread-b4' });
 
-    expect(respondedWithExpired(secondRespond)).toBe(false);
-    expect(commands).toContainEqual(expect.objectContaining({
-      type: 'start_plan',
-      planText: expect.stringContaining('name: First'),
-    }));
+    expect(respondedWithText(secondRespond, 'failed')).toBe(true);
+    expect(commands).not.toContainEqual(expect.objectContaining({ type: 'start_plan' }));
   });
 });
