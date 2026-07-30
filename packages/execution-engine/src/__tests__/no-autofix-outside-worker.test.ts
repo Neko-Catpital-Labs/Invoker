@@ -11,7 +11,7 @@ import { createWorkerRegistry } from '../worker-registry.js';
 const SOURCE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BUILTIN_WORKERS_SOURCE = 'builtin-workers.ts';
 const RECOVERY_ACTION_TRIGGER_PATTERN = /\bsubmitter\.submit\s*\(/g;
-const SANCTIONED_RECOVERY_HELPER_SOURCE_FILES = new Set([
+const SANCTIONED_RECOVERY_ACTION_SOURCE_FILES = new Set([
   'repair-workflow-spec.ts',
   'review-gate-ci-repair.ts',
 ]);
@@ -115,7 +115,9 @@ function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<strin
     registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()).list().map((worker) => worker.kind),
   );
   const registerImports = importedRegisterFunctions(builtinWorkers ?? '');
-  const allowedFiles = new Set<string>();
+  // CI-repair submitters are lifecycle/command-dispatcher owned, not runtime
+  // factories in registerBuiltinWorkers, so they must stay explicit here.
+  const allowedFiles = new Set<string>(SANCTIONED_RECOVERY_ACTION_SOURCE_FILES);
 
   for (const [registerFunction, moduleSpecifier] of registerImports) {
     const callPattern = new RegExp(`\\b${escapeRegExp(registerFunction)}\\(registry\\)`);
@@ -131,10 +133,10 @@ function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<strin
     }
   }
 
-  // Recovery helpers factored out of a registered worker (and imported by it)
-  // are part of that worker's implementation, so follow value imports to keep
-  // their submitter.submit() calls sanctioned. Files no worker reaches stay
-  // unsanctioned and are still caught as violations.
+  // Sanctioned recovery sources can factor helpers behind local imports, so
+  // follow value imports to keep delegated submitter.submit() calls sanctioned.
+  // Files no sanctioned source reaches stay unsanctioned and are still caught
+  // as violations.
   const queue = [...allowedFiles];
   while (queue.length > 0) {
     const file = queue.pop() as string;
@@ -148,8 +150,9 @@ function registeredBuiltInWorkerSourceFiles(sourceFiles: SourceFiles): Set<strin
       }
     }
   }
-  for (const file of SANCTIONED_RECOVERY_HELPER_SOURCE_FILES) {
-    if (sourceFiles.has(file)) allowedFiles.add(file);
+
+  for (const file of SANCTIONED_RECOVERY_ACTION_SOURCE_FILES) {
+    expect(sourceFiles.get(file), `${file} must exist while it is sanctioned for recovery actions`).toBeDefined();
   }
 
   return allowedFiles;
