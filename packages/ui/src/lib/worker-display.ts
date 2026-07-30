@@ -19,6 +19,8 @@ export interface WorkerActionTargetContext {
   readonly workflowName: string | undefined;
 }
 
+export type WorkerDisplayLifecycle = WorkerStatusEntry['lifecycle'] | 'unknown';
+
 export const ACTIVE_WORKER_ACTION_STATUSES: ReadonlySet<WorkerActionStatus> = new Set<WorkerActionStatus>([
   'queued',
   'pending',
@@ -40,6 +42,10 @@ export function displayWorkerTaskId(taskId: string): string {
   if (taskId.startsWith('__merge__')) return 'merge gate';
   const slash = taskId.lastIndexOf('/');
   return slash >= 0 ? taskId.slice(slash + 1) : taskId;
+}
+
+export function displayWorkerLifecycle(worker: Pick<WorkerStatusEntry, 'lifecycle' | 'running'>): WorkerDisplayLifecycle {
+  return worker.running === undefined ? 'unknown' : worker.lifecycle;
 }
 
 export function resolveWorkerActionTarget(
