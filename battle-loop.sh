@@ -21,6 +21,7 @@ REPROS=(
   scripts/repro/repro-babysit-targeted-scan-light.sh
   scripts/repro/repro-babysit-queue-repair-invalid-stop.sh
   scripts/repro/repro-babysit-conflict-repair-invalid-stop.sh
+  scripts/repro/repro-babysit-conflict-repair-delegated-wait.sh
   scripts/repro/repro-babysit-stack-human-blocker-suppresses-repairs.sh
   scripts/repro/repro-babysit-no-current-bottom-comment.sh
   scripts/repro/repro-babysit-merged-pr-terminal.sh
