@@ -2,6 +2,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
+python3 -m unittest scripts/test_pr_worker_safe_push.py
 python3 -m unittest scripts/test_mergify_admin_requeue.py
 bash scripts/repro/repro-mergify-admin-requeue.sh
 bash scripts/repro/repro-mergify-admin-requeue-stack-expansion.sh

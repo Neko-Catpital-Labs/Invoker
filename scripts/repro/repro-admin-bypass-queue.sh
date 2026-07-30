@@ -93,6 +93,10 @@ grep -q "^repoUrl: https://github.com/fake/repo.git$" "$plan902" \
   || fail "plan902: repoUrl must be set (parseRawPlan requires it)" "$(cat "$plan902")"
 grep -q "^onFinish: none$" "$plan902" || fail "plan902: must not open its own PR" "$(cat "$plan902")"
 grep -q "Blocker category: failed_checks" "$plan902" || fail "plan902: wrong category" "$(cat "$plan902")"
+grep -q "id: safe-push" "$plan902" || fail "plan902: missing safe-push task" "$(cat "$plan902")"
+grep -q "python3 scripts/pr_worker_safe_push.py" "$plan902" || fail "plan902: missing safe-push helper command" "$(cat "$plan902")"
+grep -q -- "--tsv-kind queue-attempt" "$plan902" || fail "plan902: safe-push must own queue-attempt recording" "$(cat "$plan902")"
+grep -q "Do not push" "$plan902" || fail "plan902: repair prompt must forbid direct pushes" "$(cat "$plan902")"
 
 plan903="$TMP/plans/repair-pr-903.yaml"
 [ -f "$plan903" ] || fail "tick 1: plan file missing for #903"
@@ -111,8 +115,9 @@ node_calls_after="$(wc -l < "$NODE_LOG")"
 # Tick 3: attempt cap -> one-time exhausted comment for #902.
 fp="$(awk -F '\t' '$1 == "queue-submitted" && $2 == "902" { print $3 }' "$TMP/ledger.tsv")"
 [ -n "$fp" ] || fail "could not read fingerprint from ledger for #902"
-grep -v "^queue-submitted	902	" "$TMP/ledger.tsv" > "$TMP/ledger2.tsv" && mv "$TMP/ledger2.tsv" "$TMP/ledger.tsv"
-for _ in 1 2; do printf 'queue-attempt\t902\t%s\t%s\n' "$fp" "$(date +%s)" >> "$TMP/ledger.tsv"; done
+awk -F '\t' '!( $1 == "queue-submitted" && $2 == "902" )' "$TMP/ledger.tsv" > "$TMP/ledger2.tsv"
+mv "$TMP/ledger2.tsv" "$TMP/ledger.tsv"
+for _ in 1 2 3; do printf 'queue-attempt\t902\t%s\t%s\n' "$fp" "$(date +%s)" >> "$TMP/ledger.tsv"; done
 out="$(run_cron)" || fail "tick 3 exited non-zero" "$out"
 echo "$out" | grep -q "PR #902: attempt cap reached" \
   || fail "tick 3: expected attempt cap to fire for #902" "$out"

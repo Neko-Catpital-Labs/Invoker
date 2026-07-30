@@ -34,6 +34,26 @@ class AdminBypassGhExecutor:
         self.logger = logger
         self.repo = repo
 
+    def pr_head_is_current(self, pr: PrSnapshot, action_kind: str, key: str) -> bool:
+        if not pr.head_ref_oid or not hasattr(self.gh, "pr_detail"):
+            return True
+        detail = self.gh.pr_detail(self.repo, pr.number)
+        state = str(detail.get("state") or pr.state)
+        current = str(detail.get("headRefOid") or detail.get("head_ref_oid") or "")
+        if state == "OPEN" and current == pr.head_ref_oid:
+            return True
+        self.logger.trace(
+            "admin-bypass-stale-head-skip",
+            repo=self.repo,
+            pr_number=pr.number,
+            action_kind=action_kind,
+            key=key,
+            expected_head=pr.head_ref_oid,
+            current_head=current or None,
+            current_state=state,
+        )
+        return False
+
     def download_job_log(self, repo: str, details_url: str, pr_number: int, check_name: str) -> str:
         match = GH_ACTIONS_JOB_RE.search(details_url)
         if not match:
@@ -103,28 +123,38 @@ class AdminBypassGhExecutor:
             self.gh.comment(self.repo, pr.number, f"Mergify repair stopped: {detail}")
             self.ledger.record("comment-blocked", pr.number, pr.head_ref_oid, "no-current-bottom:exact", now)
 
-    def execute(self, action: Action, pr: PrSnapshot, now: int) -> None:
+    def execute(self, action: Action, pr: PrSnapshot, now: int) -> bool:
         self.logger.trace("admin-bypass-action-execute", action=self.logger.action_payload(action))
+        if action.kind in {
+            "requeue",
+            "restore_admin_bypass_label",
+            "retarget_base",
+            "comment_admin_bypass_nudge",
+            "remove_merge_hold",
+            "resolve_bot_threads",
+            "comment_blocked",
+        } and not self.pr_head_is_current(pr, action.kind, action.key):
+            return False
         if action.kind == "requeue":
             self.requeue(pr, action.key, now)
-            return
+            return True
         if action.kind == "restore_admin_bypass_label":
             self.restore_admin_bypass_label(pr, now)
-            return
+            return True
         if action.kind == "retarget_base":
             self.retarget_base(pr, action.key, now)
-            return
+            return True
         if action.kind == "comment_admin_bypass_nudge":
             self.comment_admin_bypass_nudge(pr, action.key, now)
-            return
+            return True
         if action.kind == "remove_merge_hold":
             self.remove_merge_hold(pr, now)
-            return
+            return True
         if action.kind == "resolve_bot_threads":
             self.resolve_bot_threads(action.key)
-            return
+            return True
         if action.kind == "comment_blocked":
             key = f"capped:{action.detail}" if action.key == "capped" else action.key
             self.comment_blocked(pr, action.detail, key, now)
-            return
+            return True
         raise ValueError(f"unsupported executor action: {action.kind}")

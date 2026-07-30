@@ -126,8 +126,6 @@ def run_cycle(args: argparse.Namespace) -> bool:
                 # repair task instead of running an AI repair synchronously
                 # here while holding the shared PR-maintenance lock.
                 check_name = action.key.split(":", 1)[-1]
-                kind = "repair-bot-thread" if action.key.startswith("bot_review_thread:") else "repair-check"
-                ledger.record(kind, action.pr_number, pr.head_ref_oid, check_name, now)
                 ledger.record("repair-delegated", action.pr_number, pr.head_ref_oid, check_name, now)
                 logger.trace(
                     "admin-bypass-repair-delegated",
@@ -136,7 +134,6 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     check_name=check_name,
                 )
             elif action.kind == "repair_conflict":
-                ledger.record("conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now)
                 ledger.record("repair-delegated", action.pr_number, pr.head_ref_oid, action.key, now)
                 logger.trace(
                     "admin-bypass-repair-delegated",
@@ -145,7 +142,10 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     check_name=action.key,
                 )
             else:
-                executor.execute(action, pr, now)
+                performed = executor.execute(action, pr, now)
+                if not performed:
+                    should_poll = True
+                    continue
                 if action.kind == "requeue":
                     if (
                         plan.prereq_status

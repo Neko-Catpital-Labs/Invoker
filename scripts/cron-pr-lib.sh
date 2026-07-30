@@ -44,6 +44,11 @@ log_line() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
 }
 
+shell_quote() {
+  # Single-quote a value for a generated shell command.
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
 # ---------------------------------------------------------------------------
 # Shared cross-job lock (decision 3): one PR cron operation at a time.
 # Exits 0 (clean no-op) when the other job holds the lock.

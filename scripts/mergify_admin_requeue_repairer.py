@@ -13,12 +13,14 @@ try:
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
+    from .pr_worker_safe_push import SafePushError, safe_push
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
+    from pr_worker_safe_push import SafePushError, safe_push
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -314,8 +316,20 @@ class AdminBypassRepairer:
             prereq=prereq,
         )
 
-    def push_branch(self, work_root: Path, branch_name: str) -> None:
-        self.git_output(work_root, "push", "origin", f"HEAD:{branch_name}")
+    def push_branch(
+        self,
+        work_root: Path,
+        branch_name: str,
+        *,
+        expected_head: str | None = None,
+        expect_missing: bool = False,
+    ) -> str:
+        return safe_push(
+            branch=branch_name,
+            expected_head=expected_head,
+            expect_missing=expect_missing,
+            cwd=work_root,
+        )
 
     def terminal_repair_outcome(
         self,
@@ -363,7 +377,7 @@ class AdminBypassRepairer:
         if not validation.get("valid"):
             errors = [str(error) for error in validation.get("errors", [])]
             raise RuntimeError("prerequisite PR body failed validation: " + "; ".join(errors))
-        self.push_branch(work_root, branch_name)
+        self.push_branch(work_root, branch_name, expect_missing=True)
         created = self.gh.create_pr(self.repo, title, body, branch_name, TRUNK)
         prereq_number = int(created.get("number") or 0)
         if prereq_number <= 0:
@@ -515,7 +529,17 @@ class AdminBypassRepairer:
         repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
         validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
         if validation.get("valid"):
-            self.push_branch(work_root, pr.head_ref_name)
+            try:
+                self.push_branch(work_root, pr.head_ref_name, expected_head=pr.head_ref_oid)
+            except SafePushError as exc:
+                return self.blocked_outcome(
+                    "stale_head",
+                    check_name,
+                    start_head,
+                    end_head,
+                    repair_commits=repair_commits,
+                    errors=(str(exc),),
+                )
             return self.blocked_outcome(
                 "pushed",
                 check_name,
@@ -551,10 +575,11 @@ class AdminBypassRepairer:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
+        start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
         prompt = (
             f"Resolve only the merge conflict that keeps this PR from merging. "
             f"Rebase the PR head branch onto its base branch, preserve the PR's intended changes, "
-            f"run the narrow proof for the conflict resolution, then commit and push to the PR head branch. "
+            f"run the narrow proof for the conflict resolution, then commit locally. Do not push. "
             f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
             f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
             f"Head SHA: {pr.head_ref_oid}\nReason: {reason}\n"
@@ -570,3 +595,6 @@ class AdminBypassRepairer:
             head_sha=pr.head_ref_oid,
         )
         self.run_claude_repair(work_root, prompt)
+        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        if end_head != start_head and not self.git_lines(work_root, "status", "--porcelain"):
+            self.push_branch(work_root, pr.head_ref_name, expected_head=pr.head_ref_oid)
