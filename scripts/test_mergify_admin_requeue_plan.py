@@ -418,6 +418,44 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(blockers[0]["kind"], "repair_delegated")
         self.assertIn("repair already delegated for current head", blockers[0]["detail"])
 
+    def test_clean_unaccepted_upper_stack_posts_exact_human_blocker_once(self):
+        ledger = self._ledger()
+        bottom = pr(
+            number=6435,
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="dequeued", head="c" * 40, comment_id="old"),
+        )
+        upper = pr(
+            number=6439,
+            base_ref_name=bottom.head_ref_name,
+            head_ref_name="stack/top",
+            head_ref_oid="b" * 40,
+            labels=frozenset(),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom, upper)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6435, 6439},
+            open_pr_numbers_by_head={bottom.head_ref_name: (6435,), upper.head_ref_name: (6439,)},
+        )
+        self.assertEqual([(action.kind, action.key, action.pr_number) for action in plan.actions], [("comment_blocked", "upper-stack-needs-acceptance", 6435)])
+        self.assertIn("#6439", plan.actions[0].detail)
+        self.assertIn("without `admin-bypass`", plan.actions[0].detail)
+
+        ledger.record("comment-blocked", 6435, HEAD, "upper-stack-needs-acceptance", 1)
+        repeated = p.plan_stack_execution(
+            m.StackGroup("s", (bottom, upper)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6435, 6439},
+            open_pr_numbers_by_head={bottom.head_ref_name: (6435,), upper.head_ref_name: (6439,)},
+        )
+        self.assertEqual(repeated.actions, ())
+        self.assertEqual(repeated.wait_reason, "upper-stack-needs-acceptance")
+
     def test_failed_check_triggers_repair(self):
         actions = self._plan(pr(checks={"build": check("failure")}))
         self.assertEqual((actions[0].kind, actions[0].key), ("repair_check", "build"))
