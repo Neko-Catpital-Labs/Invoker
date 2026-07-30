@@ -111,6 +111,33 @@ describe('headless watch', () => {
 });
 
 describe('trackWorkflow', () => {
+  it('settles closed tasks without counting them as completed', async () => {
+    const tasks = [makeWorkflowTask('wf-1/closed', 'closed')];
+    const loadTasks = vi.fn(() => tasks);
+
+    const result = await trackWorkflow({
+      workflowId: 'wf-1',
+      loadTasks,
+      printSnapshot: false,
+      printSummary: false,
+      printTaskOutput: false,
+      setExitCodeOnFailure: false,
+      pollIntervalMs: 5,
+      maxWaitMs: 100,
+    });
+
+    expect(loadTasks).toHaveBeenCalledTimes(1);
+    expect(result.status).toEqual({
+      total: 1,
+      completed: 0,
+      failed: 0,
+      closed: 1,
+      running: 0,
+      pending: 0,
+    });
+    expect(result.tasks[0]?.status).toBe('closed');
+  });
+
   it('does not settle a failed workflow while a sibling launch is still queued', async () => {
     const tasks = [
       makeWorkflowTask('wf-1/a', 'completed'),
