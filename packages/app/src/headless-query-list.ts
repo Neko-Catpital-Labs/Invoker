@@ -369,6 +369,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
 
       const completed = workflows.filter(w => w.status === 'completed').length;
       const failed = workflows.filter(w => w.status === 'failed').length;
+      const closed = workflows.filter(w => w.status === 'closed').length;
       const running = workflows.filter(w => w.status === 'running').length;
       const terminal = completed + failed;
       const successRate = terminal > 0 ? (completed / terminal) * 100 : 0;
@@ -402,6 +403,7 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
         totalWorkflows: workflows.length,
         completed,
         failed,
+        closed,
         running,
         successRate,
         avgDurationMs,

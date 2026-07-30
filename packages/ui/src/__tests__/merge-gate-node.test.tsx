@@ -77,6 +77,21 @@ describe('MergeGateNode', () => {
     expect(screen.queryByTestId('approve-merge-button')).not.toBeInTheDocument();
   });
 
+  it('renders closed as a first-class terminal-neutral gate status', () => {
+    renderNode({
+      status: 'closed',
+      label: 'Plan',
+      gateKind: 'external_review',
+      mergeMode: 'external_review',
+      workflowId: 'wf-123',
+    });
+
+    expect(screen.getByText('Closed')).toBeInTheDocument();
+    expect(screen.queryByText('Review ready')).not.toBeInTheDocument();
+    expect(screen.queryByText('Blocked')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pending')).not.toBeInTheDocument();
+  });
+
   it('does not render an inline approve button in external_review mode', () => {
     renderNode({
       status: 'awaiting_approval',

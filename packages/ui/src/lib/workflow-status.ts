@@ -37,6 +37,22 @@ export function workflowStatusVisual(status: WorkflowStatus): WorkflowStatusVisu
   };
 }
 
+export function workflowStatusLabel(status: WorkflowStatus): string {
+  const labelMap: Record<WorkflowStatus, string> = {
+    pending: 'Pending',
+    running: 'Running',
+    fixing_with_ai: 'Fixing With AI',
+    completed: 'Completed',
+    failed: 'Failed',
+    closed: 'Closed',
+    blocked: 'Blocked',
+    review_ready: 'Review Ready',
+    awaiting_approval: 'Awaiting Approval',
+    stale: 'Stale',
+  };
+  return labelMap[status] ?? status;
+}
+
 export function isWorkflowStatusActive(status: WorkflowStatus): boolean {
   return status === 'running';
 }

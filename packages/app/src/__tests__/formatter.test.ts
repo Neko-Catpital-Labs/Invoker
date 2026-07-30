@@ -136,6 +136,27 @@ describe('formatWorkflowStatus', () => {
   });
 });
 
+// ── formatWorkflowList ───────────────────────────────────────
+
+describe('formatWorkflowList', () => {
+  it('labels closed workflows without failed or review-ready styling', async () => {
+    const { formatWorkflowList } = await import('../formatter.js');
+    const output = formatWorkflowList([{
+      id: 'wf-closed',
+      name: 'Closed workflow',
+      status: 'closed',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }]);
+
+    expect(output).toContain('[Closed]');
+    expect(output).toContain(DIM);
+    expect(output).not.toContain(RED);
+    expect(output).not.toContain('[Failed]');
+    expect(output).not.toContain('[Review Ready]');
+  });
+});
+
 // ── formatEventLog ───────────────────────────────────────────
 
 describe('formatEventLog', () => {

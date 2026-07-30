@@ -141,7 +141,7 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('failed');
+    expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('Failed');
     expect(screen.getByTestId('workflow-node-wf-a-running-tasks')).toHaveTextContent('1 running task');
   });
 
@@ -563,11 +563,11 @@ describe('WorkflowGraph', () => {
       />,
     );
 
-    expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('running');
-    expect(screen.getByTestId('workflow-node-wf-a')).not.toHaveTextContent('completed');
+    expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('Running');
+    expect(screen.getByTestId('workflow-node-wf-a')).not.toHaveTextContent('Completed');
 
     fireEvent.pointerUp(pane);
-    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('completed'));
+    await waitFor(() => expect(screen.getByTestId('workflow-node-wf-a')).toHaveTextContent('Completed'));
   });
 
   it('pans the workflow viewport from native pane mouse drags', async () => {

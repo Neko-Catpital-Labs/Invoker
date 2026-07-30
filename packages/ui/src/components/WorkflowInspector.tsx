@@ -193,7 +193,21 @@ interface WorkflowInspectorProps {
 }
 
 function formatStatus(value: string | undefined): string {
-  return value?.replaceAll('_', ' ') ?? 'unknown';
+  const labelMap: Record<string, string> = {
+    pending: 'Pending',
+    queued: 'Queued',
+    running: 'Running',
+    fixing_with_ai: 'Fixing With AI',
+    completed: 'Completed',
+    failed: 'Failed',
+    closed: 'Closed',
+    needs_input: 'Needs Input',
+    blocked: 'Blocked',
+    review_ready: 'Review Ready',
+    awaiting_approval: 'Awaiting Approval',
+    stale: 'Stale',
+  };
+  return value ? labelMap[value] ?? value.replaceAll('_', ' ') : 'unknown';
 }
 
 function capitalize(value: string): string {

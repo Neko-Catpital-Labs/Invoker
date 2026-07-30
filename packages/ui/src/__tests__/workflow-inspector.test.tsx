@@ -41,6 +41,23 @@ describe('WorkflowInspector', () => {
     expect(screen.queryByText(/workflow id:/i)).not.toBeInTheDocument();
   });
 
+  it('labels closed tasks as Closed', () => {
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'closed' }}
+        task={makeTask({ status: 'closed' })}
+        collapsed={false}
+        advancedExpanded={false}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-inspector-status-label')).toHaveTextContent('Closed');
+    expect(screen.getByTestId('workflow-inspector-status-label')).not.toHaveTextContent('Failed');
+    expect(screen.getByTestId('workflow-inspector-status-label')).not.toHaveTextContent('Review Ready');
+  });
+
   it('hides the Pull Request section for a non-review-gate task even when reviewUrl is set', () => {
     render(
       <WorkflowInspector
@@ -551,7 +568,7 @@ describe('WorkflowInspector', () => {
     );
 
     expect(screen.getByText('Fix cancellation race')).toBeInTheDocument();
-    expect(screen.getByText('failed')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
   });
 
   it('does not render prompt content for workflow-only selection', () => {

@@ -11,7 +11,7 @@ const noopLogger = {
   child: vi.fn(function () { return noopLogger; }),
 };
 
-function makeWorkflow(id: string, status: 'completed' | 'failed' | 'running', overrides: Record<string, unknown> = {}) {
+function makeWorkflow(id: string, status: 'completed' | 'failed' | 'closed' | 'running', overrides: Record<string, unknown> = {}) {
   return { id, name: `Workflow ${id}`, status, createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:01:00Z', ...overrides };
 }
 
@@ -65,7 +65,24 @@ describe('headless query stats', () => {
     expect(parsed.totalWorkflows).toBe(3);
     expect(parsed.completed).toBe(2);
     expect(parsed.failed).toBe(1);
+    expect(parsed.closed).toBe(0);
     expect(parsed.running).toBe(0);
+    stdout.mockRestore();
+  });
+
+  it('counts closed separately without increasing completed or failed totals', async () => {
+    (mockDeps.persistence.listWorkflows as ReturnType<typeof vi.fn>).mockReturnValue([
+      makeWorkflow('wf-1', 'completed'),
+      makeWorkflow('wf-2', 'closed'),
+      makeWorkflow('wf-3', 'failed'),
+    ]);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    await runHeadless(['query', 'stats', '--output', 'json'], mockDeps);
+    const parsed = JSON.parse(stdout.mock.calls[0][0] as string);
+    expect(parsed.completed).toBe(1);
+    expect(parsed.failed).toBe(1);
+    expect(parsed.closed).toBe(1);
+    expect(parsed.successRate).toBe(50);
     stdout.mockRestore();
   });
 

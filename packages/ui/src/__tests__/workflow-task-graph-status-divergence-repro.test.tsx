@@ -108,7 +108,7 @@ describe('workflow / task-graph status divergence', () => {
 
     const miniDag = await renderWorkflow(mock, [runningTask, failedTask], [workflow]);
 
-    expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('failed');
+    expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('Failed');
 
     await waitFor(() => {
       expect(miniDag).toHaveTextContent('Still running task');
@@ -130,7 +130,7 @@ describe('workflow / task-graph status divergence', () => {
     const failedWorkflow = workflowMetaFromTasks([failedTask]);
     const miniDag = await renderWorkflow(mock, [failedTask], [failedWorkflow]);
 
-    expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('failed');
+    expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('Failed');
     await waitFor(() => {
       expect(miniDag).toHaveTextContent('Failed');
     });
@@ -152,7 +152,7 @@ describe('workflow / task-graph status divergence', () => {
     });
 
     // Label still reads the older failed metadata: separate renderer channels.
-    expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('failed');
+    expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('Failed');
 
     const runningTask: TaskState = {
       ...failedTask,
@@ -166,7 +166,7 @@ describe('workflow / task-graph status divergence', () => {
     act(() => mock.fireWorkflowsChanged([runningWorkflow]));
 
     await waitFor(() => {
-      expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('running');
+      expect(screen.getByTestId('workflow-node-wf-diverge')).toHaveTextContent('Running');
     });
   });
 });

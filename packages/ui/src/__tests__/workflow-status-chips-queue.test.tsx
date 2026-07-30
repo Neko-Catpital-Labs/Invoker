@@ -44,4 +44,20 @@ describe('WorkflowStatusChips queue capacity', () => {
     fireEvent.click(screen.getByTestId('queue-chip-queued'));
     expect(onOpenRunningSurface).toHaveBeenCalledTimes(1);
   });
+
+  it('renders closed with a display label instead of the raw enum', () => {
+    render(
+      <WorkflowStatusChips
+        workflows={new Map([
+          ['wf-closed', { id: 'wf-closed', name: 'Closed workflow', status: 'closed' }],
+        ])}
+        activeFilters={new Set()}
+        onStatusClick={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId('workflow-status-pill-closed')).toHaveTextContent('Closed (1)');
+    expect(screen.getByTestId('workflow-status-pill-closed')).not.toHaveTextContent('Review Ready');
+    expect(screen.getByTestId('workflow-status-pill-closed')).not.toHaveTextContent('Failed');
+  });
 });

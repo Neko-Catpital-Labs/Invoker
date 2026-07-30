@@ -1,6 +1,6 @@
 import type { KeyboardEvent, MouseEvent } from 'react';
 import type { WorkflowMeta, WorkflowStatus } from '../types.js';
-import { isWorkflowStatusActive, workflowStatusVisual } from '../lib/workflow-status.js';
+import { isWorkflowStatusActive, workflowStatusLabel, workflowStatusVisual } from '../lib/workflow-status.js';
 import type { WorkflowCoreActivity } from '../lib/workflow-core-activity.js';
 
 interface WorkflowNodeProps {
@@ -13,7 +13,7 @@ interface WorkflowNodeProps {
 }
 
 function statusLabel(status: WorkflowStatus): string {
-  return status.replaceAll('_', ' ');
+  return workflowStatusLabel(status);
 }
 function runningTaskLabel(count: number): string {
   return count === 1 ? '1 running task' : `${count} running tasks`;

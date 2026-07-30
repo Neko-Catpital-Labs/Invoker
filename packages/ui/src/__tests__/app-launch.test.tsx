@@ -190,7 +190,7 @@ describe('App launch (component)', () => {
 
     fireEvent.click(screen.getByTestId('sidebar-planning'));
     expect(await screen.findByRole('heading', { name: 'Plan graph' })).toBeInTheDocument();
-    expect(screen.getByText('Alpha · running')).toBeInTheDocument();
+    expect(screen.getByText('Alpha · Running')).toBeInTheDocument();
   });
   it('keeps sidebar width under explicit toggle control while surfaces change', async () => {
     render(<App />);

@@ -122,6 +122,24 @@ const STATUS_ICONS: Record<TaskStatus, string> = {
   stale: '◌',
 };
 
+function statusLabel(status: string): string {
+  const labelMap: Record<string, string> = {
+    pending: 'Pending',
+    queued: 'Queued',
+    running: 'Running',
+    fixing_with_ai: 'Fixing With AI',
+    completed: 'Completed',
+    failed: 'Failed',
+    closed: 'Closed',
+    needs_input: 'Needs Input',
+    review_ready: 'Review Ready',
+    blocked: 'Blocked',
+    awaiting_approval: 'Awaiting Approval',
+    stale: 'Stale',
+  };
+  return labelMap[status] ?? status;
+}
+
 // ── Public API ───────────────────────────────────────────────
 
 /**
@@ -186,11 +204,12 @@ export function formatWorkflowList(
     running: YELLOW,
     completed: GREEN,
     failed: RED,
+    closed: DIM,
   };
 
   const lines = workflows.map((wf) => {
     const color = WORKFLOW_STATUS_COLORS[wf.status] ?? DIM;
-    return `${color}  ${BOLD}${wf.id}${RESET}${color} — ${wf.name} [${wf.status}] ${DIM}(${wf.createdAt})${RESET}`;
+    return `${color}  ${BOLD}${wf.id}${RESET}${color} — ${wf.name} [${statusLabel(wf.status)}] ${DIM}(${wf.createdAt})${RESET}`;
   });
 
   return lines.join('\n');
@@ -374,6 +393,7 @@ export function formatWorkflowStats(stats: {
   totalWorkflows: number;
   completed: number;
   failed: number;
+  closed?: number;
   running: number;
   successRate: number;
   avgDurationMs: number | null;
@@ -386,6 +406,7 @@ export function formatWorkflowStats(stats: {
   lines.push(`  Total      ${BOLD}${stats.totalWorkflows}${RESET}`);
   lines.push(`  ${GREEN}Completed  ${stats.completed}${RESET}`);
   lines.push(`  ${RED}Failed     ${stats.failed}${RESET}`);
+  lines.push(`  ${DIM}Closed     ${stats.closed ?? 0}${RESET}`);
   lines.push(`  ${YELLOW}Running    ${stats.running}${RESET}`);
   lines.push(`  Success    ${BOLD}${stats.successRate.toFixed(1)}%${RESET}`);
 
