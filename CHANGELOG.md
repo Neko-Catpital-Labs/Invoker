@@ -4,7 +4,7 @@ All notable changes to Invoker will be documented in this file.
 
 ## Unreleased
 
-- Remove the overlapping `coderabbit-address`, `pr-conflict-rebase`, and `pr-ci-failure-scan` PR-maintenance workers. The built-in PR-maintenance surface now narrows to `pr-admin-bypass-land` plus `pr-orphan-repair`, with only `pr-admin-bypass-land` auto-started by `prMaintenance.enabled`.
+- Remove the overlapping `coderabbit-address`, `pr-conflict-rebase`, and `pr-ci-failure-scan` PR-maintenance workers. The built-in PR-maintenance surface now narrows to `pr-admin-bypass-land`, `pr-admin-bypass-queue`, and `pr-orphan-repair`, with the admin-bypass land and queue workers auto-started by `prMaintenance.enabled`.
 
 - Stop stale pid locks from blocking launch after a hard kill. If Invoker died without releasing `~/.invoker/gui-window.lock` or `invoker.db.lock` (e.g. SIGKILL from `kill-all-electron.sh`) and the OS later reused the recorded pid for an unrelated process (a Chrome renderer, in the reported case), launch failed with the "only one instance of the Invoker GUI" dialog or a `[db-writer-lock] already held by PID …` error with no Invoker running. Both locks' staleness checks now also compare the holder's process start time (`ps -o etime=`, shared `process-start-time.ts`) against the lock file's mtime: a process that started after the lock was written cannot be its owner, so the lock is reclaimed. Unknown start time (Windows, `ps` failure) stays conservative and keeps the lock.
 

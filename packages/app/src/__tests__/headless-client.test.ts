@@ -105,6 +105,29 @@ describe('headless-client', () => {
       rmSync(homeRoot, { recursive: true, force: true });
     }
   });
+  it('serves worker list locally without delegating or booting Electron', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 23);
+    try {
+      const exitCode = await runHeadlessClientCommand(['worker', 'list'], {
+        messageBus: new LocalBus(),
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        refreshMessageBus: vi.fn(async () => new LocalBus()),
+        runElectronHeadless,
+      });
+
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(exitCode).toBe(0);
+      expect(runElectronHeadless).not.toHaveBeenCalled();
+      expect(output).toContain('Worker kinds');
+      expect(output).toContain('pr-admin-bypass-land');
+      expect(output).toContain('pr-admin-bypass-queue');
+      expect(output).toContain('pr-orphan-repair');
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it('falls back to direct execution for generic standalone reads when no owner exists', async () => {
     process.env.INVOKER_HEADLESS_STANDALONE = '1';
     const firstBus = new LocalBus();
