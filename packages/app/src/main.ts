@@ -1523,6 +1523,18 @@ function startHeadlessMode(): void {
             }),
           );
         }
+        if (!workflowMutationDispatcher.has('invoker:retry-task')) {
+          workflowMutationDispatcher.set('invoker:retry-task', async (taskIdArg: unknown) => {
+            await runHeadless(['retry-task', String(taskIdArg)], {
+              ...headlessDeps,
+              waitForApproval: false,
+              noTrack: true,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
+            return { ok: true };
+          });
+        }
         if (!workflowMutationDispatcher.has('invoker:fix-with-agent')) {
           workflowMutationDispatcher.set('invoker:fix-with-agent', async (...fixArgs: unknown[]) => {
             const { taskId, agentName, context } = parseFixWithAgentMutationArgs(fixArgs);
