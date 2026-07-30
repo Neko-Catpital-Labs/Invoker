@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Battle-test: the two surviving PR-maintenance WORKERS (the real
-# createXWorker runtimes the owner boots) still route every remaining issue
-# class to the right owner path against a fake GitHub:
+# Battle-test: the land and orphan PR-maintenance WORKERS (the real
+# createXWorker runtimes the owner boots) still route their issue classes to
+# the right owner path against a fake GitHub:
 #   pr-admin-bypass-land <- conflicted admin-bypass PR        (pr-dirty.json)
 #   pr-admin-bypass-land <- CI-failed admin-bypass PR         (pr-ci-failed.json)
 #   pr-admin-bypass-land <- dequeued landable stack           (stack-landable.json)
