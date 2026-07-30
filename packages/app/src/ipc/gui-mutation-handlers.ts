@@ -16,6 +16,7 @@ import type {
   InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   Logger,
+  QueueStatus,
   StartReadyRequest,
   StartReadyResult,
   TaskGraphEvent,
@@ -233,6 +234,44 @@ export function acknowledgeNoTrackHeadlessExec(
     { module: 'ipc-delegate' },
   );
   throw new Error(`Fire-and-forget headless.exec could not be queued: ${reason}`);
+}
+
+function isOwnerReadHandlerMissingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const code = typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code ?? '')
+    : '';
+  return code === 'NO_HANDLER' || message.includes('No request handler registered');
+}
+
+export async function resolveGuiQueueStatusRead({
+  ownerMode,
+  messageBus,
+  orchestrator,
+  logger,
+  markDaemonOwnerUnavailable,
+}: {
+  ownerMode: boolean;
+  messageBus: Pick<MessageBus, 'request'>;
+  orchestrator: Pick<Orchestrator, 'getQueueStatus'>;
+  logger: Logger;
+  markDaemonOwnerUnavailable: (reason: string) => void;
+}): Promise<QueueStatus> {
+  if (!ownerMode) {
+    try {
+      return await messageBus.request<{ kind: string }, QueueStatus>('headless.query', { kind: 'queue' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!isOwnerReadHandlerMissingError(err)) throw err;
+      markDaemonOwnerUnavailable(message);
+      logger.warn(
+        `get-queue-status owner delegation found no owner handler; falling back to local read-only snapshot: ${message}`,
+        { module: 'ipc' },
+      );
+    }
+    return orchestrator.getQueueStatus({ refresh: true });
+  }
+  return orchestrator.getQueueStatus({ refresh: false });
 }
 
 type RendererTaskFeed = ReturnType<typeof createRendererTaskFeed>;
@@ -1762,9 +1801,13 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     return workerRuntimeController.stop(String(kindArg));
   });
 
-  ipcMain.handle('invoker:get-queue-status', () => {
-    return orchestrator.getQueueStatus({ refresh: false });
-  });
+  ipcMain.handle('invoker:get-queue-status', () => resolveGuiQueueStatusRead({
+    ownerMode,
+    messageBus,
+    orchestrator,
+    logger,
+    markDaemonOwnerUnavailable,
+  }));
   ipcMain.handle('invoker:get-worker-status', async () => {
     if (!ownerMode) {
       try {
