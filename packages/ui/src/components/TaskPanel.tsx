@@ -448,7 +448,7 @@ export function TaskPanel({
             <div data-testid="base-branch-display" className="font-mono text-xs text-foreground">
               {baseBranch ?? 'n/a'}
             </div>
-            <div className="text-[11px] text-muted-foreground">Use master, origin/master, or upstream/master.</div>
+            <div className="text-[11px] text-muted-foreground">Pinned to master for review gates.</div>
 
           </div>
         </div>
