@@ -243,7 +243,7 @@ const nodeLogText = (leg) => readFileSync(leg.nodeLog, 'utf8');
   assert(leg, has(leg, '[worker:pr-orphan-repair] spawning scripts/cron-pr-orphan-repair.sh'),
     'worker spawned its own cron entrypoint');
   assert(leg, !err, `entrypoint completed cleanly${err ? ` (got: ${err.message})` : ''}`);
-  assert(leg, /exec --no-track -- run .*repair-pr-801\.yaml/.test(nodeLogText(leg)),
+  assert(leg, /exec -- run .*repair-pr-801\.yaml/.test(nodeLogText(leg)),
     'unmapped broken PR #801 got ONE combined Invoker repair task');
   assert(leg, !nodeLogText(leg).includes('repair-pr-802'),
     'healthy unmapped PR #802 was untouched');
