@@ -20,6 +20,8 @@
 # and retry in 5 min). The lock prefers flock (Linux owner host) and falls back
 # to an atomic mkdir lock where flock is absent (e.g. macOS).
 
+export INVOKER_HEADLESS_FORCE_OWNER_IPC="${INVOKER_HEADLESS_FORCE_OWNER_IPC:-1}"
+
 # headless-lib.sh: REPO_ROOT, RUNNER, IPC_HELPER, headless_query, ... It keys
 # off ${BASH_SOURCE[0]} so it resolves correctly no matter the caller's cwd.
 # shellcheck source=scripts/headless-lib.sh
