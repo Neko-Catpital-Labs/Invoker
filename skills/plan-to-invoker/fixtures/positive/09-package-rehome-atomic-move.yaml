@@ -1,0 +1,87 @@
+# Positive fixture: Atomic package rehome for an already-cohesive unit
+# Source: review-compression.md Rehome / Relocation Refactors
+# Pattern: move plus old-path removal in one slice, avoiding duplicate live logic
+
+name: "Package rehome atomic move"
+description: |
+  Demonstrates the corrected rehome pattern for an already-cohesive unit:
+  the old path is removed in the same task that creates the new home, rather
+  than being left as a separately editable duplicate for a later slice.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: git@github.com:example-org/acme-repo.git
+baseBranch: master
+featureBranch: plan/package-rehome-atomic-move
+
+tasks:
+  - id: rehome-legacy-widget-sync-into-package
+    description: |
+      Review claim:
+      - Move legacy widget sync from `scripts/legacy-widget-sync.py` to `packages/widget-sync/legacy_widget_sync.py`; no logic change.
+      Review lane:
+      - policy
+      Safety invariant:
+      - The slice leaves one source of truth for legacy widget sync logic, with the old path removed in the same task as the new package home.
+      Slice rationale:
+      - A pure rehome is one location transformation, so keeping create and removal together avoids a duplicate-logic drift window.
+      Architectural effect:
+      - Legacy widget sync lives under the package path while behavior and runtime architecture stay unchanged.
+      Goal:
+      - Rehome the already-cohesive legacy widget sync script into the widget-sync package atomically.
+      Motivation:
+      - Avoid silently losing a hotfix made to the old copy before a delayed removal slice lands.
+      Alternative considerations:
+      - Option A (chosen): land the atomic move in one slice, with the old script path removed and the package path created together.
+      - Option B (rejected): copy the script now and remove the old path later in a separate slice, because that risks silently losing a hotfix made to the old copy before deletion.
+      Implementation details:
+      - Use a git-mv-shaped relocation from the legacy script path to the package module path, preserving logic and making only import-path fixups required by the new location.
+      - Keep directly affected tests or fixture references with this same slice.
+      Non-goals:
+      - Do not split symbols into new modules, change behavior, add fields, or leave a forwarding shim because the caller set is small enough to repoint now.
+      Layer: docs
+      Feature state: active
+      Files:
+      - `scripts/legacy-widget-sync.py`
+      - `packages/widget-sync/legacy_widget_sync.py`
+      Change types:
+      - `scripts/legacy-widget-sync.py`: delete
+      - `packages/widget-sync/legacy_widget_sync.py`: create
+      Acceptance criteria:
+      - The old path and new path are changed in the same task, and no duplicate live implementation remains.
+      - Pass condition: the plan-level fixture validation exits 0.
+    prompt: |
+      Review claim:
+      - Move legacy widget sync from `scripts/legacy-widget-sync.py` to `packages/widget-sync/legacy_widget_sync.py`; no logic change.
+      Review lane:
+      - policy
+      Safety invariant:
+      - The slice leaves one source of truth for legacy widget sync logic, with the old path removed in the same task as the new package home.
+      Slice rationale:
+      - A pure rehome is one location transformation, so keeping create and removal together avoids a duplicate-logic drift window.
+      Architectural effect:
+      - Legacy widget sync lives under the package path while behavior and runtime architecture stay unchanged.
+      Goal:
+      - Rehome the already-cohesive legacy widget sync script into the widget-sync package atomically.
+      Motivation:
+      - Avoid silently losing a hotfix made to the old copy before a delayed removal slice lands.
+      Alternative considerations:
+      - Option A (chosen): land the atomic move in one slice, with the old script path removed and the package path created together.
+      - Option B (rejected): copy the script now and remove the old path later in a separate slice, because that risks silently losing a hotfix made to the old copy before deletion.
+      Implementation details:
+      - Assume no prior context. Rehome `scripts/legacy-widget-sync.py` to `packages/widget-sync/legacy_widget_sync.py` as one atomic move.
+      - Preserve the moved file's logic and make only import-path fixups required by the new location.
+      - Update directly affected tests or fixture references in the same slice.
+      Non-goals:
+      - Do not split symbols into new modules, change behavior, add fields, or leave a forwarding shim because the caller set is small enough to repoint now.
+      Layer: docs
+      Feature state: active
+      Files:
+      - `scripts/legacy-widget-sync.py`
+      - `packages/widget-sync/legacy_widget_sync.py`
+      Change types:
+      - `scripts/legacy-widget-sync.py`: delete
+      - `packages/widget-sync/legacy_widget_sync.py`: create
+      Acceptance criteria:
+      - The old path and new path are changed in the same task, and no duplicate live implementation remains.
+      - Pass condition: the plan-level fixture validation exits 0.
+    dependencies: []
