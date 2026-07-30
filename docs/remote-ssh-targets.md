@@ -50,7 +50,6 @@ For the supported PR-maintenance setup, enable `prMaintenance` in `~/.invoker/co
 ```bash
 ./run.sh --headless worker status --output text
 ./run.sh --headless worker pr-admin-bypass-land
-./run.sh --headless worker pr-admin-bypass-queue
 ./run.sh --headless worker pr-orphan-repair
 ```
 
