@@ -153,23 +153,16 @@ import os
 from pathlib import Path
 ledger_path = Path(os.environ['LEDGER_PATH'])
 rows = [json.loads(line) for line in ledger_path.read_text(encoding='utf-8').splitlines() if line.strip()]
-if not any(row.get('kind') == 'repair-check' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
-    raise SystemExit('missing repair-check ledger row for PR #5803')
-invalid = next((row for row in rows if row.get('kind') == 'repair-invalid' and row.get('pr') == 5803 and row.get('key') == 'PR Body'), None)
-if invalid is None:
-    raise SystemExit('missing repair-invalid ledger row for PR #5803')
-errors = (invalid.get('meta') or {}).get('errors') or []
-if not any('human stack split required' in str(item) for item in errors):
-    raise SystemExit('repair-invalid row missing manual split note')
+if not any(row.get('kind') == 'repair-delegated' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
+    raise SystemExit('missing repair-delegated ledger row for PR #5803')
+if any(row.get('kind') == 'repair-check' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
+    raise SystemExit('repair-check attempt marker must not be recorded at delegation time')
+if any(row.get('kind') == 'repair-invalid' and row.get('pr') == 5803 and row.get('key') == 'PR Body' for row in rows):
+    raise SystemExit('repair-invalid must be produced by the delegated repair, not submission')
 state = json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
 comments = state.get('issue_comments', {}).get('5803', [])
-if len(comments) != 1:
-    raise SystemExit(f'expected exactly one stop comment, saw {len(comments)}')
-body = comments[0].get('body', '')
-if 'Split this into one Review Unit per PR.' not in body:
-    raise SystemExit('stop comment missing split guidance')
-if 'human stack split required' not in body:
-    raise SystemExit('stop comment missing manual split note')
+if comments:
+    raise SystemExit(f'delegation must not comment on the PR, saw {len(comments)} comment(s)')
 PY
 }
 
@@ -235,23 +228,9 @@ case "$out2" in
   *'repair-check PR #5803'*) fail 'tick 2: worker retried the same impossible PR Body fix' "$out2" ;;
 esac
 case "$out2" in
-  *'"reason": "blocked-needs-human"'*) ;;
-  *) fail 'tick 2: worker did not surface blocked-needs-human wait state' "$out2" ;;
+  *'"reason": "repair-delegated"'*) ;;
+  *) fail 'tick 2: worker did not surface repair-delegated wait state' "$out2" ;;
 esac
-assert_stop_comment_count 1
-
-: > "$LEDGER_PATH"
-if ! out3="$(run_worker)"; then
-  fail 'tick 3: worker failed after ledger loss' "$out3"
-fi
-printf '%s\n' "$out3"
-case "$out3" in
-  *'repair-check PR #5803'*) fail 'tick 3: worker retried existing split-only stop after ledger loss' "$out3" ;;
-esac
-case "$out3" in
-  *'"reason": "blocked-needs-human"'*) ;;
-  *) fail 'tick 3: worker did not keep blocked-needs-human wait state after ledger loss' "$out3" ;;
-esac
-assert_stop_comment_count 1
+assert_stop_comment_count 0
 
 echo '[repro] passed'

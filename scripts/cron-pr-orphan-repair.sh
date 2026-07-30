@@ -118,6 +118,11 @@ while IFS= read -r pr; do
   head_ref="$(jq -r '.headRefName' <<<"$pr")"
   base_ref="$(jq -r '.baseRefName' <<<"$pr")"
   summary="$(printf '%s; ' "${blockers[@]}")"
+  q_head_ref="$(shell_quote "$head_ref")"
+  q_head_oid="$(shell_quote "$head_oid")"
+  q_state_file="$(shell_quote "$STATE_FILE")"
+  q_num="$(shell_quote "$num")"
+  q_fingerprint="$(shell_quote "$fingerprint")"
 
   plan_file="$PLAN_DIR/repair-pr-$num.yaml"
   {
@@ -142,9 +147,23 @@ while IFS= read -r pr; do
       done
       printf '\nRules:\n'
       printf -- '- Resolve the merge conflict by rebasing onto origin/%s (or merging it) before anything else.\n' "$base_ref"
-      printf -- '- Reproduce and fix the failing checks locally before pushing.\n'
+      printf -- '- Reproduce and fix the failing checks locally.\n'
       printf -- '- Address review feedback with real changes or a reasoned reply, never by dismissing.\n'
-      printf -- '- Push to the SAME branch (%s). NEVER open a new PR and NEVER force-push unless the rebase requires it.\n' "$head_ref"
+      printf -- '- Commit locally if changes are needed.\n'
+      printf -- '- Do not push, do not open a new PR, and do not force-push. The safe-push task owns publication.\n'
+    } | sed 's/^/      /'
+    printf '  - id: safe-push\n'
+    printf '    description: "Safely push PR #%s only if its head did not move"\n' "$num"
+    printf '    dependencies: [repair]\n'
+    printf '    command: |\n'
+    {
+      printf 'python3 scripts/pr_worker_safe_push.py \\\n'
+      printf '  --branch %s \\\n' "$q_head_ref"
+      printf '  --expected-head %s \\\n' "$q_head_oid"
+      printf '  --record-tsv-ledger %s \\\n' "$q_state_file"
+      printf '  --tsv-kind orphan-attempt \\\n'
+      printf '  --tsv-key %s \\\n' "$q_num"
+      printf '  --tsv-marker %s\n' "$q_fingerprint"
     } | sed 's/^/      /'
   } > "$plan_file"
 
@@ -154,7 +173,6 @@ while IFS= read -r pr; do
   fi
 
   if output="$(headless_mutation run "$plan_file" 2>&1)"; then
-    ledger_record orphan-attempt "$num" "$fingerprint"
     ledger_record orphan-submitted "$num" "$fingerprint"
     submitted=$((submitted + 1))
     log_line "PR #$num: submitted repair task ($fingerprint; blockers: $summary)"

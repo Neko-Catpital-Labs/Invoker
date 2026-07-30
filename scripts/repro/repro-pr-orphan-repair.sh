@@ -76,6 +76,12 @@ grep -q "1. conflict:" "$plan" || fail "plan: conflict must be blocker #1" "$(ca
 grep -q "2. failed_checks: Unit Tests" "$plan" || fail "plan: failing check must be blocker #2" "$(cat "$plan")"
 grep -q "3. changes_requested:" "$plan" || fail "plan: review feedback must be blocker #3" "$(cat "$plan")"
 grep -q "git fetch origin feature/orphan-801" "$plan" || fail "plan: must target the existing PR branch" "$(cat "$plan")"
+grep -q "id: safe-push" "$plan" || fail "plan: missing safe-push task" "$(cat "$plan")"
+grep -q "python3 scripts/pr_worker_safe_push.py" "$plan" || fail "plan: missing safe-push helper command" "$(cat "$plan")"
+grep -q -- "--tsv-kind orphan-attempt" "$plan" || fail "plan: safe-push must own orphan-attempt recording" "$(cat "$plan")"
+grep -q "Do not push" "$plan" || fail "plan: repair prompt must forbid direct pushes" "$(cat "$plan")"
+awk -F '\t' '$1 == "orphan-attempt" && $2 == "801" { found=1 } END { exit found ? 0 : 1 }' "$TMP/ledger.tsv" \
+  && fail "tick 1: submission must not record orphan-attempt" "$(cat "$TMP/ledger.tsv")"
 grep -q "repair-pr-802" "$NODE_LOG" && fail "healthy PR #802 got a repair plan"
 grep -q "repair-pr-803" "$NODE_LOG" && fail "mapped PR #803 got a repair plan"
 
@@ -89,8 +95,9 @@ runs="$(grep -c "exec -- run " "$NODE_LOG" || true)"
 # ── Tick 3: attempt cap -> one-time exhausted comment ──
 fp="$(awk -F '\t' '$1 == "orphan-submitted" && $2 == "801" { print $3 }' "$TMP/ledger.tsv")"
 [ -n "$fp" ] || fail "could not read fingerprint from ledger"
-grep -v "^orphan-submitted	801	" "$TMP/ledger.tsv" > "$TMP/ledger2.tsv" && mv "$TMP/ledger2.tsv" "$TMP/ledger.tsv"
-for _ in 1 2; do printf 'orphan-attempt\t801\t%s\t%s\n' "$fp" "$(date +%s)" >> "$TMP/ledger.tsv"; done
+awk -F '\t' '!( $1 == "orphan-submitted" && $2 == "801" )' "$TMP/ledger.tsv" > "$TMP/ledger2.tsv"
+mv "$TMP/ledger2.tsv" "$TMP/ledger.tsv"
+for _ in 1 2 3; do printf 'orphan-attempt\t801\t%s\t%s\n' "$fp" "$(date +%s)" >> "$TMP/ledger.tsv"; done
 out="$(run_cron)" || fail "tick 3 exited non-zero" "$out"
 echo "$out" | grep -q "PR #801: attempt cap reached" \
   || fail "tick 3: expected the attempt cap to fire" "$out"
