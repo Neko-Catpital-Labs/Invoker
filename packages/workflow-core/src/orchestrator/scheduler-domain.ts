@@ -96,6 +96,35 @@ function hasActiveLaunchAttempt(
     || attempt?.status === 'running';
 }
 
+function isReusableLaunchAttempt(
+  host: SchedulerDomainHost,
+  task: TaskState,
+  attempt: Attempt | undefined,
+): boolean {
+  if (!attempt || isDiscardedAttempt(attempt)) return false;
+  if (attempt.status === 'pending') return !hasPendingLaunchRuntimeState(task);
+  if (attempt.status === 'claimed' || attempt.status === 'running') {
+    return host.isAttemptLeaseActive(attempt);
+  }
+  return false;
+}
+
+function hasPendingLaunchRuntimeState(task: TaskState): boolean {
+  return Boolean(
+    task.execution.phase
+    || task.execution.startedAt
+    || task.execution.launchStartedAt
+    || task.execution.launchCompletedAt
+    || task.execution.lastHeartbeatAt
+    || task.execution.agentSessionId
+    || task.execution.containerId
+    || task.execution.error
+    || task.execution.exitCode !== undefined
+    || task.execution.inputPrompt
+    || task.execution.pendingFixError,
+  );
+}
+
 function planPendingLaunchQueue(host: SchedulerDomainHost, candidateJobs: TaskJob[]): TaskJob[] {
   const mergedJobs = new Map<string, TaskJob>();
   for (const sourceJob of [...host.scheduler.getQueuedJobs(), ...candidateJobs]) {
@@ -363,13 +392,15 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
     const task = readiness.task;
 
     const now = new Date();
-    let attemptId = job.attemptId ?? host.ensureCurrentPendingAttempt(task);
+    let launchTask = task;
+    let attemptId = job.attemptId;
     let currentAttempt = host.loadAttemptById(attemptId);
-    if (!currentAttempt || isDiscardedAttempt(currentAttempt)) {
+    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
       attemptId = host.ensureCurrentPendingAttempt(task);
+      launchTask = host.stateGetTask(job.taskId) ?? task;
       currentAttempt = host.loadAttemptById(attemptId);
     }
-    if (!currentAttempt || isDiscardedAttempt(currentAttempt)) {
+    if (!isReusableLaunchAttempt(host, launchTask, currentAttempt)) {
       host.logger.info('[orchestrator] drainScheduler: skipping non-runnable attempt', {
         taskId: job.taskId,
         attemptId,
@@ -378,10 +409,17 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
       job = host.scheduler.takeNext();
       continue;
     }
-    let launchAttemptId = attemptId;
+    if (!attemptId) {
+      host.logger.info('[orchestrator] drainScheduler: skipping missing attempt id', {
+        taskId: job.taskId,
+      });
+      job = host.scheduler.takeNext();
+      continue;
+    }
+    const launchAttemptId = attemptId;
     const selectedTask = host.stateGetTask(job.taskId) ?? task;
-    if (selectedTask.execution.selectedAttemptId !== attemptId) {
-      host.writeAndSync(job.taskId, { execution: { selectedAttemptId: attemptId } });
+    if (selectedTask.execution.selectedAttemptId !== launchAttemptId) {
+      host.writeAndSync(job.taskId, { execution: { selectedAttemptId: launchAttemptId } });
     }
     let claimSucceeded = false;
     const claimPatch = host.deferRunningUntilLaunch
@@ -398,10 +436,10 @@ export function drainSchedulerImpl(host: SchedulerDomainHost): TaskState[] {
           lastHeartbeatAt: now,
           leaseExpiresAt: nextLeaseExpiry(now),
         };
-    claimSucceeded = host.taskRepository.claimAttemptForLaunch?.(attemptId, claimPatch, now)
+    claimSucceeded = host.taskRepository.claimAttemptForLaunch?.(launchAttemptId, claimPatch, now)
       ?? !host.isAttemptLeaseActive(currentAttempt, now.getTime());
     if (claimSucceeded && !host.taskRepository.claimAttemptForLaunch) {
-      host.taskRepository.updateAttempt(attemptId, claimPatch);
+      host.taskRepository.updateAttempt(launchAttemptId, claimPatch);
     }
     if (!claimSucceeded) {
       host.logger.info('[orchestrator] drainScheduler: skipping already-claimed attempt', {
