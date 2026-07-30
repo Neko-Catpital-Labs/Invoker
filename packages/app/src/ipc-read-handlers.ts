@@ -1,5 +1,5 @@
 import type { IpcMain } from 'electron';
-import type { GetEventsOptions, Logger, QueueStatus, SearchOptions, WorkerActionHistoryRequest, WorkerActionHistoryResponse, WorkerDecisionsRequest, WorkerDecisionsResponse } from '@invoker/contracts';
+import type { GetEventsOptions, Logger, SearchOptions, WorkerActionHistoryRequest, WorkerActionHistoryResponse, WorkerDecisionsRequest, WorkerDecisionsResponse } from '@invoker/contracts';
 import { resolveInvokerHomeRoot } from '@invoker/contracts';
 import type { SQLiteAdapter } from '@invoker/data-store';
 import { DEFAULT_EXECUTION_AGENT, type AgentRegistry } from '@invoker/execution-engine';
@@ -112,10 +112,6 @@ export function registerReadOnlyIpcHandlers(context: RegisterReadOnlyIpcHandlers
   ipcMain.handle('invoker:list-workflows', () =>
     delegatedRead('workflows', {}, 'workflows', () => persistence.listWorkflows()));
   ipcMain.handle('invoker:get-execution-pools', () => Object.keys(loadConfig().executionPools ?? {}));
-  ipcMain.handle('invoker:get-queue-status', async () => (
-    await delegateOwnerQuery<QueueStatus>('queue')
-    ?? getOrchestrator().getQueueStatus({ refresh: getOwnerMode?.() === false })
-  ));
 
   ipcMain.handle('invoker:load-workflow', async (_event, workflowId: string) => {
     logger.info(`load-workflow: "${workflowId}"`, { module: 'ipc' });
