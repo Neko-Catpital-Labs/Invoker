@@ -1,18 +1,18 @@
 # Invoker-on-Invoker dogfood example with handoff-only approval and explicit later Mergify Stacks publication.
 # Source: examples.md Section 7
 
-name: "Dogfood Invoker CI docs update"
+name: "Dogfood Invoker fixture handoff refresh"
 description: |
-  Updates Invoker's own contributor guidance for merge automation.
+  Refreshes Invoker's checked-in dogfood fixture for the handoff-only boundary.
 
   This plan still uses the normal Invoker review gate shape:
-  `onFinish: pull_request` with `mergeMode: external_review`. Plain approval
-  means approval to hand the workflow to Invoker; it is not also GitHub PR-stack
-  publication.
+  `onFinish: pull_request` with `mergeMode: external_review`. Plain approval only
+  authorizes workflow handoff to Invoker; it must not publish local branches,
+  create GitHub PRs, or update PR stacks.
 
   Because the target repo is Invoker itself, branch publication remains a
-  separate later action after the commits are ready: `mergify stack push` keeps
-  the stacked PRs synchronized.
+  separate later action. The `publish-invoker-pr-stack` task requires its own
+  manual approval and runs `mergify stack push` only after fixture proof passes.
 onFinish: pull_request
 mergeMode: external_review
 repoUrl: git@github.com:EdbertChan/Invoker.git
@@ -20,95 +20,85 @@ baseBranch: master
 featureBranch: docs/dogfood-mergify-stack
 
 tasks:
-  - id: update-dogfood-guidance
+  - id: refresh-dogfood-fixture
     description: |
       Review claim:
-      - Refresh the dogfood docs so plain approval is handoff-only and later PR publication is separate.
+      - Refresh the positive dogfood fixture so later PR publication stays separate from plain approval.
       Review lane:
       - docs
       Safety invariant:
-      - The update stays in plan-to-invoker skill docs and the positive dogfood example.
+      - Touch only `skills/plan-to-invoker/fixtures/positive/06-invoker-dogfood-mergify-stack.yaml`.
       Slice rationale:
-      - The docs wording is one conceptual fixture and guidance update.
+      - One fixture slice keeps the checked-in example aligned with the handoff-only boundary.
       Architectural effect:
-      - Invoker-on-Invoker guidance keeps the review gate separate from later publication.
+      - The canonical Invoker dogfood example now models the same boundary as the handoff text.
       Goal:
-      - Clarify when Invoker-on-Invoker changes should use Mergify Stacks.
+      - Keep the positive fixture aligned with the handoff-only boundary.
       Motivation:
-      - Keep the dogfood example aligned with the handoff-only approval boundary.
+      - The example should reinforce the same reading as the text.
       Alternative considerations:
-      - Option A (chosen): document the separate later publication action in the dogfood guidance.
-      - Option B: leave Mergify publication implied by approval, which keeps the old ambiguity.
+      - Option A (chosen): show Invoker-on-Invoker later PR publication as a separate explicitly approved action.
+      - Option B: leave the fixture teaching the old ambiguous reading.
       Implementation details:
-      - Edit the plan-to-invoker skill guidance and examples to separate handoff approval from later Mergify publication.
+      - Update the positive fixture so Invoker-on-Invoker later PR publication is shown as a separate explicit action rather than part of plain approval.
       Non-goals:
-      - Do not generalize Mergify guidance to external repositories.
+      - No planning-skill edits, handoff-entry edits, handoff-check edits, runtime code changes, or unrelated docs cleanup.
       Layer: docs
       Feature state: active
       Files:
-      - skills/plan-to-invoker/SKILL.md
-      - skills/plan-to-invoker/references/examples.md
       - skills/plan-to-invoker/fixtures/positive/06-invoker-dogfood-mergify-stack.yaml
       Change types:
-      - skills/plan-to-invoker/SKILL.md: modify
-      - skills/plan-to-invoker/references/examples.md: modify
       - skills/plan-to-invoker/fixtures/positive/06-invoker-dogfood-mergify-stack.yaml: modify
       Acceptance criteria:
-      - Relevant skill docs mention the Invoker-only scope.
-      - Examples include an Invoker positive case and an external-repo counterexample.
-      - The Invoker positive case separates plain approval from later Mergify stack publication.
+      - Plain approval language says workflow handoff only.
+      - Later PR publication is visible as a distinct manual `mergify stack push` task.
+      - Pass condition: bash skills/plan-to-invoker/scripts/test-fixtures.sh exits 0.
     prompt: |
       Review claim:
-      - Refresh the dogfood docs so plain approval is handoff-only and later PR publication is separate.
+      - Refresh the positive dogfood fixture so later PR publication stays separate from plain approval.
       Review lane:
       - docs
       Safety invariant:
-      - Keep the update inside skills/plan-to-invoker/SKILL.md, skills/plan-to-invoker/references/examples.md, and skills/plan-to-invoker/fixtures/positive/06-invoker-dogfood-mergify-stack.yaml.
+      - Touch only `skills/plan-to-invoker/fixtures/positive/06-invoker-dogfood-mergify-stack.yaml`.
       Slice rationale:
-      - The docs wording is one conceptual fixture and guidance update.
+      - One fixture slice keeps the checked-in example aligned with the handoff-only boundary.
       Architectural effect:
-      - Invoker-on-Invoker guidance keeps the review gate separate from later publication.
+      - The canonical Invoker dogfood example now models the same boundary as the handoff text.
       Goal:
-      - Clarify when Invoker-on-Invoker changes should use Mergify Stacks.
+      - Keep the positive fixture aligned with the handoff-only boundary.
       Motivation:
-      - Keep the dogfood example aligned with the handoff-only approval boundary.
+      - The example should reinforce the same reading as the text.
       Alternative considerations:
-      - Option A (chosen): document the separate later publication action in the dogfood guidance.
-      - Option B: leave Mergify publication implied by approval, which keeps the old ambiguity.
+      - Option A (chosen): show Invoker-on-Invoker later PR publication as a separate explicitly approved action.
+      - Option B: leave the fixture teaching the old ambiguous reading.
       Implementation details:
-      - Assume no prior context. Update the Invoker skills and examples so they are explicit about the repo-specific dogfood boundary:
-      1. Plain approval approves the handoff to Invoker only; it must not be described as publishing or updating GitHub PRs.
-      2. When the target repo is Invoker itself, keep `onFinish: pull_request` with `mergeMode: external_review`.
-      3. After Invoker has prepared the resulting commit stack, publish/update that PR stack as a separate explicit action with `mergify stack push`.
-      4. When the target repo is an external repo, keep normal PR flow unless
-         that repo independently uses Mergify Stacks.
+      - Assume no prior context. Update `skills/plan-to-invoker/fixtures/positive/06-invoker-dogfood-mergify-stack.yaml` so the Invoker-on-Invoker example is explicit about the handoff-only boundary:
+      1. Plain approval approves workflow handoff to Invoker only; it must not be described as publishing local branches, creating GitHub PRs, or updating PR stacks.
+      2. Keep `onFinish: pull_request` with `mergeMode: external_review`.
+      3. Keep later Invoker PR-stack publication as a separate explicit action with `mergify stack push`.
+      4. Make that publication action require its own manual approval after fixture proof passes.
       Non-goals:
-      - Do not generalize Mergify guidance to external repositories.
+      - No planning-skill edits, handoff-entry edits, handoff-check edits, runtime code changes, or unrelated docs cleanup.
       Files:
-      - skills/plan-to-invoker/SKILL.md
-      - skills/plan-to-invoker/references/examples.md
       - skills/plan-to-invoker/fixtures/positive/06-invoker-dogfood-mergify-stack.yaml
       Change types:
-      - skills/plan-to-invoker/SKILL.md: modify
-      - skills/plan-to-invoker/references/examples.md: modify
       - skills/plan-to-invoker/fixtures/positive/06-invoker-dogfood-mergify-stack.yaml: modify
       Acceptance criteria:
-      - Relevant skill docs mention the Invoker-only scope.
-      - Examples include an Invoker positive case and an external-repo counterexample.
-      - The Invoker positive case separates plain approval from later Mergify stack publication.
+      - Plain approval language says workflow handoff only.
+      - Later PR publication is visible as a distinct manual `mergify stack push` task.
       - Pass condition: bash skills/plan-to-invoker/scripts/test-fixtures.sh exits 0.
     dependencies: []
 
   - id: verify-skill-fixtures
     description: |
       Review claim:
-      - Run focused fixture validation for the dogfood guidance update.
+      - Run focused fixture validation for the dogfood fixture refresh.
       Review lane:
       - proof
       Safety invariant:
       - This command only validates checked-in plan-to-invoker fixtures.
       Slice rationale:
-      - Fixture proof stays separate from the docs update.
+      - Fixture proof stays separate from the fixture update.
       Architectural effect:
       - No architecture change; the proof validates fixture compatibility.
       Goal:
@@ -123,11 +113,11 @@ tasks:
       Non-goals:
       - Do not modify source files during verification.
       Layer exception: allowed
-      - Proof depends on the docs fixture slice so validation runs after the example update.
+      - Proof depends on the fixture slice so validation runs after the example update.
       Layer: e2e_regression
       Feature state: active
     command: "bash skills/plan-to-invoker/scripts/test-fixtures.sh"
-    dependencies: [update-dogfood-guidance]
+    dependencies: [refresh-dogfood-fixture]
 
   - id: publish-invoker-pr-stack
     description: |
