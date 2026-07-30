@@ -6,7 +6,7 @@
 #
 # Provides:
 #   Variables  — REPO_ROOT, RUNNER, ELECTRON, MAIN, IPC_HELPER,
-#                STANDALONE_MODE, SANDBOX_FLAG
+#                STANDALONE_MODE, FORCE_OWNER_IPC, SANDBOX_FLAG
 #   Functions  — headless_query, headless_mutation, headless_workflow_ids,
 #                headless_task_ids, run_with_optional_timeout,
 #                batch_dispatch, parse_batch_results, count_results
@@ -26,6 +26,7 @@ if [[ -n "${INVOKER_HEADLESS_IPC_HELPER:-}" ]]; then
   IPC_HELPER="$INVOKER_HEADLESS_IPC_HELPER"
 fi
 STANDALONE_MODE="${INVOKER_HEADLESS_STANDALONE:-0}"
+FORCE_OWNER_IPC="${INVOKER_HEADLESS_FORCE_OWNER_IPC:-0}"
 
 # ---------------------------------------------------------------------------
 # Electron sandbox detection (Linux)
@@ -87,7 +88,7 @@ headless_mutation() {
     esac
   done
 
-  if [ "$STANDALONE_MODE" = "1" ]; then
+  if [ "$STANDALONE_MODE" = "1" ] && [ "$FORCE_OWNER_IPC" != "1" ]; then
     "$RUNNER" --headless "${ipc_args[@]}" "${headless_args[@]}"
     return $?
   fi
@@ -170,7 +171,7 @@ batch_dispatch() {
   shift 4
   local extra_batch_args=("$@")
 
-  if [ "$STANDALONE_MODE" = "1" ]; then
+  if [ "$STANDALONE_MODE" = "1" ] && [ "$FORCE_OWNER_IPC" != "1" ]; then
     while IFS= read -r line; do
       [ -z "$line" ] && continue
       local wf_id args_json
