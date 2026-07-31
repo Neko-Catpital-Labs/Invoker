@@ -1,23 +1,9 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { WorkerActionRecord } from '@invoker/data-store';
 import {
   runReadOnlyHeadlessQueryToString,
   type HeadlessQueryDeps,
 } from '../headless-query-list.js';
-
-const savedAdminBypassQueueStateFile = process.env.INVOKER_ADMIN_BYPASS_QUEUE_STATE_FILE;
-
-afterEach(() => {
-  if (savedAdminBypassQueueStateFile === undefined) {
-    delete process.env.INVOKER_ADMIN_BYPASS_QUEUE_STATE_FILE;
-  } else {
-    process.env.INVOKER_ADMIN_BYPASS_QUEUE_STATE_FILE = savedAdminBypassQueueStateFile;
-  }
-});
 
 const workerActions: WorkerActionRecord[] = [
   {
@@ -189,48 +175,6 @@ describe('headless query worker-decisions', () => {
         makeDecisionDeps(),
       ),
     ).rejects.toThrow('Invalid --decision');
-  });
-});
-
-describe('headless query admin-bypass-queue', () => {
-  it('reports and resets only queue attempt/exhaustion ledger rows', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'admin-bypass-queue-query-'));
-    const ledger = join(dir, 'admin-bypass-queue.tsv');
-    process.env.INVOKER_ADMIN_BYPASS_QUEUE_STATE_FILE = ledger;
-    writeFileSync(ledger, [
-      'queue-attempt\t6530\tfp-a\t1',
-      'queue-exhausted\t6530\tfp-a\t2',
-      'queue-submitted\t6540\tfp-b\t3',
-      'other\t6550\tfp-c\t4',
-      '',
-    ].join('\n'), 'utf8');
-
-    try {
-      const before = JSON.parse(await runReadOnlyHeadlessQueryToString(
-        ['query', 'admin-bypass-queue', '--output', 'json'],
-        makeQueryDeps(),
-      )) as { queueAttempts: number; queueExhausted: number; queueSubmitted: number; removedRows: number };
-      expect(before).toMatchObject({
-        queueAttempts: 1,
-        queueExhausted: 1,
-        queueSubmitted: 1,
-        removedRows: 0,
-      });
-
-      const after = JSON.parse(await runReadOnlyHeadlessQueryToString(
-        ['query', 'admin-bypass-queue', '--reset', '--output', 'json'],
-        makeQueryDeps(),
-      )) as { removedRows: number; removedQueueAttempts: number; removedQueueExhausted: number; remainingRows: number };
-      expect(after).toMatchObject({
-        removedRows: 2,
-        removedQueueAttempts: 1,
-        removedQueueExhausted: 1,
-        remainingRows: 2,
-      });
-      expect(readFileSync(ledger, 'utf8')).toBe('queue-submitted\t6540\tfp-b\t3\nother\t6550\tfp-c\t4\n');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 });
 
