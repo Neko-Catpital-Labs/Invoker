@@ -363,10 +363,21 @@ def latest_repair_delegated_blocker(pr: PrSnapshot, blocker: Blocker, ledger: Le
     if blocker.kind not in REPAIR_INVALID_BLOCKER_KINDS:
         return None
     latest = None
-    for key in repair_invalid_keys_for_blocker(pr, blocker):
-        row = ledger.latest("repair-delegated", pr.number, pr.head_ref_oid, key)
-        if row is None:
+    direct_keys = set(repair_invalid_keys_for_blocker(pr, blocker))
+    for row in ledger.rows:
+        if row.get("kind") != "repair-delegated":
             continue
+        if int(row.get("pr", -1)) != pr.number:
+            continue
+        if row.get("headSha") != pr.head_ref_oid:
+            continue
+        row_key = str(row.get("key") or "")
+        if row_key not in direct_keys:
+            if blocker.kind != "bot_review_thread":
+                continue
+            grouped_keys = {part.strip() for part in row_key.split(",") if part.strip()}
+            if blocker.key not in grouped_keys:
+                continue
         if latest is None or int(row.get("epoch", 0) or 0) >= int(latest.get("epoch", 0) or 0):
             latest = row
     if latest is None:
@@ -618,6 +629,8 @@ def plan_mergify_queue_repairs(
     for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
+        if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.blockers_by_pr[pr.number]):
+            continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
         actions = mergify_failed_check_actions(pr, ledger, facts.suppressed_failed_checks_by_pr.get(pr.number, ()))
@@ -634,6 +647,8 @@ def plan_direct_repairs(
 ) -> Action | None:
     for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
+            continue
+        if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.blockers_by_pr[pr.number]):
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "conflict":
@@ -658,6 +673,7 @@ def plan_bot_thread_repairs(
     for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
+        bot_thread_blockers: list[Blocker] = []
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "outdated_bot_review_thread":
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
@@ -667,7 +683,13 @@ def plan_bot_thread_repairs(
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
             if ledger.count("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
                 return cap_action(pr, blocker, blocker.detail)
-            return Action("repair_check", pr.number, "bot_review_thread:" + blocker.key, blocker.detail)
+            bot_thread_blockers.append(blocker)
+        if bot_thread_blockers:
+            keys = tuple(blocker.key for blocker in bot_thread_blockers)
+            if len(keys) == 1:
+                return Action("repair_check", pr.number, "bot_review_thread:" + keys[0], bot_thread_blockers[0].detail)
+            detail = "unresolved bot review threads " + ", ".join(keys)
+            return Action("repair_check", pr.number, "bot_review_thread:" + ",".join(keys), detail)
     return None
 
 
@@ -784,8 +806,6 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
-    if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
-        return ()
     if facts.bottom:
         bottom_pr_numbers = (facts.bottom.number,)
         action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
