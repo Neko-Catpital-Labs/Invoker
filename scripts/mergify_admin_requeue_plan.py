@@ -83,6 +83,8 @@ def is_queue_only_required_check(name: str) -> bool:
 
 
 def has_active_queue_event(pr: PrSnapshot) -> bool:
+    if "queued" in pr.labels:
+        return True
     latest = pr.latest_mergify
     if not latest or latest.queue_rule_name != "admin-bypass" or latest.state not in ACTIVE_QUEUE_STATES:
         return False
