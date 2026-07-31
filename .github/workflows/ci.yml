@@ -639,6 +639,7 @@ jobs:
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
+              e2e/planning-terminal-live-model.proof.spec.ts
           - name: 7-of-9
             files: >-
               e2e/worker-tab-scroll.spec.ts
@@ -655,6 +656,7 @@ jobs:
               e2e/task-new-attempt-reset.spec.ts
               e2e/persistence-recovery.spec.ts
               e2e/start-ready-production-click.spec.ts
+              e2e/ui-delta-timeline.spec.ts
           - name: 9-of-9
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts

@@ -16,7 +16,7 @@ const BASE_BRANCH_NORMALIZATION_PLAN = {
   ],
 };
 
-test('loading a non-master plan base shows the normalized master value', async ({ page }) => {
+test('loading a non-master plan base preserves the explicit base value', async ({ page }) => {
   await loadPlan(page, BASE_BRANCH_NORMALIZATION_PLAN);
   await page.locator('.react-flow__node[data-testid$="base-branch-proof-task"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
@@ -34,7 +34,7 @@ test('loading a non-master plan base shows the normalized master value', async (
 
   await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
   await expect(page.getByText('Base Ref')).toBeVisible();
-  await expect(page.getByTestId('base-ref-input')).toHaveValue('master');
+  await expect(page.getByTestId('base-ref-input')).toHaveValue('release');
 
-  await captureScreenshot(page, 'base-branch-normalized-to-master');
+  await captureScreenshot(page, 'base-branch-preserved-release');
 });
