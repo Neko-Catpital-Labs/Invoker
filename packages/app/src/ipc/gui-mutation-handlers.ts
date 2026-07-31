@@ -36,6 +36,7 @@ import {
   parseSpawnRepairWorkflowMutationArgs,
   SPAWN_REPAIR_WORKFLOW_CHANNEL,
   submitRepairWorkflowFromCiFailure,
+  type WorktreeExecutor,
 } from '@invoker/execution-engine';
 import type { AgentRegistry, WorkerRegistry, WorkerRuntimeDependencies } from '@invoker/execution-engine';
 import {
@@ -1271,6 +1272,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     planningSessionStore: ownerMode ? persistence : undefined,
     logger,
     onRawPlannerOutput: emitPlanningChatStream,
+    repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
   });
   let testPlanFromGoalResponse: { planYaml: string; planName: string } | null = null;
   // Two variants: (1) a successful override that returns a canned reply +
@@ -1308,6 +1310,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       planningSessionStore: ownerMode ? persistence : undefined,
       logger,
       onRawPlannerOutput: emitPlanningChatStream,
+      repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-list', async () => {
@@ -1338,6 +1341,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       logger,
       plannerReplyOverride,
       onRawPlannerOutput: emitPlanningChatStream,
+      repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
     });
   });
   registerGuiMutationHandler('invoker:planning-chat-submit', async (request: unknown) => {
