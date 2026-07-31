@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cron entrypoint for the e2e master-regression watcher. Lock + log only;
+# Cron entrypoint for the default-branch CI regression watcher. Lock + log only;
 # all logic lives in scripts/e2e-regression-watch.mjs.
 set -euo pipefail
 
@@ -33,11 +33,11 @@ else
   trap 'rm -rf "'"$lockdir"'" 2>/dev/null || true' EXIT
 fi
 
-log_line "e2e-regression-watch sweep starting"
+log_line "ci-regression-watch sweep starting"
 if node "$REPO_ROOT/scripts/e2e-regression-watch.mjs"; then
-  log_line "e2e-regression-watch sweep finished"
+  log_line "ci-regression-watch sweep finished"
 else
   status=$?
-  log_line "e2e-regression-watch sweep failed (exit $status)"
+  log_line "ci-regression-watch sweep failed (exit $status)"
   exit "$status"
 fi
