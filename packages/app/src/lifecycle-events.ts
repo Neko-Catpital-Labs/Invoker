@@ -1,8 +1,9 @@
-import type {
-  TaskDelta,
-  TaskState,
-  TaskStatus,
-  WorkflowDerivedStatus,
+import {
+  TASK_STATUSES,
+  type TaskDelta,
+  type TaskState,
+  type TaskStatus,
+  type WorkflowDerivedStatus,
 } from '@invoker/workflow-core';
 import {
   WORKFLOW_LIFECYCLE_EVENT_KINDS,
@@ -94,21 +95,8 @@ export interface WorkflowWakeupLifecycleEventInput {
   readonly createdAt?: Date;
 }
 
-const STATUS_VALUES: readonly WorkflowLifecycleStatus[] = [
-  'pending',
-  'running',
-  'fixing_with_ai',
-  'completed',
-  'failed',
-  'closed',
-  'needs_input',
-  'blocked',
-  'review_ready',
-  'awaiting_approval',
-  'stale',
-];
-
 const EVENT_KIND_SET = new Set<string>(WORKFLOW_LIFECYCLE_EVENT_KINDS);
+const STATUS_VALUES = TASK_STATUSES satisfies readonly WorkflowLifecycleStatus[];
 const STATUS_SET = new Set<string>(STATUS_VALUES);
 
 export function lifecycleEventKindForTaskStatus(status: TaskStatus): TaskLifecycleEvent['kind'] {

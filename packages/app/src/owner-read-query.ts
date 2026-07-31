@@ -188,7 +188,7 @@ export async function answerOwnerHeadlessQuery(
 
 type ReadOrchestrator = Pick<
   Orchestrator,
-  'getQueueStatus' | 'getWorkflowStatus' | 'getAllTasks' | 'syncAllFromDb' | 'syncFromDb'
+  'getQueueStatus' | 'getWorkflowStatus' | 'getAllTasks' | 'getMergeNode' | 'syncAllFromDb' | 'syncFromDb'
 >;
 type ReadPersistence = Pick<
   SQLiteAdapter,
@@ -260,7 +260,16 @@ export function buildOwnerReadQueryHandlers(deps: OwnerReadQueryDeps): OwnerRead
     },
     getEvents: (taskId: string, options: GetEventsOptions) =>
       getEventsPage(persistence, taskId, options),
-    getTaskById: (taskId: string) => persistence.loadTask(taskId),
+    getTaskById: (taskId: string) => {
+      const inMemory = orchestrator.getAllTasks().find((task) => task.id === taskId);
+      if (inMemory) return inMemory;
+      const persisted = persistence.loadTask(taskId);
+      if (persisted) return persisted;
+      if (taskId.startsWith('__merge__')) {
+        return orchestrator.getMergeNode(taskId.slice('__merge__'.length));
+      }
+      return undefined;
+    },
     getTaskOutput: (taskId: string) => persistence.getTaskOutput(taskId),
     getOutputChunks: (taskId: string) => persistence.getOutputChunks(taskId),
     getOutputTail: (taskId: string) => persistence.getOutputTail(taskId),

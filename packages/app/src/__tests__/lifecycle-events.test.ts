@@ -105,6 +105,23 @@ describe('lifecycle event helpers', () => {
     expectRecoveryWakeup(event, { reason: 'task_lifecycle' });
   });
 
+  it('accepts queued as a valid task lifecycle status', () => {
+    const event = buildTaskUpdatedLifecycleEvent({
+      workflowId: 'wf-1',
+      taskId: 'wf-1/task-a',
+      status: 'queued',
+      previousStatus: 'pending',
+      taskStateVersion: 2,
+      generation: 4,
+      attemptId: 'attempt-2',
+      createdAt: CREATED_AT_DATE,
+    });
+
+    expect(event.kind).toBe('task.updated');
+    expect(isWorkflowLifecycleEvent(event)).toBe(true);
+    expectRecoveryWakeup(event, { reason: 'task_lifecycle' });
+  });
+
   it('maps completed and failed status updates to worker lifecycle kinds', () => {
     expect(lifecycleEventKindForTaskStatus('completed')).toBe('task.completed');
     expect(lifecycleEventKindForTaskStatus('failed')).toBe('task.failed');
