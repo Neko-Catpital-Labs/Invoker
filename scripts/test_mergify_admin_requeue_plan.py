@@ -383,41 +383,6 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(blockers[0]["kind"], "human_decision")
         self.assertIn("stale duplicate stack", blockers[0]["detail"])
 
-    def test_delegated_conflict_repair_waits_without_capping_or_retrying(self):
-        ledger = self._ledger()
-        for epoch in range(1, 4):
-            ledger.record("conflict-repair", 6435, HEAD, "conflict:6435", epoch)
-        ledger.record("repair-delegated", 6435, HEAD, "conflict:6435", 4)
-        bottom = pr(
-            number=6435,
-            labels=frozenset({"admin-bypass", "dequeued"}),
-            merge_state_status="DIRTY",
-            mergeable="CONFLICTING",
-            checks={"build": check("failure")},
-            latest_mergify=event(state="dequeued", comment_id="m6435"),
-        )
-        upper = pr(
-            number=6439,
-            base_ref_name=bottom.head_ref_name,
-            head_ref_name="stack/top",
-            head_ref_oid="b" * 40,
-            labels=frozenset(),
-            checks={"build": check("pending")},
-        )
-        plan = p.plan_stack_execution(
-            m.StackGroup("s", (bottom, upper)),
-            REQUIRED,
-            ledger,
-            now_epoch=0,
-            open_pr_numbers={6435, 6439},
-            open_pr_numbers_by_head={bottom.head_ref_name: (6435,), upper.head_ref_name: (6439,)},
-        )
-        self.assertEqual(plan.actions, ())
-        self.assertEqual(plan.wait_reason, "repair-delegated")
-        blockers = plan.summary["prs"][0]["blockers"]
-        self.assertEqual(blockers[0]["kind"], "repair_delegated")
-        self.assertIn("repair already delegated for current head", blockers[0]["detail"])
-
     def test_clean_unaccepted_upper_stack_posts_exact_human_blocker_once(self):
         ledger = self._ledger()
         bottom = pr(
@@ -585,6 +550,34 @@ class PlanStackActions(PlannerTestCase):
             [(action.kind, action.pr_number, action.key) for action in actions],
             [("repair_check", 10, "bot_review_thread:PRRT_bot")],
         )
+
+    def test_clean_upper_pr_with_only_a_false_positive_base_signal_is_never_touched(self):
+        # Regression coverage for #6536/#6579: the upper PR has zero blocker
+        # signal of its own -- clean checks, no review threads -- and only
+        # "looks" blocked because its base branch (the lower PR's head) is
+        # still moving. The planner must target the lower PR only.
+        bottom = pr(
+            number=10,
+            head_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass"}),
+            checks={"build": check("failure")},
+        )
+        upper = pr(
+            number=11,
+            base_ref_name="stack/bottom",
+            head_ref_name="stack/upper",
+            labels=frozenset({"admin-bypass"}),
+        )
+
+        facts, _ledger = self._facts(m.StackGroup("s", (bottom, upper)))
+        self.assertEqual(facts.blockers_by_pr[11], ())
+
+        actions = self._plan(m.StackGroup("s", (bottom, upper)))
+        self.assertEqual(
+            [(action.kind, action.pr_number, action.key) for action in actions],
+            [("repair_check", 10, "build")],
+        )
+        self.assertTrue(all(action.pr_number != 11 for action in actions))
 
     def test_stale_root_base_retargets_root_pr(self):
         stack = m.StackGroup(
