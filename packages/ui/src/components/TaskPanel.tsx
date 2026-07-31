@@ -748,7 +748,7 @@ export function TaskPanel({
       {/* External dependencies + gate policy */}
       {externalDeps.length > 0 && (() => {
         // Status ladder for gate evaluation
-        const statusLadder: TaskStatus[] = ['pending', 'running', 'review_ready', 'awaiting_approval', 'completed'];
+        const statusLadder: TaskStatus[] = ['pending', 'queued', 'running', 'review_ready', 'awaiting_approval', 'completed'];
 
         // Helper: compute steps between current and threshold
         const computeSteps = (current: TaskStatus, threshold: TaskStatus): number => {
