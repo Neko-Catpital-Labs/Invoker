@@ -36,6 +36,34 @@ LABEL="${INVOKER_ADMIN_BYPASS_LABEL:-admin-bypass}"
 REPO_URL="${INVOKER_ADMIN_BYPASS_REPO_URL:-https://github.com/$TARGET_REPO.git}"
 ledger_init "$STATE_FILE"
 
+unresolved_bot_review_thread() {
+  local pr_number="${1:?pr number required}"
+  local owner="${TARGET_REPO%%/*}"
+  local repo_name="${TARGET_REPO#*/}"
+  local query threads
+  query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved isOutdated comments(first:50) { nodes { author { login } } } } } } } }'
+  if ! threads="$(gh_json api graphql -f "owner=$owner" -f "name=$repo_name" -F "number=$pr_number" -f "query=$query")"; then
+    log_line "PR #$pr_number: could not load review threads; skipping review-thread classifier"
+    return 0
+  fi
+  jq -r '
+    .data.repository.pullRequest.reviewThreads as $threads
+    | if ($threads.pageInfo.hasNextPage // false) then empty else
+        $threads.nodes[]?
+        | select((.isResolved // false) == false)
+        | select((.isOutdated // false) == false)
+        | select(
+            [
+              .comments.nodes[]?.author.login // ""
+              | select(. != "" and . != "coderabbitai" and . != "coderabbitai[bot]" and . != "EdbertChan")
+            ]
+            | length == 0
+          )
+        | .id
+      end
+  ' <<<"$threads" | sed -n '1p'
+}
+
 # Repros pass INVOKER_ADMIN_BYPASS_QUEUE_PLAN_DIR to inspect submitted plans; a
 # caller-provided dir is never cleaned up here.
 if [ -n "${INVOKER_ADMIN_BYPASS_QUEUE_PLAN_DIR:-}" ]; then
@@ -84,6 +112,13 @@ while IFS= read -r pr; do
   if [ -z "$category" ] && [ "$(jq -r '.reviewDecision // ""' <<<"$pr")" = "CHANGES_REQUESTED" ]; then
     category="changes_requested"
     detail="a reviewer requested changes; address the open feedback"
+  fi
+  if [ -z "$category" ]; then
+    bot_thread="$(unresolved_bot_review_thread "$num")"
+    if [ -n "$bot_thread" ]; then
+      category="bot_review_thread"
+      detail="unresolved bot review thread $bot_thread"
+    fi
   fi
   if [ -z "$category" ]; then
     log_line "PR #$num: no actionable blocker found; skipping"
@@ -183,6 +218,7 @@ while IFS= read -r pr; do
       printf -- '- If this is a merge conflict, rebase onto origin/%s (or merge it) before anything else.\n' "$base_ref"
       printf -- '- If checks are failing, reproduce and fix them locally.\n'
       printf -- '- If changes were requested, address the open feedback with real changes or a reasoned reply, never by dismissing.\n'
+      printf -- '- If the blocker is a bot review thread, inspect the unresolved thread, address the feedback with code or tests, and leave it unresolved for the platform to reconcile after the push unless it is already outdated.\n'
       printf -- '- Commit locally if changes are needed.\n'
       printf -- '- Do not push, do not open a new PR, and do not force-push. The safe-push task owns publication.\n'
     } | sed 's/^/      /'
