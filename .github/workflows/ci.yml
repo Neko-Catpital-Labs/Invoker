@@ -635,6 +635,7 @@ jobs:
             files: >-
               e2e/embedded-terminal-spawn-failure.spec.ts
               e2e/embedded-terminal-restart-persistence.spec.ts
+              e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
@@ -660,6 +661,7 @@ jobs:
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/ui-delta-timeline.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
