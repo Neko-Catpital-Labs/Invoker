@@ -219,14 +219,14 @@ Failing checks
         actions = plan_stack_actions(groups[0], REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number) for a in actions], [("comment_admin_bypass_nudge", 2604)])
 
-    def test_upper_stack_blocker_stops_bottom_requeue(self):
+    def test_upper_stack_blocker_does_not_stop_bottom_requeue(self):
         failed = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
         stack = StackGroup("s", (pr(2604, head="stack/a", latest=mergify()), pr(2605, base="stack/a", checks=failed)))
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
-        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("repair_check", 2605)])
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("requeue", 2604)])
         thread_stack = StackGroup("s", (pr(2604, head="stack/a", latest=mergify()), pr(2605, base="stack/a", threads=(ReviewThread("t1", False, ("alice",)),))))
         actions = plan_stack_actions(thread_stack, REQUIRED, self.ledger(), 1)
-        self.assertEqual([(a.kind, a.pr_number, a.detail) for a in actions], [("comment_blocked", 2605, "unresolved human review thread t1")])
+        self.assertEqual([(a.kind, a.pr_number) for a in actions], [("requeue", 2604)])
     def test_unaccepted_upper_failed_check_repairs_upper_before_bottom(self):
         failed = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
         stack = StackGroup(
