@@ -18,6 +18,7 @@ const RECORDING_DONE_TIMEOUT_MS = 15_000;
 const UPDATE_BURSTS = 8;
 const UPDATES_PER_BURST = 16;
 const UPDATE_BURST_DELAY_MS = 50;
+const UPDATE_START_DELAY_MS = 250;
 const MIN_FRAME_COUNT = 35;
 const MAX_P95_FRAME_GAP_MS = 80;
 const MAX_FRAME_GAP_MS = 250;
@@ -61,6 +62,11 @@ declare global {
       finishedAt: number;
       frames: number[];
       transforms: string[];
+    };
+    __invokerDragUpdateState?: {
+      done: boolean;
+      updateCount: number;
+      error?: string;
     };
   }
 }
@@ -167,7 +173,7 @@ async function recordDragPerformance(
   page: Page,
   paneSelector: string,
   viewportSelector: string,
-  duringDrag?: () => Promise<unknown>,
+  startDuringDrag?: () => Promise<() => Promise<unknown>>,
 ): Promise<DragPerfResult> {
   await page.evaluate(({ durationMs, viewportSelector: selector }) => {
     const viewport = document.querySelector(selector) as HTMLElement | null;
@@ -207,16 +213,67 @@ async function recordDragPerformance(
   ) {
     throw new Error(`Graph drag start is outside visible pane: ${JSON.stringify({ startX, startY, box })}`);
   }
-  await page.mouse.move(startX, startY);
-  await page.mouse.down();
-  const updateWork = duringDrag?.() ?? Promise.resolve();
-  for (let step = 1; step <= DRAG_STEPS; step += 1) {
-    const progress = step / DRAG_STEPS;
-    await page.mouse.move(startX + DRAG_DELTA_X * progress, startY + Math.sin(progress * Math.PI * 2) * 24);
-    await page.waitForTimeout(DRAG_STEP_DELAY_MS);
-  }
-  await page.mouse.up();
-  await updateWork;
+  await page.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y) ?? window;
+    target.dispatchEvent(new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+      button: 0,
+      buttons: 1,
+      clientX: x,
+      clientY: y,
+      view: window,
+    }));
+  }, { x: startX, y: startY });
+  const waitForUpdateWork = startDuringDrag ? await startDuringDrag() : async () => undefined;
+  await page.evaluate(
+    ({ startX: x, startY: y, dragDeltaX, dragSteps, dragStepDelayMs }) => {
+      const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
+      const dispatchMove = (clientX: number, clientY: number) => {
+        window.dispatchEvent(new MouseEvent('mousemove', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          buttons: 1,
+          clientX,
+          clientY,
+          view: window,
+        }));
+      };
+      const dispatchEnd = (clientX: number, clientY: number) => {
+        window.dispatchEvent(new MouseEvent('mouseup', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          buttons: 0,
+          clientX,
+          clientY,
+          view: window,
+        }));
+      };
+
+      return (async () => {
+        let lastX = x;
+        let lastY = y;
+        for (let step = 1; step <= dragSteps; step += 1) {
+          const progress = step / dragSteps;
+          lastX = x + dragDeltaX * progress;
+          lastY = y + Math.sin(progress * Math.PI * 2) * 24;
+          dispatchMove(lastX, lastY);
+          await sleep(dragStepDelayMs);
+        }
+        dispatchEnd(lastX, lastY);
+      })();
+    },
+    {
+      startX,
+      startY,
+      dragDeltaX: DRAG_DELTA_X,
+      dragSteps: DRAG_STEPS,
+      dragStepDelayMs: DRAG_STEP_DELAY_MS,
+    },
+  );
+  await waitForUpdateWork();
 
   await page.waitForFunction(() => window.__invokerDragPerf?.done === true, null, { timeout: RECORDING_DONE_TIMEOUT_MS });
 
@@ -249,39 +306,68 @@ async function recordDragPerformance(
   });
 }
 
-async function streamTaskUpdatesDuringDrag(page: Page): Promise<number> {
+async function startTaskUpdatesDuringDrag(page: Page): Promise<() => Promise<number>> {
   const taskIds = await page.evaluate(async () => {
     const result = await window.invoker.getTasks();
     const tasks = Array.isArray(result) ? result : result.tasks;
     return tasks.map((task: { id: string }) => task.id);
   });
-  let updateCount = 0;
-  const statuses = ['running', 'completed', 'failed', 'pending'] as const;
 
-  for (let burst = 0; burst < UPDATE_BURSTS; burst += 1) {
-    const updates = Array.from({ length: UPDATES_PER_BURST }, (_, offset) => {
-      const taskId = taskIds[(burst * UPDATES_PER_BURST + offset) % taskIds.length];
-      const status = statuses[(burst + offset) % statuses.length];
-      const now = new Date();
-      return {
-        taskId,
-        changes: {
-          status,
-          execution: {
-            startedAt: now,
-            completedAt: status === 'completed' || status === 'failed' ? now : undefined,
-            exitCode: status === 'completed' ? 0 : status === 'failed' ? 1 : undefined,
-            error: status === 'failed' ? `drag update burst ${burst}` : undefined,
-          },
-        },
-      };
-    });
-    await page.evaluate((burstUpdates) => window.invoker.injectTaskStates!(burstUpdates), updates);
-    updateCount += updates.length;
-    await page.waitForTimeout(UPDATE_BURST_DELAY_MS);
-  }
+  await page.evaluate(
+    ({ taskIds: ids, updateBursts, updatesPerBurst, updateBurstDelayMs, updateStartDelayMs }) => {
+      const state: NonNullable<Window['__invokerDragUpdateState']> = { done: false, updateCount: 0 };
+      window.__invokerDragUpdateState = state;
+      const statuses = ['running', 'completed', 'failed', 'pending'] as const;
+      const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-  return updateCount;
+      void (async () => {
+        try {
+          await sleep(updateStartDelayMs);
+          for (let burst = 0; burst < updateBursts; burst += 1) {
+            const updates = Array.from({ length: updatesPerBurst }, (_, offset) => {
+              const taskId = ids[(burst * updatesPerBurst + offset) % ids.length];
+              const status = statuses[(burst + offset) % statuses.length];
+              const now = new Date();
+              return {
+                taskId,
+                changes: {
+                  status,
+                  execution: {
+                    startedAt: now,
+                    completedAt: status === 'completed' || status === 'failed' ? now : undefined,
+                    exitCode: status === 'completed' ? 0 : status === 'failed' ? 1 : undefined,
+                    error: status === 'failed' ? `drag update burst ${burst}` : undefined,
+                  },
+                },
+              };
+            });
+            await window.invoker.injectTaskStates!(updates);
+            state.updateCount += updates.length;
+            await sleep(updateBurstDelayMs);
+          }
+        } catch (error) {
+          state.error = error instanceof Error ? error.message : String(error);
+        } finally {
+          state.done = true;
+        }
+      })();
+    },
+    {
+      taskIds,
+      updateBursts: UPDATE_BURSTS,
+      updatesPerBurst: UPDATES_PER_BURST,
+      updateBurstDelayMs: UPDATE_BURST_DELAY_MS,
+      updateStartDelayMs: UPDATE_START_DELAY_MS,
+    },
+  );
+
+  return async () => {
+    await page.waitForFunction(() => window.__invokerDragUpdateState?.done === true, null, { timeout: 30_000 });
+    const state = await page.evaluate(() => window.__invokerDragUpdateState);
+    if (!state) throw new Error('Missing drag update state');
+    if (state.error) throw new Error(state.error);
+    return state.updateCount;
+  };
 }
 
 async function completeAllSeededTasks(page: Page): Promise<void> {
@@ -358,7 +444,10 @@ test('workflow graph pan stays responsive while task updates arrive', async ({ p
       '[data-testid="workflow-graph-react-flow"] .react-flow__pane',
       '[data-testid="workflow-graph-react-flow"] .react-flow__viewport',
       async () => {
-        updateCount = await streamTaskUpdatesDuringDrag(page);
+        const waitForUpdates = await startTaskUpdatesDuringDrag(page);
+        return async () => {
+          updateCount = await waitForUpdates();
+        };
       },
     );
     const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
