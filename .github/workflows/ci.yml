@@ -664,6 +664,8 @@ jobs:
               e2e/planning-terminal-live-model.proof.spec.ts
               e2e/ui-delta-timeline.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/planning-terminal-live-model.proof.spec.ts
+              e2e/ui-delta-timeline.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
