@@ -1829,6 +1829,52 @@ describe('rebindPlanningChatRepo', () => {
     expect(result).toEqual({ ok: false, error: 'Worktree provisioning is not available.' });
   });
 
+  it('rejects rebinding a submitted session without touching repo state', async () => {
+    const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'new-head-sha');
+    const sessions = createInAppPlanningChatSessions();
+    const session = planningSession({
+      id: 'submitted-rebind-session',
+      title: 'Submitted rebind',
+      status: 'submitted',
+      repoUrl: 'https://example.com/repo.git',
+      baseBranch: 'main',
+      baseCommit: 'sha-a',
+      worktreePath: '/fake/worktree/existing-submitted',
+      worktreeBranch: 'invoker/planning/submitted-rebind-session',
+      submittedPlanName: 'Submitted plan',
+      submittedWorkflowId: 'wf-submitted',
+    });
+    const originalConversation = session.conversation;
+    sessions.set(session.id, session);
+
+    const result = await rebindPlanningChatRepo({
+      sessionId: session.id,
+      repoUrl: 'https://example.com/other-repo.git',
+      baseBranch: 'main',
+    }, {
+      config: {},
+      sessions,
+      repoPool,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'This planning session was already submitted. Start a new planning chat for changes.',
+    });
+    expect(repoPool.ensureCloneThroughRepoQueue).not.toHaveBeenCalled();
+    expect(repoPool.resolveBaseCommit).not.toHaveBeenCalled();
+    expect(repoPool.acquireWorktree).not.toHaveBeenCalled();
+    expect(repoPool.release).not.toHaveBeenCalled();
+
+    const stored = sessions.get(session.id);
+    expect(stored?.repoUrl).toBe('https://example.com/repo.git');
+    expect(stored?.baseBranch).toBe('main');
+    expect(stored?.baseCommit).toBe('sha-a');
+    expect(stored?.worktreePath).toBe('/fake/worktree/existing-submitted');
+    expect(stored?.worktreeBranch).toBe('invoker/planning/submitted-rebind-session');
+    expect(stored?.conversation).toBe(originalConversation);
+  });
+
   it('returns an error when no repo URL can be resolved', async () => {
     const repoPool = createFakeRebindRepoPool('/fake/worktree/should-not-be-used', 'sha-a');
     const sessions = createInAppPlanningChatSessions();

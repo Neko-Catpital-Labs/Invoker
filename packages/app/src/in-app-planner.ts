@@ -1113,6 +1113,9 @@ export async function rebindPlanningChatRepo(
   if (!session) {
     return { ok: false, error: 'No planning conversation yet.' };
   }
+  if (session.status === 'submitted') {
+    return { ok: false, error: 'This planning session was already submitted. Start a new planning chat for changes.' };
+  }
   if (!deps.repoPool) {
     return { ok: false, error: 'Worktree provisioning is not available.' };
   }
