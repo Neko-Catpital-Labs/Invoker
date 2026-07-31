@@ -3,7 +3,15 @@ import type { Logger, WorkResponse } from '@invoker/contracts';
 import type { Workflow } from '@invoker/data-store';
 import { Channels, type MessageBus } from '@invoker/transport';
 import type { TaskDelta, TaskState } from '@invoker/workflow-core';
-import { applyDelta, recoverQuarantinedTask, recoveryFound, recoveryMissing, TaskSnapshotCache } from '../delta-merge.js';
+import {
+  applyDelta,
+  recoverQuarantinedTask,
+  recoveryFound,
+  recoveryMissing,
+  recoveryUnavailable,
+  TaskSnapshotCache,
+  type RecoveryLookupResult,
+} from '../delta-merge.js';
 import { evaluateExecutingStall, taskNeedsExecutingStallCheck } from '../executing-stall.js';
 import { persistShutdownDiagnostic, type ShutdownDiagnosticDb } from '../shutdown-diagnostic.js';
 import type { TaskGraphEventPublisher } from '../task-graph-event-publisher.js';
@@ -62,7 +70,8 @@ export interface RendererTaskFeedUiPerfStats {
 export interface RendererTaskFeedDeps {
   logger: Logger;
   persistence: RendererTaskFeedPersistence;
-  messageBus: Pick<MessageBus, 'publish'>;
+  messageBus: Pick<MessageBus, 'publish' | 'request'>;
+  isDetachedViewer?: () => boolean;
   getOrchestrator: () => RendererTaskFeedOrchestrator;
   taskHandles: { has(taskId: string): boolean };
   taskGraphEventPublisher: Pick<TaskGraphEventPublisher, 'publishDelta'>;
@@ -103,6 +112,7 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
   const workflowRollupProjection = new WorkflowRollupProjection();
   const pendingOutputBuffers = new Map<string, string[]>();
   const outputFlushTimers = new Map<string, RendererTaskFeedTimer>();
+  const pendingOwnerRecoveries = new Map<string, Promise<void>>();
   let lastKnownWorkflowCount = 0;
 
   const flushTaskOutput = (taskId: string): void => {
@@ -148,6 +158,120 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
     deps.taskGraphEventPublisher.publishDelta(delta, workflowRollups);
   };
 
+  const isTaskStateForRecovery = (value: unknown, taskId: string): value is TaskState => (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { id?: unknown }).id === taskId
+  );
+
+  const lookupLocalTaskForRecovery = (taskId: string): RecoveryLookupResult => {
+    if (deps.isDetachedViewer?.()) {
+      return recoveryUnavailable('detached-viewer-local-read-is-not-authoritative');
+    }
+    try {
+      const task = deps.persistence.loadTask(taskId);
+      return task ? recoveryFound(task) : recoveryMissing();
+    } catch (err) {
+      return recoveryUnavailable(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const lookupLocalMergeNodeForRecovery = (workflowId: string): RecoveryLookupResult => {
+    if (deps.isDetachedViewer?.()) {
+      return recoveryUnavailable('detached-viewer-orchestrator-is-not-authoritative');
+    }
+    try {
+      const task = deps.getOrchestrator().getMergeNode(workflowId);
+      return task ? recoveryFound(task) : recoveryMissing();
+    } catch (err) {
+      return recoveryUnavailable(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const lookupOwnerTaskForRecovery = async (taskId: string): Promise<RecoveryLookupResult> => {
+    let taskByIdMissing = false;
+    let taskByIdUnavailableReason: string | undefined;
+
+    try {
+      const response = await deps.messageBus.request<
+        { kind: 'task-by-id'; taskId: string },
+        { task?: unknown | null }
+      >('headless.query', { kind: 'task-by-id', taskId });
+      if (isTaskStateForRecovery(response?.task, taskId)) {
+        return recoveryFound(response.task);
+      }
+      if (response && Object.prototype.hasOwnProperty.call(response, 'task') && response.task == null) {
+        taskByIdMissing = true;
+      } else {
+        taskByIdUnavailableReason = 'owner task-by-id returned malformed response';
+      }
+    } catch (err) {
+      taskByIdUnavailableReason = err instanceof Error ? err.message : String(err);
+    }
+
+    try {
+      const snapshot = await deps.messageBus.request<
+        { kind: 'task-graph-refresh' },
+        { tasks?: unknown[] }
+      >('headless.query', { kind: 'task-graph-refresh' });
+      const task = Array.isArray(snapshot?.tasks)
+        ? snapshot.tasks.find((candidate) => isTaskStateForRecovery(candidate, taskId))
+        : undefined;
+      if (isTaskStateForRecovery(task, taskId)) {
+        return recoveryFound(task);
+      }
+      if (Array.isArray(snapshot?.tasks)) {
+        return recoveryMissing();
+      }
+    } catch (err) {
+      if (taskByIdMissing) return recoveryMissing();
+      const reason = err instanceof Error ? err.message : String(err);
+      return recoveryUnavailable(taskByIdUnavailableReason ?? reason);
+    }
+
+    return taskByIdMissing
+      ? recoveryMissing()
+      : recoveryUnavailable(taskByIdUnavailableReason ?? 'owner task snapshot unavailable');
+  };
+
+  const applySingleLookupRecovery = (taskId: string, lookup: RecoveryLookupResult) =>
+    recoverQuarantinedTask(lastKnownTaskStates, taskId, {
+      loadTask: () => lookup,
+      getMergeNode: () => lookup,
+    });
+
+  const scheduleOwnerRecovery = (taskId: string, reason?: string): void => {
+    if (pendingOwnerRecoveries.has(taskId)) return;
+    const recovery = (async () => {
+      deps.logger.info(
+        `[gap-detect] task="${taskId}" local recovery unavailable${reason ? `: ${reason}` : ''}; querying owner`,
+        { module: 'delta-merge' },
+      );
+      const lookup = await lookupOwnerTaskForRecovery(taskId);
+      const entry = lastKnownTaskStates.getEntry(taskId);
+      if (entry && !entry.quarantined) {
+        return;
+      }
+      const { rendererDelta, outcome, reason: ownerReason } = applySingleLookupRecovery(taskId, lookup);
+      if (rendererDelta) {
+        publishTaskDeltaToRenderer(rendererDelta);
+        return;
+      }
+      deps.logger.warn(
+        `[gap-detect] task="${taskId}" owner recovery unavailable${ownerReason ? `: ${ownerReason}` : ''}; keeping task quarantined`,
+        { module: 'delta-merge', outcome },
+      );
+    })().catch((err) => {
+      deps.logger.warn(
+        `[gap-detect] task="${taskId}" owner recovery failed: ${err instanceof Error ? err.message : String(err)}`,
+        { module: 'delta-merge' },
+      );
+    }).finally(() => {
+      pendingOwnerRecoveries.delete(taskId);
+    });
+    pendingOwnerRecoveries.set(taskId, recovery);
+  };
+
   const applyTaskDeltaToOwnerCacheOrRecover = (delta: TaskDelta): TaskDelta[] => {
     const { quarantined, accepted } = applyDelta(delta, lastKnownTaskStates);
     if (quarantined.length === 0) {
@@ -157,18 +281,14 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
     const rendererDeltas: TaskDelta[] = [];
     for (const taskId of quarantined) {
       deps.logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
-      const { rendererDelta } = recoverQuarantinedTask(lastKnownTaskStates, taskId, {
-        loadTask: (recoveryTaskId) => {
-          const task = deps.persistence.loadTask(recoveryTaskId);
-          return task ? recoveryFound(task) : recoveryMissing();
-        },
-        getMergeNode: (workflowId) => {
-          const task = deps.getOrchestrator().getMergeNode(workflowId);
-          return task ? recoveryFound(task) : recoveryMissing();
-        },
+      const { rendererDelta, outcome, reason } = recoverQuarantinedTask(lastKnownTaskStates, taskId, {
+        loadTask: lookupLocalTaskForRecovery,
+        getMergeNode: lookupLocalMergeNodeForRecovery,
       });
       if (rendererDelta) {
         rendererDeltas.push(rendererDelta);
+      } else if (outcome === 'unavailable') {
+        scheduleOwnerRecovery(taskId, reason);
       }
     }
     return rendererDeltas;
