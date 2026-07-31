@@ -45,7 +45,7 @@ state = {
     "prs": [
         {
             "number": 5805,
-            "title": "Already queued with headless Mergify status",
+            "title": "Already queued with headless Mergify status and no queued label",
             "body": "## Summary\n\nQueued PR repro.\n",
             "url": "https://github.com/fake/repo/pull/5805",
             "state": "OPEN",
@@ -55,7 +55,7 @@ state = {
             "headRefOid": head,
             "mergeStateStatus": "BLOCKED",
             "mergeable": "MERGEABLE",
-            "labels": ["admin-bypass", "queued"],
+            "labels": ["admin-bypass"],
             "reviewThreads": [],
             "checks": {"*": "SUCCESS"},
         }
