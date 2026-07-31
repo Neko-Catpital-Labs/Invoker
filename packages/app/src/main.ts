@@ -2605,6 +2605,7 @@ startMainProcessBootstrap({
       logger,
       persistence,
       messageBus,
+      isDetachedViewer: () => !ownerMode,
       getOrchestrator: () => orchestrator,
       taskHandles,
       taskGraphEventPublisher,
