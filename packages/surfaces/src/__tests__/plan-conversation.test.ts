@@ -64,6 +64,10 @@ function expectAuthorizedPlanToInvokerPrompt(prompt: string) {
   expect(prompt).toContain('MCP review/submit flow');
   expect(prompt).toContain('Harness handoff mode');
   expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
+  expect(prompt).toContain('skills/review-compression/SKILL.md');
+  expect(prompt).toContain('Safety invariant:');
+  expect(prompt).toContain('confirm or correct each one');
+  expect(prompt).toContain('Do not author YAML or proceed to review/submission steps until those safety invariants are confirmed');
 }
 
 /** Helper: parse the returned plan text string into an object for assertions. */
