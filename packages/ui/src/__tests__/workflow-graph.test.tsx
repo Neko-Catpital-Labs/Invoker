@@ -34,6 +34,7 @@ function rollup(
     status,
     countsByStatus: {
       pending: 0,
+      queued: 0,
       running,
       fixing_with_ai: 0,
       completed: 0,

@@ -5,21 +5,11 @@
 import { describe, it, expect } from 'vitest';
 import { getStatusColor, getStatusInlineColors, matchesStatusFilter, formatStatusLabel, getEffectiveVisualStatus } from '../lib/colors.js';
 import { getStatusVisual, STATUS_VISUALS } from '../lib/status-colors.js';
+import { TASK_STATUSES } from '../types.js';
 import type { TaskStatus } from '../types.js';
 
 describe('getStatusColor', () => {
-  const allStatuses: TaskStatus[] = [
-    'pending',
-    'running',
-    'fixing_with_ai',
-    'completed',
-    'failed',
-    'closed',
-    'blocked',
-    'needs_input',
-    'awaiting_approval',
-    'stale',
-  ];
+  const allStatuses: readonly TaskStatus[] = TASK_STATUSES;
 
   it('returns correct color for each status', () => {
     for (const status of allStatuses) {

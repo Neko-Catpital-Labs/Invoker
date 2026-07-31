@@ -7,18 +7,8 @@
 
 // ── Task Status ─────────────────────────────────────────────
 
-export type TaskStatus =
-  | 'pending'
-  | 'running'
-  | 'fixing_with_ai'
-  | 'completed'
-  | 'failed'
-  | 'closed'
-  | 'needs_input'
-  | 'blocked'
-  | 'review_ready'
-  | 'awaiting_approval'
-  | 'stale';
+export { TASK_STATUSES } from '@invoker/workflow-graph';
+export type { TaskStatus } from '@invoker/workflow-graph';
 
 // ── Experiment Types ────────────────────────────────────────
 

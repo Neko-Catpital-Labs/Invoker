@@ -16,6 +16,7 @@ function makeWorkflowRollup(
     status,
     countsByStatus: {
       pending: 0,
+      queued: 0,
       running: 0,
       fixing_with_ai: 0,
       completed: 0,
