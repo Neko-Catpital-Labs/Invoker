@@ -65,8 +65,8 @@ describe('standalone owner web surface wiring', () => {
   it('registers recovery worker mutation channels before auto-starting workers', () => {
     const source = readFileSync(MAIN, 'utf8');
 
-    const retryRegistrationIdx = source.indexOf("workflowMutationDispatcher.has('invoker:retry-task')");
-    const fixRegistrationIdx = source.indexOf("workflowMutationDispatcher.has('invoker:fix-with-agent')");
+    const retryRegistrationIdx = source.indexOf("workflowMutationDispatcher.set('invoker:retry-task'");
+    const fixRegistrationIdx = source.indexOf("workflowMutationDispatcher.set('invoker:fix-with-agent'");
     const autoStartedWorkersIdx = source.indexOf('workerRuntimeController.startAutoStartedWorkers();');
 
     expect(retryRegistrationIdx, 'standalone retry-task dispatcher registration not found').toBeGreaterThan(-1);
