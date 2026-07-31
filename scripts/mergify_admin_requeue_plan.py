@@ -671,6 +671,17 @@ def plan_bot_thread_repairs(
     return None
 
 
+def plan_outdated_bot_thread_resolutions(
+    facts: StackFacts,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
+    for pr in _candidate_prs(facts, pr_numbers):
+        for blocker in facts.blockers_by_pr[pr.number]:
+            if blocker.kind == "outdated_bot_review_thread":
+                return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
+    return None
+
+
 def plan_hard_blockers(
     facts: StackFacts,
     ledger: Ledger,
@@ -784,6 +795,9 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
+    action = plan_outdated_bot_thread_resolutions(facts, (facts.bottom.number,) if facts.bottom else None)
+    if action is not None:
+        return (action,)
     if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
         return ()
     if facts.bottom:

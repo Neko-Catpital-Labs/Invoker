@@ -50,6 +50,7 @@ import os
 from pathlib import Path
 
 head = "1605586282a7bccef5c1ea34419a7176ca755dc1"
+delegated_head = "2605586282a7bccef5c1ea34419a7176ca755dc2"
 state = {
     "prs": [
         {
@@ -82,9 +83,41 @@ state = {
                 }
             ],
             "checks": {"*": "SUCCESS"},
-        }
+        },
+        {
+            "number": 5806,
+            "title": "Outdated CodeRabbit thread with delegated check repair",
+            "body": "## Summary\n\nOutdated bot thread plus delegated check repair repro.\n",
+            "url": "https://github.com/fake/repo/pull/5806",
+            "state": "OPEN",
+            "isDraft": False,
+            "baseRefName": "master",
+            "headRefName": "stack/5806",
+            "headRefOid": delegated_head,
+            "mergeStateStatus": "BLOCKED",
+            "mergeable": "MERGEABLE",
+            "labels": ["admin-bypass"],
+            "reviewDecision": "REVIEW_REQUIRED",
+            "reviewThreads": [
+                {
+                    "id": "thread-outdated-delegated",
+                    "isResolved": False,
+                    "isOutdated": True,
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": {"login": "coderabbitai"},
+                                "body": "Clean up a line that no longer exists.",
+                                "url": "https://github.com/fake/repo/pull/5806#discussion_r1",
+                            }
+                        ]
+                    },
+                }
+            ],
+            "checks": {"*": "SUCCESS", "PR Body": "FAILURE"},
+        },
     ],
-    "issue_comments": {"5805": []},
+    "issue_comments": {"5805": [], "5806": []},
     "job_logs": {},
 }
 Path(os.environ["STATE_PATH"]).write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -103,6 +136,28 @@ echo "$dry_out" | grep -q 'DRY-RUN resolve-bot-threads PR #5805 thread=thread-ou
 ! echo "$dry_out" | grep -q 'DRY-RUN repair-check PR #5805 check="thread-outdated"' \
   || fail "dry-run tried to repair an outdated bot thread" "$dry_out"
 
+python3 - "$LEDGER_PATH" <<'PY'
+import json
+import sys
+
+row = {
+    "kind": "repair-delegated",
+    "pr": 5806,
+    "headSha": "2605586282a7bccef5c1ea34419a7176ca755dc2",
+    "key": "PR Body",
+    "epoch": 1,
+}
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    handle.write(json.dumps(row, sort_keys=True) + "\n")
+PY
+if ! delegated_dry_out="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 5806 2>&1)"; then
+  fail "dry-run failed for delegated repair plus outdated bot thread" "$delegated_dry_out"
+fi
+printf '%s\n' "$delegated_dry_out"
+echo "$delegated_dry_out" | grep -q 'DRY-RUN resolve-bot-threads PR #5806 thread=thread-outdated-delegated' \
+  || fail "delegated repair suppressed outdated bot thread resolution" "$delegated_dry_out"
+
+rm -f "$LEDGER_PATH"
 if ! out="$(run_worker)"; then
   fail "worker failed resolving outdated bot thread" "$out"
 fi

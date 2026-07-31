@@ -418,6 +418,31 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(blockers[0]["kind"], "repair_delegated")
         self.assertIn("repair already delegated for current head", blockers[0]["detail"])
 
+    def test_delegated_failed_check_does_not_suppress_outdated_bot_thread_resolution(self):
+        ledger = self._ledger()
+        ledger.record("repair-delegated", 6579, HEAD, "PR Body", 1)
+        bottom = pr(
+            number=6579,
+            labels=frozenset({"admin-bypass"}),
+            checks={"PR Body": check("failure", "PR Body")},
+            review_threads=(m.ReviewThread("PRRT_outdated", False, ("coderabbitai",), True),),
+            latest_mergify=event(state="dequeued", comment_id="m6579"),
+        )
+
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom,)),
+            {"PR Body"},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6579},
+            open_pr_numbers_by_head={},
+        )
+
+        self.assertEqual(
+            [(action.kind, action.pr_number, action.key) for action in plan.actions],
+            [("resolve_bot_threads", 6579, "PRRT_outdated")],
+        )
+
     def test_clean_unaccepted_upper_stack_posts_exact_human_blocker_once(self):
         ledger = self._ledger()
         bottom = pr(
