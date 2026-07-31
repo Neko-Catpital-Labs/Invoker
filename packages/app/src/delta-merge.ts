@@ -23,10 +23,41 @@ export interface CacheEntry {
   quarantined: boolean;
 }
 
-// ── Authoritative loader (persistence by id) ────────────────
+// ── Authoritative loader (persistence / owner by id) ────────
 
 export interface AuthoritativeTaskLoader {
   loadTask(taskId: string): TaskState | undefined;
+}
+
+export type RecoveryLookupResult =
+  | { kind: 'found'; task: TaskState }
+  | { kind: 'missing' }
+  | { kind: 'unavailable'; reason?: string };
+
+export type RecoveryLookupValue = TaskState | undefined | RecoveryLookupResult;
+
+export function recoveryFound(task: TaskState): RecoveryLookupResult {
+  return { kind: 'found', task };
+}
+
+export function recoveryMissing(): RecoveryLookupResult {
+  return { kind: 'missing' };
+}
+
+export function recoveryUnavailable(reason?: string): RecoveryLookupResult {
+  return reason ? { kind: 'unavailable', reason } : { kind: 'unavailable' };
+}
+
+function isRecoveryLookupResult(value: RecoveryLookupValue): value is RecoveryLookupResult {
+  return Boolean(value)
+    && typeof value === 'object'
+    && 'kind' in value
+    && (value.kind === 'found' || value.kind === 'missing' || value.kind === 'unavailable');
+}
+
+function normalizeRecoveryLookupResult(value: RecoveryLookupValue): RecoveryLookupResult {
+  if (isRecoveryLookupResult(value)) return value;
+  return value ? recoveryFound(value) : recoveryMissing();
 }
 
 // ── Snapshot cache ───────────────────────────────────────────
@@ -210,23 +241,26 @@ export function resolveQuarantine(
  * Loaders the recovery loop consults to find an authoritative snapshot
  * for a quarantined task id.
  *
- * - `loadTask`: persistence by id. Returns `undefined` for ids that have
- *   never been persisted (notably synthetic merge nodes).
+ * - `loadTask`: persistence/owner lookup by id. Plain `undefined` and `missing`
+ *   mean an authoritative owner proved the task is gone; `unavailable` means
+ *   the caller cannot prove existence either way.
  * - `getMergeNode`: orchestrator in-memory lookup by workflowId. Authoritative
  *   source for synthetic `__merge__${workflowId}` ids, which are not stored
  *   in persistence but are tracked in `Orchestrator.stateMachine`.
  */
 export interface RecoveryLoaders {
-  loadTask: (taskId: string) => TaskState | undefined;
-  getMergeNode: (workflowId: string) => TaskState | undefined;
+  loadTask: (taskId: string) => RecoveryLookupValue;
+  getMergeNode: (workflowId: string) => RecoveryLookupValue;
 }
 
 export interface RecoveryResult {
+  outcome: RecoveryLookupResult['kind'];
+  reason?: string;
   /**
    * Renderer-bound delta the caller MUST forward to keep the renderer in
-   * sync with the owner cache. `undefined` only when no cache mutation
-   * happened (currently never — every branch either restores from an
-   * authoritative source or emits `removed`).
+   * sync with the owner cache. `undefined` means no authoritative answer was
+   * available, so the cache was left quarantined instead of deleting a task on
+   * a local/read-only miss.
    */
   rendererDelta?: TaskDelta;
 }
@@ -237,11 +271,13 @@ const SYNTHETIC_MERGE_PREFIX = '__merge__';
  * Single source of truth for the main-process quarantine-recovery loop.
  *
  * Contract — no implicit message drops:
- * - If persistence has the task → restore from persistence, emit `created`.
+ * - If persistence/owner has the task → restore from that source, emit `created`.
  * - Else if it's a synthetic merge id and the orchestrator has it in memory
  *   → restore from orchestrator, emit `created`.
- * - Else (truly absent) → delete the cache entry, emit `removed` so the
- *   renderer drops its stale copy too.
+ * - Else if an authoritative owner proves the task is absent → delete the cache
+ *   entry, emit `removed` so the renderer drops its stale copy too.
+ * - Else → leave the cache quarantined and emit nothing. A local/read-only miss
+ *   is not proof of deletion.
  *
  * This replaces the legacy `if (authoritative) { sendTaskDeltaToRenderer(...) }`
  * pattern that silently dropped the recovery message whenever
@@ -254,24 +290,32 @@ export function recoverQuarantinedTask(
   taskId: string,
   loaders: RecoveryLoaders,
 ): RecoveryResult {
-  const persisted = loaders.loadTask(taskId);
-  if (persisted) {
-    resolveQuarantine(cache, taskId, persisted);
-    return { rendererDelta: { type: 'created', task: persisted } };
+  const persisted = normalizeRecoveryLookupResult(loaders.loadTask(taskId));
+  if (persisted.kind === 'found') {
+    resolveQuarantine(cache, taskId, persisted.task);
+    return { outcome: 'found', rendererDelta: { type: 'created', task: persisted.task } };
   }
 
   if (taskId.startsWith(SYNTHETIC_MERGE_PREFIX)) {
     const workflowId = taskId.slice(SYNTHETIC_MERGE_PREFIX.length);
-    const synthetic = loaders.getMergeNode(workflowId);
-    if (synthetic) {
-      resolveQuarantine(cache, taskId, synthetic);
-      return { rendererDelta: { type: 'created', task: synthetic } };
+    const synthetic = normalizeRecoveryLookupResult(loaders.getMergeNode(workflowId));
+    if (synthetic.kind === 'found') {
+      resolveQuarantine(cache, taskId, synthetic.task);
+      return { outcome: 'found', rendererDelta: { type: 'created', task: synthetic.task } };
     }
+    if (synthetic.kind === 'unavailable') {
+      return { outcome: 'unavailable', reason: synthetic.reason };
+    }
+  }
+
+  if (persisted.kind === 'unavailable') {
+    return { outcome: 'unavailable', reason: persisted.reason };
   }
 
   const previousTaskStateVersion = cache.getEntry(taskId)?.taskStateVersion ?? 0;
   resolveQuarantine(cache, taskId, undefined);
   return {
+    outcome: 'missing',
     rendererDelta: { type: 'removed', taskId, previousTaskStateVersion },
   };
 }

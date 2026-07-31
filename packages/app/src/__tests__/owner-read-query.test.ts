@@ -152,6 +152,7 @@ describe('buildOwnerReadQueryHandlers', () => {
         getQueueStatus: () => ({ q: 1 }),
         getWorkflowStatus: () => ({ w: 1 }),
         getAllTasks: () => [{ id: 't' }],
+        getMergeNode: (workflowId: string) => ({ id: `__merge__${workflowId}` }),
         syncAllFromDb: vi.fn(),
         syncFromDb: vi.fn(),
       },
@@ -205,6 +206,22 @@ describe('buildOwnerReadQueryHandlers', () => {
       limit: 1,
       offset: 2,
       hasMore: false,
+    });
+  });
+
+  it('resolves synthetic merge nodes from orchestrator memory', () => {
+    const h = build({
+      getAllTasks: () => [],
+      getMergeNode: (workflowId: string) => (
+        workflowId === 'wf-1' ? { id: '__merge__wf-1', config: { workflowId, isMergeNode: true } } : undefined
+      ),
+    }, {
+      loadTask: () => undefined,
+    });
+
+    expect(h.getTaskById('__merge__wf-1')).toEqual({
+      id: '__merge__wf-1',
+      config: { workflowId: 'wf-1', isMergeNode: true },
     });
   });
 

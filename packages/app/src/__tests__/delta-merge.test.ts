@@ -17,6 +17,9 @@ import { describe, it, expect } from 'vitest';
 import {
   applyDelta,
   recoverQuarantinedTask,
+  recoveryFound,
+  recoveryMissing,
+  recoveryUnavailable,
   resolveQuarantine,
   TaskSnapshotCache,
 } from '../delta-merge.js';
@@ -420,8 +423,14 @@ function simulateMainProcessDeltaHandler(
   }
   for (const taskId of quarantined) {
     const { rendererDelta } = recoverQuarantinedTask(cache, taskId, {
-      loadTask: persistence.loadTask,
-      getMergeNode: orchestrator.getMergeNode,
+      loadTask: (id) => {
+        const task = persistence.loadTask(id);
+        return task ? recoveryFound(task) : recoveryMissing();
+      },
+      getMergeNode: (workflowId) => {
+        const task = orchestrator.getMergeNode(workflowId);
+        return task ? recoveryFound(task) : recoveryMissing();
+      },
     });
     if (rendererDelta) {
       rendererDeltas.push(rendererDelta);
@@ -483,6 +492,57 @@ describe('gap recovery: unknown task → quarantine + authoritative reload', () 
     const [first] = rendererDeltas;
     expect(first.type).toBe('removed');
     expect((first as { type: 'removed'; taskId: string }).taskId).toBe('ghost');
+  });
+
+  it('unknown task with unavailable local read does not emit removed', () => {
+    const cache = new TaskSnapshotCache();
+
+    const delta: TaskDelta = {
+      type: 'updated',
+      taskId: 'detached-task',
+      changes: { status: 'completed' },
+      taskStateVersion: 2,
+      previousTaskStateVersion: 1,
+    };
+
+    const { quarantined } = applyDelta(delta, cache);
+    expect(quarantined).toEqual(['detached-task']);
+
+    const recovery = recoverQuarantinedTask(cache, 'detached-task', {
+      loadTask: () => recoveryUnavailable('read-only-viewer'),
+      getMergeNode: () => recoveryUnavailable('read-only-viewer'),
+    });
+
+    expect(recovery.outcome).toBe('unavailable');
+    expect(recovery.rendererDelta).toBeUndefined();
+    expect(cache.has('detached-task')).toBe(false);
+  });
+
+  it('version gap with unavailable local read keeps stale entry quarantined', () => {
+    const cache = new TaskSnapshotCache();
+    cache.set('detached-task', JSON.stringify(makeTask('detached-task', {
+      status: 'running',
+      taskStateVersion: 2,
+    })));
+
+    const { quarantined } = applyDelta({
+      type: 'updated',
+      taskId: 'detached-task',
+      changes: { status: 'completed' },
+      taskStateVersion: 5,
+      previousTaskStateVersion: 4,
+    }, cache);
+    expect(quarantined).toEqual(['detached-task']);
+
+    const recovery = recoverQuarantinedTask(cache, 'detached-task', {
+      loadTask: () => recoveryUnavailable('read-only-viewer'),
+      getMergeNode: () => recoveryUnavailable('read-only-viewer'),
+    });
+
+    expect(recovery.outcome).toBe('unavailable');
+    expect(recovery.rendererDelta).toBeUndefined();
+    expect(cache.has('detached-task')).toBe(true);
+    expect(cache.isQuarantined('detached-task')).toBe(true);
   });
 });
 
