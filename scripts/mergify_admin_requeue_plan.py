@@ -82,6 +82,17 @@ def is_queue_only_required_check(name: str) -> bool:
     return name in QUEUE_ONLY_REQUIRED_CHECKS
 
 
+def has_active_queue_event(pr: PrSnapshot) -> bool:
+    latest = pr.latest_mergify
+    if not latest or latest.queue_rule_name != "admin-bypass" or latest.state not in ACTIVE_QUEUE_STATES:
+        return False
+    if latest.head_sha == pr.head_ref_oid:
+        return True
+    if not latest.head_sha:
+        return True
+    return "queued" in pr.labels
+
+
 def classify_pr(pr: PrSnapshot, required_checks: Collection[str], trunk: str) -> tuple[Blocker, ...]:
     blockers: list[Blocker] = []
     if pr.state == "MERGED":
@@ -560,7 +571,7 @@ def wait_reason_for_facts(facts: StackFacts) -> str:
             return "repair-delegated"
         if HUMAN_BLOCKER_KINDS & blocker_kinds:
             return "blocked-needs-human"
-    if facts.bottom and facts.bottom.latest_mergify and facts.bottom.latest_mergify.state in {"queued", "merging"}:
+    if facts.bottom and has_active_queue_event(facts.bottom):
         return "bottom-already-queued"
     return "no-action"
 
@@ -590,9 +601,21 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
-def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
+def _candidate_prs(facts: StackFacts, pr_numbers: Collection[int] | None = None) -> tuple[PrSnapshot, ...]:
+    if pr_numbers is None:
+        return facts.stack.prs
+    allowed = frozenset(pr_numbers)
+    return tuple(pr for pr in facts.stack.prs if pr.number in allowed)
+
+
+def plan_mergify_queue_repairs(
+    facts: StackFacts,
+    ledger: Ledger,
+    max_repair_attempts: int,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
     del max_repair_attempts
-    for pr in facts.stack.prs:
+    for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
@@ -603,8 +626,13 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
     return None
 
 
-def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
-    for pr in facts.stack.prs:
+def plan_direct_repairs(
+    facts: StackFacts,
+    ledger: Ledger,
+    max_repair_attempts: int,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
+    for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
@@ -621,8 +649,13 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
     return None
 
 
-def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
-    for pr in facts.stack.prs:
+def plan_bot_thread_repairs(
+    facts: StackFacts,
+    ledger: Ledger,
+    max_repair_attempts: int,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
+    for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
@@ -638,8 +671,12 @@ def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attemp
     return None
 
 
-def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
-    for pr in facts.stack.prs:
+def plan_hard_blockers(
+    facts: StackFacts,
+    ledger: Ledger,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
+    for pr in _candidate_prs(facts, pr_numbers):
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "pending_check":
                 return None
@@ -726,7 +763,7 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
         return None
-    if latest and latest.state in ACTIVE_QUEUE_STATES and (latest.head_sha == bottom.head_ref_oid or "queued" in bottom.labels):
+    if has_active_queue_event(bottom):
         return None
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
@@ -749,6 +786,25 @@ def plan_actions_from_facts(
 ) -> tuple[Action, ...]:
     if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
         return ()
+    if facts.bottom:
+        bottom_pr_numbers = (facts.bottom.number,)
+        action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        if action is not None:
+            return (action,)
+        action = plan_direct_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        if action is not None:
+            return (action,)
+        action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        if action is not None:
+            return (action,)
+        action = plan_hard_blockers(facts, ledger, bottom_pr_numbers)
+        if action is not None:
+            return (action,)
+        if _bottom_has_pending_or_human_blocker(facts):
+            return ()
+        action = plan_bottom_progress(facts, ledger, max_requeue_attempts)
+        if action is not None:
+            return (action,)
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)

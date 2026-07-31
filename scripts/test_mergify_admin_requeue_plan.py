@@ -509,6 +509,24 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(snapshot)
         self.assertEqual(actions, ())
 
+    def test_headless_active_queue_event_waits_without_queued_label(self):
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="queued", head=""))
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            self._ledger(),
+            now_epoch=0,
+            open_pr_numbers={snapshot.number},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "bottom-already-queued")
+
+    def test_stale_active_queue_event_without_queued_label_requeues_current_head(self):
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="queued", head="b" * 40))
+        actions = self._plan(snapshot)
+        self.assertEqual((actions[0].kind, actions[0].detail), ("requeue", "eligible-when-ready"))
+
     def test_clean_bottom_queues_without_prior_dequeue(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot)
@@ -531,6 +549,42 @@ class PlanStackActions(PlannerTestCase):
         )
         actions = self._plan(m.StackGroup("s", (bottom, upper)))
         self.assertEqual((actions[0].kind, actions[0].pr_number), ("requeue", 10))
+
+    def test_upper_conflict_does_not_block_clean_bottom_requeue(self):
+        bottom = pr(number=10, head_ref_name="stack/bottom", labels=frozenset({"admin-bypass"}))
+        upper = pr(
+            number=11,
+            base_ref_name="stack/bottom",
+            head_ref_name="stack/upper",
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+        )
+
+        actions = self._plan(m.StackGroup("s", (bottom, upper)))
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("requeue", 10))
+
+    def test_bottom_bot_thread_repairs_before_upper_conflict(self):
+        bottom = pr(
+            number=10,
+            head_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass"}),
+            review_threads=(m.ReviewThread("PRRT_bot", False, ("coderabbitai[bot]",)),),
+        )
+        upper = pr(
+            number=11,
+            base_ref_name="stack/bottom",
+            head_ref_name="stack/upper",
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+        )
+
+        actions = self._plan(m.StackGroup("s", (bottom, upper)))
+        self.assertEqual(
+            [(action.kind, action.pr_number, action.key) for action in actions],
+            [("repair_check", 10, "bot_review_thread:PRRT_bot")],
+        )
 
     def test_stale_root_base_retargets_root_pr(self):
         stack = m.StackGroup(
