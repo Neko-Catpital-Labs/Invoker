@@ -8,7 +8,13 @@ import { InMemoryBus } from '@invoker/test-kit';
 import { Orchestrator, type PlanDefinition, type TaskDelta, type TaskState } from '@invoker/workflow-core';
 import { LaunchDispatcher } from '../launch-dispatcher.js';
 import { taskNeedsExecutingStallCheck } from '../executing-stall.js';
-import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from '../delta-merge.js';
+import {
+  applyDelta,
+  recoverQuarantinedTask,
+  recoveryFound,
+  recoveryMissing,
+  TaskSnapshotCache,
+} from '../delta-merge.js';
 import { WorkflowRollupProjection } from '../workflow-rollup-projection.js';
 
 function makeTask(
@@ -273,11 +279,15 @@ describe('dispatch capacity invariants', () => {
     expect(removePatches).toHaveLength(1);
 
     const recovery = recoverQuarantinedTask(cache, 'wf-2/b', {
-      loadTask: (taskId) => persisted.get(taskId),
-      getMergeNode: () => undefined,
+      loadTask: (taskId) => {
+        const task = persisted.get(taskId);
+        return task ? recoveryFound(task) : recoveryMissing();
+      },
+      getMergeNode: () => recoveryMissing(),
     });
     expect(recovery.rendererDelta).toEqual({ type: 'created', task: persisted.get('wf-2/b')! });
-    const recoveryPatches = projection.applyDelta(recovery.rendererDelta);
+    expect(recovery.rendererDelta).toBeDefined();
+    const recoveryPatches = projection.applyDelta(recovery.rendererDelta!);
     expect(recoveryPatches).toHaveLength(1);
     expect(cache.isQuarantined('wf-2/b')).toBe(false);
 

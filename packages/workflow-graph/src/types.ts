@@ -7,19 +7,22 @@
 
 // ── Task Status FSM ─────────────────────────────────────────
 
-export type TaskStatus =
-  | 'pending'
-  | 'queued'
-  | 'running'
-  | 'fixing_with_ai'
-  | 'completed'
-  | 'failed'
-  | 'closed'
-  | 'needs_input'
-  | 'blocked'
-  | 'review_ready'
-  | 'awaiting_approval'
-  | 'stale';
+export const TASK_STATUSES = [
+  'pending',
+  'queued',
+  'running',
+  'fixing_with_ai',
+  'completed',
+  'failed',
+  'closed',
+  'needs_input',
+  'blocked',
+  'review_ready',
+  'awaiting_approval',
+  'stale',
+] as const;
+
+export type TaskStatus = typeof TASK_STATUSES[number];
 // ── Task Config (definition / spec) ────────────────────────
 // Copied wholesale when cloning/forking: clone.config = original.config
 

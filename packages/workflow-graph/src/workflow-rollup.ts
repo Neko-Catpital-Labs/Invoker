@@ -1,4 +1,4 @@
-import type { TaskState, TaskStatus } from './types.js';
+import { TASK_STATUSES, type TaskState, type TaskStatus } from './types.js';
 
 export type WorkflowDerivedStatus =
   | 'pending'
@@ -57,20 +57,6 @@ export interface WorkflowRollupTaskSummary {
     isFixingWithAI?: boolean;
   };
 }
-
-export const TASK_STATUSES: readonly TaskStatus[] = [
-  'pending',
-  'running',
-  'fixing_with_ai',
-  'completed',
-  'failed',
-  'closed',
-  'needs_input',
-  'blocked',
-  'review_ready',
-  'awaiting_approval',
-  'stale',
-];
 
 export function createEmptyWorkflowTaskStatusCounts(): WorkflowTaskStatusCounts {
   return Object.fromEntries(TASK_STATUSES.map((status) => [status, 0])) as WorkflowTaskStatusCounts;
