@@ -16,6 +16,7 @@ State schema (see scripts/repro/fixtures/fake-gh/scenarios/*.json):
       "headRefOid": "<40-hex>", "mergeStateStatus": "DIRTY",
       "mergeable": "CONFLICTING", "labels": ["admin-bypass"],
       "reviewThreads": [], "checks": {"*": "SUCCESS", "PR Body": "FAILURE"}
+      # Or provide "statusCheckRollup": [{...raw check/status node...}, ...]
     }],
     "issue_comments": {"501": [ ...gh api issues/N/comments shape... ]},
     "job_logs": {"2": "job log text"}
@@ -76,6 +77,16 @@ def flag_value(name: str) -> str | None:
 
 
 def check_nodes(pr: dict) -> list[dict]:
+    raw_rollup = pr.get("statusCheckRollup")
+    if isinstance(raw_rollup, list):
+        return raw_rollup
+    if isinstance(raw_rollup, dict):
+        nodes = raw_rollup.get("nodes")
+        if isinstance(nodes, list):
+            return nodes
+        contexts = raw_rollup.get("contexts")
+        if isinstance(contexts, dict) and isinstance(contexts.get("nodes"), list):
+            return contexts["nodes"]
     checks = pr.get("checks") or {}
     default = checks.get("*")
     names: set[str] = {name for name in checks if name != "*"}

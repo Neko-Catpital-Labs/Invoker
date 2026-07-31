@@ -42,7 +42,7 @@ unresolved_bot_review_thread() {
   local repo_name="${TARGET_REPO#*/}"
   local query threads
   query='query($owner:String!, $name:String!, $number:Int!) { repository(owner:$owner, name:$name) { pullRequest(number:$number) { reviewThreads(first:100) { pageInfo { hasNextPage } nodes { id isResolved isOutdated comments(first:50) { nodes { author { login } } } } } } } }'
-  if ! threads="$(gh_json api graphql -f "owner=$owner" -f "name=$repo_name" -F "number=$pr_number" -f "query=$query")"; then
+  if ! threads="$(gh_json api graphql -f "owner=$owner" -f "name=$repo_name" -F "number=$pr_number" -f "query=$query" </dev/null)"; then
     log_line "PR #$pr_number: could not load review threads; skipping review-thread classifier"
     return 0
   fi
@@ -101,9 +101,35 @@ while IFS= read -r pr; do
     detail="GitHub reports a merge conflict against $(jq -r '.baseRefName' <<<"$pr")"
   fi
   if [ -z "$category" ]; then
-    failed_checks="$(jq -r '[.statusCheckRollup[]? | select((.conclusion // "") as $c
-      | $c == "FAILURE" or $c == "ERROR" or $c == "TIMED_OUT" or $c == "CANCELLED")
-      | .name] | unique | join(", ")' <<<"$pr")"
+    failed_checks="$(jq -r '
+      def norm_state:
+        (.conclusion // "" | ascii_upcase) as $conclusion
+        | (.status // "" | ascii_upcase) as $status
+        | if ($conclusion == "SUCCESS" or $conclusion == "SKIPPED" or $conclusion == "NEUTRAL") then "ok"
+          elif ($conclusion == "FAILURE" or $conclusion == "ERROR" or $conclusion == "TIMED_OUT" or $conclusion == "CANCELLED" or $conclusion == "ACTION_REQUIRED" or $conclusion == "STARTUP_FAILURE") then "failure"
+          elif ($status != "" and $status != "COMPLETED") then "pending"
+          else "pending"
+          end;
+      def state_rank:
+        if . == "failure" then 0
+        elif . == "pending" then 1
+        else 2
+        end;
+      [
+        .statusCheckRollup[]?
+        | select((.name // "") != "")
+        | {
+            name: .name,
+            at: (.completedAt // .startedAt // ""),
+            state: norm_state
+          }
+        | . + {rank: (.state | state_rank)}
+      ]
+      | sort_by(.name, .at, .rank)
+      | group_by(.name)
+      | map(.[-1] | select(.state == "failure") | .name)
+      | join(", ")
+    ' <<<"$pr")"
     if [ -n "$failed_checks" ]; then
       category="failed_checks"
       detail="$failed_checks"
