@@ -622,9 +622,21 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
-def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
+def _candidate_prs(facts: StackFacts, pr_numbers: Collection[int] | None = None) -> tuple[PrSnapshot, ...]:
+    if pr_numbers is None:
+        return facts.stack.prs
+    allowed = frozenset(pr_numbers)
+    return tuple(pr for pr in facts.stack.prs if pr.number in allowed)
+
+
+def plan_mergify_queue_repairs(
+    facts: StackFacts,
+    ledger: Ledger,
+    max_repair_attempts: int,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
     del max_repair_attempts
-    for pr in facts.stack.prs:
+    for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
@@ -635,8 +647,13 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
     return None
 
 
-def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
-    for pr in facts.stack.prs:
+def plan_direct_repairs(
+    facts: StackFacts,
+    ledger: Ledger,
+    max_repair_attempts: int,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
+    for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
@@ -653,8 +670,13 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
     return None
 
 
-def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
-    for pr in facts.stack.prs:
+def plan_bot_thread_repairs(
+    facts: StackFacts,
+    ledger: Ledger,
+    max_repair_attempts: int,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
+    for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
@@ -670,8 +692,12 @@ def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attemp
     return None
 
 
-def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
-    for pr in facts.stack.prs:
+def plan_hard_blockers(
+    facts: StackFacts,
+    ledger: Ledger,
+    pr_numbers: Collection[int] | None = None,
+) -> Action | None:
+    for pr in _candidate_prs(facts, pr_numbers):
         for blocker in facts.blockers_by_pr[pr.number]:
             if blocker.kind == "pending_check":
                 return None
@@ -781,6 +807,25 @@ def plan_actions_from_facts(
 ) -> tuple[Action, ...]:
     if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
         return ()
+    if facts.bottom:
+        bottom_pr_numbers = (facts.bottom.number,)
+        action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        if action is not None:
+            return (action,)
+        action = plan_direct_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        if action is not None:
+            return (action,)
+        action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        if action is not None:
+            return (action,)
+        action = plan_hard_blockers(facts, ledger, bottom_pr_numbers)
+        if action is not None:
+            return (action,)
+        if _bottom_has_pending_or_human_blocker(facts):
+            return ()
+        action = plan_bottom_progress(facts, ledger, max_requeue_attempts)
+        if action is not None:
+            return (action,)
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)
