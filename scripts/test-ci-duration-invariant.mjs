@@ -2,12 +2,19 @@
 import { readFileSync } from 'node:fs';
 import YAML from 'yaml';
 
-const MAX_PR_FACING_TIMEOUT_MINUTES = 5;
+const MAX_DEFAULT_PR_FACING_TIMEOUT_MINUTES = 5;
 
-const BUDGETED_JOBS = new Set([
-  'quality-required',
-  'ui-vitest',
-  'quality-extra',
+const PR_FACING_TIMEOUT_BUDGETS = new Map([
+  ['quality-required', { maxMinutes: MAX_DEFAULT_PR_FACING_TIMEOUT_MINUTES }],
+  [
+    'ui-vitest',
+    {
+      maxMinutes: 10,
+      runnerLabel: 'Runner_Vitest',
+      runCommand: 'pnpm --filter @invoker/ui test',
+    },
+  ],
+  ['quality-extra', { maxMinutes: MAX_DEFAULT_PR_FACING_TIMEOUT_MINUTES }],
 ]);
 
 const MAX_PLAYWRIGHT_TIMEOUT_MINUTES = 30;
@@ -35,19 +42,32 @@ function assert(condition, message) {
   if (!condition) errors.push(message);
 }
 
-for (const jobName of BUDGETED_JOBS) {
+for (const [jobName, budget] of PR_FACING_TIMEOUT_BUDGETS) {
   const job = jobs[jobName];
   assert(job, `Missing budgeted CI job ${jobName}`);
   if (!job) continue;
   const timeout = job['timeout-minutes'];
   assert(
     typeof timeout === 'number',
-    `${jobName} must declare timeout-minutes (expected <= ${MAX_PR_FACING_TIMEOUT_MINUTES})`,
+    `${jobName} must declare timeout-minutes (expected <= ${budget.maxMinutes})`,
   );
   assert(
-    timeout <= MAX_PR_FACING_TIMEOUT_MINUTES,
-    `${jobName} timeout-minutes=${timeout} exceeds hard invariant of ${MAX_PR_FACING_TIMEOUT_MINUTES} minutes`,
+    timeout <= budget.maxMinutes,
+    `${jobName} timeout-minutes=${timeout} exceeds hard invariant of ${budget.maxMinutes} minutes`,
   );
+  if (budget.runnerLabel) {
+    assert(
+      job['runs-on']?.labels === budget.runnerLabel,
+      `${jobName} must stay on ${budget.runnerLabel} when using a ${budget.maxMinutes}-minute budget`,
+    );
+  }
+  if (budget.runCommand) {
+    const commands = (job.steps ?? []).map((step) => step?.run).filter(Boolean);
+    assert(
+      commands.includes(budget.runCommand),
+      `${jobName} must stay scoped to ${budget.runCommand}`,
+    );
+  }
 }
 
 const playwright = jobs.playwright;
@@ -86,11 +106,11 @@ if (playwright) {
 }
 
 for (const [jobName, job] of Object.entries(jobs)) {
-  if (BUDGETED_JOBS.has(jobName) || EXEMPT_JOBS.has(jobName)) continue;
+  if (PR_FACING_TIMEOUT_BUDGETS.has(jobName) || EXEMPT_JOBS.has(jobName)) continue;
   const timeout = job?.['timeout-minutes'];
-  if (typeof timeout === 'number' && timeout > MAX_PR_FACING_TIMEOUT_MINUTES) {
+  if (typeof timeout === 'number' && timeout > MAX_DEFAULT_PR_FACING_TIMEOUT_MINUTES) {
     errors.push(
-      `Unknown job ${jobName} has timeout-minutes=${timeout}. Add it to BUDGETED_JOBS (must be <= ${MAX_PR_FACING_TIMEOUT_MINUTES}) or EXEMPT_JOBS.`,
+      `Unknown job ${jobName} has timeout-minutes=${timeout}. Add it to PR_FACING_TIMEOUT_BUDGETS (must be <= ${MAX_DEFAULT_PR_FACING_TIMEOUT_MINUTES} unless explicitly justified) or EXEMPT_JOBS.`,
     );
   }
 }
@@ -102,5 +122,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `CI duration invariant ok: budgeted jobs <= ${MAX_PR_FACING_TIMEOUT_MINUTES}m; playwright <= ${MAX_PLAYWRIGHT_TIMEOUT_MINUTES}m; hitch e2e shards present.`,
+  `CI duration invariant ok: PR quality jobs <= ${MAX_DEFAULT_PR_FACING_TIMEOUT_MINUTES}m; UI Vitest <= 10m on Runner_Vitest; playwright <= ${MAX_PLAYWRIGHT_TIMEOUT_MINUTES}m; hitch e2e shards present.`,
 );
