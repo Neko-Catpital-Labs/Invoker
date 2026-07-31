@@ -3,7 +3,7 @@ import type { Logger, WorkResponse } from '@invoker/contracts';
 import type { Workflow } from '@invoker/data-store';
 import { Channels, type MessageBus } from '@invoker/transport';
 import type { TaskDelta, TaskState } from '@invoker/workflow-core';
-import { applyDelta, recoverQuarantinedTask, TaskSnapshotCache } from '../delta-merge.js';
+import { applyDelta, recoverQuarantinedTask, recoveryFound, recoveryMissing, TaskSnapshotCache } from '../delta-merge.js';
 import { evaluateExecutingStall, taskNeedsExecutingStallCheck } from '../executing-stall.js';
 import { persistShutdownDiagnostic, type ShutdownDiagnosticDb } from '../shutdown-diagnostic.js';
 import type { TaskGraphEventPublisher } from '../task-graph-event-publisher.js';
@@ -158,8 +158,14 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
     for (const taskId of quarantined) {
       deps.logger.info(`[gap-detect] quarantined task="${taskId}" — triggering authoritative reload`, { module: 'delta-merge' });
       const { rendererDelta } = recoverQuarantinedTask(lastKnownTaskStates, taskId, {
-        loadTask: (recoveryTaskId) => deps.persistence.loadTask(recoveryTaskId),
-        getMergeNode: (workflowId) => deps.getOrchestrator().getMergeNode(workflowId),
+        loadTask: (recoveryTaskId) => {
+          const task = deps.persistence.loadTask(recoveryTaskId);
+          return task ? recoveryFound(task) : recoveryMissing();
+        },
+        getMergeNode: (workflowId) => {
+          const task = deps.getOrchestrator().getMergeNode(workflowId);
+          return task ? recoveryFound(task) : recoveryMissing();
+        },
       });
       if (rendererDelta) {
         rendererDeltas.push(rendererDelta);
