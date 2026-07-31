@@ -1,14 +1,14 @@
 import { test, expect, captureScreenshot, loadPlan } from './fixtures/electron-app.js';
 
-const BASE_BRANCH_NORMALIZATION_PLAN = {
-  name: 'Base branch normalization proof',
+const EXPLICIT_BASE_BRANCH_PLAN = {
+  name: 'Explicit base branch proof',
   repoUrl: 'https://github.com/Neko-Catpital-Labs/Invoker',
   baseBranch: 'release',
   onFinish: 'pull_request' as const,
   mergeMode: 'external_review' as const,
   tasks: [
     {
-      id: 'base-branch-proof-task',
+      id: 'explicit-base-branch-proof-task',
       description: 'Single task to generate merge gate',
       command: 'echo proof',
       dependencies: [] as string[],
@@ -16,9 +16,9 @@ const BASE_BRANCH_NORMALIZATION_PLAN = {
   ],
 };
 
-test('loading a non-master plan base shows the normalized master value', async ({ page }) => {
-  await loadPlan(page, BASE_BRANCH_NORMALIZATION_PLAN);
-  await page.locator('.react-flow__node[data-testid$="base-branch-proof-task"]').first().waitFor({ state: 'visible', timeout: 15000 });
+test('loading a non-master plan base shows the explicit base ref', async ({ page }) => {
+  await loadPlan(page, EXPLICIT_BASE_BRANCH_PLAN);
+  await page.locator('.react-flow__node[data-testid$="explicit-base-branch-proof-task"]').first().waitFor({ state: 'visible', timeout: 15000 });
 
   const mergeGateTaskId = await page.evaluate(async () => {
     const result = await window.invoker.getTasks();
@@ -34,7 +34,7 @@ test('loading a non-master plan base shows the normalized master value', async (
 
   await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
   await expect(page.getByText('Base Ref')).toBeVisible();
-  await expect(page.getByTestId('base-ref-input')).toHaveValue('master');
+  await expect(page.getByTestId('base-ref-input')).toHaveValue('release');
 
-  await captureScreenshot(page, 'base-branch-normalized-to-master');
+  await captureScreenshot(page, 'base-branch-explicit-base-preserved');
 });

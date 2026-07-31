@@ -786,7 +786,7 @@ export function WorkflowInspector({
                     className="min-w-0 w-full rounded border border-border-strong bg-muted px-2 py-1 text-right font-mono text-xs text-foreground focus:border-border-strong focus:outline-none"
                   />
                   <div data-testid="base-ref-help" className="text-[11px] text-muted-foreground">
-                    Pinned to master for review gates.
+                    Defaults to master; explicit refs are preserved.
                   </div>
                 </div>
               </label>
@@ -800,7 +800,7 @@ export function WorkflowInspector({
                   >
                     {workflow?.baseBranch ?? 'n/a'}
                   </div>
-                  <div className="text-[11px] text-muted-foreground">Pinned to master for review gates.</div>
+                  <div className="text-[11px] text-muted-foreground">Defaults to master; explicit refs are preserved.</div>
                 </div>
               </div>
             )}

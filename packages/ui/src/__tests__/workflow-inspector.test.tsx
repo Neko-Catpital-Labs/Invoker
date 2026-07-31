@@ -158,7 +158,7 @@ describe('WorkflowInspector', () => {
     const input = screen.getByTestId('base-ref-input');
     expect(screen.getByText('Base Ref')).toBeInTheDocument();
     expect(input).toHaveValue('origin/main');
-    expect(screen.getByTestId('base-ref-help')).toHaveTextContent('Pinned to master for review gates.');
+    expect(screen.getByTestId('base-ref-help')).toHaveTextContent('Defaults to master; explicit refs are preserved.');
 
     fireEvent.change(input, { target: { value: 'upstream/release' } });
     fireEvent.blur(input);
