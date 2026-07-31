@@ -49,7 +49,12 @@ import {
 } from '@invoker/planning-core';
 import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningCommandBuilder } from '@invoker/surfaces';
 import type { InvokerConfig } from './config.js';
-import { ensurePlanningWorktreeReady, provisionPlanningWorktree, type PlanningRepoPool } from './planning-chat-worktree.js';
+import {
+  ensurePlanningWorktreeReady,
+  provisionPlanningWorktree,
+  releasePlanningWorktree,
+  type PlanningRepoPool,
+} from './planning-chat-worktree.js';
 
 function logPlanningWorktreeReadyError(sessionId: string, step: string, error: unknown): void {
   console.error(`[planning-chat] ensurePlanningWorktreeReady ${step} failed session="${sessionId}": ${
@@ -1266,6 +1271,7 @@ export interface PlanningChatDeleteDeps {
   planningSessionStore?: Pick<InAppPlanningSessionStore, 'deleteInAppPlanningSession'>;
   conversationRepo?: Pick<ConversationRepository, 'deleteConversation'>;
   closeTerminal?: (terminalSessionId: string) => void;
+  repoPool?: Pick<PlanningRepoPool, 'acquireWorktree'>;
   logger?: PlanningChatDeleteLogger;
 }
 
@@ -1285,65 +1291,76 @@ function logPlanningChatDeleteError(
   console.error(`[planning-chat] ${message}`);
 }
 
-function runPlanningChatDeleteStep(
+async function runPlanningChatDeleteStep(
   deps: Pick<PlanningChatDeleteDeps, 'logger'>,
   sessionId: string,
   step: string,
-  cleanup: () => void,
-): void {
+  cleanup: () => void | Promise<void>,
+): Promise<void> {
   try {
-    cleanup();
+    await cleanup();
   } catch (error) {
     logPlanningChatDeleteError(deps, sessionId, step, error);
   }
 }
 
-function cleanupPlanningChatSession(
+async function cleanupPlanningChatSession(
   sessionId: string,
   session: InAppPlanningChatSession | undefined,
   deps: PlanningChatDeleteDeps,
-): void {
+): Promise<void> {
   const terminalSessionId = session?.terminalSessionId;
   if (terminalSessionId) {
-    runPlanningChatDeleteStep(deps, sessionId, 'close-terminal', () => {
+    await runPlanningChatDeleteStep(deps, sessionId, 'close-terminal', () => {
       deps.closeTerminal?.(terminalSessionId);
     });
   }
 
-  runPlanningChatDeleteStep(deps, sessionId, 'delete-memory-session', () => {
+  const repoPool = deps.repoPool;
+  const repoUrl = session?.repoUrl;
+  const baseCommit = session?.baseCommit;
+  if (repoPool && repoUrl && baseCommit) {
+    await runPlanningChatDeleteStep(deps, sessionId, 'release-worktree', () => releasePlanningWorktree(repoPool, {
+      repoUrl,
+      baseCommit,
+      sessionId,
+    }));
+  }
+
+  await runPlanningChatDeleteStep(deps, sessionId, 'delete-memory-session', () => {
     deps.sessions.delete(sessionId);
   });
-  runPlanningChatDeleteStep(deps, sessionId, 'delete-persisted-planning-session', () => {
+  await runPlanningChatDeleteStep(deps, sessionId, 'delete-persisted-planning-session', () => {
     deps.planningSessionStore?.deleteInAppPlanningSession(sessionId);
   });
-  runPlanningChatDeleteStep(deps, sessionId, 'delete-override-conversation', () => {
+  await runPlanningChatDeleteStep(deps, sessionId, 'delete-override-conversation', () => {
     deps.conversationRepo?.deleteConversation(sessionId);
   });
 }
 
-export function deletePlanningChat(
+export async function deletePlanningChat(
   request: InAppPlanningDeleteRequest,
   deps: PlanningChatDeleteDeps,
-): InAppPlanningDeleteResponse {
+): Promise<InAppPlanningDeleteResponse> {
   const sessionId = typeof request?.sessionId === 'string' ? request.sessionId.trim() : '';
   if (!sessionId) {
     return { ok: false, error: 'Planning session id is required.' };
   }
 
-  cleanupPlanningChatSession(sessionId, deps.sessions.get(sessionId), deps);
+  await cleanupPlanningChatSession(sessionId, deps.sessions.get(sessionId), deps);
   return { ok: true };
 }
 
-export function deleteSubmittedPlanningChats(
+export async function deleteSubmittedPlanningChats(
   deps: PlanningChatDeleteDeps,
-): InAppPlanningDeleteSubmittedResponse {
+): Promise<InAppPlanningDeleteSubmittedResponse> {
   const submittedSessions = [...deps.sessions.values()]
     .filter((session) => session.status === 'submitted')
     .map((session) => ({ id: session.id, session }));
   const deletedSessionIds = submittedSessions.map(({ id }) => id);
 
   for (const { id, session } of submittedSessions) {
-    cleanupPlanningChatSession(id, session, deps);
+    await cleanupPlanningChatSession(id, session, deps);
   }
 
   return { ok: true, deletedSessionIds };

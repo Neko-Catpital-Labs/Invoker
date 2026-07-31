@@ -1221,6 +1221,7 @@ function startHeadlessMode(): void {
               planningSessionStore: readOnlyMode ? undefined : persistence,
               conversationRepo: planningConversationRepo,
               logger,
+              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
           case 'invoker:planning-chat-delete-submitted': {
@@ -1229,6 +1230,7 @@ function startHeadlessMode(): void {
               planningSessionStore: readOnlyMode ? undefined : persistence,
               conversationRepo: planningConversationRepo,
               logger,
+              repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
             });
           }
           case 'invoker:load-plan': {
@@ -3082,6 +3084,7 @@ startMainProcessBootstrap({
         conversationRepo: guiPlanningConversationRepo,
         closeTerminal: closePlanningTerminalSession,
         logger,
+        repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
       });
     });
     registrars.registerGuiMutationHandler('invoker:planning-chat-delete-submitted', async () => {
@@ -3091,6 +3094,7 @@ startMainProcessBootstrap({
         conversationRepo: guiPlanningConversationRepo,
         closeTerminal: closePlanningTerminalSession,
         logger,
+        repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
       });
     });
     if (ownerMode) {

@@ -6,18 +6,31 @@ import {
 } from '../in-app-planner.js';
 
 describe('planning chat deletion', () => {
-  it('closes the terminal and deletes memory, store, and override conversation', () => {
+  it('closes the terminal, releases the worktree, and deletes memory, store, and override conversation', async () => {
     const sessions = createInAppPlanningChatSessions();
     sessions.set('plan-1', {
       id: 'plan-1',
       status: 'draft_ready',
       terminalSessionId: 'term-1',
+      repoUrl: 'https://example.com/repo.git',
+      baseCommit: 'base-sha',
     });
     const calls: string[] = [];
+    const release = vi.fn(async () => {
+      calls.push('release-worktree');
+    });
+    const acquireWorktree = vi.fn(async () => ({
+      clonePath: '/clone/path',
+      worktreePath: '/worktrees/plan-1',
+      branch: 'invoker/planning/plan-1',
+      release,
+      softRelease: vi.fn(),
+    }));
 
-    const result = deletePlanningChat({ sessionId: 'plan-1' }, {
+    const result = await deletePlanningChat({ sessionId: 'plan-1' }, {
       sessions,
       closeTerminal: (id) => calls.push(`close:${id}`),
+      repoPool: { acquireWorktree },
       planningSessionStore: {
         deleteInAppPlanningSession: (id) => calls.push(`store:${id}`),
       },
@@ -28,18 +41,26 @@ describe('planning chat deletion', () => {
 
     expect(result).toEqual({ ok: true });
     expect(sessions.has('plan-1')).toBe(false);
+    expect(acquireWorktree).toHaveBeenCalledWith(
+      'https://example.com/repo.git',
+      'invoker/planning/plan-1',
+      'base-sha',
+      'plan-1',
+    );
+    expect(release).toHaveBeenCalledTimes(1);
     expect(calls).toEqual([
       'close:term-1',
+      'release-worktree',
       'store:plan-1',
       'conversation:plan-1',
     ]);
   });
 
-  it('best-effort deletes persisted rows for an unknown session', () => {
+  it('best-effort deletes persisted rows for an unknown session', async () => {
     const sessions = createInAppPlanningChatSessions();
     const calls: string[] = [];
 
-    const result = deletePlanningChat({ sessionId: 'missing' }, {
+    const result = await deletePlanningChat({ sessionId: 'missing' }, {
       sessions,
       closeTerminal: (id) => calls.push(`close:${id}`),
       planningSessionStore: {
@@ -54,16 +75,43 @@ describe('planning chat deletion', () => {
     expect(calls).toEqual(['store:missing', 'conversation:missing']);
   });
 
-  it('deletes only submitted sessions in bulk from a snapshot', () => {
+  it('deletes only submitted sessions in bulk from a snapshot', async () => {
     const sessions = createInAppPlanningChatSessions();
-    sessions.set('draft', { id: 'draft', status: 'draft_ready', terminalSessionId: 'term-draft' });
-    sessions.set('submitted-1', { id: 'submitted-1', status: 'submitted', terminalSessionId: 'term-1' });
-    sessions.set('submitted-2', { id: 'submitted-2', status: 'submitted' });
+    sessions.set('draft', {
+      id: 'draft',
+      status: 'draft_ready',
+      terminalSessionId: 'term-draft',
+      repoUrl: 'https://example.com/repo.git',
+      baseCommit: 'base-draft',
+    });
+    sessions.set('submitted-1', {
+      id: 'submitted-1',
+      status: 'submitted',
+      terminalSessionId: 'term-1',
+      repoUrl: 'https://example.com/repo.git',
+      baseCommit: 'base-one',
+    });
+    sessions.set('submitted-2', {
+      id: 'submitted-2',
+      status: 'submitted',
+      repoUrl: 'https://example.com/repo.git',
+      baseCommit: 'base-two',
+    });
     const calls: string[] = [];
+    const acquireWorktree = vi.fn(async (_repoUrl: string, branch: string) => ({
+      clonePath: '/clone/path',
+      worktreePath: `/worktrees/${branch}`,
+      branch,
+      release: vi.fn(async () => {
+        calls.push(`release:${branch}`);
+      }),
+      softRelease: vi.fn(),
+    }));
 
-    const result = deleteSubmittedPlanningChats({
+    const result = await deleteSubmittedPlanningChats({
       sessions,
       closeTerminal: (id) => calls.push(`close:${id}`),
+      repoPool: { acquireWorktree },
       planningSessionStore: {
         deleteInAppPlanningSession: (id) => calls.push(`store:${id}`),
       },
@@ -74,16 +122,19 @@ describe('planning chat deletion', () => {
 
     expect(result).toEqual({ ok: true, deletedSessionIds: ['submitted-1', 'submitted-2'] });
     expect([...sessions.keys()]).toEqual(['draft']);
+    expect(acquireWorktree).toHaveBeenCalledTimes(2);
     expect(calls).toEqual([
       'close:term-1',
+      'release:invoker/planning/submitted-1',
       'store:submitted-1',
       'conversation:submitted-1',
+      'release:invoker/planning/submitted-2',
       'store:submitted-2',
       'conversation:submitted-2',
     ]);
   });
 
-  it('logs cleanup errors and continues remaining steps', () => {
+  it('logs cleanup errors and continues remaining steps', async () => {
     const sessions = createInAppPlanningChatSessions();
     sessions.set('plan-1', {
       id: 'plan-1',
@@ -93,7 +144,7 @@ describe('planning chat deletion', () => {
     const logger = { error: vi.fn() };
     const calls: string[] = [];
 
-    const result = deletePlanningChat({ sessionId: 'plan-1' }, {
+    const result = await deletePlanningChat({ sessionId: 'plan-1' }, {
       sessions,
       closeTerminal: () => {
         throw new Error('tmux failed');
@@ -112,6 +163,42 @@ describe('planning chat deletion', () => {
     expect(calls).toEqual(['store:plan-1', 'conversation:plan-1']);
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining('delete planning chat failed session="plan-1" step="close-terminal": tmux failed'),
+      { module: 'planning-chat' },
+    );
+  });
+
+  it('logs worktree release errors and still deletes the session records', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set('plan-1', {
+      id: 'plan-1',
+      status: 'submitted',
+      repoUrl: 'https://example.com/repo.git',
+      baseCommit: 'base-sha',
+    });
+    const logger = { error: vi.fn() };
+    const calls: string[] = [];
+
+    const result = await deletePlanningChat({ sessionId: 'plan-1' }, {
+      sessions,
+      repoPool: {
+        acquireWorktree: vi.fn(async () => {
+          throw new Error('release failed');
+        }),
+      },
+      planningSessionStore: {
+        deleteInAppPlanningSession: (id) => calls.push(`store:${id}`),
+      },
+      conversationRepo: {
+        deleteConversation: (id) => calls.push(`conversation:${id}`),
+      },
+      logger,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(sessions.has('plan-1')).toBe(false);
+    expect(calls).toEqual(['store:plan-1', 'conversation:plan-1']);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('delete planning chat failed session="plan-1" step="release-worktree": release failed'),
       { module: 'planning-chat' },
     );
   });
