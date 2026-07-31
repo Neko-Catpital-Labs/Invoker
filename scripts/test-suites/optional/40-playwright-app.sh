@@ -8,6 +8,30 @@ sanitize_label() {
   printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
 }
 
+resolve_git_metadata_dir() {
+  if [ -d "$ROOT/.git" ]; then
+    printf '%s/.git' "$ROOT"
+    return
+  fi
+
+  local git_dir
+  git_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+  if [ -z "$git_dir" ]; then
+    git_dir="$(git -C "$ROOT" rev-parse --git-dir 2>/dev/null || true)"
+    case "$git_dir" in
+      /*|'') ;;
+      *) git_dir="$ROOT/$git_dir" ;;
+    esac
+  fi
+
+  if [ -n "$git_dir" ]; then
+    printf '%s' "$git_dir"
+    return
+  fi
+
+  printf '%s/.git' "$ROOT"
+}
+
 PLAYWRIGHT_ARGS=()
 if [ -n "${INVOKER_PLAYWRIGHT_SHARD:-}" ]; then
   PLAYWRIGHT_ARGS+=( "--shard=${INVOKER_PLAYWRIGHT_SHARD}" )
@@ -37,7 +61,8 @@ elif [ -n "${INVOKER_PLAYWRIGHT_SHARD_INDEX:-}" ] && [ -n "${INVOKER_PLAYWRIGHT_
 fi
 RUN_LABEL="$(sanitize_label "$RUN_LABEL")"
 
-ARTIFACT_ROOT="$ROOT/.git/playwright-artifacts/$RUN_LABEL"
+GIT_METADATA_DIR="$(resolve_git_metadata_dir)"
+ARTIFACT_ROOT="$GIT_METADATA_DIR/playwright-artifacts/$RUN_LABEL"
 mkdir -p "$ARTIFACT_ROOT"
 
 export INVOKER_E2E_BARE_REPO="${INVOKER_E2E_BARE_REPO:-/tmp/invoker-e2e-repo-${RUN_LABEL}.git}"
