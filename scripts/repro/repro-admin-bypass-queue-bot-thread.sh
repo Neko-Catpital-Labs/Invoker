@@ -68,6 +68,16 @@ state = {
                             {"author": {"login": "EdbertChan"}},
                         ]
                     },
+                },
+                {
+                    "id": "PRRT_bot_6575_followup",
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": {
+                        "nodes": [
+                            {"author": {"login": "coderabbitai[bot]"}},
+                        ]
+                    },
                 }
             ],
             "checks": {"*": "SUCCESS"},
@@ -106,5 +116,16 @@ grep -q "bot review thread" "$plan" \
 
 grep -q "exec --no-track -- run .*repair-pr-6575.yaml" "$NODE_LOG" \
   || fail "expected Invoker run submission through headless IPC" "$(cat "$NODE_LOG")"
+
+rm -f "$plan"
+: > "$NODE_LOG"
+out="$(run_cron)" || fail "second cron exited non-zero" "$out"
+echo "$out" | grep -q "PR #6575: submitted ad-hoc repair plan (category=bot_review_thread" \
+  || fail "expected second bot review thread to submit an ad-hoc repair plan" "$out"
+[ -f "$plan" ] || fail "expected second repair plan file for #6575" "$out"
+grep -q "unresolved bot review thread PRRT_bot_6575_followup" "$plan" \
+  || fail "second plan did not name the next unresolved bot thread" "$(cat "$plan")"
+grep -q "exec --no-track -- run .*repair-pr-6575.yaml" "$NODE_LOG" \
+  || fail "expected second Invoker run submission through headless IPC" "$(cat "$NODE_LOG")"
 
 echo "[repro] passed"

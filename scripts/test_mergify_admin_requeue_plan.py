@@ -418,6 +418,43 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(blockers[0]["kind"], "repair_delegated")
         self.assertIn("repair already delegated for current head", blockers[0]["detail"])
 
+    def test_delegated_bot_thread_does_not_hide_next_bottom_bot_thread(self):
+        ledger = self._ledger()
+        ledger.record("repair-delegated", 6579, HEAD, "PRRT_delegated", 1)
+        bottom = pr(
+            number=6579,
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            review_threads=(
+                m.ReviewThread("PRRT_delegated", False, ("coderabbitai[bot]",)),
+                m.ReviewThread("PRRT_next", False, ("coderabbitai[bot]",)),
+            ),
+            latest_mergify=event(state="dequeued", comment_id="m6579"),
+        )
+        upper = pr(
+            number=6536,
+            base_ref_name=bottom.head_ref_name,
+            head_ref_name="stack/top",
+            head_ref_oid="b" * 40,
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom, upper)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6579, 6536},
+            open_pr_numbers_by_head={bottom.head_ref_name: (6579,), upper.head_ref_name: (6536,)},
+        )
+        self.assertEqual(
+            [(action.kind, action.pr_number, action.key) for action in plan.actions],
+            [("repair_check", 6579, "bot_review_thread:PRRT_next")],
+        )
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "repair_delegated")
+        self.assertEqual(blockers[1]["kind"], "bot_review_thread")
+
     def test_clean_unaccepted_upper_stack_posts_exact_human_blocker_once(self):
         ledger = self._ledger()
         bottom = pr(

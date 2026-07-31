@@ -601,6 +601,14 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
+def _pr_has_in_flight_repair_blocker(facts: StackFacts, pr_number: int) -> bool:
+    return any(
+        blocker.pr_number == pr_number
+        and blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS
+        for blocker in facts.all_blockers
+    )
+
+
 def _candidate_prs(facts: StackFacts, pr_numbers: Collection[int] | None = None) -> tuple[PrSnapshot, ...]:
     if pr_numbers is None:
         return facts.stack.prs
@@ -784,10 +792,16 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
-    if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
-        return ()
     if facts.bottom:
         bottom_pr_numbers = (facts.bottom.number,)
+        if _pr_has_in_flight_repair_blocker(facts, facts.bottom.number):
+            action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+            if action is not None:
+                return (action,)
+            action = plan_hard_blockers(facts, ledger, bottom_pr_numbers)
+            if action is not None:
+                return (action,)
+            return ()
         action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
         if action is not None:
             return (action,)

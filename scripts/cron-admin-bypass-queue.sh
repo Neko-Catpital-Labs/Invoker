@@ -61,7 +61,21 @@ unresolved_bot_review_thread() {
           )
         | .id
       end
-  ' <<<"$threads" | sed -n '1p'
+  ' <<<"$threads"
+}
+
+fingerprint_for() {
+  local head_oid="${1:?head oid required}"
+  local category="${2:?category required}"
+  local detail="${3:?detail required}"
+  local fingerprint
+  if command -v shasum >/dev/null 2>&1; then
+    fingerprint="$(printf '%s|%s|%s' "$head_oid" "$category" "$detail" | shasum -a 256)"
+  else
+    fingerprint="$(printf '%s|%s|%s' "$head_oid" "$category" "$detail" | sha256sum)"
+  fi
+  fingerprint="${fingerprint%% *}"
+  printf '%s\n' "${fingerprint:0:16}"
 }
 
 # Repros pass INVOKER_ADMIN_BYPASS_QUEUE_PLAN_DIR to inspect submitted plans; a
@@ -85,6 +99,7 @@ submitted=0
 while IFS= read -r pr; do
   [ -z "$pr" ] && continue
   num="$(jq -r '.number' <<<"$pr")"
+  head_oid="$(jq -r '.headRefOid' <<<"$pr")"
 
   if [ "$(jq -r '.isDraft' <<<"$pr")" = "true" ]; then
     log_line "PR #$num: draft; skipping"
@@ -114,10 +129,22 @@ while IFS= read -r pr; do
     detail="a reviewer requested changes; address the open feedback"
   fi
   if [ -z "$category" ]; then
-    bot_thread="$(unresolved_bot_review_thread "$num")"
-    if [ -n "$bot_thread" ]; then
+    first_submitted_bot_thread=""
+    while IFS= read -r bot_thread; do
+      [ -n "$bot_thread" ] || continue
+      bot_detail="unresolved bot review thread $bot_thread"
+      bot_fingerprint="$(fingerprint_for "$head_oid" "bot_review_thread" "$bot_detail")"
+      if ledger_marker_seen queue-submitted "$num" "$bot_fingerprint"; then
+        first_submitted_bot_thread="${first_submitted_bot_thread:-$bot_thread}"
+        continue
+      fi
       category="bot_review_thread"
-      detail="unresolved bot review thread $bot_thread"
+      detail="$bot_detail"
+      break
+    done < <(unresolved_bot_review_thread "$num")
+    if [ -z "$category" ] && [ -n "$first_submitted_bot_thread" ]; then
+      category="bot_review_thread"
+      detail="unresolved bot review thread $first_submitted_bot_thread"
     fi
   fi
   if [ -z "$category" ]; then
@@ -125,11 +152,7 @@ while IFS= read -r pr; do
     continue
   fi
 
-  head_oid="$(jq -r '.headRefOid' <<<"$pr")"
-  fingerprint="$(printf '%s|%s|%s' "$head_oid" "$category" "$detail" \
-    | shasum -a 256 2>/dev/null || printf '%s|%s|%s' "$head_oid" "$category" "$detail" | sha256sum)"
-  fingerprint="${fingerprint%% *}"
-  fingerprint="${fingerprint:0:16}"
+  fingerprint="$(fingerprint_for "$head_oid" "$category" "$detail")"
 
   if ledger_marker_seen queue-submitted "$num" "$fingerprint"; then
     log_line "PR #$num: repair already submitted for this head-state ($fingerprint); waiting"
