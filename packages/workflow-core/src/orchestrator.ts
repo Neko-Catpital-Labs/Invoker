@@ -450,6 +450,7 @@ export function descriptionForMergeNode(plan: Pick<PlanDefinition, 'name' | 'onF
  */
 const LIVE_TASK_STATUSES = new Set<string>([
   'pending',
+  'queued',
   'running',
   'fixing_with_ai',
   'needs_input',
