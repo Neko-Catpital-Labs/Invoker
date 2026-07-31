@@ -1379,7 +1379,11 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   });
 
   if (process.env.NODE_ENV === 'test') {
-    const injectTaskStates = async (updates: Array<{ taskId: string; changes: TaskStateChanges }>): Promise<void> => {
+    type InjectTaskStatesOptions = { syncOrchestrator?: boolean };
+    const injectTaskStates = async (
+      updates: Array<{ taskId: string; changes: TaskStateChanges }>,
+      options: InjectTaskStatesOptions = {},
+    ): Promise<void> => {
       for (const { taskId, changes } of updates) {
         const before = orchestrator.getTask(taskId);
         const previousSnapshot = rendererTaskFeed.getTaskSnapshot(taskId);
@@ -1399,13 +1403,15 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
           taskStateVersion: previousTaskStateVersion + 1,
         } satisfies TaskDelta);
       }
-      orchestrator.syncAllFromDb();
+      if (options.syncOrchestrator !== false) {
+        orchestrator.syncAllFromDb();
+      }
     };
     registerGuiMutationHandler(
       'invoker:inject-task-states',
-      async (updatesArg: unknown) => {
+      async (updatesArg: unknown, optionsArg: unknown) => {
         const updates = updatesArg as Array<{ taskId: string; changes: TaskStateChanges }>;
-        await injectTaskStates(updates);
+        await injectTaskStates(updates, optionsArg as InjectTaskStatesOptions | undefined);
       },
     );
     ipcMain.handle(

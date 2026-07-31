@@ -1299,10 +1299,13 @@ function startHeadlessMode(): void {
               throw new Error('inject-task-states is only available in tests');
             }
             const updates = payload.args[0] as Array<{ taskId: string; changes: TaskStateChanges }>;
+            const options = payload.args[1] as { syncOrchestrator?: boolean } | undefined;
             for (const { taskId, changes } of updates) {
               persistence.updateTask(taskId, changes);
             }
-            orchestrator.syncAllFromDb();
+            if (options?.syncOrchestrator !== false) {
+              orchestrator.syncAllFromDb();
+            }
             return undefined;
           }
           case 'invoker:seed-main-process-hitch-fixture': {

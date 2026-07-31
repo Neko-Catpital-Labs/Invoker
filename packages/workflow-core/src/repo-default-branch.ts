@@ -4,8 +4,11 @@ export const PINNED_WORKFLOW_BASE_BRANCH = 'master';
 
 export function normalizeWorkflowBaseBranch(branch?: string | null): string {
   const trimmed = branch?.trim();
-  if (trimmed) return trimmed;
-  return PINNED_WORKFLOW_BASE_BRANCH;
+  if (!trimmed) return PINNED_WORKFLOW_BASE_BRANCH;
+  if (trimmed === `origin/${PINNED_WORKFLOW_BASE_BRANCH}` || trimmed === `upstream/${PINNED_WORKFLOW_BASE_BRANCH}`) {
+    return PINNED_WORKFLOW_BASE_BRANCH;
+  }
+  return trimmed;
 }
 
 export function workflowBaseBranchNeedsMigration(branch?: string | null): boolean {

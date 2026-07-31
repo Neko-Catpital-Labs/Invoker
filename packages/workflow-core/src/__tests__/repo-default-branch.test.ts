@@ -18,7 +18,10 @@ describe('repo-default-branch', () => {
 
   it('preserves explicit workflow base branches and defaults blank values to master', () => {
     expect(repoDefaultBranch.normalizeWorkflowBaseBranch('plan/upstream-step')).toBe('plan/upstream-step');
+    expect(repoDefaultBranch.normalizeWorkflowBaseBranch('origin/release')).toBe('origin/release');
     expect(repoDefaultBranch.normalizeWorkflowBaseBranch('  release  ')).toBe('release');
+    expect(repoDefaultBranch.normalizeWorkflowBaseBranch('upstream/master')).toBe('master');
+    expect(repoDefaultBranch.normalizeWorkflowBaseBranch('origin/master')).toBe('master');
     expect(repoDefaultBranch.normalizeWorkflowBaseBranch('')).toBe('master');
     expect(repoDefaultBranch.normalizeWorkflowBaseBranch(undefined)).toBe('master');
     expect(repoDefaultBranch.workflowBaseBranchNeedsMigration('plan/upstream-step')).toBe(false);

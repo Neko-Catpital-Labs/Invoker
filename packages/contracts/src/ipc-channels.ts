@@ -1353,7 +1353,10 @@ export const IpcChannels = {
 
 export const IpcTestOnlyChannels = {
   'invoker:inject-task-states': {} as {
-    request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
+    request: [
+      updates: Array<{ taskId: string; changes: TaskStateChanges }>,
+      options?: { syncOrchestrator?: boolean },
+    ];
     response: void;
   },
   'invoker:set-test-plan-from-goal-response': {} as {

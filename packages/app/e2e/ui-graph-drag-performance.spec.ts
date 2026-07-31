@@ -53,6 +53,12 @@ interface DragStartPoint {
   y: number;
 }
 
+interface DuringDragWorkHandle {
+  wait: () => Promise<unknown>;
+}
+
+type DuringDragWork = Promise<unknown> | DuringDragWorkHandle | void;
+
 declare global {
   interface Window {
     __invokerDragPerf?: {
@@ -62,7 +68,12 @@ declare global {
       frames: number[];
       transforms: string[];
     };
+    __invokerDragUpdateWork?: Promise<number>;
   }
+}
+
+function isDuringDragWorkHandle(value: unknown): value is DuringDragWorkHandle {
+  return typeof value === 'object' && value !== null && typeof (value as DuringDragWorkHandle).wait === 'function';
 }
 
 async function dismissKnownOverlays(page: Page): Promise<void> {
@@ -167,7 +178,7 @@ async function recordDragPerformance(
   page: Page,
   paneSelector: string,
   viewportSelector: string,
-  duringDrag?: () => Promise<unknown>,
+  duringDrag?: () => DuringDragWork,
 ): Promise<DragPerfResult> {
   await page.evaluate(({ durationMs, viewportSelector: selector }) => {
     const viewport = document.querySelector(selector) as HTMLElement | null;
@@ -209,14 +220,20 @@ async function recordDragPerformance(
   }
   await page.mouse.move(startX, startY);
   await page.mouse.down();
-  const updateWork = duringDrag?.() ?? Promise.resolve();
+  const duringDragWork = duringDrag?.();
+  let waitForDuringDrag = async (): Promise<unknown> => undefined;
+  if (isDuringDragWorkHandle(duringDragWork)) {
+    waitForDuringDrag = duringDragWork.wait;
+  } else if (duringDragWork) {
+    waitForDuringDrag = () => duringDragWork;
+  }
   for (let step = 1; step <= DRAG_STEPS; step += 1) {
     const progress = step / DRAG_STEPS;
     await page.mouse.move(startX + DRAG_DELTA_X * progress, startY + Math.sin(progress * Math.PI * 2) * 24);
     await page.waitForTimeout(DRAG_STEP_DELAY_MS);
   }
   await page.mouse.up();
-  await updateWork;
+  await waitForDuringDrag();
 
   await page.waitForFunction(() => window.__invokerDragPerf?.done === true, null, { timeout: RECORDING_DONE_TIMEOUT_MS });
 
@@ -249,39 +266,58 @@ async function recordDragPerformance(
   });
 }
 
-async function streamTaskUpdatesDuringDrag(page: Page): Promise<number> {
-  const taskIds = await page.evaluate(async () => {
-    const result = await window.invoker.getTasks();
-    const tasks = Array.isArray(result) ? result : result.tasks;
-    return tasks.map((task: { id: string }) => task.id);
+function streamTaskUpdatesDuringDrag(page: Page, onComplete: (updateCount: number) => void): DuringDragWorkHandle {
+  const scheduledUpdateWork = page.evaluate(({ bursts, updatesPerBurst, delayMs }) => {
+    window.__invokerDragUpdateWork = (async () => {
+      const result = await window.invoker.getTasks();
+      const tasks = Array.isArray(result) ? result : result.tasks;
+      const taskIds = tasks.map((task: { id: string }) => task.id);
+      const statuses = ['running', 'completed', 'failed', 'pending'] as const;
+      let updateCount = 0;
+
+      for (let burst = 0; burst < bursts; burst += 1) {
+        const updates = Array.from({ length: updatesPerBurst }, (_, offset) => {
+          const taskId = taskIds[(burst * updatesPerBurst + offset) % taskIds.length];
+          const status = statuses[(burst + offset) % statuses.length];
+          const now = new Date();
+          return {
+            taskId,
+            changes: {
+              status,
+              execution: {
+                startedAt: now,
+                completedAt: status === 'completed' || status === 'failed' ? now : undefined,
+                exitCode: status === 'completed' ? 0 : status === 'failed' ? 1 : undefined,
+                error: status === 'failed' ? `drag update burst ${burst}` : undefined,
+              },
+            },
+          };
+        });
+        await window.invoker.injectTaskStates!(updates, { syncOrchestrator: false });
+        updateCount += updates.length;
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+
+      return updateCount;
+    })();
+  }, {
+    bursts: UPDATE_BURSTS,
+    updatesPerBurst: UPDATES_PER_BURST,
+    delayMs: UPDATE_BURST_DELAY_MS,
   });
-  let updateCount = 0;
-  const statuses = ['running', 'completed', 'failed', 'pending'] as const;
 
-  for (let burst = 0; burst < UPDATE_BURSTS; burst += 1) {
-    const updates = Array.from({ length: UPDATES_PER_BURST }, (_, offset) => {
-      const taskId = taskIds[(burst * UPDATES_PER_BURST + offset) % taskIds.length];
-      const status = statuses[(burst + offset) % statuses.length];
-      const now = new Date();
-      return {
-        taskId,
-        changes: {
-          status,
-          execution: {
-            startedAt: now,
-            completedAt: status === 'completed' || status === 'failed' ? now : undefined,
-            exitCode: status === 'completed' ? 0 : status === 'failed' ? 1 : undefined,
-            error: status === 'failed' ? `drag update burst ${burst}` : undefined,
-          },
-        },
-      };
-    });
-    await page.evaluate((burstUpdates) => window.invoker.injectTaskStates!(burstUpdates), updates);
-    updateCount += updates.length;
-    await page.waitForTimeout(UPDATE_BURST_DELAY_MS);
-  }
-
-  return updateCount;
+  return {
+    wait: async () => {
+      await scheduledUpdateWork;
+      const updateCount = await page.evaluate(async () => {
+        if (!window.__invokerDragUpdateWork) {
+          throw new Error('Missing scheduled drag task updates');
+        }
+        return window.__invokerDragUpdateWork;
+      });
+      onComplete(updateCount);
+    },
+  };
 }
 
 async function completeAllSeededTasks(page: Page): Promise<void> {
@@ -357,9 +393,9 @@ test('workflow graph pan stays responsive while task updates arrive', async ({ p
       page,
       '[data-testid="workflow-graph-react-flow"] .react-flow__pane',
       '[data-testid="workflow-graph-react-flow"] .react-flow__viewport',
-      async () => {
-        updateCount = await streamTaskUpdatesDuringDrag(page);
-      },
+      () => streamTaskUpdatesDuringDrag(page, (count) => {
+        updateCount = count;
+      }),
     );
     const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
     const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
