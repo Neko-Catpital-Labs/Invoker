@@ -30,6 +30,7 @@ REPROS=(
   scripts/repro/repro-babysit-merged-pr-terminal.sh
   scripts/repro/repro-babysit-merged-during-repair.sh
   scripts/repro/repro-admin-bypass-queue-retries-failed-workflow.sh
+  scripts/repro/repro-admin-bypass-queue-bot-review-thread.sh
 )
 
 # repro-mergify-stack-dogfood.sh is deliberately excluded: it's an opt-in

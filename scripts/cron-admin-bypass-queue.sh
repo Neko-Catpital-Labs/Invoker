@@ -99,6 +99,50 @@ print(f"active\t{workflow_id}\t\t")
 PY
 }
 
+bot_review_thread_detail() {
+  local num="$1"
+  local owner="${TARGET_REPO%%/*}"
+  local repo_name="${TARGET_REPO#*/}"
+  local out
+  if [ -z "$owner" ] || [ -z "$repo_name" ] || [ "$owner" = "$repo_name" ]; then
+    printf ''
+    return 0
+  fi
+  out="$(gh_json api graphql \
+    -F owner="$owner" \
+    -F name="$repo_name" \
+    -F number="$num" \
+    -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 50) { nodes { id isResolved isOutdated comments(first: 20) { nodes { author { login } body } } } } } } }' \
+    </dev/null)" \
+    || {
+      printf ''
+      return 0
+    }
+  jq -r '
+    def one_line:
+      tostring
+      | gsub("[\r\n\t]+"; " ")
+      | gsub(" +"; " ")
+      | .[0:240];
+    def bot_author($login):
+      $login == "coderabbitai"
+      or $login == "coderabbitai[bot]"
+      or $login == "github-actions[bot]";
+    [
+      .data.repository.pullRequest.reviewThreads.nodes[]?
+      | select(.isResolved != true)
+      | select(.isOutdated != true)
+      | . as $thread
+      | [
+          $thread.comments.nodes[]?
+          | select((.author.login // "") as $login | bot_author($login))
+        ][0] as $comment
+      | select($comment != null)
+      | "unresolved bot review thread \($thread.id // "unknown") by \($comment.author.login // "unknown"): \($comment.body | one_line)"
+    ][0] // ""
+  ' <<<"$out" 2>/dev/null || true
+}
+
 while IFS= read -r pr; do
   [ -z "$pr" ] && continue
   num="$(jq -r '.number' <<<"$pr")"
@@ -124,6 +168,13 @@ while IFS= read -r pr; do
     if [ -n "$failed_checks" ]; then
       category="failed_checks"
       detail="$failed_checks"
+    fi
+  fi
+  if [ -z "$category" ]; then
+    bot_thread_detail="$(bot_review_thread_detail "$num")"
+    if [ -n "$bot_thread_detail" ]; then
+      category="bot_review_thread"
+      detail="$bot_thread_detail"
     fi
   fi
   if [ -z "$category" ] && [ "$(jq -r '.reviewDecision // ""' <<<"$pr")" = "CHANGES_REQUESTED" ]; then
@@ -256,6 +307,7 @@ while IFS= read -r pr; do
       printf 'Rules:\n'
       printf -- '- If this is a merge conflict, rebase onto origin/%s (or merge it) before anything else.\n' "$base_ref"
       printf -- '- If checks are failing, reproduce and fix them locally.\n'
+      printf -- '- If a bot review thread is blocking, verify the inline feedback and fix still-valid issues with minimal changes.\n'
       printf -- '- If changes were requested, address the open feedback with real changes or a reasoned reply, never by dismissing.\n'
       printf -- '- Commit locally if changes are needed.\n'
       printf -- '- Do not push, do not open a new PR, and do not force-push. The safe-push task owns publication.\n'
