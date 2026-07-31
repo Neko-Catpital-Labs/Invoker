@@ -110,7 +110,11 @@ surface stable; the next symbol is the next workflow. Move a private helper the
 symbol depends on only when splitting them would break the build. A file that
 yields six extracted symbols is six chained workflows, not one "extract phases"
 task. See the **Decomposition & Extraction Refactors** section of
-`../review-compression/SKILL.md`.
+`../review-compression/SKILL.md`. This applies to decomposition only. A pure
+rehome of an already-cohesive file or package — no splitting, no new modules —
+lands as one workflow: the move (and its deletion, or a same-workflow
+forwarding shim when callers can't all move at once) in the same slice. See the
+**Rehome / Relocation Refactors** section of `../review-compression/SKILL.md`.
 
 ### Cross-layer direction
 
