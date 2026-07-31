@@ -638,6 +638,7 @@ jobs:
               e2e/planning-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
+              e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
           - name: 7-of-9
             files: >-
@@ -659,6 +660,7 @@ jobs:
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
+              e2e/ui-delta-timeline.spec.ts
               e2e/workers-surface.spec.ts
 
     name: playwright / ${{ matrix.name }}
