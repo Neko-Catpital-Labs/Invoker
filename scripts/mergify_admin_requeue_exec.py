@@ -13,14 +13,26 @@ try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
     from .mergify_admin_requeue_plan import plan_stack_execution
+    from .mergify_admin_requeue_repairer import AdminBypassRepairer
     from .mergify_admin_requeue_snapshot import GhClient
+    from .mergify_admin_requeue_workflow_fastpath import (
+        resolve_workflow_for_pr,
+        submit_rebase_recreate,
+        submit_repair_review_gate_ci,
+    )
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_loader import AdminBypassStackLoader
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Action, Ledger, PrSnapshot, load_mergify_rules
     from mergify_admin_requeue_plan import plan_stack_execution
+    from mergify_admin_requeue_repairer import AdminBypassRepairer
     from mergify_admin_requeue_snapshot import GhClient
+    from mergify_admin_requeue_workflow_fastpath import (
+        resolve_workflow_for_pr,
+        submit_rebase_recreate,
+        submit_repair_review_gate_ci,
+    )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,6 +86,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
     ledger = Ledger(Path(args.state_file).expanduser())
     loader = AdminBypassStackLoader(gh)
     executor = AdminBypassGhExecutor(gh, ledger, logger, args.repo)
+    repairer = AdminBypassRepairer(gh, executor, logger, ledger, args.repo)
     loaded = loader.load(args.repo, args.author, args.pr, required_checks, trunk)
     stacks = loaded.stacks
     now = int(time.time())
@@ -121,26 +134,61 @@ def run_cycle(args: argparse.Namespace) -> bool:
             if pr is None:
                 raise RuntimeError(f"missing PR snapshot for #{action.pr_number}")
             if action.kind == "repair_check":
-                # Repair is delegated to the admin-bypass-queue Invoker worker
-                # (scripts/cron-admin-bypass-queue.sh), which submits a fast
-                # repair task instead of running an AI repair synchronously
-                # here while holding the shared PR-maintenance lock.
-                check_name = action.key.split(":", 1)[-1]
-                ledger.record("repair-delegated", action.pr_number, pr.head_ref_oid, check_name, now)
-                logger.trace(
-                    "admin-bypass-repair-delegated",
-                    repo=args.repo,
-                    pr_number=action.pr_number,
-                    check_name=check_name,
-                )
+                try:
+                    if action.key.startswith("bot_review_thread:"):
+                        thread_id = action.key.split(":", 1)[1]
+                        outcome = repairer.repair_bot_thread(pr, thread_id, now)
+                        progressed = outcome.status in {"pushed", "prereq_created"}
+                    else:
+                        check_name = action.key
+                        workflow_id = resolve_workflow_for_pr(action.pr_number)
+                        if workflow_id:
+                            submit_repair_review_gate_ci(action.pr_number)
+                            ledger.record("repair-check", action.pr_number, pr.head_ref_oid, check_name, now)
+                            progressed = True
+                        else:
+                            outcome = repairer.repair_check(pr, check_name, now)
+                            progressed = outcome.status in {"pushed", "prereq_created"}
+                except Exception as exc:
+                    logger.trace(
+                        "admin-bypass-repair-attempt-failed",
+                        repo=args.repo,
+                        pr_number=action.pr_number,
+                        action_kind=action.kind,
+                        key=action.key,
+                        error=str(exc),
+                    )
+                    should_poll = True
+                    continue
+                if progressed:
+                    return True
+                should_poll = True
+                continue
             elif action.kind == "repair_conflict":
-                ledger.record("repair-delegated", action.pr_number, pr.head_ref_oid, action.key, now)
-                logger.trace(
-                    "admin-bypass-repair-delegated",
-                    repo=args.repo,
-                    pr_number=action.pr_number,
-                    check_name=action.key,
-                )
+                try:
+                    workflow_id = resolve_workflow_for_pr(action.pr_number)
+                    if workflow_id:
+                        submit_rebase_recreate(workflow_id)
+                        ledger.record("conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now)
+                        progressed = True
+                    else:
+                        outcome = repairer.repair_conflict(pr, action.detail, now)
+                        progressed = outcome.status in {"pushed", "prereq_created"}
+                except Exception as exc:
+                    logger.trace(
+                        "admin-bypass-repair-attempt-failed",
+                        repo=args.repo,
+                        pr_number=action.pr_number,
+                        action_kind=action.kind,
+                        key=action.key,
+                        error=str(exc),
+                    )
+                    should_poll = True
+                    continue
+                if progressed:
+                    return True
+                should_poll = True
+                continue
             else:
                 performed = executor.execute(action, pr, now)
                 if not performed:
@@ -167,7 +215,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
                             pr_number=pr.number,
                             check_name=queue_only_noop_check,
                         )
-            if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge", "repair_check", "repair_conflict"}:
+            if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
                 return True
     if not stacks:
         logger.trace("admin-bypass-scan-empty")
