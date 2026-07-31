@@ -34,6 +34,7 @@ STATE_FILE="${INVOKER_ADMIN_BYPASS_QUEUE_STATE_FILE:-$HOME/.invoker/admin-bypass
 MAX_ATTEMPTS="${INVOKER_ADMIN_BYPASS_QUEUE_MAX_ATTEMPTS:-3}"
 LABEL="${INVOKER_ADMIN_BYPASS_LABEL:-admin-bypass}"
 REPO_URL="${INVOKER_ADMIN_BYPASS_REPO_URL:-https://github.com/$TARGET_REPO.git}"
+INVOKER_DB_PATH="${INVOKER_DB_PATH:-$HOME/.invoker/invoker.db}"
 ledger_init "$STATE_FILE"
 
 # Repros pass INVOKER_ADMIN_BYPASS_QUEUE_PLAN_DIR to inspect submitted plans; a
@@ -54,6 +55,50 @@ prs_json="$(gh_json pr list --repo "$TARGET_REPO" --label "$LABEL" --state open 
 }
 
 submitted=0
+repair_workflow_submission_state() {
+  local num="$1"
+  local fingerprint="$2"
+  local workflow_name="admin-bypass-repair-pr-${num}-${fingerprint}"
+  if [ ! -f "$INVOKER_DB_PATH" ] || ! command -v python3 >/dev/null 2>&1; then
+    printf 'unknown\t\t\t\n'
+    return 0
+  fi
+  python3 - "$INVOKER_DB_PATH" "$workflow_name" <<'PY' || printf 'unknown\t\t\t\n'
+import sqlite3
+import sys
+
+db_path, workflow_name = sys.argv[1], sys.argv[2]
+try:
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    workflow = con.execute(
+        "select id from workflows where name = ? order by created_at desc, rowid desc limit 1",
+        (workflow_name,),
+    ).fetchone()
+except sqlite3.Error:
+    print("unknown\t\t\t")
+    raise SystemExit(0)
+if workflow is None:
+    print("unknown\t\t\t")
+    raise SystemExit(0)
+workflow_id = str(workflow["id"])
+try:
+    tasks = list(con.execute("select id, status, coalesce(error, '') as error from tasks where workflow_id = ?", (workflow_id,)))
+except sqlite3.Error:
+    print("unknown\t\t\t")
+    raise SystemExit(0)
+failed = next((task for task in tasks if str(task["status"] or "").lower() in {"failed", "cancelled", "canceled"}), None)
+if failed is not None:
+    error = str(failed["error"] or failed["status"] or "failed").replace("\t", " ").replace("\n", " ")
+    print(f"failed\t{workflow_id}\t{failed['id']}\t{error}")
+    raise SystemExit(0)
+if tasks and all(str(task["status"] or "").lower() in {"completed", "skipped", "review_ready"} for task in tasks):
+    print(f"finished\t{workflow_id}\t\t")
+    raise SystemExit(0)
+print(f"active\t{workflow_id}\t\t")
+PY
+}
+
 while IFS= read -r pr; do
   [ -z "$pr" ] && continue
   num="$(jq -r '.number' <<<"$pr")"
@@ -97,10 +142,39 @@ while IFS= read -r pr; do
   fingerprint="${fingerprint:0:16}"
 
   if ledger_marker_seen queue-submitted "$num" "$fingerprint"; then
-    log_line "PR #$num: repair already submitted for this head-state ($fingerprint); waiting"
-    continue
+    submission_info="$(repair_workflow_submission_state "$num" "$fingerprint")"
+    IFS=$'\t' read -r submission_state submission_workflow submission_task submission_error <<<"$submission_info"
+    if [ "$submission_state" = "failed" ] && [ -n "$submission_workflow" ]; then
+      failed_marker="${fingerprint}:${submission_workflow}"
+      if [ "$DRY_RUN" != "1" ] && ! ledger_marker_seen queue-failed "$num" "$failed_marker"; then
+        ledger_record queue-failed "$num" "$failed_marker"
+        ledger_record queue-attempt "$num" "$fingerprint"
+      fi
+      if [ "$(ledger_count queue-attempt "$num" "$fingerprint")" -ge "$MAX_ATTEMPTS" ]; then
+        if [ "$DRY_RUN" = "1" ]; then
+          log_line "PR #$num: DRY-RUN would mark attempt cap reached ($MAX_ATTEMPTS)"
+          continue
+        fi
+        if ! ledger_marker_seen queue-exhausted "$num" "$fingerprint"; then
+          ledger_record queue-exhausted "$num" "$fingerprint"
+          gh pr comment "$num" --repo "$TARGET_REPO" \
+            --body "Invoker admin-bypass queue gave up after $MAX_ATTEMPTS repair-task attempts for this head state. Blocker: $category ($detail). Last failed workflow: $submission_workflow/${submission_task:-unknown} (${submission_error:-failed})" \
+            >/dev/null 2>&1 || true
+          log_line "PR #$num: attempt cap reached ($MAX_ATTEMPTS); posted exhausted comment"
+        fi
+        continue
+      fi
+      log_line "PR #$num: previous repair workflow $submission_workflow failed for this head-state ($fingerprint): ${submission_task:-unknown} (${submission_error:-failed}); retrying"
+    else
+      log_line "PR #$num: repair already submitted for this head-state ($fingerprint); waiting"
+      continue
+    fi
   fi
   if [ "$(ledger_count queue-attempt "$num" "$fingerprint")" -ge "$MAX_ATTEMPTS" ]; then
+    if [ "$DRY_RUN" = "1" ]; then
+      log_line "PR #$num: DRY-RUN would mark attempt cap reached ($MAX_ATTEMPTS)"
+      continue
+    fi
     if ! ledger_marker_seen queue-exhausted "$num" "$fingerprint"; then
       ledger_record queue-exhausted "$num" "$fingerprint"
       gh pr comment "$num" --repo "$TARGET_REPO" \
