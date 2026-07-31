@@ -47,6 +47,10 @@ function expectAuthorizedPlanToInvokerPrompt(prompt: string) {
   expect(prompt).toContain('plan-to-invoker');
   expect(prompt).toContain('first produce a Markdown planning artifact');
   expect(prompt).toContain('convert the approved Markdown plan into a full Invoker YAML task plan');
+  expect(prompt).toContain('skills/review-compression/SKILL.md');
+  expect(prompt).toContain('Safety invariant:');
+  expect(prompt).toContain('confirm or correct it');
+  expect(prompt).toContain('every slice is confirmed safe');
   expect(prompt).toContain('skill-doctor.sh');
   expect(prompt).toContain('MCP review/submit flow');
   expect(prompt).toContain('Harness handoff mode');
