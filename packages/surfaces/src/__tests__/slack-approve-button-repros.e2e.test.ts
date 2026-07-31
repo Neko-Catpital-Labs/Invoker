@@ -1,12 +1,10 @@
 /**
- * Repro contracts for issue 1: a drafted plan must always arrive with an
- * Approve button.
+ * Repro contracts for issue 1: an explicit Slack PlanDraft review must always
+ * arrive with an Approve button once its YAML attachment is ready.
  *
- * Root cause under test: `PlanConversation.getDraftedPlan()` returns the
- * plan-draft file unvalidated. When the planner writes a parseable-but-
- * unsummarizable draft file while the chat reply carries a valid fenced plan,
- * the surface sees `draftedPlan != null` but `summary == null` and posts the
- * reply with no Approve button and no staged confirmation.
+ * Root cause under test: a parseable-but-unsummarizable plan-draft file must
+ * not shadow a valid fenced plan in the planner reply, or the review card would
+ * be posted without a usable Approve action.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,7 +15,7 @@ import type { ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ConversationRepository, SlackSessionRepository, SQLiteAdapter } from '@invoker/data-store';
+import { ConversationRepository, SlackPlanDraftRepository, SlackSessionRepository, SQLiteAdapter } from '@invoker/data-store';
 import { SlackSurface } from '../slack/slack-surface.js';
 import type { SurfaceCommand } from '../surface.js';
 
@@ -49,11 +47,6 @@ interface SaidMessage {
   thread_ts?: string;
 }
 
-interface PendingSubmitLike {
-  kind: string;
-  planText?: string;
-}
-
 const sharedSlack = vi.hoisted(() => ({
   client: {
     auth: { test: vi.fn().mockResolvedValue({ user_id: 'UBOT' }) },
@@ -62,6 +55,7 @@ const sharedSlack = vi.hoisted(() => ({
       update: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue({}),
     },
+    files: { uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F-proof' }] }) },
     reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
     conversations: { replies: vi.fn().mockResolvedValue({ messages: [] }) },
   },
@@ -130,12 +124,12 @@ async function mention(surface: SlackSurface, text: string, ts: string, threadTs
   return say;
 }
 
-function confirmButtonValue(say: Mock): string | null {
-  for (const call of say.mock.calls) {
+function actionValueFromUpdatedCard(actionId: string): string | null {
+  for (const call of [...sharedSlack.client.chat.update.mock.calls].reverse()) {
     const message = call[0] as SaidMessage | undefined;
     for (const block of message?.blocks ?? []) {
       for (const element of block.elements ?? []) {
-        if (element.action_id === 'lobby_confirm' && typeof element.value === 'string') {
+        if (element.action_id === actionId && typeof element.value === 'string') {
           return element.value;
         }
       }
@@ -144,16 +138,18 @@ function confirmButtonValue(say: Mock): string | null {
   return null;
 }
 
-function pendingSubmits(surface: SlackSurface): PendingSubmitLike[] {
-  // Test-only reach into a private field to observe confirmation staging.
-  const map = (surface as unknown as { pendingConfirms: Map<string, PendingSubmitLike> }).pendingConfirms;
-  return [...map.values()].filter((pending) => pending.kind === 'submit');
+function updatedCardWithAction(actionId: string): SaidMessage | undefined {
+  return [...sharedSlack.client.chat.update.mock.calls]
+    .map((call) => call[0] as SaidMessage)
+    .find((message) => message.blocks?.some((block) =>
+      block.elements?.some((element) => element.action_id === actionId)));
 }
 
 describe('Slack approve-button repro contracts', () => {
   let adapter: SQLiteAdapter;
   let repo: ConversationRepository;
   let slackSessions: SlackSessionRepository;
+  let slackPlanDrafts: SlackPlanDraftRepository;
   let surfaces: SlackSurface[];
   let tempDirs: string[];
 
@@ -162,9 +158,11 @@ describe('Slack approve-button repro contracts', () => {
     sharedSlack.client.chat.postMessage.mockClear();
     sharedSlack.client.chat.update.mockClear();
     sharedSlack.client.chat.delete.mockClear();
+    sharedSlack.client.files.uploadV2.mockClear();
     adapter = await SQLiteAdapter.create(':memory:');
     repo = new ConversationRepository(adapter, { info: silentLog, warn: silentLog, error: silentLog });
     slackSessions = new SlackSessionRepository(adapter);
+    slackPlanDrafts = new SlackPlanDraftRepository(adapter);
     surfaces = [];
     tempDirs = [];
   });
@@ -185,6 +183,7 @@ describe('Slack approve-button repro contracts', () => {
       lobbyChannelId: 'C_LOBBY',
       conversationRepo: repo,
       slackSessionRepo: slackSessions,
+      slackPlanDraftRepo: slackPlanDrafts,
       enableImmediateAck: false,
       planningHeartbeatIntervalSeconds: 0,
       workingDir,
@@ -206,6 +205,8 @@ describe('Slack approve-button repro contracts', () => {
     const slack = surface(commands, workingDir);
     await slack.start(async (command) => { commands.push(command); });
 
+    mockSpawn.mockImplementationOnce(() => processWith('Scope captured.'));
+    await mention(slack, 'build this feature', 'thread-a1');
     mockSpawn.mockImplementationOnce(() => {
       // The planner writes a truncated draft file (parses, but cannot be
       // summarized), while its chat reply still carries a complete plan.
@@ -217,26 +218,28 @@ describe('Slack approve-button repro contracts', () => {
       return processWith(goodPlanReply);
     });
 
-    const say = await mention(slack, 'plan: draft it', 'thread-a1');
+    await mention(slack, '/plan', 'thread-a1-plan', 'thread-a1');
 
-    expect(confirmButtonValue(say)).not.toBeNull();
-    const submits = pendingSubmits(slack);
-    expect(submits.some((pending) => pending.planText?.includes('name: Good'))).toBe(true);
+    const draft = slackPlanDrafts.getReady('C_LOBBY', 'thread-a1');
+    expect(draft?.planText).toContain('name: Good');
+    expect(actionValueFromUpdatedCard('plan_draft_approve')).toBe(`${draft?.draftId}:${draft?.version}`);
   });
 
-  it('carries the Approve/Reject actions on the same message as the drafted plan brief', async () => {
+  it('carries the Approve/Cancel actions on the same message as the drafted plan brief', async () => {
     const commands: SurfaceCommand[] = [];
     const slack = surface(commands, newWorkingDir());
     await slack.start(async (command) => { commands.push(command); });
 
+    mockSpawn.mockImplementationOnce(() => processWith('Scope captured.'));
+    await mention(slack, 'build it cleanly', 'thread-a2');
     mockSpawn.mockImplementationOnce(() => processWith(goodPlanReply));
-    const say = await mention(slack, 'plan: draft it cleanly', 'thread-a2');
+    await mention(slack, '/plan', 'thread-a2-plan', 'thread-a2');
 
-    const briefed = say.mock.calls
-      .map((call) => call[0] as SaidMessage)
-      .find((message) => message.text?.includes('Drafted *'));
+    const briefed = updatedCardWithAction('plan_draft_approve');
     expect(briefed).toBeDefined();
     const actions = briefed?.blocks?.find((block) => block.type === 'actions');
-    expect(actions?.elements?.some((element) => element.action_id === 'lobby_confirm')).toBe(true);
+    expect(briefed?.text).toContain('Good');
+    expect(actions?.elements?.some((element) => element.action_id === 'plan_draft_approve')).toBe(true);
+    expect(actions?.elements?.some((element) => element.action_id === 'plan_draft_cancel')).toBe(true);
   });
 });

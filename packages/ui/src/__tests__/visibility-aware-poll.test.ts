@@ -48,6 +48,36 @@ describe('subscribeVisibilityAwarePoll', () => {
     unsubscribe();
   });
 
+  it('restarts interval cadence after the delayed restore poll', () => {
+    vi.useFakeTimers();
+    const poll = vi.fn();
+    let visibility: DocumentVisibilityState = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibility,
+    });
+
+    const unsubscribe = subscribeVisibilityAwarePoll(poll, 1000, { restoreDelayMs: 50 });
+    expect(poll).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(900);
+    visibility = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(1000);
+    expect(poll).toHaveBeenCalledTimes(1);
+
+    visibility = 'visible';
+    document.dispatchEvent(new Event('visibilitychange'));
+    vi.advanceTimersByTime(50);
+    expect(poll).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(999);
+    expect(poll).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    expect(poll).toHaveBeenCalledTimes(3);
+
+    unsubscribe();
+  });
+
   it('defers the initial poll by initialDelayMs so the mount/click can paint', () => {
     vi.useFakeTimers();
     const poll = vi.fn();

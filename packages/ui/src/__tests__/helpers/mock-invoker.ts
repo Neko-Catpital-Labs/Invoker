@@ -339,6 +339,7 @@ export function createMockInvoker(
     replaceTask: vi.fn(async () => accepted('invoker:replace-task')),
     getActivityLogs: vi.fn(async () => []),
     reportUiPerf: vi.fn(async () => {}),
+    traceRendererTaskGraphEvent: vi.fn(async () => {}),
     getUiPerfStats: vi.fn(async () => ({})),
     getEvents: vi.fn(async (taskId: string, options?: { limit: number; sortBy?: 'asc' | 'desc'; beforeId?: number }) => {
       const events = [...(eventsByTask.get(taskId) ?? [])];

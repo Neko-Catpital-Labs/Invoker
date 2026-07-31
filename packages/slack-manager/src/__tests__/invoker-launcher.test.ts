@@ -43,10 +43,8 @@ describe('resolveOwnerLaunch', () => {
         path === '/repo/scripts/electron.cjs' || path === '/repo/packages/app/dist/main.js',
     });
     expect(spec).toEqual({
-      command: 'xvfb-run',
+      command: './scripts/electron.cjs',
       args: [
-        '--auto-servernum',
-        './scripts/electron.cjs',
         ...LINUX_HEADLESS_ELECTRON_FLAGS,
         'packages/app/dist/main.js',
         '--headless',

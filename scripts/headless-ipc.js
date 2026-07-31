@@ -123,6 +123,10 @@ function isNoHandlerError(error) {
   return /NO_HANDLER|No request handler registered|No handler registered/i.test(message);
 }
 
+function createTraceId(channel) {
+  return `${channel}:${process.pid}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Stdin reader (for batch-exec)
 // ---------------------------------------------------------------------------
@@ -184,22 +188,41 @@ function execStandalone(args) {
 // ---------------------------------------------------------------------------
 
 async function requestExec(bus, item, options) {
-  const payload = {
-    args: item.args,
-    noTrack: options.noTrack,
-    waitForApproval: options.waitForApproval,
-  };
-  const response = await withTimeout(bus.request('headless.exec', payload), options.timeoutMs);
+  let response;
+  if (item.args[0] === 'run') {
+    const planPath = item.args[1];
+    if (!planPath) {
+      throw new Error('Missing plan file. Usage: exec [--no-track] -- run <plan.yaml>');
+    }
+    response = await withTimeout(
+      bus.request('headless.run', {
+        planPath: path.resolve(planPath),
+        traceId: createTraceId('headless.run'),
+      }),
+      options.timeoutMs,
+    );
+  } else {
+    const payload = {
+      args: item.args,
+      noTrack: options.noTrack,
+      waitForApproval: options.waitForApproval,
+    };
+    response = await withTimeout(bus.request('headless.exec', payload), options.timeoutMs);
+  }
   if (options.noTrack) {
-    const acknowledged =
+    const queuedMutation =
       response &&
       typeof response === 'object' &&
       response.ok === true &&
       (typeof response.intentId === 'number' || typeof response.intentId === 'string');
-    if (!acknowledged) {
+    const acceptedWorkflow =
+      response &&
+      typeof response === 'object' &&
+      typeof response.workflowId === 'string';
+    if (!queuedMutation && !acceptedWorkflow) {
       throw new Error(
         `Fire-and-forget dispatch was not queued for args "${item.args.join(' ')}"; ` +
-        `expected owner response { ok: true, intentId }, got ${JSON.stringify(response)}`,
+        `expected owner response { ok: true, intentId } or { workflowId }, got ${JSON.stringify(response)}`,
       );
     }
   }

@@ -164,7 +164,6 @@ import {
   type InvalidationAction,
 } from './invalidation-policy.js';
 import {
-  isActiveAttempt,
   isDiscardedAttempt,
   isOutcomeTerminalAttempt,
 } from './attempt-policy.js';
@@ -1088,6 +1087,31 @@ export class Orchestrator {
     this.scheduler.removeJob(taskId);
   }
 
+  private hasPendingLaunchRuntimeState(task: TaskState): boolean {
+    return Boolean(
+      task.execution.phase
+      || task.execution.startedAt
+      || task.execution.launchStartedAt
+      || task.execution.launchCompletedAt
+      || task.execution.lastHeartbeatAt
+      || task.execution.agentSessionId
+      || task.execution.containerId
+      || task.execution.error
+      || task.execution.exitCode !== undefined
+      || task.execution.inputPrompt
+      || task.execution.pendingFixError,
+    );
+  }
+
+  private isReusablePendingLaunchAttempt(task: TaskState, attempt: Attempt | undefined): boolean {
+    if (!attempt || isDiscardedAttempt(attempt)) return false;
+    if (attempt.status === 'pending') return !this.hasPendingLaunchRuntimeState(task);
+    if (attempt.status === 'claimed' || attempt.status === 'running') {
+      return this.isAttemptLeaseActive(attempt);
+    }
+    return false;
+  }
+
   getPersistedActiveTaskIds(now: number = Date.now()): Set<string> {
     const active = new Set<string>();
     for (const task of this.stateMachine.getAllTasks()) {
@@ -1100,7 +1124,7 @@ export class Orchestrator {
 
   private ensureCurrentPendingAttempt(task: TaskState): string {
     const selected = this.getSelectedAttempt(task);
-    if (selected && isActiveAttempt(selected)) {
+    if (selected && this.isReusablePendingLaunchAttempt(task, selected)) {
       return selected.id;
     }
 
@@ -1108,7 +1132,7 @@ export class Orchestrator {
     const attempts =
       typeof loadAttempts === 'function' ? loadAttempts.call(this.persistence, task.id) : [];
     const current = attempts[attempts.length - 1];
-    if (current && isActiveAttempt(current)) {
+    if (current && this.isReusablePendingLaunchAttempt(task, current)) {
       if (task.execution.selectedAttemptId !== current.id) {
         this.writeAndSync(task.id, { execution: { selectedAttemptId: current.id } });
       }
@@ -1127,7 +1151,13 @@ export class Orchestrator {
       this.taskRepository.updateAttempt(current.id, { status: 'superseded' });
     }
     this.taskRepository.saveAttempt(freshAttempt);
-    this.writeAndSync(task.id, { execution: { selectedAttemptId: freshAttempt.id } });
+    this.writeResetAndSync(
+      task,
+      'newAttempt',
+      buildTaskResetChanges('newAttempt', {
+        execution: { selectedAttemptId: freshAttempt.id },
+      }),
+    );
     return freshAttempt.id;
   }
 

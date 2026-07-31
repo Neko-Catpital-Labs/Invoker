@@ -153,8 +153,8 @@ while IFS= read -r pr; do
     continue
   fi
 
-  ledger_record orphan-attempt "$num" "$fingerprint"
   if output="$(headless_mutation run "$plan_file" 2>&1)"; then
+    ledger_record orphan-attempt "$num" "$fingerprint"
     ledger_record orphan-submitted "$num" "$fingerprint"
     submitted=$((submitted + 1))
     log_line "PR #$num: submitted repair task ($fingerprint; blockers: $summary)"

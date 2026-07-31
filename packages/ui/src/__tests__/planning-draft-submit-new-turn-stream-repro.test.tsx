@@ -9,6 +9,10 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+// Rendering the full <App /> exceeds Vitest's default 5s on 1-2 vCPU CI
+// runners. Keep this timeout scoped to the repro file.
+vi.setConfig({ testTimeout: 20_000 });
+
 // Dynamic import is required so App sees the hoisted @xyflow/react mock.
 const { App } = await import('../App.js');
 

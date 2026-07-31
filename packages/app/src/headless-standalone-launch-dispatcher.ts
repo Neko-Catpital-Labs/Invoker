@@ -11,6 +11,7 @@ interface StandaloneLaunchDispatcherOptions {
   ownerId: string;
   createTaskExecutor: () => TaskRunner;
   setLatestTaskExecutor: (executor: TaskRunner) => void;
+  topUpReadyLaunchesEnabled?: () => boolean;
 }
 
 export function startStandaloneLaunchDispatcher(
@@ -36,6 +37,7 @@ export function startStandaloneLaunchDispatcher(
     taskRunnerProvider: () => executor,
     ownerId,
     logger: headlessDeps.logger,
+    topUpReadyLaunchesEnabled: options.topUpReadyLaunchesEnabled,
   });
 
   const poll = (): void => {

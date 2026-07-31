@@ -171,31 +171,17 @@ describe('Slack thinking-placeholder repro contracts', () => {
       enableImmediateAck: true,
       planningHeartbeatIntervalSeconds: 0,
     });
+    const reply = Promise.withResolvers<string>();
+    conversationMock.sendMessage.mockReturnValue(reply.promise);
+
     await surface.start(async () => {});
-
-    // Spawn 1: intent classifier → question.
-    mockSpawn.mockImplementationOnce(() => processWith('{"intent":"question","operation":"none","target":"none"}'));
-
-    // Spawn 2: the one-shot question planner, held open until released.
-    const plannerStarted = Promise.withResolvers<void>();
-    let releaseAnswer!: () => void;
-    mockSpawn.mockImplementationOnce(() => {
-      const { proc, emitter } = stubProcess();
-      releaseAnswer = () => {
-        emitter.stdout.emit('data', Buffer.from('The retry queue re-runs failed tasks.'));
-        emitter.emit('close', 0);
-      };
-      plannerStarted.resolve();
-      return proc;
-    });
-
     const say = recordingSay();
     const pendingMention = mentionHandler(surface)({
       event: { text: '<@UBOT> what does the retry queue do?', ts: '7777.001', user: 'U1', channel: 'C-test' },
       say,
     });
 
-    await plannerStarted.promise;
+    await vi.waitFor(() => expect(conversationMock.sendMessage).toHaveBeenCalled());
 
     const ack = apiCalls.find((call) => call.method === 'postMessage' && call.text === 'Processing your request...');
     try {
@@ -203,7 +189,7 @@ describe('Slack thinking-placeholder repro contracts', () => {
       // The planner is running: the placeholder must still be on screen.
       expect(apiCalls.some((call) => call.method === 'delete' && call.ts === ack?.ts)).toBe(false);
     } finally {
-      releaseAnswer();
+      reply.resolve('The retry queue re-runs failed tasks.');
       await pendingMention;
     }
 

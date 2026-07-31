@@ -229,11 +229,18 @@ def classify_bottom_topology(
 
 
 
-def stack_has_unaccepted_upper_pr(stack: StackGroup, bottom: PrSnapshot | None) -> bool:
-    return bool(bottom) and any(
-        pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
+def unaccepted_upper_prs(stack: StackGroup, bottom: PrSnapshot | None) -> tuple[PrSnapshot, ...]:
+    if not bottom:
+        return ()
+    return tuple(
+        pr
         for pr in stack.prs
+        if pr.state == "OPEN" and pr.number != bottom.number and "admin-bypass" not in pr.labels
     )
+
+
+def stack_has_unaccepted_upper_pr(stack: StackGroup, bottom: PrSnapshot | None) -> bool:
+    return bool(unaccepted_upper_prs(stack, bottom))
 
 
 def latest_repair_prereq_status(
@@ -645,6 +652,24 @@ def plan_hard_blockers(facts: StackFacts, ledger: Ledger) -> Action | None:
     return None
 
 
+def plan_upper_stack_acceptance_blocker(facts: StackFacts, ledger: Ledger) -> Action | None:
+    if not facts.upper_stack_needs_acceptance or not facts.bottom or facts.all_blockers:
+        return None
+    upper_prs = unaccepted_upper_prs(facts.stack, facts.bottom)
+    if not upper_prs:
+        return None
+    key = "upper-stack-needs-acceptance"
+    if ledger.count("comment-blocked", facts.bottom.number, facts.bottom.head_ref_oid, key) > 0:
+        return None
+    upper_list = ", ".join(f"#{pr.number}" for pr in upper_prs)
+    return Action(
+        "comment_blocked",
+        facts.bottom.number,
+        key,
+        f"PR #{facts.bottom.number} is ready to land, but upper stack PR(s) {upper_list} are open without `admin-bypass`; a human must decide whether to include them in the admin-bypass landing stack or land them separately.",
+    )
+
+
 def plan_merge_hold_cleanup(facts: StackFacts, ledger: Ledger) -> Action | None:
     if _has_pending_or_human_blocker(facts) or not facts.bottom:
         return None
@@ -734,6 +759,9 @@ def plan_actions_from_facts(
     if action is not None:
         return (action,)
     action = plan_hard_blockers(facts, ledger)
+    if action is not None:
+        return (action,)
+    action = plan_upper_stack_acceptance_blocker(facts, ledger)
     if action is not None:
         return (action,)
     action = plan_merge_hold_cleanup(facts, ledger)

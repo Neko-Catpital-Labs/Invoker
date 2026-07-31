@@ -1,7 +1,7 @@
-// Worker-routing battle driver: boots the two REAL surviving PR-maintenance
+// Worker-routing battle driver: boots the land and orphan PR-maintenance
 // workers (the same createXWorker factories the Invoker owner uses) and
-// manually ticks them against fake-GitHub scenarios exhibiting each remaining
-// issue class. Proves the wiring end-to-end per owner:
+// manually ticks them against fake-GitHub scenarios exhibiting their issue
+// classes. Proves the wiring end-to-end per owner:
 //   worker tick -> spawns its cron entrypoint -> entrypoint detects the issue
 //   -> takes the right action (recorded via worker logs or node-shim calls).
 //
@@ -257,4 +257,4 @@ if (failures.length > 0) {
   for (const failure of failures) console.log(`  - ${failure}`);
   process.exit(1);
 }
-console.log('[worker-routing] all five routing legs passed through the two-worker PR-maintenance surface');
+console.log('[worker-routing] all five routing legs passed through the targeted PR-maintenance workers');

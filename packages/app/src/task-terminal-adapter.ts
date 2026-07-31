@@ -23,6 +23,9 @@ import type {
   TerminalUiPerfSink,
 } from './terminal-ui-perf.js';
 
+type TaskTerminalPersistence = OpenTerminalPersistence &
+  Pick<SQLiteAdapter, 'listTerminalSessions' | 'deleteTerminalSession'>;
+
 export interface TaskTerminalMutationResult {
   ok: boolean;
   reason?: string;
@@ -44,9 +47,10 @@ export interface TaskTerminalAdapter {
 }
 
 export interface CreateTaskTerminalAdapterDeps {
-  persistence: OpenTerminalPersistence &
-    Pick<SQLiteAdapter, 'listTerminalSessions' | 'deleteTerminalSession'>;
-  executorRegistry: ExecutorRegistry;
+  persistence?: TaskTerminalPersistence;
+  getPersistence?: () => TaskTerminalPersistence | undefined;
+  executorRegistry?: ExecutorRegistry;
+  getExecutorRegistry?: () => ExecutorRegistry | undefined;
   executionAgentRegistry?: AgentRegistry;
   repoRoot: string;
   taskHandles: Pick<TaskHandleMap, 'get'>;
@@ -63,12 +67,24 @@ export interface CreateTaskTerminalAdapterDeps {
 export function createTaskTerminalAdapter(
   deps: CreateTaskTerminalAdapterDeps,
 ): TaskTerminalAdapter {
+  const getPersistence = (): TaskTerminalPersistence | undefined =>
+    deps.getPersistence?.() ?? deps.persistence;
+  const getExecutorRegistry = (): ExecutorRegistry | undefined =>
+    deps.getExecutorRegistry?.() ?? deps.executorRegistry;
+
   return {
     open(taskId: string) {
+      const executorRegistry = getExecutorRegistry();
+      if (!executorRegistry) {
+        return {
+          opened: false,
+          reason: `Task "${taskId}" terminal metadata is unavailable.`,
+        };
+      }
       return openEmbeddedTerminalForTask({
         taskId,
-        persistence: deps.persistence,
-        executorRegistry: deps.executorRegistry,
+        persistence: getPersistence(),
+        executorRegistry,
         executionAgentRegistry: deps.executionAgentRegistry,
         repoRoot: deps.repoRoot,
         taskHandles: deps.taskHandles,
@@ -77,9 +93,15 @@ export function createTaskTerminalAdapter(
       });
     },
     list() {
+      const persistence = getPersistence();
+      if (!persistence) {
+        return deps.embeddedTerminalManager
+          .list()
+          .filter((session) => session.kind !== 'planning');
+      }
       return listTaskTerminalSessions({
         embeddedTerminalManager: deps.embeddedTerminalManager,
-        persistence: deps.persistence,
+        persistence,
       });
     },
     write(sessionId: string, data: string) {
@@ -111,7 +133,7 @@ export function createTaskTerminalAdapter(
       return closeTaskTerminalSession(
         {
           embeddedTerminalManager: deps.embeddedTerminalManager,
-          persistence: deps.persistence,
+          persistence: getPersistence(),
         },
         sessionId,
       );

@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import {
-  INFRA_REPAIR_WORKER_KIND,
-  PR_SUMMARY_REFRESH_WORKER_KIND,
-} from '@invoker/execution-engine';
+import { INFRA_REPAIR_WORKER_KIND } from '@invoker/execution-engine';
 import {
   resolveHeadlessDiskHeadroomConfig,
   resolveHeadlessInfraRepairConfig,
@@ -10,7 +7,7 @@ import {
 } from '../headless.js';
 
 describe('headless worker registry', () => {
-  it('lists the PR summary refresh worker kind', async () => {
+  it('lists the registered owner worker kinds', async () => {
     let stdout = '';
     const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
       stdout += String(chunk);
@@ -24,7 +21,7 @@ describe('headless worker registry', () => {
     }
 
     expect(stdout).toContain('Worker kinds');
-    expect(stdout).toContain(PR_SUMMARY_REFRESH_WORKER_KIND);
+    expect(stdout).not.toContain('pr-summary-refresh');
     expect(stdout).toContain(INFRA_REPAIR_WORKER_KIND);
   });
 

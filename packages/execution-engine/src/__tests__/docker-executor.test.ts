@@ -222,6 +222,22 @@ describe('DockerExecutor', () => {
     expect(syncFromRemoteSpy).toHaveBeenCalledWith('/app', expect.any(String));
   });
 
+  it('skips Docker image-baked repo sync when origin is absent', async () => {
+    const execGitSpy = vi.spyOn(executor as any, 'execGitSimple').mockRejectedValueOnce(
+      new Error("docker exec failed (code 128): fatal: 'origin' does not appear to be a git repository\nfatal: Could not read from remote repository."),
+    );
+    const emitOutputSpy = vi.spyOn(executor as any, 'emitOutput').mockImplementation(() => undefined);
+
+    await expect((executor as any).syncFromRemote('/app', 'exec-1')).resolves.toBeUndefined();
+
+    expect(execGitSpy).toHaveBeenCalledWith(['remote', 'get-url', 'origin'], '/app');
+    expect(syncFromRemoteSpy).not.toHaveBeenCalled();
+    expect(emitOutputSpy).toHaveBeenCalledWith(
+      'exec-1',
+      '[Git Fetch] Status: skipped | Remote: origin missing | Using image-baked repo state\n',
+    );
+  });
+
   it('calls setupTaskBranch with /app and content-addressable branch', async () => {
     await executor.start(makeRequest());
 

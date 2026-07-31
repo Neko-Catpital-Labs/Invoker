@@ -1,5 +1,4 @@
-import { expect, test, E2E_REPO_URL } from './fixtures/electron-app.js';
-import { stringify as yamlStringify } from 'yaml';
+import { expect, test } from './fixtures/electron-app.js';
 import type { Page } from '@playwright/test';
 import {
   activityLogWatermark,
@@ -11,9 +10,11 @@ import {
 
 const WORKFLOW_COUNT = 50;
 const TASKS_PER_WORKFLOW = 8;
+const DRAG_DELTA_X = 360;
 const DRAG_STEPS = 60;
 const DRAG_STEP_DELAY_MS = 16;
 const RECORDING_DURATION_MS = 1_400;
+const RECORDING_DONE_TIMEOUT_MS = 15_000;
 const UPDATE_BURSTS = 8;
 const UPDATES_PER_BURST = 16;
 const UPDATE_BURST_DELAY_MS = 50;
@@ -47,6 +48,11 @@ interface DragPerfResult {
   durationMs: number;
 }
 
+interface DragStartPoint {
+  x: number;
+  y: number;
+}
+
 declare global {
   interface Window {
     __invokerDragPerf?: {
@@ -57,20 +63,6 @@ declare global {
       transforms: string[];
     };
   }
-}
-
-function buildPlan(index: number) {
-  return {
-    name: `UI Drag Perf Plan ${index}`,
-    repoUrl: E2E_REPO_URL,
-    onFinish: 'none' as const,
-    tasks: Array.from({ length: TASKS_PER_WORKFLOW }, (_, taskIndex) => ({
-      id: `task-${index}-${taskIndex}`,
-      description: `Task ${index}-${taskIndex}`,
-      command: `echo task-${index}-${taskIndex}`,
-      dependencies: taskIndex === 0 ? [] : [`task-${index}-${taskIndex - 1}`],
-    })),
-  };
 }
 
 async function dismissKnownOverlays(page: Page): Promise<void> {
@@ -92,12 +84,17 @@ async function openPlanGraph(page: Page): Promise<void> {
 }
 
 async function seedLargeWorkflowGraph(page: Page): Promise<void> {
-  const plans = Array.from({ length: WORKFLOW_COUNT }, (_, index) => yamlStringify(buildPlan(index)));
-  await page.evaluate(async (planTexts) => {
-    for (const planText of planTexts) {
-      await window.invoker.loadPlan(planText);
+  await page.evaluate(async (options) => {
+    if (!window.invoker.seedStressFixture) {
+      throw new Error('seedStressFixture is not exposed (NODE_ENV=test required)');
     }
-  }, plans);
+    await window.invoker.seedStressFixture(options);
+  }, {
+    workflowCount: WORKFLOW_COUNT,
+    tasksPerWorkflow: TASKS_PER_WORKFLOW,
+    eventsPerTask: 0,
+    taskStatusMode: 'completed',
+  });
   await page.waitForFunction(
     (expected) => window.invoker.listWorkflows().then((workflows) => workflows.length >= expected),
     WORKFLOW_COUNT,
@@ -107,6 +104,63 @@ async function seedLargeWorkflowGraph(page: Page): Promise<void> {
   await dismissKnownOverlays(page);
   await page.getByRole('button', { name: 'Refresh' }).dispatchEvent('click', { bubbles: true, cancelable: true });
   await page.locator('[data-testid^="workflow-node-"]:visible').first().waitFor({ state: 'visible', timeout: 30_000 });
+}
+
+async function findPaneDragStart(page: Page, paneSelector: string): Promise<DragStartPoint> {
+  return page.evaluate(({ selector, dragDeltaX }) => {
+    const pane = document.querySelector(selector) as HTMLElement | null;
+    if (!pane) throw new Error(`Missing graph pane: ${selector}`);
+
+    const rect = pane.getBoundingClientRect();
+    const minX = rect.left + 24;
+    const maxX = Math.max(minX, rect.right - dragDeltaX - 24);
+    const minY = rect.top + 24;
+    const maxY = Math.max(minY, rect.bottom - 24);
+    const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+    const xs = Array.from(new Set([
+      minX,
+      clamp(rect.left + rect.width * 0.15, minX, maxX),
+      clamp(rect.left + rect.width * 0.3, minX, maxX),
+      clamp(rect.left + rect.width * 0.5, minX, maxX),
+      clamp(rect.left + rect.width * 0.7, minX, maxX),
+      maxX,
+    ]));
+    const ys = Array.from(new Set([
+      minY,
+      clamp(rect.top + rect.height * 0.15, minY, maxY),
+      clamp(rect.top + rect.height * 0.35, minY, maxY),
+      clamp(rect.top + rect.height * 0.55, minY, maxY),
+      clamp(rect.top + rect.height * 0.75, minY, maxY),
+      maxY,
+    ]));
+    const blockedSelector = [
+      '.react-flow__node',
+      '[data-testid^="workflow-node-"]',
+      '.react-flow__controls',
+      'a',
+      'button',
+      'input',
+      'textarea',
+      'select',
+      '[contenteditable="true"]',
+    ].join(',');
+
+    for (const y of ys) {
+      for (const x of xs) {
+        const target = document.elementFromPoint(x, y);
+        const targetElement = target instanceof Element ? target : null;
+        if (!targetElement) continue;
+        if (targetElement.closest(blockedSelector)) continue;
+        if (!pane.contains(targetElement) && targetElement !== pane) continue;
+        return { x, y };
+      }
+    }
+
+    return {
+      x: clamp(rect.left + rect.width * 0.5, minX, maxX),
+      y: clamp(rect.top + rect.height * 0.5, minY, maxY),
+    };
+  }, { selector: paneSelector, dragDeltaX: DRAG_DELTA_X });
 }
 
 async function recordDragPerformance(
@@ -144,20 +198,27 @@ async function recordDragPerformance(
   const box = await pane.boundingBox();
   if (!box) throw new Error(`Graph pane is not visible: ${paneSelector}`);
 
-  const startX = box.x + box.width * 0.5;
-  const startY = box.y + box.height * 0.5;
+  const { x: startX, y: startY } = await findPaneDragStart(page, paneSelector);
+  if (
+    startX < box.x ||
+    startX > box.x + box.width ||
+    startY < box.y ||
+    startY > box.y + box.height
+  ) {
+    throw new Error(`Graph drag start is outside visible pane: ${JSON.stringify({ startX, startY, box })}`);
+  }
   await page.mouse.move(startX, startY);
   await page.mouse.down();
   const updateWork = duringDrag?.() ?? Promise.resolve();
   for (let step = 1; step <= DRAG_STEPS; step += 1) {
     const progress = step / DRAG_STEPS;
-    await page.mouse.move(startX + 360 * progress, startY + Math.sin(progress * Math.PI * 2) * 24);
+    await page.mouse.move(startX + DRAG_DELTA_X * progress, startY + Math.sin(progress * Math.PI * 2) * 24);
     await page.waitForTimeout(DRAG_STEP_DELAY_MS);
   }
   await page.mouse.up();
   await updateWork;
 
-  await page.waitForFunction(() => window.__invokerDragPerf?.done === true, null, { timeout: RECORDING_DURATION_MS + 2_000 });
+  await page.waitForFunction(() => window.__invokerDragPerf?.done === true, null, { timeout: RECORDING_DONE_TIMEOUT_MS });
 
   return page.evaluate(() => {
     const state = window.__invokerDragPerf;
@@ -223,6 +284,27 @@ async function streamTaskUpdatesDuringDrag(page: Page): Promise<number> {
   return updateCount;
 }
 
+async function completeAllSeededTasks(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const result = await window.invoker.getTasks();
+    const tasks = Array.isArray(result) ? result : result.tasks;
+    const completedAt = new Date();
+    await window.invoker.injectTaskStates!(tasks.map((task: { id: string }) => ({
+      taskId: task.id,
+      changes: {
+        status: 'completed',
+        execution: {
+          phase: undefined,
+          completedAt,
+          exitCode: 0,
+          error: undefined,
+          isFixingWithAI: false,
+        },
+      },
+    })));
+  });
+}
+
 function expectSmoothDrag(
   result: DragPerfResult,
   perf: Record<string, unknown>,
@@ -269,30 +351,34 @@ test('workflow graph pan stays responsive while task updates arrive', async ({ p
   await seedLargeWorkflowGraph(page);
 
   let updateCount = 0;
-  const perfWatermark = await activityLogWatermark(page);
-  const result = await recordDragPerformance(
-    page,
-    '[data-testid="workflow-graph-react-flow"] .react-flow__pane',
-    '[data-testid="workflow-graph-react-flow"] .react-flow__viewport',
-    async () => {
-      updateCount = await streamTaskUpdatesDuringDrag(page);
-    },
-  );
-  const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
-  const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
+  try {
+    const perfWatermark = await activityLogWatermark(page);
+    const result = await recordDragPerformance(
+      page,
+      '[data-testid="workflow-graph-react-flow"] .react-flow__pane',
+      '[data-testid="workflow-graph-react-flow"] .react-flow__viewport',
+      async () => {
+        updateCount = await streamTaskUpdatesDuringDrag(page);
+      },
+    );
+    const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
+    const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
 
-  console.log(`UI_GRAPH_DRAG_WITH_UPDATES_BENCH_RESULT=${JSON.stringify({
-    ...result,
-    workflowCount: WORKFLOW_COUNT,
-    taskCount: WORKFLOW_COUNT * TASKS_PER_WORKFLOW,
-    updateCount,
-    updateBursts: UPDATE_BURSTS,
-    updatesPerBurst: UPDATES_PER_BURST,
-    perfPayloads,
-    perf,
-    budgets: DRAG_PERF_BUDGETS,
-  })}`);
-  const evidence = JSON.stringify({ ...result, updateCount, perfPayloads, perf, budgets: DRAG_PERF_BUDGETS });
-  expect(updateCount, evidence).toBe(UPDATE_BURSTS * UPDATES_PER_BURST);
-  expectSmoothDrag(result, perf, perfPayloads);
+    console.log(`UI_GRAPH_DRAG_WITH_UPDATES_BENCH_RESULT=${JSON.stringify({
+      ...result,
+      workflowCount: WORKFLOW_COUNT,
+      taskCount: WORKFLOW_COUNT * TASKS_PER_WORKFLOW,
+      updateCount,
+      updateBursts: UPDATE_BURSTS,
+      updatesPerBurst: UPDATES_PER_BURST,
+      perfPayloads,
+      perf,
+      budgets: DRAG_PERF_BUDGETS,
+    })}`);
+    const evidence = JSON.stringify({ ...result, updateCount, perfPayloads, perf, budgets: DRAG_PERF_BUDGETS });
+    expect(updateCount, evidence).toBe(UPDATE_BURSTS * UPDATES_PER_BURST);
+    expectSmoothDrag(result, perf, perfPayloads);
+  } finally {
+    await completeAllSeededTasks(page).catch(() => {});
+  }
 });

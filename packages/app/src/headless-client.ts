@@ -28,6 +28,7 @@ import {
   tryAcquireOwnerBootstrapLock,
 } from './headless-owner-bootstrap.js';
 import { loadConfig, type InvokerConfig } from './config.js';
+import { BOLD, RESET } from './headless-shared.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   discoverOwner,
@@ -50,7 +51,6 @@ import {
 import { printHeadlessUsage } from './headless-usage.js';
 
 const RED = '\x1b[31m';
-const RESET = '\x1b[0m';
 const repoRoot = resolveRepoRoot(__dirname);
 
 function delegationClientLog(message: string): void {
@@ -99,12 +99,17 @@ const READ_ONLY_QUERY_REQUEST_TIMEOUT_MS = 15_000;
 const GENERIC_READ_OWNER_PING_TIMEOUT_MS = 10_000;
 const POST_BOOTSTRAP_OWNER_RESTART_ATTEMPTS = 3;
 const DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS = 60_000;
+const REQUIRE_EXISTING_OWNER_ENV = 'INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER';
 
 function standaloneOwnerBootstrapTimeoutMs(): number {
   const raw = process.env.INVOKER_HEADLESS_OWNER_BOOTSTRAP_TIMEOUT_MS;
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   return DEFAULT_STANDALONE_OWNER_BOOTSTRAP_TIMEOUT_MS;
+}
+
+function requireExistingSharedMutationOwner(): boolean {
+  return process.env[REQUIRE_EXISTING_OWNER_ENV] === '1';
 }
 
 export class SharedMutationOwnerTimeoutError extends Error {
@@ -203,6 +208,9 @@ function isGenericDelegatableReadCommand(args: string[]): boolean {
   if (command === 'query') {
     const sub = args[1];
     return sub !== undefined && sub !== 'workers' && sub !== 'queue' && sub !== 'ui-perf' && sub !== 'action-graph';
+  }
+  if (command === 'worker') {
+    return (args[1] ?? 'list') === 'status';
   }
   return command !== undefined && GENERIC_DELEGATABLE_READ_COMMANDS.has(command);
 }
@@ -488,6 +496,20 @@ async function tryDelegateWorkersQuery(
   return true;
 }
 
+function isLocalWorkerListCommand(args: string[]): boolean {
+  return args[0] === 'worker' && (args[1] ?? 'list') === 'list';
+}
+
+function writeLocalWorkerList(invokerConfig: InvokerConfig): void {
+  const registry = registerExternalWorkersFromConfig(
+    invokerConfig.externalWorkers,
+    registerBuiltinWorkers(createWorkerRegistry<WorkerRuntimeDependencies>()),
+  );
+  process.stdout.write(`${BOLD}Worker kinds${RESET}\n`);
+  for (const worker of registry.list()) {
+    process.stdout.write(`  ${worker.kind} — available (${worker.note})\n`);
+  }
+}
 async function runLocalWorkersQuery(args: string[], invokerConfig: InvokerConfig): Promise<number> {
   const dbPath = join(resolveInvokerHomeRoot(), 'invoker.db');
   const persistence = await openMainProcessDatabase({
@@ -595,12 +617,19 @@ async function resolveOwnerAndDelegate(
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
   };
+  const ensureStandaloneOwner = requireExistingSharedMutationOwner()
+    ? async () => {
+        const message = `Existing shared mutation owner is required; bootstrap disabled by ${REQUIRE_EXISTING_OWNER_ENV}=1`;
+        delegationClientLog(message);
+        throw new SharedMutationOwnerTimeoutError(message);
+      }
+    : deps.ensureStandaloneOwner;
 
   const resolver = createOwnerResolver(
     {
       messageBus: deps.messageBus,
       refreshMessageBus: deps.refreshMessageBus,
-      ensureStandaloneOwner: deps.ensureStandaloneOwner,
+      ensureStandaloneOwner,
       isRetryableBootstrapError: isSharedMutationOwnerTimeoutError,
     },
     {
@@ -688,6 +717,11 @@ export async function runHeadlessClientCommand(
   if (!internalOwnerServe && await delegateWorkerControl(args, deps.messageBus, invokerConfig, deps.refreshMessageBus)) {
     const exitCode = process.exitCode;
     return typeof exitCode === 'number' ? exitCode : 0;
+  }
+
+  if (!internalOwnerServe && isLocalWorkerListCommand(args)) {
+    writeLocalWorkerList(invokerConfig);
+    return 0;
   }
 
   if (

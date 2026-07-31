@@ -2,12 +2,14 @@ import { execFileSync } from 'node:child_process';
 
 export const PINNED_WORKFLOW_BASE_BRANCH = 'master';
 
-export function normalizeWorkflowBaseBranch(_branch?: string | null): string {
+export function normalizeWorkflowBaseBranch(branch?: string | null): string {
+  const trimmed = branch?.trim();
+  if (trimmed) return trimmed;
   return PINNED_WORKFLOW_BASE_BRANCH;
 }
 
 export function workflowBaseBranchNeedsMigration(branch?: string | null): boolean {
-  return (branch?.trim() ?? '') !== PINNED_WORKFLOW_BASE_BRANCH;
+  return (branch?.trim() ?? '') === '';
 }
 
 
@@ -32,4 +34,3 @@ export function requireDefaultBranchRemote(repoUrl: string): string {
   if (branch) return branch;
   throw new Error('Unable to resolve default branch for repo. Make the remote HEAD readable.');
 }
-
