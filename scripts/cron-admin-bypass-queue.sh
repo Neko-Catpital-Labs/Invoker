@@ -99,6 +99,75 @@ print(f"active\t{workflow_id}\t\t")
 PY
 }
 
+repair_workflow_handoff_detail() {
+  local workflow_id="$1"
+  if [ ! -f "$INVOKER_DB_PATH" ] || ! command -v python3 >/dev/null 2>&1; then
+    printf '\t\t\t\n'
+    return 0
+  fi
+  python3 - "$INVOKER_DB_PATH" "$workflow_id" <<'PY' || printf '\t\t\t\n'
+import sqlite3
+import sys
+
+db_path, workflow_id = sys.argv[1], sys.argv[2]
+try:
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    workflow = con.execute(
+        "select repo_url from workflows where id = ? limit 1",
+        (workflow_id,),
+    ).fetchone()
+    task = con.execute(
+        """
+        select id, branch, commit_hash
+        from tasks
+        where workflow_id = ?
+          and coalesce(commit_hash, '') != ''
+        order by completed_at desc, rowid desc
+        limit 1
+        """,
+        (workflow_id,),
+    ).fetchone()
+except sqlite3.Error:
+    print("\t\t\t")
+    raise SystemExit(0)
+if workflow is None or task is None:
+    print("\t\t\t")
+    raise SystemExit(0)
+def clean(value):
+    return str(value or "").replace("\t", " ").replace("\n", " ")
+print("\t".join([
+    clean(workflow["repo_url"]),
+    clean(task["id"]),
+    clean(task["branch"]),
+    clean(task["commit_hash"]),
+]))
+PY
+}
+
+invalid_reference_sha() {
+  sed -nE 's/.*fatal: invalid reference: ([0-9a-f]{40}).*/\1/ip' <<<"$1" | head -n 1
+}
+
+unreachable_handoff_detail() {
+  local workflow_id="$1"
+  local invalid_sha="$2"
+  local handoff repo_url repair_task repair_branch repair_commit remote_sha
+  handoff="$(repair_workflow_handoff_detail "$workflow_id")"
+  IFS=$'\t' read -r repo_url repair_task repair_branch repair_commit <<<"$handoff"
+  if [ -z "$repo_url" ] || [ -z "$repair_branch" ] || [ -z "$repair_commit" ]; then
+    printf 'repair workflow %s failed with invalid reference %s, but the recorded repair handoff could not be read from the Invoker DB' "$workflow_id" "$invalid_sha"
+    return 0
+  fi
+  remote_sha="$(git ls-remote "$repo_url" "refs/heads/$repair_branch" 2>/dev/null | cut -f1 | head -n 1 || true)"
+  if [ "$repair_commit" = "$invalid_sha" ] && [ "$remote_sha" = "$repair_commit" ]; then
+    printf ''
+    return 0
+  fi
+  printf 'repair workflow %s produced commit %s for %s, but %s refs/heads/%s resolves to %s' \
+    "$workflow_id" "$invalid_sha" "${repair_task:-unknown repair task}" "$repo_url" "$repair_branch" "${remote_sha:-missing}"
+}
+
 bot_review_thread_detail() {
   local num="$1"
   local owner="${TARGET_REPO%%/*}"
@@ -162,9 +231,24 @@ while IFS= read -r pr; do
     detail="GitHub reports a merge conflict against $(jq -r '.baseRefName' <<<"$pr")"
   fi
   if [ -z "$category" ]; then
-    failed_checks="$(jq -r '[.statusCheckRollup[]? | select((.conclusion // "") as $c
-      | $c == "FAILURE" or $c == "ERROR" or $c == "TIMED_OUT" or $c == "CANCELLED")
-      | .name] | unique | join(", ")' <<<"$pr")"
+    failed_checks="$(jq -r '
+      def check_name: .name // .context // "";
+      def check_state: .conclusion // .state // "";
+      def check_time: .completedAt // .startedAt // "";
+      [
+        .statusCheckRollup[]?
+        | {name: check_name, state: check_state, time: check_time}
+        | select(.name != "")
+      ]
+      | sort_by(.name, .time)
+      | group_by(.name)
+      | map(.[-1])
+      | map(select(.state as $c
+        | $c == "FAILURE" or $c == "ERROR" or $c == "TIMED_OUT" or $c == "CANCELLED")
+        | .name)
+      | unique
+      | join(", ")
+    ' <<<"$pr")"
     if [ -n "$failed_checks" ]; then
       category="failed_checks"
       detail="$failed_checks"
@@ -197,6 +281,25 @@ while IFS= read -r pr; do
     IFS=$'\t' read -r submission_state submission_workflow submission_task submission_error <<<"$submission_info"
     if [ "$submission_state" = "failed" ] && [ -n "$submission_workflow" ]; then
       failed_marker="${fingerprint}:${submission_workflow}"
+      invalid_sha="$(invalid_reference_sha "$submission_error")"
+      if [ -n "$invalid_sha" ]; then
+        handoff_detail="$(unreachable_handoff_detail "$submission_workflow" "$invalid_sha")"
+        if [ -n "$handoff_detail" ]; then
+          unreachable_marker="${failed_marker}:${invalid_sha}"
+          if [ "$DRY_RUN" = "1" ]; then
+            log_line "PR #$num: DRY-RUN would stop retrying upstream publication/reachability failure: $handoff_detail"
+            continue
+          fi
+          if ! ledger_marker_seen queue-unreachable "$num" "$unreachable_marker"; then
+            ledger_record queue-unreachable "$num" "$unreachable_marker"
+            gh pr comment "$num" --repo "$TARGET_REPO" \
+              --body "Invoker admin-bypass queue stopped retrying this repair because the upstream repair handoff is unpublished or unreachable. $handoff_detail. This is an upstream publication/reachability failure; fix the producer publication path before recreating downstream safe-push work." \
+              >/dev/null 2>&1 || true
+          fi
+          log_line "PR #$num: upstream publication/reachability failure; not retrying ($handoff_detail)"
+          continue
+        fi
+      fi
       if [ "$DRY_RUN" != "1" ] && ! ledger_marker_seen queue-failed "$num" "$failed_marker"; then
         ledger_record queue-failed "$num" "$failed_marker"
         ledger_record queue-attempt "$num" "$fingerprint"

@@ -76,6 +76,8 @@ def flag_value(name: str) -> str | None:
 
 
 def check_nodes(pr: dict) -> list[dict]:
+    if isinstance(pr.get("statusCheckRollup"), list):
+        return pr["statusCheckRollup"]
     checks = pr.get("checks") or {}
     default = checks.get("*")
     names: set[str] = {name for name in checks if name != "*"}

@@ -8,6 +8,7 @@
 #   #904 mapped,   clean              -> skipped, no blocker
 #   #905 broken but NOT admin-bypass labeled -> excluded by --label filter
 #   #906 admin-bypass, draft          -> skipped
+#   #907 clean, stale cancelled duplicate check -> skipped, no blocker
 # Then: same tick again -> fingerprint dedup, no re-submission.
 # Then: attempt cap -> one-time exhausted PR comment.
 # Then: DRY_RUN=1 -> logs the route, submits nothing.
@@ -76,6 +77,8 @@ echo "$out" | grep -q "PR #905" \
   && fail "tick 1: #905 is not admin-bypass labeled and must never appear" "$out"
 echo "$out" | grep -q "PR #906: draft; skipping" \
   || fail "tick 1: expected draft #906 to be skipped" "$out"
+echo "$out" | grep -q "PR #907: no actionable blocker found; skipping" \
+  || fail "tick 1: expected stale duplicate check #907 to be skipped" "$out"
 
 # rebase-recreate must never be routed for a non-conflict category, and
 # repair-review-gate-ci must never fire here (no mapped failed_checks PR in

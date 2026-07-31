@@ -95,6 +95,50 @@
       "labels": ["admin-bypass"],
       "reviewThreads": [],
       "checks": {}
+    },
+    {
+      "number": 907,
+      "title": "Clean PR with stale cancelled duplicate check",
+      "url": "https://github.com/fake/repo/pull/907",
+      "state": "OPEN",
+      "isDraft": false,
+      "baseRefName": "master",
+      "headRefName": "feature/907",
+      "headRefOid": "7777777777777777777777777777777777777a",
+      "mergeStateStatus": "CLEAN",
+      "mergeable": "MERGEABLE",
+      "reviewDecision": "",
+      "labels": ["admin-bypass"],
+      "reviewThreads": [],
+      "statusCheckRollup": [
+        {
+          "__typename": "CheckRun",
+          "name": "PR Body",
+          "conclusion": "CANCELLED",
+          "status": "COMPLETED",
+          "completedAt": "2026-07-20T00:00:00Z",
+          "startedAt": "2026-07-20T00:00:00Z",
+          "detailsUrl": "https://github.com/fake/repo/actions/runs/1/job/1"
+        },
+        {
+          "__typename": "CheckRun",
+          "name": "PR Body",
+          "conclusion": "SUCCESS",
+          "status": "COMPLETED",
+          "completedAt": "2026-07-20T00:05:00Z",
+          "startedAt": "2026-07-20T00:04:00Z",
+          "detailsUrl": "https://github.com/fake/repo/actions/runs/2/job/2"
+        },
+        {
+          "__typename": "CheckRun",
+          "name": "Unit Tests",
+          "conclusion": "SUCCESS",
+          "status": "COMPLETED",
+          "completedAt": "2026-07-20T00:05:00Z",
+          "startedAt": "2026-07-20T00:04:00Z",
+          "detailsUrl": "https://github.com/fake/repo/actions/runs/2/job/3"
+        }
+      ]
     }
   ],
   "issue_comments": {
@@ -103,6 +147,7 @@
     "903": [],
     "904": [],
     "905": [],
-    "906": []
+    "906": [],
+    "907": []
   }
 }

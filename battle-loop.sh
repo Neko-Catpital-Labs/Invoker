@@ -30,6 +30,7 @@ REPROS=(
   scripts/repro/repro-babysit-merged-pr-terminal.sh
   scripts/repro/repro-babysit-merged-during-repair.sh
   scripts/repro/repro-admin-bypass-queue-retries-failed-workflow.sh
+  scripts/repro/repro-admin-bypass-queue-invalid-ref-stop.sh
   scripts/repro/repro-admin-bypass-queue-bot-review-thread.sh
 )
 
