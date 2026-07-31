@@ -1646,6 +1646,7 @@ describe('planning chat worktree provisioning', () => {
       expect(existsSync(mcpConfigPath)).toBe(true);
       const parsed = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
       expect(parsed.mcpServers.invoker.command).toBe('invoker-cli');
+      expect(parsed.mcpServers.invoker.env).toEqual({ INVOKER_PLANNING_SESSION_ID: created.session.id });
     } finally {
       rmSync(worktreePath, { recursive: true, force: true });
     }
@@ -1687,6 +1688,7 @@ describe('planning chat worktree provisioning', () => {
       expect(existsSync(mcpConfigPath)).toBe(true);
       const parsed = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
       expect(parsed.mcpServers.invoker.command).toBe('invoker-cli');
+      expect(parsed.mcpServers.invoker.env).toEqual({ INVOKER_PLANNING_SESSION_ID: record.id });
     } finally {
       rmSync(worktreePath, { recursive: true, force: true });
     }
@@ -1821,6 +1823,7 @@ describe('rebindPlanningChatRepo', () => {
       expect(existsSync(mcpConfigPath)).toBe(true);
       const parsed = JSON.parse(readFileSync(mcpConfigPath, 'utf8'));
       expect(parsed.mcpServers.invoker.command).toBe('invoker-cli');
+      expect(parsed.mcpServers.invoker.env).toEqual({ INVOKER_PLANNING_SESSION_ID: session.id });
     } finally {
       rmSync(worktreePath, { recursive: true, force: true });
     }
