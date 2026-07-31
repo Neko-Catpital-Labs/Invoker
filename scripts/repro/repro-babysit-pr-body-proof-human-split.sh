@@ -150,23 +150,14 @@ import json
 import os
 from pathlib import Path
 rows = [json.loads(line) for line in Path(os.environ['LEDGER_PATH']).read_text(encoding='utf-8').splitlines() if line.strip()]
-invalid = next((row for row in rows if row.get('kind') == 'repair-invalid' and row.get('pr') == 5804 and row.get('key') == 'PR Body'), None)
-if invalid is None:
-    raise SystemExit('missing repair-invalid row for PR #5804')
-errors = (invalid.get('meta') or {}).get('errors') or []
-if not any('cannot ship with proof files' in str(item) for item in errors):
-    raise SystemExit('repair-invalid row missing proof-file split reason')
-if not any('human stack split required' in str(item) for item in errors):
-    raise SystemExit('repair-invalid row missing manual split note')
+if not any(row.get('kind') == 'repair-delegated' and row.get('pr') == 5804 and row.get('key') == 'PR Body' for row in rows):
+    raise SystemExit('missing repair-delegated ledger row for PR #5804')
+if any(row.get('kind') == 'repair-invalid' and row.get('pr') == 5804 and row.get('key') == 'PR Body' for row in rows):
+    raise SystemExit('repair-invalid must be produced by the delegated repair, not submission')
 state = json.loads(Path(os.environ['STATE_PATH']).read_text(encoding='utf-8'))
 comments = state.get('issue_comments', {}).get('5804', [])
-if len(comments) != 1:
-    raise SystemExit(f'expected exactly one stop comment, saw {len(comments)}')
-body = comments[0].get('body', '')
-if 'cannot ship with proof files' not in body:
-    raise SystemExit('stop comment missing proof-file split reason')
-if 'human stack split required' not in body:
-    raise SystemExit('stop comment missing manual split note')
+if comments:
+    raise SystemExit(f'delegation must not comment on the PR, saw {len(comments)} comment(s)')
 PY
 }
 
@@ -224,18 +215,17 @@ fi
 printf '%s\n' "$out1"
 assert_first_run_state
 
-: > "$LEDGER_PATH"
 if ! out2="$(run_worker)"; then
-  fail 'tick 2: worker failed after ledger loss' "$out2"
+  fail 'tick 2: worker failed' "$out2"
 fi
 printf '%s\n' "$out2"
 case "$out2" in
-  *'repair-check PR #5804'*) fail 'tick 2: worker retried existing proof split stop after ledger loss' "$out2" ;;
+  *'repair-check PR #5804'*) fail 'tick 2: worker retried delegated proof split repair' "$out2" ;;
 esac
 case "$out2" in
-  *'"reason": "blocked-needs-human"'*) ;;
-  *) fail 'tick 2: worker did not keep blocked-needs-human wait state after ledger loss' "$out2" ;;
+  *'"reason": "repair-delegated"'*) ;;
+  *) fail 'tick 2: worker did not wait on delegated proof split repair' "$out2" ;;
 esac
-assert_stop_comment_count 1
+assert_stop_comment_count 0
 
 echo '[repro] passed'

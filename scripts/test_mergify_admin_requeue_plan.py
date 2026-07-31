@@ -646,6 +646,32 @@ class PlanStackActions(PlannerTestCase):
             [("repair_check", QUEUE_ONLY_CHECK)],
         )
 
+    def test_delegated_queue_only_repair_waits_without_retrying(self):
+        ledger = self._ledger()
+        ledger.record("repair-delegated", 10, HEAD, QUEUE_ONLY_CHECK, 1)
+        snapshot = pr(
+            number=10,
+            checks={},
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            latest_mergify=event(
+                failing=(QUEUE_ONLY_CHECK,),
+                conditions=((QUEUE_ONLY_CHECK, "failure"),),
+            ),
+        )
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            {QUEUE_ONLY_CHECK},
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={10},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "repair-delegated")
+        blockers = plan.summary["prs"][0]["blockers"]
+        self.assertEqual(blockers[0]["kind"], "repair_delegated")
+        self.assertEqual(blockers[0]["key"], QUEUE_ONLY_CHECK)
+
     def test_admin_bypass_stack_members_progress_as_they_become_bottom(self):
         before_land = m.StackGroup(
             "s",

@@ -404,6 +404,29 @@ def latest_mergify_repair_invalid_blockers(
     return tuple(blockers)
 
 
+def latest_mergify_repair_delegated_blockers(
+    pr: PrSnapshot,
+    ledger: Ledger,
+    suppressed_failed_checks: Collection[str],
+) -> tuple[Blocker, ...]:
+    latest = pr.latest_mergify
+    if not latest or latest.state != "dequeued" or latest.head_sha != pr.head_ref_oid:
+        return ()
+    suppressed = set(suppressed_failed_checks)
+    blockers: list[Blocker] = []
+    for name in latest.failing_checks:
+        if name in suppressed:
+            continue
+        blocker = latest_repair_delegated_blocker(
+            pr,
+            Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"),
+            ledger,
+        )
+        if blocker is not None:
+            blockers.append(blocker)
+    return tuple(blockers)
+
+
 def _assert_stack_facts_invariants(facts: StackFacts) -> None:
     assert facts.stack.prs, "stack must contain at least one PR"
     pr_numbers = tuple(pr.number for pr in facts.stack.prs)
@@ -479,6 +502,15 @@ def build_stack_facts(
         existing_keys = {blocker.key for blocker in blockers}
         blockers.extend(
             blocker for blocker in latest_mergify_repair_invalid_blockers(
+                pr,
+                ledger,
+                suppressed_failed_checks_by_pr.get(pr.number, ()),
+            )
+            if blocker.key not in existing_keys
+        )
+        existing_keys = {blocker.key for blocker in blockers}
+        blockers.extend(
+            blocker for blocker in latest_mergify_repair_delegated_blockers(
                 pr,
                 ledger,
                 suppressed_failed_checks_by_pr.get(pr.number, ()),

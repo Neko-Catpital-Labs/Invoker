@@ -136,11 +136,10 @@ fi
 printf '%s\n' "$out1"
 
 [ ! -f "$CLAUDE_CALLED" ] || fail 'tick 1: worker invoked Claude for empty queue-only log' "$(cat "$CLAUDE_CALLED")"
-echo "$out1" | grep -q 'admin-bypass-queue-only-empty-log-noop' || fail 'tick 1: missing empty-log noop trace' "$out1"
-echo "$out1" | grep -q 'admin-bypass-queue-only-noop' || fail 'tick 1: missing queue-only noop trace' "$out1"
+echo "$out1" | grep -q 'admin-bypass-repair-delegated' || fail 'tick 1: missing repair-delegated trace' "$out1"
 
-if ! grep -q '"kind": "queue-only-noop".*"pr": 5810' "$LEDGER_PATH"; then
-  fail 'tick 1: queue-only noop was not recorded' "$(cat "$LEDGER_PATH")"
+if ! grep -q '"kind": "repair-delegated".*"pr": 5810' "$LEDGER_PATH"; then
+  fail 'tick 1: queue-only repair delegation was not recorded' "$(cat "$LEDGER_PATH")"
 fi
 
 if ! out2="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 5810 2>&1)"; then
@@ -149,8 +148,8 @@ fi
 printf '%s\n' "$out2"
 
 ! echo "$out2" | grep -q 'DRY-RUN repair-check PR #5810 check="required-fast / Guardrails"' \
-  || fail 'tick 2: worker retried suppressed queue-only Guardrails failure' "$out2"
-echo "$out2" | grep -q 'DRY-RUN repair-check PR #5810 check="PR Body"' \
-  || fail 'tick 2: worker did not move on to the remaining PR-head blocker' "$out2"
+  || fail 'tick 2: worker retried delegated queue-only Guardrails repair' "$out2"
+echo "$out2" | grep -q '"reason": "repair-delegated"' \
+  || fail 'tick 2: worker did not wait on delegated queue-only repair' "$out2"
 
 echo '[repro] passed'

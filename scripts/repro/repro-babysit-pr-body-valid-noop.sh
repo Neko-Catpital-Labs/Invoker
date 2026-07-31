@@ -182,10 +182,9 @@ fi
 printf '%s\n' "$out1"
 
 [ ! -f "$CLAUDE_CALLED" ] || fail 'tick 1: worker invoked Claude for locally valid PR Body' "$(cat "$CLAUDE_CALLED")"
-echo "$out1" | grep -q 'admin-bypass-pr-body-valid-noop' || fail 'tick 1: missing PR Body valid-noop trace' "$out1"
-echo "$out1" | grep -q 'admin-bypass-repair-noop' || fail 'tick 1: missing repair-noop trace' "$out1"
-grep -q '"kind": "repair-noop".*"pr": 5810' "$LEDGER_PATH" \
-  || fail 'tick 1: repair noop was not recorded' "$(cat "$LEDGER_PATH")"
+echo "$out1" | grep -q 'admin-bypass-repair-delegated' || fail 'tick 1: missing repair-delegated trace' "$out1"
+grep -q '"kind": "repair-delegated".*"pr": 5810' "$LEDGER_PATH" \
+  || fail 'tick 1: repair delegation was not recorded' "$(cat "$LEDGER_PATH")"
 
 if ! out2="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 5810 2>&1)"; then
   fail 'tick 2: dry-run failed after PR Body noop' "$out2"
@@ -193,8 +192,8 @@ fi
 printf '%s\n' "$out2"
 
 ! echo "$out2" | grep -q 'DRY-RUN repair-check PR #5810 check="PR Body"' \
-  || fail 'tick 2: worker retried suppressed PR Body failure' "$out2"
-echo "$out2" | grep -q 'DRY-RUN requeue PR #5810' \
-  || fail 'tick 2: worker did not advance to requeue after PR Body noop' "$out2"
+  || fail 'tick 2: worker retried delegated PR Body repair' "$out2"
+echo "$out2" | grep -q '"reason": "repair-delegated"' \
+  || fail 'tick 2: worker did not wait on delegated PR Body repair' "$out2"
 
 echo '[repro] passed'

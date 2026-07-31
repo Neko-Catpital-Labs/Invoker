@@ -198,6 +198,10 @@ function tailText(text: string): string {
   return text.length <= MAX_OUTPUT_TAIL_CHARS ? text : text.slice(-MAX_OUTPUT_TAIL_CHARS);
 }
 
+function isGitInvalidReferenceError(errorText: unknown): boolean {
+  return typeof errorText === 'string' && errorText.includes('fatal: invalid reference:');
+}
+
 function taskDecisionExternalKey(candidate: Pick<InfraRepairScanCandidate, 'taskId' | 'generation' | 'taskStateVersion'>, reason: InfraRepairReason): string {
   return `task:${candidate.taskId}:g${candidate.generation}:v${candidate.taskStateVersion}:${reason}`;
 }
@@ -581,6 +585,22 @@ async function handleInvalidReferenceRecovery(
   options: InfraRepairWorkerPolicyOptions,
   candidate: ValidatedGenericSshInfraCandidate,
 ): Promise<void> {
+  if (isGitInvalidReferenceError(candidate.task.execution.error)) {
+    recordTaskDecision(
+      options,
+      candidate,
+      candidate.reason,
+      'completed',
+      'Blocked recreate-task because an upstream git reference is unpublished or unreachable',
+      {
+        targetId: candidate.targetId,
+        errorTail: tailText(candidate.task.execution.error ?? ''),
+      },
+      'upstream-publication-unreachable',
+    );
+    return;
+  }
+
   await submitFollowUpMutation(
     options,
     candidate,

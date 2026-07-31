@@ -132,9 +132,11 @@ case "$out" in
 esac
 grep -q 'repair-check PR #6111 check="PR Body"' <<<"$out" \
   || fail 'expected repair-check action' "$out"
-grep -q '"kind": "repair-check"' "$LEDGER_PATH" \
-  || fail 'expected repair-check ledger row' "$(cat "$LEDGER_PATH")"
-grep -q '"kind": "repair-noop"' "$LEDGER_PATH" \
-  || fail 'expected repair-noop ledger row' "$(cat "$LEDGER_PATH")"
+grep -q '"kind": "repair-delegated"' "$LEDGER_PATH" \
+  || fail 'expected repair-delegated ledger row' "$(cat "$LEDGER_PATH")"
+! grep -q '"kind": "repair-check"' "$LEDGER_PATH" \
+  || fail 'land worker recorded synchronous repair-check after delegation' "$(cat "$LEDGER_PATH")"
+! grep -q '"kind": "repair-noop"' "$LEDGER_PATH" \
+  || fail 'land worker ran local repair instead of delegating' "$(cat "$LEDGER_PATH")"
 
 echo '[repro] passed'

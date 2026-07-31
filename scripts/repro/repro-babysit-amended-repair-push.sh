@@ -124,19 +124,25 @@ git clone "$REMOTE" "$WORK_ROOT" >/dev/null
 write_state
 
 if ! out="$(run_worker)"; then
-  fail 'worker failed to push amended repair as descendant' "$out"
+  fail 'worker failed to delegate amended repair' "$out"
 fi
 printf '%s\n' "$out"
 
 REMOTE_HEAD="$(git --git-dir="$REMOTE" rev-parse refs/heads/stack/5806)"
-if [ "$REMOTE_HEAD" = "$ORIGINAL_HEAD" ]; then
-  fail 'remote branch did not advance'
+if [ "$REMOTE_HEAD" != "$ORIGINAL_HEAD" ]; then
+  fail 'land worker pushed directly instead of delegating repair'
 fi
-if ! git --git-dir="$REMOTE" merge-base --is-ancestor "$ORIGINAL_HEAD" "$REMOTE_HEAD"; then
-  fail 'remote repair did not descend from original head'
+if ! grep -q '"kind": "repair-delegated".*"pr": 5806' "$LEDGER_PATH"; then
+  fail 'repair delegation was not recorded' "$(cat "$LEDGER_PATH")"
 fi
-if git --git-dir="$REMOTE" cat-file -e "$REMOTE_HEAD:scripts/repro/proof-wrapper.sh" 2>/dev/null; then
-  fail 'proof wrapper still exists on pushed repair'
+
+if ! out2="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 5806 2>&1)"; then
+  fail 'dry-run failed after amended repair delegation' "$out2"
 fi
+printf '%s\n' "$out2"
+! echo "$out2" | grep -q 'DRY-RUN repair-check PR #5806 check="PR Body"' \
+  || fail 'worker retried delegated amended repair' "$out2"
+echo "$out2" | grep -q '"reason": "repair-delegated"' \
+  || fail 'worker did not wait on delegated amended repair' "$out2"
 
 echo '[repro] passed'

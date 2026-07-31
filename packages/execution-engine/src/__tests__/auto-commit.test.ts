@@ -2239,6 +2239,35 @@ describe('BaseExecutor.handleProcessExit push semantics', () => {
     expect(entry.outputBuffer.join('')).toContain('no local ref to publish');
   });
 
+  it('publishes the recorded HEAD when a repair task checked out the target PR branch', async () => {
+    const taskBranch = 'invoker/pr-repair-task';
+    const targetBranch = 'pr/target-repair';
+    const baseSha = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+    execSync(`git checkout -b ${taskBranch}`, { cwd: cloneDir });
+    execSync(`git push origin HEAD:refs/heads/${taskBranch}`, { cwd: cloneDir });
+    execSync(`git checkout -b ${targetBranch} master`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'repair.txt'), 'repair result');
+
+    const req = makeRequest('task-pr-repair', {
+      description: 'Repair target PR',
+      prompt: 'Repair the existing pull request branch.',
+    });
+    const entry = executor.registerTestEntry('e-pr-repair', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    await executor.testHandleProcessExit('e-pr-repair', req, cloneDir, 0, { branch: taskBranch });
+
+    expect(response?.status).toBe('completed');
+    const recordedCommit = response?.outputs.commitHash;
+    expect(recordedCommit).toBeTruthy();
+    const remoteTaskSha = execSync(`git --git-dir="${originDir}" rev-parse "refs/heads/${taskBranch}"`)
+      .toString()
+      .trim();
+    expect(remoteTaskSha).toBe(recordedCommit);
+    expect(remoteTaskSha).not.toBe(baseSha);
+  });
+
   it('marks codex ai_task as failed when semantic sandbox denial appears in output despite exit 0', async () => {
     execSync('git checkout -b invoker/semantic-fail', { cwd: cloneDir });
 
