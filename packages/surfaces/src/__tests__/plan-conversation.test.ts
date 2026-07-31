@@ -55,6 +55,17 @@ function mockCursorResponse(text: string) {
   mockSpawn.mockReturnValueOnce(createMockProcess(text));
 }
 
+function expectAuthorizedPlanToInvokerPrompt(prompt: string) {
+  expect(prompt).toContain('The user has explicitly approved drafting');
+  expect(prompt).toContain('plan-to-invoker');
+  expect(prompt).toContain('first produce a Markdown planning artifact');
+  expect(prompt).toContain('convert the approved Markdown plan into a full Invoker YAML task plan');
+  expect(prompt).toContain('skill-doctor.sh');
+  expect(prompt).toContain('MCP review/submit flow');
+  expect(prompt).toContain('Harness handoff mode');
+  expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
+}
+
 /** Helper: parse the returned plan text string into an object for assertions. */
 function parsePlanText(text: string): Record<string, any> {
   return parseYaml(text) as Record<string, any>;
@@ -597,10 +608,7 @@ describe('PlanConversation', () => {
     expect(conversational.submittedPlanText).toBeNull();
     expect(mockSpawn).toHaveBeenCalledTimes(1);
     const prompt = mockSpawn.mock.calls[0][1][1] as string;
-    expect(prompt).toContain('The user has explicitly approved drafting');
-    expect(prompt).toContain('plan-to-invoker');
-    expect(prompt).toContain('Harness handoff mode');
-    expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
+    expectAuthorizedPlanToInvokerPrompt(prompt);
     expect(prompt).not.toContain('name: "Plan Name"');
     expect(prompt).not.toContain('tasks:\n  - id: task-1');
   });
@@ -885,9 +893,7 @@ describe('PlanConversation prompt construction', () => {
 
   it('buildPlanSystemPrompt conversational mode with drafting authorized points at the plan-to-invoker skill instead of embedding the ad hoc contract', () => {
     const prompt = buildPlanSystemPrompt('main', undefined, { conversationalPlanning: true, draftingAuthorized: true });
-    expect(prompt).toContain('plan-to-invoker');
-    expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
-    expect(prompt).toContain('Harness handoff mode');
+    expectAuthorizedPlanToInvokerPrompt(prompt);
     expect(prompt).not.toContain('tasks:\n  - id: task-1');
     expect(prompt).not.toContain('name: "Plan Name"');
   });
