@@ -22,7 +22,6 @@ ${BOLD}Query${RESET} (read-only, all support --output text|label|json|jsonl):
                                                       List durable worker action rows (all workers)
   query worker-decisions [--workflow <id>] [--decision act|skip] [--reason <substr>]
                                                       Show what each worker decided: submitted vs skipped, and why
-  query admin-bypass-queue [--reset] [--output F]    Inspect or clear admin-bypass queue attempt ledger rows
   query ui-perf [--output F] [--reset]               Print live UI perf stats
   query stats [--output F]                           Aggregate stats across all workflows
   query execution-leases [--output F]               List live SSH/host execution resource leases
