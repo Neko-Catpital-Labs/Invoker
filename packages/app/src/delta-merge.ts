@@ -34,6 +34,8 @@ export type RecoveryLookupResult =
   | { kind: 'missing' }
   | { kind: 'unavailable'; reason?: string };
 
+export type RecoveryLookupValue = TaskState | undefined | RecoveryLookupResult;
+
 export function recoveryFound(task: TaskState): RecoveryLookupResult {
   return { kind: 'found', task };
 }
@@ -44,6 +46,18 @@ export function recoveryMissing(): RecoveryLookupResult {
 
 export function recoveryUnavailable(reason?: string): RecoveryLookupResult {
   return reason ? { kind: 'unavailable', reason } : { kind: 'unavailable' };
+}
+
+function isRecoveryLookupResult(value: RecoveryLookupValue): value is RecoveryLookupResult {
+  return Boolean(value)
+    && typeof value === 'object'
+    && 'kind' in value
+    && (value.kind === 'found' || value.kind === 'missing' || value.kind === 'unavailable');
+}
+
+function normalizeRecoveryLookupResult(value: RecoveryLookupValue): RecoveryLookupResult {
+  if (isRecoveryLookupResult(value)) return value;
+  return value ? recoveryFound(value) : recoveryMissing();
 }
 
 // ── Snapshot cache ───────────────────────────────────────────
@@ -227,16 +241,16 @@ export function resolveQuarantine(
  * Loaders the recovery loop consults to find an authoritative snapshot
  * for a quarantined task id.
  *
- * - `loadTask`: persistence/owner lookup by id. `missing` means an
- *   authoritative owner proved the task is gone; `unavailable` means the caller
- *   cannot prove existence either way.
+ * - `loadTask`: persistence/owner lookup by id. Plain `undefined` and `missing`
+ *   mean an authoritative owner proved the task is gone; `unavailable` means
+ *   the caller cannot prove existence either way.
  * - `getMergeNode`: orchestrator in-memory lookup by workflowId. Authoritative
  *   source for synthetic `__merge__${workflowId}` ids, which are not stored
  *   in persistence but are tracked in `Orchestrator.stateMachine`.
  */
 export interface RecoveryLoaders {
-  loadTask: (taskId: string) => RecoveryLookupResult;
-  getMergeNode: (workflowId: string) => RecoveryLookupResult;
+  loadTask: (taskId: string) => RecoveryLookupValue;
+  getMergeNode: (workflowId: string) => RecoveryLookupValue;
 }
 
 export interface RecoveryResult {
@@ -276,7 +290,7 @@ export function recoverQuarantinedTask(
   taskId: string,
   loaders: RecoveryLoaders,
 ): RecoveryResult {
-  const persisted = loaders.loadTask(taskId);
+  const persisted = normalizeRecoveryLookupResult(loaders.loadTask(taskId));
   if (persisted.kind === 'found') {
     resolveQuarantine(cache, taskId, persisted.task);
     return { outcome: 'found', rendererDelta: { type: 'created', task: persisted.task } };
@@ -284,7 +298,7 @@ export function recoverQuarantinedTask(
 
   if (taskId.startsWith(SYNTHETIC_MERGE_PREFIX)) {
     const workflowId = taskId.slice(SYNTHETIC_MERGE_PREFIX.length);
-    const synthetic = loaders.getMergeNode(workflowId);
+    const synthetic = normalizeRecoveryLookupResult(loaders.getMergeNode(workflowId));
     if (synthetic.kind === 'found') {
       resolveQuarantine(cache, taskId, synthetic.task);
       return { outcome: 'found', rendererDelta: { type: 'created', task: synthetic.task } };
