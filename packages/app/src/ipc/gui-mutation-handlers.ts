@@ -2,7 +2,7 @@ import type { App, BrowserWindow, IpcMain } from 'electron';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { Orchestrator, CommandService, OrchestratorErrorCode, normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
+import { Orchestrator, CommandService, OrchestratorErrorCode, PINNED_WORKFLOW_BASE_BRANCH } from '@invoker/workflow-core';
 import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 import { CommandError, IpcChannels, makeEnvelope } from '@invoker/contracts';
 import type {
@@ -2210,8 +2210,9 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     'normal',
     async (workflowIdArg: unknown, baseBranchArg: unknown) => {
     const workflowId = String(workflowIdArg);
-    const baseBranch = normalizeWorkflowBaseBranch(String(baseBranchArg));
-    logger.info(`set-merge-branch: workflow="${workflowId}" → "${baseBranch}"`, { module: 'ipc' });
+    const requestedBaseBranch = String(baseBranchArg);
+    const baseBranch = PINNED_WORKFLOW_BASE_BRANCH;
+    logger.info(`set-merge-branch: workflow="${workflowId}" requested="${requestedBaseBranch}" → "${baseBranch}"`, { module: 'ipc' });
     try {
       persistence.updateWorkflow(workflowId, { baseBranch });
 
