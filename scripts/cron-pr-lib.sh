@@ -152,11 +152,13 @@ ledger_max_marker() {
 gh_json() {
   local out code
   set +e
-  out="$(gh "$@" 2>&1)"
+  # Do not let gh inherit a caller's loop stdin. Some gh subcommands may probe
+  # stdin, which can drain process-substitution streams used by PR scan loops.
+  out="$(gh "$@" </dev/null 2>&1)"
   code=$?
   if [ "$code" -ne 0 ]; then
     sleep 2
-    out="$(gh "$@" 2>&1)"
+    out="$(gh "$@" </dev/null 2>&1)"
     code=$?
   fi
   set -e
