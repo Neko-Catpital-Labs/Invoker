@@ -196,17 +196,17 @@ describe('plan draft-file activation prompt policy', () => {
     expect(prompt).not.toContain(SUBMIT_REPLY_LINE);
   });
 
-  it('restores YAML drafting instructions after conversational authorization', () => {
+  it('points at the plan-to-invoker skill after conversational authorization, instead of embedding the ad hoc YAML contract', () => {
     const prompt = buildPlanSystemPrompt('develop', undefined, {
       conversationalPlanning: true,
       draftingAuthorized: true,
     });
 
     expect(prompt).toContain('The user has explicitly approved drafting');
-    expect(prompt).toContain('baseBranch: develop');
-    expect(prompt).toContain('name: "Plan Name"');
-    expect(prompt).toContain('When the final YAML plan is ready, output the COMPLETE YAML inside a ```yaml code block.');
-    expect(prompt).toContain('Slack orchestrator reads that exact YAML');
-    expect(prompt).toContain('Every implementation task MUST have a corresponding test task');
+    expect(prompt).toContain('plan-to-invoker');
+    expect(prompt).toContain('Harness handoff mode');
+    expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
+    expect(prompt).not.toContain('name: "Plan Name"');
+    expect(prompt).not.toContain('tasks:\n  - id: task-1');
   });
 });
