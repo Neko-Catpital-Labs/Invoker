@@ -9,9 +9,9 @@ import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
 export const E2E_AUTOFIX_WORKER_KIND = 'e2e-autofix';
-export const E2E_AUTOFIX_SCRIPT_RELATIVE_PATH = 'scripts/daily-e2e-do-submit.sh';
-/** Default cadence: run the battery about twice a day (every twelve hours). */
-export const DEFAULT_E2E_AUTOFIX_INTERVAL_MS = 12 * 60 * 60_000;
+export const E2E_AUTOFIX_SCRIPT_RELATIVE_PATH = 'scripts/cron-e2e-regression-watch.sh';
+/** Default cadence: sweep default-branch push CI every fifteen minutes. */
+export const DEFAULT_E2E_AUTOFIX_INTERVAL_MS = 15 * 60_000;
 
 type EnvOverrides = Record<string, string | undefined>;
 
@@ -20,7 +20,7 @@ export interface E2eAutoFixWorkerConfig {
   repoRoot?: string;
   /** Environment overrides passed to the shell entrypoint. `undefined` removes a variable. */
   env?: EnvOverrides;
-  /** Poll cadence in milliseconds. `> 0` arms the periodic timer. Defaults to twelve hours. */
+  /** Poll cadence in milliseconds. `> 0` arms the periodic timer. Defaults to fifteen minutes. */
   intervalMs?: number;
   /** Shell executable used to run the existing entrypoint. Defaults to `bash`. */
   shell?: string;
@@ -40,13 +40,13 @@ export interface E2eAutoFixTickOptions extends E2eAutoFixWorkerConfig {
   spawnProcess?: typeof spawn;
 }
 
-/** Register the built-in e2e auto-fix battery worker. */
+/** Register the built-in default-branch CI auto-fix watcher. */
 export function registerE2eAutoFixWorker(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {
   registry.register({
     kind: E2E_AUTOFIX_WORKER_KIND,
-    note: 'Periodically runs the extended e2e battery and opens one auto-fix PR per failing suite.',
+    note: 'Watches default-branch push CI and opens one repair workflow per first-bad SHA/job.',
     factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
       createE2eAutoFixWorker({
         logger: deps.logger,
@@ -62,8 +62,7 @@ export function createE2eAutoFixWorker(options: E2eAutoFixWorkerOptions): Worker
     instanceId: options.instanceId,
     logger: options.logger,
     intervalMs: options.intervalMs ?? DEFAULT_E2E_AUTOFIX_INTERVAL_MS,
-    // Auto-start on launch must NOT immediately kick off a ~1h battery.
-    tickOnStart: options.tickOnStart ?? false,
+    tickOnStart: options.tickOnStart ?? true,
     installSignalHandlers: options.installSignalHandlers,
     onTick: options.onTick ?? createE2eAutoFixTick({
       logger: options.logger,

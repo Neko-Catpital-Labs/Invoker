@@ -94,7 +94,7 @@ describe('e2e auto-fix worker', () => {
     return tmpRoot;
   }
 
-  it('spawns the daily-e2e-do-submit script with the repo root as cwd', async () => {
+  it('spawns the CI regression watcher script with the repo root as cwd', async () => {
     const repoRoot = makeRepoRoot();
     const logger = makeLogger();
     const harness = makeSpawnHarness({ stdout: 'submitted one plan\n', stderr: 'diagnostic line\n' });
@@ -149,7 +149,7 @@ describe('e2e auto-fix worker', () => {
     await expect(tick(makeCtx())).rejects.toThrow('exited with code 1');
   });
 
-  it('arms the default twelve-hour interval and does not tick on start', async () => {
+  it('ticks on start and arms the default fifteen-minute interval', async () => {
     vi.useFakeTimers();
     const repoRoot = makeRepoRoot();
     const harness = makeSpawnHarness();
@@ -161,13 +161,14 @@ describe('e2e auto-fix worker', () => {
     });
 
     worker.start();
-    expect(harness.calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(harness.calls).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(DEFAULT_E2E_AUTOFIX_INTERVAL_MS - 1);
-    expect(harness.calls).toEqual([]);
+    expect(harness.calls).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(1);
-    expect(harness.calls).toHaveLength(1);
+    expect(harness.calls).toHaveLength(2);
     await worker.stop();
   });
 });

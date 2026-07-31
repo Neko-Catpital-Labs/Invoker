@@ -66,6 +66,6 @@ export interface WorkerRuntimeDependencies {
   autoApprove?: AutoApproveWorkerConfig;
   /** Workflow-resume worker tuning (cooldown and poll cadence). */
   workflowResume?: WorkflowResumeWorkerConfig;
-  /** e2e auto-fix battery worker configuration. */
+  /** e2e auto-fix/default-branch CI watcher configuration. */
   e2eAutoFix?: E2eAutoFixWorkerConfig;
 }
