@@ -64,6 +64,13 @@ export class OrchestratorError extends Error {
   }
 }
 
+export function isWorkerResponseGenerationValid(
+  response: Partial<Pick<WorkResponse, 'executionGeneration'>>,
+  activeGeneration: number,
+): boolean {
+  return response.executionGeneration === undefined || response.executionGeneration === activeGeneration;
+}
+
 function isActiveForInvalidation(status: TaskStatus): boolean {
   return (
     status === 'running' ||
@@ -1530,10 +1537,7 @@ export class Orchestrator {
           return [];
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
-        if (
-          response.executionGeneration !== undefined &&
-          response.executionGeneration !== activeGeneration
-        ) {
+        if (!isWorkerResponseGenerationValid(response, activeGeneration)) {
           this.logger.warn('[worker-response] STALE_GENERATION_REJECTED', {
             taskId: earlyTask.id,
             responseGeneration: response.executionGeneration,
