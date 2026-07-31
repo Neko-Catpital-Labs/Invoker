@@ -36,7 +36,7 @@ LABEL="${INVOKER_ADMIN_BYPASS_LABEL:-admin-bypass}"
 REPO_URL="${INVOKER_ADMIN_BYPASS_REPO_URL:-https://github.com/$TARGET_REPO.git}"
 ledger_init "$STATE_FILE"
 
-unresolved_bot_review_thread() {
+unresolved_bot_review_threads() {
   local pr_number="${1:?pr number required}"
   local owner="${TARGET_REPO%%/*}"
   local repo_name="${TARGET_REPO#*/}"
@@ -48,20 +48,25 @@ unresolved_bot_review_thread() {
   fi
   jq -r '
     .data.repository.pullRequest.reviewThreads as $threads
-    | if ($threads.pageInfo.hasNextPage // false) then empty else
-        $threads.nodes[]?
-        | select((.isResolved // false) == false)
-        | select((.isOutdated // false) == false)
-        | select(
-            [
-              .comments.nodes[]?.author.login // ""
-              | select(. != "" and . != "coderabbitai" and . != "coderabbitai[bot]" and . != "EdbertChan")
-            ]
-            | length == 0
-          )
-        | .id
+    | if ($threads.pageInfo.hasNextPage // false) then
+        ""
+      else
+        [
+          $threads.nodes[]?
+          | select((.isResolved // false) == false)
+          | select((.isOutdated // false) == false)
+          | select(
+              [
+                .comments.nodes[]?.author.login // ""
+                | select(. != "" and . != "coderabbitai" and . != "coderabbitai[bot]" and . != "EdbertChan")
+              ]
+              | length == 0
+            )
+          | .id
+        ]
+        | join(", ")
       end
-  ' <<<"$threads" | sed -n '1p'
+  ' <<<"$threads"
 }
 
 # Repros pass INVOKER_ADMIN_BYPASS_QUEUE_PLAN_DIR to inspect submitted plans; a
@@ -114,10 +119,14 @@ while IFS= read -r pr; do
     detail="a reviewer requested changes; address the open feedback"
   fi
   if [ -z "$category" ]; then
-    bot_thread="$(unresolved_bot_review_thread "$num")"
-    if [ -n "$bot_thread" ]; then
+    bot_threads="$(unresolved_bot_review_threads "$num")"
+    if [ -n "$bot_threads" ]; then
       category="bot_review_thread"
-      detail="unresolved bot review thread $bot_thread"
+      if [[ "$bot_threads" == *,* ]]; then
+        detail="unresolved bot review threads $bot_threads"
+      else
+        detail="unresolved bot review thread $bot_threads"
+      fi
     fi
   fi
   if [ -z "$category" ]; then

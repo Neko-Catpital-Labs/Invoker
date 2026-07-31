@@ -68,6 +68,36 @@ state = {
                             {"author": {"login": "EdbertChan"}},
                         ]
                     },
+                },
+                {
+                    "id": "PRRT_bot_6575_second",
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": {
+                        "nodes": [
+                            {"author": {"login": "coderabbitai[bot]"}},
+                        ]
+                    },
+                },
+                {
+                    "id": "PRRT_bot_6575_outdated",
+                    "isResolved": False,
+                    "isOutdated": True,
+                    "comments": {
+                        "nodes": [
+                            {"author": {"login": "coderabbitai[bot]"}},
+                        ]
+                    },
+                },
+                {
+                    "id": "PRRT_human_6575",
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": {
+                        "nodes": [
+                            {"author": {"login": "alice"}},
+                        ]
+                    },
                 }
             ],
             "checks": {"*": "SUCCESS"},
@@ -99,8 +129,14 @@ plan="$TMP/plans/repair-pr-6575.yaml"
 [ -f "$plan" ] || fail "expected repair plan file for #6575" "$out"
 grep -q "Blocker category: bot_review_thread" "$plan" \
   || fail "plan did not preserve bot_review_thread category" "$(cat "$plan")"
-grep -q "unresolved bot review thread PRRT_bot_6575" "$plan" \
-  || fail "plan did not name the unresolved bot thread" "$(cat "$plan")"
+grep -q "unresolved bot review threads PRRT_bot_6575, PRRT_bot_6575_second" "$plan" \
+  || fail "plan did not name the unresolved bot thread set" "$(cat "$plan")"
+grep -q "PRRT_bot_6575_second" "$plan" \
+  || fail "plan did not include every current bot thread" "$(cat "$plan")"
+grep -q "PRRT_bot_6575_outdated" "$plan" \
+  && fail "plan must not include outdated bot threads" "$(cat "$plan")"
+grep -q "PRRT_human_6575" "$plan" \
+  && fail "plan must not include human review threads" "$(cat "$plan")"
 grep -q "bot review thread" "$plan" \
   || fail "plan did not instruct the repair task how to handle bot threads" "$(cat "$plan")"
 
