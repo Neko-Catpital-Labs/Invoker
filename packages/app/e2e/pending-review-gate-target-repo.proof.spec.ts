@@ -48,8 +48,8 @@ test('pending review gate target repo row', async ({ page }) => {
       { workflowId },
     ),
     { timeout: 15000 },
-  ).toBe('master');
-  await expect(input).toHaveValue('master');
+  ).toBe('upstream/master');
+  await expect(input).toHaveValue('upstream/master');
   await expect(page.getByText('PR target repo')).toBeVisible();
   await expect(page.getByText('github.com/Neko-Catpital-Labs/Invoker')).toBeVisible();
 
