@@ -3,14 +3,19 @@ import { readFileSync } from 'node:fs';
 import YAML from 'yaml';
 
 const MAX_PR_FACING_TIMEOUT_MINUTES = 5;
+const MAX_UI_VITEST_TIMEOUT_MINUTES = 10;
 
 const BUDGETED_JOBS = new Set([
   'quality-required',
-  'ui-vitest',
   'quality-extra',
 ]);
 
 const MAX_PLAYWRIGHT_TIMEOUT_MINUTES = 30;
+
+const SEPARATELY_BUDGETED_JOBS = new Set([
+  'ui-vitest',
+  'playwright',
+]);
 
 const EXEMPT_JOBS = new Set([
   'build-artifacts',
@@ -50,6 +55,20 @@ for (const jobName of BUDGETED_JOBS) {
   );
 }
 
+const uiVitest = jobs['ui-vitest'];
+assert(uiVitest, 'Missing budgeted CI job ui-vitest');
+if (uiVitest) {
+  const uiVitestTimeout = uiVitest['timeout-minutes'];
+  assert(
+    typeof uiVitestTimeout === 'number',
+    `ui-vitest must declare timeout-minutes (expected <= ${MAX_UI_VITEST_TIMEOUT_MINUTES})`,
+  );
+  assert(
+    uiVitestTimeout <= MAX_UI_VITEST_TIMEOUT_MINUTES,
+    `ui-vitest timeout-minutes=${uiVitestTimeout} exceeds hard invariant of ${MAX_UI_VITEST_TIMEOUT_MINUTES} minutes`,
+  );
+}
+
 const playwright = jobs.playwright;
 if (playwright) {
   const playwrightTimeout = playwright['timeout-minutes'];
@@ -86,7 +105,7 @@ if (playwright) {
 }
 
 for (const [jobName, job] of Object.entries(jobs)) {
-  if (BUDGETED_JOBS.has(jobName) || EXEMPT_JOBS.has(jobName)) continue;
+  if (BUDGETED_JOBS.has(jobName) || SEPARATELY_BUDGETED_JOBS.has(jobName) || EXEMPT_JOBS.has(jobName)) continue;
   const timeout = job?.['timeout-minutes'];
   if (typeof timeout === 'number' && timeout > MAX_PR_FACING_TIMEOUT_MINUTES) {
     errors.push(
@@ -102,5 +121,5 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `CI duration invariant ok: budgeted jobs <= ${MAX_PR_FACING_TIMEOUT_MINUTES}m; playwright <= ${MAX_PLAYWRIGHT_TIMEOUT_MINUTES}m; hitch e2e shards present.`,
+  `CI duration invariant ok: budgeted jobs <= ${MAX_PR_FACING_TIMEOUT_MINUTES}m; ui-vitest <= ${MAX_UI_VITEST_TIMEOUT_MINUTES}m; playwright <= ${MAX_PLAYWRIGHT_TIMEOUT_MINUTES}m; hitch e2e shards present.`,
 );
