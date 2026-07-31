@@ -82,7 +82,7 @@ prs_json="$(gh_json pr list --repo "$TARGET_REPO" --label "$LABEL" --state open 
 }
 
 submitted=0
-while IFS= read -r pr; do
+while IFS= read -r -u 3 pr; do
   [ -z "$pr" ] && continue
   num="$(jq -r '.number' <<<"$pr")"
 
@@ -263,6 +263,6 @@ while IFS= read -r pr; do
       log_line "PR #$num: plan submit failed: $line"
     done <<<"$output"
   fi
-done < <(jq -c '.[]' <<<"$prs_json")
+done 3< <(jq -c '.[]' <<<"$prs_json")
 
 log_line "admin-bypass queue scan complete; submitted $submitted repair task(s)"
