@@ -143,8 +143,23 @@ async function readStdinLines() {
 // Transport — load IpcBus from the shared transport dist
 // ---------------------------------------------------------------------------
 
+function buildTransportDistIfMissing() {
+  if (existsSync(TRANSPORT_DIST)) {
+    return true;
+  }
+  try {
+    execFileSync('pnpm', ['--filter', '@invoker/transport', 'build'], {
+      cwd: REPO_ROOT,
+      stdio: ['ignore', 'ignore', 'inherit'],
+    });
+  } catch (_error) {
+    return false;
+  }
+  return existsSync(TRANSPORT_DIST);
+}
+
 async function loadTransport() {
-  if (!existsSync(TRANSPORT_DIST)) {
+  if (!buildTransportDistIfMissing()) {
     return null;
   }
   const mod = await import(TRANSPORT_DIST);
