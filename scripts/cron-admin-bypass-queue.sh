@@ -36,7 +36,7 @@ LABEL="${INVOKER_ADMIN_BYPASS_LABEL:-admin-bypass}"
 REPO_URL="${INVOKER_ADMIN_BYPASS_REPO_URL:-https://github.com/$TARGET_REPO.git}"
 ledger_init "$STATE_FILE"
 
-unresolved_bot_review_thread() {
+unresolved_bot_review_threads() {
   local pr_number="${1:?pr number required}"
   local owner="${TARGET_REPO%%/*}"
   local repo_name="${TARGET_REPO#*/}"
@@ -49,19 +49,34 @@ unresolved_bot_review_thread() {
   jq -r '
     .data.repository.pullRequest.reviewThreads as $threads
     | if ($threads.pageInfo.hasNextPage // false) then empty else
-        $threads.nodes[]?
-        | select((.isResolved // false) == false)
-        | select((.isOutdated // false) == false)
-        | select(
+        [
+          $threads.nodes[]?
+          | select((.isResolved // false) == false)
+          | select((.isOutdated // false) == false)
+        ] as $open
+        | [
+          $open[]?
+          | select(
             [
               .comments.nodes[]?.author.login // ""
               | select(. != "" and . != "coderabbitai" and . != "coderabbitai[bot]" and . != "EdbertChan")
             ]
-            | length == 0
+            | length > 0
           )
-        | .id
+        ] as $human
+        | if ($human | length) > 0 then empty else
+            $open[]?
+            | select(
+                [
+                  .comments.nodes[]?.author.login // ""
+                  | select(. == "coderabbitai" or . == "coderabbitai[bot]" or . == "EdbertChan")
+                ]
+                | length > 0
+              )
+            | .id
+          end
       end
-  ' <<<"$threads" | sed -n '1p'
+  ' <<<"$threads"
 }
 
 # Repros pass INVOKER_ADMIN_BYPASS_QUEUE_PLAN_DIR to inspect submitted plans; a
@@ -109,16 +124,21 @@ while IFS= read -r pr; do
       detail="$failed_checks"
     fi
   fi
+  if [ -z "$category" ]; then
+    bot_threads="$(unresolved_bot_review_threads "$num" | sed '/^$/d' | sort -u)"
+    if [ -n "$bot_threads" ]; then
+      bot_thread_list="$(printf '%s\n' "$bot_threads" | awk 'NF { s = s ? s ", " $0 : $0 } END { print s }')"
+      category="bot_review_thread"
+      if [ "$(printf '%s\n' "$bot_threads" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ]; then
+        detail="unresolved bot review thread $bot_thread_list"
+      else
+        detail="unresolved bot review threads $bot_thread_list"
+      fi
+    fi
+  fi
   if [ -z "$category" ] && [ "$(jq -r '.reviewDecision // ""' <<<"$pr")" = "CHANGES_REQUESTED" ]; then
     category="changes_requested"
     detail="a reviewer requested changes; address the open feedback"
-  fi
-  if [ -z "$category" ]; then
-    bot_thread="$(unresolved_bot_review_thread "$num")"
-    if [ -n "$bot_thread" ]; then
-      category="bot_review_thread"
-      detail="unresolved bot review thread $bot_thread"
-    fi
   fi
   if [ -z "$category" ]; then
     log_line "PR #$num: no actionable blocker found; skipping"
@@ -218,7 +238,7 @@ while IFS= read -r pr; do
       printf -- '- If this is a merge conflict, rebase onto origin/%s (or merge it) before anything else.\n' "$base_ref"
       printf -- '- If checks are failing, reproduce and fix them locally.\n'
       printf -- '- If changes were requested, address the open feedback with real changes or a reasoned reply, never by dismissing.\n'
-      printf -- '- If the blocker is a bot review thread, inspect the unresolved thread, address the feedback with code or tests, and leave it unresolved for the platform to reconcile after the push unless it is already outdated.\n'
+      printf -- '- If the blocker is a bot review thread, inspect every unresolved thread named in Detail, address the feedback with code or tests, and leave it unresolved for the platform to reconcile after the push unless it is already outdated.\n'
       printf -- '- Commit locally if changes are needed.\n'
       printf -- '- Do not push, do not open a new PR, and do not force-push. The safe-push task owns publication.\n'
     } | sed 's/^/      /'

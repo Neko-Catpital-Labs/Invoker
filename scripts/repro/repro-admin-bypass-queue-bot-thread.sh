@@ -68,6 +68,16 @@ state = {
                             {"author": {"login": "EdbertChan"}},
                         ]
                     },
+                },
+                {
+                    "id": "PRRT_bot_6575_extra",
+                    "isResolved": False,
+                    "isOutdated": False,
+                    "comments": {
+                        "nodes": [
+                            {"author": {"login": "coderabbitai[bot]"}},
+                        ]
+                    },
                 }
             ],
             "checks": {"*": "SUCCESS"},
@@ -77,6 +87,17 @@ state = {
     "job_logs": {},
 }
 Path(sys.argv[1]).write_text(json.dumps(state, indent=2), encoding="utf-8")
+PY
+
+python3 - "$TMP/admin-bypass-queue.tsv" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+head = "9fc81429638a8a0b62bf7b9b337cd60f38461c53"
+old_detail = "unresolved bot review thread PRRT_bot_6575"
+old_fingerprint = hashlib.sha256(f"{head}|bot_review_thread|{old_detail}".encode()).hexdigest()[:16]
+Path(sys.argv[1]).write_text(f"queue-submitted\t6575\t{old_fingerprint}\t1785480000\n", encoding="utf-8")
 PY
 
 run_cron() {
@@ -93,14 +114,16 @@ run_cron() {
 
 out="$(run_cron)" || fail "cron exited non-zero" "$out"
 echo "$out" | grep -q "PR #6575: submitted ad-hoc repair plan (category=bot_review_thread" \
-  || fail "expected bot review thread to submit an ad-hoc repair plan" "$out"
+  || fail "expected all bot review threads to submit a fresh ad-hoc repair plan despite the old single-thread marker" "$out"
 
 plan="$TMP/plans/repair-pr-6575.yaml"
 [ -f "$plan" ] || fail "expected repair plan file for #6575" "$out"
 grep -q "Blocker category: bot_review_thread" "$plan" \
   || fail "plan did not preserve bot_review_thread category" "$(cat "$plan")"
-grep -q "unresolved bot review thread PRRT_bot_6575" "$plan" \
+grep -q "PRRT_bot_6575" "$plan" \
   || fail "plan did not name the unresolved bot thread" "$(cat "$plan")"
+grep -q "PRRT_bot_6575_extra" "$plan" \
+  || fail "plan did not name every unresolved bot thread" "$(cat "$plan")"
 grep -q "bot review thread" "$plan" \
   || fail "plan did not instruct the repair task how to handle bot threads" "$(cat "$plan")"
 
