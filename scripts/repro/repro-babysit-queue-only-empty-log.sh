@@ -22,6 +22,7 @@ mkdir -p "$WORK_PARENT" "$TMP/state" "$TMP/bin"
 export FAKE_GH_STATE_DIR="$TMP/state"
 export PATH="$TMP/bin:$ROOT/scripts/repro/fixtures/fake-gh/bin:$PATH"
 export CLAUDE_CALLED="$TMP/claude-called"
+export INVOKER_ADMIN_BYPASS_INLINE_REPAIR=1
 
 FAKE_GH_REQUIRED_CHECKS="$(python3 - <<'PY'
 import sys

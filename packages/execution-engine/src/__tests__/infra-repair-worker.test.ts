@@ -287,7 +287,7 @@ describe('infra-repair worker', () => {
     expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
   });
 
-  it('recreates invalid-reference and no-saved-workspace failures', async () => {
+  it('recreates branch invalid-reference and no-saved-workspace failures', async () => {
     for (const error of [
       'fatal: invalid reference: refs/heads/feature/task-1',
       'Cannot apply a fix because this task has no saved workspace.',
@@ -302,6 +302,35 @@ describe('infra-repair worker', () => {
       expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
       expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
     }
+  });
+
+  it('does not recreate a downstream task when invalid-reference is an unpublished upstream commit', async () => {
+    const upstreamCommit = '0123456789abcdef0123456789abcdef01234567';
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: `fatal: invalid reference: ${upstreamCommit}`,
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        summary: expect.stringContaining(`Stopped recreate-task after invalid upstream commit reference ${upstreamCommit}`),
+        payload: expect.objectContaining({
+          infraReason: 'ssh-invalid-reference',
+          invalidReference: upstreamCommit,
+          classification: 'upstream-publication-reachability',
+        }),
+      }),
+    ]));
   });
 
   it('suppresses a second target repair but still retries a later task after recent success', async () => {

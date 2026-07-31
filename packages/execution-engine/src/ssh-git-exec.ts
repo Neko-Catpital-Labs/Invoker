@@ -388,9 +388,9 @@ HASH=$(git rev-parse HEAD)
 BR=$(printf '%s' ${shellPosixSingleQuote(brB)} | invoker_base64_decode)
 PUSH_URL=$(printf '%s' ${shellPosixSingleQuote(pushRemoteUrlB)} | invoker_base64_decode)
 if [ -n "$PUSH_URL" ]; then
-  git push "$PUSH_URL" "$BR:refs/heads/$BR"
+  git push "$PUSH_URL" "HEAD:refs/heads/$BR"
 else
-  git push origin "$BR:refs/heads/$BR"
+  git push origin "HEAD:refs/heads/$BR"
 fi
 printf "%s" "$HASH"
 `;

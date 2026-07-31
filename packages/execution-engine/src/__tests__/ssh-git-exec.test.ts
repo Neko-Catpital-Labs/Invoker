@@ -467,7 +467,7 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain('git commit --allow-empty -F');
     expect(script).toContain('git commit -F');
     expect(script).toContain('HASH=$(git rev-parse HEAD)');
-    expect(script).toContain('git push origin "$BR:refs/heads/$BR"');
+    expect(script).toContain('git push origin "HEAD:refs/heads/$BR"');
     expect(script).toContain('printf "%s" "$HASH"');
   });
 
@@ -497,7 +497,7 @@ describe('buildRecordAndPushScript', () => {
 
     expect(script).not.toContain('git remote set-url invoker-branches "$PUSH_URL"');
     expect(script).not.toContain('git remote add invoker-branches "$PUSH_URL"');
-    expect(script).toContain('git push "$PUSH_URL" "$BR:refs/heads/$BR"');
+    expect(script).toContain('git push "$PUSH_URL" "HEAD:refs/heads/$BR"');
   });
 
   it('commits and pushes successfully without preconfigured git identity', () => {
@@ -546,6 +546,60 @@ describe('buildRecordAndPushScript', () => {
     expect(authorName).toBe('Remote CI Bot');
     expect(authorEmail).toBe('remote-ci@example.com');
     expect(pushedHead).toBe(localHead);
+  });
+
+  it('publishes the recorded HEAD even if the task checked out another branch', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ssh-record-push-detached-branch-'));
+    const source = join(root, 'source');
+    const bare = join(root, 'remote.git');
+    const clone = join(root, 'clone');
+    const fresh = join(root, 'fresh');
+
+    mkdirSync(source, { recursive: true });
+    execSync('git init -b master', { cwd: source, stdio: 'ignore' });
+    writeFileSync(join(source, 'README.md'), 'seed\n');
+    execSync('git add README.md', { cwd: source, stdio: 'ignore' });
+    execSync('git -c user.name="Seed User" -c user.email="seed@example.com" commit -m "seed"', {
+      cwd: source,
+      stdio: 'ignore',
+    });
+    execSync(`git clone --bare ${JSON.stringify(source)} ${JSON.stringify(bare)}`, { stdio: 'ignore' });
+    execSync(`git clone ${JSON.stringify(bare)} ${JSON.stringify(clone)}`, { stdio: 'ignore' });
+    execSync('git checkout -b experiment/task-branch', { cwd: clone, stdio: 'ignore' });
+    const staleTaskBranchHead = execSync('git rev-parse HEAD', { cwd: clone }).toString().trim();
+    execSync('git checkout -b pr/target-branch', { cwd: clone, stdio: 'ignore' });
+    writeFileSync(join(clone, 'result.txt'), 'repair\n');
+
+    const script = buildRecordAndPushScript({
+      worktreePath: clone,
+      branch: 'experiment/task-branch',
+      commitMessageChanges: 'invoker: record checked-out PR branch result',
+      commitMessageEmpty: 'invoker: record remote empty result',
+      gitUserName: 'Remote CI Bot',
+      gitUserEmail: 'remote-ci@example.com',
+    });
+
+    execFileSync('bash', ['-lc', script], {
+      env: {
+        ...process.env,
+        HOME: mkdtempSync(join(tmpdir(), 'ssh-record-push-home-')),
+      },
+      stdio: 'ignore',
+    });
+
+    const recordedHead = execSync('git rev-parse HEAD', { cwd: clone }).toString().trim();
+    const pushedTaskHead = execSync(`git --git-dir=${JSON.stringify(bare)} rev-parse refs/heads/experiment/task-branch`)
+      .toString()
+      .trim();
+    execSync(`git clone --no-checkout --single-branch --branch experiment/task-branch ${JSON.stringify(bare)} ${JSON.stringify(fresh)}`, { stdio: 'ignore' });
+    const freshBranchHead = execSync('git rev-parse refs/remotes/origin/experiment/task-branch', { cwd: fresh })
+      .toString()
+      .trim();
+
+    expect(recordedHead).not.toBe(staleTaskBranchHead);
+    expect(pushedTaskHead).toBe(recordedHead);
+    expect(freshBranchHead).toBe(recordedHead);
+    execSync(`git -C ${JSON.stringify(fresh)} rev-parse --verify ${JSON.stringify(`${recordedHead}^{commit}`)}`, { stdio: 'ignore' });
   });
 });
 
