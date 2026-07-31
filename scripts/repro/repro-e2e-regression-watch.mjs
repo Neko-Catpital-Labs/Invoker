@@ -1,16 +1,23 @@
 #!/usr/bin/env node
-// Exercises scripts/e2e-regression-watch.mjs's pure logic (Playwright JSON
-// parsing, Day-0 baseline vs. new-regression reconciliation, SHA grouping
-// with flaky-pattern debounce, and live-dedup) against fabricated inputs, so
-// none of it needs a real CI run or a running Invoker instance to verify.
+// Exercises scripts/e2e-regression-watch.mjs's pure logic and dry-run formula
+// path. The optional live smoke uses real GitHub read APIs only when
+// INVOKER_E2E_REGRESSION_WATCH_LIVE=1 is set.
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
-  parsePlaywrightJson,
-  reconcileFailingSet,
-  groupBySha,
-  buildPlanVars,
-  liveQueryHasNonTerminalWork,
+  buildCiJobDefinitions,
   buildMarker,
+  buildPlanVars,
+  classifyJobConclusion,
+  fileBugfixPlan,
+  getActionableFailures,
+  getCiRun,
+  listUnprocessedDefaultBranchRuns,
+  liveQueryHasNonTerminalWork,
   loadEmptyState,
+  reconcileCiRun,
 } from '../e2e-regression-watch.mjs';
 
 function fail(message) {
@@ -23,189 +30,205 @@ function assertEqual(actual, expected, label) {
   if (a !== e) fail(`${label}: expected ${e}, got ${a}`);
 }
 
-// Mirrors the real shape verified by running packages/app's Playwright config
-// with INVOKER_PLAYWRIGHT_JSON_OUTPUT set: suites[] per file, nested
-// suites[] for describe blocks, specs[].tests[0].status is post-retry
-// ('expected' | 'unexpected' | 'flaky' | 'skipped').
-function fakeResultsJson(fileTitle, entries) {
-  return JSON.stringify({
-    config: {},
-    errors: [],
-    stats: {},
-    suites: [
-      {
-        title: fileTitle,
-        file: fileTitle,
-        suites: [
-          {
-            title: 'suite',
-            file: fileTitle,
-            specs: entries.map((e) => ({
-              title: e.title,
-              file: fileTitle,
-              line: e.line,
-              tests: [{ status: e.status }],
-            })),
-          },
-        ],
-        specs: [],
-      },
-    ],
-  });
-}
-
-function testParsePlaywrightJson() {
-  const raw = fakeResultsJson('e2e/foo.spec.ts', [
-    { title: 'does the thing', line: 10, status: 'unexpected' },
-    { title: 'does another thing', line: 20, status: 'expected' },
-  ]);
-  const outcomes = parsePlaywrightJson(raw);
-  assertEqual(outcomes.size, 2, 'parsePlaywrightJson: outcome count');
-  const failing = outcomes.get('e2e/foo.spec.ts::suite > does the thing');
-  if (!failing) fail('parsePlaywrightJson: missing expected testId (nested describe title not joined correctly)');
-  assertEqual(failing.status, 'unexpected', 'parsePlaywrightJson: failing test status');
-  const passing = outcomes.get('e2e/foo.spec.ts::suite > does another thing');
-  assertEqual(passing.status, 'expected', 'parsePlaywrightJson: passing test status');
-  console.log('[repro-e2e-regression-watch] parsePlaywrightJson: PASS');
-}
-
-function testDayZeroBootstrapNotActionable() {
-  const state = loadEmptyState();
-  const run = { databaseId: 100, headSha: 'sha-day0', createdAt: '2026-07-01T00:00:00Z' };
-  const outcomes = parsePlaywrightJson(
-    fakeResultsJson('e2e/known-red.spec.ts', [{ title: 'already broken', line: 5, status: 'unexpected' }]),
-  );
-  reconcileFailingSet(state, run, outcomes);
-  if (!state.dayZero) fail('reconcileFailingSet: dayZero not established on first run');
-  const entry = state.failingTests['e2e/known-red.spec.ts::suite > already broken'];
-  assertEqual(entry.origin, 'day0-baseline', 'reconcileFailingSet: bootstrap origin');
-  const groups = groupBySha(state.failingTests);
-  assertEqual(groups.length, 0, 'groupBySha: day0-baseline tests must not be actionable');
-  console.log('[repro-e2e-regression-watch] day0 bootstrap not actionable: PASS');
-  return state;
-}
-
-function testNewRegressionDetectedAndGrouped(stateAfterDayZero) {
-  const state = stateAfterDayZero;
-  const run = { databaseId: 101, headSha: 'sha-regression-1', createdAt: '2026-07-02T00:00:00Z' };
-  const outcomes = parsePlaywrightJson(
-    JSON.stringify({
-      suites: [
-        {
-          title: 'e2e/known-red.spec.ts',
-          suites: [{ title: 'suite', specs: [{ title: 'already broken', file: 'e2e/known-red.spec.ts', line: 5, tests: [{ status: 'unexpected' }] }] }],
-        },
-        {
-          title: 'e2e/a.spec.ts',
-          suites: [{ title: 'suite', specs: [{ title: 'new failure a', file: 'e2e/a.spec.ts', line: 1, tests: [{ status: 'unexpected' }] }] }],
-        },
-        {
-          title: 'e2e/b.spec.ts',
-          suites: [{ title: 'suite', specs: [{ title: 'new failure b', file: 'e2e/b.spec.ts', line: 2, tests: [{ status: 'unexpected' }] }] }],
-        },
-      ],
-    }),
-  );
-  reconcileFailingSet(state, run, outcomes);
-
-  const a = state.failingTests['e2e/a.spec.ts::suite > new failure a'];
-  const b = state.failingTests['e2e/b.spec.ts::suite > new failure b'];
-  assertEqual(a.origin, 'regression', 'reconcileFailingSet: new test origin');
-  assertEqual(a.firstBadSha, 'sha-regression-1', 'reconcileFailingSet: new test firstBadSha');
-  assertEqual(b.firstBadSha, 'sha-regression-1', 'reconcileFailingSet: second new test shares firstBadSha');
-
-  const groups = groupBySha(state.failingTests);
-  assertEqual(groups.length, 1, 'groupBySha: two tests sharing a SHA must form exactly one group');
-  assertEqual(groups[0].tests.length, 2, 'groupBySha: group blast radius');
-  console.log('[repro-e2e-regression-watch] new regression detected + grouped by SHA: PASS');
-  return state;
-}
-
-function testRecoverySkipsAndFlakyDebounce(stateAfterRegression) {
-  const state = stateAfterRegression;
-  const run = { databaseId: 102, headSha: 'sha-3', createdAt: '2026-07-03T00:00:00Z' };
-  const outcomes = parsePlaywrightJson(
-    JSON.stringify({
-      suites: [
-        {
-          title: 'e2e/a.spec.ts',
-          suites: [{ title: 'suite', specs: [{ title: 'new failure a', file: 'e2e/a.spec.ts', line: 1, tests: [{ status: 'expected' }] }] }],
-        },
-        {
-          title: 'e2e/dag-click-hitch-responsiveness.spec.ts',
-          suites: [{ title: 'suite', specs: [{ title: 'flaky-prone', file: 'e2e/dag-click-hitch-responsiveness.spec.ts', line: 1, tests: [{ status: 'unexpected' }] }] }],
-        },
-      ],
-    }),
-  );
-  reconcileFailingSet(state, run, outcomes);
-
-  if (state.failingTests['e2e/a.spec.ts::suite > new failure a']) {
-    fail('reconcileFailingSet: recovered test must be removed from failingTests');
-  }
-
-  const flakyKey = 'e2e/dag-click-hitch-responsiveness.spec.ts::suite > flaky-prone';
-  assertEqual(state.failingTests[flakyKey].consecutiveFailingPolls, 1, 'flaky test first poll count');
-  let groups = groupBySha(state.failingTests);
-  const flakyGroup = groups.find((g) => g.sha === 'sha-3');
-  if (flakyGroup) fail('groupBySha: flaky-pattern test with 1 consecutive failing poll must be debounced (excluded)');
-
-  const run2 = { databaseId: 103, headSha: 'sha-3', createdAt: '2026-07-04T00:00:00Z' };
-  const outcomes2 = parsePlaywrightJson(
-    JSON.stringify({
-      suites: [
-        {
-          title: 'e2e/dag-click-hitch-responsiveness.spec.ts',
-          suites: [{ title: 'suite', specs: [{ title: 'flaky-prone', file: 'e2e/dag-click-hitch-responsiveness.spec.ts', line: 1, tests: [{ status: 'unexpected' }] }] }],
-        },
-      ],
-    }),
-  );
-  reconcileFailingSet(state, run2, outcomes2);
-  assertEqual(state.failingTests[flakyKey].consecutiveFailingPolls, 2, 'flaky test second poll count');
-  groups = groupBySha(state.failingTests);
-  const flakyGroupAfterDebounce = groups.find((g) => g.sha === 'sha-3');
-  if (!flakyGroupAfterDebounce) fail('groupBySha: flaky-pattern test must become actionable after 2 consecutive failing polls');
-  console.log('[repro-e2e-regression-watch] recovery removal + flaky debounce: PASS');
-}
-
-function testLiveDedupIsAlwaysLive() {
-  const sha = 'sha-dedup-test';
-  const fakeNonTerminal = () => JSON.stringify([{ status: 'running', description: `<!-- ${buildMarker(sha)} -->\nsome plan body` }]);
-  const fakeTerminal = () => JSON.stringify([{ status: 'completed', description: `<!-- ${buildMarker(sha)} -->\nsome plan body` }]);
-  const fakeNoMatch = () => JSON.stringify([{ status: 'running', description: 'unrelated workflow' }]);
-
-  if (!liveQueryHasNonTerminalWork(sha, fakeNonTerminal)) fail('liveQueryHasNonTerminalWork: must return true for a non-terminal match');
-  if (liveQueryHasNonTerminalWork(sha, fakeTerminal)) fail('liveQueryHasNonTerminalWork: a completed workflow must not block re-filing');
-  if (liveQueryHasNonTerminalWork(sha, fakeNoMatch)) fail('liveQueryHasNonTerminalWork: must return false when no workflow carries the marker');
-  console.log('[repro-e2e-regression-watch] live dedup (non-cached) behavior: PASS');
-}
-
-function testBuildPlanVars() {
-  const group = {
-    sha: 'abc123def456abc123def456abc123def456ab1',
-    tests: [
-      { testId: 'e2e/b.spec.ts::suite > new failure b', file: 'e2e/b.spec.ts', line: 2 },
-      { testId: 'e2e/a.spec.ts::suite > new failure a', file: 'e2e/a.spec.ts', line: 1 },
-    ],
+function fakeJob(name, conclusion, id = 1) {
+  return {
+    name,
+    status: 'completed',
+    conclusion,
+    databaseId: id,
+    url: `https://example.test/job/${id}`,
+    completedAt: `2026-07-31T00:0${id}:00Z`,
   };
-  const vars = buildPlanVars(group, 'git@github.com:Neko-Catpital-Labs/Invoker.git');
-  assertEqual(vars.short_sha, 'abc123d', 'buildPlanVars: short_sha');
-  assertEqual(vars.bug_slug, 'e2e-regression-abc123d', 'buildPlanVars: bug_slug');
-  assertEqual(vars.primary_file, 'e2e/a.spec.ts', 'buildPlanVars: primary is lowest sorted testId');
-  assertEqual(vars.test_count, '2', 'buildPlanVars: test_count');
-  if (!vars.marker.includes(group.sha)) fail('buildPlanVars: marker must embed the SHA');
-  if (!vars.verify_command.includes('e2e/a.spec.ts:1')) fail('buildPlanVars: verify_command must target the primary test');
-  console.log('[repro-e2e-regression-watch] buildPlanVars: PASS');
+}
+
+function fakeRun(id, sha, jobs) {
+  return {
+    databaseId: id,
+    headSha: sha,
+    headBranch: 'master',
+    event: 'push',
+    status: 'completed',
+    conclusion: jobs.some((job) => job.conclusion === 'failure') ? 'failure' : 'success',
+    createdAt: `2026-07-31T00:${id}:00Z`,
+    jobs,
+  };
+}
+
+function testJobClassification() {
+  assertEqual(classifyJobConclusion(fakeJob('A', 'success')), 'ok', 'success is ok');
+  assertEqual(classifyJobConclusion(fakeJob('A', 'failure')), 'broken', 'failure is broken');
+  assertEqual(classifyJobConclusion(fakeJob('A', 'timed_out')), 'broken', 'timed_out is broken');
+  assertEqual(classifyJobConclusion(fakeJob('A', 'cancelled')), 'ignored', 'cancelled is ignored');
+  assertEqual(classifyJobConclusion(fakeJob('A', 'skipped')), 'ignored', 'skipped is ignored');
+  console.log('[repro-e2e-regression-watch] job classification: PASS');
+}
+
+function testPerHeadFailureDedupAndRecovery() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(100, 'sha-x', [fakeJob('playwright / 1-of-9', 'failure', 10)]));
+  let failures = getActionableFailures(state);
+  assertEqual(failures.length, 1, 'first failure creates one actionable failure');
+  assertEqual(failures[0].firstBadSha, 'sha-x', 'first bad SHA is recorded');
+  assertEqual(state.heads['sha-x'].jobs['playwright / 1-of-9'].state, 'broken', 'head records broken job');
+
+  reconcileCiRun(state, fakeRun(101, 'sha-x-plus-1', [fakeJob('playwright / 1-of-9', 'failure', 11)]));
+  failures = getActionableFailures(state);
+  assertEqual(failures.length, 1, 'duplicate failing HEAD keeps one actionable failure');
+  assertEqual(failures[0].firstBadSha, 'sha-x', 'first bad SHA is stable across duplicates');
+  assertEqual(failures[0].lastBadSha, 'sha-x-plus-1', 'latest bad SHA advances');
+
+  reconcileCiRun(state, fakeRun(102, 'sha-x-plus-2', [fakeJob('playwright / 1-of-9', 'success', 12)]));
+  failures = getActionableFailures(state);
+  assertEqual(failures.length, 0, 'later successful HEAD clears active failure');
+  assertEqual(state.heads['sha-x-plus-2'].jobs['playwright / 1-of-9'].state, 'ok', 'success is recorded per head');
+  console.log('[repro-e2e-regression-watch] per-HEAD dedup + recovery: PASS');
+}
+
+function testCancelledAndSkippedDoNotClear() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(200, 'sha-a', [fakeJob('required-fast / Vitest Workspace', 'failure', 20)]));
+  reconcileCiRun(state, fakeRun(201, 'sha-b', [fakeJob('required-fast / Vitest Workspace', 'cancelled', 21)]));
+  reconcileCiRun(state, fakeRun(202, 'sha-c', [fakeJob('required-fast / Vitest Workspace', 'skipped', 22)]));
+  const failures = getActionableFailures(state);
+  assertEqual(failures.length, 1, 'cancelled/skipped do not clear active failure');
+  assertEqual(failures[0].firstBadSha, 'sha-a', 'first bad SHA remains after ignored runs');
+  assertEqual(state.heads['sha-b'].jobs['required-fast / Vitest Workspace'].state, 'ignored', 'cancelled head is recorded ignored');
+  assertEqual(state.heads['sha-c'].jobs['required-fast / Vitest Workspace'].state, 'ignored', 'skipped head is recorded ignored');
+  console.log('[repro-e2e-regression-watch] cancelled/skipped behavior: PASS');
+}
+
+function testEveryFailedJobQueuesSeparately() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(300, 'sha-many', [
+    fakeJob('playwright / 1-of-9', 'failure', 30),
+    fakeJob('playwright / 2-of-9', 'failure', 31),
+    fakeJob('build-artifacts', 'success', 32),
+  ]));
+  const failures = getActionableFailures(state);
+  assertEqual(failures.map((f) => f.jobName), ['playwright / 1-of-9', 'playwright / 2-of-9'], 'each failed job is actionable');
+  console.log('[repro-e2e-regression-watch] every failed job queues separately: PASS');
+}
+
+function testLiveDedupIsJobScoped() {
+  const sha = 'sha-dedup-test';
+  const job = 'playwright / 1-of-9';
+  const marker = buildMarker(sha, job);
+  const fakeNonTerminal = () => JSON.stringify([{ status: 'running', description: `<!-- ${marker} -->` }]);
+  const fakeTerminal = () => JSON.stringify([{ status: 'failed', description: `<!-- ${marker} -->` }]);
+  const fakeOtherJob = () => JSON.stringify([{ status: 'running', description: `<!-- ${buildMarker(sha, 'playwright / 2-of-9')} -->` }]);
+
+  if (!liveQueryHasNonTerminalWork(sha, job, fakeNonTerminal)) fail('non-terminal matching marker must dedupe');
+  if (liveQueryHasNonTerminalWork(sha, job, fakeTerminal)) fail('terminal matching marker must not dedupe');
+  if (liveQueryHasNonTerminalWork(sha, job, fakeOtherJob)) fail('same SHA but different job must not dedupe');
+  console.log('[repro-e2e-regression-watch] live dedup is job-scoped: PASS');
+}
+
+function testWorkflowCommandMapping() {
+  const defs = buildCiJobDefinitions();
+  const expected = [
+    'playwright / 1-of-9',
+    'playwright / 9-of-9',
+    'required-fast / Vitest Workspace',
+    'e2e-proof / shard 0',
+    'docker / comprehensive',
+  ];
+  for (const name of expected) {
+    const def = defs.get(name);
+    if (!def) fail(`missing CI job definition for ${name}`);
+    if (!def.verifyCommand) fail(`CI job definition lacks verify command for ${name}`);
+  }
+  if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
+    fail('playwright shard command must include shard file list');
+  }
+  if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
+    fail('required-fast / Vitest Workspace command changed unexpectedly');
+  }
+  console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
+}
+
+function testPlanVarsAndDryRunRendering() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(400, 'abc123def456abc123def456abc123def456ab1', [
+    fakeJob('required-fast / Vitest Workspace', 'failure', 40),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const defs = buildCiJobDefinitions();
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (!vars.marker.includes('job=required-fast / Vitest Workspace')) fail('marker must include job name');
+  if (!vars.verify_command.includes('10-vitest-workspace.sh')) fail('verify command must be job-specific');
+
+  const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-render-'));
+  try {
+    const rendered = fileBugfixPlan(failure, {
+      repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+      jobDefinitions: defs,
+      outRoot,
+      dryRun: true,
+    });
+    if (!rendered.planPath.endsWith('ci-regression-watch.yaml')) fail('dry run did not render expected plan path');
+    if (rendered.submitted) fail('dry run must not submit');
+  } finally {
+    rmSync(outRoot, { recursive: true, force: true });
+  }
+  console.log('[repro-e2e-regression-watch] plan vars + dry-run rendering: PASS');
+}
+
+function testLiveSubmissionUsesNoTrack() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(450, 'abc456def456abc123def456abc123def456ab2', [
+    fakeJob('playwright / 2-of-9', 'failure', 45),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const calls = [];
+  const rendered = fileBugfixPlan(failure, {
+    repoUrl: 'git@github.com:Neko-Catpital-Labs/Invoker.git',
+    jobDefinitions: buildCiJobDefinitions(),
+    outRoot: join(tmpdir(), 'invoker-ci-watch-no-track-test'),
+    dryRun: false,
+    runCommand: (cmd, args) => calls.push([cmd, args]),
+  });
+
+  assertEqual(rendered.submitted, true, 'live filing reports submitted');
+  const submitCall = calls.find(([, args]) => args.some((arg) => String(arg).endsWith('/submit-plan.sh')));
+  if (!submitCall) fail('live filing did not invoke submit-plan.sh');
+  const [, submitArgs] = submitCall;
+  assertEqual(submitArgs.at(-1), '--no-track', 'live filing must submit without tracking');
+  assertEqual(submitArgs.at(-2), rendered.planPath, 'live filing passes rendered plan before --no-track');
+  console.log('[repro-e2e-regression-watch] live submission uses --no-track: PASS');
+}
+
+function testLiveGithubSmokeIfRequested() {
+  if (process.env.INVOKER_E2E_REGRESSION_WATCH_LIVE !== '1') {
+    console.log('[repro-e2e-regression-watch] live GitHub smoke: SKIP');
+    return;
+  }
+  const runs = listUnprocessedDefaultBranchRuns(0, { branches: ['master'], limit: 1 });
+  if (runs.length === 0) fail('live GitHub smoke found no completed master push runs');
+  let run = null;
+  for (const candidate of listUnprocessedDefaultBranchRuns(0, { branches: ['master'], limit: 10 })) {
+    const detail = getCiRun(candidate.databaseId);
+    if (detail.headSha && Array.isArray(detail.jobs) && detail.jobs.length > 0) {
+      run = detail;
+      break;
+    }
+  }
+  if (!run) fail('live GitHub smoke found no completed master push run with jobs');
+  const state = loadEmptyState();
+  reconcileCiRun(state, run);
+  if (!state.heads[run.headSha]) fail('live GitHub smoke did not record run HEAD');
+  console.log('[repro-e2e-regression-watch] live GitHub smoke: PASS');
 }
 
 function main() {
-  testParsePlaywrightJson();
-  const s1 = testDayZeroBootstrapNotActionable();
-  const s2 = testNewRegressionDetectedAndGrouped(s1);
-  testRecoverySkipsAndFlakyDebounce(s2);
-  testLiveDedupIsAlwaysLive();
-  testBuildPlanVars();
+  testJobClassification();
+  testPerHeadFailureDedupAndRecovery();
+  testCancelledAndSkippedDoNotClear();
+  testEveryFailedJobQueuesSeparately();
+  testLiveDedupIsJobScoped();
+  testWorkflowCommandMapping();
+  testPlanVarsAndDryRunRendering();
+  testLiveSubmissionUsesNoTrack();
+  testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
 }
 
