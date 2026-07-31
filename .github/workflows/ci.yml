@@ -660,6 +660,8 @@ jobs:
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/planning-terminal-live-model.proof.spec.ts
+              e2e/ui-delta-timeline.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
