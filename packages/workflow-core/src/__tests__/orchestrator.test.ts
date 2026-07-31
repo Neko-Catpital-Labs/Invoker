@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { reconciliationNeedsInputWorkResponse } from './reconciliation-needs-input-shim.js';
 import { rid, sid } from './scoped-test-helpers.js';
-import { Orchestrator, PlanConflictError, descriptionForMergeNode } from '../orchestrator.js';
+import { Orchestrator, PlanConflictError, descriptionForMergeNode, isWorkerResponseGenerationValid } from '../orchestrator.js';
 import type { PlanDefinition, OrchestratorPersistence, OrchestratorMessageBus } from '../orchestrator.js';
 import { computeWorkflowRollup } from '../task-types.js';
 import type { TaskState, TaskDelta, TaskStateChanges, Attempt, ExternalDependency, ExternalDependencyChange } from '../task-types.js';
@@ -7326,6 +7326,10 @@ describe('Orchestrator', () => {
 
       expect(activeAttemptId).not.toBe(staleAttemptId);
       expect(activeTask.status).toBe('running');
+
+      expect(isWorkerResponseGenerationValid(makeResponse({ executionGeneration: 2 }), 2)).toBe(true);
+      expect(isWorkerResponseGenerationValid(makeResponse({ executionGeneration: 1 }), 2)).toBe(false);
+      expect(isWorkerResponseGenerationValid(makeResponse({ executionGeneration: undefined }), 2)).toBe(true);
 
       const staleAttemptResult = orchestrator.handleWorkerResponse(
         makeResponse({
