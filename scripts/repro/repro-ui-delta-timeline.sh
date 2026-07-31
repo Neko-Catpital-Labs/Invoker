@@ -6,6 +6,8 @@ RUNNER="$ROOT_DIR/run.sh"
 TIMEOUT_SEC="${INVOKER_UI_DELTA_TIMELINE_TIMEOUT_SEC:-240}"
 OWNER_PROBE_TIMEOUT_SEC="${INVOKER_UI_DELTA_OWNER_PROBE_TIMEOUT_SEC:-5}"
 KEEP_TMP="${INVOKER_UI_DELTA_KEEP_TMP:-0}"
+MODE="${1:-${INVOKER_UI_DELTA_TIMELINE_MODE:-live}}"
+EXPECT_BUG="${INVOKER_UI_DELTA_EXPECT_BUG:-0}"
 
 TMP_BASE="${INVOKER_UI_DELTA_TMPDIR:-/tmp}"
 TMP_ROOT="$(mktemp -d "$TMP_BASE/invoker-ui-delta-timeline.XXXXXX")"
@@ -673,6 +675,713 @@ if reasons:
 print(json.dumps(result, indent=2))
 PY
 }
+
+run_synthetic_timelines() {
+  local compiled_dir="$TMP_ROOT/compiled-delta-merge"
+  mkdir -p "$compiled_dir" "$LOG_DIR"
+
+  log "compiling packages/app/src/delta-merge.ts for standalone synthetic timeline"
+  pnpm exec tsup \
+    packages/app/src/delta-merge.ts \
+    packages/app/src/workflow-rollup-projection.ts \
+    --format cjs \
+    --no-dts \
+    --sourcemap false \
+    --out-dir "$compiled_dir" \
+    --clean false \
+    >"$LOG_DIR/tsup-delta-merge.stdout.log" \
+    2>"$LOG_DIR/tsup-delta-merge.stderr.log"
+
+  REPRO_DELTA_MERGE="$compiled_dir/delta-merge.js" \
+  REPRO_WORKFLOW_ROLLUP="$compiled_dir/workflow-rollup-projection.js" \
+  REPRO_EXPECT_BUG="$EXPECT_BUG" \
+  node --input-type=module <<'NODE'
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const expectBug = process.env.REPRO_EXPECT_BUG === '1';
+const mod = require(process.env.REPRO_DELTA_MERGE);
+const {
+  TaskSnapshotCache,
+  applyDelta,
+  recoverQuarantinedTask,
+  recoveryFound,
+  recoveryMissing,
+  recoveryUnavailable,
+} = mod;
+const rollupMod = require(process.env.REPRO_WORKFLOW_ROLLUP);
+const { WorkflowRollupProjection } = rollupMod;
+
+function makeTask(id, overrides = {}) {
+  return {
+    id,
+    description: `Task ${id}`,
+    status: 'pending',
+    dependencies: [],
+    createdAt: '2026-07-31T03:23:35.000Z',
+    config: { workflowId: 'wf-ui-delta', command: 'true', runnerKind: 'worktree' },
+    execution: {},
+    taskStateVersion: 1,
+    ...overrides,
+    config: {
+      workflowId: 'wf-ui-delta',
+      command: 'true',
+      runnerKind: 'worktree',
+      ...(overrides.config ?? {}),
+    },
+    execution: {
+      ...(overrides.execution ?? {}),
+    },
+  };
+}
+
+function summarizeDelta(delta) {
+  if (delta.type === 'created') {
+    return {
+      type: 'created',
+      taskId: delta.task.id,
+      status: delta.task.status,
+      taskStateVersion: delta.task.taskStateVersion,
+    };
+  }
+  if (delta.type === 'updated') {
+    return {
+      type: 'updated',
+      taskId: delta.taskId,
+      status: delta.changes.status,
+      taskStateVersion: delta.taskStateVersion,
+      previousTaskStateVersion: delta.previousTaskStateVersion,
+    };
+  }
+  return {
+    type: 'removed',
+    taskId: delta.taskId,
+    previousTaskStateVersion: delta.previousTaskStateVersion,
+  };
+}
+
+function cacheSummary(cache, taskId) {
+  const entry = cache.getEntry(taskId);
+  if (!entry) return { present: false };
+  let task = {};
+  try {
+    task = JSON.parse(entry.snapshot);
+  } catch {
+    task = {};
+  }
+  return {
+    present: true,
+    quarantined: entry.quarantined,
+    taskStateVersion: entry.taskStateVersion,
+    status: task.status,
+  };
+}
+
+function summarizePatch(patch) {
+  return {
+    workflowId: patch.workflowId,
+    status: patch.status,
+    removed: patch.removed === true,
+    countsByStatus: patch.rollup?.countsByStatus,
+    taskCount: patch.rollup?.totalTasks,
+  };
+}
+
+function publishRendererDelta({ projection, rendererDeltas, workflowPatches, timeline }, delta) {
+  const patches = projection.applyDelta(delta);
+  rendererDeltas.push(delta);
+  workflowPatches.push(...patches);
+  timeline.push({
+    step: 'renderer-delta',
+    delta: summarizeDelta(delta),
+    workflowPatches: patches.map(summarizePatch),
+  });
+}
+
+function snapshotTasks(cache, taskIds) {
+  const tasks = [];
+  for (const taskId of taskIds) {
+    const snapshot = cache.get(taskId);
+    if (!snapshot) continue;
+    try {
+      tasks.push(JSON.parse(snapshot));
+    } catch {
+      // Ignore corrupt synthetic fixture state; the source cache summary will
+      // still show the task as present.
+    }
+  }
+  return tasks;
+}
+
+function runRecoveryLoop({ cache, deltas, loaders, taskIds, initialProjectionTasks = undefined }) {
+  const rendererDeltas = [];
+  const workflowPatches = [];
+  const timeline = [];
+  const projection = new WorkflowRollupProjection();
+  projection.replaceAll(initialProjectionTasks ?? snapshotTasks(cache, taskIds));
+  const publishContext = { projection, rendererDeltas, workflowPatches, timeline };
+
+  for (const delta of deltas) {
+    const taskId = delta.type === 'created' ? delta.task.id : delta.taskId;
+    timeline.push({
+      step: 'backend-delta',
+      delta: summarizeDelta(delta),
+      cacheBefore: cacheSummary(cache, taskId),
+    });
+
+    const result = applyDelta(delta, cache);
+    timeline.push({
+      step: 'applyDelta',
+      accepted: result.accepted,
+      quarantined: result.quarantined,
+      cacheAfterApply: cacheSummary(cache, taskId),
+    });
+
+    if (result.accepted && result.quarantined.length === 0) {
+      publishRendererDelta(publishContext, delta);
+    }
+
+    for (const quarantinedTaskId of result.quarantined) {
+      const beforeRecovery = cacheSummary(cache, quarantinedTaskId);
+      const recovered = recoverQuarantinedTask(cache, quarantinedTaskId, loaders);
+      const emitted = recovered.rendererDelta;
+      if (emitted) {
+        publishRendererDelta(publishContext, emitted);
+      }
+      timeline.push({
+        step: 'recoverQuarantinedTask',
+        taskId: quarantinedTaskId,
+        cacheBeforeRecovery: beforeRecovery,
+        cacheAfterRecovery: cacheSummary(cache, quarantinedTaskId),
+        rendererDelta: emitted ? summarizeDelta(emitted) : null,
+      });
+    }
+  }
+
+  return {
+    rendererDeltas,
+    workflowPatches,
+    timeline,
+    finalCache: Object.fromEntries(taskIds.map((taskId) => [taskId, cacheSummary(cache, taskId)])),
+  };
+}
+
+function scenarioDetachedGapLocalMiss() {
+  const taskId = 'wf-ui-delta/implement-payment-execution';
+  const cache = new TaskSnapshotCache();
+  cache.set(taskId, JSON.stringify(makeTask(taskId, {
+    status: 'pending',
+    taskStateVersion: 50,
+    execution: { generation: 3 },
+  })));
+
+  const ownerHasTask = makeTask(taskId, {
+    status: 'running',
+    taskStateVersion: 54,
+    execution: { generation: 3, phase: 'executing' },
+  });
+  const deltas = [
+    {
+      type: 'updated',
+      taskId,
+      changes: { status: 'running', execution: { phase: 'executing' } },
+      taskStateVersion: 54,
+      previousTaskStateVersion: 53,
+    },
+    {
+      type: 'updated',
+      taskId,
+      changes: { execution: { lastHeartbeatAt: '2026-07-31T03:24:09.557Z' } },
+      taskStateVersion: 55,
+      previousTaskStateVersion: 54,
+    },
+  ];
+  const output = runRecoveryLoop({
+    cache,
+    deltas,
+    taskIds: [taskId],
+    loaders: {
+      loadTask: () => recoveryUnavailable('detached-viewer-local-read'),
+      getMergeNode: () => recoveryUnavailable('detached-viewer-local-read'),
+    },
+  });
+  const removed = output.rendererDeltas.filter((delta) => delta.type === 'removed');
+  return {
+    name: 'detached-gap-local-miss-removes-authoritative-task',
+    expectedBug: false,
+    invariant: 'A detached/local read miss must not emit removed while owner still has the task.',
+    ownerTruth: summarizeDelta({ type: 'created', task: ownerHasTask }),
+    violated: removed.length > 0,
+    output,
+  };
+}
+
+function scenarioDetachedUnknownLocalMiss() {
+  const taskId = 'wf-ui-delta/implement-market-lifecycle';
+  const cache = new TaskSnapshotCache();
+  const ownerHasTask = makeTask(taskId, {
+    status: 'running',
+    taskStateVersion: 52,
+    execution: { generation: 3, phase: 'executing' },
+  });
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskId],
+    deltas: [
+      {
+        type: 'updated',
+        taskId,
+        changes: { status: 'running', execution: { phase: 'executing' } },
+        taskStateVersion: 52,
+        previousTaskStateVersion: 51,
+      },
+    ],
+    loaders: {
+      loadTask: () => recoveryUnavailable('detached-viewer-local-read'),
+      getMergeNode: () => recoveryUnavailable('detached-viewer-local-read'),
+    },
+  });
+  const removed = output.rendererDeltas.filter((delta) => delta.type === 'removed');
+  return {
+    name: 'detached-unknown-update-local-miss-removes-authoritative-task',
+    expectedBug: false,
+    invariant: 'An unknown update in detached mode must ask the owner before removing the task.',
+    ownerTruth: summarizeDelta({ type: 'created', task: ownerHasTask }),
+    violated: removed.length > 0,
+    output,
+  };
+}
+
+function scenarioOwnerLoaderRecoversGap() {
+  const taskId = 'wf-ui-delta/implement-payment-execution';
+  const cache = new TaskSnapshotCache();
+  cache.set(taskId, JSON.stringify(makeTask(taskId, { status: 'pending', taskStateVersion: 50 })));
+  const authoritative = makeTask(taskId, {
+    status: 'running',
+    taskStateVersion: 54,
+    execution: { phase: 'executing' },
+  });
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskId],
+    deltas: [
+      {
+        type: 'updated',
+        taskId,
+        changes: { status: 'running' },
+        taskStateVersion: 54,
+        previousTaskStateVersion: 53,
+      },
+    ],
+    loaders: {
+      loadTask: () => recoveryFound(authoritative),
+      getMergeNode: () => recoveryMissing(),
+    },
+  });
+  return {
+    name: 'owner-authoritative-loader-recovers-gap',
+    expectedBug: false,
+    invariant: 'When authoritative loadTask sees the task, recovery emits created and keeps cache present.',
+    violated: output.rendererDeltas[0]?.type !== 'created' || !output.finalCache[taskId]?.present,
+    output,
+  };
+}
+
+function scenarioSyntheticMergeFallback() {
+  const workflowId = 'wf-ui-delta';
+  const taskId = `__merge__${workflowId}`;
+  const cache = new TaskSnapshotCache();
+  cache.set(taskId, JSON.stringify(makeTask(taskId, {
+    status: 'pending',
+    taskStateVersion: 2,
+    config: { workflowId, isMergeNode: true },
+  })));
+  const authoritative = makeTask(taskId, {
+    status: 'running',
+    taskStateVersion: 4,
+    config: { workflowId, isMergeNode: true },
+  });
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskId],
+    deltas: [
+      {
+        type: 'updated',
+        taskId,
+        changes: { status: 'running' },
+        taskStateVersion: 4,
+        previousTaskStateVersion: 3,
+      },
+    ],
+    loaders: {
+      loadTask: () => recoveryMissing(),
+      getMergeNode: (id) => (id === workflowId ? recoveryFound(authoritative) : recoveryMissing()),
+    },
+  });
+  return {
+    name: 'synthetic-merge-node-recovers-from-orchestrator',
+    expectedBug: false,
+    invariant: 'Synthetic merge nodes absent from persistence must recover through getMergeNode.',
+    violated: output.rendererDeltas[0]?.type !== 'created' || !output.finalCache[taskId]?.present,
+    output,
+  };
+}
+
+function scenarioStaleRemoveDropped() {
+  const taskId = 'wf-ui-delta/implement-bet-accounting';
+  const cache = new TaskSnapshotCache();
+  cache.set(taskId, JSON.stringify(makeTask(taskId, {
+    status: 'running',
+    taskStateVersion: 8,
+  })));
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskId],
+    deltas: [
+      {
+        type: 'removed',
+        taskId,
+        previousTaskStateVersion: 7,
+      },
+    ],
+    loaders: {
+      loadTask: () => recoveryMissing(),
+      getMergeNode: () => recoveryMissing(),
+    },
+  });
+  return {
+    name: 'stale-remove-cannot-delete-newer-cache-entry',
+    expectedBug: false,
+    invariant: 'A removed delta older than the cache version must be dropped.',
+    violated: output.rendererDeltas.length !== 0 || !output.finalCache[taskId]?.present,
+    output,
+  };
+}
+
+function scenarioRebaseRecreateResetContinuity() {
+  const workflowId = 'wf-ui-delta-rebase';
+  const taskId = `${workflowId}/implement-market-lifecycle`;
+  const cache = new TaskSnapshotCache();
+  cache.set(taskId, JSON.stringify(makeTask(taskId, {
+    status: 'completed',
+    taskStateVersion: 4,
+    config: { workflowId },
+    execution: { generation: 1, exitCode: 0 },
+  })));
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskId],
+    deltas: [
+      {
+        type: 'updated',
+        taskId,
+        changes: {
+          status: 'pending',
+          execution: { generation: 2, exitCode: undefined, phase: undefined },
+        },
+        taskStateVersion: 5,
+        previousTaskStateVersion: 4,
+      },
+      {
+        type: 'updated',
+        taskId,
+        changes: { status: 'running', execution: { generation: 2, phase: 'executing' } },
+        taskStateVersion: 6,
+        previousTaskStateVersion: 5,
+      },
+    ],
+    loaders: {
+      loadTask: () => recoveryMissing(),
+      getMergeNode: () => recoveryMissing(),
+    },
+  });
+  const final = output.finalCache[taskId];
+  const removed = output.rendererDeltas.some((delta) => delta.type === 'removed');
+  return {
+    name: 'rebase-recreate-reset-with-continuous-versions',
+    expectedBug: false,
+    invariant: 'Rebase+recreate reset deltas with continuous taskStateVersion must update in place, not remove.',
+    violated: removed || !final?.present || final.status !== 'running' || final.taskStateVersion !== 6,
+    output,
+  };
+}
+
+function scenarioQueuedStatusRollupCounted() {
+  const workflowId = 'wf-ui-delta-queued';
+  const taskId = `${workflowId}/task-a`;
+  const cache = new TaskSnapshotCache();
+  cache.set(taskId, JSON.stringify(makeTask(taskId, {
+    status: 'pending',
+    taskStateVersion: 1,
+    config: { workflowId },
+  })));
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskId],
+    deltas: [
+      {
+        type: 'updated',
+        taskId,
+        changes: { status: 'queued', execution: { phase: 'launching' } },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+      },
+    ],
+    loaders: {
+      loadTask: () => recoveryMissing(),
+      getMergeNode: () => recoveryMissing(),
+    },
+  });
+  const lastPatch = [...output.workflowPatches]
+    .reverse()
+    .find((patch) => patch.workflowId === workflowId);
+  const queuedCount = lastPatch?.rollup?.countsByStatus?.queued;
+  return {
+    name: 'workflow-queued-status-rollup-counted',
+    expectedBug: false,
+    invariant: 'Queued is a valid TaskStatus and must produce a finite numeric rollup count.',
+    violated: queuedCount !== 1,
+    output,
+  };
+}
+
+function scenarioWorkflowDeleteRemovesAllTasks() {
+  const workflowId = 'wf-ui-delta-delete';
+  const taskA = `${workflowId}/task-a`;
+  const taskB = `${workflowId}/task-b`;
+  const cache = new TaskSnapshotCache();
+  cache.set(taskA, JSON.stringify(makeTask(taskA, {
+    status: 'completed',
+    taskStateVersion: 3,
+    config: { workflowId },
+  })));
+  cache.set(taskB, JSON.stringify(makeTask(taskB, {
+    status: 'running',
+    taskStateVersion: 2,
+    config: { workflowId },
+  })));
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskA, taskB],
+    deltas: [
+      { type: 'removed', taskId: taskA, previousTaskStateVersion: 3 },
+      { type: 'removed', taskId: taskB, previousTaskStateVersion: 2 },
+    ],
+    loaders: {
+      loadTask: () => recoveryMissing(),
+      getMergeNode: () => recoveryMissing(),
+    },
+  });
+  const finalRemovedPatch = [...output.workflowPatches]
+    .reverse()
+    .find((patch) => patch.workflowId === workflowId);
+  return {
+    name: 'workflow-delete-removes-final-rollup',
+    expectedBug: false,
+    invariant: 'Deleting all tasks in a workflow must leave cache empty and mark the workflow rollup removed.',
+    violated:
+      output.finalCache[taskA]?.present ||
+      output.finalCache[taskB]?.present ||
+      finalRemovedPatch?.removed !== true,
+    output,
+  };
+}
+
+function scenarioWorkflowProgressMovesForward() {
+  const workflowId = 'wf-ui-delta-progress';
+  const taskA = `${workflowId}/task-a`;
+  const taskB = `${workflowId}/task-b`;
+  const cache = new TaskSnapshotCache();
+  cache.set(taskA, JSON.stringify(makeTask(taskA, {
+    status: 'pending',
+    taskStateVersion: 1,
+    config: { workflowId },
+  })));
+  cache.set(taskB, JSON.stringify(makeTask(taskB, {
+    status: 'pending',
+    taskStateVersion: 1,
+    config: { workflowId },
+  })));
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskA, taskB],
+    deltas: [
+      {
+        type: 'updated',
+        taskId: taskA,
+        changes: { status: 'running' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+      },
+      {
+        type: 'updated',
+        taskId: taskA,
+        changes: { status: 'completed', execution: { exitCode: 0 } },
+        taskStateVersion: 3,
+        previousTaskStateVersion: 2,
+      },
+      {
+        type: 'updated',
+        taskId: taskB,
+        changes: { status: 'running' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+      },
+      {
+        type: 'updated',
+        taskId: taskB,
+        changes: { status: 'completed', execution: { exitCode: 0 } },
+        taskStateVersion: 3,
+        previousTaskStateVersion: 2,
+      },
+    ],
+    loaders: {
+      loadTask: () => recoveryMissing(),
+      getMergeNode: () => recoveryMissing(),
+    },
+  });
+  const lastPatch = [...output.workflowPatches]
+    .reverse()
+    .find((patch) => patch.workflowId === workflowId);
+  return {
+    name: 'workflow-progress-pending-running-completed',
+    expectedBug: false,
+    invariant: 'Continuous progress updates must publish rollup patches and finish completed without removals.',
+    violated:
+      output.rendererDeltas.some((delta) => delta.type === 'removed') ||
+      lastPatch?.status !== 'completed' ||
+      output.finalCache[taskA]?.status !== 'completed' ||
+      output.finalCache[taskB]?.status !== 'completed',
+    output,
+  };
+}
+
+function scenarioWorkflowAddCreatedTasks() {
+  const workflowId = 'wf-ui-delta-add';
+  const taskA = `${workflowId}/task-a`;
+  const taskB = `${workflowId}/task-b`;
+  const cache = new TaskSnapshotCache();
+  const output = runRecoveryLoop({
+    cache,
+    taskIds: [taskA, taskB],
+    deltas: [
+      {
+        type: 'created',
+        task: makeTask(taskA, {
+          status: 'pending',
+          taskStateVersion: 1,
+          config: { workflowId },
+        }),
+      },
+      {
+        type: 'created',
+        task: makeTask(taskB, {
+          status: 'pending',
+          taskStateVersion: 1,
+          config: { workflowId },
+        }),
+      },
+      {
+        type: 'updated',
+        taskId: taskA,
+        changes: { status: 'running' },
+        taskStateVersion: 2,
+        previousTaskStateVersion: 1,
+      },
+    ],
+    loaders: {
+      loadTask: () => recoveryMissing(),
+      getMergeNode: () => recoveryMissing(),
+    },
+  });
+  const addPatches = output.workflowPatches.filter((patch) => patch.workflowId === workflowId);
+  return {
+    name: 'workflow-add-created-tasks-then-progress',
+    expectedBug: false,
+    invariant: 'Adding a workflow through created deltas must populate cache and publish rollups.',
+    violated:
+      output.rendererDeltas.some((delta) => delta.type === 'removed') ||
+      !output.finalCache[taskA]?.present ||
+      !output.finalCache[taskB]?.present ||
+      addPatches.length < 3,
+    output,
+  };
+}
+
+const scenarios = [
+  scenarioDetachedGapLocalMiss(),
+  scenarioDetachedUnknownLocalMiss(),
+  scenarioOwnerLoaderRecoversGap(),
+  scenarioSyntheticMergeFallback(),
+  scenarioStaleRemoveDropped(),
+  scenarioRebaseRecreateResetContinuity(),
+  scenarioQueuedStatusRollupCounted(),
+  scenarioWorkflowDeleteRemovesAllTasks(),
+  scenarioWorkflowProgressMovesForward(),
+  scenarioWorkflowAddCreatedTasks(),
+];
+
+for (const scenario of scenarios) {
+  console.log(`\n[scenario] ${scenario.name}`);
+  console.log(`  invariant: ${scenario.invariant}`);
+  if (scenario.ownerTruth) {
+    console.log(`  owner truth: ${JSON.stringify(scenario.ownerTruth)}`);
+  }
+  for (const entry of scenario.output.timeline) {
+    console.log(`  ${entry.step}: ${JSON.stringify(entry)}`);
+  }
+  console.log(`  rendererDeltas: ${JSON.stringify(scenario.output.rendererDeltas.map(summarizeDelta))}`);
+  console.log(`  workflowPatches: ${JSON.stringify(scenario.output.workflowPatches.map(summarizePatch))}`);
+  console.log(`  finalCache: ${JSON.stringify(scenario.output.finalCache)}`);
+  console.log(`  result: ${scenario.violated ? 'VIOLATED' : 'ok'}`);
+}
+
+const expectedBugScenarios = scenarios.filter((scenario) => scenario.expectedBug);
+const reproducedBugs = expectedBugScenarios.filter((scenario) => scenario.violated);
+const missingBugs = expectedBugScenarios.filter((scenario) => !scenario.violated);
+const controlFailures = scenarios.filter((scenario) => !scenario.expectedBug && scenario.violated);
+
+console.log('\n[summary]');
+console.log(`  expected bug scenarios: ${expectedBugScenarios.length}`);
+console.log(`  reproduced bug scenarios: ${reproducedBugs.length}`);
+console.log(`  fixed/missing bug scenarios: ${missingBugs.length}`);
+console.log(`  control failures: ${controlFailures.length}`);
+
+if (controlFailures.length > 0) {
+  console.error(`[repro] FAIL: control scenarios failed: ${controlFailures.map((scenario) => scenario.name).join(', ')}`);
+  process.exit(1);
+}
+
+if (expectBug) {
+  if (reproducedBugs.length !== expectedBugScenarios.length) {
+    console.error(`[repro] FAIL: expected the current bug, but these scenarios no longer reproduce it: ${missingBugs.map((scenario) => scenario.name).join(', ')}`);
+    process.exit(1);
+  }
+  console.log('[repro] PASS: current bug reproduced by standalone synthetic timelines');
+  process.exit(0);
+}
+
+if (reproducedBugs.length > 0) {
+  console.error(`[repro] FAIL: detached recovery emitted removed for authoritative tasks: ${reproducedBugs.map((scenario) => scenario.name).join(', ')}`);
+  console.error('[repro] Set INVOKER_UI_DELTA_EXPECT_BUG=1 when intentionally proving the pre-fix behavior.');
+  process.exit(1);
+}
+
+console.log('[repro] PASS: detached recovery did not remove authoritative tasks');
+NODE
+}
+
+case "$MODE" in
+  live | e2e | --live | --e2e)
+    ;;
+  synthetic | adverse | quick | --synthetic | --adverse | --quick)
+    run_synthetic_timelines
+    exit 0
+    ;;
+  *)
+    fail "unknown mode '$MODE' (use live or synthetic)"
+    ;;
+esac
 
 mkdir -p "$DB_DIR" "$LOG_DIR"
 : >"$BACKEND_SOURCE"
