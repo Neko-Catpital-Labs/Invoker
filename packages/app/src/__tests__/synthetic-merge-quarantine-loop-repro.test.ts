@@ -39,6 +39,8 @@ import { describe, it, expect } from 'vitest';
 import {
   applyDelta,
   recoverQuarantinedTask,
+  recoveryFound,
+  recoveryMissing,
   TaskSnapshotCache,
   type RecoveryLoaders,
 } from '../delta-merge.js';
@@ -114,9 +116,9 @@ function seedCacheWithMergeNode(version: number): TaskSnapshotCache {
   return cache;
 }
 
-function loadTaskNeverReturnsSynthetic(_id: string): TaskState | undefined {
+function loadTaskNeverReturnsSynthetic(_id: string) {
   // Persistence never holds synthetic merge nodes.
-  return undefined;
+  return recoveryMissing();
 }
 
 function copyCache(source: TaskSnapshotCache): TaskSnapshotCache {
@@ -136,7 +138,7 @@ describe('synthetic __merge__ quarantine-loop repro (graph-blank root cause)', (
     const authoritative = makeMergeNode(WORKFLOW_ID, 4);
     const loaders: RecoveryLoaders = {
       loadTask: loadTaskNeverReturnsSynthetic,
-      getMergeNode: (workflowId) => (workflowId === WORKFLOW_ID ? authoritative : undefined),
+      getMergeNode: (workflowId) => (workflowId === WORKFLOW_ID ? recoveryFound(authoritative) : recoveryMissing()),
     };
 
     const delta: TaskDelta = {
@@ -162,7 +164,7 @@ describe('synthetic __merge__ quarantine-loop repro (graph-blank root cause)', (
     const cache = seedCacheWithMergeNode(2);
     const loaders: RecoveryLoaders = {
       loadTask: loadTaskNeverReturnsSynthetic,
-      getMergeNode: (_workflowId) => undefined,
+      getMergeNode: (_workflowId) => recoveryMissing(),
     };
 
     const delta: TaskDelta = {
@@ -190,7 +192,7 @@ describe('synthetic __merge__ quarantine-loop repro (graph-blank root cause)', (
     const loaders: RecoveryLoaders = {
       loadTask: loadTaskNeverReturnsSynthetic,
       getMergeNode: (workflowId) =>
-        workflowId === WORKFLOW_ID ? makeMergeNode(WORKFLOW_ID, 10) : undefined,
+        workflowId === WORKFLOW_ID ? recoveryFound(makeMergeNode(WORKFLOW_ID, 10)) : recoveryMissing(),
     };
 
     const allRendererDeltas: TaskDelta[] = [];
@@ -240,8 +242,8 @@ describe('synthetic __merge__ quarantine-loop repro (graph-blank root cause)', (
     // removed delta so the renderer's stale entry is cleared.
     const cache = new TaskSnapshotCache();
     const loaders: RecoveryLoaders = {
-      loadTask: (_id) => undefined,
-      getMergeNode: (_workflowId) => undefined,
+      loadTask: (_id) => recoveryMissing(),
+      getMergeNode: (_workflowId) => recoveryMissing(),
     };
 
     const delta: TaskDelta = {
