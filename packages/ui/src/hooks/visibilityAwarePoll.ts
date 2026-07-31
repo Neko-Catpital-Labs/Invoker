@@ -16,10 +16,26 @@ export function subscribeVisibilityAwarePoll(
   let cancelled = false;
   let restoreTimer: number | undefined;
   let initialTimer: number | undefined;
+  let intervalTimer: number | undefined;
+
+  const isVisible = (): boolean =>
+    typeof document === 'undefined' || document.visibilityState === 'visible';
+
+  const clearIntervalTimer = (): void => {
+    if (intervalTimer !== undefined) {
+      window.clearInterval(intervalTimer);
+      intervalTimer = undefined;
+    }
+  };
+
+  const startInterval = (): void => {
+    clearIntervalTimer();
+    intervalTimer = window.setInterval(runIfVisible, pollMs);
+  };
 
   const runIfVisible = (): void => {
     if (cancelled) return;
-    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    if (!isVisible()) return;
     void poll();
   };
 
@@ -31,6 +47,7 @@ export function subscribeVisibilityAwarePoll(
         window.clearTimeout(restoreTimer);
         restoreTimer = undefined;
       }
+      clearIntervalTimer();
       return;
     }
     const delay = options?.restoreDelayMs ?? 0;
@@ -38,6 +55,7 @@ export function subscribeVisibilityAwarePoll(
     restoreTimer = window.setTimeout(() => {
       restoreTimer = undefined;
       runIfVisible();
+      if (!cancelled && isVisible()) startInterval();
     }, delay);
   };
 
@@ -50,14 +68,14 @@ export function subscribeVisibilityAwarePoll(
   } else {
     runIfVisible();
   }
-  const interval = window.setInterval(runIfVisible, pollMs);
+  if (isVisible()) startInterval();
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', onVisibilityChange);
   }
 
   return () => {
     cancelled = true;
-    window.clearInterval(interval);
+    clearIntervalTimer();
     if (restoreTimer !== undefined) window.clearTimeout(restoreTimer);
     if (initialTimer !== undefined) window.clearTimeout(initialTimer);
     if (typeof document !== 'undefined') {

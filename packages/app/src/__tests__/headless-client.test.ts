@@ -5,15 +5,28 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LocalBus } from '@invoker/transport';
+import {
+  PR_ADMIN_BYPASS_LAND_WORKER_KIND,
+  PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
+  PR_ORPHAN_REPAIR_WORKER_KIND,
+} from '@invoker/execution-engine';
 
 import { SharedMutationOwnerTimeoutError, electronCommandArgs, runHeadlessClientCommand } from '../headless-client.js';
 
+const RETIRED_PR_MAINTENANCE_WORKER_KINDS = [
+  'coderabbit-address',
+  'pr-conflict-rebase',
+  'pr-ci-failure-scan',
+] as const;
+
 describe('headless-client', () => {
   const savedStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+  const savedRequireExistingOwner = process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER;
   const savedDbDir = process.env.INVOKER_DB_DIR;
   let dbDir: string;
   beforeEach(() => {
     delete process.env.INVOKER_HEADLESS_STANDALONE;
+    delete process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER;
     // Isolate the resolved DB path so the owner-marker liveness check in
     // delegateGenericReadQuery cannot see a real ~/.invoker owner on the dev box.
     dbDir = mkdtempSync(join(tmpdir(), 'headless-client-'));
@@ -24,6 +37,11 @@ describe('headless-client', () => {
       delete process.env.INVOKER_HEADLESS_STANDALONE;
     } else {
       process.env.INVOKER_HEADLESS_STANDALONE = savedStandalone;
+    }
+    if (savedRequireExistingOwner === undefined) {
+      delete process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER;
+    } else {
+      process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER = savedRequireExistingOwner;
     }
     if (savedDbDir === undefined) {
       delete process.env.INVOKER_DB_DIR;
@@ -105,6 +123,32 @@ describe('headless-client', () => {
       rmSync(homeRoot, { recursive: true, force: true });
     }
   });
+  it('serves worker list locally without delegating or booting Electron', async () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const runElectronHeadless = vi.fn(async () => 23);
+    try {
+      const exitCode = await runHeadlessClientCommand(['worker', 'list'], {
+        messageBus: new LocalBus(),
+        ensureStandaloneOwner: vi.fn(async () => {}),
+        refreshMessageBus: vi.fn(async () => new LocalBus()),
+        runElectronHeadless,
+      });
+
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(exitCode).toBe(0);
+      expect(runElectronHeadless).not.toHaveBeenCalled();
+      expect(output).toContain('Worker kinds');
+      expect(output).toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
+      expect(output).toContain(PR_ADMIN_BYPASS_QUEUE_WORKER_KIND);
+      expect(output).toContain(PR_ORPHAN_REPAIR_WORKER_KIND);
+      for (const workerKind of RETIRED_PR_MAINTENANCE_WORKER_KINDS) {
+        expect(output).not.toContain(workerKind);
+      }
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it('falls back to direct execution for generic standalone reads when no owner exists', async () => {
     process.env.INVOKER_HEADLESS_STANDALONE = '1';
     const firstBus = new LocalBus();
@@ -701,6 +745,23 @@ describe('headless-client', () => {
     expect(refreshMessageBus).toHaveBeenCalled();
     expect(firstExecHandler).not.toHaveBeenCalled();
     expect(secondExecHandler).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  it('does not bootstrap a standalone owner when an existing mutation owner is required', async () => {
+    process.env.INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER = '1';
+    const ensureStandaloneOwner = vi.fn(async () => {});
+    const runElectronHeadless = vi.fn(async () => 0);
+
+    const exitCode = await runHeadlessClientCommand(['rebase-recreate', 'wf-3', '--no-track'], {
+      messageBus: new LocalBus(),
+      ensureStandaloneOwner,
+      refreshMessageBus: vi.fn(async () => new LocalBus()),
+      runElectronHeadless,
+    });
+
+    expect(exitCode).toBe(1);
+    expect(ensureStandaloneOwner).not.toHaveBeenCalled();
+    expect(runElectronHeadless).not.toHaveBeenCalled();
   }, 15_000);
 
   it('falls back to the host runtime for non-mutating commands', async () => {

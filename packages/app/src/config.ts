@@ -46,10 +46,10 @@ export interface DefaultExecutionConfig {
 /**
  * Owner-side PR-maintenance worker config.
  *
- * Disabled by default: the coderabbit-address and pr-conflict-rebase workers
- * only receive launch dependencies when `enabled` is true. The remaining fields
- * tune the shell entrypoint launch and fall back to the worker defaults when
- * omitted.
+ * Disabled by default: `enabled` is the gate for building launch dependencies
+ * for the surviving `pr-admin-bypass-land`, `pr-admin-bypass-queue`, and
+ * `pr-orphan-repair` worker paths. The remaining fields tune those shell
+ * entrypoints and fall back to the worker defaults when omitted.
  */
 export interface PrMaintenanceConfig {
   /**
@@ -61,7 +61,7 @@ export interface PrMaintenanceConfig {
   repoRoot?: string;
   /** Environment overrides forwarded to the shell entrypoint. `undefined` removes a variable. */
   env?: Record<string, string | undefined>;
-  /** Poll cadence for both PR-maintenance workers in milliseconds. Defaults to five minutes. */
+  /** Poll cadence for all PR-maintenance workers in milliseconds. Defaults to five minutes. */
   intervalMs?: number;
   /** Shared cron lock path. Defaults to the shell script's INVOKER_PR_CRON_LOCK behavior. */
   lockPath?: string;
@@ -373,8 +373,8 @@ export interface InvokerConfig {
   externalWorkers?: ExternalWorkerConfig[];
   /**
    * Owner-side PR-maintenance worker config. Disabled by default; when
-   * `enabled` is true the owner builds coderabbit-address and pr-conflict-rebase
-   * worker launch dependencies from this block.
+   * `enabled` is true the owner builds launch dependencies for the surviving
+   * PR-maintenance workers from this block.
    */
   prMaintenance?: PrMaintenanceConfig;
 }

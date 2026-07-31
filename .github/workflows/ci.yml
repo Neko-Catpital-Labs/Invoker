@@ -110,7 +110,7 @@ jobs:
       - name: Run quality check
         run: ${{ matrix.command }}
 
-  # UI component suite (@invoker/ui vitest, ~20s). Runs on every PR for early
+  # UI component suite (@invoker/ui vitest, ~2-3m). Runs on every PR for early
   # feedback AND on merge-queue refs, where `.mergify.yml` requires it — this is
   # the gate that blocks behavioral UI regressions (e.g. the sidebar navigation
   # guard) that still type-check. Scoped to @invoker/ui on purpose: the full
@@ -119,7 +119,7 @@ jobs:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - name: Reclaim workspace

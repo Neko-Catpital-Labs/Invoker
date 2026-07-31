@@ -567,16 +567,6 @@ export async function headlessRetryTask(taskId: string, deps: HeadlessDeps): Pro
   if (!taskId) throw new Error('Missing arguments. Usage: --headless retry-task <taskId>');
   await withRestoredTaskUnlessDeleteAllWon(taskId, deps, 'retry-task', async (restored) => {
     taskId = restored.resolvedTaskId;
-    if (deps.mutationTiming) {
-      await deps.mutationTiming.span(
-        'headless.retry-task.preemptTaskSubgraph',
-        { taskId },
-        () => preemptTaskSubgraph(taskId, deps),
-      );
-    } else {
-      await preemptTaskSubgraph(taskId, deps);
-    }
-
     const envelope = makeEnvelope('retry-task', 'headless', 'task', { taskId });
     const result = deps.mutationTiming
       ? await deps.mutationTiming.span(

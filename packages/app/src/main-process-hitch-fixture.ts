@@ -24,6 +24,8 @@ export interface MainProcessHitchFixtureOptions {
   actionsPerKind?: number;
   /** Defaults to completed so dbPoll does not keep syncing a perpetual running workflow. */
   workflowStatus?: Workflow['status'];
+  /** Defaults to completed so the hitch fixture is inert unless a test opts in. */
+  taskStatus?: TaskState['status'];
 }
 
 export interface MainProcessHitchFixtureResult {
@@ -43,15 +45,17 @@ function makeWorkflow(id: string, name: string, status: Workflow['status']): Wor
   };
 }
 
-function makeTask(id: string): TaskState {
+function makeTask(id: string, status: TaskState['status']): TaskState {
   return {
     id,
     description: `Task ${id}`,
-    status: 'pending',
+    status,
     dependencies: [],
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
     config: {},
-    execution: {},
+    execution: status === 'completed'
+      ? { exitCode: 0, completedAt: new Date('2026-07-01T00:00:01.000Z') }
+      : {},
     taskStateVersion: 1,
   };
 }
@@ -64,6 +68,7 @@ export function seedMainProcessHitchFixture(
   const eventsPerTask = options.eventsPerTask ?? DEFAULT_EVENTS_PER_TASK;
   const actionsPerKind = options.actionsPerKind ?? DEFAULT_ACTIONS_PER_KIND;
   const workflowStatus = options.workflowStatus ?? 'completed';
+  const taskStatus = options.taskStatus ?? 'completed';
   const workflowId = MAIN_PROCESS_HITCH_FIXTURE_WORKFLOW_ID;
   let workerActionCount = 0;
 
@@ -72,7 +77,7 @@ export function seedMainProcessHitchFixture(
 
     for (let t = 0; t < taskCount; t += 1) {
       const taskId = `${workflowId}/t${t}`;
-      persistence.saveTask(workflowId, makeTask(taskId));
+      persistence.saveTask(workflowId, makeTask(taskId, taskStatus));
       for (let e = 0; e < eventsPerTask; e += 1) {
         const action = e % 4 === 0 ? 'wakeup'
           : e % 4 === 1 ? 'scan'

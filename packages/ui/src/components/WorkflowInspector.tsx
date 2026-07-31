@@ -9,6 +9,7 @@ import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, Workfl
 
 type MergeMode = 'manual' | 'automatic' | 'external_review';
 type TaskLogLevel = 'debug' | 'info' | 'warn' | 'error';
+const PINNED_BASE_BRANCH = 'master';
 
 interface TaskAuditEvent {
   id?: number;
@@ -489,6 +490,7 @@ export function WorkflowInspector({
     }
     if (workflow?.id && trimmed !== (workflow.baseBranch ?? '')) {
       void onSetMergeBranch?.(workflow.id, trimmed);
+      setBranchValue(PINNED_BASE_BRANCH);
     }
   };
 
@@ -784,7 +786,7 @@ export function WorkflowInspector({
                     className="min-w-0 w-full rounded border border-border-strong bg-muted px-2 py-1 text-right font-mono text-xs text-foreground focus:border-border-strong focus:outline-none"
                   />
                   <div data-testid="base-ref-help" className="text-[11px] text-muted-foreground">
-                    Use master, origin/master, or upstream/master.
+                    Pinned to master for review gates.
                   </div>
                 </div>
               </label>
@@ -798,7 +800,7 @@ export function WorkflowInspector({
                   >
                     {workflow?.baseBranch ?? 'n/a'}
                   </div>
-                  <div className="text-[11px] text-muted-foreground">Use master, origin/master, or upstream/master.</div>
+                  <div className="text-[11px] text-muted-foreground">Pinned to master for review gates.</div>
                 </div>
               </div>
             )}

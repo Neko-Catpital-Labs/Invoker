@@ -68,12 +68,12 @@ describe('metadata-setter', () => {
     expect(deps.orchestrator.syncFromDb).toHaveBeenCalledWith('wf-1');
   });
 
-  it('pins workflow baseBranch metadata writes to master', async () => {
+  it('preserves explicit workflow baseBranch metadata writes', async () => {
     const deps = makeDeps();
     await setWorkflowMetadata(deps, 'wf-1', 'baseBranch', 'release');
 
     expect(deps.persistence.updateWorkflow).toHaveBeenCalledWith('wf-1', {
-      baseBranch: 'master',
+      baseBranch: 'release',
     });
   });
 

@@ -26,6 +26,7 @@ if [[ -n "${INVOKER_HEADLESS_IPC_HELPER:-}" ]]; then
   IPC_HELPER="$INVOKER_HEADLESS_IPC_HELPER"
 fi
 STANDALONE_MODE="${INVOKER_HEADLESS_STANDALONE:-0}"
+FORCE_OWNER_IPC="${INVOKER_HEADLESS_FORCE_OWNER_IPC:-0}"
 
 # ---------------------------------------------------------------------------
 # Electron sandbox detection (Linux)
@@ -54,11 +55,44 @@ headless_query() {
 
 # Mutating command — delegates to the owner (standalone or IPC).
 headless_mutation() {
-  if [ "$STANDALONE_MODE" = "1" ]; then
-    "$RUNNER" --headless "$@"
+  local ipc_args=()
+  local headless_args=()
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-track|--do-not-track)
+        ipc_args+=(--no-track)
+        shift
+        ;;
+      --wait-for-approval)
+        ipc_args+=(--wait-for-approval)
+        shift
+        ;;
+      --timeout-ms)
+        if [ "$#" -lt 2 ]; then
+          echo "ERROR: --timeout-ms requires a value" >&2
+          return 2
+        fi
+        ipc_args+=(--timeout-ms "$2")
+        shift 2
+        ;;
+      --)
+        shift
+        headless_args+=("$@")
+        break
+        ;;
+      *)
+        headless_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [ "$STANDALONE_MODE" = "1" ] && [ "$FORCE_OWNER_IPC" != "1" ]; then
+    "$RUNNER" --headless "${ipc_args[@]}" "${headless_args[@]}"
     return $?
   fi
-  node "$IPC_HELPER" exec -- "$@"
+  INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER=1 node "$IPC_HELPER" exec "${ipc_args[@]}" -- "${headless_args[@]}"
 }
 
 # Extract workflow IDs (label format) from a query.
@@ -137,7 +171,7 @@ batch_dispatch() {
   shift 4
   local extra_batch_args=("$@")
 
-  if [ "$STANDALONE_MODE" = "1" ]; then
+  if [ "$STANDALONE_MODE" = "1" ] && [ "$FORCE_OWNER_IPC" != "1" ]; then
     while IFS= read -r line; do
       [ -z "$line" ] && continue
       local wf_id args_json
@@ -198,8 +232,10 @@ for raw in output_jsonl.read_text(encoding="utf-8").splitlines():
     queued = (
         item.get("ok") is True
         and isinstance(response, dict)
-        and response.get("ok") is True
-        and response.get("intentId") not in (None, "")
+        and (
+            (response.get("ok") is True and response.get("intentId") not in (None, ""))
+            or response.get("workflowId") not in (None, "")
+        )
     )
     (log_dir / f"{workflow_id}.log").write_text(raw + "\n", encoding="utf-8")
     with result_file.open("a", encoding="utf-8") as handle:

@@ -41,7 +41,8 @@ function writeAcceptedNoTrackResult(result: WorkflowMutationAcceptedResult): voi
 }
 
 function fallbackExclusiveLockingEnabled(): boolean {
-  return process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1'
+  return process.env.INVOKER_ENABLE_EXCLUSIVE_LOCKING === '1'
+    && process.env.INVOKER_DISABLE_EXCLUSIVE_LOCKING !== '1'
     && process.env.INVOKER_UNSAFE_DISABLE_DB_WRITER_LOCK !== '1';
 }
 

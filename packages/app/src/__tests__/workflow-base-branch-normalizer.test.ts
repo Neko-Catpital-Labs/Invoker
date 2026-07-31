@@ -9,10 +9,11 @@ function makePersistence(workflows: Array<{ id: string; baseBranch?: string }>) 
 }
 
 describe('normalizePersistedWorkflowBaseBranches', () => {
-  it('rewrites every non-master workflow base branch to master', () => {
+  it('defaults missing workflow base branches without rewriting explicit stack bases', () => {
     const persistence = makePersistence([
       { id: 'wf-master', baseBranch: 'master' },
       { id: 'wf-main', baseBranch: 'main' },
+      { id: 'wf-stack', baseBranch: 'plan/upstream-step' },
       { id: 'wf-empty', baseBranch: '' },
       { id: 'wf-missing' },
     ]);
@@ -20,14 +21,13 @@ describe('normalizePersistedWorkflowBaseBranches', () => {
 
     const updated = normalizePersistedWorkflowBaseBranches(persistence, logger);
 
-    expect(updated).toBe(3);
-    expect(persistence.updateWorkflow).toHaveBeenCalledTimes(3);
-    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(1, 'wf-main', { baseBranch: 'master' });
-    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(2, 'wf-empty', { baseBranch: 'master' });
-    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(3, 'wf-missing', { baseBranch: 'master' });
+    expect(updated).toBe(2);
+    expect(persistence.updateWorkflow).toHaveBeenCalledTimes(2);
+    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(1, 'wf-empty', { baseBranch: 'master' });
+    expect(persistence.updateWorkflow).toHaveBeenNthCalledWith(2, 'wf-missing', { baseBranch: 'master' });
     expect(logger.info).toHaveBeenCalledWith(
-      '[init] normalized 3 workflow base branches to master',
-      { module: 'init', workflowCount: 3, baseBranch: 'master' },
+      '[init] defaulted 2 missing workflow base branches to master',
+      { module: 'init', workflowCount: 2, baseBranch: 'master' },
     );
   });
 

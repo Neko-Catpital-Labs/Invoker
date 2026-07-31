@@ -30,7 +30,7 @@ describe('applyPlanDefinitionDefaults', () => {
     expect(plan.baseBranch).toBe('master');
   });
 
-  it('pins the workflow baseBranch to master even when the plan asks for another branch', () => {
+  it('preserves explicit workflow baseBranch values for stacked workflows', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'X',
       baseBranch: 'upstream/develop',
@@ -38,7 +38,7 @@ describe('applyPlanDefinitionDefaults', () => {
       onFinish: 'merge',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
     });
-    expect(plan.baseBranch).toBe('master');
+    expect(plan.baseBranch).toBe('upstream/develop');
     expect(plan.featureBranch).toBe('feat/x');
     expect(plan.onFinish).toBe('merge');
   });
@@ -881,7 +881,7 @@ tasks:
   });
 
   describe('onFinish parsing', () => {
-    it('parses plan with onFinish: merge and still pins baseBranch to master', () => {
+    it('parses plan with onFinish: merge and preserves explicit baseBranch', () => {
       const yaml = `
 name: Merge Plan
 repoUrl: git@github.com:test/repo.git
@@ -894,7 +894,7 @@ tasks:
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('merge');
-      expect(plan.baseBranch).toBe('master');
+      expect(plan.baseBranch).toBe('upstream/develop');
       expect(plan.featureBranch).toBe('feat/x');
     });
 
@@ -943,7 +943,7 @@ tasks:
       loadConfigSpy.mockRestore();
     });
 
-    it('ignores an explicit baseBranch override and still pins to master', () => {
+    it('preserves an explicit baseBranch override', () => {
       const yaml = `
 name: Explicit Base
 repoUrl: git@github.com:test/repo.git
@@ -955,7 +955,35 @@ tasks:
     description: Build the project
 `;
       const plan = parsePlan(yaml);
-      expect(plan.baseBranch).toBe('master');
+      expect(plan.baseBranch).toBe('origin/release');
+    });
+
+    it('preserves stacked workflow baseBranch with externalDependencies', () => {
+      const yaml = `
+name: Stacked Child
+repoUrl: git@github.com:test/repo.git
+onFinish: pull_request
+baseBranch: plan/upstream-step
+featureBranch: plan/downstream-step
+externalDependencies:
+  - workflowId: wf-upstream
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+tasks:
+  - id: build
+    description: Build the project
+`;
+      const plan = parsePlan(yaml);
+      expect(plan.baseBranch).toBe('plan/upstream-step');
+      expect(plan.externalDependencies).toEqual([
+        {
+          workflowId: 'wf-upstream',
+          taskId: '__merge__',
+          requiredStatus: 'completed',
+          gatePolicy: 'review_ready',
+        },
+      ]);
     });
 
     it('rejects invalid onFinish value', () => {

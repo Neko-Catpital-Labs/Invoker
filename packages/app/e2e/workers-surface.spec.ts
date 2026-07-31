@@ -9,7 +9,7 @@ test('workers surface shows the worker control in the details panel', async ({ p
   await expect(page.getByTestId('worker-process-list')).toBeVisible();
   await expect(page.getByTestId('worker-row-autofix')).toBeVisible();
   await expect(page.getByTestId('worker-row-pr-status')).toBeVisible();
-  await expect(page.getByTestId('worker-row-ci-failure')).toBeVisible();
+  await expect(page.getByTestId('worker-row-infra-repair')).toBeVisible();
 
   await page.getByTestId('worker-row-pr-status').click();
   await expect(page.getByTestId('worker-detail-start-stop')).toBeVisible();
@@ -32,7 +32,7 @@ test('workers surface details control turns one worker off without touching the 
 
   await expect(page.getByTestId('worker-lifecycle-pr-status')).toHaveAttribute('data-lifecycle', 'stopped');
   await expect(control).toHaveAttribute('data-action', 'start');
-  await expect(page.getByTestId('worker-lifecycle-ci-failure')).toHaveAttribute('data-lifecycle', 'running');
+  await expect(page.getByTestId('worker-lifecycle-infra-repair')).toHaveAttribute('data-lifecycle', 'running');
   await captureScreenshot(page, 'workers-detail-control-step-2-one-off');
 
   await control.click();

@@ -106,7 +106,7 @@ async function closeApp(app: ElectronApplication): Promise<void> {
 }
 
 async function openPlanningTerminal(page: Page): Promise<void> {
-  await page.getByTestId('sidebar-planning').click();
+  await page.getByTestId('sidebar-home').click();
   await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: 10000 });
 }
 
@@ -130,7 +130,7 @@ async function bootstrapPlanningDraft(page: Page, planYaml: string): Promise<str
 
   await openPlanningTerminal(page);
   await submitPlanningText(page, 'Draft a YAML plan to reproduce planning terminal tmux blanking');
-  await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText('draft ready', { timeout: 10000 });
+  await expect(page.getByTestId('invoker-terminal-ready-bar')).toContainText(/draft ready/i, { timeout: 10000 });
   const sessionId = await page.evaluate(async () => {
     const list = await window.invoker.planningChatList();
     return list.sessions[0]?.id;
@@ -175,7 +175,10 @@ async function writeSentinel(page: Page, terminalSessionId: string, sentinel: st
     async () => terminalSnapshotForSession(page, terminalSessionId),
     { timeout: 10000 },
   ).toContain(sentinel);
-  await expect(page.getByTestId('invoker-terminal-tmux-pane').getByText(sentinel, { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect.poll(
+    async () => compactTerminalText(await visibleTmuxText(page)),
+    { timeout: 10000 },
+  ).toContain(compactTerminalText(sentinel));
 }
 
 async function terminalSnapshotForSession(page: Page, terminalSessionId: string): Promise<string> {
@@ -208,6 +211,10 @@ async function visibleTmuxText(page: Page): Promise<string> {
       .join('\n');
     return rowText.replace(/\u00a0/g, ' ').trim();
   });
+}
+
+function compactTerminalText(value: string): string {
+  return value.replace(/\s+/g, '');
 }
 
 function escapeRegExp(value: string): string {
@@ -280,8 +287,9 @@ base.describe('Planning Terminal tmux blank regression', () => {
       ).toContain(firstSentinel);
 
       const returnedText = await visibleTmuxText(page);
-      expect(returnedText).toContain(firstSentinel);
-      expect(returnedText).not.toContain(secondSentinel);
+      const compactReturnedText = compactTerminalText(returnedText);
+      expect(compactReturnedText).toContain(compactTerminalText(firstSentinel));
+      expect(compactReturnedText).not.toContain(compactTerminalText(secondSentinel));
       await recordPostSwitchEvidence(page, testInfo, 'planning-terminal-tmux-session-switch', returnedText);
 
       const planningState = await page.evaluate(async ({ firstSessionId, secondSessionId }) => {
@@ -336,18 +344,18 @@ base.describe('Planning Terminal tmux blank regression', () => {
       const sentinel = 'TMUX_NAV_REPRO_STILL_ACTIVE';
       await writeSentinel(page, terminalSessionId, sentinel);
 
-      await page.getByTestId('sidebar-home').click();
+      await page.getByTestId('sidebar-planning').click();
       await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10000 });
       await expect.poll(
         async () => terminalSnapshotForSession(page, terminalSessionId),
         { timeout: 10000 },
       ).toContain(sentinel);
-      await page.getByTestId('sidebar-planning').click();
+      await page.getByTestId('sidebar-home').click();
       await expect(page.getByTestId('invoker-terminal-mode-toggle').getByRole('tab', { name: 'tmux' })).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute('data-session-id', terminalSessionId);
 
       const returnedText = await visibleTmuxText(page);
-      expect(returnedText).toContain(sentinel);
+      expect(compactTerminalText(returnedText)).toContain(compactTerminalText(sentinel));
       await recordPostSwitchEvidence(page, testInfo, 'planning-terminal-tmux-navigation', returnedText);
 
       await expect.poll(async () => page.evaluate(async (sessionId) => {

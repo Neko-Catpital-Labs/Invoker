@@ -56,6 +56,14 @@ function getSetMergeBranchSource(): string {
   return guiMutationHandlersSource.slice(start, end);
 }
 
+function getRetryTaskSource(): string {
+  const start = guiMutationHandlersSource.lastIndexOf("'invoker:retry-task'");
+  const end = guiMutationHandlersSource.indexOf("'invoker:cancel-task'", start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return guiMutationHandlersSource.slice(start, end);
+}
+
 describe('GUI mutation translation', () => {
   it.each([
     'invoker:check-pr-statuses',
@@ -134,5 +142,11 @@ describe('GUI mutation translation', () => {
     expect(setMergeBranchSource).toMatch(
       /persistence\.updateWorkflow\(workflowId, \{ baseBranch \}\);[\s\S]*requestWorkflowMetadataPublish\('set-merge-branch'\);/,
     );
+  });
+
+  it('retry-task lets commandService own active-task preemption', () => {
+    const retryTaskSource = getRetryTaskSource();
+    expect(retryTaskSource).not.toContain('preemptTaskSubgraph(taskId)');
+    expect(retryTaskSource).toContain('commandService.retryTask(envelope)');
   });
 });

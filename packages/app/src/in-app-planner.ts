@@ -27,6 +27,7 @@ import type {
   InAppPlanningStreamEvent,
   InAppPlanningSubmitRequest,
   InAppPlanningSubmitResponse,
+  Logger,
   PlanningConfirmationMode,
   PlanningTerminalMode,
   PlanningPresetOption,
@@ -83,8 +84,9 @@ export interface InAppPlannerDeps {
   loadGeneratedPlan: (planText: string) => LoadedGeneratedPlan | Promise<LoadedGeneratedPlan>;
   workingDir?: string;
   planningCommandBuilder?: PlanningCommandBuilder;
-  executionAgentRegistry?: Pick<AgentRegistry, 'get'>;
+  executionAgentRegistry?: Pick<AgentRegistry, 'get' | 'getSessionDriver'>;
   conversationRepo?: ConversationRepository;
+  logger?: Logger;
   plannerReplyOverride?: (formattedMessage: string) => Promise<string>;
   onRawPlannerOutput?: (event: InAppPlanningStreamEvent) => void;
 }
@@ -446,6 +448,9 @@ export function hydrateRemotePlanningTerminalSession(summary: InAppPlanningSessi
     id: summary.id,
     title: summary.title,
     presetKey: summary.presetKey,
+    repoUrl: summary.repoUrl,
+    baseBranch: summary.baseBranch,
+    baseCommit: summary.baseCommit,
     confirmationMode: summary.confirmationMode ?? 'require',
     status: summary.status,
     messages: summary.messages,
@@ -610,7 +615,7 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'onRawPlannerOutput'> & { mcpConfigPath?: string },
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput'> & { mcpConfigPath?: string },
   threadTs: string,
   selectHarnessSessionDriver: PlannerSurfacesModule['selectHarnessSessionDriver'],
   options: { conversationalPlanning?: boolean } = {},
@@ -637,6 +642,13 @@ function planConversationConfig(
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
     onRawPlannerOutput: deps.onRawPlannerOutput
       ? (chunk) => deps.onRawPlannerOutput?.({ sessionId: threadTs, chunk })
+      : undefined,
+    log: deps.logger
+      ? (_source, level, message) => {
+        if (level === 'error') deps.logger?.error(message, { module: 'planning-chat' });
+        else if (level === 'warn') deps.logger?.warn(message, { module: 'planning-chat' });
+        else deps.logger?.info(message, { module: 'planning-chat' });
+      }
       : undefined,
   };
 }

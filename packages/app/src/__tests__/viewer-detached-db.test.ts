@@ -1,14 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { SQLiteAdapter } from '@invoker/data-store';
 import { openMainProcessDatabase, openDetachedViewerDatabase } from '../viewer-db-boundary.js';
 import type { Workflow } from '@invoker/data-store';
+import type { TaskState } from '@invoker/workflow-core';
 
 /**
- * Detached GUI viewers must never open the shared `invoker.db` file. They use
- * process-local placeholder persistence while renderer reads delegate to the
- * owner over IPC.
+ * Detached GUI viewers may open the shared `invoker.db` file read-only. React
+ * still crosses only the IPC bridge; this boundary belongs to Electron main.
  */
 
 const dirs: string[] = [];
@@ -28,6 +29,29 @@ const wf: Workflow = {
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
+
+function task(id: string): TaskState {
+  return {
+    id,
+    description: id,
+    status: 'running',
+    dependencies: [],
+    createdAt: new Date('2026-07-29T00:00:00.000Z'),
+    config: { workflowId: wf.id, command: 'echo hello' },
+    execution: { phase: 'executing' },
+    taskStateVersion: 2,
+  } as TaskState;
+}
+
+async function seedDb(dbPath: string): Promise<void> {
+  const owner = await SQLiteAdapter.create(dbPath, { ownerCapability: true });
+  try {
+    owner.saveWorkflow(wf);
+    owner.saveTask(wf.id, task('wf-1/hello-world'));
+  } finally {
+    owner.close();
+  }
+}
 
 describe('detached viewer persistence boundary', () => {
   it('uses empty in-memory persistence for read-only startup when the db file is absent', async () => {
@@ -49,45 +73,64 @@ describe('detached viewer persistence boundary', () => {
     }
   });
 
-  it('ignores the real db path and opens no database file (no -shm to truncate)', async () => {
+  it('opens the real database read-only when it exists', async () => {
     const dir = makeDir();
-    const probeDbPath = join(dir, 'invoker.db');
-    const previousCwd = process.cwd();
-    process.chdir(dir);
-    try {
-      const adapter = await openMainProcessDatabase({
-        dbPath: probeDbPath,
-        detachedViewer: true,
-        readOnly: true,
-        exclusiveLocking: true,
-      });
-      try {
-        // Fully functional: schema is present and writes/reads work in memory.
-        expect(adapter.listWorkflows()).toEqual([]);
-        adapter.saveWorkflow(wf);
-        expect(adapter.listWorkflows().map((w) => w.id)).toEqual(['wf-1']);
-        // Telemetry writes the viewer's logger attempts must not throw in memory.
-        expect(() => adapter.writeActivityLog('viewer', 'info', 'hello')).not.toThrow();
+    const dbPath = join(dir, 'invoker.db');
+    await seedDb(dbPath);
 
-        // The immunity property: no file, no -wal, no -shm anywhere.
-        expect(existsSync(probeDbPath)).toBe(false);
-        expect(existsSync(`${probeDbPath}-shm`)).toBe(false);
-        expect(existsSync(`${probeDbPath}-wal`)).toBe(false);
-        expect(readdirSync(dir)).toEqual([]);
-      } finally {
-        adapter.close();
-      }
+    const adapter = await openMainProcessDatabase({
+      dbPath,
+      detachedViewer: true,
+      readOnly: true,
+      exclusiveLocking: true,
+    });
+    try {
+      expect(adapter.listWorkflows().map((item) => item.id)).toEqual(['wf-1']);
+      expect(adapter.loadTasks(wf.id).map((item) => item.id)).toEqual(['wf-1/hello-world']);
+      expect(adapter.loadTask('wf-1/hello-world')?.status).toBe('running');
     } finally {
-      process.chdir(previousCwd);
+      adapter.close();
     }
   });
 
-  it('does not require owner capability (it never touches the shared file)', async () => {
+  it('rejects detached viewer writes when the real database exists', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    await seedDb(dbPath);
+
+    const adapter = await openMainProcessDatabase({
+      dbPath,
+      detachedViewer: true,
+      readOnly: true,
+      exclusiveLocking: false,
+    });
+    try {
+      expect(() => adapter.updateTask('wf-1/hello-world', { status: 'completed' })).toThrow(/read-only/i);
+      expect(() => adapter.saveWorkflow({ ...wf, id: 'wf-2' })).toThrow(/read-only/i);
+    } finally {
+      adapter.close();
+    }
+  });
+
+  it('keeps an explicit ephemeral placeholder helper for absent databases', async () => {
     const adapter = await openDetachedViewerDatabase();
     try {
       expect(adapter).toBeDefined();
     } finally {
       adapter.close();
     }
+  });
+
+  it('does not silently fall back to empty persistence when read-only open fails', async () => {
+    const dir = makeDir();
+    const dbPath = join(dir, 'invoker.db');
+    writeFileSync(dbPath, 'not sqlite', 'utf-8');
+
+    await expect(openMainProcessDatabase({
+      dbPath,
+      detachedViewer: true,
+      readOnly: true,
+      exclusiveLocking: false,
+    })).rejects.toThrow();
   });
 });
