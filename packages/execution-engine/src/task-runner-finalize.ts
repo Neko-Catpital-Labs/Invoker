@@ -17,8 +17,57 @@ import type { WorkResponse } from '@invoker/contracts';
 
 import type { Executor, ExecutorHandle } from './executor.js';
 import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
+import {
+  shouldVerifyTaskBranchPublication,
+  verifyTaskBranchPublication,
+} from './task-branch-publication.js';
 import type { LaunchDispatchOptions } from './task-runner.js';
 import type { TaskRunnerPhaseHost } from './task-runner-phase-host.js';
+
+function branchRemoteUrl(host: TaskRunnerPhaseHost, task: TaskState): string | undefined {
+  const workflow = task.config.workflowId ? host.persistence.loadWorkflow?.(task.config.workflowId) : undefined;
+  const remote = (workflow as any)?.intermediateRepoUrl?.trim() || (workflow as any)?.repoUrl?.trim();
+  return remote || undefined;
+}
+
+async function verifyCompletionHandoff(
+  host: TaskRunnerPhaseHost,
+  task: TaskState,
+  handle: ExecutorHandle,
+  response: WorkResponse,
+): Promise<WorkResponse> {
+  if (response.status !== 'completed') return response;
+  const commitHash = response.outputs.commitHash?.trim();
+  const branch = response.outputs.branch?.trim() || handle.branch?.trim() || task.execution.branch?.trim();
+  const repoUrl = branchRemoteUrl(host, task);
+  const verificationInput = { repoUrl, branch, commitHash };
+  if (!shouldVerifyTaskBranchPublication(verificationInput)) return response;
+
+  const verification = await verifyTaskBranchPublication(verificationInput);
+  if (verification.ok) return response;
+
+  const error =
+    `Task branch publication handoff verification failed for ${task.id}: ${verification.error}. ` +
+    'Downstream tasks were not started from this unpublished or stale commit.';
+  host.persistence.logEvent?.(task.id, 'task.branch_publication_handoff_failed', {
+    branch,
+    commitHash,
+    remoteHead: verification.remoteHead,
+    error,
+  });
+  const { commitHash: _commitHash, summary: _summary, ...outputs } = response.outputs;
+  return {
+    ...response,
+    status: 'failed',
+    outputs: {
+      ...outputs,
+      branch,
+      exitCode: 1,
+      failureClass: 'ssh-invalid-reference',
+      error,
+    },
+  };
+}
 
 export function wireCompletion(
   host: TaskRunnerPhaseHost,
@@ -38,7 +87,8 @@ export function wireCompletion(
   const completionPromise = new Promise<void>((resolvePromise) => {
     executor.onComplete(handle, async (response: WorkResponse) => {
       const work = async () => {
-        const normalizedResponse = response.attemptId ? response : { ...response, attemptId };
+        const responseWithAttempt = response.attemptId ? response : { ...response, attemptId };
+        const normalizedResponse = await verifyCompletionHandoff(host, task, handle, responseWithAttempt);
         const activeExecution = host.activeExecutions.get(normalizedResponse.attemptId ?? attemptId);
         if (activeExecution?.leaseResourceKey && activeExecution.leaseHolderId) {
           host.persistence.releaseExecutionResourceLease?.(activeExecution.leaseResourceKey, activeExecution.leaseHolderId);

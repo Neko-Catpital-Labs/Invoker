@@ -123,7 +123,7 @@ PY
 : > "$LEDGER_PATH"
 : > "$CALLS_PATH"
 
-if ! out="$(python3 scripts/mergify_admin_requeue.py --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 6111 2>&1)"; then
+if ! out="$(python3 scripts/mergify_admin_requeue.py --once --repair-mode local --repo fake/repo --state-file "$LEDGER_PATH" --pr 6111 2>&1)"; then
   fail 'worker failed after PR merged during repair' "$out"
 fi
 case "$out" in

@@ -185,7 +185,7 @@ PY
 }
 
 run_worker() {
-  python3 scripts/mergify_admin_requeue.py --once --repo fake/repo --author fake-bot --state-file "$LEDGER_PATH" 2>&1
+  python3 scripts/mergify_admin_requeue.py --once --repair-mode local --repo fake/repo --author fake-bot --state-file "$LEDGER_PATH" 2>&1
 }
 
 git clone . "$SEED" >/dev/null

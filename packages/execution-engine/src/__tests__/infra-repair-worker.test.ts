@@ -287,21 +287,56 @@ describe('infra-repair worker', () => {
     expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
   });
 
-  it('recreates invalid-reference and no-saved-workspace failures', async () => {
-    for (const error of [
-      'fatal: invalid reference: refs/heads/feature/task-1',
-      'Cannot apply a fix because this task has no saved workspace.',
-    ]) {
-      const h = makeHarness([
-        makeTask({ execution: { error } }),
-      ]);
+  it('records one blocker instead of recreating downstream for an unpublished upstream commit reference', async () => {
+    const invalidCommit = '2a8919ca88335431a1790ba8ce31e0e94a1e4199';
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: `fatal: invalid reference: ${invalidCommit}`,
+        },
+      }),
+    ]);
 
-      await h.tick(POLL_CTX);
+    await h.tick(POLL_CTX);
+    await h.tick(POLL_CTX);
 
-      expect(h.submit).toHaveBeenCalledTimes(1);
-      expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
-      expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
-    }
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(workerActions(h.actions)).toHaveLength(1);
+    expect(workerActions(h.actions)[0]).toEqual(expect.objectContaining({
+      workerKind: INFRA_REPAIR_WORKER_KIND,
+      actionType: 'repair-infra-failure',
+      taskId: 'wf-1/task-1',
+      status: 'skipped',
+      summary: expect.stringContaining(invalidCommit),
+      payload: expect.objectContaining({
+        invalidCommit,
+        reason: 'unpublished-upstream-commit',
+      }),
+    }));
+  });
+
+  it('still recreates invalid-reference failures that are not unpublished commit handoffs', async () => {
+    const h = makeHarness([
+      makeTask({ execution: { error: 'fatal: invalid reference: refs/heads/feature/task-1' } }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
+    expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+  });
+
+  it('recreates no-saved-workspace failures', async () => {
+    const h = makeHarness([
+      makeTask({ execution: { error: 'Cannot apply a fix because this task has no saved workspace.' } }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
+    expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
   });
 
   it('suppresses a second target repair but still retries a later task after recent success', async () => {

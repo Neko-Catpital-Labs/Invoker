@@ -29,7 +29,7 @@ from scripts.mergify_admin_requeue import (
     plan_stack_actions,
 )
 from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_KIND, AdminBypassGhExecutor
-from scripts.mergify_admin_requeue_model import LoadedStacks
+from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
 from scripts.mergify_admin_requeue_repairer import (
@@ -589,6 +589,31 @@ Failing checks
         refreshed = Ledger(ledger.path)
         self.assertEqual(refreshed.count("repair-delegated", 2606, HEAD, "PR Body"), 1)
         self.assertEqual(refreshed.count("repair-check", 2606, HEAD, "PR Body"), 0)
+
+    def test_run_cycle_local_repair_mode_uses_synchronous_repairer(self):
+        class FakeRepairer:
+            def __init__(self, *_args):
+                pass
+
+            def repair_check(self, _pr, check_name, _now):
+                return RepairOutcome("noop", check_name, HEAD, HEAD)
+
+        ledger = self.ledger()
+        args = requeue.parse_args(["--once", "--repair-mode", "local", "--repo", "owner/repo", "--state-file", str(ledger.path)])
+        stack = StackGroup("s", (pr(2606, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}, latest=mergify()),))
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(exec_impl, "AdminBypassRepairer", FakeRepairer):
+                    with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                        with redirect_stdout(stdout):
+                            should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        self.assertIn('repair-check PR #2606 check="PR Body"', stdout.getvalue())
+        refreshed = Ledger(ledger.path)
+        self.assertEqual(refreshed.count("repair-check", 2606, HEAD, "PR Body"), 1)
+        self.assertEqual(refreshed.count("repair-noop", 2606, HEAD, "PR Body"), 1)
+        self.assertEqual(refreshed.count("repair-delegated", 2606, HEAD, "PR Body"), 0)
 
     def test_run_cycle_delegated_conflict_repair_does_not_consume_attempt_cap_marker(self):
         ledger = self.ledger()

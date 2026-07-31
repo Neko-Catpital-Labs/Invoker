@@ -6,7 +6,7 @@ source "$(dirname "$0")/cron-pr-lib.sh"
 
 cron_lock
 
-args=(--once --repo "$TARGET_REPO" --author "$PR_AUTHOR")
+args=(--once --repair-mode delegate --repo "$TARGET_REPO" --author "$PR_AUTHOR")
 if [ "$DRY_RUN" = "1" ]; then
   args+=(--dry-run)
 fi

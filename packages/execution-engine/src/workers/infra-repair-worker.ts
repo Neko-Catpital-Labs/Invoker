@@ -222,6 +222,18 @@ function isOpenOrCompletedTaskDecisionStatus(status: string): boolean {
   return status === 'queued' || status === 'running' || status === 'completed';
 }
 
+function workerActionPayloadReason(action: WorkerActionRecord): string | undefined {
+  const payload = action.payload;
+  if (!payload || typeof payload !== 'object') return undefined;
+  const reason = (payload as Record<string, unknown>).reason;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
+function exactInvalidCommitReference(errorText: unknown): string | undefined {
+  if (typeof errorText !== 'string') return undefined;
+  return errorText.match(/fatal: invalid reference:\s*([0-9a-f]{40})/i)?.[1];
+}
+
 function recordTaskDecision(
   options: InfraRepairWorkerPolicyOptions,
   candidate: Pick<InfraRepairScanCandidate, 'taskId' | 'workflowId' | 'generation' | 'taskStateVersion'>,
@@ -581,6 +593,23 @@ async function handleInvalidReferenceRecovery(
   options: InfraRepairWorkerPolicyOptions,
   candidate: ValidatedGenericSshInfraCandidate,
 ): Promise<void> {
+  const invalidCommit = exactInvalidCommitReference(candidate.task.execution.error);
+  if (invalidCommit) {
+    recordTaskDecision(
+      options,
+      candidate,
+      candidate.reason,
+      'skipped',
+      `Skipped recreate-task because ${candidate.taskId} references unpublished or unreachable upstream commit ${invalidCommit}`,
+      {
+        targetId: candidate.targetId,
+        invalidCommit,
+      },
+      'unpublished-upstream-commit',
+    );
+    return;
+  }
+
   await submitFollowUpMutation(
     options,
     candidate,
@@ -603,6 +632,13 @@ async function handleValidatedGenericSshInfraCandidate(
     taskDecisionExternalKey(candidate, candidate.reason),
   );
   if (existingDecision && isOpenOrCompletedTaskDecisionStatus(existingDecision.status)) {
+    return;
+  }
+  if (
+    existingDecision?.status === 'skipped'
+    && exactInvalidCommitReference(candidate.task.execution.error)
+    && workerActionPayloadReason(existingDecision) === 'unpublished-upstream-commit'
+  ) {
     return;
   }
 
