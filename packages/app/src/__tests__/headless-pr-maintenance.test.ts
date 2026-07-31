@@ -4,7 +4,6 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import {
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
-  PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
 } from '@invoker/execution-engine';
 import { runHeadless } from '../headless.js';
@@ -86,7 +85,6 @@ describe('headless worker PR-maintenance', () => {
 
     expect(stdout).toContain('Worker kinds');
     expect(stdout).toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
-    expect(stdout).toContain(PR_ADMIN_BYPASS_QUEUE_WORKER_KIND);
     expect(stdout).toContain(PR_ORPHAN_REPAIR_WORKER_KIND);
     expect(stdout).not.toContain('coderabbit-address');
     expect(stdout).not.toContain('pr-conflict-rebase');

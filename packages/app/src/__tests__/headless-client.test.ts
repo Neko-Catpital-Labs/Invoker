@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalBus } from '@invoker/transport';
 import {
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
-  PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
 } from '@invoker/execution-engine';
 
@@ -139,7 +138,6 @@ describe('headless-client', () => {
       expect(runElectronHeadless).not.toHaveBeenCalled();
       expect(output).toContain('Worker kinds');
       expect(output).toContain(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
-      expect(output).toContain(PR_ADMIN_BYPASS_QUEUE_WORKER_KIND);
       expect(output).toContain(PR_ORPHAN_REPAIR_WORKER_KIND);
       for (const workerKind of RETIRED_PR_MAINTENANCE_WORKER_KINDS) {
         expect(output).not.toContain(workerKind);
