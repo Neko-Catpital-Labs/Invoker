@@ -1,0 +1,62 @@
+formula: ci-regression-watch
+version: 1
+description: >
+  File a bug-fix workflow for one CI job that first went red on a default-branch
+  push commit. The task reproduces against the observed commit, then ports the
+  fix to current master so the resulting PR is mergeable.
+vars:
+  repo_url:
+    required: true
+    example: "git@github.com:Neko-Catpital-Labs/Invoker.git"
+    description: "Git remote for the repo where tasks run."
+  base_branch:
+    required: false
+    default: "master"
+    example: "master"
+    description: "Current target branch for the repair PR."
+  sha:
+    required: true
+    example: "abc123def456abc123def456abc123def456ab1"
+    description: "Default-branch commit where this CI job first failed."
+  short_sha:
+    required: true
+    example: "abc123d"
+    description: "Short SHA used in ids."
+  job_name:
+    required: true
+    example: "playwright / 1-of-9"
+    description: "Exact GitHub Actions job name."
+  job_slug:
+    required: true
+    example: "abc123d-playwright-1-of-9"
+    description: "Kebab-case plan/task id suffix."
+  run_id:
+    required: true
+    example: "123456789"
+    description: "GitHub Actions run id for the first bad observation."
+  job_database_id:
+    required: true
+    example: "987654321"
+    description: "GitHub Actions job database id for log lookup."
+  job_url:
+    required: true
+    example: "https://github.com/Neko-Catpital-Labs/Invoker/actions/runs/123/job/987"
+    description: "GitHub Actions job URL for the first bad observation."
+  last_bad_sha:
+    required: true
+    example: "def456def456def456def456def456def456def4"
+    description: "Most recent SHA where the job was still broken."
+  last_bad_run_id:
+    required: true
+    example: "123456799"
+    description: "Most recent run id where the job was still broken."
+  verify_command:
+    required: true
+    example: "bash scripts/test-suites/required/10-vitest-workspace.sh"
+    description: "Local command that should fail before and pass after the fix."
+  marker:
+    required: true
+    example: "<!-- invoker-ci-regression-watch: first-bad-sha=abc123def456abc123def456abc123def456ab1; job=playwright / 1-of-9 -->"
+    description: "Exact dedup marker embedded in the workflow description."
+workflows:
+  - ci-regression-watch.workflow.yaml

@@ -1,0 +1,84 @@
+name: "CI regression: {{job_slug}}"
+description: |
+  {{marker}}
+
+  CI job `{{job_name}}` first failed on default-branch push commit {{sha}}
+  in run {{run_id}}. It was most recently still red at {{last_bad_sha}}
+  in run {{last_bad_run_id}}.
+
+  First bad job: {{job_url}}
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: {{base_branch}}
+repoUrl: {{repo_url}}
+
+tasks:
+  - id: fix-ci-{{job_slug}}
+    description: |
+      Fix CI job {{job_name}} first observed failing at {{sha}}.
+      Review claim: The change corrects the CI regression's root cause at its source, with no unrelated edits.
+      Review lane: behavior
+      Safety invariant: Other CI jobs and product behavior stay unchanged except for the corrected defect.
+      Slice rationale: One behavior slice: the failing CI job's root cause and deterministic proof.
+      Architectural effect: None expected; no new module boundaries unless the root cause requires it.
+      Goal: Make the CI job `{{job_name}}` pass on current master.
+      Motivation: This job first failed on default-branch commit {{sha}} and stayed red through {{last_bad_sha}}.
+      Alternative considerations: Re-running or weakening the test was rejected; fix the underlying defect.
+      Implementation details: Reproduce at {{sha}}, then implement on current master.
+      Non-goals: No refactor, no unrelated cleanup, no test weakening, no snapshot churn unless it is the reviewed expected output.
+      Layer: e2e_regression
+      Feature state: active
+      Files:
+      - Unknown at filing time; determined during root-cause investigation.
+      Change types:
+      - Unknown at filing time; determined during root-cause investigation.
+      Acceptance criteria:
+      - `{{verify_command}}` exits 0 after the change.
+    prompt: |
+      Goal: Diagnose and fix CI job `{{job_name}}`, first observed failing at
+      default-branch commit {{sha}}.
+      Review lane: behavior
+      Motivation: The per-HEAD CI watcher records this job as broken at
+      {{sha}} and still broken through {{last_bad_sha}}. This is keyed by the
+      CI job, not by a later duplicate HEAD, so avoid duplicate or unrelated
+      repair work.
+      Alternative considerations: Re-running, skipping, weakening tests, or
+      targeting a PR at the historical SHA was rejected; the fix must land on
+      current master.
+      Implementation details: Assume no prior context. Inspect
+      `.github/workflows/ci.yml`, the relevant `scripts/` suite entrypoint, and
+      the first failing GitHub job logs:
+      `gh run view {{run_id}} --repo Neko-Catpital-Labs/Invoker --job {{job_database_id}} --log`.
+      Inspect the introducing commit with `git show {{sha}}`. Reproduce against
+      the historical commit without doing final work there: use a detached
+      temporary worktree or clone at {{sha}}, then run `{{verify_command}}`.
+      Return to the current task branch based on master and implement the fix
+      there. If historical reproduction is blocked by external runner setup,
+      use the GitHub job logs as the historical evidence and still prove the
+      final fix locally.
+      Non-goals: Do not weaken, skip, or delete assertions; do not make broad
+      refactors; do not manually edit GitHub CI state; do not target a PR at
+      the historical SHA.
+      Acceptance criteria: `{{verify_command}}` must exit code 0 on the final
+      branch after the change.
+    dependencies: []
+
+  - id: verify-ci-{{job_slug}}
+    description: |
+      Run the local verification command for CI job {{job_name}}.
+      Review claim: The command passes only when the CI regression is fixed.
+      Review lane: proof
+      Safety invariant: The command is identical before and after the fix.
+      Slice rationale: One proof slice for the repaired CI job.
+      Architectural effect: None; adds no product behavior.
+      Goal: Prove the CI job repair locally.
+      Motivation: A shared command prevents the job-specific regression from recurring silently.
+      Alternative considerations: Manual verification was rejected as non-deterministic.
+      Implementation details: Execute the exact command below.
+      Non-goals: No product edits here; proof only.
+      Layer: e2e_regression
+      Feature state: active
+    command: |
+      {{verify_command}}
+    dependencies:
+      - fix-ci-{{job_slug}}
