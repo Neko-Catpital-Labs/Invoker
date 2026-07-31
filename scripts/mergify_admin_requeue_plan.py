@@ -784,8 +784,6 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
-    if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
-        return ()
     if facts.bottom:
         bottom_pr_numbers = (facts.bottom.number,)
         action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)

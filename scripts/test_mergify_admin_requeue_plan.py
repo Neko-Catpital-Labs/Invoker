@@ -586,6 +586,42 @@ class PlanStackActions(PlannerTestCase):
             [("repair_check", 10, "bot_review_thread:PRRT_bot")],
         )
 
+    def test_delegated_bot_thread_does_not_suppress_sibling_bot_thread_repair(self):
+        ledger = self._ledger()
+        ledger.record("repair-delegated", 6579, HEAD, "PRRT_done", 1)
+        bottom = pr(
+            number=6579,
+            head_ref_name="stack/bottom",
+            labels=frozenset({"admin-bypass", "dequeued"}),
+            review_threads=(
+                m.ReviewThread("PRRT_done", False, ("coderabbitai[bot]",)),
+                m.ReviewThread("PRRT_next", False, ("coderabbitai[bot]",)),
+            ),
+        )
+
+        actions = self._plan(m.StackGroup("s", (bottom,)), ledger)
+
+        self.assertEqual(
+            [(action.kind, action.pr_number, action.key) for action in actions],
+            [("repair_check", 6579, "bot_review_thread:PRRT_next")],
+        )
+
+    def test_upper_delegated_repair_does_not_block_clean_bottom_requeue(self):
+        ledger = self._ledger()
+        bottom = pr(number=10, head_ref_name="stack/bottom", labels=frozenset({"admin-bypass"}))
+        upper = pr(
+            number=11,
+            base_ref_name="stack/bottom",
+            head_ref_name="stack/upper",
+            labels=frozenset({"admin-bypass"}),
+            review_threads=(m.ReviewThread("PRRT_upper", False, ("coderabbitai[bot]",)),),
+        )
+        ledger.record("repair-delegated", 11, HEAD, "PRRT_upper", 1)
+
+        actions = self._plan(m.StackGroup("s", (bottom, upper)), ledger)
+
+        self.assertEqual((actions[0].kind, actions[0].pr_number), ("requeue", 10))
+
     def test_stale_root_base_retargets_root_pr(self):
         stack = m.StackGroup(
             "s",
