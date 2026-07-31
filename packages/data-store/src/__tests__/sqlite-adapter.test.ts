@@ -701,7 +701,6 @@ describe('SQLiteAdapter', () => {
       }
     });
 
-
     it('round-trips repo/HEAD/worktree binding columns when populated', () => {
       adapter.upsertInAppPlanningSession(makePlanningSession('planning-binding', {
         repoUrl: 'https://github.com/example/repo.git',
