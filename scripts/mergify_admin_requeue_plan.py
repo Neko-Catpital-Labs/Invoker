@@ -712,16 +712,23 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
     latest = bottom.latest_mergify
     if "admin-bypass" not in bottom.labels:
         if (
-            facts.queue_only_noop_check
-            and latest
+            latest
             and latest.queue_rule_name == "admin-bypass"
             and latest.state == "dequeued"
+            and latest.head_sha == bottom.head_ref_oid
         ):
+            if facts.queue_only_noop_check:
+                return Action(
+                    "restore_admin_bypass_label",
+                    bottom.number,
+                    facts.queue_only_noop_check,
+                    "restore admin-bypass label after queue-only noop",
+                )
             return Action(
                 "restore_admin_bypass_label",
                 bottom.number,
-                facts.queue_only_noop_check,
-                "restore admin-bypass label after queue-only noop",
+                "admin-bypass",
+                "restore admin-bypass label after dequeued admin-bypass event",
             )
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:

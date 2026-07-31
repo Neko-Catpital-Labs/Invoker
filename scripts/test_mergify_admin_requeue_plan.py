@@ -310,6 +310,28 @@ class BuildStackFacts(PlannerTestCase):
         actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
         self.assertEqual([(action.kind, action.key) for action in actions], [("restore_admin_bypass_label", QUEUE_ONLY_CHECK)])
 
+    def test_same_head_dequeued_admin_bypass_event_restores_missing_label(self):
+        ledger = self._ledger()
+        facts, _ = self._facts(
+            m.StackGroup(
+                "s",
+                (
+                    pr(
+                        number=10,
+                        labels=frozenset({"dequeued"}),
+                        latest_mergify=event(state="dequeued", comment_id="cm10"),
+                    ),
+                ),
+            ),
+            ledger=ledger,
+            open_pr_numbers={10},
+        )
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        self.assertEqual(
+            [(action.kind, action.key, action.detail) for action in actions],
+            [("restore_admin_bypass_label", "admin-bypass", "restore admin-bypass label after dequeued admin-bypass event")],
+        )
+
     def test_detects_bottom_and_unaccepted_upper(self):
         facts, _ledger = self._facts(
             m.StackGroup(
