@@ -590,9 +590,18 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
+def _pr_has_in_flight_repair(facts: StackFacts, pr_number: int) -> bool:
+    return any(
+        blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS
+        for blocker in facts.blockers_by_pr.get(pr_number, ())
+    )
+
+
 def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     del max_repair_attempts
     for pr in facts.stack.prs:
+        if _pr_has_in_flight_repair(facts, pr.number):
+            continue
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
@@ -605,6 +614,8 @@ def plan_mergify_queue_repairs(facts: StackFacts, ledger: Ledger, max_repair_att
 
 def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_in_flight_repair(facts, pr.number):
+            continue
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
@@ -623,6 +634,8 @@ def plan_direct_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: 
 
 def plan_bot_thread_repairs(facts: StackFacts, ledger: Ledger, max_repair_attempts: int) -> Action | None:
     for pr in facts.stack.prs:
+        if _pr_has_in_flight_repair(facts, pr.number):
+            continue
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         for blocker in facts.blockers_by_pr[pr.number]:
@@ -754,8 +767,6 @@ def plan_actions_from_facts(
     max_requeue_attempts: int,
     max_repair_attempts: int,
 ) -> tuple[Action, ...]:
-    if any(blocker.kind in IN_FLIGHT_REPAIR_BLOCKER_KINDS for blocker in facts.all_blockers):
-        return ()
     action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
     if action is not None:
         return (action,)

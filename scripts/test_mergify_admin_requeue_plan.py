@@ -440,6 +440,39 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(blockers[0]["kind"], "repair_delegated")
         self.assertIn("repair already delegated for current head", blockers[0]["detail"])
 
+    def test_upper_delegated_repair_does_not_block_ready_bottom_requeue(self):
+        ledger = self._ledger()
+        upper_head = "b" * 40
+        old_bottom_queue_head = "c" * 40
+        bottom = pr(
+            number=6825,
+            labels=frozenset({"admin-bypass"}),
+            head_ref_name="stack/bottom",
+            latest_mergify=event(state="dequeued", head=old_bottom_queue_head, comment_id="m6825"),
+        )
+        upper = pr(
+            number=6826,
+            base_ref_name=bottom.head_ref_name,
+            head_ref_name="stack/upper",
+            head_ref_oid=upper_head,
+            labels=frozenset({"admin-bypass"}),
+            merge_state_status="DIRTY",
+            mergeable="CONFLICTING",
+        )
+        ledger.record("repair-delegated", 6826, upper_head, "conflict:6826", 1)
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (bottom, upper)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={6825, 6826},
+            open_pr_numbers_by_head={bottom.head_ref_name: (6825,), upper.head_ref_name: (6826,)},
+        )
+        self.assertEqual(
+            [(action.kind, action.pr_number, action.key, action.detail) for action in plan.actions],
+            [("requeue", 6825, "m6825", "eligible-after-dequeue")],
+        )
+
     def test_clean_unaccepted_upper_stack_posts_exact_human_blocker_once(self):
         ledger = self._ledger()
         bottom = pr(
