@@ -37,7 +37,12 @@ elif [ -n "${INVOKER_PLAYWRIGHT_SHARD_INDEX:-}" ] && [ -n "${INVOKER_PLAYWRIGHT_
 fi
 RUN_LABEL="$(sanitize_label "$RUN_LABEL")"
 
-ARTIFACT_ROOT="$ROOT/.git/playwright-artifacts/$RUN_LABEL"
+REPO_GIT_DIR="$(git rev-parse --git-dir)"
+case "$REPO_GIT_DIR" in
+  /*) ;;
+  *) REPO_GIT_DIR="$ROOT/$REPO_GIT_DIR" ;;
+esac
+ARTIFACT_ROOT="$REPO_GIT_DIR/playwright-artifacts/$RUN_LABEL"
 mkdir -p "$ARTIFACT_ROOT"
 
 export INVOKER_E2E_BARE_REPO="${INVOKER_E2E_BARE_REPO:-/tmp/invoker-e2e-repo-${RUN_LABEL}.git}"
