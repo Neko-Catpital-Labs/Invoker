@@ -123,6 +123,7 @@ while IFS= read -r pr; do
   q_state_file="$(shell_quote "$STATE_FILE")"
   q_num="$(shell_quote "$num")"
   q_fingerprint="$(shell_quote "$fingerprint")"
+  q_tsv_kind="$(shell_quote "orphan-attempt")"
 
   plan_file="$PLAN_DIR/repair-pr-$num.yaml"
   {
@@ -157,13 +158,29 @@ while IFS= read -r pr; do
     printf '    dependencies: [repair]\n'
     printf '    command: |\n'
     {
-      printf 'python3 scripts/pr_worker_safe_push.py \\\n'
-      printf '  --branch %s \\\n' "$q_head_ref"
-      printf '  --expected-head %s \\\n' "$q_head_oid"
-      printf '  --record-tsv-ledger %s \\\n' "$q_state_file"
-      printf '  --tsv-kind orphan-attempt \\\n'
-      printf '  --tsv-key %s \\\n' "$q_num"
-      printf '  --tsv-marker %s\n' "$q_fingerprint"
+      printf 'set -euo pipefail\n'
+      printf 'branch=%s\n' "$q_head_ref"
+      printf 'expected=%s\n' "$q_head_oid"
+      printf 'ledger=%s\n' "$q_state_file"
+      printf 'kind=%s\n' "$q_tsv_kind"
+      printf 'key=%s\n' "$q_num"
+      printf 'marker=%s\n' "$q_fingerprint"
+      printf 'ref="refs/heads/$branch"\n'
+      printf 'live="$(git ls-remote origin "$ref" | cut -f1)"\n'
+      printf 'if [ "$live" != "$expected" ]; then\n'
+      printf '  echo "stale-head: $ref is ${live:-missing}; expected $expected" >&2\n'
+      printf '  exit 20\n'
+      printf 'fi\n'
+      printf 'pushed="$(git rev-parse HEAD)"\n'
+      printf 'git push --force-with-lease="$ref:$expected" origin "HEAD:$ref"\n'
+      printf 'verified="$(git ls-remote origin "$ref" | cut -f1)"\n'
+      printf 'if [ "$verified" != "$pushed" ]; then\n'
+      printf '  echo "post-push verification failed: $ref is ${verified:-missing}; expected $pushed" >&2\n'
+      printf '  exit 22\n'
+      printf 'fi\n'
+      printf 'mkdir -p "$(dirname "$ledger")"\n'
+      printf 'printf '"'"'%%s\\t%%s\\t%%s\\t%%s\\n'"'"' "$kind" "$key" "$marker" "$(date +%%s)" >> "$ledger"\n'
+      printf 'echo "pr-worker-safe-push: pushed $ref to $pushed"\n'
     } | sed 's/^/      /'
   } > "$plan_file"
 
