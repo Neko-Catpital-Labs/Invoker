@@ -430,6 +430,7 @@ class AdminBypassRepairer:
             return False
 
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
+        self.ledger.record("repair-check", pr.number, pr.head_ref_oid, check_name, now)
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
         queue_only = ctx is None and is_queue_only_required_check(check_name)
@@ -571,7 +572,9 @@ class AdminBypassRepairer:
             repair_commits=repair_commits,
         )
 
-    def repair_conflict(self, pr: PrSnapshot, reason: str) -> None:
+    def repair_conflict(self, pr: PrSnapshot, reason: str, now: int | None = None) -> RepairOutcome:
+        check_name = "conflict"
+        self.ledger.record("conflict-repair", pr.number, pr.head_ref_oid, f"conflict:{pr.number}", now)
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
@@ -596,5 +599,72 @@ class AdminBypassRepairer:
         )
         self.run_claude_repair(work_root, prompt)
         end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
-        if end_head != start_head and not self.git_lines(work_root, "status", "--porcelain"):
+        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        if end_head == start_head or status_lines:
+            if status_lines:
+                self.hard_reset_work_root(work_root, start_head)
+                return self.blocked_outcome(
+                    "blocked_dirty",
+                    check_name,
+                    start_head,
+                    end_head,
+                    status_lines=status_lines,
+                )
+            return self.blocked_outcome("noop", check_name, start_head, end_head)
+        try:
             self.push_branch(work_root, pr.head_ref_name, expected_head=pr.head_ref_oid)
+        except SafePushError as exc:
+            return self.blocked_outcome(
+                "stale_head",
+                check_name,
+                start_head,
+                end_head,
+                errors=(str(exc),),
+            )
+        return self.blocked_outcome("pushed", check_name, start_head, end_head)
+
+    def repair_bot_thread(self, pr: PrSnapshot, thread_id: str, now: int | None = None) -> RepairOutcome:
+        self.ledger.record("repair-bot-thread", pr.number, pr.head_ref_oid, thread_id, now)
+        work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
+        work_root.parent.mkdir(parents=True, exist_ok=True)
+        checkout_pr_head(self.repo, pr, work_root)
+        start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        prompt = (
+            f"Resolve the unresolved review thread {thread_id}. Address the reviewer's feedback with "
+            f"real code changes, run the narrow proof for the fix, then commit locally. Do not push. "
+            f"If the thread is already resolved, or the PR is closed or merged, make no commit and exit 0.\n\n"
+            f"PR: #{pr.number}\nHead branch: {pr.head_ref_name}\nHead SHA: {pr.head_ref_oid}\nThread: {thread_id}\n"
+        )
+        self.logger.trace(
+            "admin-bypass-repair-bot-thread-start",
+            repo=self.repo,
+            pr_number=pr.number,
+            thread_id=thread_id,
+            work_root=str(work_root),
+            head_sha=pr.head_ref_oid,
+        )
+        self.run_claude_repair(work_root, prompt)
+        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        if end_head == start_head or status_lines:
+            if status_lines:
+                self.hard_reset_work_root(work_root, start_head)
+                return self.blocked_outcome(
+                    "blocked_dirty",
+                    thread_id,
+                    start_head,
+                    end_head,
+                    status_lines=status_lines,
+                )
+            return self.blocked_outcome("noop", thread_id, start_head, end_head)
+        try:
+            self.push_branch(work_root, pr.head_ref_name, expected_head=pr.head_ref_oid)
+        except SafePushError as exc:
+            return self.blocked_outcome(
+                "stale_head",
+                thread_id,
+                start_head,
+                end_head,
+                errors=(str(exc),),
+            )
+        return self.blocked_outcome("pushed", thread_id, start_head, end_head)
