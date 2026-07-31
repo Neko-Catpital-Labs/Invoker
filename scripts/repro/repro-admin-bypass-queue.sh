@@ -94,8 +94,8 @@ grep -q "^repoUrl: https://github.com/fake/repo.git$" "$plan902" \
 grep -q "^onFinish: none$" "$plan902" || fail "plan902: must not open its own PR" "$(cat "$plan902")"
 grep -q "Blocker category: failed_checks" "$plan902" || fail "plan902: wrong category" "$(cat "$plan902")"
 grep -q "id: safe-push" "$plan902" || fail "plan902: missing safe-push task" "$(cat "$plan902")"
-grep -q "python3 scripts/pr_worker_safe_push.py" "$plan902" || fail "plan902: missing safe-push helper command" "$(cat "$plan902")"
-grep -q -- "--tsv-kind queue-attempt" "$plan902" || fail "plan902: safe-push must own queue-attempt recording" "$(cat "$plan902")"
+grep -q "git push --force-with-lease" "$plan902" || fail "plan902: missing guarded safe-push command" "$(cat "$plan902")"
+grep -q "kind='queue-attempt'" "$plan902" || fail "plan902: safe-push must own queue-attempt recording" "$(cat "$plan902")"
 grep -q "Do not push" "$plan902" || fail "plan902: repair prompt must forbid direct pushes" "$(cat "$plan902")"
 
 plan903="$TMP/plans/repair-pr-903.yaml"
