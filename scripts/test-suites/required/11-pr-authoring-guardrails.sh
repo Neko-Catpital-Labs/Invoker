@@ -5,3 +5,4 @@ cd "$ROOT"
 node scripts/test-pr-diff-atomicity.mjs
 node scripts/test-pr-body-validator.mjs
 node scripts/test-create-pr-visual-proof.mjs
+bash scripts/repro/repro-pr-body-stale-base-sha.sh
