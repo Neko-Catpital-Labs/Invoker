@@ -55,8 +55,13 @@ class TestExecutor extends BaseExecutor<BaseEntry> {
     return this.syncFromRemote(cwd, executionId);
   }
 
-  async testPushBranchToRemote(cwd: string, branch: string, executionId?: string): Promise<string | undefined> {
-    return this.pushBranchToRemote(cwd, branch, executionId);
+  async testPushBranchToRemote(
+    cwd: string,
+    branch: string,
+    executionId?: string,
+    sourceCommitHash?: string,
+  ): Promise<string | undefined> {
+    return this.pushBranchToRemote(cwd, branch, executionId, undefined, sourceCommitHash);
   }
 
   async testHandleProcessExit(
@@ -2112,6 +2117,42 @@ describe('BaseExecutor.pushBranchToRemote', () => {
     expect(remoteSha).toBe(taskSha);
   });
 
+  it('pushes the recorded commit when current checkout is not the task branch', async () => {
+    const taskBranch = 'invoker/task-stale';
+    const prBranch = 'pr/head';
+
+    execSync(`git checkout -b ${taskBranch}`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'task.txt'), 'stale task branch\n');
+    execSync('git add -A && git commit -m "stale task commit"', { cwd: cloneDir });
+    const staleTaskSha = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+    execSync(`git push origin HEAD:refs/heads/${taskBranch}`, { cwd: cloneDir });
+
+    execSync(`git checkout -b ${prBranch} master`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'pr.txt'), 'recorded repair commit\n');
+    execSync('git add -A && git commit -m "recorded repair commit"', { cwd: cloneDir });
+    const recordedSha = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+
+    const pushErr = await executor.testPushBranchToRemote(cloneDir, taskBranch, undefined, recordedSha);
+    expect(pushErr).toBeUndefined();
+
+    const remoteSha = execSync(`git --git-dir="${originDir}" rev-parse "refs/heads/${taskBranch}"`)
+      .toString()
+      .trim();
+    expect(remoteSha).toBe(recordedSha);
+    expect(remoteSha).not.toBe(staleTaskSha);
+
+    const freshClone = mkdtempSync(join(tmpdir(), 'push-fresh-clone-'));
+    try {
+      execSync(`git clone ${originDir} .`, { cwd: freshClone });
+      const reachableSha = execSync(`git rev-parse --verify "${recordedSha}^{commit}"`, { cwd: freshClone })
+        .toString()
+        .trim();
+      expect(reachableSha).toBe(recordedSha);
+    } finally {
+      rmSync(freshClone, { recursive: true, force: true });
+    }
+  });
+
   it('returns an error message when branch does not exist on remote', async () => {
     const err = await executor.testPushBranchToRemote(cloneDir, 'nonexistent-branch');
     expect(err).toBeDefined();
@@ -2176,6 +2217,49 @@ describe('BaseExecutor.handleProcessExit push semantics', () => {
     rmSync(originDir, { recursive: true, force: true });
     rmSync(cloneDir, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it('publishes the recorded process-exit commit when current checkout is not the task branch', async () => {
+    const taskBranch = 'invoker/admin-bypass-repair';
+    const prBranch = 'pr/head';
+
+    execSync(`git checkout -b ${taskBranch}`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'task.txt'), 'stale task branch\n');
+    execSync('git add -A && git commit -m "stale task commit"', { cwd: cloneDir });
+    const staleTaskSha = execSync('git rev-parse HEAD', { cwd: cloneDir }).toString().trim();
+    execSync(`git push origin HEAD:refs/heads/${taskBranch}`, { cwd: cloneDir });
+
+    execSync(`git checkout -b ${prBranch} master`, { cwd: cloneDir });
+    writeFileSync(join(cloneDir, 'repair.txt'), 'repair committed from pr checkout\n');
+
+    const req = makeRequest('admin-bypass-repair', { description: 'repair' });
+    const entry = executor.registerTestEntry('e-admin-bypass-repair', req);
+    let response: WorkResponse | undefined;
+    entry.completeListeners.add((r) => { response = r; });
+
+    await executor.testHandleProcessExit('e-admin-bypass-repair', req, cloneDir, 0, { branch: taskBranch });
+
+    expect(response?.status).toBe('completed');
+    const commitHash = response?.outputs.commitHash;
+    if (!commitHash) throw new Error('expected process exit to record a commit hash');
+    expect(commitHash).toMatch(/^[0-9a-f]{40}$/);
+
+    const remoteSha = execSync(`git --git-dir="${originDir}" rev-parse "refs/heads/${taskBranch}"`)
+      .toString()
+      .trim();
+    expect(remoteSha).toBe(commitHash);
+    expect(remoteSha).not.toBe(staleTaskSha);
+
+    const freshClone = mkdtempSync(join(tmpdir(), 'hpe-fresh-clone-'));
+    try {
+      execSync(`git clone ${originDir} .`, { cwd: freshClone });
+      const reachableSha = execSync(`git rev-parse --verify "${commitHash}^{commit}"`, { cwd: freshClone })
+        .toString()
+        .trim();
+      expect(reachableSha).toBe(commitHash);
+    } finally {
+      rmSync(freshClone, { recursive: true, force: true });
+    }
   });
 
   it('marks task failed when exit 0 but push fails', async () => {

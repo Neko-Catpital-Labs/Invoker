@@ -388,9 +388,15 @@ HASH=$(git rev-parse HEAD)
 BR=$(printf '%s' ${shellPosixSingleQuote(brB)} | invoker_base64_decode)
 PUSH_URL=$(printf '%s' ${shellPosixSingleQuote(pushRemoteUrlB)} | invoker_base64_decode)
 if [ -n "$PUSH_URL" ]; then
-  git push "$PUSH_URL" "$BR:refs/heads/$BR"
+  PUSH_REMOTE="$PUSH_URL"
 else
-  git push origin "$BR:refs/heads/$BR"
+  PUSH_REMOTE=origin
+fi
+REMOTE_EXPECTED=$(git ls-remote "$PUSH_REMOTE" "refs/heads/$BR" | awk 'NR == 1 { print $1 }')
+if [ -n "$REMOTE_EXPECTED" ]; then
+  git push --force-with-lease="refs/heads/$BR:$REMOTE_EXPECTED" "$PUSH_REMOTE" "$HASH:refs/heads/$BR"
+else
+  git push "$PUSH_REMOTE" "$HASH:refs/heads/$BR"
 fi
 printf "%s" "$HASH"
 `;

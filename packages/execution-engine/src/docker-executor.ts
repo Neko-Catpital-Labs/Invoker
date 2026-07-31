@@ -247,6 +247,7 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
     branch: string,
     executionId?: string,
     branchRepoUrlOverride?: string,
+    sourceCommitHash?: string,
   ): Promise<string | undefined> {
     try {
       await this.execGitSimple(['remote', 'get-url', 'origin'], cwd);
@@ -258,9 +259,9 @@ export class DockerExecutor extends BaseExecutor<ContainerEntry> {
         if (executionId) this.emitOutput(executionId, msg);
         return undefined;
       }
-      return await super.pushBranchToRemote(cwd, branch, executionId, branchRepoUrlOverride);
+      return await super.pushBranchToRemote(cwd, branch, executionId, branchRepoUrlOverride, sourceCommitHash);
     }
-    return await super.pushBranchToRemote(cwd, branch, executionId, branchRepoUrlOverride);
+    return await super.pushBranchToRemote(cwd, branch, executionId, branchRepoUrlOverride, sourceCommitHash);
   }
 
   // ---------------------------------------------------------------------------
