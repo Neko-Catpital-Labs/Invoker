@@ -14,10 +14,8 @@ import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store'
 import {
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
-  PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   createPrAdminBypassLandWorker,
-  createPrAdminBypassQueueWorker,
   createPrOrphanRepairWorker,
   type PrMaintenanceLockProbeOptions,
 } from '../workers/pr-maintenance-workers.js';
@@ -168,75 +166,6 @@ describe('PR maintenance workers', () => {
       args: [resolve(repoRoot, 'scripts/cron-pr-orphan-repair.sh')],
       options: expect.objectContaining({ cwd: repoRoot }),
     }));
-  });
-
-  it('spawns the admin-bypass queue shell entrypoint', async () => {
-    const repoRoot = makeRepoRoot();
-    const logger = makeLogger();
-    const spawnHarness = makeSpawnHarness();
-    const worker = createPrAdminBypassQueueWorker({
-      logger,
-      repoRoot,
-      spawnProcess: spawnHarness.spawnProcess,
-      lockProbe: () => ({ held: false }),
-      installSignalHandlers: false,
-    });
-
-    await worker.tick();
-
-    expect(spawnHarness.calls[0]).toEqual(expect.objectContaining({
-      command: 'bash',
-      args: [resolve(repoRoot, 'scripts/cron-admin-bypass-queue.sh')],
-      options: expect.objectContaining({ cwd: repoRoot }),
-    }));
-    expect(logger.info).toHaveBeenCalledWith(
-      `[worker:${PR_ADMIN_BYPASS_QUEUE_WORKER_KIND}] spawning scripts/cron-admin-bypass-queue.sh`,
-      expect.objectContaining({ worker: PR_ADMIN_BYPASS_QUEUE_WORKER_KIND }),
-    );
-  });
-
-  it('forces admin-bypass queue children into existing-owner submitter mode', async () => {
-    const previousStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
-    process.env.INVOKER_HEADLESS_STANDALONE = '1';
-
-    try {
-      const repoRoot = makeRepoRoot();
-      const logger = makeLogger();
-      const spawnHarness = makeSpawnHarness();
-      const lockProbe = vi.fn((_options: PrMaintenanceLockProbeOptions) => ({ held: false }));
-      const worker = createPrAdminBypassQueueWorker({
-        logger,
-        repoRoot,
-        env: {
-          INVOKER_HEADLESS_STANDALONE: '1',
-        },
-        spawnProcess: spawnHarness.spawnProcess,
-        lockProbe,
-        installSignalHandlers: false,
-      });
-
-      await worker.tick();
-
-      const lockProbeEnv = lockProbe.mock.calls[0]?.[0].env;
-      expect(lockProbeEnv).not.toHaveProperty('INVOKER_HEADLESS_STANDALONE');
-      expect(lockProbeEnv).toMatchObject({
-        INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER: '1',
-        INVOKER_REPO_ROOT: repoRoot,
-      });
-      const spawnedEnv = spawnHarness.calls[0]?.options.env;
-      expect(spawnedEnv).toBe(lockProbeEnv);
-      expect(spawnedEnv).not.toHaveProperty('INVOKER_HEADLESS_STANDALONE');
-      expect(spawnedEnv).toMatchObject({
-        INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER: '1',
-        INVOKER_REPO_ROOT: repoRoot,
-      });
-    } finally {
-      if (previousStandalone === undefined) {
-        delete process.env.INVOKER_HEADLESS_STANDALONE;
-      } else {
-        process.env.INVOKER_HEADLESS_STANDALONE = previousStandalone;
-      }
-    }
   });
 
   it('skips cleanly when the shared PR-maintenance lock is already held', async () => {

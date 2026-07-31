@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
-  PR_ADMIN_BYPASS_QUEUE_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   createWorkerRegistry,
   registerBuiltinWorkers,
@@ -104,13 +103,10 @@ describe('registered owner PR-maintenance worker dependencies', () => {
     });
 
     const adminBypass = registry.get(PR_ADMIN_BYPASS_LAND_WORKER_KIND)?.factory(deps);
-    const adminBypassQueue = registry.get(PR_ADMIN_BYPASS_QUEUE_WORKER_KIND)?.factory(deps);
     const orphanRepair = registry.get(PR_ORPHAN_REPAIR_WORKER_KIND)?.factory(deps);
 
     expect(adminBypass?.identity.kind).toBe(PR_ADMIN_BYPASS_LAND_WORKER_KIND);
     expect(adminBypass?.isRunning()).toBe(false);
-    expect(adminBypassQueue?.identity.kind).toBe(PR_ADMIN_BYPASS_QUEUE_WORKER_KIND);
-    expect(adminBypassQueue?.isRunning()).toBe(false);
     expect(orphanRepair?.identity.kind).toBe(PR_ORPHAN_REPAIR_WORKER_KIND);
     expect(orphanRepair?.isRunning()).toBe(false);
   });
