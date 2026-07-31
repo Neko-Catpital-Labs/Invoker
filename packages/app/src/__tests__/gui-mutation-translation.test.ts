@@ -50,7 +50,7 @@ function getPerformDetachWorkflowSource(): string {
 
 function getSetMergeBranchSource(): string {
   const start = guiMutationHandlersSource.lastIndexOf("'invoker:set-merge-branch'");
-  const end = guiMutationHandlersSource.indexOf("'invoker:set-merge-mode'", start);
+  const end = guiMutationHandlersSource.indexOf("'invoker:set-workflow-merge-mode'", start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return guiMutationHandlersSource.slice(start, end);
