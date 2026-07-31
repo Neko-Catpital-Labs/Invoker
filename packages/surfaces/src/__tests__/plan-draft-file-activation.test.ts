@@ -42,6 +42,17 @@ tasks:
 
 const SUBMIT_REPLY_LINE = 'Reply `submit` to submit it.';
 
+function expectAuthorizedPlanToInvokerPrompt(prompt: string) {
+  expect(prompt).toContain('The user has explicitly approved drafting');
+  expect(prompt).toContain('plan-to-invoker');
+  expect(prompt).toContain('first produce a Markdown planning artifact');
+  expect(prompt).toContain('convert the approved Markdown plan into a full Invoker YAML task plan');
+  expect(prompt).toContain('skill-doctor.sh');
+  expect(prompt).toContain('MCP review/submit flow');
+  expect(prompt).toContain('Harness handoff mode');
+  expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
+}
+
 const INLINE_PLAN_RESPONSE = `Here is the plan:
 
 \`\`\`yaml
@@ -202,10 +213,7 @@ describe('plan draft-file activation prompt policy', () => {
       draftingAuthorized: true,
     });
 
-    expect(prompt).toContain('The user has explicitly approved drafting');
-    expect(prompt).toContain('plan-to-invoker');
-    expect(prompt).toContain('Harness handoff mode');
-    expect(prompt).toContain('skills/plan-to-invoker/SKILL.md');
+    expectAuthorizedPlanToInvokerPrompt(prompt);
     expect(prompt).not.toContain('name: "Plan Name"');
     expect(prompt).not.toContain('tasks:\n  - id: task-1');
   });
