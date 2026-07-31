@@ -198,6 +198,11 @@ function tailText(text: string): string {
   return text.length <= MAX_OUTPUT_TAIL_CHARS ? text : text.slice(-MAX_OUTPUT_TAIL_CHARS);
 }
 
+function missingCommitInvalidReference(errorText: string | undefined): string | undefined {
+  const match = errorText?.match(/fatal: invalid reference:\s+([0-9a-f]{40})(?:\b|$)/i);
+  return match?.[1];
+}
+
 function taskDecisionExternalKey(candidate: Pick<InfraRepairScanCandidate, 'taskId' | 'generation' | 'taskStateVersion'>, reason: InfraRepairReason): string {
   return `task:${candidate.taskId}:g${candidate.generation}:v${candidate.taskStateVersion}:${reason}`;
 }
@@ -581,6 +586,23 @@ async function handleInvalidReferenceRecovery(
   options: InfraRepairWorkerPolicyOptions,
   candidate: ValidatedGenericSshInfraCandidate,
 ): Promise<void> {
+  const missingCommit = missingCommitInvalidReference(candidate.task.execution.error);
+  if (missingCommit) {
+    recordTaskDecision(
+      options,
+      candidate,
+      candidate.reason,
+      'completed',
+      'Skipped recreate for missing upstream commit reference',
+      {
+        targetId: candidate.targetId,
+        invalidReference: missingCommit,
+      },
+      'upstream-commit-unreachable',
+    );
+    return;
+  }
+
   await submitFollowUpMutation(
     options,
     candidate,

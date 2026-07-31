@@ -860,7 +860,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     if (!commitHash) {
       return { error: 'commit approved fix failed' };
     }
-    const pushError = await this.pushBranchToRemote(cwd, branch, undefined, request.inputs.branchRepoUrl);
+    const pushError = await this.pushBranchToRemote(cwd, branch, undefined, request.inputs.branchRepoUrl, commitHash);
     if (pushError) {
       return { error: pushError };
     }
@@ -976,6 +976,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
     branch: string,
     executionId?: string,
     branchRepoUrlOverride?: string,
+    sourceCommitHash?: string,
   ): Promise<string | undefined> {
     try {
       const requestBranchRepoUrl = branchRepoUrlOverride ?? (executionId
@@ -992,10 +993,16 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         });
       }
       const destinationRef = `refs/heads/${branch}`;
-      const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
-      const sourceRef = !currentBranch || currentBranch === branch
-        ? 'HEAD'
-        : `refs/heads/${branch}`;
+      const explicitSourceRef = sourceCommitHash?.trim();
+      let sourceRef: string;
+      if (explicitSourceRef) {
+        sourceRef = explicitSourceRef;
+      } else {
+        const currentBranch = (await this.execGitSimple(['branch', '--show-current'], cwd)).trim();
+        sourceRef = !currentBranch || currentBranch === branch
+          ? 'HEAD'
+          : `refs/heads/${branch}`;
+      }
       const sourceSha = (await this.execGitSimple(['rev-parse', '--verify', `${sourceRef}^{commit}`], cwd)).trim();
       const branchRef = `${sourceSha}:${destinationRef}`;
       try {
@@ -1209,7 +1216,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
     let pushError: string | undefined;
     if (opts?.branch) {
-      pushError = await this.pushBranchToRemote(cwd, opts.branch, executionId);
+      pushError = await this.pushBranchToRemote(cwd, opts.branch, executionId, undefined, commitHash);
     }
     if (effectiveExitCode === 0 && pushError !== undefined && opts?.branch) {
       if (this.isTransientGitTransportError(pushError)) {
