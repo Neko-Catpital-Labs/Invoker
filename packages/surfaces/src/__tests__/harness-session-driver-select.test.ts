@@ -73,4 +73,29 @@ describe('selectHarnessSessionDriver', () => {
 
     expect(driver).toBeUndefined();
   });
+
+  it('omits --mcp-config when mcpConfigPath is not in deps, matching pre-MCP behavior byte-for-byte', () => {
+    const claude = fakeExecutionAgent('claude');
+    const driver = selectHarnessSessionDriver(
+      { tool: 'claude', model: 'sonnet' },
+      { executionAgentRegistry: { get: (name) => (name === 'claude' ? claude : undefined) } },
+    );
+
+    const result = driver?.start('Fix the bug');
+    expect(result?.args).toEqual(['Fix the bug']);
+  });
+
+  it('threads mcpConfigPath through to the ExecutionHarnessSessionDriver argv', () => {
+    const claude = fakeExecutionAgent('claude');
+    const driver = selectHarnessSessionDriver(
+      { tool: 'claude', model: 'sonnet' },
+      {
+        executionAgentRegistry: { get: (name) => (name === 'claude' ? claude : undefined) },
+        mcpConfigPath: '/tmp/planning/.mcp.json',
+      },
+    );
+
+    const result = driver?.start('Fix the bug');
+    expect(result?.args).toEqual(['--mcp-config', '/tmp/planning/.mcp.json', 'Fix the bug']);
+  });
 });
