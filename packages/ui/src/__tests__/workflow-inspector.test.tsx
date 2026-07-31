@@ -158,7 +158,7 @@ describe('WorkflowInspector', () => {
     const input = screen.getByTestId('base-ref-input');
     expect(screen.getByText('Base Ref')).toBeInTheDocument();
     expect(input).toHaveValue('origin/main');
-    expect(screen.getByTestId('base-ref-help')).toHaveTextContent('Pinned to master for review gates.');
+    expect(screen.getByTestId('base-ref-help')).toHaveTextContent('Used for review gate comparisons.');
 
     fireEvent.change(input, { target: { value: 'upstream/release' } });
     fireEvent.blur(input);
@@ -166,7 +166,7 @@ describe('WorkflowInspector', () => {
     await waitFor(() => {
       expect(onSetMergeBranch).toHaveBeenCalledWith('wf-1', 'upstream/release');
     });
-    expect(input).toHaveValue('master');
+    expect(input).toHaveValue('upstream/release');
   });
 
   it('keeps the PR link for a completed review gate in a completed workflow', () => {
