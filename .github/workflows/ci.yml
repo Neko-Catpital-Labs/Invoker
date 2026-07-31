@@ -614,6 +614,7 @@ jobs:
               e2e/ui-graph-drag-performance.spec.ts
               e2e/pending-review-gate-target-repo.proof.spec.ts
               e2e/workflow-status-composition.spec.ts
+              e2e/ui-delta-timeline.spec.ts
               e2e/queue-running-vs-queued.spec.ts
           - name: 4-of-9
             files: >-
@@ -635,6 +636,7 @@ jobs:
             files: >-
               e2e/embedded-terminal-spawn-failure.spec.ts
               e2e/embedded-terminal-restart-persistence.spec.ts
+              e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
