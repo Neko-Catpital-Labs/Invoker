@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Shared helpers for the three surviving PR-maintenance cron jobs that run
+# Shared helpers for the two surviving PR-maintenance cron jobs that run
 # co-located with the Invoker owner:
 #
 #   scripts/cron-pr-admin-bypass-land.sh
-#   scripts/cron-admin-bypass-queue.sh
 #   scripts/cron-pr-orphan-repair.sh
 # Source this AFTER `set -euo pipefail`:
 #   source "$(dirname "$0")/cron-pr-lib.sh"
