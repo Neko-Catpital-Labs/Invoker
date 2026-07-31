@@ -54,6 +54,7 @@ import type { HarnessPreset, PlanConversation, PlanConversationConfig, PlanningC
 import type { InvokerConfig } from './config.js';
 import {
   ensurePlanningWorktreeReady,
+  planningMcpConfigPath,
   provisionPlanningWorktree,
   releasePlanningWorktree,
   type PlanningRepoPool,
@@ -145,7 +146,7 @@ interface PlannerSurfacesModule {
   extractYamlPlan: (output: string) => string | null;
   selectHarnessSessionDriver: (
     preset: HarnessPreset,
-    deps: Pick<InAppPlannerDeps, 'executionAgentRegistry' | 'planningCommandBuilder'>,
+    deps: Pick<InAppPlannerDeps, 'executionAgentRegistry' | 'planningCommandBuilder'> & { mcpConfigPath?: string },
   ) => PlanConversationConfig['harnessSessionDriver'];
 }
 
@@ -608,7 +609,7 @@ export function isDraftingAuthorizedByTurn(message: string, messagesBeforeTurn: 
 
 function planConversationConfig(
   preset: HarnessPreset,
-  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput'>,
+  deps: Pick<InAppPlannerDeps, 'config' | 'workingDir' | 'planningCommandBuilder' | 'executionAgentRegistry' | 'conversationRepo' | 'logger' | 'onRawPlannerOutput'> & { mcpConfigPath?: string },
   threadTs: string,
   selectHarnessSessionDriver: PlannerSurfacesModule['selectHarnessSessionDriver'],
   options: { conversationalPlanning?: boolean } = {},
@@ -629,6 +630,7 @@ function planConversationConfig(
     harnessSessionDriver: selectHarnessSessionDriver(preset, {
       executionAgentRegistry: deps.executionAgentRegistry,
       planningCommandBuilder: deps.planningCommandBuilder,
+      mcpConfigPath: deps.mcpConfigPath,
     }),
     plannerRetryLimit: deps.config.plannerRetryLimit,
     plannerRetryBaseDelayMs: deps.config.plannerRetryBaseDelayMs,
@@ -687,7 +689,9 @@ async function createSession(
       worktreeBranch: provisioned.branch,
     };
   }
-  const conversationDeps = worktreeBinding ? { ...deps, workingDir: worktreeBinding.worktreePath } : deps;
+  const conversationDeps = worktreeBinding
+    ? { ...deps, workingDir: worktreeBinding.worktreePath, mcpConfigPath: planningMcpConfigPath(worktreeBinding.worktreePath) }
+    : deps;
 
   const session: InAppPlanningChatSession = {
     id,
@@ -1167,7 +1171,11 @@ export async function rebindPlanningChatRepo(
       return { ok: false, error: `Unknown planner preset "${session.presetKey}".` };
     }
     const { PlanConversation, selectHarnessSessionDriver } = await loadPlannerSurfaces();
-    const conversationDeps = { ...deps, workingDir: provisioned.worktreePath };
+    const conversationDeps = {
+      ...deps,
+      workingDir: provisioned.worktreePath,
+      mcpConfigPath: planningMcpConfigPath(provisioned.worktreePath),
+    };
     const conversation = new PlanConversation(planConversationConfig(
       preset,
       conversationDeps,
@@ -1286,7 +1294,9 @@ export async function restorePlanningChatSessions(
         logPlanningWorktreeReadyError(record.id, 'restore', error);
       }
     }
-    const conversationDeps = restoredWorktreePath ? { ...deps, workingDir: restoredWorktreePath } : deps;
+    const conversationDeps = restoredWorktreePath
+      ? { ...deps, workingDir: restoredWorktreePath, mcpConfigPath: planningMcpConfigPath(restoredWorktreePath) }
+      : deps;
 
     const conversation = new PlanConversation(planConversationConfig(preset, conversationDeps, record.id, selectHarnessSessionDriver));
     await conversation.init();
