@@ -564,6 +564,22 @@ class PlanStackActions(PlannerTestCase):
         actions = self._plan(snapshot)
         self.assertEqual(actions, ())
 
+    def test_headless_queued_event_without_label_or_head_waits(self):
+        ledger = self._ledger()
+        ledger.record("requeue", 1, HEAD, "ready")
+        ledger.record("requeue", 1, HEAD, "ready")
+        snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="queued", head=""))
+        plan = p.plan_stack_execution(
+            m.StackGroup("s", (snapshot,)),
+            REQUIRED,
+            ledger,
+            now_epoch=0,
+            open_pr_numbers={1},
+            open_pr_numbers_by_head={},
+        )
+        self.assertEqual(plan.actions, ())
+        self.assertEqual(plan.wait_reason, "bottom-already-queued")
+
     def test_clean_bottom_queues_without_prior_dequeue(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}))
         actions = self._plan(snapshot)

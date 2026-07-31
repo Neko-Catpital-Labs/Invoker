@@ -34,13 +34,15 @@ export FAKE_GH_REQUIRED_CHECKS
 STATE_PATH="$FAKE_GH_STATE_DIR/state.json"
 LEDGER_PATH="$TMP/ledger.jsonl"
 export STATE_PATH
+HEAD_SHA="1605586282a7bccef5c1ea34419a7176ca755dc1"
+export HEAD_SHA
 
 python3 - <<'PY'
 import json
 import os
 from pathlib import Path
 
-head = "1605586282a7bccef5c1ea34419a7176ca755dc1"
+head = os.environ["HEAD_SHA"]
 state = {
     "prs": [
         {
@@ -56,6 +58,22 @@ state = {
             "mergeStateStatus": "BLOCKED",
             "mergeable": "MERGEABLE",
             "labels": ["admin-bypass", "queued"],
+            "reviewThreads": [],
+            "checks": {"*": "SUCCESS"},
+        },
+        {
+            "number": 5826,
+            "title": "Queued without label or head payload",
+            "body": "## Summary\n\nQueued PR with sparse Mergify payload.\n",
+            "url": "https://github.com/fake/repo/pull/5826",
+            "state": "OPEN",
+            "isDraft": False,
+            "baseRefName": "master",
+            "headRefName": "stack/5826",
+            "headRefOid": head,
+            "mergeStateStatus": "BLOCKED",
+            "mergeable": "MERGEABLE",
+            "labels": ["admin-bypass"],
             "reviewThreads": [],
             "checks": {"*": "SUCCESS"},
         }
@@ -82,6 +100,27 @@ state = {
                     "</details>\n"
                 ),
             }
+        ],
+        "5826": [
+            {
+                "id": "m5826-queued",
+                "user": {"login": "mergify"},
+                "updated_at": "2026-07-26T06:12:39Z",
+                "html_url": "https://github.com/fake/repo/pull/5826#m5826-queued",
+                "body": (
+                    "<!---\n"
+                    "DO NOT EDIT\n"
+                    "-*- Mergify Payload -*-\n"
+                    '{"version":1,"state":"queued","queue_rule_name":"admin-bypass","required_conditions":[]}\n'
+                    "-*- Mergify Payload End -*-\n"
+                    "-->\n\n"
+                    "# Merge Queue Status\n\n"
+                    "- 🟠 **Waiting for queue conditions**\n\n"
+                    "<details>\n<summary><strong>Waiting for</strong></summary>\n\n"
+                    "- [ ] `-conflict` [📌 queue requirement]\n\n"
+                    "</details>\n"
+                ),
+            }
         ]
     },
     "job_logs": {},
@@ -98,5 +137,19 @@ printf '%s\n' "$out"
   || fail "worker tried to requeue a PR already in Mergify queue" "$out"
 echo "$out" | grep -q '"reason": "bottom-already-queued"' \
   || fail "worker did not wait on the active queue state" "$out"
+
+printf '{"epoch":1,"pr":5826,"headSha":"%s","kind":"requeue","key":"ready"}\n' "$HEAD_SHA" > "$LEDGER_PATH"
+printf '{"epoch":2,"pr":5826,"headSha":"%s","kind":"requeue","key":"ready"}\n' "$HEAD_SHA" >> "$LEDGER_PATH"
+if ! out="$(python3 scripts/mergify_admin_requeue.py --dry-run --once --repo fake/repo --state-file "$LEDGER_PATH" --pr 5826 2>&1)"; then
+  fail "worker dry-run failed for sparse queued payload" "$out"
+fi
+printf '%s\n' "$out"
+
+! echo "$out" | grep -q 'DRY-RUN requeue PR #5826' \
+  || fail "worker tried to requeue a PR already queued by sparse Mergify payload" "$out"
+! echo "$out" | grep -q 'BLOCK PR #5826 requeue' \
+  || fail "worker capped a PR already queued by sparse Mergify payload" "$out"
+echo "$out" | grep -q '"reason": "bottom-already-queued"' \
+  || fail "worker did not wait on sparse active queue state" "$out"
 
 echo "[repro] passed"

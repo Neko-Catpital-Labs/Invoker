@@ -746,7 +746,7 @@ def plan_bottom_progress(facts: StackFacts, ledger: Ledger, max_requeue_attempts
         return Action("comment_admin_bypass_nudge", bottom.number, "admin-bypass", "missing admin-bypass label")
     if facts.upper_stack_needs_acceptance:
         return None
-    if latest and latest.state in ACTIVE_QUEUE_STATES and (latest.head_sha == bottom.head_ref_oid or "queued" in bottom.labels):
+    if latest and latest.state in ACTIVE_QUEUE_STATES:
         return None
     requeue_reason = "eligible-when-ready"
     requeue_key = "ready"
