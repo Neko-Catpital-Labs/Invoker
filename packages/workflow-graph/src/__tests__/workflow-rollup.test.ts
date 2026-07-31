@@ -15,6 +15,7 @@ describe('workflow rollup', () => {
   it.each([
     { name: 'no tasks', statuses: [], expected: 'pending' },
     { name: 'all pending', statuses: ['pending'], expected: 'pending' },
+    { name: 'queued task', statuses: ['queued'], expected: 'running' },
     { name: 'running task', statuses: ['pending', 'running'], expected: 'running' },
     { name: 'fixing task', statuses: ['running', 'fixing_with_ai'], expected: 'fixing_with_ai' },
     { name: 'awaiting approval', statuses: ['completed', 'awaiting_approval'], expected: 'awaiting_approval' },
