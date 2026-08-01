@@ -85,7 +85,7 @@ describe('embedded terminal truncated-escape garble repro', () => {
       name: 'bash',
       spawn(opts) {
         emitOutput = opts.emitOutput;
-        return { write() {}, resize() {}, close() {} };
+        return { write() {}, resize() {}, getAppliedSize: () => null, close() {} };
       },
     };
     const manager = new EmbeddedTerminalManager({ backend });
