@@ -98,6 +98,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
         candidate_pr_numbers=sorted(pr_by_number),
     )
     should_poll = False
+    any_progress = False
     open_pr_numbers = set(pr_by_number)
     for stack in stacks:
         plan = plan_stack_execution(
@@ -138,7 +139,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     if action.key.startswith("bot_review_thread:"):
                         thread_id = action.key.split(":", 1)[1]
                         outcome = repairer.repair_bot_thread(pr, thread_id, now)
-                        progressed = outcome.status in {"pushed", "prereq_created"}
+                        progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                     else:
                         check_name = action.key
                         workflow_id = resolve_workflow_for_pr(action.pr_number)
@@ -148,7 +149,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
                             progressed = True
                         else:
                             outcome = repairer.repair_check(pr, check_name, now)
-                            progressed = outcome.status in {"pushed", "prereq_created"}
+                            progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                 except Exception as exc:
                     logger.trace(
                         "admin-bypass-repair-attempt-failed",
@@ -161,8 +162,9 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     should_poll = True
                     continue
                 if progressed:
-                    return True
-                should_poll = True
+                    any_progress = True
+                else:
+                    should_poll = True
                 continue
             elif action.kind == "repair_conflict":
                 try:
@@ -173,7 +175,7 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         progressed = True
                     else:
                         outcome = repairer.repair_conflict(pr, action.detail, now)
-                        progressed = outcome.status in {"pushed", "prereq_created"}
+                        progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                 except Exception as exc:
                     logger.trace(
                         "admin-bypass-repair-attempt-failed",
@@ -186,8 +188,9 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     should_poll = True
                     continue
                 if progressed:
-                    return True
-                should_poll = True
+                    any_progress = True
+                else:
+                    should_poll = True
                 continue
             else:
                 performed = executor.execute(action, pr, now)
@@ -215,11 +218,11 @@ def run_cycle(args: argparse.Namespace) -> bool:
                             pr_number=pr.number,
                             check_name=queue_only_noop_check,
                         )
-            if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
-                return True
+                if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
+                    any_progress = True
     if not stacks:
         logger.trace("admin-bypass-scan-empty")
-    return should_poll
+    return any_progress or should_poll
 
 
 def run_once(args: argparse.Namespace) -> int:
