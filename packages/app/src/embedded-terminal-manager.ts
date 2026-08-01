@@ -573,6 +573,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
       close() {
         // There is no process handle to close yet.
       },
+      getAppliedSize() {
+        return null;
+      },
     };
     const state: SpawnSessionState = {
       ...base,

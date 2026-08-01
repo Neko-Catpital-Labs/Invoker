@@ -204,6 +204,7 @@ describe('EmbeddedTerminalManager', () => {
       write: vi.fn(),
       resize: vi.fn(),
       close: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
     };
     const backend: EmbeddedTerminalBackend = {
       name: 'bash',
@@ -242,6 +243,7 @@ describe('EmbeddedTerminalManager', () => {
       write: vi.fn(),
       resize: vi.fn(),
       close: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
     };
     const backend: EmbeddedTerminalBackend = {
       name: 'pty',
@@ -357,6 +359,7 @@ describe('EmbeddedTerminalManager', () => {
       write: vi.fn(),
       resize: vi.fn(),
       close: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
     };
     let emitOutput: ((data: string) => void) | undefined;
     const backend: EmbeddedTerminalBackend = {
@@ -383,6 +386,7 @@ describe('EmbeddedTerminalManager', () => {
       write: vi.fn(),
       resize: vi.fn(),
       close: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
     };
     const backend: EmbeddedTerminalBackend = {
       name: 'pty',
@@ -477,6 +481,7 @@ describe('EmbeddedTerminalManager', () => {
       },
       resize: vi.fn(),
       close: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
     };
     const backend: EmbeddedTerminalBackend = {
       name: 'pty',
@@ -513,6 +518,7 @@ describe('EmbeddedTerminalManager', () => {
       write: vi.fn(),
       resize: vi.fn(),
       close: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
     };
     const backend: EmbeddedTerminalBackend = {
       name: 'pty',
@@ -677,6 +683,7 @@ describe('EmbeddedTerminalManager', () => {
       write: vi.fn(),
       resize: vi.fn(),
       close: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
     };
     const backend: EmbeddedTerminalBackend = {
       name: 'bash',
@@ -741,6 +748,7 @@ describe('EmbeddedTerminalManager', () => {
       write: vi.fn(),
       resize: vi.fn(),
       close: vi.fn(() => emitExit?.(0)),
+      getAppliedSize: vi.fn(() => null),
     };
     const backend: EmbeddedTerminalBackend = {
       name: 'bash',
