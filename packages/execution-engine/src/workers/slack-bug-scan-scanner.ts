@@ -1,9 +1,12 @@
-import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
-import type { SlackBugScanClient, SlackBugScanMessage } from './slack-bug-scan-client.js';
-import { issueFingerprint } from './slack-bug-scan-fingerprint.js';
-import { looksLikeBugComplaint } from './slack-bug-scan-prefilter.js';
+import {
+  issueFingerprint,
+  looksLikeBugComplaint,
+  SLACK_BUG_SCAN_WORKER_KIND,
+  type SlackBugScanClient,
+  type SlackBugScanMessage,
+} from '@invoker/slack-bug-scan';
 
-export const SLACK_BUG_SCAN_WORKER_KIND = 'slack-bug-scan';
+import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
 
 export interface SlackBugScanCandidate {
   channelId: string;

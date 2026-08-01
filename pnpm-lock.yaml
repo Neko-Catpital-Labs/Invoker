@@ -44,9 +44,6 @@ importers:
 
   packages/app:
     dependencies:
-      '@anthropic-ai/sdk':
-        specifier: ^0.115.0
-        version: 0.115.0(zod@4.4.3)
       '@invoker/cli':
         specifier: workspace:*
         version: link:../cli
@@ -71,6 +68,9 @@ importers:
       '@invoker/shell':
         specifier: workspace:*
         version: link:../shell
+      '@invoker/slack-bug-scan':
+        specifier: workspace:*
+        version: link:../slack-bug-scan
       '@invoker/surfaces':
         specifier: workspace:*
         version: link:../surfaces
@@ -80,9 +80,6 @@ importers:
       '@invoker/workflow-core':
         specifier: workspace:*
         version: link:../workflow-core
-      '@slack/web-api':
-        specifier: ^7.14.1
-        version: 7.14.1
       dockerode:
         specifier: ^4.0.0
         version: 4.0.9
@@ -95,9 +92,6 @@ importers:
       yaml:
         specifier: ^2.7.0
         version: 2.8.2
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
     devDependencies:
       '@electron/rebuild':
         specifier: ^4.0.3
@@ -108,6 +102,9 @@ importers:
       '@playwright/test':
         specifier: ^1.58.2
         version: 1.58.2
+      '@slack/web-api':
+        specifier: ^7.14.1
+        version: 7.14.1
       electron:
         specifier: ^35.0.0
         version: 35.7.5
@@ -239,6 +236,9 @@ importers:
       '@invoker/data-store':
         specifier: workspace:*
         version: link:../data-store
+      '@invoker/slack-bug-scan':
+        specifier: workspace:*
+        version: link:../slack-bug-scan
       '@invoker/transport':
         specifier: workspace:*
         version: link:../transport
@@ -414,6 +414,31 @@ importers:
       '@invoker/contracts':
         specifier: workspace:*
         version: link:../contracts
+    devDependencies:
+      '@types/node':
+        specifier: ^25.3.3
+        version: 25.3.3
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(jiti@2.6.1)(postcss@8.5.8)(typescript@5.9.3)(yaml@2.8.2)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@25.3.3)(jiti@2.6.1)(jsdom@25.0.1)(yaml@2.8.2)
+
+  packages/slack-bug-scan:
+    dependencies:
+      '@anthropic-ai/sdk':
+        specifier: ^0.115.0
+        version: 0.115.0(zod@4.4.3)
+      '@slack/web-api':
+        specifier: ^7.14.1
+        version: 7.14.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^25.3.3

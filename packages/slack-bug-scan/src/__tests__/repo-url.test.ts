@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractRepoUrlFromText, resolveChannelRepoUrl } from '../workers/slack-bug-scan-repo-url.js';
+import { extractRepoUrlFromText, resolveChannelRepoUrl } from '../repo-url.js';
 
 describe('slack-bug-scan repo url extraction', () => {
   it('extracts an ssh-style git url', () => {

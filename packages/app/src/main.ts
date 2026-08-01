@@ -284,8 +284,7 @@ import {
 } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
 import type { PlanningCommandBuilder } from '@invoker/surfaces';
-import { createRealSlackBugScanClient } from './slack-bug-scan-client.js';
-import { createSlackBugScanClassifier } from './slack-bug-scan-classifier.js';
+import { createRealSlackBugScanClient, createSlackBugScanClassifier } from '@invoker/slack-bug-scan';
 import { createSlackBugScanPlanner } from './slack-bug-scan-planner.js';
 import {
   killRunningTaskExecution,

@@ -25,12 +25,12 @@ import {
   PR_STATUS_WORKER_KIND,
   REAPER_WORKER_KIND,
   REQUEUE_WORKER_KIND,
-  SLACK_BUG_SCAN_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
   type WorkerRuntimeDependencies,
 } from '@invoker/execution-engine';
+import { SLACK_BUG_SCAN_WORKER_KIND } from '@invoker/slack-bug-scan';
 import { collectRecoveryWorkerStatus } from './recovery-worker-observability.js';
 
 /** Worker kinds auto-started on every owner boot, regardless of config. */
