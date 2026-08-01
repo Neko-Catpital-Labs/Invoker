@@ -1,7 +1,5 @@
-import { execFile } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import { promisify } from 'node:util';
 import { _electron as electron, type Page } from '@playwright/test';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { stringify as yamlStringify } from 'yaml';
@@ -20,10 +18,17 @@ import {
   numberOrZero,
   uiPerfPayloadsSince,
 } from './fixtures/ui-perf.js';
+import {
+  ensureHeadlessTestConfig,
+  expectDelegated,
+  headlessTestEnv,
+  parseJsonStdout,
+  parseWorkflowId,
+  runHeadlessClient,
+} from './fixtures/headless-client.js';
 
 test.use({ guiOwnerMode: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon' });
 
-const execFileAsync = promisify(execFile);
 const repoRoot = resolveRepoRoot(__dirname);
 const RESPONSIVE_INTERACTION_TIMEOUT_MS = 15000;
 const MAX_INSPECTOR_TOGGLE_MS = 5000;
@@ -55,52 +60,6 @@ const HEADLESS_HERD_UI_PLAN = {
     },
   ],
 };
-
-async function ensureHeadlessTestConfig(testDir: string): Promise<void> {
-  await writeFile(path.join(testDir, 'e2e-config.json'), JSON.stringify({ autoFixRetries: 0 }), 'utf8');
-}
-
-function headlessTestEnv(testDir: string): NodeJS.ProcessEnv {
-  const configPath = path.join(testDir, 'e2e-config.json');
-  const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
-  return {
-    ...process.env,
-    NODE_ENV: 'test',
-    INVOKER_TEST_WORKFLOW_IDS: '1',
-    TZ: 'UTC',
-    INVOKER_DB_DIR: testDir,
-    INVOKER_IPC_SOCKET: ipcSocketPath,
-    INVOKER_REPO_CONFIG_PATH: configPath,
-  };
-}
-
-async function runHeadlessClient(testDir: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
-  await ensureHeadlessTestConfig(testDir);
-  const clientPath = path.join(repoRoot, 'packages', 'app', 'dist', 'headless-client.js');
-  return await execFileAsync('node', [clientPath, ...args], {
-    cwd: repoRoot,
-    env: headlessTestEnv(testDir),
-    maxBuffer: 10 * 1024 * 1024,
-  });
-}
-
-function parseWorkflowId(stdout: string): string {
-  const delegated = stdout.match(/Delegated to owner — workflow: (wf-[^\s]+)/);
-  if (delegated?.[1]) return delegated[1];
-  const direct = stdout.match(/Workflow ID: (wf-[^\s]+)/);
-  if (direct?.[1]) return direct[1];
-  throw new Error(`No workflow id found in stdout:\n${stdout}`);
-}
-
-function expectDelegated(stdout: string): void {
-  expect(stdout).toContain('Delegated to owner');
-}
-
-function parseJsonStdout(stdout: string): Record<string, unknown> {
-  const line = stdout.split(/\r?\n/).map((entry) => entry.trim()).find((entry) => entry.startsWith('{'));
-  if (!line) throw new Error(`No JSON object found in stdout:\n${stdout}`);
-  return JSON.parse(line) as Record<string, unknown>;
-}
 
 async function measureInspectorToggleResponsive(page: Page, timeoutMs: number, label: string): Promise<number> {
   const sidebarToggle = page.getByTestId('sidebar-collapse-toggle');
