@@ -1,13 +1,32 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Mapping
 
 try:
+    from .mergify_admin_requeue_model import PrSnapshot
+    from .mergify_admin_requeue_plan import TRUNK
     from .mergify_admin_requeue_snapshot import run_logged
 except ImportError:
+    from mergify_admin_requeue_model import PrSnapshot
+    from mergify_admin_requeue_plan import TRUNK
     from mergify_admin_requeue_snapshot import run_logged
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PROOF_POLICY_LANE_ERROR = (
+    "Review lane proof cannot ship with policy files in the same PR. "
+    "Keep benchmarks, repros, and regression proof separate from behavior or policy changes."
+)
+PROOF_TOOLING_POLICY_UNIT_ERROR = (
+    'PR body Review Unit "proof" cannot ship with tooling-policy files in the same PR. '
+    "Split this into one Review Unit per PR."
+)
+NON_TRUNK_PREREQ_ERROR = "automatic tooling-policy split is only supported for base master"
+NON_TRUNK_MANUAL_SPLIT_ERROR = "worker cannot auto-split this PR on a non-trunk base; human stack split required"
 
 
 def git_output(cwd: Path, *args: str) -> str:
@@ -54,3 +73,146 @@ def normalize_repair_commit(cwd: Path, start_head: str, end_head: str, check_nam
         return start_head
     git_output(cwd, "commit", "-m", f"Repair {check_name}")
     return git_output(cwd, "rev-parse", "HEAD").strip()
+
+
+def validate_local_pr_body(cwd: Path, body: str, base_branch: str) -> dict[str, object]:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(body)
+        body_path = Path(handle.name)
+    try:
+        completed = subprocess.run(
+            [
+                "node",
+                str(REPO_ROOT / "scripts" / "validate-pr-body-local.mjs"),
+                "--body-file",
+                str(body_path),
+                "--base",
+                base_branch,
+                "--json",
+            ],
+            cwd=str(cwd),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        stdout = completed.stdout.strip()
+        if completed.returncode not in {0, 1}:
+            raise RuntimeError(completed.stderr.strip() or stdout or "validate-pr-body-local failed")
+        if not stdout:
+            raise RuntimeError(completed.stderr.strip() or "validate-pr-body-local produced no JSON output")
+        value = json.loads(stdout)
+        if not isinstance(value, dict):
+            raise RuntimeError("validate-pr-body-local returned non-object JSON")
+        return value
+    finally:
+        body_path.unlink(missing_ok=True)
+
+
+def validate_pr_body_from_current_diff(cwd: Path, body: str, base_branch: str) -> dict[str, object]:
+    git_output(cwd, "fetch", "origin", f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}")
+    changed_files = git_output(cwd, "diff", "--name-only", f"origin/{base_branch}...HEAD")
+    diff_text = git_output(cwd, "diff", "--no-ext-diff", f"origin/{base_branch}...HEAD")
+    with (
+        tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as body_handle,
+        tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as changed_handle,
+        tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as diff_handle,
+    ):
+        body_handle.write(body)
+        changed_handle.write(changed_files)
+        diff_handle.write(diff_text)
+        body_path = Path(body_handle.name)
+        changed_path = Path(changed_handle.name)
+        diff_path = Path(diff_handle.name)
+    script = (
+        "import { readFileSync } from 'node:fs';"
+        f"import {{ getReviewMetadata, scopeKindsForChangedFiles, validatePrBody }} from '{(REPO_ROOT / 'scripts' / 'validate-pr-body.mjs').as_posix()}';"
+        f"import {{ reviewUnitsForChangedFiles }} from '{(REPO_ROOT / 'scripts' / 'review-unit-rules.mjs').as_posix()}';"
+        "const body = readFileSync(process.argv[1], 'utf8');"
+        "const changedFiles = readFileSync(process.argv[2], 'utf8').split(/\\r?\\n/).filter(Boolean);"
+        "const diffText = readFileSync(process.argv[3], 'utf8');"
+        "const errors = await validatePrBody(body, { changedFiles, diffText });"
+        "const reviewMetadata = getReviewMetadata(body.trim());"
+        "console.log(JSON.stringify({"
+        "valid: errors.length === 0,"
+        "errors,"
+        "reviewLane: reviewMetadata.reviewLane,"
+        "reviewUnit: reviewMetadata.reviewUnit,"
+        "reviewUnits: reviewUnitsForChangedFiles(changedFiles),"
+        "scopeKinds: scopeKindsForChangedFiles(changedFiles),"
+        "}));"
+    )
+    try:
+        completed = subprocess.run(
+            ["node", "--input-type=module", "-e", script, str(body_path), str(changed_path), str(diff_path)],
+            cwd=str(cwd),
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+        stdout = completed.stdout.strip()
+        if completed.returncode not in {0, 1}:
+            raise RuntimeError(completed.stderr.strip() or stdout or "validate-pr-body fallback failed")
+        if not stdout:
+            raise RuntimeError(completed.stderr.strip() or "validate-pr-body fallback produced no JSON output")
+        value = json.loads(stdout)
+        if not isinstance(value, dict):
+            raise RuntimeError("validate-pr-body fallback returned non-object JSON")
+        return value
+    finally:
+        body_path.unlink(missing_ok=True)
+        changed_path.unlink(missing_ok=True)
+        diff_path.unlink(missing_ok=True)
+
+
+def validate_current_pr_body(cwd: Path, body: str, base_branch: str) -> dict[str, object]:
+    try:
+        return validate_local_pr_body(cwd, body, base_branch)
+    except RuntimeError:
+        return validate_pr_body_from_current_diff(cwd, body, base_branch)
+
+
+def is_proof_tooling_policy_validation(value: Mapping[str, object]) -> bool:
+    errors = value.get("errors")
+    scope_kinds = value.get("scopeKinds")
+    review_units = value.get("reviewUnits")
+    if value.get("reviewLane") != "proof" or value.get("reviewUnit") != "proof":
+        return False
+    if review_units != ["tooling-policy"]:
+        return False
+    if scope_kinds not in ([], ["policy"]):
+        return False
+    if not isinstance(errors, list):
+        return False
+    return bool(errors) and set(errors).issubset({PROOF_POLICY_LANE_ERROR, PROOF_TOOLING_POLICY_UNIT_ERROR})
+
+
+def is_prereq_split_validation(value: Mapping[str, object], pr: PrSnapshot) -> bool:
+    return pr.base_ref_name == TRUNK and is_proof_tooling_policy_validation(value)
+
+
+def is_manual_split_validation(value: Mapping[str, object]) -> bool:
+    errors = value.get("errors")
+    review_units = value.get("reviewUnits")
+    if not isinstance(errors, list) or not errors:
+        return False
+    if not isinstance(review_units, list):
+        return False
+    if len({str(unit) for unit in review_units}) < 2:
+        return False
+    joined = "\n".join(str(error) for error in errors)
+    return (
+        "multiple review units" in joined
+        or "Split this into one Review Unit per PR." in joined
+        or "cannot ship with policy, proof files" in joined
+        or "cannot ship with tooling-policy, proof files" in joined
+        or "cannot ship with proof files" in joined
+    )
+
+
+def invalid_repair_errors(value: Mapping[str, object], pr: PrSnapshot) -> list[str]:
+    errors = [str(error) for error in value.get("errors", [])]
+    if is_proof_tooling_policy_validation(value) and pr.base_ref_name != TRUNK:
+        errors = [*errors, NON_TRUNK_PREREQ_ERROR]
+    if is_manual_split_validation(value) and pr.base_ref_name != TRUNK:
+        errors = [*errors, NON_TRUNK_MANUAL_SPLIT_ERROR]
+    return errors
