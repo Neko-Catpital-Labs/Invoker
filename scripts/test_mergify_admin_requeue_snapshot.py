@@ -292,6 +292,22 @@ class GhClientLabelEdit(unittest.TestCase):
         self.assertNotIn("statusCheckRollup", fields)
         self.assertIn("headRefName", fields)
 
+    def test_list_open_prs_omits_author_by_default(self):
+        client = s.GhClient()
+        with mock.patch.object(client, "_run_json", return_value=[]) as run_json:
+            client.list_open_prs("Neko-Catpital-Labs/Invoker")
+
+        args = run_json.call_args.args[0]
+        self.assertNotIn("--author", args)
+
+    def test_list_open_prs_includes_explicit_author(self):
+        client = s.GhClient()
+        with mock.patch.object(client, "_run_json", return_value=[]) as run_json:
+            client.list_open_prs("Neko-Catpital-Labs/Invoker", "EdbertChan")
+
+        args = run_json.call_args.args[0]
+        self.assertEqual(args[args.index("--author") + 1], "EdbertChan")
+
     def test_add_label_uses_rest_issue_labels_endpoint(self):
         client = s.GhClient()
         with mock.patch("mergify_admin_requeue_snapshot.subprocess.run") as run:
