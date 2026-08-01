@@ -656,6 +656,32 @@ describe('EmbeddedTerminalManager', () => {
     expect(mgr.getAppliedSize(session.sessionId)).toBeNull();
   });
 
+  it('getAppliedSize returns null while a spawned process handle is still pending', () => {
+    let mgr: EmbeddedTerminalManager;
+    let pendingAppliedSize: { cols: number; rows: number } | null | undefined;
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      getAppliedSize: vi.fn(() => ({ cols: 120, rows: 40 })),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => {
+        const pendingSession = mgr.list()[0];
+        expect(pendingSession).toBeDefined();
+        pendingAppliedSize = mgr.getAppliedSize(pendingSession!.sessionId);
+        return spawned;
+      }),
+    };
+    mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
+
+    expect(pendingAppliedSize).toBeNull();
+    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 120, rows: 40 });
+  });
+
   it('emits exit and removes session when the bash child exits', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
