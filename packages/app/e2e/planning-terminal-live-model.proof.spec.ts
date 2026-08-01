@@ -11,6 +11,7 @@ const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
 const E2E_BARE_REPO = process.env.INVOKER_E2E_BARE_REPO ?? '/tmp/invoker-e2e-repo.git';
 const E2E_REPO_URL = pathToFileURL(E2E_BARE_REPO).href;
 const LIVE_PROOF_ENABLED = process.env.INVOKER_E2E_LIVE_PLANNER === '1';
+const LIVE_PLANNER_TOOL = (process.env.INVOKER_E2E_LIVE_PLANNER_TOOL?.trim() || 'codex') as 'codex' | 'claude';
 const LIVE_PLANNER_MODEL = process.env.INVOKER_E2E_LIVE_PLANNER_MODEL?.trim();
 const LIVE_PLANNER_TIMEOUT_SECONDS = readPositiveIntEnv('INVOKER_E2E_LIVE_PLANNER_TIMEOUT_SECONDS', 300);
 const LIVE_PROOF_PLAN_NAME = 'Live planner black to pink proof';
@@ -23,10 +24,10 @@ function readPositiveIntEnv(name: string, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function requireCodexOnPath(): string {
-  const result = spawnSync('bash', ['-lc', 'command -v codex'], { encoding: 'utf8' });
+function requireCliOnPath(tool: 'codex' | 'claude'): string {
+  const result = spawnSync('bash', ['-lc', `command -v ${tool}`], { encoding: 'utf8' });
   if (result.status !== 0) {
-    throw new Error('INVOKER_E2E_LIVE_PLANNER=1 requires a real `codex` CLI on PATH.');
+    throw new Error(`INVOKER_E2E_LIVE_PLANNER=1 requires a real \`${tool}\` CLI on PATH.`);
   }
   return result.stdout.trim();
 }
@@ -52,7 +53,13 @@ async function launchLivePlannerApp(paths: {
   configPath: string;
 }): Promise<{ app: ElectronApplication; page: Page }> {
   registerTrackedBrowserUserDataDir(paths.userDataDir);
+  // Playwright's `use.video` option only applies to browser contexts, so the
+  // Electron walkthrough video must be requested at launch time.
+  const recordVideo = process.env.CAPTURE_VIDEO
+    ? { recordVideo: { dir: path.resolve(__dirname, 'test-results', 'videos') } }
+    : {};
   const app = await electron.launch({
+    ...recordVideo,
     args: [
       ...launchArgs().slice(0, -1),
       `--user-data-dir=${paths.userDataDir}`,
@@ -115,7 +122,7 @@ async function submitPlanningText(page: Page, text: string): Promise<void> {
   await page.getByTestId('invoker-terminal-input').press('Enter');
 }
 
-async function attachPlanningState(page: Page | undefined, testInfo: TestInfo, codexPath: string): Promise<void> {
+async function attachPlanningState(page: Page | undefined, testInfo: TestInfo, cliPath: string): Promise<void> {
   if (!page) return;
   const evidence = await page.evaluate(async () => {
     const planning = await window.invoker.planningChatList().catch((error: unknown) => ({
@@ -132,7 +139,7 @@ async function attachPlanningState(page: Page | undefined, testInfo: TestInfo, c
     workflows: { ok: false, error: error instanceof Error ? error.message : String(error) },
   }));
   await testInfo.attach('live-planning-state.json', {
-    body: Buffer.from(JSON.stringify({ codexPath, ...evidence }, null, 2)),
+    body: Buffer.from(JSON.stringify({ cliPath, ...evidence }, null, 2)),
     contentType: 'application/json',
   });
 }
@@ -140,10 +147,10 @@ async function attachPlanningState(page: Page | undefined, testInfo: TestInfo, c
 base.describe('Planning terminal live model proof', () => {
   base.skip(!LIVE_PROOF_ENABLED, 'Set INVOKER_E2E_LIVE_PLANNER=1 to run the live model planning proof.');
 
-  base('continues a real Codex planning session, then drafts and submits a workflow', async ({}, testInfo) => {
+  base(`continues a real ${LIVE_PLANNER_TOOL} planning session, then drafts and submits a workflow`, async ({}, testInfo) => {
     base.setTimeout((LIVE_PLANNER_TIMEOUT_SECONDS * 2 + 120) * 1000);
 
-    const codexPath = requireCodexOnPath();
+    const cliPath = requireCliOnPath(LIVE_PLANNER_TOOL);
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-live-planner-'));
     const configPath = path.join(testDir, 'e2e-config.json');
     const userDataDir = path.join(testDir, 'electron-user-data');
@@ -157,7 +164,7 @@ base.describe('Planning terminal live model proof', () => {
       planningTimeoutSeconds: LIVE_PLANNER_TIMEOUT_SECONDS,
       slackHarnessPresets: {
         'live-codex': {
-          tool: 'codex',
+          tool: LIVE_PLANNER_TOOL,
           ...(LIVE_PLANNER_MODEL ? { model: LIVE_PLANNER_MODEL } : {}),
         },
       },
@@ -206,16 +213,21 @@ base.describe('Planning terminal live model proof', () => {
         'Draft ready',
         { timeout: (LIVE_PLANNER_TIMEOUT_SECONDS + 15) * 1000 },
       );
-      await expect.poll(async () => page.evaluate(async (sinceId) => {
-        const logs = await window.invoker.getActivityLogs(sinceId, 2000);
-        return logs
-          .filter((entry) => entry.message.includes('planner_session_id_promoted'))
-          .map((entry) => entry.message)
-          .join('\n');
-      }, activityLogWatermark), {
-        timeout: 10000,
-        message: 'activity log contains planner_session_id_promoted',
-      }).toContain('planner_session_id_promoted');
+      if (LIVE_PLANNER_TOOL === 'codex') {
+        // Codex starts a session with a provisional id and corrects it from
+        // stdout once the real thread id is known; Claude's session id is
+        // known upfront and never gets "promoted", so this check is codex-only.
+        await expect.poll(async () => page.evaluate(async (sinceId) => {
+          const logs = await window.invoker.getActivityLogs(sinceId, 2000);
+          return logs
+            .filter((entry) => entry.message.includes('planner_session_id_promoted'))
+            .map((entry) => entry.message)
+            .join('\n');
+        }, activityLogWatermark), {
+          timeout: 10000,
+          message: 'activity log contains planner_session_id_promoted',
+        }).toContain('planner_session_id_promoted');
+      }
       const activityLogs = await page.evaluate(async (sinceId) => window.invoker.getActivityLogs(sinceId, 2000), activityLogWatermark);
       await testInfo.attach('live-planning-activity-log.json', {
         body: Buffer.from(JSON.stringify(activityLogs, null, 2)),
@@ -248,8 +260,11 @@ base.describe('Planning terminal live model proof', () => {
         await page.screenshot({ path: LIVE_PROOF_SCREENSHOT, fullPage: true });
       }
     } finally {
-      await attachPlanningState(page, testInfo, codexPath).catch(() => undefined);
+      await attachPlanningState(page, testInfo, cliPath).catch(() => undefined);
+      const videoPromise = page?.video()?.path().catch(() => undefined);
       if (app) await closeApp(app).catch(() => undefined);
+      const videoPath = await videoPromise;
+      if (videoPath) console.log(`LIVE_PROOF_VIDEO_PATH=${videoPath}`);
       if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
         rmSync(testDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       }
