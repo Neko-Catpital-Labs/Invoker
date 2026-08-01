@@ -366,13 +366,13 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       let out = '';
       let err = '';
       let settled = false;
+      let closed = false;
       let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       const finish = (fn: () => void): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timeoutTimer);
-        clearTimeout(killTimer);
         fn();
       };
       child.stdout?.on('data', (c: Buffer) => { out += c.toString(); });
@@ -384,6 +384,8 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
         });
       });
       child.on('close', (code) => {
+        closed = true;
+        clearTimeout(killTimer);
         finish(() => {
           bench('SshExecutor.execRemoteCapture.closed', {
             code,
@@ -402,7 +404,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
           bench('SshExecutor.execRemoteCapture.timedOut', { timeoutMs: opts.timeoutMs });
           killProcessGroup(child, 'SIGTERM');
           killTimer = setTimeout(() => {
-            if (!settled) killProcessGroup(child, 'SIGKILL');
+            if (!closed) killProcessGroup(child, 'SIGKILL');
           }, SIGKILL_TIMEOUT_MS);
           killTimer.unref?.();
           finish(() => {
