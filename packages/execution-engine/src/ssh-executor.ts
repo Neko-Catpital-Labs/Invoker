@@ -46,6 +46,34 @@ function remoteFinalizeTimeoutMs(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REMOTE_FINALIZE_TIMEOUT_MS;
 }
 
+const REMOTE_FAILURE_LOG_TAIL_CHARS = 500;
+
+function tailFor(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '(empty)';
+  return trimmed.length > REMOTE_FAILURE_LOG_TAIL_CHARS
+    ? `...${trimmed.slice(-REMOTE_FAILURE_LOG_TAIL_CHARS)}`
+    : trimmed;
+}
+
+// Every remote-contact primitive (bootstrap, worktree list/cleanup, record-and-push,
+// etc.) funnels through execRemoteCapture, so logging failures here -- unconditionally,
+// unlike the bench() calls above which are opt-in -- covers all of them without each
+// caller having to remember to log its own failure.
+function logRemoteCommandFailure(
+  host: string,
+  user: string,
+  phase: string | undefined,
+  reason: string,
+  stderr = '',
+  stdout = '',
+): void {
+  console.error(
+    `[ssh-lifecycle] remote command failed host=${host} user=${user} phase=${phase ?? 'remote_capture'} ` +
+      `reason="${reason}" stderrTail=${JSON.stringify(tailFor(stderr))} stdoutTail=${JSON.stringify(tailFor(stdout))}`,
+  );
+}
+
 export interface SshExecutorConfig {
   host: string;
   user: string;
@@ -380,6 +408,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       child.on('error', (error) => {
         finish(() => {
           bench('SshExecutor.execRemoteCapture.spawnError', { error: error.message });
+          logRemoteCommandFailure(this.host, this.user, phase, `spawn error: ${error.message}`);
           reject(error);
         });
       });
@@ -394,6 +423,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
           });
           if (code === 0) resolve(out);
           else {
+            logRemoteCommandFailure(this.host, this.user, phase, `exited with code ${code ?? 'null'}`, err, out);
             reject(createSshRemoteScriptError(code, out, err, phase));
           }
         });
@@ -402,6 +432,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
         timeoutTimer = setTimeout(() => {
           if (settled) return;
           bench('SshExecutor.execRemoteCapture.timedOut', { timeoutMs: opts.timeoutMs });
+          logRemoteCommandFailure(this.host, this.user, phase, `timed out after ${opts.timeoutMs}ms`, err, out);
           killProcessGroup(child, 'SIGTERM');
           killTimer = setTimeout(() => {
             if (!closed) killProcessGroup(child, 'SIGKILL');
