@@ -79,6 +79,9 @@ def _repair_task_yaml(*, description: str, prompt: str) -> str:
     return (
         "  - id: repair\n"
         f"    description: {_yaml_str(description)}\n"
+        # codex reaches every SSH pool member; the default claude agent's
+        # session is broken on most of them right now.
+        "    executionAgent: codex\n"
         "    prompt: |\n"
         f"{_indent_block(prompt, 6)}\n"
     )
