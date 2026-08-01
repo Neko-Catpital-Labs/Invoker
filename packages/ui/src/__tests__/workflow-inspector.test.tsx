@@ -169,6 +169,36 @@ describe('WorkflowInspector', () => {
     expect(input).toHaveValue('upstream/release');
   });
 
+  it('trims whitespace from the base ref input even when the value is unchanged', async () => {
+    const onSetMergeBranch = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <WorkflowInspector
+        workflow={{ ...workflow, status: 'review_ready', baseBranch: 'upstream/master' }}
+        task={makeTask({
+          id: '__merge__wf-1',
+          description: 'Review gate',
+          status: 'review_ready',
+          config: { workflowId: 'wf-1', isMergeNode: true },
+        })}
+        collapsed={false}
+        advancedExpanded={false}
+        onSetMergeBranch={onSetMergeBranch}
+        onToggleCollapsed={() => {}}
+        onToggleAdvanced={() => {}}
+      />,
+    );
+
+    const input = screen.getByTestId('base-ref-input');
+    fireEvent.change(input, { target: { value: ' upstream/master ' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => {
+      expect(input).toHaveValue('upstream/master');
+    });
+    expect(onSetMergeBranch).not.toHaveBeenCalled();
+  });
+
   it('keeps the PR link for a completed review gate in a completed workflow', () => {
     render(
       <WorkflowInspector
