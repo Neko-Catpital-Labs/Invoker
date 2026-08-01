@@ -1,0 +1,6 @@
+packages/app/src/__tests__/embedded-terminal-manager.test.ts
+packages/app/src/__tests__/embedded-terminal-truncated-escape-garble-repro.test.ts
+packages/app/src/embedded-terminal-manager.ts
+packages/app/src/terminal-session-ipc.ts
+packages/contracts/src/ipc-channels.ts
+packages/execution-engine/src/executor.ts
