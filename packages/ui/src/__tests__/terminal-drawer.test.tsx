@@ -158,7 +158,7 @@ describe('Terminal drawer (component)', () => {
     vi.restoreAllMocks();
   });
 
-  it('starts minimized: header is shown but no terminal body', async () => {
+  it('starts minimized: header is shown but the terminal body is hidden, not unmounted', async () => {
     render(<App />);
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
     await waitFor(() => {
@@ -166,7 +166,8 @@ describe('Terminal drawer (component)', () => {
       expect(screen.getByRole('button', { name: 'Partial terminal drawer' })).toBeInTheDocument();
     });
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
-    expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
+    // Stays mounted (CSS-hidden) so open task terminals aren't disposed by minimizing.
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
   });
 
   it('restores persisted terminal sessions from startup terminalList', async () => {
@@ -203,7 +204,7 @@ describe('Terminal drawer (component)', () => {
 
     const { rerender } = render(<TerminalDrawer state="minimized" {...props} />);
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
-    expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
 
     rerender(<TerminalDrawer state="partial" {...props} />);
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
@@ -302,10 +303,10 @@ describe('Terminal drawer (component)', () => {
     expect(drawer).toHaveClass('fixed');
     expect(screen.getByTestId('terminal-drawer-body')).toBeInTheDocument();
 
-    // maximized → minimized: body flattens away.
+    // maximized → minimized: body hides (CSS), stays mounted.
     fireEvent.click(screen.getByRole('button', { name: 'Minimize terminal drawer' }));
     expect(drawer).toHaveAttribute('data-state', 'minimized');
-    expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
   });
 
   it('bounds the maximized terminal body so xterm owns scrollback', () => {
