@@ -190,7 +190,8 @@ export interface ReviewGateState {
 export type SshInfraFailureClass =
   | 'ssh-env-invalid-export'
   | 'ssh-worktree-missing'
-  | 'ssh-invalid-reference';
+  | 'ssh-invalid-reference'
+  | 'ssh-repo-mirror-corrupt';
 
 export type FailureClass = 'liveness_stall' | SshInfraFailureClass;
 

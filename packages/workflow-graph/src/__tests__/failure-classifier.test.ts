@@ -20,6 +20,23 @@ describe('FailureClassifier.classifyError', () => {
       .toBe('ssh-invalid-reference');
   });
 
+  it('classifies the corrupt-repo-mirror signature', () => {
+    expect(FailureClassifier.classifyError(
+      'SSH remote script failed (exit=128, phase=bootstrap_clone_fetch)\n'
+      + 'STDERR:\n'
+      + 'fatal: not a git repository (or any of the parent directories): .git\n'
+      + '[WARNING] Git fetch failed for /home/invoker/.invoker/repos/647faa73e90e\n'
+      + '[WARNING] Continuing with existing refs. Tasks may use stale commits.\n'
+      + "ERROR: base ref 'master' not found and fallback 'origin/master' also missing\n",
+    )).toBe('ssh-repo-mirror-corrupt');
+  });
+
+  it('does not classify a bare "not a git repository" outside the bootstrap-clone phase', () => {
+    expect(FailureClassifier.classifyError(
+      'fatal: not a git repository (or any of the parent directories): .git',
+    )).toBeUndefined();
+  });
+
   it('returns undefined for ordinary code failures and non-strings', () => {
     expect(FailureClassifier.classifyError('AssertionError: expected 1 to be 2')).toBeUndefined();
     expect(FailureClassifier.classifyError(undefined)).toBeUndefined();
