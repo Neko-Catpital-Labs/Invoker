@@ -13,6 +13,7 @@ import {
 
 import { resolveInvokerHomeRoot } from './delete-all-snapshot.js';
 import { isHeadlessMutatingCommand } from './headless-command-classification.js';
+import { isHeadlessHelpCommand, isRemovedHeadlessCommandAlias } from './headless-command-registry.js';
 import {
   resolveDelegationTimeoutMs,
   tryDelegateExec,
@@ -44,10 +45,6 @@ import {
   tryAcknowledgeNoTrackTaskMutationWithoutDb,
   tryAcknowledgeNoTrackTaskMutationWithoutOwner,
 } from './headless-no-track-fallback.js';
-import {
-  isHeadlessHelpCommand,
-  isRemovedHeadlessCommandAlias,
-} from './headless-command-registry.js';
 import { printHeadlessUsage } from './headless-usage.js';
 
 const RED = '\x1b[31m';
