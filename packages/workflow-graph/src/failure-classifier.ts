@@ -19,6 +19,7 @@ export const SSH_INFRA_FAILURE_CLASSES: readonly SshInfraFailureClass[] = [
   'ssh-worktree-missing',
   'ssh-invalid-reference',
   'ssh-repo-mirror-corrupt',
+  'ssh-oauth-session-expired',
 ];
 
 export class FailureClassifier {
@@ -47,6 +48,9 @@ export class FailureClassifier {
       && errorText.includes('fatal: not a git repository (or any of the parent directories): .git')
     ) {
       return 'ssh-repo-mirror-corrupt';
+    }
+    if (errorText.includes('Failed to authenticate: OAuth session expired and could not be refreshed')) {
+      return 'ssh-oauth-session-expired';
     }
     return undefined;
   }
