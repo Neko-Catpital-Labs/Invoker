@@ -25,6 +25,7 @@ import mergify_admin_requeue_plan as p
 HEAD = "a" * 40
 REQUIRED = {"build"}
 QUEUE_ONLY_CHECK = "required-fast / Guardrails"
+NOW = 2_000_000_000
 
 
 def check(state, name="build"):
@@ -307,7 +308,7 @@ class BuildStackFacts(PlannerTestCase):
         )
         self.assertEqual(facts.suppressed_failed_checks_by_pr, {10: (QUEUE_ONLY_CHECK, "PR Body")})
         self.assertEqual(facts.blockers_by_pr[10], ())
-        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW)
         self.assertEqual([(action.kind, action.key) for action in actions], [("restore_admin_bypass_label", QUEUE_ONLY_CHECK)])
 
     def test_detects_bottom_and_unaccepted_upper(self):
@@ -331,7 +332,7 @@ class PlanStackActions(PlannerTestCase):
         ledger = ledger or self._ledger()
         stack = stack_or_snapshot if isinstance(stack_or_snapshot, m.StackGroup) else m.StackGroup("s", (stack_or_snapshot,))
         facts = p.build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head or {}, "master")
-        return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        return p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW)
 
     def test_pending_check_means_wait_do_nothing(self):
         self.assertEqual(self._plan(pr(checks={"build": check("pending")})), ())
@@ -597,7 +598,7 @@ class PlanStackActions(PlannerTestCase):
         )
         facts, ledger = self._facts(stack, open_pr_numbers_by_head={})
         self.assertEqual(facts.bottom_topology.kind, "stale_unowned_base")
-        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW)
         self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("retarget_base", 5885, "master"))
         self.assertIn("`pr/babysit-prereq-split`", actions[0].detail)
         self.assertIn("`master`", actions[0].detail)
@@ -620,7 +621,7 @@ class PlanStackActions(PlannerTestCase):
         )
         facts, ledger = self._facts(stack, open_pr_numbers_by_head={"pr/babysit-prereq-split": (7001,)})
         self.assertEqual(facts.bottom_topology.kind, "external_open_base")
-        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW)
         self.assertEqual((actions[0].kind, actions[0].pr_number, actions[0].key), ("comment_blocked", 5885, "external-open-base-pr"))
         self.assertIn("#7001", actions[0].detail)
 
@@ -644,7 +645,7 @@ class PlanStackActions(PlannerTestCase):
         )
         facts, ledger = self._facts(stale_stack, open_pr_numbers_by_head={})
         self.assertEqual(facts.bottom_topology.kind, "stale_unowned_base")
-        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3)
+        actions = p.plan_actions_from_facts(facts, ledger, max_requeue_attempts=2, max_repair_attempts=3, now=NOW)
         self.assertEqual([(action.kind, action.pr_number) for action in actions], [("retarget_base", 5885)])
 
     def test_stale_root_failed_check_repairs_before_retarget(self):
