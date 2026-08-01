@@ -1391,23 +1391,19 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   if (process.env.NODE_ENV === 'test') {
     const injectTaskStates = async (updates: Array<{ taskId: string; changes: TaskStateChanges }>): Promise<void> => {
       for (const { taskId, changes } of updates) {
-        const before = orchestrator.getTask(taskId);
-        const previousSnapshot = rendererTaskFeed.getTaskSnapshot(taskId);
-        const previousTaskStateVersion = previousSnapshot
-          ? (
-              (JSON.parse(previousSnapshot) as { taskStateVersion?: number }).taskStateVersion
-              ?? before?.taskStateVersion
-              ?? 1
-            )
-          : (before?.taskStateVersion ?? 0);
+        const before = persistence.loadTask(taskId);
+        if (!before) continue;
         persistence.updateTask(taskId, changes);
-        messageBus.publish(Channels.TASK_DELTA, {
+        const after = persistence.loadTask(taskId);
+        if (!after) continue;
+        const delta: TaskDelta = {
           type: 'updated',
-          taskId,
+          taskId: after.id,
           changes,
-          previousTaskStateVersion,
-          taskStateVersion: previousTaskStateVersion + 1,
-        } satisfies TaskDelta);
+          previousTaskStateVersion: before.taskStateVersion ?? 1,
+          taskStateVersion: after.taskStateVersion ?? (before.taskStateVersion ?? 1) + 1,
+        };
+        messageBus.publish(Channels.TASK_DELTA, delta);
       }
       orchestrator.syncAllFromDb();
     };
