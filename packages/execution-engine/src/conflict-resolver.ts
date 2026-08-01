@@ -284,30 +284,26 @@ export function remoteAgentShellInvocation(): string[] {
 
 /**
  * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
+ * Requires the requested agent to resolve through the agent registry.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
   executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
   const name = agentName ?? DEFAULT_EXECUTION_AGENT;
-  if (agentRegistry) {
-    const agent = agentRegistry.get(name);
-    if (agent?.buildFixCommand) {
-      const spec = agent.buildFixCommand(prompt, { executionModel });
-      const sessionId = spec.sessionId ?? randomUUID();
-      const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
-      return { shellCommand: cmd, sessionId };
-    }
+  const agent = agentRegistry?.get(name);
+  if (!agent?.buildFixCommand) {
+    throw new Error(
+      `Cannot build remote agent command for requested execution agent "${name}": ` +
+      'no configured agent set was available, it did not include that agent, or that agent does not support fix commands.',
+    );
   }
-  // Fallback: claude-compatible CLI (for backwards compat without registry)
-  const sessionId = randomUUID();
-  return {
-    shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
-    sessionId,
-  };
+  const spec = agent.buildFixCommand(prompt, { executionModel });
+  const sessionId = spec.sessionId ?? randomUUID();
+  const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
+  return { shellCommand: cmd, sessionId };
 }
 
 export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {

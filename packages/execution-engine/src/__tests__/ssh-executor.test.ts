@@ -10,6 +10,7 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -110,6 +111,24 @@ describe('SshExecutor pre-flight validation', () => {
     const handle = await ssh.start(req);
     expect(handle).toBeDefined();
     expect(handle.executionId).toBeDefined();
+  });
+
+  it('throws with the requested agent name instead of substituting Claude when no registry is configured', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the task',
+        description: 'test',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(/requested execution agent "codex"/);
   });
 
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
@@ -227,6 +246,54 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toContain("trap 'cleanup_runtime' EXIT");
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
+  });
+
+  it('keeps resolved registry-backed agent behavior unchanged for SSH managed tasks', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: registerBuiltinAgents(),
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      if (script.includes('worktree prune')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the task',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    const call = spawnStub.mock.calls[0]!;
+    const callScript = call[3] as string;
+    const callAgentName = call[6];
+    expect(callScript).toContain('codex');
+    expect(callScript).toContain('exec');
+    expect(callScript).not.toContain('claude --session-id');
+    expect(callAgentName).toBe('codex');
+    expect(handle.agentSessionId).toBeTruthy();
   });
 
   it('managed mode skips provisioning when provisionCommand is unset', async () => {
