@@ -126,6 +126,7 @@ export interface InfraRepairWorkerPolicyOptions {
   drainWakeupHints?: () => RecoveryWorkerWakeupHint[];
   resolveRemoteBranchOwnerPathFn?: typeof resolveRemoteBranchOwnerPath;
   runRemoteProvisionRepairFn?: typeof runRemoteProvisionRepair;
+  runRepoMirrorRepairFn?: typeof runRepoMirrorRepair;
 }
 
 export interface InfraRepairWorkerOptions {
@@ -426,6 +427,45 @@ export async function runRemoteProvisionRepair(options: {
   });
 }
 
+/**
+ * The mirror-clone bootstrap script (buildMirrorCloneScript in ssh-git-exec.ts)
+ * only checks `[ ! -d "$CLONE/.git" ]` before deciding whether to (re)clone, so
+ * a corrupted mirror (`.git/` present but missing HEAD/config/objects) is never
+ * repaired by the bootstrap itself -- it fails the same way every attempt. The
+ * mirror path is embedded in its own `[WARNING] Git fetch failed for <path>`
+ * line, so pull it out of the persisted error text rather than recomputing the
+ * repo-URL hash here.
+ */
+export function extractCorruptMirrorPath(errorText: string | undefined): string | undefined {
+  if (typeof errorText !== 'string') return undefined;
+  const match = errorText.match(/Git fetch failed for (\S+)/);
+  return match?.[1];
+}
+
+export function buildRepoMirrorRepairScript(options: { mirrorPath: string }): string {
+  const mirrorPathB64 = base64Encode(options.mirrorPath);
+  return `set -euo pipefail
+${buildPortableBase64DecodeFunction()}
+MIRROR_PATH=$(printf '%s' ${shellPosixSingleQuote(mirrorPathB64)} | invoker_base64_decode)
+${bashNormalizeTildePath('MIRROR_PATH')}
+rm -rf "$MIRROR_PATH"
+`;
+}
+
+export async function runRepoMirrorRepair(options: {
+  target: InfraRepairRemoteTargetConfig;
+  mirrorPath: string;
+  targetKey?: string;
+  runRemoteScript?: typeof execRemoteCapture;
+}): Promise<string> {
+  const sshArgs = buildSshConnectionArgs(options.target, { batchMode: true });
+  return (options.runRemoteScript ?? execRemoteCapture)({
+    sshArgs,
+    script: buildRepoMirrorRepairScript({ mirrorPath: options.mirrorPath }),
+    phase: `infra-repair:${options.targetKey ?? options.target.host}`,
+  });
+}
+
 async function runTargetRepairWithCooldown(
   options: InfraRepairWorkerPolicyOptions,
   args: {
@@ -521,6 +561,60 @@ async function handleRemoteProvisionRecovery(
       reusedRecentRepair: repair.kind === 'reused-success',
     },
     'Queued retry-task after remote infra repair',
+  );
+}
+
+async function handleRepoMirrorCorruptRecovery(
+  options: InfraRepairWorkerPolicyOptions,
+  candidate: ValidatedGenericSshInfraCandidate,
+): Promise<void> {
+  const mirrorPath = extractCorruptMirrorPath(candidate.task.execution.error);
+  if (!mirrorPath) {
+    recordTaskDecision(options, candidate, candidate.reason, 'failed', 'Could not determine the corrupt mirror path from the task error', {
+      targetId: candidate.targetId,
+    }, 'mirror-path-unresolved');
+    return;
+  }
+
+  const repair = await runTargetRepairWithCooldown(options, {
+    targetKey: `${candidate.targetId}:${mirrorPath}`,
+    reason: candidate.reason,
+    execute: () => (options.runRepoMirrorRepairFn ?? runRepoMirrorRepair)({
+      target: candidate.target,
+      mirrorPath,
+      targetKey: candidate.targetId,
+    }),
+  });
+
+  if (repair.kind === 'cooldown-skip') {
+    recordTaskDecision(options, candidate, candidate.reason, 'skipped', 'Skipped infra repair because target cooldown is active', {
+      targetId: candidate.targetId,
+      mirrorPath,
+      repairStatus: repair.action.status,
+    }, 'repair-cooldown');
+    return;
+  }
+  if (repair.kind === 'failed') {
+    recordTaskDecision(options, candidate, candidate.reason, 'failed', `Infra repair failed: ${firstLine(repair.errorMessage) ?? 'unknown error'}`, {
+      targetId: candidate.targetId,
+      mirrorPath,
+      error: repair.errorMessage,
+    }, 'repair-failed');
+    return;
+  }
+
+  await submitFollowUpMutation(
+    options,
+    candidate,
+    candidate.reason,
+    INFRA_REPAIR_RETRY_TASK_CHANNEL,
+    buildInfraRepairRetryTaskMutationArgs(candidate.taskId),
+    {
+      targetId: candidate.targetId,
+      mirrorPath,
+      reusedRecentRepair: repair.kind === 'reused-success',
+    },
+    'Queued retry-task after removing the corrupt repo mirror (bootstrap re-clones on next attempt)',
   );
 }
 
@@ -634,6 +728,10 @@ async function handleValidatedGenericSshInfraCandidate(
   }
   if (candidate.reason === 'ssh-worktree-missing') {
     await handleMissingWorktreeRecovery(options, candidate);
+    return;
+  }
+  if (candidate.reason === 'ssh-repo-mirror-corrupt') {
+    await handleRepoMirrorCorruptRecovery(options, candidate);
     return;
   }
   await handleInvalidReferenceRecovery(options, candidate);

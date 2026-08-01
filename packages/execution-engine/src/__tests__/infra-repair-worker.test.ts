@@ -106,6 +106,7 @@ function makeHarness(tasksInput: TaskState[] = [makeTask()]) {
     logEvent: vi.fn(),
   };
   const runRemoteProvisionRepairFn = vi.fn(async () => 'remote repair ok');
+  const runRepoMirrorRepairFn = vi.fn(async () => 'mirror repair ok');
   const resolveRemoteBranchOwnerPathFn = vi.fn(async () => undefined as string | undefined);
   let nowMs = Date.parse('2026-01-01T00:00:00.000Z');
   const tick = createInfraRepairTick({
@@ -124,6 +125,7 @@ function makeHarness(tasksInput: TaskState[] = [makeTask()]) {
     },
     repairCooldownMs: 30 * 60 * 1000,
     runRemoteProvisionRepairFn,
+    runRepoMirrorRepairFn,
     resolveRemoteBranchOwnerPathFn,
     now: () => nowMs,
   });
@@ -136,6 +138,7 @@ function makeHarness(tasksInput: TaskState[] = [makeTask()]) {
     tick,
     updateTask,
     runRemoteProvisionRepairFn,
+    runRepoMirrorRepairFn,
     resolveRemoteBranchOwnerPathFn,
     setNow: (nextNowMs: number) => { nowMs = nextNowMs; },
   };
@@ -227,6 +230,65 @@ describe('infra-repair worker', () => {
         }),
       }),
     ]));
+  });
+
+  it('classifies a corrupt repo mirror, removes it remotely, and queues retry-task', async () => {
+    // Repro: SSH bootstrap_clone_fetch hits a mirror whose .git/ exists but is
+    // corrupt (present but missing HEAD/config/objects) -- git's own fetch
+    // fails with "not a git repository" because buildMirrorCloneScript only
+    // checks directory existence, not repo validity, before skipping clone.
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: 'Executor startup failed (ssh): SSH remote script failed (exit=128, phase=bootstrap_clone_fetch)\n'
+            + 'STDERR:\n'
+            + 'fatal: not a git repository (or any of the parent directories): .git\n'
+            + '[WARNING] Git fetch failed for /home/invoker/.invoker/repos/647faa73e90e\n'
+            + '[WARNING] Continuing with existing refs. Tasks may use stale commits.\n'
+            + "ERROR: base ref 'master' not found and fallback 'origin/master' also missing\n",
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.runRepoMirrorRepairFn).toHaveBeenCalledTimes(1);
+    expect(h.runRepoMirrorRepairFn).toHaveBeenCalledWith(expect.objectContaining({
+      mirrorPath: '/home/invoker/.invoker/repos/647faa73e90e',
+    }));
+    expect(h.runRemoteProvisionRepairFn).not.toHaveBeenCalled();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RETRY_TASK_CHANNEL);
+    expect(parseInfraRepairRetryTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        payload: expect.objectContaining({
+          infraReason: 'ssh-repo-mirror-corrupt',
+          channel: INFRA_REPAIR_RETRY_TASK_CHANNEL,
+        }),
+      }),
+    ]));
+  });
+
+  it('fails cleanly when the corrupt mirror path cannot be parsed from the error', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: 'SSH remote script failed (exit=128, phase=bootstrap_clone_fetch)\n'
+            + 'STDERR:\n'
+            + 'fatal: not a git repository (or any of the parent directories): .git\n',
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.runRepoMirrorRepairFn).not.toHaveBeenCalled();
+    expect(h.submit).not.toHaveBeenCalled();
   });
 
   it('reads the persisted failureClass subtype when the error text is opaque', async () => {

@@ -18,6 +18,7 @@ export const SSH_INFRA_FAILURE_CLASSES: readonly SshInfraFailureClass[] = [
   'ssh-env-invalid-export',
   'ssh-worktree-missing',
   'ssh-invalid-reference',
+  'ssh-repo-mirror-corrupt',
 ];
 
 export class FailureClassifier {
@@ -40,6 +41,12 @@ export class FailureClassifier {
       || errorText.includes('Cannot apply a fix because this task has no saved workspace.')
     ) {
       return 'ssh-invalid-reference';
+    }
+    if (
+      errorText.includes('phase=bootstrap_clone_fetch')
+      && errorText.includes('fatal: not a git repository (or any of the parent directories): .git')
+    ) {
+      return 'ssh-repo-mirror-corrupt';
     }
     return undefined;
   }
