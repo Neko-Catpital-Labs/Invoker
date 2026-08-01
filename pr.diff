@@ -1,0 +1,4116 @@
+diff --git a/packages/app/src/__tests__/embedded-terminal-manager.test.ts b/packages/app/src/__tests__/embedded-terminal-manager.test.ts
+index 9c5a93dfa..b16d3fdd1 100644
+--- a/packages/app/src/__tests__/embedded-terminal-manager.test.ts
++++ b/packages/app/src/__tests__/embedded-terminal-manager.test.ts
+@@ -1,945 +1,1030 @@
+ /**
+  * Embedded terminal manager unit + integration tests.
+  *
+  * Covers:
+  *   - openOrReuse returns the same sessionId for the same resolved terminal target
+  *   - spawn mode wires stdout/stderr → output events and exit
+  *   - attached mode forwards executor.onOutput → output events and
+  *     executor.sendInput → write()
+  *   - GUI route through resolveTaskTerminalSpec + manager returns a session
+  *     descriptor (the deterministic outcome required by the task spec)
+  */
+ 
+ import { describe, it, expect, vi } from 'vitest';
+ import { EventEmitter } from 'node:events';
+ import { join } from 'node:path';
+ import { tmpdir } from 'node:os';
+ import { randomUUID } from 'node:crypto';
+ import { mkdirSync, rmSync } from 'node:fs';
+ 
+ import {
+   EmbeddedTerminalManager,
+   createBashTerminalBackend,
+   createPtyTerminalBackend,
+   type EmbeddedTerminalBackend,
+   type BashSpawnFn,
+   type PtyLike,
+   type PtySpawnFn,
+ } from '../embedded-terminal-manager.js';
+ import {
+   resolveTaskTerminalSpec,
+   shouldAttachEmbeddedTerminalToLiveExecutor,
+ } from '../open-terminal-for-task.js';
+ import {
+   ExecutorRegistry,
+   WorktreeExecutor,
+   type Executor,
+   type ExecutorHandle,
+   type TerminalSpec,
+ } from '@invoker/execution-engine';
+ 
+ function createFakeChild() {
+   const ee = new EventEmitter() as EventEmitter & {
+     stdout: EventEmitter;
+     stderr: EventEmitter;
+     stdin: { write: (data: string) => boolean };
+     kill: () => void;
+     killed: boolean;
+     __written: string[];
+   };
+   ee.stdout = new EventEmitter();
+   ee.stderr = new EventEmitter();
+   ee.__written = [];
+   ee.stdin = {
+     write: (data: string) => {
+       ee.__written.push(data);
+       return true;
+     },
+   };
+   ee.killed = false;
+   ee.kill = () => {
+     ee.killed = true;
+   };
+   return ee;
+ }
+ 
+-function createFakePty() {
+-  const ee = new EventEmitter() as EventEmitter & PtyLike & {
++function createFakePty(initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 }) {
++  const ee = new EventEmitter() as EventEmitter & Omit<PtyLike, 'cols' | 'rows'> & {
++    cols: number;
++    rows: number;
+     __written: string[];
+     __resized: Array<{ cols: number; rows: number }>;
+     killed: boolean;
+   };
++  ee.cols = initialSize.cols;
++  ee.rows = initialSize.rows;
+   ee.__written = [];
+   ee.__resized = [];
+   ee.killed = false;
+   ee.onData = (listener) => {
+     ee.on('data', listener);
+     return { dispose: () => ee.off('data', listener) };
+   };
+   ee.onExit = (listener) => {
+     ee.on('exit', listener);
+     return { dispose: () => ee.off('exit', listener) };
+   };
+   ee.write = (data: string) => {
+     ee.__written.push(data);
+   };
+   ee.resize = (cols: number, rows: number) => {
+     ee.__resized.push({ cols, rows });
++    ee.cols = cols;
++    ee.rows = rows;
+   };
+   ee.kill = () => {
+     ee.killed = true;
+   };
+   return ee;
+ }
+ 
+ describe('EmbeddedTerminalManager', () => {
+   it('opens a spawn-mode session through the default bash backend and returns a descriptor', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+ 
+     const spec: TerminalSpec = { cwd: '/tmp/wt-1' };
+     const session = mgr.openOrReuse({ taskId: 'task-1', spec, cwd: '/tmp/wt-1' });
+ 
+     expect(session.taskId).toBe('task-1');
+     expect(session.status).toBe('running');
+     expect(session.mode).toBe('spawn');
+     expect(session.attached).toBe(false);
+     expect(session.cwd).toBe('/tmp/wt-1');
+     expect(typeof session.sessionId).toBe('string');
+     expect(bashSpawnFn).toHaveBeenCalledTimes(1);
+   });
+ 
+   it('reopening the same task and terminal target returns the same session id', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+ 
+     const first = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
+     const second = mgr.openOrReuse({ taskId: 'task-1', spec: {}, cwd: '/tmp' });
+ 
+     expect(second.sessionId).toBe(first.sessionId);
+     expect(bashSpawnFn).toHaveBeenCalledTimes(1);
+     expect(mgr.list()).toHaveLength(1);
+   });
+ 
+   it('opens planning sessions as reusable raw shells distinct from task terminals', () => {
+     const planningChild = createFakeChild();
+     const taskChild = createFakeChild();
+     const bashSpawnFn = vi
+       .fn()
+       .mockReturnValueOnce(planningChild)
+       .mockReturnValueOnce(taskChild) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+       defaultShell: '/bin/manual-shell',
+     });
+     const events: Array<{ kind?: string; planningSessionId?: string; data: string }> = [];
+     mgr.on('output', (event) => {
+       events.push({
+         kind: event.kind,
+         planningSessionId: event.planningSessionId,
+         data: event.data,
+       });
+     });
+ 
+     const first = mgr.openOrReuse({
+       kind: 'planning',
+       taskId: 'planning:plan-session-1',
+       planningSessionId: 'plan-session-1',
+       spec: { cwd: '/repo' },
+       cwd: '/repo',
+     });
+     const reused = mgr.openOrReuse({
+       kind: 'planning',
+       taskId: 'planning:plan-session-1',
+       planningSessionId: 'plan-session-1',
+       spec: { cwd: '/repo' },
+       cwd: '/repo',
+     });
+     const taskSession = mgr.openOrReuse({
+       taskId: 'planning:plan-session-1',
+       spec: { cwd: '/repo' },
+       cwd: '/repo',
+     });
+     planningChild.stdout.emit('data', Buffer.from('planner shell\n'));
+ 
+     expect(reused.sessionId).toBe(first.sessionId);
+     expect(taskSession.sessionId).not.toBe(first.sessionId);
+     expect(first).toMatchObject({
+       kind: 'planning',
+       planningSessionId: 'plan-session-1',
+       taskId: 'planning:plan-session-1',
+       cwd: '/repo',
+       command: undefined,
+       args: undefined,
+       mode: 'spawn',
+       attached: false,
+     });
+     expect(taskSession.kind).toBe('task');
+     expect(events).toEqual([
+       { kind: 'planning', planningSessionId: 'plan-session-1', data: 'planner shell\n' },
+     ]);
+     expect(bashSpawnFn).toHaveBeenNthCalledWith(
+       1,
+       '/bin/manual-shell',
+       [],
+       expect.objectContaining({ cwd: '/repo' }),
+     );
+     expect(bashSpawnFn).toHaveBeenCalledTimes(2);
+   });
+ 
+   it('opens and reuses sessions through an injected backend object', () => {
+     const spawned = {
+       write: vi.fn(),
+       resize: vi.fn(),
+       close: vi.fn(),
+     };
+     const backend: EmbeddedTerminalBackend = {
+       name: 'bash',
+       spawn: vi.fn(() => spawned),
+     };
+     const mgr = new EmbeddedTerminalManager({ backend });
+     const codexResumeArgs = [
+       'resume',
+       '--dangerously-bypass-approvals-and-sandbox',
+       'session-1',
+     ];
+ 
+     const first = mgr.openOrReuse({
+       taskId: 'task-injected',
+       spec: { command: 'codex', args: codexResumeArgs },
+       cwd: '/tmp/wt',
+     });
+     const second = mgr.openOrReuse({
+       taskId: 'task-injected',
+       spec: { command: 'codex', args: codexResumeArgs },
+       cwd: '/tmp/wt',
+     });
+ 
+     expect(second.sessionId).toBe(first.sessionId);
+     expect(backend.spawn).toHaveBeenCalledTimes(1);
+     expect(backend.spawn).toHaveBeenCalledWith(expect.objectContaining({
+       spec: { command: 'codex', args: codexResumeArgs },
+       cwd: '/tmp/wt',
+       defaultShell: expect.any(String),
+     }));
+   });
+ 
+   it('replays PTY first-frame output emitted before openOrReuse returns', () => {
+     const firstFrame = 'FIRST_FRAME_FROM_PTY\n';
+     const spawned = {
+       write: vi.fn(),
+       resize: vi.fn(),
+       close: vi.fn(),
+     };
+     const backend: EmbeddedTerminalBackend = {
+       name: 'pty',
+       spawn: vi.fn((opts) => {
+         opts.emitOutput(firstFrame);
+         return spawned;
+       }),
+     };
+     const mgr = new EmbeddedTerminalManager({ backend });
+ 
+     const session = mgr.openOrReuse({ taskId: 'task-early', spec: {}, cwd: '/tmp/wt' });
+     const latePaneOutput = [session.outputSnapshot ?? ''];
+     mgr.on('output', (e) => latePaneOutput.push(e.data));
+ 
+     expect(latePaneOutput).toEqual([firstFrame]);
+     expect(mgr.list()).toMatchObject([
+       { sessionId: session.sessionId, outputSnapshot: firstFrame },
+     ]);
+ 
+     const reused = mgr.openOrReuse({ taskId: 'task-early', spec: {}, cwd: '/tmp/wt' });
+     expect(reused.sessionId).toBe(session.sessionId);
+     expect(reused.outputSnapshot).toBe(firstFrame);
+   });
+ 
+   it('opens a distinct session when the same task resolves to a different terminal target', () => {
+     const child1 = createFakeChild();
+     const child2 = createFakeChild();
+     const child3 = createFakeChild();
+     const bashSpawnFn = vi
+       .fn()
+       .mockReturnValueOnce(child1)
+       .mockReturnValueOnce(child2)
+       .mockReturnValueOnce(child3) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+ 
+     const first = mgr.openOrReuse({
+       taskId: 'task-1',
+       spec: { command: 'claude', args: ['--resume', 'session-a'], cwd: '/tmp/wt-a' },
+       cwd: '/tmp/wt-a',
+     });
+     const changedSession = mgr.openOrReuse({
+       taskId: 'task-1',
+       spec: { command: 'claude', args: ['--resume', 'session-b'], cwd: '/tmp/wt-a' },
+       cwd: '/tmp/wt-a',
+     });
+     const changedWorkspace = mgr.openOrReuse({
+       taskId: 'task-1',
+       spec: { command: 'claude', args: ['--resume', 'session-b'], cwd: '/tmp/wt-b' },
+       cwd: '/tmp/wt-b',
+     });
+ 
+     expect(changedSession.sessionId).not.toBe(first.sessionId);
+     expect(changedWorkspace.sessionId).not.toBe(changedSession.sessionId);
+     expect(bashSpawnFn).toHaveBeenCalledTimes(3);
+     expect(mgr.list()).toHaveLength(3);
+   });
+ 
+   it('preserves the resolved command, args, and cwd when spawning the bash backend', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+ 
+     const session = mgr.openOrReuse({
+       taskId: 'task-1',
+       spec: {
+         command: 'codex',
+         args: ['resume', '--dangerously-bypass-approvals-and-sandbox', 'codex-session-1'],
+         cwd: '/tmp/wt',
+       },
+       cwd: '/tmp/wt',
+     });
+ 
+     expect(session.command).toBe('codex');
+     expect(session.args).toEqual([
+       'resume',
+       '--dangerously-bypass-approvals-and-sandbox',
+       'codex-session-1',
+     ]);
+     expect(session.cwd).toBe('/tmp/wt');
+     expect(bashSpawnFn).toHaveBeenCalledWith(
+       'codex',
+       ['resume', '--dangerously-bypass-approvals-and-sandbox', 'codex-session-1'],
+       expect.objectContaining({ cwd: '/tmp/wt', stdio: ['pipe', 'pipe', 'pipe'] }),
+     );
+   });
+ 
+   it('fans bash stdout and stderr through the output event', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+     const events: Array<{ sessionId: string; data: string }> = [];
+     mgr.on('output', (e) => events.push({ sessionId: e.sessionId, data: e.data }));
+ 
+     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+     child.stdout.emit('data', Buffer.from('hello'));
+     child.stderr.emit('data', Buffer.from('err'));
+ 
+     expect(events.map((e) => e.data)).toEqual(['hello', 'err']);
+     expect(events.every((e) => e.sessionId === session.sessionId)).toBe(true);
+     expect(mgr.get(session.sessionId)?.outputSnapshot).toBe('helloerr');
+     expect(mgr.list()[0]?.outputSnapshot).toBe('helloerr');
+   });
+ 
+   it('bounds each session replay snapshot to the most recent 64 KiB', () => {
+     const maxSnapshotChars = 64 * 1024;
+     const spawned = {
+       write: vi.fn(),
+       resize: vi.fn(),
+       close: vi.fn(),
+     };
+     let emitOutput: ((data: string) => void) | undefined;
+     const backend: EmbeddedTerminalBackend = {
+       name: 'bash',
+       spawn: vi.fn((opts) => {
+         emitOutput = opts.emitOutput;
+         return spawned;
+       }),
+     };
+     const mgr = new EmbeddedTerminalManager({ backend });
+ 
+     const session = mgr.openOrReuse({ taskId: 'task-buffer', spec: {}, cwd: '/tmp/wt' });
+     emitOutput?.('a'.repeat(maxSnapshotChars));
+     emitOutput?.('tail');
+ 
+     const snapshot = mgr.get(session.sessionId)?.outputSnapshot;
+     expect(snapshot).toHaveLength(maxSnapshotChars);
+     expect(snapshot).toBe(`${'a'.repeat(maxSnapshotChars - 'tail'.length)}tail`);
+   });
+ 
+   it('bounds restored spawn session snapshots to the most recent 64 KiB', () => {
+     const maxSnapshotChars = 64 * 1024;
+     const spawned = {
+       write: vi.fn(),
+       resize: vi.fn(),
+       close: vi.fn(),
+     };
+     const backend: EmbeddedTerminalBackend = {
+       name: 'pty',
+       spawn: vi.fn(() => spawned),
+     };
+     const mgr = new EmbeddedTerminalManager({ backend });
+ 
+     const session = mgr.restoreSpawnSession({
+       sessionId: 'restored-large-snapshot',
+       taskId: 'task-restored-large-snapshot',
+       targetKey: 'target-restored-large-snapshot',
+       spec: { command: 'bash', args: ['-l'] },
+       cwd: '/tmp/restored',
+       createdAt: '2026-07-07T00:00:00.000Z',
+       outputSnapshot: `${'a'.repeat(maxSnapshotChars)}tail`,
+     });
+ 
+     expect(session.outputSnapshot).toHaveLength(maxSnapshotChars);
+     expect(session.outputSnapshot).toBe(`${'a'.repeat(maxSnapshotChars - 'tail'.length)}tail`);
+     expect(mgr.get(session.sessionId)?.outputSnapshot).toBe(session.outputSnapshot);
+   });
+ 
+   it('emits session-updated on open, output, and natural exit', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+     const updates: Array<{
+       sessionId: string;
+       status: 'running' | 'exited';
+       outputSnapshot: string;
+       targetKey: string;
+       exitCode?: number;
+     }> = [];
+     mgr.on('session-updated', (record) => {
+       updates.push({
+         sessionId: record.sessionId,
+         status: record.status,
+         outputSnapshot: record.outputSnapshot,
+         targetKey: record.targetKey,
+         exitCode: record.exitCode,
+       });
+     });
+ 
+     const session = mgr.openOrReuse({ taskId: 'task-updates', spec: {}, cwd: '/tmp/wt' });
+     child.stdout.emit('data', Buffer.from('hello'));
+     child.emit('exit', 4);
+ 
+     expect(updates).toEqual([
+       expect.objectContaining({
+         sessionId: session.sessionId,
+         status: 'running',
+         outputSnapshot: '',
+         targetKey: expect.any(String),
+       }),
+       expect.objectContaining({
+         sessionId: session.sessionId,
+         status: 'running',
+         outputSnapshot: 'hello',
+         targetKey: expect.any(String),
+       }),
+       expect.objectContaining({
+         sessionId: session.sessionId,
+         status: 'exited',
+         outputSnapshot: 'hello',
+         targetKey: expect.any(String),
+         exitCode: 4,
+       }),
+     ]);
+   });
+ 
+   it('write() forwards data to bash stdin in spawn mode', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+ 
+     const res = mgr.write(session.sessionId, 'ls\n');
+ 
+     expect(res.ok).toBe(true);
+     expect(child.__written).toEqual(['ls\n']);
+   });
+ 
+   it('restoreSpawnSession preserves identity, snapshot, and live input', () => {
+     const spawned = {
+       written: [] as string[],
+       write(data: string) {
+         this.written.push(data);
+       },
+       resize: vi.fn(),
+       close: vi.fn(),
+     };
+     const backend: EmbeddedTerminalBackend = {
+       name: 'pty',
+       spawn: vi.fn(() => spawned),
+     };
+     const mgr = new EmbeddedTerminalManager({ backend });
+ 
+     const session = mgr.restoreSpawnSession({
+       sessionId: 'restored-session',
+       taskId: 'task-restored',
+       targetKey: 'target-restored',
+       spec: { command: 'bash', args: ['-l'] },
+       cwd: '/tmp/restored',
+       createdAt: '2026-07-07T00:00:00.000Z',
+       outputSnapshot: 'before restart\n',
+     });
+     const writeResult = mgr.write('restored-session', 'echo after\n');
+ 
+     expect(session).toMatchObject({
+       sessionId: 'restored-session',
+       taskId: 'task-restored',
+       createdAt: '2026-07-07T00:00:00.000Z',
+       outputSnapshot: 'before restart\n',
+       status: 'running',
+       mode: 'spawn',
+     });
+     expect(backend.spawn).toHaveBeenCalledTimes(1);
+     expect(writeResult.ok).toBe(true);
+     expect(spawned.written).toEqual(['echo after\n']);
+   });
+ 
+   it('rejects restoring a second running session for the same terminal target', () => {
+     const spawned = {
+       write: vi.fn(),
+       resize: vi.fn(),
+       close: vi.fn(),
+     };
+     const backend: EmbeddedTerminalBackend = {
+       name: 'pty',
+       spawn: vi.fn(() => spawned),
+     };
+     const mgr = new EmbeddedTerminalManager({ backend });
+ 
+     mgr.restoreSpawnSession({
+       sessionId: 'restored-session-a',
+       taskId: 'task-restored',
+       targetKey: 'target-restored',
+       spec: { command: 'bash', args: ['-l'] },
+       cwd: '/tmp/restored',
+       createdAt: '2026-07-07T00:00:00.000Z',
+       outputSnapshot: 'before restart\n',
+     });
+ 
+     expect(() => mgr.restoreSpawnSession({
+       sessionId: 'restored-session-b',
+       taskId: 'task-restored',
+       targetKey: 'target-restored',
+       spec: { command: 'bash', args: ['-l'] },
+       cwd: '/tmp/restored',
+       createdAt: '2026-07-07T00:00:01.000Z',
+       outputSnapshot: 'duplicate restart\n',
+     })).toThrow(/already has running session/);
+   });
+ 
+   it('resize() is accepted by the bash backend as a no-op', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+ 
+     const res = mgr.resize(session.sessionId, 120, 40);
+ 
+     expect(res.ok).toBe(true);
+   });
+ 
+   it('opt-in PTY backend preserves command metadata and forwards resize', () => {
+     const pty = createFakePty();
+     const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+     });
+     const session = mgr.openOrReuse({
+       taskId: 't',
+       spec: { command: 'claude', args: ['--resume', 'session-1'], cwd: '/tmp' },
+       cwd: '/tmp',
+     });
+ 
+     const res = mgr.resize(session.sessionId, 120, 40);
+ 
+     expect(ptySpawnFn).toHaveBeenCalledWith(
+       'claude',
+       ['--resume', 'session-1'],
+       expect.objectContaining({ cwd: '/tmp', cols: 80, rows: 24, name: 'xterm-256color' }),
+     );
+     expect(res.ok).toBe(true);
+     expect(pty.__resized).toEqual([{ cols: 120, rows: 40 }]);
+   });
+ 
++  it('threads TerminalSpec cols/rows into the PTY spawn call instead of the hardcoded 80x24 default', () => {
++    const pty = createFakePty({ cols: 160, rows: 50 });
++    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
++    });
++
++    mgr.openOrReuse({
++      taskId: 't',
++      spec: { command: 'claude', cwd: '/tmp', cols: 160, rows: 50 },
++      cwd: '/tmp',
++    });
++
++    expect(ptySpawnFn).toHaveBeenCalledWith(
++      'claude',
++      [],
++      expect.objectContaining({ cols: 160, rows: 50 }),
++    );
++  });
++
++  it('falls back to 80x24 when a TerminalSpec omits cols/rows, unchanged from today', () => {
++    const pty = createFakePty();
++    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
++    });
++
++    mgr.openOrReuse({ taskId: 't', spec: { command: 'claude', cwd: '/tmp' }, cwd: '/tmp' });
++
++    expect(ptySpawnFn).toHaveBeenCalledWith(
++      'claude',
++      [],
++      expect.objectContaining({ cols: 80, rows: 24 }),
++    );
++  });
++
++  it('getAppliedSize reads the PTY back directly, exposing a resize that silently did not stick', () => {
++    const pty = createFakePty({ cols: 80, rows: 24 });
++    // Simulate a real-world dropped resize: the call is recorded but the
++    // underlying winsize never actually changes.
++    pty.resize = (cols: number, rows: number) => {
++      pty.__resized.push({ cols, rows });
++    };
++    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
++    });
++    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
++
++    const res = mgr.resize(session.sessionId, 120, 40);
++
++    expect(res.ok).toBe(true);
++    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 80, rows: 24 });
++  });
++
++  it('getAppliedSize reflects a resize that actually applied', () => {
++    const pty = createFakePty({ cols: 80, rows: 24 });
++    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
++    });
++    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
++
++    mgr.resize(session.sessionId, 120, 40);
++
++    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 120, rows: 40 });
++  });
++
++  it('getAppliedSize returns null for the pipe-backed bash backend, which has no real TTY size', () => {
++    const child = createFakeChild();
++    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
++    });
++    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
++
++    expect(mgr.getAppliedSize(session.sessionId)).toBeNull();
++  });
++
+   it('emits exit and removes session when the bash child exits', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+     const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+ 
+     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+     child.emit('exit', 0);
+ 
+     expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 0 }]);
+     expect(mgr.list()).toHaveLength(0);
+   });
+ 
+   it('handles synchronous backend output and exit during spawn without uninitialized state', () => {
+     const spawned = {
+       write: vi.fn(),
+       resize: vi.fn(),
+       close: vi.fn(),
+     };
+     const backend: EmbeddedTerminalBackend = {
+       name: 'bash',
+       spawn: vi.fn((opts) => {
+         opts.emitOutput('before-exit\n');
+         opts.emitExit(7);
+         return spawned;
+       }),
+     };
+     const mgr = new EmbeddedTerminalManager({ backend });
+     const exits: Array<{ sessionId: string; exitCode?: number }> = [];
+     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId, exitCode: e.exitCode }));
+ 
+     const session = mgr.openOrReuse({ taskId: 'task-sync-exit', spec: {}, cwd: '/tmp/wt' });
+ 
+     expect(session.status).toBe('exited');
+     expect(session.exitCode).toBe(7);
+     expect(session.outputSnapshot).toBe('before-exit\n');
+     expect(spawned.close).toHaveBeenCalledTimes(1);
+     expect(exits).toEqual([{ sessionId: session.sessionId, exitCode: 7 }]);
+     expect(mgr.list()).toHaveLength(0);
+   });
+ 
+   it('after exit, openOrReuse spawns a fresh session', () => {
+     const child1 = createFakeChild();
+     const child2 = createFakeChild();
+     const bashSpawnFn = vi
+       .fn()
+       .mockReturnValueOnce(child1)
+       .mockReturnValueOnce(child2) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+ 
+     const a = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+     child1.emit('exit', 0);
+     const b = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+ 
+     expect(b.sessionId).not.toBe(a.sessionId);
+   });
+ 
+   it('close() kills the bash child and clears the session', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+     });
+     const exits: Array<{ sessionId: string }> = [];
+     mgr.on('exit', (e) => exits.push({ sessionId: e.sessionId }));
+ 
+     const session = mgr.openOrReuse({ taskId: 't', spec: {}, cwd: '/tmp' });
+     const res = mgr.close(session.sessionId);
+ 
+     expect(res.ok).toBe(true);
+     expect(child.killed).toBe(true);
+     expect(exits).toEqual([{ sessionId: session.sessionId }]);
+   });
+ 
+   it('closeAll preserveForRestart closes without exit or exited persistence updates', () => {
+     let emitExit: ((exitCode?: number) => void) | undefined;
+     const spawned = {
+       write: vi.fn(),
+       resize: vi.fn(),
+       close: vi.fn(() => emitExit?.(0)),
+     };
+     const backend: EmbeddedTerminalBackend = {
+       name: 'bash',
+       spawn: vi.fn((opts) => {
+         emitExit = opts.emitExit;
+         return spawned;
+       }),
+     };
+     const mgr = new EmbeddedTerminalManager({ backend });
+     const exits: unknown[] = [];
+     const updates: Array<{ status: 'running' | 'exited' }> = [];
+     mgr.on('exit', (event) => exits.push(event));
+     mgr.on('session-updated', (record) => updates.push({ status: record.status }));
+ 
+     mgr.openOrReuse({ taskId: 'task-preserve', spec: {}, cwd: '/tmp' });
+     mgr.closeAll({ preserveForRestart: true });
+ 
+     expect(spawned.close).toHaveBeenCalledTimes(1);
+     expect(exits).toEqual([]);
+     expect(updates).toEqual([{ status: 'running' }]);
+     expect(mgr.list()).toEqual([]);
+   });
+ 
+   it('attached mode forwards executor output and routes sendInput', () => {
+     const outputCallbacks: Array<(data: string) => void> = [];
+     const inputs: string[] = [];
+     let unsubscribed = 0;
+     const executor: Pick<Executor, 'onOutput' | 'sendInput'> & { type: string } = {
+       type: 'fake',
+       onOutput(_handle: ExecutorHandle, cb: (data: string) => void) {
+         outputCallbacks.push(cb);
+         return () => {
+           unsubscribed += 1;
+         };
+       },
+       sendInput(_handle: ExecutorHandle, input: string) {
+         inputs.push(input);
+       },
+     };
+     const handle: ExecutorHandle = { executionId: 'exec-1', taskId: 'task-live' };
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({
+         spawnFn: () => {
+           throw new Error('bash should not be spawned in attached mode');
+         },
+       }),
+     });
+     const events: string[] = [];
+     mgr.on('output', (e) => events.push(e.data));
+ 
+     const session = mgr.openOrReuse({
+       taskId: 'task-live',
+       spec: { cwd: '/tmp/wt' },
+       cwd: '/tmp/wt',
+       attach: { handle, executor: executor as Executor },
+     });
+ 
+     expect(session.mode).toBe('attached');
+     expect(session.attached).toBe(true);
+ 
+     // Output fan-in
+     outputCallbacks[0]?.('live-output');
+     expect(events).toEqual(['live-output']);
+ 
+     // Input routes through executor
+     const writeRes = mgr.write(session.sessionId, 'cmd\n');
+     expect(writeRes.ok).toBe(true);
+     expect(inputs).toEqual(['cmd\n']);
+ 
+     // Close unsubscribes from the executor
+     mgr.close(session.sessionId);
+     expect(unsubscribed).toBe(1);
+   });
+ 
+   it('write() rejects unknown sessions', () => {
+     const mgr = new EmbeddedTerminalManager({
+       backend: createBashTerminalBackend({ spawnFn: () => createFakeChild() }),
+     });
+     const res = mgr.write('not-a-session', 'x');
+     expect(res).toEqual({ ok: false, reason: expect.stringContaining('Unknown session') });
+   });
+ });
+ 
+ // ── Deterministic GUI route: resolveTaskTerminalSpec + EmbeddedTerminalManager ──
+ 
+ describe('GUI open-terminal embedded route', () => {
+   it('returns an opened embedded session descriptor for an existing task', () => {
+     const wtBase = join(tmpdir(), `embedded-wt-${randomUUID()}`);
+     const workspacePath = join(wtBase, 'task-workspace');
+     mkdirSync(workspacePath, { recursive: true });
+ 
+     try {
+       const registry = new ExecutorRegistry();
+       registry.register('worktree', new WorktreeExecutor({
+         cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
+         worktreeBaseDir: wtBase,
+       }));
+ 
+       const persistence = {
+         getTaskStatus: vi.fn(() => 'completed'),
+         getRunnerKind: vi.fn(() => 'worktree'),
+         getAgentSessionId: vi.fn(() => null),
+         getContainerId: vi.fn(() => null),
+         getWorkspacePath: vi.fn(() => workspacePath),
+         getBranch: vi.fn(() => null),
+       };
+ 
+       const resolved = resolveTaskTerminalSpec({
+         taskId: 'task-X',
+         persistence: persistence as never,
+         executorRegistry: registry,
+         repoRoot: '/repo',
+       });
+       expect(resolved.ok).toBe(true);
+       if (!resolved.ok) return;
+ 
+       const child = createFakeChild();
+       const mgr = new EmbeddedTerminalManager({
+         backend: createBashTerminalBackend({ spawnFn: () => child }),
+       });
+ 
+       const session = mgr.openOrReuse({
+         taskId: 'task-X',
+         spec: resolved.spec,
+         cwd: resolved.cwd,
+       });
+ 
+       expect(session.taskId).toBe('task-X');
+       expect(session.status).toBe('running');
+       expect(session.mode).toBe('spawn');
+       expect(session.cwd).toBe(workspacePath);
+ 
+       // Reopening the same task reuses the same session id (deterministic outcome).
+       const again = mgr.openOrReuse({
+         taskId: 'task-X',
+         spec: resolved.spec,
+         cwd: resolved.cwd,
+       });
+       expect(again.sessionId).toBe(session.sessionId);
+     } finally {
+       try { rmSync(wtBase, { recursive: true, force: true }); } catch { /* ignore */ }
+     }
+   });
+ 
+   it('propagates the resolved reason when workspace metadata is missing', () => {
+     const registry = new ExecutorRegistry();
+     registry.register('worktree', new WorktreeExecutor({
+       cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
+       worktreeBaseDir: join(tmpdir(), `wt-${randomUUID()}`),
+     }));
+     const persistence = {
+       getTaskStatus: vi.fn(() => 'completed'),
+       getRunnerKind: vi.fn(() => 'worktree'),
+       getAgentSessionId: vi.fn(() => null),
+       getContainerId: vi.fn(() => null),
+       getWorkspacePath: vi.fn(() => null),
+       getBranch: vi.fn(() => null),
+     };
+ 
+     const resolved = resolveTaskTerminalSpec({
+       taskId: 'task-no-workspace',
+       persistence: persistence as never,
+       executorRegistry: registry,
+       repoRoot: '/repo',
+     });
+ 
+     expect(resolved.ok).toBe(false);
+     if (resolved.ok) return;
+     expect(resolved.reason).toContain('workspace metadata is missing');
+   });
+ 
+   it('allows running tasks when allowRunning=true (attach path)', () => {
+     const wtBase = join(tmpdir(), `embedded-wt-${randomUUID()}`);
+     const workspacePath = join(wtBase, 'task-workspace');
+     mkdirSync(workspacePath, { recursive: true });
+     try {
+       const registry = new ExecutorRegistry();
+       registry.register('worktree', new WorktreeExecutor({
+         cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
+         worktreeBaseDir: wtBase,
+       }));
+       const persistence = {
+         getTaskStatus: vi.fn(() => 'running'),
+         getRunnerKind: vi.fn(() => 'worktree'),
+         getAgentSessionId: vi.fn(() => null),
+         getContainerId: vi.fn(() => null),
+         getWorkspacePath: vi.fn(() => workspacePath),
+         getBranch: vi.fn(() => null),
+       };
+ 
+       const refused = resolveTaskTerminalSpec({
+         taskId: 'task-running',
+         persistence: persistence as never,
+         executorRegistry: registry,
+         repoRoot: '/repo',
+       });
+       expect(refused.ok).toBe(false);
+ 
+       const allowed = resolveTaskTerminalSpec({
+         taskId: 'task-running',
+         persistence: persistence as never,
+         executorRegistry: registry,
+         repoRoot: '/repo',
+         allowRunning: true,
+       });
+       expect(allowed.ok).toBe(true);
+     } finally {
+       try { rmSync(wtBase, { recursive: true, force: true }); } catch { /* ignore */ }
+     }
+   });
+ 
+   it('opens running command tasks as isolated shell sessions instead of attaching stdin', () => {
+     const wtBase = join(tmpdir(), `embedded-wt-${randomUUID()}`);
+     const workspacePath = join(wtBase, 'task-workspace');
+     mkdirSync(workspacePath, { recursive: true });
+     try {
+       const registry = new ExecutorRegistry();
+       registry.register('worktree', new WorktreeExecutor({
+         cacheDir: join(tmpdir(), `cache-${randomUUID()}`),
+         worktreeBaseDir: wtBase,
+       }));
+       const persistence = {
+         getTaskStatus: vi.fn(() => 'running'),
+         getRunnerKind: vi.fn(() => 'worktree'),
+         getAgentSessionId: vi.fn(() => null),
+         getContainerId: vi.fn(() => null),
+         getWorkspacePath: vi.fn(() => workspacePath),
+         getBranch: vi.fn(() => null),
+       };
+       const resolved = resolveTaskTerminalSpec({
+         taskId: 'task-cat',
+         persistence: persistence as never,
+         executorRegistry: registry,
+         repoRoot: '/repo',
+         allowRunning: true,
+       });
+       expect(resolved.ok).toBe(true);
+       if (!resolved.ok) return;
+ 
+       const commandChild = createFakeChild();
+       const bashSpawnFn = vi.fn(() => commandChild) as unknown as BashSpawnFn;
+       const liveExecutor = {
+         type: 'worktree',
+         onOutput: vi.fn(() => () => {}),
+         sendInput: vi.fn(),
+       };
+       const liveHandle = {
+         handle: { executionId: 'exec-cat', taskId: 'task-cat', workspacePath },
+         executor: liveExecutor as unknown as Executor,
+       };
+       const attachToLiveExecutor = shouldAttachEmbeddedTerminalToLiveExecutor(
+         resolved.meta,
+         liveHandle,
+       );
+       const mgr = new EmbeddedTerminalManager({
+         backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+       });
+ 
+       const session = mgr.openOrReuse({
+         taskId: 'task-cat',
+         spec: resolved.spec,
+         cwd: resolved.cwd,
+         attach: attachToLiveExecutor ? liveHandle : undefined,
+       });
+       const writeResult = mgr.write(session.sessionId, 'printf desktop-smoke\n');
+ 
+       expect(attachToLiveExecutor).toBe(false);
+       expect(session.mode).toBe('spawn');
+       expect(session.attached).toBe(false);
+       expect(bashSpawnFn).toHaveBeenCalledTimes(1);
+       expect(commandChild.__written).toEqual(['printf desktop-smoke\n']);
+       expect(liveExecutor.sendInput).not.toHaveBeenCalled();
+       expect(writeResult.ok).toBe(true);
+ 
+       expect(shouldAttachEmbeddedTerminalToLiveExecutor(
+         { ...resolved.meta, agentSessionId: 'agent-session-1' },
+         liveHandle,
+       )).toBe(true);
+       expect(shouldAttachEmbeddedTerminalToLiveExecutor(
+         resolved.meta,
+         { ...liveHandle, handle: { ...liveHandle.handle, agentSessionId: 'agent-session-2' } },
+       )).toBe(true);
+     } finally {
+       try { rmSync(wtBase, { recursive: true, force: true }); } catch { /* ignore */ }
+     }
+   });
+ });
+diff --git a/packages/app/src/__tests__/embedded-terminal-truncated-escape-garble-repro.test.ts b/packages/app/src/__tests__/embedded-terminal-truncated-escape-garble-repro.test.ts
+new file mode 100644
+index 000000000..961f165a4
+--- /dev/null
++++ b/packages/app/src/__tests__/embedded-terminal-truncated-escape-garble-repro.test.ts
+@@ -0,0 +1,124 @@
++// @vitest-environment jsdom
++/**
++ * Reproduces the tmux/planning-terminal remount garble bug.
++ *
++ * Root cause chain (confirmed by prior investigation):
++ *   - packages/ui/src/components/InvokerTerminal.tsx:692-700 unmounts/remounts
++ *     PlanningTmuxPane's xterm.js Terminal when the UI toggles chat<->tmux mode.
++ *   - packages/app/src/embedded-terminal-manager.ts:656-659 `trimOutputSnapshot`
++ *     is a byte-count `slice()` with zero ANSI/VT escape-sequence awareness.
++ *   - packages/ui/src/components/InvokerTerminal.tsx:147-182
++ *     `seedTerminalOutputSnapshot` replays that raw (possibly mid-escape-sequence)
++ *     buffer straight into the freshly created Terminal via `term.write(...)`.
++ *
++ * This test drives the REAL, unexported `trimOutputSnapshot` through
++ * EmbeddedTerminalManager's public `emitOutput` code path (a fake backend
++ * captures the `emitOutput` callback the same way the real pty/bash backends
++ * do), then feeds the real trimmed snapshot into a real `xterm` `Terminal`
++ * instance (loaded from packages/ui's node_modules, since @invoker/app does
++ * not depend on xterm) the same way `seedTerminalOutputSnapshot` does on
++ * remount. `trimOutputSnapshot` is a pure "keep last N chars of the stream"
++ * operation, so simulating the whole history as a single oversized chunk is
++ * equivalent to many incremental writes accumulating to the same length.
++ */
++
++import { describe, it, expect } from 'vitest';
++import { createRequire } from 'node:module';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import type { TerminalSpec } from '@invoker/execution-engine';
++import {
++  EmbeddedTerminalManager,
++  MAX_OUTPUT_SNAPSHOT_CHARS,
++  type EmbeddedTerminalBackend,
++} from '../embedded-terminal-manager.js';
++
++const rootDir = path.dirname(fileURLToPath(import.meta.url));
++
++function loadRealXtermTerminal() {
++  const requireFromUi = createRequire(path.join(rootDir, '../../../ui/package.json'));
++  const { Terminal } = requireFromUi('xterm') as {
++    Terminal: new (options?: Record<string, unknown>) => {
++      write(data: string, callback?: () => void): void;
++      buffer: { active: { getLine(n: number): { translateToString(trimRight?: boolean): string } | undefined } };
++    };
++  };
++  return Terminal;
++}
++
++function writeAndWait(term: { write(data: string, callback?: () => void): void }, data: string): Promise<void> {
++  return new Promise((resolve) => term.write(data, resolve));
++}
++
++describe('embedded terminal truncated-escape garble repro', () => {
++  it('replays a clean cursor-move escape sequence without printing literal escape text', async () => {
++    const ESC = '\x1b';
++    const escSeq = `${ESC}[24;1H`; // cursor-position sequence, matches the hypothesized garble trigger
++    const cleanPayload = `before${escSeq}AFTER_CURSOR_MOVE`;
++
++    const Terminal = loadRealXtermTerminal();
++    const term = new Terminal({ cols: 40, rows: 5, scrollback: 5000 });
++    await writeAndWait(term, cleanPayload);
++
++    const line0 = term.buffer.active.getLine(0)?.translateToString(true) ?? '';
++    expect(line0).not.toContain('24;1H');
++  });
++
++  it('garbles a fresh xterm.js terminal when the real trimOutputSnapshot cuts an escape sequence mid-way', async () => {
++    const ESC = '\x1b';
++    const escSeq = `${ESC}[24;1H`; // 7 chars: ESC [ 2 4 ; 1 H
++    const cutIndex = 2; // drop "ESC [", keep the trailing "24;1H" fragment
++    const escSeqPrefix = escSeq.slice(0, cutIndex);
++    const escSeqSuffix = escSeq.slice(cutIndex);
++
++    const marker = 'CLEAN_TAIL_AFTER_ESCAPE';
++    const restText = marker.padEnd(MAX_OUTPUT_SNAPSHOT_CHARS - escSeqSuffix.length, 'z');
++    const expectedTrimmedTail = escSeqSuffix + restText;
++    expect(expectedTrimmedTail.length).toBe(MAX_OUTPUT_SNAPSHOT_CHARS);
++
++    const droppedPadding = 'a'.repeat(1000) + escSeqPrefix;
++    const fullPtyOutput = droppedPadding + expectedTrimmedTail;
++    expect(fullPtyOutput.length).toBeGreaterThan(MAX_OUTPUT_SNAPSHOT_CHARS);
++
++    let emitOutput: ((data: string) => void) | undefined;
++    const backend: EmbeddedTerminalBackend = {
++      name: 'bash',
++      spawn(opts) {
++        emitOutput = opts.emitOutput;
++        return { write() {}, resize() {}, close() {} };
++      },
++    };
++    const manager = new EmbeddedTerminalManager({ backend });
++    const spec: TerminalSpec = { cwd: '/tmp/garble-repro' };
++    const session = manager.openOrReuse({ taskId: 'task-garble-repro', spec, cwd: '/tmp/garble-repro' });
++    expect(emitOutput).toBeDefined();
++
++    // Single oversized chunk stands in for many incremental PTY writes that
++    // accumulate to the same total length; trimOutputSnapshot's "keep last N
++    // chars of the stream" behavior is identical either way.
++    emitOutput!(fullPtyOutput);
++
++    const trimmedSnapshot = manager.get(session.sessionId)?.outputSnapshot ?? '';
++    // trimOutputSnapshot is now escape-sequence-aware: it may keep a small
++    // bounded amount more than MAX_OUTPUT_SNAPSHOT_CHARS rather than slice
++    // through the middle of an escape sequence.
++    expect(trimmedSnapshot.length).toBeGreaterThanOrEqual(MAX_OUTPUT_SNAPSHOT_CHARS);
++    expect(trimmedSnapshot.length).toBeLessThan(MAX_OUTPUT_SNAPSHOT_CHARS + 512);
++    expect(trimmedSnapshot.endsWith(restText)).toBe(true);
++    // The full escape sequence is preserved intact, not cut mid-way.
++    expect(trimmedSnapshot.startsWith(escSeq)).toBe(true);
++
++    // seedTerminalOutputSnapshot (InvokerTerminal.tsx:171) does exactly this:
++    // term.write(outputSnapshot) into a brand-new Terminal created on remount.
++    const Terminal = loadRealXtermTerminal();
++    const remountedTerm = new Terminal({ cols: 40, rows: 5, scrollback: 5000 });
++    await writeAndWait(remountedTerm, trimmedSnapshot);
++
++    const line0 = remountedTerm.buffer.active.getLine(0)?.translateToString(true) ?? '';
++    // A correctly replayed cursor-position escape sequence prints nothing
++    // visible. A dangling "24;1H" fragment with no leading ESC byte is
++    // instead printed as literal garbage text at the top of the fresh
++    // terminal — this assertion is what should hold and currently fails.
++    expect(line0).not.toContain('24;1H');
++  });
++});
+diff --git a/packages/app/src/embedded-terminal-manager.ts b/packages/app/src/embedded-terminal-manager.ts
+index f0748897b..1337ace44 100644
+--- a/packages/app/src/embedded-terminal-manager.ts
++++ b/packages/app/src/embedded-terminal-manager.ts
+@@ -1,709 +1,773 @@
+ /**
+  * Embedded terminal manager (main process).
+  *
+  * Owns GUI terminal sessions and delegates spawned sessions to a backend.
+  * Headless open-terminal is intentionally not routed through this manager; it
+  * continues to use the external OS terminal launcher.
+  */
+ 
+ import { EventEmitter } from 'node:events';
+ import { randomUUID } from 'node:crypto';
+ import { createRequire } from 'node:module';
+ import {
+   spawn as nodeSpawn,
+   type ChildProcessWithoutNullStreams,
+   type SpawnOptions,
+ } from 'node:child_process';
+ import type {
+   TerminalSessionDescriptor,
+   TerminalOutputEvent,
+   TerminalExitEvent,
+ } from '@invoker/contracts';
+ import type { TerminalSessionRecord } from '@invoker/data-store';
+ import type { Executor, ExecutorHandle, TerminalSpec } from '@invoker/execution-engine';
+ 
+ export type EmbeddedTerminalBackendName = 'bash' | 'pty';
+ export type EmbeddedTerminalSessionKind = 'task' | 'planning';
+ 
+ export const MAX_OUTPUT_SNAPSHOT_CHARS = 64 * 1024;
+ 
+ export interface PtyForkOptionsLike {
+   name: string;
+   cols: number;
+   rows: number;
+   cwd: string;
+   env: Record<string, string | undefined>;
+ }
+ 
+ export interface PtyLike {
++  readonly cols: number;
++  readonly rows: number;
+   onData(listener: (data: string) => void): { dispose: () => void };
+   onExit(listener: (event: { exitCode: number }) => void): { dispose: () => void };
+   write(data: string): void;
+   resize(cols: number, rows: number): void;
+   kill(): void;
+ }
+ 
+ /** Factory used by the optional PTY backend. Tests can supply a fake. */
+ export type PtySpawnFn = (
+   command: string,
+   args: readonly string[],
+   options: PtyForkOptionsLike,
+ ) => PtyLike;
+ 
+ /** Factory used by the default bash/pipe backend. Tests can supply a fake. */
+ export type BashSpawnFn = (
+   command: string,
+   args: readonly string[],
+   options: SpawnOptions,
+ ) => ChildProcessWithoutNullStreams;
+ 
+ export interface SpawnedTerminalProcess {
+   write(data: string): void;
+   resize(cols: number, rows: number): void;
+   close(): void;
++  /** Authoritative applied size, read back from the real process. Null when the backend has no TTY (e.g. pipe-backed). */
++  getAppliedSize(): { cols: number; rows: number } | null;
+ }
+ 
+ export interface EmbeddedTerminalBackend {
+   readonly name: EmbeddedTerminalBackendName;
+   spawn(opts: {
+     spec: TerminalSpec;
+     cwd: string;
+     defaultShell: string;
+     emitOutput: (data: string) => void;
+     emitExit: (exitCode?: number) => void;
+   }): SpawnedTerminalProcess;
+ }
+ 
+ export interface BashTerminalBackendOptions {
+   /** Override the child_process.spawn function for this Bash backend instance. */
+   spawnFn?: BashSpawnFn;
+ }
+ 
+ export interface PtyTerminalBackendOptions {
+   /** Override the node-pty spawn function for this PTY backend instance. */
+   spawnFn?: PtySpawnFn;
+ }
+ 
+ /** Optional attach handle pair routing a session through a live executor. */
+ export interface AttachContext {
+   handle: ExecutorHandle;
+   executor: Executor;
+ }
+ 
+ 
+ export interface TerminalSessionPersistenceRecord extends TerminalSessionRecord {
+   spec: TerminalSpec;
+   kind: EmbeddedTerminalSessionKind;
+   planningSessionId?: string;
+ }
+ export interface OpenSessionOptions {
+   taskId: string;
+   kind?: EmbeddedTerminalSessionKind;
+   planningSessionId?: string;
+   spec: TerminalSpec;
+   cwd: string;
+   /** Initial display-only content to seed the terminal snapshot before process output. */
+   outputSnapshot?: string;
+   /** When provided, the session attaches to the running executor rather than spawning a child. */
+   attach?: AttachContext;
+ }
+ interface BaseSessionState {
+   sessionId: string;
+   taskId: string;
+   kind: EmbeddedTerminalSessionKind;
+   planningSessionId?: string;
+   targetKey: string;
+   spec: TerminalSpec;
+   cwd: string;
+   createdAt: string;
+   updatedAt: string;
+   status: 'running' | 'exited';
+   exitCode?: number;
+   outputSnapshot: string;
+ }
+ 
+ interface SpawnSessionState extends BaseSessionState {
+   mode: 'spawn';
+   backend: EmbeddedTerminalBackendName;
+   process: SpawnedTerminalProcess;
+ }
+ 
+ interface AttachedSessionState extends BaseSessionState {
+   mode: 'attached';
+   attach: AttachContext;
+   unsubscribeOutput: () => void;
+ }
+ 
+ type SessionState = SpawnSessionState | AttachedSessionState;
+ 
+ export interface EmbeddedTerminalManagerOptions {
+   /** Single backend used for GUI spawned sessions. Defaults to the PTY backend. */
+   backend?: EmbeddedTerminalBackend;
+   /** Default shell for `spawn`-mode sessions when the spec has no command. */
+   defaultShell?: string;
+ }
+ 
+ 
+ function describePersistenceRecord(state: SessionState): TerminalSessionPersistenceRecord {
+   return {
+     sessionId: state.sessionId,
+     taskId: state.taskId,
+     kind: state.kind,
+     planningSessionId: state.planningSessionId,
+     targetKey: state.targetKey,
+     status: state.status,
+     exitCode: state.exitCode,
+     cwd: state.cwd,
+     command: state.spec.command,
+     args: state.spec.args,
+     linuxTerminalTail: state.spec.linuxTerminalTail,
+     mode: state.mode,
+     attached: state.mode === 'attached',
+     outputSnapshot: state.outputSnapshot,
+     createdAt: state.createdAt,
+     updatedAt: state.updatedAt,
+     spec: state.spec,
+   };
+ }
+ function describeSession(state: SessionState): TerminalSessionDescriptor {
+   return {
+     sessionId: state.sessionId,
+     taskId: state.taskId,
+     kind: state.kind,
+     planningSessionId: state.planningSessionId,
+     status: state.status,
+     exitCode: state.exitCode,
+     cwd: state.cwd,
+     command: state.spec.command,
+     args: state.spec.args,
+     mode: state.mode,
+     attached: state.mode === 'attached',
+     createdAt: state.createdAt,
+     outputSnapshot: state.outputSnapshot,
+   };
+ }
+ 
+ class BashTerminalBackend implements EmbeddedTerminalBackend {
+   readonly name = 'bash' as const;
+   private readonly spawnFn: BashSpawnFn;
+ 
+   constructor(spawnFn: BashSpawnFn = nodeSpawn as unknown as BashSpawnFn) {
+     this.spawnFn = spawnFn;
+   }
+ 
+   spawn(opts: Parameters<EmbeddedTerminalBackend['spawn']>[0]): SpawnedTerminalProcess {
+     const command = opts.spec.command ?? opts.defaultShell;
+     const args = opts.spec.command ? opts.spec.args ?? [] : [];
+     const child = this.spawnFn(command, args, {
+       cwd: opts.cwd,
+       env: { ...process.env, TERM: process.env.TERM ?? 'xterm-256color' },
+       stdio: ['pipe', 'pipe', 'pipe'],
+     });
+ 
+     child.stdout?.on('data', (chunk: Buffer | string) => opts.emitOutput(chunk.toString()));
+     child.stderr?.on('data', (chunk: Buffer | string) => opts.emitOutput(chunk.toString()));
+     child.once('exit', (code: number | null) => opts.emitExit(code ?? undefined));
+     child.once('error', (err) => {
+       opts.emitOutput(`\n[embedded-terminal error] ${err.message}\n`);
+       opts.emitExit(undefined);
+     });
+ 
+     return {
+       write(data: string) {
+         child.stdin.write(data);
+       },
+       resize() {
+         // Pipe-backed child processes are not TTYs; resize is a no-op.
+       },
++      getAppliedSize() {
++        // Pipes have no real terminal size to read back.
++        return null;
++      },
+       close() {
+         try {
+           if (!child.killed) child.kill();
+         } catch {
+           /* already dead */
+         }
+       },
+     };
+   }
+ }
+ 
+ export function createBashTerminalBackend(
+   options: BashTerminalBackendOptions = {},
+ ): EmbeddedTerminalBackend {
+   return new BashTerminalBackend(options.spawnFn);
+ }
+ 
+ class PtyTerminalBackend implements EmbeddedTerminalBackend {
+   readonly name = 'pty' as const;
+   private readonly spawnFn: PtySpawnFn;
+ 
+   constructor(spawnFn?: PtySpawnFn) {
+     this.spawnFn = spawnFn ?? loadNodePtySpawn();
+   }
+ 
+   spawn(opts: Parameters<EmbeddedTerminalBackend['spawn']>[0]): SpawnedTerminalProcess {
+     const command = opts.spec.command ?? opts.defaultShell;
+     const args = opts.spec.command ? opts.spec.args ?? [] : [];
+     const pty = this.spawnFn(command, args, {
+       name: 'xterm-256color',
+-      cols: 80,
+-      rows: 24,
++      cols: opts.spec.cols ?? 80,
++      rows: opts.spec.rows ?? 24,
+       cwd: opts.cwd,
+       env: { ...process.env, TERM: process.env.TERM ?? 'xterm-256color' },
+     });
+     const dataDisposable = pty.onData(opts.emitOutput);
+     const exitDisposable = pty.onExit(({ exitCode }) => opts.emitExit(exitCode));
+ 
+     return {
+       write(data: string) {
+         pty.write(data);
+       },
+       resize(cols: number, rows: number) {
+         pty.resize(cols, rows);
+       },
++      getAppliedSize() {
++        return { cols: pty.cols, rows: pty.rows };
++      },
+       close() {
+         try {
+           dataDisposable.dispose();
+           exitDisposable.dispose();
+         } catch {
+           /* listener disposal is best-effort */
+         }
+         try {
+           pty.kill();
+         } catch {
+           /* already dead */
+         }
+       },
+     };
+   }
+ }
+ 
+ export function createPtyTerminalBackend(
+   options: PtyTerminalBackendOptions = {},
+ ): EmbeddedTerminalBackend {
+   return new PtyTerminalBackend(options.spawnFn);
+ }
+ 
+ export class EmbeddedTerminalManager extends EventEmitter {
+   private readonly sessions = new Map<string, SessionState>();
+   private readonly targetIndex = new Map<string, string>();
+   private readonly preserveForRestartSessionIds = new Set<string>();
+   private readonly backend: EmbeddedTerminalBackend;
+   private readonly defaultShell: string;
+ 
+   constructor(options: EmbeddedTerminalManagerOptions = {}) {
+     super();
+     this.backend = resolveBackend(options);
+     this.defaultShell =
+       options.defaultShell ?? (process.platform === 'darwin' ? 'zsh' : 'bash');
+   }
+ 
+   /**
+    * Open a new embedded session for the resolved terminal target, or return
+    * the existing live one. A changed attempt/session/workspace/branch resolves
+    * to a different target and therefore gets a distinct tab.
+    */
+   openOrReuse(opts: OpenSessionOptions): TerminalSessionDescriptor {
+     const targetKey = buildTargetKey(opts);
+     const existing = this.getRunningDescriptorForTarget(targetKey);
+     if (existing) return existing;
+ 
+     const sessionId = randomUUID();
+     const createdAt = new Date().toISOString();
+     const base = {
+       sessionId,
+       taskId: opts.taskId,
+       kind: opts.kind ?? 'task',
+       planningSessionId: opts.planningSessionId,
+       targetKey,
+       spec: opts.spec,
+       cwd: opts.cwd,
+       createdAt,
+       updatedAt: createdAt,
+       status: 'running' as const,
+       outputSnapshot: opts.outputSnapshot ?? '',
+     };
+ 
+     if (opts.attach) {
+       const state: AttachedSessionState = {
+         ...base,
+         mode: 'attached',
+         attach: opts.attach,
+         unsubscribeOutput: () => {},
+       };
+       this.registerLiveSession(state);
+ 
+       let unsubscribe: () => void;
+       try {
+         unsubscribe = opts.attach.executor.onOutput(opts.attach.handle, (data) => {
+           this.emitOutput(state, data);
+         });
+       } catch (err) {
+         this.removeLiveSession(state);
+         throw err;
+       }
+       state.unsubscribeOutput = unsubscribe;
+       if (state.status === 'exited') {
+         try {
+           unsubscribe();
+         } catch {
+           /* unsubscribe is best-effort */
+         }
+       }
+       this.emitSessionUpdated(state);
+       return describeSession(state);
+     }
+ 
+     return this.registerSpawnSession(base);
+   }
+ 
+   restoreSpawnSession(seed: {
+     sessionId: string;
+     taskId: string;
+     kind?: EmbeddedTerminalSessionKind;
+     planningSessionId?: string;
+     targetKey: string;
+     spec: TerminalSpec;
+     cwd: string;
+     createdAt: string;
+     outputSnapshot: string;
+   }): TerminalSessionDescriptor {
+     const existingSession = this.sessions.get(seed.sessionId);
+     if (existingSession) {
+       if (
+         existingSession.taskId !== seed.taskId
+         || existingSession.targetKey !== seed.targetKey
+       ) {
+         throw new Error(`Terminal session "${seed.sessionId}" restored with mismatched identity.`);
+       }
+       return describeSession(existingSession);
+     }
+     const existingTarget = this.getRunningDescriptorForTarget(seed.targetKey);
+     if (existingTarget && existingTarget.sessionId !== seed.sessionId) {
+       throw new Error(`Terminal target "${seed.targetKey}" already has running session "${existingTarget.sessionId}".`);
+     }
+ 
+     return this.registerSpawnSession({
+       sessionId: seed.sessionId,
+       taskId: seed.taskId,
+       kind: seed.kind ?? 'task',
+       planningSessionId: seed.planningSessionId,
+       targetKey: seed.targetKey,
+       spec: seed.spec,
+       cwd: seed.cwd,
+       createdAt: seed.createdAt,
+       updatedAt: new Date().toISOString(),
+       status: 'running' as const,
+       outputSnapshot: trimOutputSnapshot(seed.outputSnapshot),
+     });
+   }
+ 
+   list(): TerminalSessionDescriptor[] {
+     return Array.from(this.sessions.values()).map(describeSession);
+   }
+ 
+   get(sessionId: string): TerminalSessionDescriptor | undefined {
+     const state = this.sessions.get(sessionId);
+     return state ? describeSession(state) : undefined;
+   }
+ 
+   getPersistenceRecord(sessionId: string): TerminalSessionPersistenceRecord | undefined {
+     const state = this.sessions.get(sessionId);
+     return state ? describePersistenceRecord(state) : undefined;
+   }
+ 
+   write(sessionId: string, data: string): { ok: boolean; reason?: string } {
+     const state = this.sessions.get(sessionId);
+     if (!state) return { ok: false, reason: `Unknown session "${sessionId}".` };
+     if (state.status !== 'running') {
+       return { ok: false, reason: `Session "${sessionId}" has already exited.` };
+     }
+     if (state.mode === 'attached') {
+       try {
+         state.attach.executor.sendInput(state.attach.handle, data);
+         return { ok: true };
+       } catch (err) {
+         return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+       }
+     }
+     try {
+       state.process.write(data);
+       return { ok: true };
+     } catch (err) {
+       return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+     }
+   }
+ 
+   resize(sessionId: string, cols: number, rows: number): { ok: boolean; reason?: string } {
+     const state = this.sessions.get(sessionId);
+     if (!state) return { ok: false, reason: `Unknown session "${sessionId}".` };
+     if (state.status !== 'running') {
+       return { ok: false, reason: `Session "${sessionId}" has already exited.` };
+     }
+     if (state.mode === 'attached') return { ok: true };
+     try {
+       state.process.resize(cols, rows);
+       return { ok: true };
+     } catch (err) {
+       return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+     }
+   }
+ 
++  getAppliedSize(sessionId: string): { cols: number; rows: number } | null {
++    const state = this.sessions.get(sessionId);
++    if (!state || state.mode === 'attached') return null;
++    return state.process.getAppliedSize();
++  }
++
+   close(sessionId: string): { ok: boolean; reason?: string } {
+     const state = this.sessions.get(sessionId);
+     if (!state) return { ok: false, reason: `Unknown session "${sessionId}".` };
+     this.finalizeSession(state, undefined);
+     return { ok: true };
+   }
+ 
+   closeAll(options?: { preserveForRestart?: boolean }): void {
+     if (options?.preserveForRestart) {
+       for (const state of Array.from(this.sessions.values())) {
+         this.preserveForRestartSessionIds.add(state.sessionId);
+         if (state.mode === 'spawn') {
+           state.process.close();
+         } else {
+           try {
+             state.unsubscribeOutput();
+           } catch {
+             /* unsubscribe is best-effort */
+           }
+         }
+       }
+       this.sessions.clear();
+       this.targetIndex.clear();
+       this.assertLiveSessionInvariants();
+       return;
+     }
+ 
+     for (const state of Array.from(this.sessions.values())) {
+       this.finalizeSession(state, undefined);
+     }
+   }
+ 
+   private registerLiveSession(state: SessionState): void {
+     const existingSession = this.sessions.get(state.sessionId);
+     if (existingSession) {
+       throw new Error(`Terminal session "${state.sessionId}" is already registered.`);
+     }
+ 
+     const existingTargetSessionId = this.targetIndex.get(state.targetKey);
+     if (existingTargetSessionId && existingTargetSessionId !== state.sessionId) {
+       const existingTargetSession = this.sessions.get(existingTargetSessionId);
+       if (existingTargetSession?.status === 'running') {
+         throw new Error(
+           `Terminal target "${state.targetKey}" is already registered to session "${existingTargetSessionId}".`,
+         );
+       }
+       this.targetIndex.delete(state.targetKey);
+       if (existingTargetSession) {
+         this.sessions.delete(existingTargetSessionId);
+       }
+     }
+ 
+     this.sessions.set(state.sessionId, state);
+     this.targetIndex.set(state.targetKey, state.sessionId);
+     this.assertLiveSessionInvariants();
+   }
+ 
+   private removeLiveSession(state: SessionState): void {
+     if (this.targetIndex.get(state.targetKey) === state.sessionId) {
+       this.targetIndex.delete(state.targetKey);
+     }
+     this.sessions.delete(state.sessionId);
+   }
+ 
+   private assertLiveSessionInvariants(): void {
+     for (const [targetKey, sessionId] of this.targetIndex.entries()) {
+       const state = this.sessions.get(sessionId);
+       if (!state) {
+         throw new Error(`Terminal target index for "${targetKey}" points to missing session "${sessionId}".`);
+       }
+       if (state.targetKey !== targetKey) {
+         throw new Error(`Terminal target index for "${targetKey}" points to mismatched session "${sessionId}".`);
+       }
+       if (state.status !== 'running') {
+         throw new Error(`Terminal target index for "${targetKey}" points to non-running session "${sessionId}".`);
+       }
+     }
+ 
+     for (const [sessionId, state] of this.sessions.entries()) {
+       if (this.targetIndex.get(state.targetKey) !== sessionId) {
+         throw new Error(`Terminal session "${sessionId}" is missing target index entry for "${state.targetKey}".`);
+       }
+     }
+   }
+ 
+   private getRunningDescriptorForTarget(targetKey: string): TerminalSessionDescriptor | undefined {
+     const existingId = this.targetIndex.get(targetKey);
+     if (!existingId) return undefined;
+     const existing = this.sessions.get(existingId);
+     if (existing && existing.status === 'running') return describeSession(existing);
+     this.targetIndex.delete(targetKey);
+     if (existing) this.sessions.delete(existingId);
+     return undefined;
+   }
+ 
+   private registerSpawnSession(
+     base: Omit<SpawnSessionState, 'backend' | 'process' | 'mode'>,
+   ): TerminalSessionDescriptor {
+     const pendingProcess: SpawnedTerminalProcess = {
+       write() {
+         throw new Error(`Session "${base.sessionId}" process is not ready.`);
+       },
+       resize() {
+         // Resize before the backend returns a process handle is ignored.
+       },
+       close() {
+         // There is no process handle to close yet.
+       },
+     };
+     const state: SpawnSessionState = {
+       ...base,
+       mode: 'spawn',
+       backend: this.backend.name,
+       process: pendingProcess,
+     };
+     this.registerLiveSession(state);
+ 
+     const noPendingExit = Symbol('no-pending-exit');
+     let pendingExitCode: number | undefined | typeof noPendingExit = noPendingExit;
+     try {
+       const process = this.backend.spawn({
+         spec: state.spec,
+         cwd: state.cwd,
+         defaultShell: this.defaultShell,
+         emitOutput: (data) => this.emitOutput(state, data),
+         emitExit: (exitCode) => {
+           if (state.process === pendingProcess) {
+             pendingExitCode = exitCode;
+             return;
+           }
+           this.finalizeSession(state, exitCode);
+         },
+       });
+       state.process = process;
+       if (state.status === 'exited') {
+         try {
+           process.close();
+         } catch {
+           /* process cleanup is best-effort */
+         }
+       }
+     } catch (err) {
+       this.removeLiveSession(state);
+       throw err;
+     }
+ 
+     if (pendingExitCode !== noPendingExit) {
+       this.finalizeSession(state, pendingExitCode);
+     } else if (state.status === 'running') {
+       this.emitSessionUpdated(state);
+     }
+ 
+     return describeSession(state);
+   }
+ 
+   private finalizeSession(state: SessionState, exitCode: number | undefined): void {
+     if (state.status === 'exited' || this.preserveForRestartSessionIds.has(state.sessionId)) return;
+     state.status = 'exited';
+     state.exitCode = exitCode;
+     state.updatedAt = new Date().toISOString();
+     this.emitSessionUpdated(state);
+ 
+     if (state.mode === 'spawn') {
+       state.process.close();
+     } else {
+       try {
+         state.unsubscribeOutput();
+       } catch {
+         /* unsubscribe is best-effort */
+       }
+     }
+ 
+     this.removeLiveSession(state);
+ 
+     this.assertLiveSessionInvariants();
+ 
+     const payload: TerminalExitEvent = {
+       sessionId: state.sessionId,
+       taskId: state.taskId,
+       kind: state.kind,
+       planningSessionId: state.planningSessionId,
+       exitCode,
+     };
+     this.emit('exit', payload);
+   }
+ 
+   private emitOutput(state: SessionState, data: string): void {
+     state.outputSnapshot = trimOutputSnapshot(state.outputSnapshot + data);
+     state.updatedAt = new Date().toISOString();
+     const payload: TerminalOutputEvent = {
+       sessionId: state.sessionId,
+       taskId: state.taskId,
+       kind: state.kind,
+       planningSessionId: state.planningSessionId,
+       data,
+     };
+     this.emit('output', payload);
+     this.emitSessionUpdated(state);
+   }
+ 
+   private emitSessionUpdated(state: SessionState): void {
+     this.emit('session-updated', describePersistenceRecord(state));
+   }
+ }
+ 
++const ESCAPE_LOOKBACK_CHARS = 512;
++
++/**
++ * Finds where a CSI (ESC [ ... final-byte) or OSC (ESC ] ... BEL|ST)
++ * sequence starting at `escapeIndex` ends. Returns null if no terminator is
++ * found within `searchLimit`.
++ */
++function findEscapeSequenceEnd(snapshot: string, escapeIndex: number, searchLimit: number): number | null {
++  const introducer = snapshot[escapeIndex + 1];
++  if (introducer === '[') {
++    for (let i = escapeIndex + 2; i < searchLimit; i++) {
++      const code = snapshot.charCodeAt(i);
++      if (code >= 0x40 && code <= 0x7e) return i;
++    }
++    return null;
++  }
++  if (introducer === ']') {
++    for (let i = escapeIndex + 2; i < searchLimit; i++) {
++      const code = snapshot.charCodeAt(i);
++      if (code === 0x07) return i;
++      if (code === 0x1b && snapshot[i + 1] === '\\') return i + 1;
++    }
++    return null;
++  }
++  if (introducer === undefined) return null;
++  return escapeIndex + 1;
++}
++
++/**
++ * Moves `naiveCutIndex` back to the start of any escape sequence it would
++ * otherwise cut in half, so a truncated snapshot never begins with a
++ * dangling escape-sequence fragment. Falls back to `naiveCutIndex` (this
++ * function's only caller's prior behavior) when no escape start is found
++ * within ESCAPE_LOOKBACK_CHARS.
++ */
++function findSafeTrimStart(snapshot: string, naiveCutIndex: number): number {
++  const lookbackFloor = Math.max(0, naiveCutIndex - ESCAPE_LOOKBACK_CHARS);
++  const escapeIndex = snapshot.lastIndexOf('\x1b', naiveCutIndex - 1);
++  if (escapeIndex === -1 || escapeIndex < lookbackFloor) return naiveCutIndex;
++
++  const searchLimit = Math.min(snapshot.length, escapeIndex + ESCAPE_LOOKBACK_CHARS);
++  const terminatorIndex = findEscapeSequenceEnd(snapshot, escapeIndex, searchLimit);
++  const cutIsInsideSequence = terminatorIndex === null || terminatorIndex >= naiveCutIndex;
++  return cutIsInsideSequence ? escapeIndex : naiveCutIndex;
++}
++
+ function trimOutputSnapshot(snapshot: string): string {
+   if (snapshot.length <= MAX_OUTPUT_SNAPSHOT_CHARS) return snapshot;
+-  return snapshot.slice(snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS);
++  const naiveCutIndex = snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS;
++  return snapshot.slice(findSafeTrimStart(snapshot, naiveCutIndex));
+ }
+ 
+ function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
+   if (options.backend) return options.backend;
+   return createPtyTerminalBackend();
+ }
+ 
+ function loadNodePtySpawn(): PtySpawnFn {
+   try {
+     const nodeRequire = createRequire(__filename);
+     const mod = nodeRequire('node-pty') as { spawn?: PtySpawnFn };
+     if (typeof mod.spawn !== 'function') {
+       throw new Error('node-pty does not export spawn()');
+     }
+     return mod.spawn;
+   } catch (err) {
+     const detail = err instanceof Error ? err.message : String(err);
+     throw new Error(
+       `Embedded terminal PTY backend requested, but node-pty is unavailable or not built: ${detail}`,
+     );
+   }
+ }
+ 
+ function buildTargetKey(opts: OpenSessionOptions): string {
+   const taskTarget = {
+     taskId: opts.taskId,
+     cwd: opts.cwd,
+     command: opts.spec.command ?? null,
+     args: opts.spec.args ?? [],
+     linuxTerminalTail: opts.spec.linuxTerminalTail ?? null,
+     attach: opts.attach
+       ? {
+           executionId: opts.attach.handle.executionId,
+           agentSessionId: opts.attach.handle.agentSessionId ?? null,
+           containerId: opts.attach.handle.containerId ?? null,
+           workspacePath: opts.attach.handle.workspacePath ?? null,
+           branch: opts.attach.handle.branch ?? null,
+         }
+       : null,
+   };
+ 
+   if ((opts.kind ?? 'task') !== 'planning') {
+     return JSON.stringify(taskTarget);
+   }
+ 
+   return JSON.stringify({
+     kind: 'planning',
+     planningSessionId: opts.planningSessionId ?? opts.taskId,
+     ...taskTarget,
+   });
+ }
+diff --git a/packages/app/src/terminal-session-ipc.ts b/packages/app/src/terminal-session-ipc.ts
+index 761e6aabc..4e46b007c 100644
+--- a/packages/app/src/terminal-session-ipc.ts
++++ b/packages/app/src/terminal-session-ipc.ts
+@@ -1,580 +1,586 @@
+ import type { IpcMain } from 'electron';
+ import type { TerminalSessionDescriptor } from '@invoker/contracts';
+ import type { SQLiteAdapter, TerminalSessionRecord } from '@invoker/data-store';
+ import { MAX_OUTPUT_SNAPSHOT_CHARS } from './embedded-terminal-manager.js';
+ import type { EmbeddedTerminalManager, TerminalSessionPersistenceRecord } from './embedded-terminal-manager.js';
+ import {
+   timeTerminalResize,
+   timeTerminalSessionUpsert,
+   timeTerminalWrite,
+   type TerminalUiPerfCounters,
+   type TerminalUiPerfReporter,
+   type TerminalUiPerfSink,
+ } from './terminal-ui-perf.js';
+ import {
+   ensurePlanningTerminalSummaryBridge,
+   hydrateRemotePlanningTerminalSession,
+   updatePlanningChatTerminalState,
+   type InAppPlanningChatSessions,
+   type InAppPlanningSessionStore,
+ } from './in-app-planner.js';
+ import type { InAppPlanningSessionSummary } from '@invoker/contracts';
+ 
+ /** Coalesce running-session snapshot upserts so PTY output does not 1:1 SQLite-write on main. */
+ export const TERMINAL_SESSION_UPSERT_COALESCE_MS = 250;
+ 
+ type TerminalSessionRow = TerminalSessionRecord;
+ type PlanningSessionStoreGetter = () => InAppPlanningSessionStore | undefined;
+ 
+ interface PlanningTerminalLogger {
+   info(message: string, context?: Record<string, unknown>): void;
+   warn(message: string, context?: Record<string, unknown>): void;
+ }
+ 
+ export function terminalRowToDescriptor(row: TerminalSessionRow): TerminalSessionDescriptor {
+   return {
+     sessionId: row.sessionId,
+     taskId: row.taskId,
+     kind: 'task',
+     status: row.status,
+     exitCode: row.exitCode,
+     cwd: row.cwd,
+     command: row.command,
+     args: row.args,
+     mode: row.mode,
+     attached: row.attached,
+     createdAt: row.createdAt,
+     outputSnapshot: row.outputSnapshot,
+   };
+ }
+ export function listTaskTerminalSessions(deps: {
+   embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'list'>;
+   persistence: Pick<SQLiteAdapter, 'listTerminalSessions'>;
+ }): TerminalSessionDescriptor[] {
+   let persistedRows: TerminalSessionRow[] = [];
+   try {
+     persistedRows = deps.persistence.listTerminalSessions();
+   } catch {
+     persistedRows = [];
+   }
+   const liveSessions = deps.embeddedTerminalManager
+     .list()
+     .filter((session) => session.kind !== 'planning');
+   const live = new Map(liveSessions.map((session) => [session.sessionId, session]));
+   const merged = persistedRows
+     .map((row) => live.get(row.sessionId) ?? terminalRowToDescriptor(row));
+   const persistedIds = new Set(merged.map((session) => session.sessionId));
+   for (const session of live.values()) {
+     if (!persistedIds.has(session.sessionId)) {
+       merged.push(session);
+     }
+   }
+   return merged;
+ }
+ 
+ function rejectPlanningTaskTerminalSession(
+   embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get'>,
+   sessionId: string,
+ ): { ok: false; reason: string } | null {
+   const session = embeddedTerminalManager.get(sessionId);
+   if (session?.kind === 'planning') {
+     return { ok: false, reason: `Session "${sessionId}" is a planning terminal session.` };
+   }
+   return null;
+ }
+ 
+ export function writeTaskTerminalSession(deps: {
+   embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get' | 'write'>;
+   uiPerfStats: TerminalUiPerfCounters;
+   terminalUiPerf: TerminalUiPerfReporter;
+   terminalUiPerfSink: TerminalUiPerfSink;
+ }, sessionId: string, data: string): { ok: boolean; reason?: string } {
+   const rejected = rejectPlanningTaskTerminalSession(deps.embeddedTerminalManager, sessionId);
+   if (rejected) return rejected;
+   return timeTerminalWrite(
+     () => deps.embeddedTerminalManager.write(sessionId, data),
+     deps.uiPerfStats,
+     deps.terminalUiPerf,
+     deps.terminalUiPerfSink,
+     {
+       sessionId,
+       bytes: typeof data === 'string' ? data.length : 0,
+     },
+   );
+ }
+ 
+ export function resizeTaskTerminalSession(deps: {
+   embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get' | 'resize'>;
+   uiPerfStats: TerminalUiPerfCounters;
+   terminalUiPerf: TerminalUiPerfReporter;
+   terminalUiPerfSink: TerminalUiPerfSink;
+ }, sessionId: string, cols: number, rows: number): { ok: boolean; reason?: string } {
+   const rejected = rejectPlanningTaskTerminalSession(deps.embeddedTerminalManager, sessionId);
+   if (rejected) return rejected;
+   return timeTerminalResize(
+     () => deps.embeddedTerminalManager.resize(sessionId, cols, rows),
+     deps.uiPerfStats,
+     deps.terminalUiPerf,
+     deps.terminalUiPerfSink,
+     {
+       sessionId,
+       cols,
+       rows,
+     },
+   );
+ }
+ 
+ export function closeTaskTerminalSession(deps: {
+   embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get' | 'close'>;
+   persistence?: Pick<SQLiteAdapter, 'deleteTerminalSession'>;
+ }, sessionId: string): { ok: boolean; reason?: string } {
+   const rejected = rejectPlanningTaskTerminalSession(deps.embeddedTerminalManager, sessionId);
+   if (rejected) return rejected;
+   const result = deps.embeddedTerminalManager.close(sessionId);
+   deps.persistence?.deleteTerminalSession(sessionId);
+   return result.ok ? result : { ok: true };
+ }
+ 
+ export function restorePersistedTerminalSessions(deps: {
+   persistence: Pick<SQLiteAdapter, 'listTerminalSessions' | 'loadTask' | 'deleteTerminalSession' | 'updateTerminalSession'>;
+   embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'restoreSpawnSession'>;
+ }): void {
+   const nowIso = () => new Date().toISOString();
+   for (const row of deps.persistence.listTerminalSessions()) {
+     if (!deps.persistence.loadTask(row.taskId)) {
+       deps.persistence.deleteTerminalSession(row.sessionId);
+       continue;
+     }
+     if (row.status !== 'running') continue;
+     if (row.mode === 'attached') {
+       deps.persistence.updateTerminalSession(row.sessionId, { status: 'exited', updatedAt: nowIso() });
+       continue;
+     }
+     try {
+       deps.embeddedTerminalManager.restoreSpawnSession({
+         sessionId: row.sessionId,
+         taskId: row.taskId,
+         targetKey: row.targetKey,
+         spec: {
+           cwd: row.cwd,
+           command: row.command,
+           args: row.args,
+           linuxTerminalTail: row.linuxTerminalTail,
+         },
+         cwd: row.cwd ?? process.cwd(),
+         createdAt: row.createdAt,
+         outputSnapshot: row.outputSnapshot,
+       });
+     } catch {
+       deps.persistence.updateTerminalSession(row.sessionId, { status: 'exited', updatedAt: nowIso() });
+     }
+   }
+ }
+ 
+ function toUpsertRow(record: TerminalSessionPersistenceRecord) {
+   return {
+     sessionId: record.sessionId,
+     taskId: record.taskId,
+     targetKey: record.targetKey,
+     status: record.status,
+     exitCode: record.exitCode,
+     cwd: record.cwd,
+     command: record.spec.command,
+     args: record.spec.args,
+     linuxTerminalTail: record.spec.linuxTerminalTail,
+     mode: record.mode,
+     attached: record.attached,
+     outputSnapshot: record.outputSnapshot,
+     createdAt: record.createdAt,
+     updatedAt: record.updatedAt,
+   };
+ }
+ 
+ export interface TerminalSessionPersistenceHandle {
+   /** Flush any coalesced running-session upserts immediately. */
+   flushPending: () => void;
+   /** Remove the session-updated listener and clear timers. */
+   dispose: () => void;
+ }
+ 
+ export function registerTerminalSessionPersistence(deps: {
+   embeddedTerminalManager: EmbeddedTerminalManager;
+   persistence: Pick<SQLiteAdapter, 'upsertTerminalSession' | 'listTerminalSessions' | 'loadTask' | 'deleteTerminalSession' | 'updateTerminalSession'>;
+   uiPerfStats: TerminalUiPerfCounters;
+   terminalUiPerf: TerminalUiPerfReporter;
+   terminalUiPerfSink: TerminalUiPerfSink;
+   /** Override coalesce window (tests). */
+   coalesceMs?: number;
+ }): TerminalSessionPersistenceHandle {
+   const coalesceMs = deps.coalesceMs ?? TERMINAL_SESSION_UPSERT_COALESCE_MS;
+   const pendingBySession = new Map<string, TerminalSessionPersistenceRecord>();
+   const timerBySession = new Map<string, ReturnType<typeof setTimeout>>();
+ 
+   const upsertNow = (record: TerminalSessionPersistenceRecord): void => {
+     timeTerminalSessionUpsert(
+       () => {
+         deps.persistence.upsertTerminalSession(toUpsertRow(record));
+       },
+       deps.uiPerfStats,
+       deps.terminalUiPerf,
+       deps.terminalUiPerfSink,
+       {
+         sessionId: record.sessionId,
+         taskId: record.taskId,
+         status: record.status,
+         outputSnapshotChars: record.outputSnapshot?.length ?? 0,
+       },
+     );
+   };
+ 
+   const clearTimer = (sessionId: string): void => {
+     const timer = timerBySession.get(sessionId);
+     if (timer !== undefined) {
+       clearTimeout(timer);
+       timerBySession.delete(sessionId);
+     }
+   };
+ 
+   const flushSession = (sessionId: string): void => {
+     clearTimer(sessionId);
+     const pending = pendingBySession.get(sessionId);
+     if (!pending) return;
+     pendingBySession.delete(sessionId);
+     upsertNow(pending);
+   };
+ 
+   const flushPending = (): void => {
+     for (const sessionId of [...pendingBySession.keys()]) {
+       flushSession(sessionId);
+     }
+   };
+ 
+   const scheduleCoalesced = (record: TerminalSessionPersistenceRecord): void => {
+     pendingBySession.set(record.sessionId, record);
+     if (timerBySession.has(record.sessionId)) return;
+     timerBySession.set(
+       record.sessionId,
+       setTimeout(() => {
+         timerBySession.delete(record.sessionId);
+         flushSession(record.sessionId);
+       }, coalesceMs),
+     );
+   };
+ 
+   const onSessionUpdated = (record: TerminalSessionPersistenceRecord): void => {
+     if (record.kind !== 'task') return;
+ 
+     // Open (empty snapshot) and exit/status boundaries persist immediately so
+     // restart restore and final state stay correct. Output while running is
+     // coalesced — that is the PTY storm path that blocked Electron main.
+     const isLifecycleBoundary =
+       record.status !== 'running' || record.outputSnapshot.length === 0;
+ 
+     if (isLifecycleBoundary) {
+       clearTimer(record.sessionId);
+       pendingBySession.delete(record.sessionId);
+       upsertNow(record);
+       return;
+     }
+ 
+     scheduleCoalesced(record);
+   };
+ 
+   deps.embeddedTerminalManager.on('session-updated', onSessionUpdated);
+   restorePersistedTerminalSessions(deps);
+ 
+   return {
+     flushPending,
+     dispose: () => {
+       flushPending();
+       deps.embeddedTerminalManager.off('session-updated', onSessionUpdated);
+       for (const timer of timerBySession.values()) clearTimeout(timer);
+       timerBySession.clear();
+       pendingBySession.clear();
+     },
+   };
+ }
+ 
+ export function registerTerminalSessionIpcHandlers(deps: {
+   ipcMain: IpcMain;
+   embeddedTerminalManager: EmbeddedTerminalManager;
+   persistence: Pick<SQLiteAdapter, 'listTerminalSessions' | 'deleteTerminalSession'>;
+   uiPerfStats: TerminalUiPerfCounters;
+   terminalUiPerf: TerminalUiPerfReporter;
+   terminalUiPerfSink: TerminalUiPerfSink;
+ }): void {
+   const { ipcMain, embeddedTerminalManager, persistence, uiPerfStats, terminalUiPerf, terminalUiPerfSink } = deps;
+ 
+   ipcMain.handle('invoker:terminal-list', async () => {
+     return listTaskTerminalSessions({
+       embeddedTerminalManager,
+       persistence,
+     });
+   });
+ 
+   ipcMain.handle('invoker:terminal-write', async (_event, sessionId: string, data: string) => {
+     return writeTaskTerminalSession(
+       {
+         embeddedTerminalManager,
+         uiPerfStats,
+         terminalUiPerf,
+         terminalUiPerfSink,
+       },
+       sessionId,
+       data,
+     );
+   });
+ 
+   ipcMain.handle('invoker:terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+     return resizeTaskTerminalSession(
+       {
+         embeddedTerminalManager,
+         uiPerfStats,
+         terminalUiPerf,
+         terminalUiPerfSink,
+       },
+       sessionId,
+       cols,
+       rows,
+     );
+   });
+ 
+   ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {
+     return closeTaskTerminalSession(
+       {
+         embeddedTerminalManager,
+         persistence,
+       },
+       sessionId,
+     );
+   });
+ }
+ 
+ function planningTerminalOnly(
+   embeddedTerminalManager: EmbeddedTerminalManager,
+   planningChatSessions: InAppPlanningChatSessions,
+   sessionId: string,
+ ): { ok: true; planningSessionId: string } | { ok: false; reason: string } {
+   const session = embeddedTerminalManager.get(sessionId);
+   if (!session) return { ok: false, reason: `Unknown session "${sessionId}".` };
+   if (session.kind !== 'planning') {
+     return { ok: false, reason: `Session "${sessionId}" is not a planning terminal session.` };
+   }
+   const planningSessionId = session.planningSessionId ?? '';
+   if (!planningSessionId || !planningChatSessions.has(planningSessionId)) {
+     return { ok: false, reason: `Session "${sessionId}" is not owned by a planning conversation.` };
+   }
+   return { ok: true, planningSessionId };
+ }
+ 
+ function planningTerminalWritable(
+   embeddedTerminalManager: EmbeddedTerminalManager,
+   planningChatSessions: InAppPlanningChatSessions,
+   isPlanningTerminalWriteAllowed: () => boolean,
+   sessionId: string,
+ ): { ok: true } | { ok: false; reason: string } {
+   const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+   if (!allowed.ok) return allowed;
+   if (!isPlanningTerminalWriteAllowed()) {
+     return { ok: false, reason: 'Planning terminal is read-only in this window.' };
+   }
+   const planningSession = planningChatSessions.get(allowed.planningSessionId);
+   if (planningSession?.status === 'submitted') {
+     return { ok: false, reason: 'This planning session was already submitted.' };
+   }
+   return { ok: true };
+ }
+ 
+ function planningTerminalTargetKey(planningSessionId: string, repoRoot: string): string {
+   return JSON.stringify({
+     kind: 'planning',
+     planningSessionId,
+     taskId: `planning:${planningSessionId}`,
+     cwd: repoRoot,
+     command: null,
+     args: [],
+     linuxTerminalTail: null,
+     attach: null,
+   });
+ }
+ 
+ export function bindPlanningTerminalSessionState(deps: {
+   embeddedTerminalManager: EmbeddedTerminalManager;
+   logger: PlanningTerminalLogger;
+   planningChatSessions: InAppPlanningChatSessions;
+   getPlanningSessionStore: PlanningSessionStoreGetter;
+   repoRoot: string;
+ }): { restorePersistedPlanningTerminals: () => void } {
+   const {
+     embeddedTerminalManager,
+     logger,
+     planningChatSessions,
+     getPlanningSessionStore,
+     repoRoot,
+   } = deps;
+ 
+   embeddedTerminalManager.on('session-updated', (record: TerminalSessionPersistenceRecord) => {
+     if (record.kind !== 'planning' || !record.planningSessionId) return;
+     updatePlanningChatTerminalState(record.planningSessionId, {
+       terminalMode: 'tmux',
+       terminalSessionId: record.sessionId,
+       terminalStatus: record.status,
+       terminalExitCode: record.exitCode,
+       terminalOutputSnapshot: record.outputSnapshot,
+       terminalUpdatedAt: record.updatedAt,
+       touchSessionUpdatedAt: record.status !== 'running' || record.outputSnapshot.length === 0,
+     }, {
+       sessions: planningChatSessions,
+       planningSessionStore: getPlanningSessionStore(),
+     });
+   });
+ 
+   const restorePersistedPlanningTerminals = (): void => {
+     for (const session of planningChatSessions.values()) {
+       if (
+         session.terminalMode !== 'tmux'
+         || !session.terminalSessionId
+         || session.terminalStatus === 'exited'
+       ) {
+         continue;
+       }
+       try {
+         const outputSnapshot = ensurePlanningTerminalSummaryBridge(
+           session,
+           session.terminalOutputSnapshot ?? '',
+           MAX_OUTPUT_SNAPSHOT_CHARS,
+         );
+         embeddedTerminalManager.restoreSpawnSession({
+           sessionId: session.terminalSessionId,
+           taskId: `planning:${session.id}`,
+           kind: 'planning',
+           planningSessionId: session.id,
+           targetKey: planningTerminalTargetKey(session.id, repoRoot),
+           spec: { cwd: repoRoot },
+           cwd: repoRoot,
+           createdAt: session.terminalUpdatedAt ?? session.updatedAt,
+           outputSnapshot,
+         });
+       } catch (err) {
+         logger.warn(
+           `planning terminal restore failed for session="${session.id}": ${err instanceof Error ? err.message : String(err)}`,
+           { module: 'planning-terminal' },
+         );
+         updatePlanningChatTerminalState(session.id, {
+           terminalMode: 'tmux',
+           terminalSessionId: session.terminalSessionId,
+           terminalStatus: 'exited',
+           terminalOutputSnapshot: session.terminalOutputSnapshot ?? '',
+           touchSessionUpdatedAt: true,
+         }, {
+           sessions: planningChatSessions,
+           planningSessionStore: getPlanningSessionStore(),
+         });
+       }
+     }
+   };
+ 
+   return { restorePersistedPlanningTerminals };
+ }
+ 
+ export function registerPlanningTerminalSessionIpcHandlers(deps: {
+   ipcMain: IpcMain;
+   embeddedTerminalManager: EmbeddedTerminalManager;
+   logger: PlanningTerminalLogger;
+   planningChatSessions: InAppPlanningChatSessions;
+   getPlanningSessionStore: PlanningSessionStoreGetter;
+   repoRoot: string;
+   resolveRemotePlanningSession?: (planningSessionId: string) => Promise<InAppPlanningSessionSummary | undefined>;
+   isPlanningTerminalWriteAllowed?: () => boolean;
+ }): void {
+   const {
+     ipcMain,
+     embeddedTerminalManager,
+     logger,
+     planningChatSessions,
+     getPlanningSessionStore,
+     repoRoot,
+     resolveRemotePlanningSession,
+     isPlanningTerminalWriteAllowed = () => Boolean(getPlanningSessionStore()),
+   } = deps;
+ 
+   ipcMain.handle('invoker:planning-terminal-open', async (_event, planningSessionIdArg: string) => {
+     const planningSessionId = String(planningSessionIdArg ?? '').trim();
+     if (!planningSessionId) {
+       return { opened: false, reason: 'Planning session id is required.' };
+     }
+     let planningSession = planningChatSessions.get(planningSessionId);
+     if (!planningSession && resolveRemotePlanningSession) {
+       const remoteSummary = await resolveRemotePlanningSession(planningSessionId);
+       if (remoteSummary) {
+         planningSession = hydrateRemotePlanningTerminalSession(remoteSummary);
+         planningChatSessions.set(planningSessionId, planningSession);
+       }
+     }
+     if (!planningSession) {
+       return { opened: false, reason: 'Planning conversation was not found.' };
+     }
+     if (planningSession.status === 'submitted') {
+       return { opened: false, reason: 'This planning session was already submitted.' };
+     }
+     logger.info(`invoked for planningSession="${planningSessionId}"`, { module: 'planning-terminal' });
+     try {
+       const outputSnapshot = ensurePlanningTerminalSummaryBridge(
+         planningSession,
+         planningSession.terminalOutputSnapshot ?? '',
+         MAX_OUTPUT_SNAPSHOT_CHARS,
+       );
+       const session = embeddedTerminalManager.openOrReuse({
+         kind: 'planning',
+         taskId: `planning:${planningSessionId}`,
+         planningSessionId,
+         spec: { cwd: repoRoot },
+         cwd: repoRoot,
+         outputSnapshot,
+       });
+       updatePlanningChatTerminalState(planningSessionId, {
+         terminalMode: 'tmux',
+         terminalSessionId: session.sessionId,
+         terminalStatus: session.status,
+         terminalExitCode: session.exitCode,
+         terminalOutputSnapshot: session.outputSnapshot ?? '',
+         touchSessionUpdatedAt: true,
+       }, {
+         sessions: planningChatSessions,
+         planningSessionStore: getPlanningSessionStore(),
+       });
+       return { opened: true, session };
+     } catch (err) {
+       const reason = err instanceof Error ? err.message : String(err);
+       logger.warn(`planning terminal spawn failed for session="${planningSessionId}": ${reason}`, { module: 'planning-terminal' });
+       return { opened: false, reason: `Failed to start planning terminal session: ${reason}` };
+     }
+   });
+ 
+   ipcMain.handle('invoker:planning-terminal-list', async () => {
+     return embeddedTerminalManager.list().filter((session) => session.kind === 'planning');
+   });
+ 
+   ipcMain.handle('invoker:planning-terminal-write', async (_event, sessionId: string, data: string) => {
+     const allowed = planningTerminalWritable(
+       embeddedTerminalManager,
+       planningChatSessions,
+       isPlanningTerminalWriteAllowed,
+       sessionId,
+     );
+     if (!allowed.ok) return allowed;
+     return embeddedTerminalManager.write(sessionId, data);
+   });
+ 
+   ipcMain.handle('invoker:planning-terminal-resize', async (_event, sessionId: string, cols: number, rows: number) => {
+     const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+     if (!allowed.ok) return allowed;
+     return embeddedTerminalManager.resize(sessionId, cols, rows);
+   });
+ 
++  ipcMain.handle('invoker:planning-terminal-applied-size', async (_event, sessionId: string) => {
++    const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
++    if (!allowed.ok) return null;
++    return embeddedTerminalManager.getAppliedSize(sessionId);
++  });
++
+   ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
+     const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+     if (!allowed.ok) return allowed;
+     return embeddedTerminalManager.close(sessionId);
+   });
+ }
+diff --git a/packages/contracts/src/ipc-channels.ts b/packages/contracts/src/ipc-channels.ts
+index f6f13c092..163cee787 100644
+--- a/packages/contracts/src/ipc-channels.ts
++++ b/packages/contracts/src/ipc-channels.ts
+@@ -1,1508 +1,1512 @@
+ /**
+  * IPC Channel Registry — Single source of truth for every Electron IPC channel.
+  *
+  * Each entry maps a channel name to its request tuple and response type.
+  * The `InvokerAPI` type is derived from this registry, not hand-written.
+  *
+  * Conventions:
+  *   - Invoke channels use ipcMain.handle / ipcRenderer.invoke (request → response).
+  *   - Event channels use webContents.send / ipcRenderer.on (main pushes to renderer).
+  */
+ 
+ import type {
+   TaskState,
+   TaskDelta,
+   TaskStateChanges,
+   WorkflowDerivedStatus,
+   WorkflowRollup,
+ } from '@invoker/workflow-graph';
+ import type { PrerequisiteCheck, PrerequisiteReport } from './prerequisites.js';
+ 
+ export type { WorkflowDerivedStatus, WorkflowRollup } from '@invoker/workflow-graph';
+ import type { ReviewGateQueryResponse } from './types.js';
+ 
+ // ── Types used by IPC channels ──────────────────────────────
+ // These were previously in packages/app/src/types.ts.
+ // Defined here so contracts stays independent of packages/app.
+ 
+ export interface TaskReplacementDef {
+   id: string;
+   description: string;
+   command?: string;
+   prompt?: string;
+   dependencies?: string[];
+   runnerKind?: string;
+   executionAgent?: string;
+ }
+ export interface ExecutionModelOption {
+   id: string;
+   label: string;
+ }
+ 
+ export interface ExecutionHarnessOption {
+   name: string;
+   supportedModels: ExecutionModelOption[];
+ }
+ 
+ export interface ExecutionDefaults {
+   executionAgent: string;
+   executionModel?: string;
+ }
+ 
+ 
+ export interface WorkflowMeta {
+   id: string;
+   name: string;
+   status: WorkflowDerivedStatus;
+   rollup?: WorkflowRollup;
+   baseBranch?: string;
+   featureBranch?: string;
+   onFinish?: string;
+   mergeMode?: string;
+   repoUrl?: string;
+   intermediateRepoUrl?: string;
+   createdAt?: string;
+   updatedAt?: string;
+ }
+ export interface WorkflowRollupPatch {
+   workflowId: string;
+   status: WorkflowDerivedStatus;
+   rollup: WorkflowRollup;
+   /** True when the workflow no longer has any tasks (e.g. it was deleted); consumers must drop the workflow instead of patching it. */
+   removed?: boolean;
+ }
+ 
+ export type TaskGraphEvent =
+   | {
+       type: 'delta';
+       delta: TaskDelta;
+       workflowRollups: WorkflowRollupPatch[];
+     }
+   | {
+       type: 'snapshot';
+       tasks: TaskState[];
+       workflows: WorkflowMeta[];
+       reason: string;
+       streamSequence: number;
+       forced?: boolean;
+     };
+ 
+ 
+ export interface WorkflowStatus {
+   total: number;
+   completed: number;
+   failed: number;
+   closed: number;
+   running: number;
+   pending: number;
+ }
+ 
+ export interface TaskOutputData {
+   taskId: string;
+   data: string;
+ }
+ 
+ export interface ActivityLogEntry {
+   id: number;
+   timestamp: string;
+   source: string;
+   level: string;
+   message: string;
+ }
+ 
+ export interface ClaudeMessage {
+   role: 'user' | 'assistant';
+   content: string;
+   timestamp: string;
+ }
+ 
+ export type AgentSessionState = 'running' | 'finished' | 'error';
+ 
+ export interface AgentSessionData {
+   agentName: string;
+   sessionId: string;
+   state: AgentSessionState;
+   messages: ClaudeMessage[];
+   reason?: string;
+   source?: 'local' | 'remote';
+ }
+ 
+ export interface ExternalGatePolicyUpdate {
+   workflowId: string;
+   taskId?: string;
+   gatePolicy: 'completed' | 'review_ready' | 'ci_failed';
+ }
+ 
+ export interface TaskEvent {
+   id: number;
+   taskId: string;
+   eventType: string;
+   payload?: string;
+   createdAt: string;
+ }
+ 
+ /** Max rows returned by a single `invoker:get-events` page. */
+ export const MAX_EVENTS_PAGE = 100;
+ 
+ /** Required pagination options for `invoker:get-events`. */
+ export interface GetEventsOptions {
+   /** Default `'desc'` (newest first). */
+   sortBy?: 'asc' | 'desc';
+   /** Required page size; must be 1..MAX_EVENTS_PAGE. */
+   limit: number;
+   /** Optional cursor: return events with id strictly less than this (older). */
+   beforeId?: number;
+ }
+ 
+ export interface NormalizedGetEventsOptions {
+   sortBy: 'asc' | 'desc';
+   limit: number;
+   beforeId?: number;
+ }
+ 
+ /**
+  * Validate and normalize get-events pagination options.
+  * Rejects missing/invalid limit and pages larger than MAX_EVENTS_PAGE.
+  */
+ export function normalizeGetEventsOptions(raw: unknown): NormalizedGetEventsOptions {
+   if (raw === undefined || raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+     throw new Error('getEvents requires options with a numeric limit');
+   }
+   const opts = raw as Record<string, unknown>;
+   if (typeof opts.limit !== 'number' || !Number.isFinite(opts.limit)) {
+     throw new Error('getEvents options.limit is required and must be a finite number');
+   }
+   const limit = Math.floor(opts.limit);
+   if (limit <= 0 || limit > MAX_EVENTS_PAGE) {
+     throw new Error(`getEvents options.limit must be between 1 and ${MAX_EVENTS_PAGE}`);
+   }
+   const sortBy = opts.sortBy === 'asc' ? 'asc' : 'desc';
+   if (opts.beforeId === undefined) {
+     return { sortBy, limit };
+   }
+   if (typeof opts.beforeId !== 'number' || !Number.isFinite(opts.beforeId)) {
+     throw new Error('getEvents options.beforeId must be a finite number when provided');
+   }
+   return { sortBy, limit, beforeId: Math.floor(opts.beforeId) };
+ }
+ 
+ export interface TaskHistoryEntry extends TaskState {
+   workflowName: string;
+   lastEventAt: string | null;
+   eventCount: number;
+ }
+ 
+ export interface QueueStatus {
+   maxConcurrency: number;
+   runningCount: number;
+   activeExecutionCount?: number;
+   launchingCount?: number;
+   running: Array<{ taskId: string; description: string }>;
+   queued: Array<{ taskId: string; priority: number; description: string }>;
+ }
+ export type WorkerLifecycleStatus = 'running' | 'stopped' | 'exited';
+ export type WorkerPolicyStatus = 'enabled' | 'disabled' | 'unknown';
+ export type WorkerControlAction = 'start' | 'stop';
+ export type WorkerActionStatus =
+   | 'queued'
+   | 'pending'
+   | 'running'
+   | 'needs_input'
+   | 'review_ready'
+   | 'completed'
+   | 'failed'
+   | 'skipped'
+   | 'abandoned'
+   | 'cancelled';
+ export type WorkerSource = 'built-in' | 'external';
+ export type WorkerAvailability = 'available' | 'unknown';
+ export type WorkerLogSource = 'worker_actions' | 'task_events';
+ 
+ export interface WorkerLogEntry {
+   id: string;
+   workerKind: string;
+   source: WorkerLogSource;
+   actionType?: string;
+   eventType?: string;
+   workflowId?: string;
+   taskId?: string;
+   subjectType?: string;
+   subjectId?: string;
+   externalKey?: string;
+   status?: WorkerActionStatus;
+   summary?: string;
+   payload?: unknown;
+   createdAt: string;
+   updatedAt?: string;
+ }
+ 
+ 
+ export interface WorkerActionSummary {
+   id: string;
+   workerKind: string;
+   actionType: string;
+   workflowId?: string;
+   taskId?: string;
+   subjectType: string;
+   subjectId: string;
+   externalKey: string;
+   status: WorkerActionStatus;
+   attemptCount: number;
+   intentId?: string;
+   agentName?: string;
+   executionModel?: string;
+   sessionId?: string;
+   summary?: string;
+   reason?: string;
+   decision?: 'act' | 'skip';
+   createdAt: string;
+   updatedAt: string;
+   completedAt?: string;
+ }
+ 
+ export interface WorkerRecoverySummary {
+   workerId: string;
+   owner: string;
+   lastWakeupAt?: string;
+   lastScanAt?: string;
+   lastSubmitAt?: string;
+   lastSkipAt?: string;
+   lastSkipReason?: string;
+   lastSkipTaskId?: string;
+   wakeups: number;
+   scans: number;
+   submissions: number;
+   skips: number;
+ }
+ 
+ 
+ export interface WorkerStatusEntry {
+   kind: string;
+   note: string;
+   runtimeKind?: string;
+   instanceId?: string;
+   lifecycle: WorkerLifecycleStatus;
+   policy: WorkerPolicyStatus;
+   policyReason?: string;
+   autoStarts: boolean;
+   desiredEnabled?: boolean;
+   startable: boolean;
+   stoppable: boolean;
+   controlDisabledReason?: string;
+   startedAt?: string;
+   stoppedAt?: string;
+   lastError?: string;
+   recentActions: WorkerActionSummary[];
+   recentLogs?: WorkerLogEntry[];
+   recovery?: WorkerRecoverySummary;
+   source?: WorkerSource;
+   availability?: WorkerAvailability;
+   running?: boolean;
+ }
+ 
+ export interface WorkerStatusSnapshot {
+   generatedAt: string;
+   workers: WorkerStatusEntry[];
+ }
+ 
+ export interface WorkerActionHistoryRequest {
+   workerKind: string;
+   limit?: number;
+   offset?: number;
+ }
+ 
+ export interface WorkerActionHistoryResponse {
+   workerKind: string;
+   actions: WorkerActionSummary[];
+   limit: number;
+   offset: number;
+   hasMore: boolean;
+   nextOffset?: number;
+ }
+ export interface WorkerDecisionsRequest {
+   workflowId?: string;
+   workerKind?: string;
+   decision?: 'act' | 'skip';
+   reason?: string;
+   limit?: number;
+   offset?: number;
+ }
+ 
+ export interface WorkerDecisionsResponse {
+   workflowId?: string;
+   actions: WorkerActionSummary[];
+   limit: number;
+   offset: number;
+   hasMore: boolean;
+   nextOffset?: number;
+ }
+ 
+ 
+ export type UIActionGraphNodeType =
+   | 'user-action'
+   | 'mutation-intent'
+   | 'mutation-lease'
+   | 'launch-dispatch'
+   | 'scheduler-job'
+   | 'task-attempt'
+   | 'blocker';
+ 
+ export type ActionGraphNodeStatus =
+   | 'queued'
+   | 'pending'
+   | 'running'
+   | 'waiting'
+   | 'stalled'
+   | 'failed'
+   | 'cancelled'
+   | 'completed';
+ 
+ export interface ActionGraphHistoryEntry {
+   id: string;
+   timestamp: string;
+   source: string;
+   message: string;
+   level?: string;
+ }
+ 
+ export interface ActionGraphNodeDurations {
+   queuedMs?: number;
+   pendingMs?: number;
+   runningMs?: number;
+   waitingMs?: number;
+   stalledMs?: number;
+   heartbeatAgeMs?: number;
+   leaseExpiresInMs?: number;
+ }
+ 
+ export interface ActionGraphNode {
+   id: string;
+   type: UIActionGraphNodeType;
+   label: string;
+   status: ActionGraphNodeStatus;
+   workflowId?: string;
+   taskId?: string;
+   attemptId?: string;
+   intentId?: number;
+   priority?: number;
+   ownerId?: string;
+   createdAt?: string;
+   startedAt?: string;
+   completedAt?: string;
+   heartbeatAt?: string;
+   leaseExpiresAt?: string;
+   latestError?: string;
+   details?: Record<string, unknown>;
+   durations?: ActionGraphNodeDurations;
+   blockerIds?: string[];
+   suggestedNextAction?: string;
+   history?: ActionGraphHistoryEntry[];
+ }
+ 
+ export interface ActionGraphEdge {
+   id: string;
+   source: string;
+   target: string;
+   label?: string;
+ }
+ 
+ export interface ActionGraphResponse {
+   generatedAt: string;
+   stallThresholdMs: number;
+   nodes: ActionGraphNode[];
+   edges: ActionGraphEdge[];
+ }
+ 
+ export interface ResumeWorkflowResult {
+   workflow: { id: string; name: string; status: string };
+   taskCount: number;
+   startedCount: number;
+ }
+ export interface InAppPlanRequest {
+   goal: string;
+   presetKey?: string;
+ }
+ 
+ export type InAppPlanResponse =
+   | {
+       ok: true;
+       planName: string;
+       workflowId: string;
+       workflowIds?: string[];
+       workflowCount?: number;
+     }
+   | {
+       ok: false;
+       error: string;
+     };
+ 
+ export type PlanningConfirmationMode = 'require' | 'auto_submit';
+ export interface PlanningPresetOption {
+   key: string;
+   label: string;
+   tool: string;
+   model?: string;
+   isDefault: boolean;
+   defaultConfirmationMode?: PlanningConfirmationMode;
+ }
+ 
+ export interface InAppPlanningPlanSummaryTaskGroup {
+   workflow: string | null;
+   tasks: string[];
+ }
+ 
+ export interface InAppPlanningPlanSummary {
+   name: string;
+   taskCount: number;
+   workflowCount?: number;
+   steps: string[];
+   taskGroups: InAppPlanningPlanSummaryTaskGroup[];
+ }
+ export type InAppPlanningSessionStatus =
+   | 'still_discussing'
+   | 'waiting_for_answer'
+   | 'draft_ready'
+   | 'submitted';
+ 
+ export type PlanningTerminalMode = 'chat' | 'tmux';
+ 
+ export interface InAppPlanningChatLine {
+   id: number;
+   role: 'user' | 'assistant' | 'system';
+   text: string;
+   tone?: 'muted' | 'error' | 'success';
+   createdAt: string;
+ }
+ 
+ export interface InAppPlanningSessionSummary {
+   id: string;
+   title: string;
+   status: InAppPlanningSessionStatus;
+   presetKey: string;
+   confirmationMode?: PlanningConfirmationMode;
+   messages: InAppPlanningChatLine[];
+   draftPlanAvailable: boolean;
+   draftPlanSummary?: InAppPlanningPlanSummary;
+   draftPlanText?: string;
+   repoUrl?: string;
+   baseBranch?: string;
+   baseCommit?: string;
+   submittedWorkflowId?: string;
+   submittedPlanName?: string;
+   terminalMode?: PlanningTerminalMode;
+   terminalSessionId?: string;
+   terminalStatus?: 'running' | 'exited';
+   terminalExitCode?: number;
+   terminalOutputSnapshot?: string;
+   terminalUpdatedAt?: string;
+   createdAt: string;
+   updatedAt: string;
+ }
+ 
+ export interface InAppPlanningCreateSessionRequest {
+   presetKey?: string;
+   title?: string;
+   confirmationMode?: PlanningConfirmationMode;
+ }
+ 
+ export type InAppPlanningCreateSessionResponse =
+   | {
+       ok: true;
+       session: InAppPlanningSessionSummary;
+     }
+   | {
+       ok: false;
+       error: string;
+     };
+ 
+ export type InAppPlanningListSessionsResponse = {
+   ok: true;
+   sessions: InAppPlanningSessionSummary[];
+ };
+ 
+ export interface InAppPlanningStreamEvent {
+   sessionId: string;
+   chunk: string;
+ }
+ 
+ export interface InAppPlanningChatRequest {
+   sessionId?: string;
+   message: string;
+   presetKey?: string;
+   confirmationMode?: PlanningConfirmationMode;
+ }
+ 
+ export type InAppPlanningChatResponse =
+   | {
+       ok: true;
+       sessionId: string;
+       reply: string;
+       confirmationMode?: PlanningConfirmationMode;
+       draftPlanAvailable: boolean;
+       draftPlanSummary?: InAppPlanningPlanSummary;
+       draftPlanText?: string;
+     }
+   | {
+       ok: false;
+       sessionId?: string;
+       error: string;
+     };
+ 
+ export interface InAppPlanningSubmitRequest {
+   sessionId: string;
+ }
+ 
+ export type InAppPlanningSubmitResponse =
+   | {
+       ok: true;
+       planName: string;
+       workflowId: string;
+       workflowIds?: string[];
+       workflowCount?: number;
+     }
+   | {
+       ok: false;
+       error: string;
+     };
+ 
+ export interface InAppPlanningResetRequest {
+   sessionId: string;
+ }
+ 
+ export type InAppPlanningResetResponse = { ok: true };
+ export interface InAppPlanningDiscardDraftRequest {
+   sessionId: string;
+ }
+ 
+ export type InAppPlanningDiscardDraftResponse =
+   | { ok: true }
+   | { ok: false; error: string };
+ 
+ export interface InAppPlanningSetTerminalModeRequest {
+   sessionId: string;
+   mode: PlanningTerminalMode;
+ }
+ 
+ export type InAppPlanningSetTerminalModeResponse =
+   | { ok: true }
+   | { ok: false; error: string };
+ 
+ export interface InAppPlanningRebindRepoRequest {
+   sessionId: string;
+   repoUrl?: string;
+   baseBranch?: string;
+ }
+ 
+ export type InAppPlanningRebindRepoResponse =
+   | { ok: true; action: 'reuse' | 'provision' | 'invalidate_and_block_submit' }
+   | { ok: false; error: string };
+ 
+ 
+ 
+ export interface WorkflowListEntry {
+   id: string;
+   name: string;
+   status: WorkflowDerivedStatus;
+   rollup?: WorkflowRollup;
+   createdAt: string;
+   updatedAt: string;
+ }
+ 
+ export interface RebaseAndRetryResult {
+   success: boolean;
+   rebasedBranches: string[];
+   errors: string[];
+ }
+ 
+ export interface WorkflowMutationAcceptedResult {
+   ok: true;
+   accepted: true;
+   intentId: number;
+   workflowId: string;
+   channel: string;
+ }
+ 
+ export type StartReadyFreshBaseScope =
+   | 'failed'
+   | 'failed-and-pending'
+   | 'failed-pending-and-running'
+   | 'all';
+ 
+ export interface StartReadyFreshBasePreview {
+   scope: StartReadyFreshBaseScope;
+   workflowIds: string[];
+   failedWorkflowIds: string[];
+   pendingWorkflowIds: string[];
+   runningWorkflowIds: string[];
+   completedWorkflowIds?: string[];
+ }
+ 
+ export type StartReadyWorkflowOutcome =
+   | {
+       ok: true;
+       workflowId: string;
+       mode: 'recreate' | 'fresh-base-recreate';
+       startedTaskIds: string[];
+     }
+   | {
+       ok: false;
+       workflowId: string;
+       mode: 'recreate' | 'fresh-base-recreate';
+       error: string;
+     };
+ 
+ export type StartReadyExcludeSelector = {
+   field: 'mergeMode';
+   value: 'no_op';
+ };
+ 
+ export interface StartReadyRequest {
+   recreateFailed?: boolean;
+   recreateFailedAndPending?: boolean;
+   recreateFailedPendingAndRunning?: boolean;
+   /** Recreate failed + pending/queued + running + completed (finished) workflows. */
+   recreateAll?: boolean;
+   freshBaseScope?: StartReadyFreshBaseScope;
+   dryRun?: boolean;
+   /** Typed selectors that remove matching workflows from bulk recreation. */
+   exclude?: StartReadyExcludeSelector[];
+ }
+ 
+ export interface StartReadyPreview {
+   readyTaskIds: string[];
+   recoverableTaskIds: string[];
+   failedWorkflowIds: string[];
+   pendingWorkflowIds: string[];
+   runningWorkflowIds: string[];
+   completedWorkflowIds?: string[];
+   freshBase?: StartReadyFreshBasePreview;
+   skipped: {
+     awaitingApproval: number;
+     reviewReady: number;
+     blocked: number;
+     failedTasks: number;
+     pendingTasks: number;
+     runningTasks: number;
+     completedTasks?: number;
+   };
+ }
+ 
+ export interface StartReadyResult {
+   preview: StartReadyPreview;
+   started: TaskState[];
+   recreatedWorkflowIds: string[];
+   excludedWorkflowIds?: string[];
+   freshBaseRecreatedWorkflowIds?: string[];
+   workflowOutcomes?: StartReadyWorkflowOutcome[];
+   partial?: boolean;
+   dryRun: boolean;
+ }
+ 
+ export interface WorkflowMutationFailedEvent {
+   intentId: number;
+   workflowId: string;
+   channel: string;
+   taskId?: string;
+   /** Present for headless.exec failures — the CLI subcommand (e.g. fix, approve). */
+   headlessCommand?: string;
+   message: string;
+   failedAt: string;
+ }
+ 
+ export interface CancelResult {
+   cancelled: string[];
+   runningCancelled: string[];
+ }
+ 
+ export interface CleanupWorktreesResult {
+   removed: string[];
+   errors: string[];
+ }
+ 
+ export interface SystemToolStatus {
+   id: string;
+   name: string;
+   required: boolean;
+   installed: boolean;
+   version?: string;
+   installHint: string;
+ }
+ 
+ export interface BundledSkillTargetStatus {
+   id: string;
+   name: string;
+   path: string;
+   available: boolean;
+   installed: boolean;
+   upToDate: boolean;
+   installedSkillNames: string[];
+   missingSkillNames?: string[];
+   staleReason?: 'not-installed' | 'manifest-missing' | 'manifest-target-missing' | 'target-path-changed' | 'bundle-updated' | 'manifest-skill-list-changed';
+   diagnostic?: string;
+ }
+ 
+ export interface HarnessConfigState {
+   id: string;
+   name: string;
+   path: string;
+   available: boolean;
+   installed: boolean;
+   upToDate: boolean;
+   installedCommandNames: string[];
+ }
+ 
+ export interface HarnessMcpConfigState {
+   id: string;
+   name: string;
+   path: string;
+   available: boolean;
+   installed: boolean;
+   upToDate: boolean;
+   serverName: string;
+ }
+ 
+ export interface BundledSkillsStatus {
+   available: boolean;
+   promptRecommended: boolean;
+   sourcePath?: string;
+   managedPrefix: string;
+   bundledSkillNames: string[];
+   lastInstallAt?: string;
+   lastInstallError?: string;
+   targets: BundledSkillTargetStatus[];
+   commandTargets: HarnessConfigState[];
+   mcpTargets: HarnessMcpConfigState[];
+ }
+ 
+ export type BundledSkillsInstallMode = 'install' | 'update' | 'reinstall';
+ 
+ export interface CliInstallerStatus {
+   /** Packaged app + bundled binary present + darwin/linux. */
+   supported: boolean;
+   bundledVersion: string;
+   installedVersion?: string;
+   installedPath?: string;
+   upToDate: boolean;
+   /** e.g. the chosen install dir is not on the user's PATH. */
+   warning?: string;
+   lastInstallError?: string;
+ }
+ 
+ export interface CliInstallResult {
+   ok: boolean;
+   updated: boolean;
+   installedTo?: string;
+   error?: string;
+   status: CliInstallerStatus;
+ }
+ export interface InvokerSetupRequest {
+   updateCli: boolean;
+   installHelpers: boolean;
+   fixTools: boolean;
+   slack: false | {
+     botToken: string;
+     appToken: string;
+     signingSecret: string;
+     channelId: string;
+   };
+ }
+ 
+ export interface InvokerSetupStepResult {
+   id: 'invoker-cli' | 'helpers' | 'tools' | 'slack';
+   name: string;
+   ok: boolean;
+   output: string;
+   error?: string;
+ }
+ 
+ export interface InvokerSetupResult {
+   ok: boolean;
+   steps: InvokerSetupStepResult[];
+ }
+ 
+ 
+ export interface SystemDiagnostics {
+   platform: string;
+   arch: string;
+   appVersion: string;
+   isPackaged: boolean;
+   tools: SystemToolStatus[];
+   bundledSkills?: BundledSkillsStatus;
+   cliInstaller?: CliInstallerStatus;
+   readiness?: PrerequisiteReport | PrerequisiteCheck[];
+ }
+ 
+ export type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only' | 'connection-lost';
+ 
+ export interface RuntimeStatus {
+   ownerMode: boolean;
+   readOnly: boolean;
+   mode: RuntimeMode;
+ }
+ 
+ 
+ // ── Embedded terminal session types ─────────────────────────
+ 
+ /**
+  * Describes an embedded terminal session managed by the main process.
+  *
+  * `mode` distinguishes how the session is backed:
+  *   - `spawn`    — main process spawned a fresh child shell for the task
+  *                  (typical for completed/failed tasks restoring a workspace).
+  *   - `attached` — the session is wired to a live executor handle; output is
+  *                  fanned in from `executor.onOutput` and input flows through
+  *                  `executor.sendInput` (used for tasks still running).
+  */
+ export interface TerminalSessionDescriptor {
+   sessionId: string;
+   taskId: string;
+   kind?: 'task' | 'planning';
+   planningSessionId?: string;
+   status: 'running' | 'exited';
+   exitCode?: number;
+   cwd?: string;
+   command?: string;
+   args?: string[];
+   mode: 'spawn' | 'attached';
+   attached: boolean;
+   createdAt: string;
+   /** Bounded recent terminal output snapshot used to seed newly mounted panes. */
+   outputSnapshot?: string;
+ }
+ 
+ export interface TerminalOutputEvent {
+   sessionId: string;
+   taskId: string;
+   kind?: 'task' | 'planning';
+   planningSessionId?: string;
+   data: string;
+ }
+ 
+ export interface TerminalExitEvent {
+   sessionId: string;
+   taskId: string;
+   kind?: 'task' | 'planning';
+   planningSessionId?: string;
+   exitCode?: number;
+ }
+ 
+ export interface OpenTerminalResponse {
+   opened: boolean;
+   reason?: string;
+   /** Present when the GUI main process opened an embedded session. */
+   session?: TerminalSessionDescriptor;
+ }
+ 
+ // ── Search types ────────────────────────────────────────────
+ 
+ export interface SearchResultItem {
+   kind: 'workflow' | 'task';
+   id: string;
+   workflowId?: string;      // populated for task results
+   title: string;            // workflow name or task description
+   subtitle: string;         // "Workflow · <status>" or "Task · <workflowName>"
+   status: string;
+   createdAt: string;
+ }
+ 
+ export interface SearchOptions {
+   type?: 'workflows' | 'tasks' | 'all';
+   limit?: number;
+   offset?: number;
+ }
+ 
+ export interface InAppPlanningDeleteRequest {
+   sessionId: string;
+ }
+ 
+ export type InAppPlanningDeleteResponse =
+   | { ok: true }
+   | { ok: false; error: string };
+ 
+ export type InAppPlanningDeleteSubmittedResponse =
+   | { ok: true; deletedSessionIds: string[] }
+   | { ok: false; error: string };
+ 
+ // ── Invoke Channel Registry ─────────────────────────────────
+ // Each key is the channel name string; value is { request, response }.
+ // `request` is a tuple of the arguments passed after the channel name.
+ 
+ export const IpcChannels = {
+   // Plan & Workflow Management
+   'invoker:plan-from-goal': {} as {
+     request: [request: InAppPlanRequest];
+     response: InAppPlanResponse;
+   },
+   'invoker:planning-chat-create': {} as {
+     request: [request?: InAppPlanningCreateSessionRequest];
+     response: InAppPlanningCreateSessionResponse;
+   },
+   'invoker:planning-chat-list': {} as {
+     request: [];
+     response: InAppPlanningListSessionsResponse;
+   },
+   'invoker:planning-chat-send': {} as {
+     request: [request: InAppPlanningChatRequest];
+     response: InAppPlanningChatResponse;
+   },
+   'invoker:planning-chat-submit': {} as {
+     request: [request: InAppPlanningSubmitRequest];
+     response: InAppPlanningSubmitResponse;
+   },
+   'invoker:planning-chat-discard-draft': {} as {
+     request: [request: InAppPlanningDiscardDraftRequest];
+     response: InAppPlanningDiscardDraftResponse;
+   },
+   'invoker:planning-chat-reset': {} as {
+     request: [request: InAppPlanningResetRequest];
+     response: InAppPlanningResetResponse;
+   },
+   'invoker:planning-chat-delete': {} as {
+     request: [request: InAppPlanningDeleteRequest];
+     response: InAppPlanningDeleteResponse;
+   },
+   'invoker:planning-chat-delete-submitted': {} as {
+     request: [];
+     response: InAppPlanningDeleteSubmittedResponse;
+   },
+   'invoker:planning-chat-set-terminal-mode': {} as {
+     request: [request: InAppPlanningSetTerminalModeRequest];
+     response: InAppPlanningSetTerminalModeResponse;
+   },
+   'invoker:planning-chat-rebind-repo': {} as {
+     request: [request: InAppPlanningRebindRepoRequest];
+     response: InAppPlanningRebindRepoResponse;
+   },
+   'invoker:planning-terminal-open': {} as {
+     request: [planningSessionId: string];
+     response: OpenTerminalResponse;
+   },
+   'invoker:planning-terminal-list': {} as {
+     request: [];
+     response: TerminalSessionDescriptor[];
+   },
+   'invoker:planning-terminal-write': {} as {
+     request: [sessionId: string, data: string];
+     response: { ok: boolean; reason?: string };
+   },
+   'invoker:planning-terminal-resize': {} as {
+     request: [sessionId: string, cols: number, rows: number];
+     response: { ok: boolean; reason?: string };
+   },
++  'invoker:planning-terminal-applied-size': {} as {
++    request: [sessionId: string];
++    response: { cols: number; rows: number } | null;
++  },
+   'invoker:planning-terminal-close': {} as {
+     request: [sessionId: string];
+     response: { ok: boolean; reason?: string };
+   },
+   'invoker:get-planning-presets': {} as {
+     request: [];
+     response: PlanningPresetOption[];
+   },
+   'invoker:load-plan': {} as {
+     request: [planText: string];
+     response: void;
+   },
+   'invoker:start': {} as {
+     request: [];
+     response: TaskState[];
+   },
+   'invoker:start-ready': {} as {
+     request: [request?: StartReadyRequest];
+     response: StartReadyResult;
+   },
+   'invoker:resume-workflow': {} as {
+     request: [];
+     response: ResumeWorkflowResult | null;
+   },
+   'invoker:stop': {} as {
+     request: [];
+     response: void;
+   },
+   'invoker:clear': {} as {
+     request: [];
+     response: void;
+   },
+   'invoker:list-workflows': {} as {
+     request: [];
+     response: WorkflowListEntry[];
+   },
+   'invoker:delete-all-workflows': {} as {
+     request: [];
+     response: void;
+   },
+   'invoker:delete-all-workflows-bulk': {} as {
+     request: [];
+     response: void;
+   },
+   'invoker:delete-workflow': {} as {
+     request: [workflowId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:detach-workflow': {} as {
+     request: [workflowId: string, upstreamWorkflowId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:load-workflow': {} as {
+     request: [workflowId: string];
+     response: { workflow: unknown; tasks: unknown[] };
+   },
+ 
+   // Task Queries
+   'invoker:get-tasks': {} as {
+     request: [];
+     response: { tasks: TaskState[]; workflows: WorkflowMeta[]; streamSequence: number };
+   },
+   'invoker:refresh-task-graph': {} as {
+     request: [];
+     response: void;
+   },
+   'invoker:get-events': {} as {
+     request: [taskId: string, options?: GetEventsOptions];
+     response: TaskEvent[];
+   },
+   'invoker:get-status': {} as {
+     request: [];
+     response: WorkflowStatus;
+   },
+   'invoker:get-task-by-id': {} as {
+     request: [taskId: string];
+     response: TaskState | null;
+   },
+   'invoker:get-task-output': {} as {
+     request: [taskId: string];
+     response: string;
+   },
+   'invoker:get-all-completed-tasks': {} as {
+     request: [];
+     response: Array<TaskState & { workflowName: string }>;
+   },
+   'invoker:get-history-tasks': {} as {
+     request: [];
+     response: TaskHistoryEntry[];
+   },
+ 
+   // Task Actions
+   'invoker:provide-input': {} as {
+     request: [taskId: string, input: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:approve': {} as {
+     request: [taskId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:reject': {} as {
+     request: [taskId: string, reason?: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:select-experiment': {} as {
+     request: [taskId: string, experimentId: string | string[]];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:retry-task': {} as {
+     request: [taskId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:cancel-task': {} as {
+     request: [taskId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:delete-task': {} as {
+     request: [taskId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:cancel-workflow': {} as {
+     request: [workflowId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+ 
+   // Task Editing
+   'invoker:edit-task-command': {} as {
+     request: [taskId: string, newCommand: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:edit-task-pool': {} as {
+     request: [taskId: string, poolId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:edit-task-type': {} as {
+     request: [taskId: string, runnerKind: string, poolMemberId?: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:edit-task-agent': {} as {
+     request: [taskId: string, agentName: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:edit-task-model': {} as {
+     request: [taskId: string, executionModel: string | null];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:edit-task-prompt': {} as {
+     request: [taskId: string, newPrompt: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:set-task-external-gate-policies': {} as {
+     request: [taskId: string, updates: ExternalGatePolicyUpdate[]];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:replace-task': {} as {
+     request: [taskId: string, replacementTasks: TaskReplacementDef[]];
+     response: WorkflowMutationAcceptedResult;
+   },
+ 
+   // Session & Agent Access
+   'invoker:get-claude-session': {} as {
+     request: [sessionId: string];
+     response: AgentSessionData | null;
+   },
+   'invoker:get-agent-session': {} as {
+     request: [sessionId: string, agentName?: string];
+     response: AgentSessionData | null;
+   },
+ 
+   // Workflow Mutation & Merge
+   'invoker:recreate-workflow': {} as {
+     request: [workflowId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:recreate-task': {} as {
+     request: [taskId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:recreate-downstream': {} as {
+     request: [taskId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:retry-workflow': {} as {
+     request: [workflowId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:rebase-retry': {} as {
+     request: [target: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:rebase-recreate': {} as {
+     request: [target: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:spawn-repair-workflow': {} as {
+     request: [payload: unknown];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:set-merge-branch': {} as {
+     request: [workflowId: string, baseBranch: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:set-merge-mode': {} as {
+     request: [workflowId: string, mergeMode: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:set-workflow-merge-mode': {} as {
+     request: [workflowId: string, mergeMode: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:approve-merge': {} as {
+     request: [workflowId: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+ 
+   'invoker:get-review-gate': {} as {
+     request: [workflowId: string];
+     response: ReviewGateQueryResponse | null;
+   },
+ 
+   // PR & Conflict Resolution
+   'invoker:check-pr-statuses': {} as {
+     request: [];
+     response: void;
+   },
+   'invoker:check-pr-status': {} as {
+     request: [];
+     response: void;
+   },
+   'invoker:resolve-conflict': {} as {
+     request: [taskId: string, agentName?: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+   'invoker:fix-with-agent': {} as {
+     request: [taskId: string, agentName?: string];
+     response: WorkflowMutationAcceptedResult;
+   },
+ 
+   // Queue & Configuration
+   'invoker:get-queue-status': {} as {
+     request: [];
+     response: QueueStatus;
+   },
+   'invoker:get-worker-status': {} as {
+     request: [];
+     response: WorkerStatusSnapshot;
+   },
+   'invoker:get-workers': {} as {
+     request: [];
+     response: WorkerStatusSnapshot;
+   },
+   'invoker:get-worker-action-history': {} as {
+     request: [request: WorkerActionHistoryRequest];
+     response: WorkerActionHistoryResponse;
+   },
+   'invoker:get-worker-decisions': {} as {
+     request: [request: WorkerDecisionsRequest];
+     response: WorkerDecisionsResponse;
+   },
+   'invoker:start-worker': {} as {
+     request: [kind: string];
+     response: WorkerStatusEntry;
+   },
+   'invoker:stop-worker': {} as {
+     request: [kind: string];
+     response: WorkerStatusEntry;
+   },
+   'invoker:get-action-graph': {} as {
+     request: [];
+     response: ActionGraphResponse;
+   },
+   'invoker:get-remote-targets': {} as {
+     request: [];
+     response: string[];
+   },
+   'invoker:get-execution-pools': {} as {
+     request: [];
+     response: string[];
+   },
+   'invoker:get-execution-harnesses': {} as {
+     request: [];
+     response: ExecutionHarnessOption[];
+   },
+   'invoker:get-execution-defaults': {} as {
+     request: [];
+     response: ExecutionDefaults;
+   },
+ 
+   'invoker:get-runtime-status': {} as {
+     request: [];
+     response: RuntimeStatus;
+   },
+ 
+   // Performance & Activity
+   'invoker:report-ui-perf': {} as {
+     request: [metric: string, data?: Record<string, unknown>];
+     response: void;
+   },
+   'invoker:trace-renderer-task-graph-event': {} as {
+     request: [event: TaskGraphEvent];
+     response: void;
+   },
+   'invoker:trace-renderer-workflow-event': {} as {
+     request: [workflows: unknown[]];
+     response: void;
+   },
+   'invoker:get-ui-perf-stats': {} as {
+     request: [];
+     response: Record<string, unknown>;
+   },
+   'invoker:get-activity-logs': {} as {
+     request: [sinceId?: number, limit?: number];
+     response: ActivityLogEntry[];
+   },
+ 
+   // Terminal
+   'invoker:open-terminal': {} as {
+     request: [taskId: string];
+     response: OpenTerminalResponse;
+   },
+   'invoker:terminal-list': {} as {
+     request: [];
+     response: TerminalSessionDescriptor[];
+   },
+   'invoker:terminal-write': {} as {
+     request: [sessionId: string, data: string];
+     response: { ok: boolean; reason?: string };
+   },
+   'invoker:terminal-resize': {} as {
+     request: [sessionId: string, cols: number, rows: number];
+     response: { ok: boolean; reason?: string };
+   },
+   'invoker:terminal-close': {} as {
+     request: [sessionId: string];
+     response: { ok: boolean; reason?: string };
+   },
+ 
+   // Worktree Cleanup
+   'invoker:cleanup-worktrees': {} as {
+     request: [];
+     response: CleanupWorktreesResult;
+   },
+   'invoker:get-system-diagnostics': {} as {
+     request: [];
+     response: SystemDiagnostics;
+   },
+   'invoker:get-bundled-skills-status': {} as {
+     request: [];
+     response: BundledSkillsStatus;
+   },
+   'invoker:search': {} as {
+     request: [query: string, options?: SearchOptions];
+     response: SearchResultItem[];
+   },
+   'invoker:install-bundled-skills': {} as {
+     request: [mode?: BundledSkillsInstallMode];
+     response: BundledSkillsStatus;
+   },
+   'invoker:update-invoker-cli': {} as {
+     request: [];
+     response: CliInstallResult;
+   },
+   'invoker:run-invoker-cli-setup': {} as {
+     request: [request: InvokerSetupRequest];
+     response: InvokerSetupResult;
+   },
+ 
+ } as const;
+ 
+ // ── Test-Only Invoke Channels ───────────────────────────────
+ // These channels are only registered in the preload when NODE_ENV === 'test'.
+ // They are derived as optional (Partial) in InvokerAPI.
+ 
+ export const IpcTestOnlyChannels = {
+   'invoker:inject-task-states': {} as {
+     request: [updates: Array<{ taskId: string; changes: TaskStateChanges }>];
+     response: void;
+   },
+   'invoker:set-test-plan-from-goal-response': {} as {
+     request: [response: { planYaml: string; planName: string } | null];
+     response: void;
+   },
+   'invoker:set-test-planning-chat-response': {} as {
+     request: [
+       response:
+         | { planYaml: string; planName: string; reply?: string; delayMs?: number }
+         | { throwError: string }
+         | null,
+     ];
+     response: void;
+   },
+   'invoker:seed-main-process-hitch-fixture': {} as {
+     request: [];
+     response: {
+       workflowId: string;
+       taskCount: number;
+       eventCount: number;
+       workerActionCount: number;
+     };
+   },
+   'invoker:ingest-worker-actions': {} as {
+     request: [actions: Array<Record<string, unknown>>];
+     response: void;
+   },
+   'invoker:seed-stress-fixture': {} as {
+     request: [options?: {
+       workflowCount?: number;
+       tasksPerWorkflow?: number;
+       eventsPerTask?: number;
+       nowIso?: string;
+       stuckLaunchingSlots?: number;
+       launchAgeMs?: number;
+       taskStatusMode?: 'mixed' | 'pending' | 'completed';
+     }];
+     response: {
+       workflowCount: number;
+       taskCount: number;
+       running: number;
+       launching: number;
+       fixing: number;
+       pending: number;
+       failed: number;
+       completed: number;
+     };
+   },
+ } as const;
+ 
+ // ── Event Channel Registry ──────────────────────────────────
+ // Pushed from main → renderer via webContents.send.
+ 
+ export const IpcEventChannels = {
+   'invoker:task-graph-event': {} as {
+     payload: TaskGraphEvent;
+   },
+   'invoker:task-output': {} as {
+     payload: TaskOutputData;
+   },
+   'invoker:activity-log': {} as {
+     payload: ActivityLogEntry[];
+   },
+   'invoker:workflows-changed': {} as {
+     payload: unknown[];
+   },
+   'invoker:terminal-output': {} as {
+     payload: TerminalOutputEvent;
+   },
+   'invoker:terminal-exit': {} as {
+     payload: TerminalExitEvent;
+   },
+   'invoker:workflow-mutation-failed': {} as {
+     payload: WorkflowMutationFailedEvent;
+   },
+   'invoker:runtime-status': {} as {
+     payload: RuntimeStatus;
+   },
+   'invoker:planning-chat-stream': {} as {
+     payload: InAppPlanningStreamEvent;
+   },
+ } as const;
+ 
+ // ── Type Utilities ──────────────────────────────────────────
+ 
+ /** Strip the `invoker:` prefix from a channel name. */
+ type StripPrefix<S extends string> =
+   S extends `invoker:${infer Rest}` ? Rest : S;
+ 
+ /** Convert a kebab-case string to camelCase. */
+ type KebabToCamel<S extends string> =
+   S extends `${infer Head}-${infer Tail}`
+     ? `${Head}${Capitalize<KebabToCamel<Tail>>}`
+     : S;
+ 
+ /** Convert an IPC channel name to its API method name. e.g. 'invoker:load-plan' → 'loadPlan' */
+ type ChannelToMethod<S extends string> = KebabToCamel<StripPrefix<S>>;
+ 
+ /** Convert an IPC channel name to its API method name. e.g. 'invoker:get-tasks' → 'getTasks'. */
+ export function channelToMethod(channel: string): string {
+   const stripped = channel.startsWith('invoker:') ? channel.slice(8) : channel;
+   return stripped.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+ }
+ 
+ /** Convert an event channel name to its `on*` subscription method. e.g. 'invoker:task-graph-event' → 'onTaskGraphEvent'. */
+ export function channelToEventMethod(channel: string): string {
+   const base = channelToMethod(channel);
+   return `on${base.charAt(0).toUpperCase()}${base.slice(1)}`;
+ }
+ 
+ // ── Derived InvokerAPI ──────────────────────────────────────
+ 
+ type InvokeChannels = typeof IpcChannels;
+ type TestOnlyChannels = typeof IpcTestOnlyChannels;
+ type EventChannels = typeof IpcEventChannels;
+ 
+ /** Invoke methods: each channel becomes an async method on the API. */
+ type InvokeMethods = {
+   [K in keyof InvokeChannels as ChannelToMethod<K & string>]:
+     (...args: InvokeChannels[K]['request']) => Promise<InvokeChannels[K]['response']>;
+ };
+ 
+ /** Test-only invoke methods: optional because they are only registered in test environments. */
+ type TestOnlyMethods = {
+   [K in keyof TestOnlyChannels as ChannelToMethod<K & string>]:
+     (...args: TestOnlyChannels[K]['request']) => Promise<TestOnlyChannels[K]['response']>;
+ };
+ 
+ /** Event subscriptions: each event channel becomes an `on*` callback registration. */
+ type EventMethods = {
+   [K in keyof EventChannels as `on${Capitalize<ChannelToMethod<K & string>>}`]:
+     (cb: (data: EventChannels[K]['payload']) => void) => () => void;
+ };
+ 
+ /**
+  * The full IPC API surface exposed to the renderer via `window.invoker`.
+  * Derived from the channel registries — not hand-written.
+  * Test-only methods are Partial because they are only registered when NODE_ENV === 'test'.
+  */
+ export type InvokerAPI = InvokeMethods & EventMethods & Partial<TestOnlyMethods>;
+diff --git a/packages/execution-engine/src/executor.ts b/packages/execution-engine/src/executor.ts
+index 243faab7e..a798a8de8 100644
+--- a/packages/execution-engine/src/executor.ts
++++ b/packages/execution-engine/src/executor.ts
+@@ -1,51 +1,55 @@
+ import type { WorkRequest, WorkResponse } from '@invoker/contracts';
+ 
+ export type Unsubscribe = () => void;
+ 
+ export interface ExecutorHandle {
+   executionId: string;
+   taskId: string;
+   agentSessionId?: string;
+   containerId?: string;
+   workspacePath?: string;
+   branch?: string;
+ }
+ 
+ export interface TerminalSpec {
+   /** Working directory for the terminal. Used when no command is specified. */
+   cwd?: string;
+   /** Command to execute inside the terminal (e.g., 'docker', 'ssh'). */
+   command?: string;
+   /** Arguments for the command. */
+   args?: string[];
+   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
+   linuxTerminalTail?: 'exec_bash' | 'pause';
++  /** Initial PTY column count. Defaults to 80 when omitted. */
++  cols?: number;
++  /** Initial PTY row count. Defaults to 24 when omitted. */
++  rows?: number;
+ }
+ 
+ export interface PersistedTaskMeta {
+   taskId: string;
+   runnerKind: string;
+   agentSessionId?: string;
+   /** Configured execution agent name (e.g. 'claude', 'codex'). Used for session resume. */
+   executionAgent?: string;
+   containerId?: string;
+   workspacePath?: string;
+   branch?: string;
+ }
+ 
+ export interface Executor {
+   readonly type: string;
+   start(request: WorkRequest): Promise<ExecutorHandle>;
+   kill(handle: ExecutorHandle): Promise<void>;
+   sendInput(handle: ExecutorHandle, input: string): void;
+   onOutput(handle: ExecutorHandle, cb: (data: string) => void): Unsubscribe;
+   onComplete(handle: ExecutorHandle, cb: (response: WorkResponse) => void): Unsubscribe;
+   onHeartbeat(handle: ExecutorHandle, cb: (taskId: string) => void): Unsubscribe;
+   getTerminalSpec(handle: ExecutorHandle): TerminalSpec | null;
+   /**
+    * Reconstruct a TerminalSpec from persisted DB metadata (no in-memory handle required).
+    * Throws if the workspace path no longer exists on disk.
+    */
+   getRestoredTerminalSpec(meta: PersistedTaskMeta): TerminalSpec;
+   destroyAll(): Promise<void>;
+ }
