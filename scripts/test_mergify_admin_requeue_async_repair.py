@@ -91,6 +91,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("mergify_admin_requeue_repair_normalize.py", plan.yaml_text)
         self.assertIn("--json-kind 'repair-check-settled'", plan.yaml_text)
         self.assertIn("Failed check: PR Body", plan.yaml_text)
+        self.assertIn("executionAgent: codex", plan.yaml_text)
         # PR titles with quotes/colons must not corrupt the YAML document.
         self.assertIn('Fix \\"quoted\\" title: with colons', plan.yaml_text)
 
@@ -144,6 +145,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("--json-kind 'conflict-repair-settled'", plan.yaml_text)
         self.assertIn("--json-key 'conflict:2647'", plan.yaml_text)
         self.assertIn("commit locally. Do not push.", plan.yaml_text)
+        self.assertIn("executionAgent: codex", plan.yaml_text)
 
     def test_repair_bot_thread_plan_uses_thread_id_as_key(self):
         plan = async_repair.build_repair_bot_thread_plan(
@@ -152,6 +154,7 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("--json-kind 'repair-bot-thread-settled'", plan.yaml_text)
         self.assertIn("--json-key 'tbot'", plan.yaml_text)
         self.assertIn("Thread: tbot", plan.yaml_text)
+        self.assertIn("executionAgent: codex", plan.yaml_text)
 
     def test_submit_async_repair_plan_calls_headless_run_and_cleans_up_temp_file(self):
         plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
