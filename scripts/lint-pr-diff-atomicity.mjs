@@ -9,6 +9,8 @@ const require = createRequire(import.meta.url);
 let typescriptModule;
 
 const CODE_EXTENSIONS = new Set(['.cjs', '.js', '.jsx', '.mjs', '.ts', '.tsx']);
+/** Extensions consulted by the refactor-dead-symbol check only; CODE_EXTENSIONS stays TS-AST-only. */
+const DEFINITION_EXTENSIONS = new Set([...CODE_EXTENSIONS, '.py']);
 const LOCKFILES = new Set(['pnpm-lock.yaml', 'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'bun.lockb']);
 const MANIFESTS = new Set(['package.json']);
 const GENERATED_DIRS = new Set(['dist', 'out', 'build', 'coverage', '.next', '__generated__']);
@@ -40,6 +42,10 @@ const POLICY = {
   'unrelated-areas': {
     severity: 'warning',
     message: 'The diff spans multiple unrelated top-level areas; confirm this is one atomic change.',
+  },
+  'refactor-dead-symbol': {
+    severity: 'warning',
+    message: 'A refactor-lane PR adds a symbol with no reference anywhere else in the diff; confirm the extraction also re-pointed its call sites in this PR.',
   },
 };
 
@@ -262,6 +268,53 @@ function collectAstFindings(file) {
   return findings;
 }
 
+const PY_DEF_PATTERN = /^(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)/;
+const JS_DEF_PATTERN = /^(?:export\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)|^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=/;
+
+function definitionPatternFor(extension) {
+  return extension === '.py' ? PY_DEF_PATTERN : JS_DEF_PATTERN;
+}
+
+function isFrameworkInvokedName(name, extension) {
+  if (name === 'main') return true;
+  if (/^__.+__$/.test(name)) return true;
+  if (extension === '.py' && (/^test_/.test(name) || /^Test[A-Z_]/.test(name))) return true;
+  return false;
+}
+
+function collectRefactorDeadSymbolCandidates(file) {
+  const extension = path.extname(file.path);
+  if (!DEFINITION_EXTENSIONS.has(extension) || file.category === 'test' || file.category === 'generated') {
+    return [];
+  }
+  const pattern = definitionPatternFor(extension);
+  const candidates = [];
+  for (const lineNumber of file.addedLineNumbers) {
+    const text = file.newContent.split('\n')[lineNumber - 1] ?? '';
+    const match = pattern.exec(text);
+    const name = match ? (match[1] || match[2]) : '';
+    if (!name || isFrameworkInvokedName(name, extension)) continue;
+    candidates.push({ name, path: file.path, line: lineNumber, source: file.source });
+  }
+  return candidates;
+}
+
+function collectRefactorDeadSymbolFindings(files) {
+  const candidates = files.flatMap((file) => collectRefactorDeadSymbolCandidates(file));
+  if (candidates.length === 0) {
+    return [];
+  }
+  const haystack = files.map((file) => file.newContent).join('\n');
+  const findings = [];
+  for (const candidate of candidates) {
+    const occurrences = haystack.match(new RegExp(`\\b${candidate.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'));
+    if (!occurrences || occurrences.length <= 1) {
+      findings.push(makeFinding('refactor-dead-symbol', candidate.path, candidate.line, candidate.source));
+    }
+  }
+  return findings;
+}
+
 function makeFinding(kind, filePath, line, source) {
   const policy = POLICY[kind];
   return {
@@ -275,9 +328,13 @@ function makeFinding(kind, filePath, line, source) {
 }
 
 export function collectDiffAtomicityFindings(options = {}) {
-  const { diffText, source = 'diff' } = options;
+  const { diffText, source = 'diff', reviewLane } = options;
   const files = Array.isArray(options.files) ? options.files : parseUnifiedDiff(diffText, source);
   const findings = [];
+
+  if (reviewLane === 'refactor') {
+    findings.push(...collectRefactorDeadSymbolFindings(files));
+  }
 
   const hasGenerated = files.some((file) => file.category === 'generated');
   const hasHandwritten = files.some((file) => file.category === 'source' || file.category === 'test');
@@ -351,11 +408,11 @@ export function lintDiffAtomicityForGit(options = {}) {
     `${baseRef}...HEAD`,
     '--',
   ]);
-  return collectDiffAtomicityFindings({ diffText, source: `${baseRef}...HEAD` });
+  return collectDiffAtomicityFindings({ diffText, source: `${baseRef}...HEAD`, reviewLane: options.reviewLane });
 }
 
 function usage() {
-  console.error('Usage: node scripts/lint-pr-diff-atomicity.mjs [--base <ref>] [--root <path>]');
+  console.error('Usage: node scripts/lint-pr-diff-atomicity.mjs [--base <ref>] [--root <path>] [--review-lane <lane>]');
 }
 
 function hasGitRef(root, ref) {
@@ -382,7 +439,7 @@ function defaultBase(root) {
 }
 
 function parseArgs(argv) {
-  const parsed = { base: process.env.INVOKER_DIFF_ATOMICITY_BASE || '', root: process.cwd() };
+  const parsed = { base: process.env.INVOKER_DIFF_ATOMICITY_BASE || '', root: process.cwd(), reviewLane: '' };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--base') {
@@ -395,6 +452,11 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg.startsWith('--root=')) {
       parsed.root = arg.slice('--root='.length);
+    } else if (arg === '--review-lane') {
+      parsed.reviewLane = argv[index + 1] || '';
+      index += 1;
+    } else if (arg.startsWith('--review-lane=')) {
+      parsed.reviewLane = arg.slice('--review-lane='.length);
     } else if (arg === '--help' || arg === '-h') {
       usage();
       process.exit(0);
@@ -404,7 +466,7 @@ function parseArgs(argv) {
       process.exit(2);
     }
   }
-  return { base: parsed.base, root: path.resolve(parsed.root) };
+  return { base: parsed.base, root: path.resolve(parsed.root), reviewLane: parsed.reviewLane };
 }
 
 function main() {
@@ -415,7 +477,7 @@ function main() {
     process.exit(2);
   }
 
-  const findings = lintDiffAtomicityForGit({ root: args.root, baseRef: base });
+  const findings = lintDiffAtomicityForGit({ root: args.root, baseRef: base, reviewLane: args.reviewLane });
   const fatal = findings.filter((finding) => finding.severity === 'fatal');
   const warnings = findings.filter((finding) => finding.severity === 'warning');
 

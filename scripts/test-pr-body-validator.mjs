@@ -368,6 +368,44 @@ assert(
   'missing diff context should not invent atomicity blockers',
 );
 
+const deadSymbolDiff = `diff --git a/scripts/repair_body.py b/scripts/repair_body.py
+--- a/scripts/repair_body.py
++++ b/scripts/repair_body.py
+@@ -0,0 +1,2 @@
++def helper_thing(x):
++    return x
+`;
+const deadSymbolBlockers = getPrAtomicityBlockers({ diffText: deadSymbolDiff, reviewLane: 'refactor' });
+assert(
+  deadSymbolBlockers.some((warning) => warning.includes('refactor-dead-symbol')),
+  'a refactor-lane PR that adds a symbol with no other reference in the diff should warn',
+);
+
+const deadSymbolBehaviorLaneBlockers = getPrAtomicityBlockers({ diffText: deadSymbolDiff, reviewLane: 'behavior' });
+assert(
+  !deadSymbolBehaviorLaneBlockers.some((warning) => warning.includes('refactor-dead-symbol')),
+  'the same unreferenced-symbol diff outside refactor lane should not warn -- a new capability with no caller yet is normal for behavior lane',
+);
+
+const reworkedExtractionDiff = `diff --git a/scripts/repair_body.py b/scripts/repair_body.py
+--- a/scripts/repair_body.py
++++ b/scripts/repair_body.py
+@@ -0,0 +1,2 @@
++def helper_thing(x):
++    return x
+diff --git a/scripts/repairer.py b/scripts/repairer.py
+--- a/scripts/repairer.py
++++ b/scripts/repairer.py
+@@ -10,1 +10,1 @@
+-    return old_local_helper(x)
++    return helper_thing(x)
+`;
+const reworkedExtractionBlockers = getPrAtomicityBlockers({ diffText: reworkedExtractionDiff, reviewLane: 'refactor' });
+assert(
+  !reworkedExtractionBlockers.some((warning) => warning.includes('refactor-dead-symbol')),
+  'a .py extraction whose call site is re-pointed in the same diff should not warn',
+);
+
 const lightweightErrors = await validatePrBody(lightweight);
 assert(lightweightErrors.some((error) => error.includes('Unsupported section: ## Testing')), 'lightweight format should reject ## Testing');
 assert(lightweightErrors.some((error) => error.includes('Unsupported section: ## Notes')), 'lightweight format should reject ## Notes');
