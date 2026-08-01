@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
-import type { SlackBugScanClassifier } from '@invoker/execution-engine';
+import type { SlackBugScanClassifier } from './contract.js';
 
 const MAX_THREAD_TEXT_CHARS = 20_000;
 
