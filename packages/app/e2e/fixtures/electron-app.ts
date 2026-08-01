@@ -50,7 +50,7 @@ async function removeTestDir(dir: string): Promise<void> {
   throw lastError;
 }
 
-async function deleteAllWorkflowsFast(page: Page): Promise<void> {
+export async function deleteAllWorkflowsFast(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const invoker = window.invoker as typeof window.invoker & {
       deleteAllWorkflowsBulk?: () => Promise<unknown>;
