@@ -570,6 +570,10 @@ export class EmbeddedTerminalManager extends EventEmitter {
       resize() {
         // Resize before the backend returns a process handle is ignored.
       },
+      getAppliedSize() {
+        // There is no process handle to read a terminal size from yet.
+        return null;
+      },
       close() {
         // There is no process handle to close yet.
       },

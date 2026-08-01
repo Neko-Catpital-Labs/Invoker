@@ -203,6 +203,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -241,6 +242,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -356,6 +358,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     let emitOutput: ((data: string) => void) | undefined;
@@ -382,6 +385,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -476,6 +480,7 @@ describe('EmbeddedTerminalManager', () => {
         this.written.push(data);
       },
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -512,6 +517,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -656,6 +662,33 @@ describe('EmbeddedTerminalManager', () => {
     expect(mgr.getAppliedSize(session.sessionId)).toBeNull();
   });
 
+  it('getAppliedSize returns null while a spawned backend is still returning its process handle', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      getAppliedSize: vi.fn(() => ({ cols: 120, rows: 40 })),
+      close: vi.fn(),
+    };
+    let mgr: EmbeddedTerminalManager | undefined;
+    const appliedSizesDuringSpawn: Array<{ cols: number; rows: number } | null> = [];
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => {
+        if (!mgr) throw new Error('Manager was not initialized before spawn.');
+        const pendingSession = mgr.list()[0];
+        if (!pendingSession) throw new Error('Spawn session was not registered before backend spawn.');
+        appliedSizesDuringSpawn.push(mgr.getAppliedSize(pendingSession.sessionId));
+        return spawned;
+      }),
+    };
+    mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
+
+    expect(appliedSizesDuringSpawn).toEqual([null]);
+    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 120, rows: 40 });
+  });
+
   it('emits exit and removes session when the bash child exits', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
@@ -676,6 +709,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -740,6 +774,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(() => emitExit?.(0)),
     };
     const backend: EmbeddedTerminalBackend = {
