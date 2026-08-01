@@ -63,12 +63,16 @@ function createFakeChild() {
   return ee;
 }
 
-function createFakePty() {
-  const ee = new EventEmitter() as EventEmitter & PtyLike & {
+function createFakePty(initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 }) {
+  const ee = new EventEmitter() as EventEmitter & Omit<PtyLike, 'cols' | 'rows'> & {
+    cols: number;
+    rows: number;
     __written: string[];
     __resized: Array<{ cols: number; rows: number }>;
     killed: boolean;
   };
+  ee.cols = initialSize.cols;
+  ee.rows = initialSize.rows;
   ee.__written = [];
   ee.__resized = [];
   ee.killed = false;
@@ -85,6 +89,8 @@ function createFakePty() {
   };
   ee.resize = (cols: number, rows: number) => {
     ee.__resized.push({ cols, rows });
+    ee.cols = cols;
+    ee.rows = rows;
   };
   ee.kill = () => {
     ee.killed = true;
@@ -569,6 +575,85 @@ describe('EmbeddedTerminalManager', () => {
     );
     expect(res.ok).toBe(true);
     expect(pty.__resized).toEqual([{ cols: 120, rows: 40 }]);
+  });
+
+  it('threads TerminalSpec cols/rows into the PTY spawn call instead of the hardcoded 80x24 default', () => {
+    const pty = createFakePty({ cols: 160, rows: 50 });
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    mgr.openOrReuse({
+      taskId: 't',
+      spec: { command: 'claude', cwd: '/tmp', cols: 160, rows: 50 },
+      cwd: '/tmp',
+    });
+
+    expect(ptySpawnFn).toHaveBeenCalledWith(
+      'claude',
+      [],
+      expect.objectContaining({ cols: 160, rows: 50 }),
+    );
+  });
+
+  it('falls back to 80x24 when a TerminalSpec omits cols/rows, unchanged from today', () => {
+    const pty = createFakePty();
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+
+    mgr.openOrReuse({ taskId: 't', spec: { command: 'claude', cwd: '/tmp' }, cwd: '/tmp' });
+
+    expect(ptySpawnFn).toHaveBeenCalledWith(
+      'claude',
+      [],
+      expect.objectContaining({ cols: 80, rows: 24 }),
+    );
+  });
+
+  it('getAppliedSize reads the PTY back directly, exposing a resize that silently did not stick', () => {
+    const pty = createFakePty({ cols: 80, rows: 24 });
+    // Simulate a real-world dropped resize: the call is recorded but the
+    // underlying winsize never actually changes.
+    pty.resize = (cols: number, rows: number) => {
+      pty.__resized.push({ cols, rows });
+    };
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
+
+    const res = mgr.resize(session.sessionId, 120, 40);
+
+    expect(res.ok).toBe(true);
+    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 80, rows: 24 });
+  });
+
+  it('getAppliedSize reflects a resize that actually applied', () => {
+    const pty = createFakePty({ cols: 80, rows: 24 });
+    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
+    });
+    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
+
+    mgr.resize(session.sessionId, 120, 40);
+
+    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 120, rows: 40 });
+  });
+
+  it('getAppliedSize returns null for the pipe-backed bash backend, which has no real TTY size', () => {
+    const child = createFakeChild();
+    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+    const mgr = new EmbeddedTerminalManager({
+      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
+    });
+    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
+
+    expect(mgr.getAppliedSize(session.sessionId)).toBeNull();
   });
 
   it('emits exit and removes session when the bash child exits', () => {
