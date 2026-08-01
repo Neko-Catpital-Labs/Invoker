@@ -10,6 +10,8 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { AgentRegistry } from '../agent-registry.js';
+import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -159,6 +161,93 @@ describe('SshExecutor pre-flight validation', () => {
 });
 
 describe('SshExecutor managed workspace mode', () => {
+  it('raises for explicit ai_task executionAgent when no configured agent set is available', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Implement the feature',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /execution agent "codex": no configured agent set was available/,
+    );
+    expect(spawnStub).not.toHaveBeenCalled();
+  });
+
+  it('uses the requested ai_task agent when it resolves through the registry', async () => {
+    const registry = new AgentRegistry();
+    registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: registry,
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Implement the feature',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    await ssh.start(req);
+
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const [, , , script, , , effectiveAgentName] = spawnStub.mock.calls[0];
+    expect(script).toContain('codex-test');
+    expect(script).toContain('exec');
+    expect(script).not.toContain('claude --session-id');
+    expect(effectiveAgentName).toBe('codex');
+  });
+
   it('happy path: creates worktree, runs command, sets workspacePath and branch', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
