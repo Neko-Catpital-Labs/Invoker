@@ -22,6 +22,7 @@ import {
   PR_ORPHAN_REPAIR_WORKER_KIND,
   PR_STATUS_WORKER_KIND,
   REQUEUE_WORKER_KIND,
+  SLACK_BUG_SCAN_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
   type WorkerRegistry,
   type WorkerRuntime,
@@ -43,23 +44,35 @@ export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
 ] as const;
 
+export const SLACK_BUG_SCAN_AUTO_STARTED_WORKER_KINDS = [
+  SLACK_BUG_SCAN_WORKER_KIND,
+] as const;
+
 /**
  * Compute the owner worker kinds that auto-start on boot. The PR-maintenance
- * worker is gated on `prMaintenance.enabled` (matching the config docstring);
- * everything else always auto-starts. Saved per-worker desired state still
- * overrides in both directions.
+ * and Slack bug-scan workers are gated on their own `enabled` flags (matching
+ * their config docstrings); everything else always auto-starts. Saved
+ * per-worker desired state still overrides in both directions.
  */
-export function autoStartedOwnerWorkerKinds(options: { prMaintenanceEnabled: boolean }): readonly string[] {
-  return options.prMaintenanceEnabled
-    ? [...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS, ...PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS]
-    : ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS;
+export function autoStartedOwnerWorkerKinds(options: {
+  prMaintenanceEnabled: boolean;
+  slackBugScanEnabled: boolean;
+}): readonly string[] {
+  return [
+    ...ALWAYS_AUTO_STARTED_OWNER_WORKER_KINDS,
+    ...(options.prMaintenanceEnabled ? PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS : []),
+    ...(options.slackBugScanEnabled ? SLACK_BUG_SCAN_AUTO_STARTED_WORKER_KINDS : []),
+  ];
 }
 
 /** Convenience wrapper: derive the auto-start list straight from Invoker config. */
 export function autoStartedOwnerWorkerKindsForConfig(
-  config?: { prMaintenance?: { enabled?: boolean } },
+  config?: { prMaintenance?: { enabled?: boolean }; slackBugScan?: { enabled?: boolean } },
 ): readonly string[] {
-  return autoStartedOwnerWorkerKinds({ prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled) });
+  return autoStartedOwnerWorkerKinds({
+    prMaintenanceEnabled: Boolean(config?.prMaintenance?.enabled),
+    slackBugScanEnabled: Boolean(config?.slackBugScan?.enabled),
+  });
 }
 
 export interface WorkerRuntimeController {
@@ -196,6 +209,7 @@ const BUILT_IN_WORKER_KINDS = new Set<string>([
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
   PR_ORPHAN_REPAIR_WORKER_KIND,
   WORKFLOW_RESUME_WORKER_KIND,
+  SLACK_BUG_SCAN_WORKER_KIND,
 ]);
 
 export function createWorkerRuntimeController(options: {

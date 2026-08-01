@@ -288,6 +288,10 @@ import {
   submitPlanningChatDraft,
 } from './in-app-planner.js';
 import { discoverOwner, isStandaloneCapable } from './owner-endpoint.js';
+import type { PlanningCommandBuilder } from '@invoker/surfaces';
+import { createRealSlackBugScanClient } from './slack-bug-scan-client.js';
+import { createSlackBugScanClassifier } from './slack-bug-scan-classifier.js';
+import { createSlackBugScanPlanner } from './slack-bug-scan-planner.js';
 import {
   killRunningTaskExecution,
   rebuildTaskRunner as rebuildTaskRunnerWiring,
@@ -322,9 +326,36 @@ function submitRegisteredOwnerWorkerMutation(
 const autoFixAttemptLedger = createAutoFixAttemptLedger();
 
 
+function buildSlackBugScanWorkerConfig(
+  planningCommandBuilder: PlanningCommandBuilder,
+  executionAgentRegistry: AgentRegistry,
+): WorkerRuntimeDependencies['slackBugScan'] {
+  if (!invokerConfig.slackBugScan?.enabled) return undefined;
+  const client = createRealSlackBugScanClient();
+  if (!client) return undefined;
+  return {
+    client,
+    classify: createSlackBugScanClassifier(),
+    draftAndSubmitPlan: createSlackBugScanPlanner({
+      config: invokerConfig,
+      repoPool: (executorRegistry.get('worktree') as WorktreeExecutor).getRepoPool(),
+      persistence,
+      orchestrator,
+      planningCommandBuilder,
+      executionAgentRegistry,
+      logger,
+    }),
+    intervalMs: invokerConfig.slackBugScan.intervalMs,
+    maxAutoSubmissionsPerDay: invokerConfig.slackBugScan.maxAutoSubmissionsPerDay,
+    maxAutoSubmissionsPerTick: invokerConfig.slackBugScan.maxAutoSubmissionsPerTick,
+  };
+}
+
 function buildRegisteredOwnerWorkerDeps(
   store: WorkerRuntimeDependencies['store'],
   checkMergeGateStatuses: NonNullable<WorkerRuntimeDependencies['reviewGate']>['checkMergeGateStatuses'],
+  planningCommandBuilder: PlanningCommandBuilder,
+  executionAgentRegistry: AgentRegistry,
 ): WorkerRuntimeDependencies {
   const remoteTargets = Object.entries(invokerConfig.remoteTargets ?? {}).map(([name, target]) => ({
     name,
@@ -385,6 +416,7 @@ function buildRegisteredOwnerWorkerDeps(
     autoApprove: {
       enabled: resolveAutoApproveAIFixes(invokerConfig),
     },
+    slackBugScan: buildSlackBugScanWorkerConfig(planningCommandBuilder, executionAgentRegistry),
   };
 }
 function createRegisteredWorkerRegistry(): WorkerRegistry<WorkerRuntimeDependencies> {
@@ -1857,6 +1889,8 @@ function startHeadlessMode(): void {
             async () => {
               await createStandaloneTaskExecutor().checkMergeGateStatuses();
             },
+            planningCommandBuilder,
+            agentRegistry,
           ),
           autoStartKinds: invokerConfig.e2eAutoFixEnabled
             ? [...autoStartedOwnerWorkerKindsForConfig(invokerConfig), E2E_AUTOFIX_WORKER_KIND]
@@ -2976,6 +3010,8 @@ startMainProcessBootstrap({
           async () => {
             await requireTaskExecutor().checkMergeGateStatuses();
           },
+          planningCommandBuilder,
+          agentRegistry,
         ),
         autoStartKinds: invokerConfig.e2eAutoFixEnabled
           ? [...autoStartedOwnerWorkerKindsForConfig(invokerConfig), E2E_AUTOFIX_WORKER_KIND]
