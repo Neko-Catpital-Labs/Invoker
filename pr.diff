@@ -1,0 +1,217 @@
+diff --git a/packages/app/src/__tests__/embedded-terminal-manager.test.ts b/packages/app/src/__tests__/embedded-terminal-manager.test.ts
+index 9c5a93dfa..b16d3fdd1 100644
+--- a/packages/app/src/__tests__/embedded-terminal-manager.test.ts
++++ b/packages/app/src/__tests__/embedded-terminal-manager.test.ts
+@@ -63,12 +63,16 @@ function createFakeChild() {
+   return ee;
+ }
+ 
+-function createFakePty() {
+-  const ee = new EventEmitter() as EventEmitter & PtyLike & {
++function createFakePty(initialSize: { cols: number; rows: number } = { cols: 80, rows: 24 }) {
++  const ee = new EventEmitter() as EventEmitter & Omit<PtyLike, 'cols' | 'rows'> & {
++    cols: number;
++    rows: number;
+     __written: string[];
+     __resized: Array<{ cols: number; rows: number }>;
+     killed: boolean;
+   };
++  ee.cols = initialSize.cols;
++  ee.rows = initialSize.rows;
+   ee.__written = [];
+   ee.__resized = [];
+   ee.killed = false;
+@@ -85,6 +89,8 @@ function createFakePty() {
+   };
+   ee.resize = (cols: number, rows: number) => {
+     ee.__resized.push({ cols, rows });
++    ee.cols = cols;
++    ee.rows = rows;
+   };
+   ee.kill = () => {
+     ee.killed = true;
+@@ -571,6 +577,85 @@ describe('EmbeddedTerminalManager', () => {
+     expect(pty.__resized).toEqual([{ cols: 120, rows: 40 }]);
+   });
+ 
++  it('threads TerminalSpec cols/rows into the PTY spawn call instead of the hardcoded 80x24 default', () => {
++    const pty = createFakePty({ cols: 160, rows: 50 });
++    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
++    });
++
++    mgr.openOrReuse({
++      taskId: 't',
++      spec: { command: 'claude', cwd: '/tmp', cols: 160, rows: 50 },
++      cwd: '/tmp',
++    });
++
++    expect(ptySpawnFn).toHaveBeenCalledWith(
++      'claude',
++      [],
++      expect.objectContaining({ cols: 160, rows: 50 }),
++    );
++  });
++
++  it('falls back to 80x24 when a TerminalSpec omits cols/rows, unchanged from today', () => {
++    const pty = createFakePty();
++    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
++    });
++
++    mgr.openOrReuse({ taskId: 't', spec: { command: 'claude', cwd: '/tmp' }, cwd: '/tmp' });
++
++    expect(ptySpawnFn).toHaveBeenCalledWith(
++      'claude',
++      [],
++      expect.objectContaining({ cols: 80, rows: 24 }),
++    );
++  });
++
++  it('getAppliedSize reads the PTY back directly, exposing a resize that silently did not stick', () => {
++    const pty = createFakePty({ cols: 80, rows: 24 });
++    // Simulate a real-world dropped resize: the call is recorded but the
++    // underlying winsize never actually changes.
++    pty.resize = (cols: number, rows: number) => {
++      pty.__resized.push({ cols, rows });
++    };
++    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
++    });
++    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
++
++    const res = mgr.resize(session.sessionId, 120, 40);
++
++    expect(res.ok).toBe(true);
++    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 80, rows: 24 });
++  });
++
++  it('getAppliedSize reflects a resize that actually applied', () => {
++    const pty = createFakePty({ cols: 80, rows: 24 });
++    const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
++    });
++    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
++
++    mgr.resize(session.sessionId, 120, 40);
++
++    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 120, rows: 40 });
++  });
++
++  it('getAppliedSize returns null for the pipe-backed bash backend, which has no real TTY size', () => {
++    const child = createFakeChild();
++    const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
++    const mgr = new EmbeddedTerminalManager({
++      backend: createBashTerminalBackend({ spawnFn: bashSpawnFn }),
++    });
++    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
++
++    expect(mgr.getAppliedSize(session.sessionId)).toBeNull();
++  });
++
+   it('emits exit and removes session when the bash child exits', () => {
+     const child = createFakeChild();
+     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
+diff --git a/packages/app/src/embedded-terminal-manager.ts b/packages/app/src/embedded-terminal-manager.ts
+index dbc291616..1337ace44 100644
+--- a/packages/app/src/embedded-terminal-manager.ts
++++ b/packages/app/src/embedded-terminal-manager.ts
+@@ -36,6 +36,8 @@ export interface PtyForkOptionsLike {
+ }
+ 
+ export interface PtyLike {
++  readonly cols: number;
++  readonly rows: number;
+   onData(listener: (data: string) => void): { dispose: () => void };
+   onExit(listener: (event: { exitCode: number }) => void): { dispose: () => void };
+   write(data: string): void;
+@@ -61,6 +63,8 @@ export interface SpawnedTerminalProcess {
+   write(data: string): void;
+   resize(cols: number, rows: number): void;
+   close(): void;
++  /** Authoritative applied size, read back from the real process. Null when the backend has no TTY (e.g. pipe-backed). */
++  getAppliedSize(): { cols: number; rows: number } | null;
+ }
+ 
+ export interface EmbeddedTerminalBackend {
+@@ -215,6 +219,10 @@ class BashTerminalBackend implements EmbeddedTerminalBackend {
+       resize() {
+         // Pipe-backed child processes are not TTYs; resize is a no-op.
+       },
++      getAppliedSize() {
++        // Pipes have no real terminal size to read back.
++        return null;
++      },
+       close() {
+         try {
+           if (!child.killed) child.kill();
+@@ -245,8 +253,8 @@ class PtyTerminalBackend implements EmbeddedTerminalBackend {
+     const args = opts.spec.command ? opts.spec.args ?? [] : [];
+     const pty = this.spawnFn(command, args, {
+       name: 'xterm-256color',
+-      cols: 80,
+-      rows: 24,
++      cols: opts.spec.cols ?? 80,
++      rows: opts.spec.rows ?? 24,
+       cwd: opts.cwd,
+       env: { ...process.env, TERM: process.env.TERM ?? 'xterm-256color' },
+     });
+@@ -260,6 +268,9 @@ class PtyTerminalBackend implements EmbeddedTerminalBackend {
+       resize(cols: number, rows: number) {
+         pty.resize(cols, rows);
+       },
++      getAppliedSize() {
++        return { cols: pty.cols, rows: pty.rows };
++      },
+       close() {
+         try {
+           dataDisposable.dispose();
+@@ -448,6 +459,12 @@ export class EmbeddedTerminalManager extends EventEmitter {
+     }
+   }
+ 
++  getAppliedSize(sessionId: string): { cols: number; rows: number } | null {
++    const state = this.sessions.get(sessionId);
++    if (!state || state.mode === 'attached') return null;
++    return state.process.getAppliedSize();
++  }
++
+   close(sessionId: string): { ok: boolean; reason?: string } {
+     const state = this.sessions.get(sessionId);
+     if (!state) return { ok: false, reason: `Unknown session "${sessionId}".` };
+diff --git a/packages/app/src/terminal-session-ipc.ts b/packages/app/src/terminal-session-ipc.ts
+index 761e6aabc..4e46b007c 100644
+--- a/packages/app/src/terminal-session-ipc.ts
++++ b/packages/app/src/terminal-session-ipc.ts
+@@ -572,6 +572,12 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
+     return embeddedTerminalManager.resize(sessionId, cols, rows);
+   });
+ 
++  ipcMain.handle('invoker:planning-terminal-applied-size', async (_event, sessionId: string) => {
++    const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
++    if (!allowed.ok) return null;
++    return embeddedTerminalManager.getAppliedSize(sessionId);
++  });
++
+   ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
+     const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+     if (!allowed.ok) return allowed;
+diff --git a/packages/execution-engine/src/executor.ts b/packages/execution-engine/src/executor.ts
+index 243faab7e..a798a8de8 100644
+--- a/packages/execution-engine/src/executor.ts
++++ b/packages/execution-engine/src/executor.ts
+@@ -20,6 +20,10 @@ export interface TerminalSpec {
+   args?: string[];
+   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
+   linuxTerminalTail?: 'exec_bash' | 'pause';
++  /** Initial PTY column count. Defaults to 80 when omitted. */
++  cols?: number;
++  /** Initial PTY row count. Defaults to 24 when omitted. */
++  rows?: number;
+ }
+ 
+ export interface PersistedTaskMeta {

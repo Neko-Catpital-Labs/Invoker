@@ -1,0 +1,4 @@
+packages/app/src/__tests__/embedded-terminal-manager.test.ts
+packages/app/src/embedded-terminal-manager.ts
+packages/app/src/terminal-session-ipc.ts
+packages/execution-engine/src/executor.ts
