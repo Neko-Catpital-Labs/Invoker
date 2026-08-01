@@ -100,6 +100,29 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws naming an explicit executionAgent when no registry is configured', async () => {
+    spawnedProcesses = [];
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        workspacePath: '/tmp/workspace',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Unable to resolve requested execution agent "codex": .*no configured agent set was available/,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
   it('does not throw for reconciliation requests', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

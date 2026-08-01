@@ -16,6 +16,8 @@ import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, TerminalSpec } from '../executor.js';
 
 // ── Mock agent for testing alternative stdinMode + args ──────
 
@@ -45,6 +47,27 @@ class MockPipeAgent implements ExecutionAgent {
   }
 }
 
+class CommandBuildingExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'test-command-builder';
+
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
+    throw new Error('Not implemented');
+  }
+
+  async kill(_handle: ExecutorHandle): Promise<void> {}
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
+  getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
+  async destroyAll(): Promise<void> { this.entries.clear(); }
+
+  testBuildCommandAndArgs(
+    request: WorkRequest,
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ) {
+    return this.buildCommandAndArgs(request, opts);
+  }
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 
 function makeCommandRequest(command = 'echo hello'): WorkRequest {
@@ -54,6 +77,19 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
     taskId: `task-${randomUUID().slice(0, 8)}`,
     actionType: 'command',
     inputs: { command },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+function makeAiTaskRequest(inputs: Partial<WorkRequest['inputs']> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Do something', ...inputs },
     upstreamContext: [],
     callbackUrl: '',
     timestamps: {},
@@ -207,6 +243,17 @@ describe('Agent × Executor matrix', () => {
       registry.registerExecution(other);
       expect(registry.get(agentDef.name)).toBe(agent);
       expect(registry.get('other-agent')).toBe(other);
+    });
+  });
+
+  describe('BaseExecutor command building', () => {
+    it('throws naming the requested agent when no registry is supplied', () => {
+      const executor = new CommandBuildingExecutor();
+      const request = makeAiTaskRequest({ executionAgent: 'mock-pipe' });
+
+      expect(() => executor.testBuildCommandAndArgs(request, { claudeCommand: 'claude-test' })).toThrow(
+        /Unable to resolve requested execution agent "mock-pipe": .*no configured agent set was available/,
+      );
     });
   });
 
