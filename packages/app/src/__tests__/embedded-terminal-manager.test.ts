@@ -203,6 +203,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -234,6 +235,31 @@ describe('EmbeddedTerminalManager', () => {
       cwd: '/tmp/wt',
       defaultShell: expect.any(String),
     }));
+  });
+
+  it('reports no applied size while a spawned backend is still returning its process handle', () => {
+    let mgr: EmbeddedTerminalManager;
+    let pendingAppliedSize: { cols: number; rows: number } | null | undefined;
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      getAppliedSize: vi.fn(() => ({ cols: 100, rows: 30 })),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => {
+        const sessionId = mgr.list()[0]?.sessionId;
+        pendingAppliedSize = sessionId ? mgr.getAppliedSize(sessionId) : undefined;
+        return spawned;
+      }),
+    };
+    mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'task-pending-size', spec: {}, cwd: '/tmp/wt' });
+
+    expect(pendingAppliedSize).toBeNull();
+    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 100, rows: 30 });
   });
 
   it('replays PTY first-frame output emitted before openOrReuse returns', () => {
