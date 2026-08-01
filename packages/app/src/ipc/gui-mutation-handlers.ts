@@ -1919,6 +1919,32 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     }
   });
 
+  const traceRendererWorkflowEvents = process.env.INVOKER_TRACE_RENDERER_WORKFLOW_EVENTS === '1';
+  const rendererWorkflowTracePath = join(homedir(), '.invoker', 'ui-workflow-events.jsonl');
+  let rendererWorkflowTraceWriteFailed = false;
+  ipcMain.handle('invoker:trace-renderer-workflow-event', (_event, workflows: unknown[]) => {
+    if (!traceRendererWorkflowEvents) return;
+    try {
+      mkdirSync(dirname(rendererWorkflowTracePath), { recursive: true });
+      appendFileSync(
+        rendererWorkflowTracePath,
+        JSON.stringify({
+          time: new Date().toISOString(),
+          source: 'renderer',
+          event: { type: 'workflows-changed', workflows },
+        }) + '\n',
+      );
+    } catch (err) {
+      if (!rendererWorkflowTraceWriteFailed) {
+        rendererWorkflowTraceWriteFailed = true;
+        logger.warn(
+          `renderer workflow trace write failed: ${err instanceof Error ? err.message : String(err)}`,
+          { module: 'ui' },
+        );
+      }
+    }
+  });
+
   ipcMain.handle('invoker:get-ui-perf-stats', () => ({
     ...getUiPerfStats(),
   }));
