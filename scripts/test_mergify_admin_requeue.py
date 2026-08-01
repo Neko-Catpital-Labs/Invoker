@@ -753,11 +753,11 @@ Failing checks
                         with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", side_effect=fake_git_lines):
                             with mock.patch("scripts.mergify_admin_requeue_repair_body.git_output", side_effect=fake_git_output):
                                 with mock.patch("scripts.mergify_admin_requeue_repair_body.validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
-                                    with mock.patch.object(repairer, "push_branch", return_value="pushed-sha") as push_branch:
+                                    with mock.patch("scripts.mergify_admin_requeue_repair_body.safe_push", return_value="pushed-sha") as safe_push_mock:
                                         result = repairer.repair_check(item, "PR Body", 123)
 
         self.assertEqual(result.status, "prereq_created")
-        push_branch.assert_called_once_with(mock.ANY, "stack/pr-babysit-prereq-5800-c2532d2", expect_missing=True)
+        safe_push_mock.assert_called_once_with(branch="stack/pr-babysit-prereq-5800-c2532d2", expect_missing=True, cwd=mock.ANY)
         self.assertEqual(fake.created[0][0], "owner/repo")
         self.assertIn("[PR babysit] Tooling-policy repair prerequisite for #5800: PR Body", fake.created[0][1])
         self.assertEqual(fake.label_edits, [("owner/repo", 5801, "admin-bypass", None)])
