@@ -14,16 +14,23 @@ import { normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
-/** Workflow base branches default to master, while explicit stack bases are preserved. */
-function resolveDefaultBaseBranch(plan: PlanDefinition): string {
-  return normalizeWorkflowBaseBranch(plan.baseBranch);
+interface PlanDefinitionDefaultOptions {
+  preserveExplicitBaseBranch?: boolean;
+}
+
+/** Standalone workflow base branches are pinned to master; stack continuation bases are preserved. */
+function resolveDefaultBaseBranch(plan: PlanDefinition, options: PlanDefinitionDefaultOptions): string {
+  return normalizeWorkflowBaseBranch(options.preserveExplicitBaseBranch ? plan.baseBranch : undefined);
 }
 
 /**
  * Top-level plan defaults aligned with {@link parsePlan} (merge target, feature branch, onFinish).
  * Use when a {@link PlanDefinition} is built outside the YAML parser — e.g. GUI `yaml.load` + IPC.
  */
-export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {
+export function applyPlanDefinitionDefaults(
+  plan: PlanDefinition,
+  options: PlanDefinitionDefaultOptions = {},
+): PlanDefinition {
   const slug = plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const fb = plan.featureBranch;
   const featureBranch = typeof fb === 'string' && fb.trim() !== '' ? fb.trim() : `plan/${slug}`;
@@ -31,7 +38,7 @@ export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinitio
   return {
     ...plan,
     onFinish: plan.onFinish ?? 'pull_request',
-    baseBranch: resolveDefaultBaseBranch(plan),
+    baseBranch: resolveDefaultBaseBranch(plan, options),
     featureBranch,
   };
 }
@@ -299,7 +306,11 @@ function assertNoLegacyRoutingKeys(ownerLabel: string, value: object): void {
  * Parse a YAML string into a validated PlanDefinition.
  * Throws PlanParseError if validation fails.
  */
-function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
+function parseRawPlan(
+  raw: RawPlan,
+  ownerLabel = 'Plan',
+  defaultsOptions: PlanDefinitionDefaultOptions = {},
+): PlanDefinition {
   if (!raw || typeof raw !== 'object') {
     throw new PlanParseError(`${ownerLabel} must be a YAML object`);
   }
@@ -456,7 +467,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
-  });
+  }, defaultsOptions);
 }
 
 function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): RawPlan {
@@ -531,7 +542,11 @@ export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBu
     if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) {
       throw new PlanParseError(`Workflow at index ${index} must be an object with a "name" field`);
     }
-    return parseRawPlan(inheritStackWorkflowDefaults(raw, workflow), `Workflow ${index + 1}`);
+    return parseRawPlan(
+      inheritStackWorkflowDefaults(raw, workflow),
+      `Workflow ${index + 1}`,
+      { preserveExplicitBaseBranch: true },
+    );
   });
 
   return { name: raw.name, plans, isStack: true };

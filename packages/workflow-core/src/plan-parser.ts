@@ -59,11 +59,19 @@ export interface RawPlan {
 }
 
 
-function resolveDefaultBaseBranch(plan: PlanDefinition): string {
-  return normalizeWorkflowBaseBranch(plan.baseBranch);
+interface PlanDefinitionDefaultOptions {
+  preserveExplicitBaseBranch?: boolean;
 }
 
-export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {
+/** Standalone workflow base branches are pinned to master; callers may opt into stack base preservation. */
+function resolveDefaultBaseBranch(plan: PlanDefinition, options: PlanDefinitionDefaultOptions): string {
+  return normalizeWorkflowBaseBranch(options.preserveExplicitBaseBranch ? plan.baseBranch : undefined);
+}
+
+export function applyPlanDefinitionDefaults(
+  plan: PlanDefinition,
+  options: PlanDefinitionDefaultOptions = {},
+): PlanDefinition {
   const slug = plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const featureBranch = typeof plan.featureBranch === 'string' && plan.featureBranch.trim() !== ''
     ? plan.featureBranch.trim()
@@ -72,7 +80,7 @@ export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinitio
   return {
     ...plan,
     onFinish: plan.onFinish ?? 'pull_request',
-    baseBranch: resolveDefaultBaseBranch(plan),
+    baseBranch: resolveDefaultBaseBranch(plan, options),
     featureBranch,
   };
 }
