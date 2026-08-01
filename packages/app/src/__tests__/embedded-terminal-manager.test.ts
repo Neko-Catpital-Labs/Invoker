@@ -203,6 +203,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -241,6 +242,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -356,6 +358,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     let emitOutput: ((data: string) => void) | undefined;
@@ -382,6 +385,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -476,6 +480,7 @@ describe('EmbeddedTerminalManager', () => {
         this.written.push(data);
       },
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -512,6 +517,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -676,6 +682,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(),
     };
     const backend: EmbeddedTerminalBackend = {
@@ -740,6 +747,7 @@ describe('EmbeddedTerminalManager', () => {
     const spawned = {
       write: vi.fn(),
       resize: vi.fn(),
+      getAppliedSize: vi.fn(() => null),
       close: vi.fn(() => emitExit?.(0)),
     };
     const backend: EmbeddedTerminalBackend = {
