@@ -12,7 +12,7 @@ try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
-    from .mergify_admin_requeue_repair_body import git_lines, git_output, hard_reset_work_root, is_ancestor
+    from .mergify_admin_requeue_repair_body import git_lines, git_output, hard_reset_work_root, normalize_repair_commit
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
     from .pr_worker_safe_push import SafePushError, safe_push
 except ImportError:
@@ -20,7 +20,7 @@ except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
-    from mergify_admin_requeue_repair_body import git_lines, git_output, hard_reset_work_root, is_ancestor
+    from mergify_admin_requeue_repair_body import git_lines, git_output, hard_reset_work_root, normalize_repair_commit
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
     from pr_worker_safe_push import SafePushError, safe_push
 
@@ -61,25 +61,6 @@ class AdminBypassRepairer:
         self.logger = logger
         self.ledger = ledger
         self.repo = repo
-
-    def normalize_repair_commit(self, work_root: Path, start_head: str, end_head: str, check_name: str) -> str:
-        if is_ancestor(work_root, start_head, end_head):
-            return end_head
-        diff = git_output(work_root, "diff", "--binary", start_head, end_head)
-        hard_reset_work_root(work_root, start_head)
-        if not diff.strip():
-            return start_head
-        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-            handle.write(diff)
-            patch_path = Path(handle.name)
-        try:
-            git_output(work_root, "apply", "--index", str(patch_path))
-        finally:
-            patch_path.unlink(missing_ok=True)
-        if not git_lines(work_root, "status", "--porcelain"):
-            return start_head
-        git_output(work_root, "commit", "-m", f"Repair {check_name}")
-        return git_output(work_root, "rev-parse", "HEAD").strip()
 
     def validate_local_pr_body(self, work_root: Path, body: str, base_branch: str) -> dict[str, object]:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
@@ -512,7 +493,7 @@ class AdminBypassRepairer:
                 end_head,
                 status_lines=status_lines,
             )
-        end_head = self.normalize_repair_commit(work_root, start_head, end_head, check_name)
+        end_head = normalize_repair_commit(work_root, start_head, end_head, check_name)
         repair_commits = git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
         validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
         if validation.get("valid"):
