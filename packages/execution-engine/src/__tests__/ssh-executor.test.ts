@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -1695,5 +1695,112 @@ describe('SshExecutor entry lifecycle', () => {
     expect(spec.command).toBe('ssh');
     expect(spec.args).toBeTruthy();
     expect(spec.args!.length).toBeGreaterThan(0);
+  });
+});
+
+describe('SshExecutor remote finalize retry/timeout', () => {
+  let ssh: SshExecutor;
+  const previousTimeoutEnv = process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS;
+
+  beforeEach(() => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+    process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS = '20';
+    ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+    });
+  });
+
+  afterEach(() => {
+    if (previousTimeoutEnv === undefined) delete process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS;
+    else process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS = previousTimeoutEnv;
+    vi.useRealTimers();
+  });
+
+  it('execRemoteCapture kills a hung child and rejects once its timeout elapses', async () => {
+    vi.useFakeTimers();
+    const pending = (ssh as any).execRemoteCapture('some-script', 'test_phase', { timeoutMs: 20 });
+    const assertion = expect(pending).rejects.toMatchObject({ timedOut: true });
+
+    await vi.advanceTimersByTimeAsync(20);
+    await assertion;
+
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(sshProcess.kill).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('remoteGitRecordAndPush retries a hanging finalize step up to 3 times, then fails with the timeout reason logged', async () => {
+    vi.useFakeTimers();
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const emitOutputSpy = vi.spyOn(ssh as any, 'emitOutput').mockImplementation(() => {});
+
+    const request = makeRequest({
+      inputs: { command: 'echo hi', description: 'test', repoUrl: 'git@github.com:test/repo.git' },
+    });
+
+    const resultPromise = (ssh as any).remoteGitRecordAndPush(
+      'exec-1',
+      request,
+      '/home/testuser/.invoker/worktrees/test',
+      'task-branch',
+      0,
+    );
+
+    // 3 sequential attempts, each bounded by the 20ms finalize timeout.
+    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(20);
+    const result = await resultPromise;
+
+    expect(result.error).toContain('timed out after 20ms');
+    expect(spawnedProcesses.length).toBe(3);
+    for (const proc of spawnedProcesses) {
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    }
+
+    const attemptLogs = infoSpy.mock.calls
+      .map((call) => call[0])
+      .filter((line): line is string => typeof line === 'string' && line.includes('remote finalize attempt'));
+    expect(attemptLogs).toHaveLength(3);
+    expect(attemptLogs[0]).toContain('attempt 1/3');
+    expect(attemptLogs[2]).toContain('attempt 3/3');
+
+    expect(emitOutputSpy).toHaveBeenCalledTimes(3);
+    expect(emitOutputSpy.mock.calls[0]![1]).toContain('attempt 1/3');
+  });
+
+  it('remoteGitRecordAndPush recovers if a retry succeeds after earlier timeouts', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(ssh as any, 'emitOutput').mockImplementation(() => {});
+
+    let call = 0;
+    vi.spyOn(ssh as any, 'execRemoteCapture').mockImplementation(async (..._args: any[]) => {
+      call += 1;
+      if (call < 3) {
+        const err = new Error('SSH remote command timed out after 20ms') as Error & { timedOut?: boolean };
+        err.timedOut = true;
+        throw err;
+      }
+      return 'abc123def456\n';
+    });
+
+    const request = makeRequest({
+      inputs: { command: 'echo hi', description: 'test', repoUrl: 'git@github.com:test/repo.git' },
+    });
+
+    const result = await (ssh as any).remoteGitRecordAndPush(
+      'exec-1',
+      request,
+      '/home/testuser/.invoker/worktrees/test',
+      'task-branch',
+      0,
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.commitHash).toBe('abc123def456');
+    expect(call).toBe(3);
   });
 });
