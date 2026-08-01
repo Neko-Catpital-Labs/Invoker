@@ -35,13 +35,7 @@ from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_
 from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
-from scripts.mergify_admin_requeue_repair_body import (
-    NON_TRUNK_MANUAL_SPLIT_ERROR,
-    PROOF_POLICY_LANE_ERROR,
-    PROOF_TOOLING_POLICY_UNIT_ERROR,
-)
 from scripts.mergify_admin_requeue_repairer import AdminBypassRepairer
-from scripts.pr_worker_safe_push import SafePushError
 
 REQUIRED = {"PR Body", "quality / TypeScript Types"}
 HEAD = "c2532d229dbed2fd57419698c48d973001c78e9e"
@@ -335,87 +329,59 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
-    def test_conflict_repair_records_and_caps_without_invoker(self):
-        class FakeGh:
-            def __init__(self):
-                self.comments = []
-
-            def comment(self, repo, pr_number, body):
-                self.comments.append((repo, pr_number, body))
-
+    def test_conflict_repair_submits_plan_and_caps_without_invoker(self):
         ledger = self.ledger()
         item = pr(2647, merge_state="DIRTY", latest=mergify())
-        prompts = []
-        repairer = self.repairer(FakeGh(), ledger, "Neko-Catpital-Labs/Invoker")
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
-                with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
-                    with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, prompt: prompts.append(prompt)):
-                        for epoch in range(3):
-                            repairer.repair_conflict(item, "GitHub reports merge conflict", epoch)
+        submitted = []
+        repairer = self.repairer(object(), ledger, "Neko-Catpital-Labs/Invoker")
+        with mock.patch(
+            "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+            side_effect=lambda plan: submitted.append(plan),
+        ):
+            for epoch in range(3):
+                repairer.repair_conflict(item, "GitHub reports merge conflict", epoch)
         self.assertEqual(ledger.count("conflict-repair", 2647, HEAD, "conflict:2647"), 3)
-        self.assertEqual(len(prompts), 3)
-        self.assertIn("commit locally. Do not push.", prompts[0])
+        self.assertEqual(len(submitted), 3)
+        self.assertIn("commit locally. Do not push.", submitted[0].yaml_text)
         actions = plan_stack_actions(StackGroup("s", (item,)), REQUIRED, ledger, 4)
         self.assertEqual([(a.kind, a.key) for a in actions], [("comment_blocked", "capped")])
 
-    def test_repair_conflict_pushes_on_successful_resolution(self):
+    def test_repair_conflict_returns_submitted_and_records_ledger(self):
         item = pr(2660, merge_state="DIRTY", latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
-        new_head = "b" * 40
-        rev_parse = iter([HEAD, new_head])
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
-                    with mock.patch.object(repairer, "run_claude_repair"):
-                        with mock.patch.object(repairer, "push_branch", return_value=new_head) as push_branch:
-                            result = repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
-        self.assertEqual(result.status, "pushed")
+        with mock.patch("scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan") as submit:
+            result = repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
+        submit.assert_called_once()
+        self.assertEqual(result.status, "submitted")
         self.assertEqual(result.start_head, HEAD)
-        self.assertEqual(result.end_head, new_head)
-        push_branch.assert_called_once_with(mock.ANY, item.head_ref_name, expected_head=item.head_ref_oid)
+        self.assertEqual(result.end_head, HEAD)
         self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 1)
 
-    def test_repair_conflict_returns_stale_head_without_raising(self):
+    def test_repair_conflict_does_not_record_ledger_when_submission_fails(self):
         item = pr(2661, merge_state="DIRTY", latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
-        new_head = "c" * 40
-        rev_parse = iter([HEAD, new_head])
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
-                    with mock.patch.object(repairer, "run_claude_repair"):
-                        with mock.patch.object(repairer, "push_branch", side_effect=SafePushError("stale-head: refs/heads/x is deadbeef; expected " + HEAD)):
-                            result = repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
-        self.assertEqual(result.status, "stale_head")
-        self.assertIn("stale-head", result.errors[0])
-        self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 1)
+        with mock.patch(
+            "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+            side_effect=RuntimeError("submit failed"),
+        ):
+            with self.assertRaises(RuntimeError):
+                repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
+        self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 0)
 
-    def test_repair_check_ledger_row_written_before_run_claude_repair_raises(self):
+    def test_repair_check_ledger_row_not_written_when_submission_fails(self):
         item = pr(2662, latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
-                with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
-                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
-                        with mock.patch.object(repairer, "run_claude_repair", side_effect=subprocess.CalledProcessError(1, ["claude"])):
-                            with self.assertRaises(subprocess.CalledProcessError):
-                                repairer.repair_check(item, "PR Body", 1)
-        self.assertEqual(ledger.count("repair-check", item.number, item.head_ref_oid, "PR Body"), 1)
-
-    def test_claude_repair_uses_claude_cli(self):
-        repairer = self.repairer(object(), self.ledger())
-        with mock.patch("scripts.mergify_admin_requeue_repairer.subprocess.run") as run:
-            repairer.run_claude_repair(Path("/tmp/work"), "repair this")
-        run.assert_called_once_with(
-            ["claude", "-p", "repair this", "--dangerously-skip-permissions"],
-            cwd="/tmp/work",
-            check=True,
-            text=True,
-        )
+        with mock.patch.object(repairer.executor, "download_job_log", return_value=""):
+            with mock.patch(
+                "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+                side_effect=RuntimeError("submit failed"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    repairer.repair_check(item, "PR Body", 1)
+        self.assertEqual(ledger.count("repair-check", item.number, item.head_ref_oid, "PR Body"), 0)
 
     def test_candidate_stack_includes_unlabeled_upper_prs(self):
         def raw(number, base, head, labels):
@@ -457,56 +423,25 @@ Failing checks
         stderr = io.StringIO()
         item = pr(2647, latest=mergify())
         repairer = self.repairer(object(), self.ledger())
-        git_rev_parse = iter([HEAD, HEAD])
+        submitted = []
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
-                with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
-                        with mock.patch.object(repairer, "run_claude_repair") as repair:
-                            with mock.patch("scripts.mergify_admin_requeue_repairer.validate_current_pr_body", return_value={"valid": True, "errors": []}):
-                                with redirect_stderr(stderr):
-                                    result = repairer.repair_check(item, "PR Body")
-        checkout.assert_called_once()
-        repair.assert_called_once()
-        self.assertEqual(result.status, "noop")
-        self.assertIn("Commit locally if needed, do not push.", repair.call_args.args[1])
+                with mock.patch.object(repairer, "job_log_is_empty", return_value=False):
+                    with mock.patch(
+                        "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+                        side_effect=lambda plan: submitted.append(plan),
+                    ):
+                        with redirect_stderr(stderr):
+                            result = repairer.repair_check(item, "PR Body")
+        checkout.assert_not_called()
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(result.status, "submitted")
+        self.assertIn("Commit locally if needed, do not push.", submitted[0].yaml_text)
         log = stderr.getvalue()
         self.assertIn('"event": "admin-bypass-repair-check-start"', log)
         self.assertIn('"check_name": "PR Body"', log)
         self.assertIn('"log_path": "/tmp/pr-body.log"', log)
         self.assertIn('"pr_number": 2647', log)
-
-
-    def test_repair_check_noop_invalid_non_trunk_blocks_human_split(self):
-        item = pr(
-            5803,
-            base="stack/base",
-            body="## Summary\n\nMixed slice.\n",
-            checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")},
-        )
-        repairer = self.repairer(object(), self.ledger())
-        git_rev_parse = iter([HEAD, HEAD])
-        validation = {
-            "valid": False,
-            "errors": [
-                "PR body mentions multiple review units (validation-policy, routing); split into one conceptual unit per diff/task.",
-                "Review lane behavior cannot ship with policy, proof files in the same PR. Split behavior or cleanup from docs, policy, repro, and benchmark slices.",
-                'PR body Review Unit \"routing\" cannot ship with tooling-policy, proof files in the same PR. Split this into one Review Unit per PR.',
-            ],
-            "reviewLane": "behavior",
-            "reviewUnit": "routing",
-            "reviewUnits": ["routing", "tooling-policy", "proof"],
-            "scopeKinds": ["product", "policy"],
-        }
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
-                with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
-                        with mock.patch.object(repairer, "run_claude_repair"):
-                            with mock.patch("scripts.mergify_admin_requeue_repairer.validate_current_pr_body", return_value=validation):
-                                result = repairer.repair_check(item, "PR Body")
-        self.assertEqual(result.status, "blocked_invalid")
-        self.assertIn(NON_TRUNK_MANUAL_SPLIT_ERROR, result.errors)
 
     def test_plan_stack_actions_stop_retrying_after_repair_invalid(self):
         ledger = self.ledger()
@@ -514,8 +449,8 @@ Failing checks
         stack = StackGroup("s", (pr(2606, labels={"admin-bypass"}, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}),))
         actions = plan_stack_actions(stack, REQUIRED, ledger, 2)
         self.assertEqual(actions, ())
-    def test_queue_only_repair_uses_mergify_job_log_and_returns_noop(self):
-        stderr = io.StringIO()
+
+    def test_queue_only_repair_with_evidence_submits_async_plan(self):
         latest = MergifyQueueEvent(
             "m5811",
             "dequeued",
@@ -530,22 +465,20 @@ Failing checks
         )
         item = pr(5811, labels={"admin-bypass", "dequeued"}, checks={}, latest=latest)
         repairer = self.repairer(object(), self.ledger())
-        git_rev_parse = iter([HEAD, HEAD])
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
-            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
-                with mock.patch.object(repairer, "job_log_has_evidence", return_value=True):
-                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                        with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
-                            with mock.patch.object(repairer, "run_claude_repair") as repair:
-                                with redirect_stderr(stderr):
-                                    result = repairer.repair_check(item, "required-fast / Guardrails")
-        checkout.assert_called_once()
-        repair.assert_called_once()
-        self.assertEqual(result.status, "queue_only_noop")
-        self.assertIn("Queue draft PR: #5854", repair.call_args.args[1])
-        self.assertIn("Job log path: /tmp/guardrails.log", repair.call_args.args[1])
+        submitted = []
+        with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
+            with mock.patch.object(repairer, "job_log_has_evidence", return_value=True):
+                with mock.patch(
+                    "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
+                    side_effect=lambda plan: submitted.append(plan),
+                ):
+                    result = repairer.repair_check(item, "required-fast / Guardrails")
+        self.assertEqual(result.status, "submitted")
+        self.assertEqual(len(submitted), 1)
+        self.assertIn("Queue draft PR: #5854", submitted[0].yaml_text)
+        self.assertIn("Job log path: /tmp/guardrails.log", submitted[0].yaml_text)
 
-    def test_queue_only_repair_empty_job_log_returns_noop_without_claude(self):
+    def test_queue_only_repair_empty_job_log_returns_noop_without_submitting(self):
         latest = MergifyQueueEvent(
             "m5811",
             "dequeued",
@@ -560,17 +493,14 @@ Failing checks
         )
         item = pr(5811, labels={"dequeued"}, checks={}, latest=latest)
         repairer = self.repairer(object(), self.ledger())
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
-            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
-                with mock.patch.object(repairer, "job_log_has_evidence", return_value=False):
-                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
-                        with mock.patch.object(repairer, "run_claude_repair") as repair:
-                            result = repairer.repair_check(item, "required-fast / Guardrails")
-        checkout.assert_called_once()
-        repair.assert_not_called()
+        with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
+            with mock.patch.object(repairer, "job_log_has_evidence", return_value=False):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan") as submit:
+                    result = repairer.repair_check(item, "required-fast / Guardrails")
+        submit.assert_not_called()
         self.assertEqual(result.status, "queue_only_noop")
 
-    def test_pr_body_valid_local_repair_returns_noop_without_claude(self):
+    def test_pr_body_valid_local_repair_returns_noop_without_submitting(self):
         item = pr(5810, checks={"PR Body": check("PR Body", "failure")}, body=PROOF_BODY)
         repairer = self.repairer(object(), self.ledger())
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
@@ -578,12 +508,13 @@ Failing checks
                 with mock.patch.object(repairer, "job_log_is_empty", return_value=True):
                     with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
                         with mock.patch("scripts.mergify_admin_requeue_repairer.validate_current_pr_body", return_value={"valid": True}):
-                            with mock.patch.object(repairer, "run_claude_repair") as repair:
+                            with mock.patch("scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan") as submit:
                                 result = repairer.repair_check(item, "PR Body")
         checkout.assert_called_once()
         download.assert_called_once()
-        repair.assert_not_called()
+        submit.assert_not_called()
         self.assertEqual(result.status, "noop")
+
     def test_run_cycle_logs_selected_bottom_repair_context(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
         stack = StackGroup("s", (pr(2606, checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}, latest=mergify()),))
@@ -681,93 +612,6 @@ Failing checks
         self.assertEqual(repair_check.call_count, 1)
         self.assertEqual(fake_gh.comments, [("owner/repo", 6602, "@mergifyio queue")])
         self.assertTrue(should_poll)
-
-    def test_repair_check_splits_tooling_policy_prerequisite(self):
-        class FakeGh:
-            def __init__(self):
-                self.created = []
-                self.label_edits = []
-                self.comments = []
-
-            def create_pr(self, repo, title, body, head, base):
-                self.created.append((repo, title, body, head, base))
-                return {"number": 5801}
-
-            def edit_label(self, repo, pr_number, *, add=None, remove=None):
-                self.label_edits.append((repo, pr_number, add, remove))
-
-            def comment(self, repo, pr_number, body):
-                self.comments.append((repo, pr_number, body))
-
-        item = pr(
-            5800,
-            latest=mergify(),
-            body=PROOF_BODY,
-            checks={"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")},
-        )
-        ledger = self.ledger()
-        fake = FakeGh()
-        repairer = self.repairer(fake, ledger)
-        rev_parse = iter([HEAD, "b" * 40])
-        git_commands = []
-
-        def fake_git_output(_work_root, *args):
-            git_commands.append(args)
-            if args == ("rev-parse", "HEAD"):
-                return next(rev_parse)
-            return ""
-
-        def fake_git_lines(_work_root, *args):
-            if args == ("status", "--porcelain"):
-                return ()
-            if args == ("rev-list", "--reverse", f"{HEAD}..{'b' * 40}"):
-                return ("commit-a",)
-            return ()
-
-        validator_results = iter([
-            {
-                "valid": False,
-                "errors": [
-                    PROOF_POLICY_LANE_ERROR,
-                    PROOF_TOOLING_POLICY_UNIT_ERROR,
-                ],
-                "reviewLane": "proof",
-                "reviewUnit": "proof",
-                "reviewUnits": ["tooling-policy"],
-                "scopeKinds": ["policy"],
-            },
-            {
-                "valid": True,
-                "errors": [],
-                "reviewLane": "policy",
-                "reviewUnit": "tooling-policy",
-                "reviewUnits": ["tooling-policy"],
-                "scopeKinds": ["policy"],
-            },
-        ])
-
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
-                with mock.patch.object(repairer, "run_claude_repair"):
-                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=fake_git_output):
-                        with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", side_effect=fake_git_lines):
-                            with mock.patch("scripts.mergify_admin_requeue_repair_body.git_output", side_effect=fake_git_output):
-                                with mock.patch("scripts.mergify_admin_requeue_repair_body.validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
-                                    with mock.patch("scripts.mergify_admin_requeue_repair_body.safe_push", return_value="pushed-sha") as safe_push_mock:
-                                        result = repairer.repair_check(item, "PR Body", 123)
-
-        self.assertEqual(result.status, "prereq_created")
-        safe_push_mock.assert_called_once_with(branch="stack/pr-babysit-prereq-5800-c2532d2", expect_missing=True, cwd=mock.ANY)
-        self.assertEqual(fake.created[0][0], "owner/repo")
-        self.assertIn("[PR babysit] Tooling-policy repair prerequisite for #5800: PR Body", fake.created[0][1])
-        self.assertEqual(fake.label_edits, [("owner/repo", 5801, "admin-bypass", None)])
-        latest = ledger.latest("repair-prereq-created", 5800, HEAD, "PR Body")
-        self.assertIsNotNone(latest)
-        self.assertEqual(latest["meta"]["prNumber"], 5801)
-        self.assertIn(("checkout", "-B", "stack/pr-babysit-prereq-5800-c2532d2", "origin/master"), git_commands)
-        self.assertIn(("checkout", "-B", item.head_ref_name, HEAD), git_commands)
-        self.assertIn(("reset", "--hard", HEAD), git_commands)
-        self.assertEqual(fake.comments, [])
 
     def test_run_cycle_waits_while_prerequisite_pr_is_open(self):
         ledger = self.ledger()
