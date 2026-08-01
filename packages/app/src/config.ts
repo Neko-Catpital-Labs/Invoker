@@ -69,6 +69,13 @@ export interface PrMaintenanceConfig {
   shell?: string;
 }
 
+export interface SlackBugScanConfig {
+  enabled?: boolean;
+  intervalMs?: number;
+  maxAutoSubmissionsPerDay?: number;
+  maxAutoSubmissionsPerTick?: number;
+}
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -377,6 +384,7 @@ export interface InvokerConfig {
    * PR-maintenance workers from this block.
    */
   prMaintenance?: PrMaintenanceConfig;
+  slackBugScan?: SlackBugScanConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
