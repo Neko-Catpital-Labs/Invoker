@@ -57,7 +57,7 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['set', 'prompt'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'agent'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set', 'fix-context'])).toBe(true);
-    expect(isHeadlessMutatingCommand(['set', 'xyz'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['set', 'xyz'])).toBe(true);
     expect(isHeadlessMutatingCommand(['worker'])).toBe(false);
     expect(isHeadlessMutatingCommand(['worker', 'status'])).toBe(false);
     expect(isHeadlessMutatingCommand(['worker', 'disk-headroom'])).toBe(true);
@@ -68,7 +68,7 @@ describe('headless-command-classification', () => {
       expect(isHeadlessMutatingCommand(['set', subcommand])).toBe(true);
     }
 
-    expect(isHeadlessMutatingCommand(['set', 'xyz'])).toBe(false);
+    expect(isHeadlessMutatingCommand(['set', 'xyz'])).toBe(true);
     expect(isHeadlessMutatingCommand(['set'])).toBe(false);
   });
 

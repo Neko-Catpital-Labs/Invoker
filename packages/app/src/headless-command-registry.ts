@@ -75,5 +75,5 @@ export function isRemovedHeadlessCommandAlias(_command: string | undefined): boo
 }
 
 export function isMutatingSetSubcommand(subcommand: string | undefined): boolean {
-  return HEADLESS_SET_SUBCOMMANDS.includes(subcommand as (typeof HEADLESS_SET_SUBCOMMANDS)[number]);
+  return typeof subcommand === 'string' && subcommand.length > 0;
 }
