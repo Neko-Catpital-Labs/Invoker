@@ -181,10 +181,13 @@ export function createRendererTaskFeed(deps: RendererTaskFeedDeps): RendererTask
 
   const processIncomingTaskDelta = (delta: TaskDelta): void => {
     deps.uiPerfStats.mainDeltaToUi += 1;
-    if (deps.traceUiDeltaFlow) {
-      deps.logger.debug(`delta→ui: ${JSON.stringify(delta)}`, { module: 'ui' });
-    }
     for (const rendererDelta of applyTaskDeltaToOwnerCacheOrRecover(delta)) {
+      if (deps.traceUiDeltaFlow) {
+        // Trace what is actually published to the renderer (post gap-detect
+        // recovery), not the raw input -- recovery can expand one incoming
+        // delta into zero or more re-synthesized renderer deltas.
+        deps.logger.debug(`delta→ui: ${JSON.stringify(rendererDelta)}`, { module: 'ui' });
+      }
       publishTaskDeltaToRenderer(rendererDelta);
     }
   };
