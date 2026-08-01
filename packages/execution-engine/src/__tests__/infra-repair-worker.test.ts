@@ -8,7 +8,9 @@ import type {
 import type { TaskState } from '@invoker/workflow-core';
 
 import {
+  buildRepoMirrorRepairScript,
   createInfraRepairTick,
+  extractCorruptMirrorPath,
   INFRA_REPAIR_RECREATE_TASK_CHANNEL,
   INFRA_REPAIR_RETRY_TASK_CHANNEL,
   INFRA_REPAIR_WORKER_KIND,
@@ -291,6 +293,23 @@ describe('infra-repair worker', () => {
     expect(h.submit).not.toHaveBeenCalled();
   });
 
+  it('refuses to act when the parsed mirror path is unsafe, even if something matched', async () => {
+    for (const unsafePath of ['/', '~', '.', '..', '', '/home/invoker/.invoker/worktrees/x']) {
+      const h = makeHarness([
+        makeTask({
+          execution: {
+            error: `SSH remote script failed (exit=128, phase=bootstrap_clone_fetch)\nSTDERR:\nfatal: not a git repository (or any of the parent directories): .git\n[WARNING] Git fetch failed for ${unsafePath}\n`,
+          },
+        }),
+      ]);
+
+      await h.tick(POLL_CTX);
+
+      expect(h.runRepoMirrorRepairFn, `path=${JSON.stringify(unsafePath)}`).not.toHaveBeenCalled();
+      expect(h.submit, `path=${JSON.stringify(unsafePath)}`).not.toHaveBeenCalled();
+    }
+  });
+
   it('reads the persisted failureClass subtype when the error text is opaque', async () => {
     const h = makeHarness([
       makeTask({
@@ -454,5 +473,31 @@ describe('infra-repair worker', () => {
         }),
       }),
     ]));
+  });
+});
+
+describe('extractCorruptMirrorPath', () => {
+  it('parses the mirror path out of the bootstrap script warning line', () => {
+    expect(extractCorruptMirrorPath(
+      '[WARNING] Git fetch failed for /home/invoker/.invoker/repos/647faa73e90e\n',
+    )).toBe('/home/invoker/.invoker/repos/647faa73e90e');
+  });
+
+  it('rejects paths that are missing, empty, or not shaped like a mirror path', () => {
+    expect(extractCorruptMirrorPath(undefined)).toBeUndefined();
+    expect(extractCorruptMirrorPath('no warning line here')).toBeUndefined();
+    expect(extractCorruptMirrorPath('[WARNING] Git fetch failed for /\n')).toBeUndefined();
+    expect(extractCorruptMirrorPath('[WARNING] Git fetch failed for ~\n')).toBeUndefined();
+    expect(extractCorruptMirrorPath('[WARNING] Git fetch failed for /home/invoker/.invoker/worktrees/x\n')).toBeUndefined();
+  });
+});
+
+describe('buildRepoMirrorRepairScript', () => {
+  it('embeds a guard that refuses unsafe paths before rm -rf, independent of the caller', () => {
+    const script = buildRepoMirrorRepairScript({ mirrorPath: '/home/invoker/.invoker/repos/647faa73e90e' });
+    expect(script).toContain('refusing to act on unsafe mirror path');
+    expect(script).toContain('rm -rf "$MIRROR_PATH"');
+    // The guard must run before the deletion, not after.
+    expect(script.indexOf('refusing to act on unsafe mirror path')).toBeLessThan(script.indexOf('rm -rf "$MIRROR_PATH"'));
   });
 });
