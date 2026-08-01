@@ -1,0 +1,66 @@
+name: "Repair PR 5933 routing split"
+description: |
+  Restructure the existing Mergify stack for PR #5933 so the PR Body check can
+  pass without weakening review-unit policy.
+
+  The failing check is reproducible on the live PR body: PR #5933 declares
+  Review Unit `activation-surface`, while its changed file set includes
+  `packages/app/src/web/web-invoker-dispatch.ts`, which current master
+  classifies as `routing`. Removing that file from #5933's changed-file set
+  makes the same validator pass, so the fix is stack surgery rather than a
+  single local patch on this checkout.
+onFinish: none
+mergeMode: manual
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: restructure-pr-5933-routing-split
+    description: |
+      Move the web dispatch routing edit out of PR #5933 and keep the existing stack reviewable.
+    prompt: |
+      Assume no prior context. You must inspect and restructure the PR stack around packages/app/src/web/web-invoker-dispatch.ts, packages/app/src/headless-client.ts, packages/app/src/ipc/gui-mutation-handlers.ts, and packages/app/src/workflow-actions.ts.
+
+      Goal: Repair PR #5933, "[Remove deprecated merge-mode and retry paths](2) Remove legacy app command aliases", by restructuring the existing stack instead of forcing the mixed review units through one PR.
+
+      Verified failure:
+      - PR Body currently fails with: `PR body Review Unit "activation-surface" cannot ship with routing files in the same PR. Split this into one Review Unit per PR.`
+      - Current `scripts/review-unit-rules.mjs` classifies `packages/app/src/web/web-invoker-dispatch.ts` as `routing`.
+      - The other production files changed by #5933 are classified as `activation-surface`; tests are ignored by the review-unit file classifier.
+      - A local reproduction using the live PR body exits 1 with the current file list and exits 0 when `packages/app/src/web/web-invoker-dispatch.ts` is removed from that changed-file list.
+
+      Required restructuring:
+      1. Fetch the live stack branches for PRs #5933 and #5934.
+      2. Update the existing #5933 branch so its diff against its live base no longer includes `packages/app/src/web/web-invoker-dispatch.ts`.
+      3. Keep #5933 scoped to the activation-surface files already in the PR:
+         `packages/app/src/headless-client.ts`, `packages/app/src/ipc/gui-mutation-handlers.ts`, `packages/app/src/workflow-actions.ts`, and their focused tests.
+      4. Put the `packages/app/src/web/web-invoker-dispatch.ts` canonical channel change in a separate routing review unit. Prefer moving it into the existing dependent stack step #5934 if that keeps #5934 coherent; otherwise insert a new stack PR between #5933 and #5934.
+      5. Keep the renderer bridge rename and contract deletion sequenced after the backend compatibility/canonical-name steps already represented by the stack. Do not make #5933 depend on a renderer call-site that is not present in #5933.
+      6. Update PR bodies so each PR declares exactly the review unit represented by its changed production files.
+      7. Publish the corrected stack with Mergify Stacks after the local checks below are green.
+
+      Acceptance criteria:
+      - Must verify that, for PR #5933, `node scripts/validate-pr-body.mjs --body-file <live-body> --changed-files-file <changed-files> --diff-file <diff>` exits 0 using the live PR base/head.
+      - Must ensure the changed-file classifier for #5933 reports only `activation-surface` for production files.
+      - Must ensure the routing PR that receives `packages/app/src/web/web-invoker-dispatch.ts` has Review Unit `routing` and passes the same PR Body validator.
+      - Must verify focused app/UI tests covering merge-mode channel routing still pass after the split.
+      - Must not force-push or publish the stack until the repaired stack has been locally validated.
+    poolId: remote_digital_ocean_1
+    dependencies: []
+
+  - id: verify-pr-5933-body-after-split
+    description: |
+      Confirm the latest PR Body check for PR #5933 is green after restructuring.
+    command: >-
+      gh pr view 5933 --json statusCheckRollup --jq '[.statusCheckRollup[] | select(.name == "PR Body")] | max_by(.startedAt) | .conclusion' | grep -qx SUCCESS
+    poolId: remote_digital_ocean_1
+    dependencies:
+      - restructure-pr-5933-routing-split
+
+  - id: verify-pr-5933-routing-file-absent
+    description: |
+      Confirm the routing file is no longer part of PR #5933 after restructuring.
+    command: >-
+      node -e "process.exit(require('node:child_process').execFileSync('gh',['pr','diff','5933','--name-only']).toString().split(/\n/).includes('packages/app/src/web/web-invoker-dispatch.ts') ? 1 : 0)"
+    poolId: remote_digital_ocean_1
+    dependencies:
+      - restructure-pr-5933-routing-split
