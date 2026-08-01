@@ -101,11 +101,14 @@ class GhClient:
 
         return [by_number[number] for number in ordered_numbers]
 
-    def list_open_prs(self, repo: str) -> list[dict]:
-        value = self._run_json([
+    def list_open_prs(self, repo: str, author: str | None = None) -> list[dict]:
+        args = [
             "gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json",
             PR_LIST_FIELDS,
-        ])
+        ]
+        if author:
+            args[5:5] = ["--author", author]
+        value = self._run_json(args)
         return value if isinstance(value, list) else []
 
     def pr_detail(self, repo: str, number: int) -> dict:
