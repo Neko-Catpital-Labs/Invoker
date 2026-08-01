@@ -11,8 +11,9 @@ try:
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
-    from .mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
+    from .mergify_admin_requeue_plan import is_queue_only_required_check
     from .mergify_admin_requeue_repair_body import (
+        create_repair_prerequisite,
         git_lines,
         git_output,
         hard_reset_work_root,
@@ -27,8 +28,9 @@ except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
-    from mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
+    from mergify_admin_requeue_plan import is_queue_only_required_check
     from mergify_admin_requeue_repair_body import (
+        create_repair_prerequisite,
         git_lines,
         git_output,
         hard_reset_work_root,
@@ -82,43 +84,6 @@ class AdminBypassRepairer:
             end_head,
             repair_commits=repair_commits,
             errors=invalid_repair_errors(value, pr),
-        )
-
-    def prerequisite_branch_name(self, pr: PrSnapshot, start_head: str) -> str:
-        return f"stack/pr-babysit-prereq-{pr.number}-{start_head[:7]}"
-
-    def prerequisite_title(self, pr: PrSnapshot, check_name: str) -> str:
-        return f"[PR babysit] Tooling-policy repair prerequisite for #{pr.number}: {check_name}"
-
-    def prerequisite_body(self, pr: PrSnapshot, check_name: str) -> str:
-        return (
-            "## Summary\n\n"
-            "Worker-generated tooling-policy repair.\n\n"
-            "## Review Claim\n\n"
-            f"This PR carries the worker-generated tooling-policy repair that unblocks {check_name} on #{pr.number}.\n\n"
-            "## Review Lane\n\n"
-            "- policy\n\n"
-            "## Review Unit\n\n"
-            "- tooling-policy\n\n"
-            "## Safety Invariant\n\n"
-            "Contains only the worker-generated repair commit; the original PR branch stays proof-only.\n\n"
-            "## Slice Rationale\n\n"
-            "The repair changed tooling-policy files that a proof PR body cannot carry, so the repair must land first.\n\n"
-            "## Non-goals\n\n"
-            "- No product behavior change.\n\n"
-            "## Test Plan\n\n"
-            "<details>\n"
-            "<summary>Test Plan</summary>\n\n"
-            f"- [ ] Let CI rerun {check_name}.\n\n"
-            "</details>\n\n"
-            "## Revert Plan\n\n"
-            "<details>\n"
-            "<summary>Revert Plan</summary>\n\n"
-            "- Safe to revert? Yes.\n"
-            "- Revert command: `git revert <sha>`\n"
-            "- Post-revert steps: None.\n"
-            "- Data migration? No.\n\n"
-            "</details>\n"
         )
 
     def blocked_outcome(
@@ -184,51 +149,6 @@ class AdminBypassRepairer:
         )
         hard_reset_work_root(work_root, start_head)
         return self.blocked_outcome("noop", check_name, start_head, end_head)
-
-    def create_repair_prerequisite(
-        self,
-        pr: PrSnapshot,
-        check_name: str,
-        start_head: str,
-        repair_commits: Sequence[str],
-        work_root: Path,
-        now: int | None,
-    ) -> dict[str, object]:
-        branch_name = self.prerequisite_branch_name(pr, start_head)
-        title = self.prerequisite_title(pr, check_name)
-        body = self.prerequisite_body(pr, check_name)
-        git_output(work_root, "checkout", "-B", branch_name, f"origin/{TRUNK}")
-        git_output(work_root, "reset", "--hard", f"origin/{TRUNK}")
-        for commit in repair_commits:
-            git_output(work_root, "cherry-pick", commit)
-        validation = validate_current_pr_body(work_root, body, TRUNK)
-        if not validation.get("valid"):
-            errors = [str(error) for error in validation.get("errors", [])]
-            raise RuntimeError("prerequisite PR body failed validation: " + "; ".join(errors))
-        self.push_branch(work_root, branch_name, expect_missing=True)
-        created = self.gh.create_pr(self.repo, title, body, branch_name, TRUNK)
-        prereq_number = int(created.get("number") or 0)
-        if prereq_number <= 0:
-            raise RuntimeError("GitHub did not return a prerequisite PR number")
-        self.gh.edit_label(self.repo, prereq_number, add="admin-bypass")
-        self.ledger.record(
-            "repair-prereq-created",
-            pr.number,
-            pr.head_ref_oid,
-            check_name,
-            now,
-            meta={"prNumber": prereq_number, "branch": branch_name},
-        )
-        self.logger.trace(
-            "admin-bypass-repair-prereq-created",
-            repo=self.repo,
-            pr_number=pr.number,
-            check_name=check_name,
-            prereq_pr_number=prereq_number,
-            prereq_branch=branch_name,
-            repair_commits=list(repair_commits),
-        )
-        return {"prNumber": prereq_number, "branch": branch_name, "title": title}
 
     def run_claude_repair(self, work_root: Path, prompt: str) -> None:
         subprocess.run(
@@ -384,7 +304,10 @@ class AdminBypassRepairer:
             )
         if is_prereq_split_validation(validation, pr):
             try:
-                created = self.create_repair_prerequisite(pr, check_name, start_head, repair_commits, work_root, now)
+                created = create_repair_prerequisite(
+                    self.gh, self.ledger, self.logger, self.repo, work_root,
+                    pr, check_name, start_head, repair_commits, now,
+                )
             finally:
                 git_output(work_root, "checkout", "-B", pr.head_ref_name, start_head)
                 hard_reset_work_root(work_root, start_head)
