@@ -653,9 +653,56 @@ export class EmbeddedTerminalManager extends EventEmitter {
   }
 }
 
+const ESCAPE_LOOKBACK_CHARS = 512;
+
+/**
+ * Finds where a CSI (ESC [ ... final-byte) or OSC (ESC ] ... BEL|ST)
+ * sequence starting at `escapeIndex` ends. Returns null if no terminator is
+ * found within `searchLimit`.
+ */
+function findEscapeSequenceEnd(snapshot: string, escapeIndex: number, searchLimit: number): number | null {
+  const introducer = snapshot[escapeIndex + 1];
+  if (introducer === '[') {
+    for (let i = escapeIndex + 2; i < searchLimit; i++) {
+      const code = snapshot.charCodeAt(i);
+      if (code >= 0x40 && code <= 0x7e) return i;
+    }
+    return null;
+  }
+  if (introducer === ']') {
+    for (let i = escapeIndex + 2; i < searchLimit; i++) {
+      const code = snapshot.charCodeAt(i);
+      if (code === 0x07) return i;
+      if (code === 0x1b && snapshot[i + 1] === '\\') return i + 1;
+    }
+    return null;
+  }
+  if (introducer === undefined) return null;
+  return escapeIndex + 1;
+}
+
+/**
+ * Moves `naiveCutIndex` back to the start of any escape sequence it would
+ * otherwise cut in half, so a truncated snapshot never begins with a
+ * dangling escape-sequence fragment. Falls back to `naiveCutIndex` (this
+ * function's only caller's prior behavior) when no escape start is found
+ * within ESCAPE_LOOKBACK_CHARS.
+ */
+function findSafeTrimStart(snapshot: string, naiveCutIndex: number): number {
+  const lookbackFloor = Math.max(0, naiveCutIndex - ESCAPE_LOOKBACK_CHARS);
+  const escapeIndex = snapshot.lastIndexOf('\x1b', naiveCutIndex - 1);
+  if (escapeIndex === -1 || escapeIndex < lookbackFloor) return naiveCutIndex;
+
+  const searchLimit = Math.min(snapshot.length, escapeIndex + ESCAPE_LOOKBACK_CHARS);
+  const terminatorIndex = findEscapeSequenceEnd(snapshot, escapeIndex, searchLimit);
+  const cutIsInsideSequence = terminatorIndex === null || terminatorIndex >= naiveCutIndex;
+  return cutIsInsideSequence ? escapeIndex : naiveCutIndex;
+}
+
 function trimOutputSnapshot(snapshot: string): string {
   if (snapshot.length <= MAX_OUTPUT_SNAPSHOT_CHARS) return snapshot;
-  return snapshot.slice(snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS);
+  const naiveCutIndex = snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS;
+  return snapshot.slice(findSafeTrimStart(snapshot, naiveCutIndex));
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
