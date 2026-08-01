@@ -69,6 +69,5 @@ export interface WorkerRuntimeDependencies {
   workflowResume?: WorkflowResumeWorkerConfig;
   /** e2e auto-fix/default-branch CI watcher configuration. */
   e2eAutoFix?: E2eAutoFixWorkerConfig;
-  /** Slack bug-scan worker configuration (Slack client, classifier, plan submitter). Off by default. */
   slackBugScan?: SlackBugScanWorkerConfig;
 }

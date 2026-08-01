@@ -97,6 +97,10 @@ function incrementDailyCount(store: WorkerDecisionStore, dateIso: string, curren
   });
 }
 
+function currentSlackTs(): string {
+  return (Date.now() / 1000).toFixed(6);
+}
+
 function threadTextFor(candidate: SlackBugScanCandidate): string {
   return candidate.threadMessages.map((m) => m.text).join('\n---\n');
 }
@@ -132,10 +136,7 @@ export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): Wo
       ctx.signal?.throwIfAborted();
 
       const nowIso = new Date().toISOString();
-      // Slack ts values are Unix epoch seconds with microsecond precision (e.g.
-      // "1712345678.123456"), not ISO 8601 — the watermark must match that format
-      // since it's fed straight into conversations.history's `oldest` param.
-      const nowSlackTs = (Date.now() / 1000).toFixed(6);
+      const nowSlackTs = currentSlackTs();
       const channels = await options.client.listMemberChannels();
       let submittedThisTick = 0;
 
@@ -156,7 +157,6 @@ export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): Wo
             continue;
           }
           if (submittedThisTick >= maxPerTick) {
-            // Deferred, not dropped: no ledger row written, so the same candidate is picked up next tick.
             continue;
           }
 
@@ -209,7 +209,6 @@ export function createSlackBugScanWorker(options: SlackBugScanWorkerOptions): Wo
   });
 }
 
-/** Register the built-in Slack bug-scan worker (off by default — see worker-control.ts). */
 export function registerSlackBugScanWorker(
   registry: WorkerRegistry<WorkerRuntimeDependencies>,
 ): WorkerRegistry<WorkerRuntimeDependencies> {

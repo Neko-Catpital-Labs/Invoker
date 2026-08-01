@@ -15,7 +15,6 @@ export interface SlackBugScanMessage {
 }
 
 export interface SlackBugScanClient {
-  /** Channels the bot is a member of, via users.conversations (never conversations.list + filter). */
   listMemberChannels(): Promise<SlackBugScanChannelSummary[]>;
   listHistorySince(channelId: string, oldestTs?: string): Promise<SlackBugScanMessage[]>;
   listReplies(channelId: string, threadTs: string): Promise<SlackBugScanMessage[]>;

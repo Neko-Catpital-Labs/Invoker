@@ -44,7 +44,6 @@ export const PR_MAINTENANCE_AUTO_STARTED_WORKER_KINDS = [
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
 ] as const;
 
-/** Slack bug-scan worker kind auto-started only when `slackBugScan.enabled` is true. */
 export const SLACK_BUG_SCAN_AUTO_STARTED_WORKER_KINDS = [
   SLACK_BUG_SCAN_WORKER_KIND,
 ] as const;

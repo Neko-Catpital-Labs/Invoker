@@ -70,17 +70,9 @@ export interface PrMaintenanceConfig {
 }
 
 export interface SlackBugScanConfig {
-  /**
-   * Gate for auto-starting the Slack bug-scan worker at owner startup.
-   * Default: false. High blast-radius (auto-submits workflows from
-   * unstructured chat with no human approval gate) — opt-in only.
-   */
   enabled?: boolean;
-  /** Scan interval in milliseconds. Defaults to five minutes. */
   intervalMs?: number;
-  /** Max auto-submitted workflows per calendar day, across all channels. Defaults to 5. */
   maxAutoSubmissionsPerDay?: number;
-  /** Max auto-submitted workflows per single tick. Defaults to 1. */
   maxAutoSubmissionsPerTick?: number;
 }
 
@@ -392,11 +384,6 @@ export interface InvokerConfig {
    * PR-maintenance workers from this block.
    */
   prMaintenance?: PrMaintenanceConfig;
-  /**
-   * Owner-side Slack bug-scan worker config. Disabled by default; when
-   * `enabled` is true the owner auto-starts the worker that scans Slack
-   * threads and auto-files bug complaints as Invoker workflows.
-   */
   slackBugScan?: SlackBugScanConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {

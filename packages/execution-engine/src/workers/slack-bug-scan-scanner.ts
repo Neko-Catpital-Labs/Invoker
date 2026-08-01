@@ -25,12 +25,6 @@ function isHumanMessage(message: SlackBugScanMessage): boolean {
   return !message.botId;
 }
 
-/**
- * Scans one channel for new bug-complaint candidates since its stored watermark,
- * advancing the watermark unconditionally so history is never re-walked. A
- * channel seen for the first time seeds its watermark to `nowTs` rather than
- * scanning full backlog (per confirmed decision — never auto-file from old history).
- */
 export async function scanChannelForCandidates(
   client: SlackBugScanClient,
   store: WorkerDecisionStore,
