@@ -9,6 +9,7 @@ import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.j
 import { registerPrStatusWorker } from './workers/pr-status-worker.js';
 import { registerReaperWorker } from './workers/reaper-worker.js';
 import { registerRequeueWorker } from './workers/requeue-worker.js';
+import { registerSlackBugScanWorker } from './workers/slack-bug-scan-worker.js';
 import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
 
 /** Register every built-in worker in the stable built-in order. */
@@ -25,5 +26,6 @@ export function registerBuiltinWorkers(
   registerAutoApproveWorker(registry);
   registerPrMaintenanceWorkers(registry);
   registerE2eAutoFixWorker(registry);
+  registerSlackBugScanWorker(registry);
   return registry;
 }
