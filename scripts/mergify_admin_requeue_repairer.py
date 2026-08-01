@@ -12,14 +12,16 @@ try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
-    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
+    from .mergify_admin_requeue_repair_body import git_lines, git_output, hard_reset_work_root, is_ancestor
+    from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
     from .pr_worker_safe_push import SafePushError, safe_push
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import TRUNK, is_queue_only_required_check
-    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head, run_logged
+    from mergify_admin_requeue_repair_body import git_lines, git_output, hard_reset_work_root, is_ancestor
+    from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
     from pr_worker_safe_push import SafePushError, safe_push
 
 
@@ -60,46 +62,24 @@ class AdminBypassRepairer:
         self.ledger = ledger
         self.repo = repo
 
-    def git_output(self, work_root: Path, *args: str) -> str:
-        return run_logged(["git", *args], cwd=work_root)
-
-    def git_lines(self, work_root: Path, *args: str) -> tuple[str, ...]:
-        return tuple(line.strip() for line in self.git_output(work_root, *args).splitlines() if line.strip())
-
-    def hard_reset_work_root(self, work_root: Path, target: str) -> None:
-        self.git_output(work_root, "reset", "--hard", target)
-        self.git_output(work_root, "clean", "-fd")
-
-    def is_ancestor(self, work_root: Path, ancestor: str, descendant: str) -> bool:
-        if not work_root.exists():
-            return True
-        completed = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
-            cwd=str(work_root),
-            check=False,
-            text=True,
-            capture_output=True,
-        )
-        return completed.returncode == 0
-
     def normalize_repair_commit(self, work_root: Path, start_head: str, end_head: str, check_name: str) -> str:
-        if self.is_ancestor(work_root, start_head, end_head):
+        if is_ancestor(work_root, start_head, end_head):
             return end_head
-        diff = self.git_output(work_root, "diff", "--binary", start_head, end_head)
-        self.hard_reset_work_root(work_root, start_head)
+        diff = git_output(work_root, "diff", "--binary", start_head, end_head)
+        hard_reset_work_root(work_root, start_head)
         if not diff.strip():
             return start_head
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
             handle.write(diff)
             patch_path = Path(handle.name)
         try:
-            self.git_output(work_root, "apply", "--index", str(patch_path))
+            git_output(work_root, "apply", "--index", str(patch_path))
         finally:
             patch_path.unlink(missing_ok=True)
-        if not self.git_lines(work_root, "status", "--porcelain"):
+        if not git_lines(work_root, "status", "--porcelain"):
             return start_head
-        self.git_output(work_root, "commit", "-m", f"Repair {check_name}")
-        return self.git_output(work_root, "rev-parse", "HEAD").strip()
+        git_output(work_root, "commit", "-m", f"Repair {check_name}")
+        return git_output(work_root, "rev-parse", "HEAD").strip()
 
     def validate_local_pr_body(self, work_root: Path, body: str, base_branch: str) -> dict[str, object]:
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
@@ -134,9 +114,9 @@ class AdminBypassRepairer:
             body_path.unlink(missing_ok=True)
 
     def validate_pr_body_from_current_diff(self, work_root: Path, body: str, base_branch: str) -> dict[str, object]:
-        self.git_output(work_root, "fetch", "origin", f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}")
-        changed_files = self.git_output(work_root, "diff", "--name-only", f"origin/{base_branch}...HEAD")
-        diff_text = self.git_output(work_root, "diff", "--no-ext-diff", f"origin/{base_branch}...HEAD")
+        git_output(work_root, "fetch", "origin", f"+refs/heads/{base_branch}:refs/remotes/origin/{base_branch}")
+        changed_files = git_output(work_root, "diff", "--name-only", f"origin/{base_branch}...HEAD")
+        diff_text = git_output(work_root, "diff", "--no-ext-diff", f"origin/{base_branch}...HEAD")
         with (
             tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as body_handle,
             tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as changed_handle,
@@ -354,7 +334,7 @@ class AdminBypassRepairer:
             start_head=start_head,
             end_head=end_head,
         )
-        self.hard_reset_work_root(work_root, start_head)
+        hard_reset_work_root(work_root, start_head)
         return self.blocked_outcome("noop", check_name, start_head, end_head)
 
     def create_repair_prerequisite(
@@ -369,10 +349,10 @@ class AdminBypassRepairer:
         branch_name = self.prerequisite_branch_name(pr, start_head)
         title = self.prerequisite_title(pr, check_name)
         body = self.prerequisite_body(pr, check_name)
-        self.git_output(work_root, "checkout", "-B", branch_name, f"origin/{TRUNK}")
-        self.git_output(work_root, "reset", "--hard", f"origin/{TRUNK}")
+        git_output(work_root, "checkout", "-B", branch_name, f"origin/{TRUNK}")
+        git_output(work_root, "reset", "--hard", f"origin/{TRUNK}")
         for commit in repair_commits:
-            self.git_output(work_root, "cherry-pick", commit)
+            git_output(work_root, "cherry-pick", commit)
         validation = self.validate_current_pr_body(work_root, body, TRUNK)
         if not validation.get("valid"):
             errors = [str(error) for error in validation.get("errors", [])]
@@ -439,7 +419,7 @@ class AdminBypassRepairer:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
-        start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        start_head = git_output(work_root, "rev-parse", "HEAD").strip()
         if queue_only and not details_url:
             return self.blocked_outcome(
                 "blocked_invalid",
@@ -507,8 +487,8 @@ class AdminBypassRepairer:
             head_sha=pr.head_ref_oid,
         )
         self.run_claude_repair(work_root, prompt)
-        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
-        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        end_head = git_output(work_root, "rev-parse", "HEAD").strip()
+        status_lines = git_lines(work_root, "status", "--porcelain")
         terminal = self.terminal_repair_outcome(pr, check_name, start_head, end_head, work_root)
         if terminal:
             return terminal
@@ -524,7 +504,7 @@ class AdminBypassRepairer:
                 end_head,
             )
         if status_lines:
-            self.hard_reset_work_root(work_root, start_head)
+            hard_reset_work_root(work_root, start_head)
             return self.blocked_outcome(
                 "blocked_dirty",
                 check_name,
@@ -533,7 +513,7 @@ class AdminBypassRepairer:
                 status_lines=status_lines,
             )
         end_head = self.normalize_repair_commit(work_root, start_head, end_head, check_name)
-        repair_commits = self.git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
+        repair_commits = git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
         validation = self.validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
         if validation.get("valid"):
             try:
@@ -558,8 +538,8 @@ class AdminBypassRepairer:
             try:
                 created = self.create_repair_prerequisite(pr, check_name, start_head, repair_commits, work_root, now)
             finally:
-                self.git_output(work_root, "checkout", "-B", pr.head_ref_name, start_head)
-                self.hard_reset_work_root(work_root, start_head)
+                git_output(work_root, "checkout", "-B", pr.head_ref_name, start_head)
+                hard_reset_work_root(work_root, start_head)
             return self.blocked_outcome(
                 "prereq_created",
                 check_name,
@@ -568,7 +548,7 @@ class AdminBypassRepairer:
                 repair_commits=repair_commits,
                 prereq=created,
             )
-        self.hard_reset_work_root(work_root, start_head)
+        hard_reset_work_root(work_root, start_head)
         return self.invalid_repair_outcome(
             pr,
             check_name,
@@ -584,7 +564,7 @@ class AdminBypassRepairer:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
-        start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        start_head = git_output(work_root, "rev-parse", "HEAD").strip()
         prompt = (
             f"This PR has a merge conflict blocking it from merging. Diagnose why, then fix it.\n\n"
             f"If rebasing the head branch onto its base branch (preserving the PR's intended changes) resolves it: "
@@ -608,11 +588,11 @@ class AdminBypassRepairer:
             head_sha=pr.head_ref_oid,
         )
         self.run_claude_repair(work_root, prompt)
-        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
-        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        end_head = git_output(work_root, "rev-parse", "HEAD").strip()
+        status_lines = git_lines(work_root, "status", "--porcelain")
         if end_head == start_head or status_lines:
             if status_lines:
-                self.hard_reset_work_root(work_root, start_head)
+                hard_reset_work_root(work_root, start_head)
                 return self.blocked_outcome(
                     "blocked_dirty",
                     check_name,
@@ -638,7 +618,7 @@ class AdminBypassRepairer:
         work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
         work_root.parent.mkdir(parents=True, exist_ok=True)
         checkout_pr_head(self.repo, pr, work_root)
-        start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
+        start_head = git_output(work_root, "rev-parse", "HEAD").strip()
         prompt = (
             f"Resolve the unresolved review thread {thread_id}. Address the reviewer's feedback with "
             f"real code changes, run the narrow proof for the fix, then commit locally. Do not push. "
@@ -654,11 +634,11 @@ class AdminBypassRepairer:
             head_sha=pr.head_ref_oid,
         )
         self.run_claude_repair(work_root, prompt)
-        end_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
-        status_lines = self.git_lines(work_root, "status", "--porcelain")
+        end_head = git_output(work_root, "rev-parse", "HEAD").strip()
+        status_lines = git_lines(work_root, "status", "--porcelain")
         if end_head == start_head or status_lines:
             if status_lines:
-                self.hard_reset_work_root(work_root, start_head)
+                hard_reset_work_root(work_root, start_head)
                 return self.blocked_outcome(
                     "blocked_dirty",
                     thread_id,
