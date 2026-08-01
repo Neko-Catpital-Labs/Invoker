@@ -231,6 +231,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     }
     termRef.current = term;
     fitRef.current = fit;
+    (window.__INVOKER_TEST_TASK_TERMINALS__ ??= new Map()).set(session.sessionId, term);
 
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef, 'attach');
 
@@ -319,6 +320,9 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
       }
       termRef.current = null;
       fitRef.current = null;
+      if (window.__INVOKER_TEST_TASK_TERMINALS__?.get(session.sessionId) === term) {
+        window.__INVOKER_TEST_TASK_TERMINALS__.delete(session.sessionId);
+      }
     };
   }, [clearScheduledFit, fitVisibleTerminal, scheduleFit, session.sessionId]);
 
@@ -441,11 +445,13 @@ export function TerminalDrawer({
           {cycleLabel}
         </button>
       </div>
-      {showBody && (
-        <div
+      <div
           data-testid="terminal-drawer-body"
           className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative shrink-0 overflow-hidden bg-black'}
-          style={isMaximized ? undefined : { height: DRAWER_BODY_HEIGHT_PX }}
+          style={{
+            ...(isMaximized ? {} : { height: DRAWER_BODY_HEIGHT_PX }),
+            display: showBody ? undefined : 'none',
+          }}
         >
           {sessions.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center px-3 text-xs text-muted-foreground">
@@ -473,7 +479,6 @@ export function TerminalDrawer({
             />
           ))}
         </div>
-      )}
     </div>
   );
 }
