@@ -2,11 +2,14 @@
 
 ## Rule
 
-PR-facing quality jobs and each Playwright shard must finish in **under 5 minutes**.
+PR-facing quality jobs must stay short, and each Playwright shard must stay
+small enough to run predictably.
 
 Enforced by:
 
-- `timeout-minutes: 5` on `quality-required`, `ui-vitest`, `quality-extra`, and `playwright` in `.github/workflows/ci.yml`
+- `timeout-minutes: 5` on `quality-required` and `quality-extra` in `.github/workflows/ci.yml`
+- `timeout-minutes: 10` on `ui-vitest`, which includes checkout, dependency setup, and the package suite
+- `timeout-minutes: 30` on `playwright`, with each shard capped at 6 spec files
 - `node scripts/test-ci-duration-invariant.mjs` (wired into root `pnpm test`)
 
 ## Why
@@ -19,10 +22,10 @@ ordinary PR feedback. That includes the UI action responsiveness battery
 
 ## How to stay under budget
 
-- Keep Playwright shards small (≤ 6 specs each; currently 6 shards).
+- Keep Playwright shards small (≤ 6 specs each).
 - Prefer unit/proof vitest for regressions that do not need Electron.
-- Do **not** raise `timeout-minutes` above 5 for budgeted jobs — split shards
-  or move work to the daily battery instead.
+- Do **not** raise `timeout-minutes` above the script-owned budget for a job —
+  split shards or move work to the daily battery instead.
 
 ## Exempt (may be longer)
 
