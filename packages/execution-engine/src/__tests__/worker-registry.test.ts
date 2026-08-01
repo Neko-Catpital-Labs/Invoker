@@ -24,6 +24,7 @@ import { REAPER_WORKER_KIND } from '../workers/reaper-worker.js';
 import { REQUEUE_WORKER_KIND } from '../workers/requeue-worker.js';
 import { WORKFLOW_RESUME_WORKER_KIND } from '../workers/workflow-resume-worker.js';
 import { E2E_AUTOFIX_WORKER_KIND } from '../workers/e2e-autofix-worker.js';
+import { SLACK_BUG_SCAN_WORKER_KIND } from '../workers/slack-bug-scan-worker.js';
 
 const silentLogger = {
   debug: () => {},
@@ -83,6 +84,7 @@ describe('worker registry', () => {
       PR_DUPLICATE_CLOSE_WORKER_KIND,
       PR_AUTO_LABEL_WORKER_KIND,
       E2E_AUTOFIX_WORKER_KIND,
+      SLACK_BUG_SCAN_WORKER_KIND,
     ]);
     expect(registry.get(AUTO_FIX_WORKER_KIND)).toBeDefined();
     expect(registry.get(REQUEUE_WORKER_KIND)).toBeDefined();
@@ -96,6 +98,7 @@ describe('worker registry', () => {
     expect(registry.get(PR_ORPHAN_REPAIR_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_AUTO_LABEL_WORKER_KIND)).toBeDefined();
     expect(registry.get(E2E_AUTOFIX_WORKER_KIND)).toBeDefined();
+    expect(registry.get(SLACK_BUG_SCAN_WORKER_KIND)).toBeDefined();
   });
   it('returns nothing for an unknown kind', () => {
     const registry = registerAutoFixWorker(createWorkerRegistry<WorkerRuntimeDependencies>());
