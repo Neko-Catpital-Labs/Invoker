@@ -100,6 +100,32 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws with the requested agent name when an explicit SSH AI agent has no registry', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+    const execRemoteCapture = vi
+      .spyOn(ssh, 'execRemoteCapture')
+      .mockRejectedValue(new Error('unexpected remote bootstrap'));
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'omp',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Cannot resolve execution agent "omp".*no configured agent set/s,
+    );
+    expect(execRemoteCapture).not.toHaveBeenCalled();
+  });
+
   it('does not throw for reconciliation requests', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

@@ -14,6 +14,8 @@ import { randomUUID } from 'node:crypto';
 import type { WorkRequest } from '@invoker/contracts';
 import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 import { AgentRegistry } from '../agent-registry.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, TerminalSpec } from '../executor.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 
@@ -58,6 +60,40 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
     callbackUrl: '',
     timestamps: {},
   } as unknown as WorkRequest;
+}
+
+function makeAiTaskRequest(inputs: Partial<WorkRequest['inputs']> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Do the task', ...inputs },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+class TestExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'test';
+
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
+    throw new Error('Not implemented');
+  }
+
+  async kill(_handle: ExecutorHandle): Promise<void> {}
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
+  getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
+  async destroyAll(): Promise<void> { this.entries.clear(); }
+
+  testBuildCommandAndArgs(
+    request: WorkRequest,
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ) {
+    return this.buildCommandAndArgs(request, opts);
+  }
 }
 
 // ── Agent definitions for the matrix ─────────────────────────
@@ -268,6 +304,17 @@ describe('Agent × Executor matrix', () => {
       // We have at least one 'ignore' and one 'pipe'
       expect(modes).toContain('ignore');
       expect(modes).toContain('pipe');
+    });
+  });
+
+  describe('BaseExecutor fallback guard', () => {
+    it('throws with the requested agent name when an explicit AI agent has no registry', () => {
+      const executor = new TestExecutor();
+      const request = makeAiTaskRequest({ executionAgent: 'omp' });
+
+      expect(() => executor.testBuildCommandAndArgs(request)).toThrow(
+        /Cannot resolve execution agent "omp".*no configured agent set/s,
+      );
     });
   });
 });
