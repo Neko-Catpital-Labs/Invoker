@@ -2042,6 +2042,7 @@ startMainProcessBootstrap({
   let uiInteractive = false;
   let deferredStartupTriggered = false;
   const traceUiDeltaFlow = process.env.INVOKER_TRACE_UI_DELTA === '1';
+  const traceUiWorkflowDeltaFlow = process.env.INVOKER_TRACE_UI_WORKFLOW_DELTA === '1';
   const traceDbPollPerTask = process.env.INVOKER_TRACE_DB_POLL === '1';
   const traceTaskOutput = process.env.INVOKER_TRACE_TASK_OUTPUT === '1';
   const executingStallTimeoutMs = Number.parseInt(
@@ -2278,7 +2279,27 @@ startMainProcessBootstrap({
           { module: 'ui-backpressure', reasonCounts: stats.reasonCounts },
         );
       }
-      if (!mainWindow || mainWindow.isDestroyed() || !uiInteractive) {
+      const dropped = !mainWindow || mainWindow.isDestroyed() || !uiInteractive;
+      if (traceUiWorkflowDeltaFlow) {
+        logger.debug(
+          `workflow→ui: ${JSON.stringify({
+            dropped,
+            coalescedRequests: stats.coalescedRequests,
+            reasonCounts: stats.reasonCounts,
+            workflows: workflows.map((workflow) => ({
+              id: workflow.id,
+              status: workflow.status,
+              mergeMode: workflow.mergeMode,
+              baseBranch: workflow.baseBranch,
+              externalDependencies: workflow.externalDependencies,
+              generation: workflow.generation,
+              updatedAt: workflow.updatedAt,
+            })),
+          })}`,
+          { module: 'ui' },
+        );
+      }
+      if (dropped) {
         return;
       }
       mainWindow.webContents.send('invoker:workflows-changed', workflows);
