@@ -1,0 +1,83 @@
+name: "Repair PR 6976 Step 2: Terminal size app routing"
+description: |
+  Continue the PR #6976 repair stack by applying the app routing and manager behavior that consumes the terminal-size contract from the previous workflow.
+
+  This workflow depends on the contract/type PR and must stay focused on the app-side behavior: spawning a PTY with requested initial dimensions and reading back the applied PTY size through the planning terminal IPC handler. It intentionally excludes the separate ANSI escape snapshot trimming fix.
+
+  Invoker-on-Invoker publication note: keep the resulting PR stack in Mergify Stacks after the work is ready by using `mergify stack push`.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+
+tasks:
+  - id: implement-terminal-size-app-routing
+    description: |
+      Wire terminal initial size and applied-size readback through the app terminal manager and IPC handler.
+      Review claim: Approve that the app terminal backend uses optional `TerminalSpec.cols`/`rows` for PTY spawn defaults and returns an authoritative applied-size readback through planning terminal IPC.
+      Review lane: behavior
+      Review unit: routing
+      Safety invariant: Existing callers that omit `cols` and `rows` still spawn at 80x24, pipe-backed terminals continue returning null for applied size, and the new IPC handler is guarded by the existing planning-terminal session allowlist check.
+      Slice rationale: This app slice depends on the previous type-surface slice but excludes `packages/contracts` from its diff so the changed-file set stays in one review unit.
+      Architectural effect: App terminal control flow gains a readback path from PTY state to the planning terminal IPC surface, while preserving current resize/write/close behavior.
+      Goal: Rebuild the runtime portion of PR #6976 without mixing contract files into the same PR.
+      Motivation: The renderer-side fix needs to confirm whether a resize actually applied before trusting it, and the current combined PR cannot pass review-unit validation.
+      Alternative considerations: Bundling `packages/contracts/src/ipc-channels.ts` here was rejected because that is the exact CI body failure; the downstream app code can be reviewed after the previous workflow lands.
+      Implementation details: Starting from the previous workflow's feature branch, inspect PR #6976 at `35927dc2ef3c4176958f499cc88257802bef0554` and apply only the app-side initial-size and applied-size behavior. Modify `packages/app/src/embedded-terminal-manager.ts`, `packages/app/src/terminal-session-ipc.ts`, and directly related unit coverage in `packages/app/src/__tests__/embedded-terminal-manager.test.ts`. Do not include `packages/contracts/src/ipc-channels.ts` or the truncated-escape repro/fix file in this workflow.
+      Non-goals: No renderer use, no UI resize retry rule, no contract-package file edits, and no ANSI escape snapshot trimming behavior.
+      Layer: app_bridge
+      Feature state: dormant
+      Files:
+      - packages/app/src/embedded-terminal-manager.ts
+      - packages/app/src/terminal-session-ipc.ts
+      - packages/app/src/__tests__/embedded-terminal-manager.test.ts
+      Change types:
+      - packages/app/src/embedded-terminal-manager.ts: modify
+      - packages/app/src/terminal-session-ipc.ts: modify
+      - packages/app/src/__tests__/embedded-terminal-manager.test.ts: modify
+      Acceptance criteria:
+      - `cd packages/app && pnpm test -- src/__tests__/embedded-terminal-manager.test.ts` exits 0.
+      - `pnpm --filter @invoker/app typecheck` exits 0.
+      - `git diff --name-only origin/master...HEAD` does not include `packages/contracts/src/ipc-channels.ts` or `packages/app/src/__tests__/embedded-terminal-truncated-escape-garble-repro.test.ts`.
+    prompt: |
+      Assume no prior context. Continue the PR #6976 repair stack after the terminal-size contract workflow.
+      Goal: Apply only the app-side terminal initial-size and applied-size readback behavior from PR head `35927dc2ef3c4176958f499cc88257802bef0554`.
+      Review lane: behavior
+      Review claim: Approve that the app terminal backend uses optional `TerminalSpec.cols`/`rows` for PTY spawn defaults and returns an authoritative applied-size readback through planning terminal IPC.
+      Safety invariant: Existing callers that omit `cols` and `rows` still spawn at 80x24, pipe-backed terminals continue returning null for applied size, and the new IPC handler is guarded by the existing planning-terminal session allowlist check.
+      Slice rationale: This workflow must stay Review Unit `routing`; do not edit `packages/contracts` or carry the unrelated ANSI escape snapshot trimming repro/fix.
+      Architectural effect: App terminal control flow gains a readback path from PTY state to the planning terminal IPC surface, while preserving current resize/write/close behavior.
+      Motivation: The renderer-side resize confirmation work needs app-side readback, but the current PR fails CI because routing and contract files are bundled together.
+      Alternative considerations: Do not fix this by changing review metadata alone; the validator requires the file split.
+      Implementation details: Starting from the previous workflow's feature branch, inspect PR #6976 at `35927dc2ef3c4176958f499cc88257802bef0554`. Modify only `packages/app/src/embedded-terminal-manager.ts`, `packages/app/src/terminal-session-ipc.ts`, and directly related unit coverage in `packages/app/src/__tests__/embedded-terminal-manager.test.ts`. Preserve the 80x24 fallback for omitted sizes, add `getAppliedSize` semantics for PTY and pipe-backed backends, and keep planning-terminal IPC access behind the existing allowlist guard. Commit the result locally.
+      Non-goals: No `packages/contracts/src/ipc-channels.ts` edits, no renderer use, no UI resize retry rule, and no ANSI escape snapshot trimming behavior.
+      Deterministic pass/fail expectations:
+      - `cd packages/app && pnpm test -- src/__tests__/embedded-terminal-manager.test.ts` exits 0.
+      - `pnpm --filter @invoker/app typecheck` exits 0.
+      - `git diff --name-only origin/master...HEAD` does not list `packages/contracts/src/ipc-channels.ts` or `packages/app/src/__tests__/embedded-terminal-truncated-escape-garble-repro.test.ts`.
+      - A GitHub body using Review Lane `behavior` and Review Unit `routing` passes the repo's local body checker with exit code 0.
+    dependencies: []
+
+  - id: verify-terminal-size-app-routing
+    description: |
+      Run focused app tests for the terminal-size app routing slice.
+      Review claim: The app terminal manager coverage proves the initial-size and applied-size behavior in isolation.
+      Review lane: proof
+      Review unit: proof
+      Safety invariant: This task only runs existing package tests after the implementation task.
+      Slice rationale: Focused verification stays with this non-terminal workflow; the final full-suite gate runs in the last workflow.
+      Architectural effect: None.
+      Goal: Prove the app routing slice behaves as intended without carrying unrelated files.
+      Motivation: The repair stack must avoid another broad PR Body failure while still proving behavior.
+      Alternative considerations: Manual inspection was rejected as insufficient because the regression is covered by unit tests.
+      Implementation details: Execute the embedded terminal manager test file from `packages/app`.
+      Non-goals: No code edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "cd packages/app && pnpm test -- src/__tests__/embedded-terminal-manager.test.ts"
+    dependencies:
+      - implement-terminal-size-app-routing

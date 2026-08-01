@@ -1,0 +1,73 @@
+name: "Repair PR 6976 Step 1: Terminal size contract"
+description: |
+  Split PR #6976 so the terminal-size public type surface can be reviewed before app routing uses it.
+
+  This workflow extracts only the dormant contract/type portion from the current PR head `35927dc2ef3c4176958f499cc88257802bef0554`: `TerminalSpec.cols` and `TerminalSpec.rows` in the execution-engine contract. It intentionally leaves IPC routing, manager behavior, and the unrelated snapshot-trim repro/fix for later workflows in the submitted stack.
+
+  Invoker-on-Invoker publication note: keep the resulting PR in Mergify Stacks after the work is ready by using `mergify stack push`.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+
+tasks:
+  - id: implement-terminal-size-contract
+    description: |
+      Add dormant initial-size fields to the terminal execution contract only.
+      Review claim: Approve that `TerminalSpec` gains optional `cols` and `rows` fields with no caller behavior change.
+      Review lane: behavior
+      Review unit: contract
+      Safety invariant: Optional fields do not change any existing executor return value or terminal spawn default while no app code reads them in this slice.
+      Slice rationale: This slice exists separately because PR #6976 currently mixes the type surface with another review unit.
+      Architectural effect: The execution-engine contract can now represent a desired terminal size, but no runtime path consumes it yet.
+      Goal: Create the type foundation needed by the later app-size resize confirmation slice.
+      Motivation: The current CI body check fails because one PR combines two review units; the type surface must be isolated first.
+      Alternative considerations: Updating only the GitHub body was rejected because the changed files still span two review units.
+      Implementation details: Starting from `origin/master`, inspect PR #6976 at `35927dc2ef3c4176958f499cc88257802bef0554` and apply only the optional `cols` and `rows` additions to `packages/execution-engine/src/executor.ts`. Do not edit `packages/app`, `packages/contracts`, UI, tests, or snapshot trimming in this workflow.
+      Non-goals: No IPC channel, no terminal manager behavior, no renderer changes, and no ANSI escape trimming fix.
+      Layer: transport
+      Feature state: dormant
+      Files:
+      - packages/execution-engine/src/executor.ts
+      Change types:
+      - packages/execution-engine/src/executor.ts: modify
+      Acceptance criteria:
+      - `pnpm --filter @invoker/execution-engine build` exits 0.
+      - `git diff --name-only origin/master...HEAD` contains only `packages/execution-engine/src/executor.ts`.
+    prompt: |
+      Assume no prior context. Repair PR #6976 by taking only the contract first slice from PR head `35927dc2ef3c4176958f499cc88257802bef0554`.
+      Goal: Add optional initial terminal size fields to `TerminalSpec` without changing behavior.
+      Review lane: behavior
+      Review claim: Approve that `TerminalSpec` gains optional `cols` and `rows` fields with no caller behavior change.
+      Safety invariant: Optional fields do not change any existing executor return value or terminal spawn default while no app code reads them in this slice.
+      Slice rationale: PR #6976 is failing the CI body check because it combines the type surface with another review unit; this workflow must contain only the contract unit.
+      Architectural effect: The execution-engine contract can represent a desired terminal size, but no runtime path consumes it yet.
+      Motivation: A later terminal resize confirmation slice needs a typed way to pass initial PTY dimensions.
+      Alternative considerations: Do not merely edit the GitHub body, and do not carry app runtime files in this commit; both shapes fail this repo's review-unit rule.
+      Implementation details: Starting from `origin/master`, inspect the diff from PR #6976 at `35927dc2ef3c4176958f499cc88257802bef0554`. Apply only the optional `cols?: number` and `rows?: number` fields and concise comments to `packages/execution-engine/src/executor.ts`. Do not edit `packages/app`, `packages/contracts`, UI, tests, or snapshot-trimming code in this workflow. Commit the result locally.
+      Non-goals: No IPC channel, no manager `getAppliedSize`, no PTY spawn behavior, no renderer behavior, and no ANSI escape trimming fix.
+      Deterministic pass/fail expectations:
+      - `pnpm --filter @invoker/execution-engine build` exits 0.
+      - `git diff --name-only origin/master...HEAD` prints only `packages/execution-engine/src/executor.ts`.
+      - A GitHub body using Review Lane `behavior` and Review Unit `contract` passes the repo's local body checker with exit code 0.
+    dependencies: []
+
+  - id: verify-terminal-size-contract
+    description: |
+      Build the execution-engine package after the contract-only slice.
+      Review claim: The contract-only slice compiles independently before downstream app code consumes it.
+      Review lane: proof
+      Review unit: proof
+      Safety invariant: This task only runs the package build.
+      Slice rationale: Focused verification stays with the non-terminal stack workflow; the final full-suite gate runs in the last workflow.
+      Architectural effect: None.
+      Goal: Prove the optional terminal size contract does not break the execution-engine package.
+      Motivation: The repair plan must show each split slice is independently buildable.
+      Alternative considerations: Running only a grep check was rejected because TypeScript compatibility is the relevant risk.
+      Implementation details: Execute the package build from the repository root.
+      Non-goals: No code edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm --filter @invoker/execution-engine build"
+    dependencies:
+      - implement-terminal-size-contract
