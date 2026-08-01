@@ -1,46 +1,25 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
-import subprocess
-import tempfile
 from typing import Mapping, Sequence
 
 try:
+    from . import mergify_admin_requeue_async_repair as async_repair
     from .mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from .mergify_admin_requeue_plan import is_queue_only_required_check
-    from .mergify_admin_requeue_repair_body import (
-        create_repair_prerequisite,
-        git_lines,
-        git_output,
-        hard_reset_work_root,
-        invalid_repair_errors,
-        is_prereq_split_validation,
-        normalize_repair_commit,
-        validate_current_pr_body,
-    )
+    from .mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
     from .mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
-    from .pr_worker_safe_push import SafePushError, safe_push
 except ImportError:
     from mergify_admin_requeue_gh_executor import AdminBypassGhExecutor
     from mergify_admin_requeue_logger import AdminBypassLogger
     from mergify_admin_requeue_model import Ledger, MergifyQueueEvent, PrSnapshot, RepairOutcome
     from mergify_admin_requeue_plan import is_queue_only_required_check
-    from mergify_admin_requeue_repair_body import (
-        create_repair_prerequisite,
-        git_lines,
-        git_output,
-        hard_reset_work_root,
-        invalid_repair_errors,
-        is_prereq_split_validation,
-        normalize_repair_commit,
-        validate_current_pr_body,
-    )
+    from mergify_admin_requeue_repair_body import git_output, hard_reset_work_root, validate_current_pr_body
     from mergify_admin_requeue_snapshot import GhClient, checkout_pr_head
-    from pr_worker_safe_push import SafePushError, safe_push
+    import mergify_admin_requeue_async_repair as async_repair
 
 
 def mergify_check_urls(event: MergifyQueueEvent | None, check_name: str) -> tuple[str, ...]:
@@ -67,25 +46,6 @@ class AdminBypassRepairer:
         self.ledger = ledger
         self.repo = repo
 
-    def invalid_repair_outcome(
-        self,
-        pr: PrSnapshot,
-        check_name: str,
-        start_head: str,
-        end_head: str,
-        value: Mapping[str, object],
-        *,
-        repair_commits: Sequence[str] = (),
-    ) -> RepairOutcome:
-        return self.blocked_outcome(
-            "blocked_invalid",
-            check_name,
-            start_head,
-            end_head,
-            repair_commits=repair_commits,
-            errors=invalid_repair_errors(value, pr.base_ref_name),
-        )
-
     def blocked_outcome(
         self,
         status: str,
@@ -109,28 +69,13 @@ class AdminBypassRepairer:
             prereq=prereq,
         )
 
-    def push_branch(
-        self,
-        work_root: Path,
-        branch_name: str,
-        *,
-        expected_head: str | None = None,
-        expect_missing: bool = False,
-    ) -> str:
-        return safe_push(
-            branch=branch_name,
-            expected_head=expected_head,
-            expect_missing=expect_missing,
-            cwd=work_root,
-        )
-
     def terminal_repair_outcome(
         self,
         pr: PrSnapshot,
         check_name: str,
         start_head: str,
         end_head: str,
-        work_root: Path,
+        work_root: Path | None,
     ) -> RepairOutcome | None:
         if not hasattr(self.gh, "pr_detail"):
             return None
@@ -147,16 +92,9 @@ class AdminBypassRepairer:
             start_head=start_head,
             end_head=end_head,
         )
-        hard_reset_work_root(work_root, start_head)
+        if work_root is not None:
+            hard_reset_work_root(work_root, start_head)
         return self.blocked_outcome("noop", check_name, start_head, end_head)
-
-    def run_claude_repair(self, work_root: Path, prompt: str) -> None:
-        subprocess.run(
-            ["claude", "-p", prompt, "--dangerously-skip-permissions"],
-            cwd=str(work_root),
-            check=True,
-            text=True,
-        )
 
     def job_log_has_evidence(self, log_path: str) -> bool:
         if not log_path:
@@ -178,16 +116,12 @@ class AdminBypassRepairer:
             return False
 
     def repair_check(self, pr: PrSnapshot, check_name: str, now: int | None = None) -> RepairOutcome:
-        self.ledger.record("repair-check", pr.number, pr.head_ref_oid, check_name, now)
         ctx = pr.checks.get(check_name)
         latest = pr.latest_mergify
         queue_only = ctx is None and is_queue_only_required_check(check_name)
         mergify_urls = mergify_check_urls(latest, check_name)
         details_url = (ctx.details_url if ctx and ctx.details_url else "") or (mergify_urls[0] if mergify_urls else "")
-        work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
-        work_root.parent.mkdir(parents=True, exist_ok=True)
-        checkout_pr_head(self.repo, pr, work_root)
-        start_head = git_output(work_root, "rev-parse", "HEAD").strip()
+        start_head = pr.head_ref_oid
         if queue_only and not details_url:
             return self.blocked_outcome(
                 "blocked_invalid",
@@ -197,8 +131,15 @@ class AdminBypassRepairer:
                 errors=(f"queue-only check {check_name} is missing a Mergify job URL",),
             )
         log_path = self.executor.download_job_log(self.repo, details_url, pr.number, check_name) if details_url else ""
+        # "PR Body" with an empty job log is the one check that still needs a
+        # local checkout before submitting anything: validate_current_pr_body
+        # has no API-only equivalent. Every other check name never checks out.
         if check_name == "PR Body" and self.job_log_is_empty(log_path):
-            terminal = self.terminal_repair_outcome(pr, check_name, start_head, start_head, work_root)
+            work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
+            work_root.parent.mkdir(parents=True, exist_ok=True)
+            checkout_pr_head(self.repo, pr, work_root)
+            checked_out_head = git_output(work_root, "rev-parse", "HEAD").strip()
+            terminal = self.terminal_repair_outcome(pr, check_name, checked_out_head, checked_out_head, work_root)
             if terminal:
                 return terminal
             validation = validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
@@ -213,7 +154,7 @@ class AdminBypassRepairer:
                     log_path=log_path,
                 )
                 return self.blocked_outcome("noop", check_name, start_head, start_head)
-        if queue_only and not self.job_log_has_evidence(log_path):
+        elif queue_only and not self.job_log_has_evidence(log_path):
             self.logger.trace(
                 "admin-bypass-queue-only-empty-log-noop",
                 repo=self.repo,
@@ -223,27 +164,25 @@ class AdminBypassRepairer:
                 log_path=log_path,
                 head_sha=pr.head_ref_oid,
             )
-            return self.blocked_outcome(
-                "queue_only_noop",
-                check_name,
-                start_head,
-                start_head,
-            )
+            return self.blocked_outcome("queue_only_noop", check_name, start_head, start_head)
+        else:
+            terminal = self.terminal_repair_outcome(pr, check_name, start_head, start_head, None)
+            if terminal:
+                return terminal
+
         queue_pr_number = latest.queue_pr_number if latest else 0
-        prompt = (
-            f"This PR's CI check is failing. Diagnose why it is failing, then fix it. Add or update a repro if the failure is reproducible.\n\n"
-            f"If a code change fixes it: make the change in this checkout. Commit locally if needed, do not push. "
-            f"If local proof shows the check is already green on the current head, make no commit and exit 0.\n\n"
-            f"If the real fix requires restructuring this PR instead of editing it in place -- for example, splitting "
-            f"unrelated files into their own PR because they can't ship together -- do not force that into a single "
-            f"local commit here. Instead, submit an Invoker plan to do the restructuring, the same way a human would "
-            f"via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). Then make no "
-            f"commit in this checkout and exit 0.\n\n"
-            f"PR: #{pr.number}\nFailed check: {check_name}\nDetails URL: {details_url}\nJob log path: {log_path}\n"
-            f"Latest Mergify event: {json.dumps(latest.__dict__ if latest else None, sort_keys=True)}\n"
+        plan = async_repair.build_repair_check_plan(
+            pr,
+            check_name,
+            repo=self.repo,
+            details_url=details_url,
+            log_path=log_path,
+            queue_only=queue_only,
+            queue_pr_number=queue_pr_number,
+            latest=latest,
+            start_head=start_head,
+            state_file=self.ledger.path,
         )
-        if queue_only:
-            prompt += f"Queue draft PR: #{queue_pr_number}\nRepair the real PR head, using only evidence from the queue draft failure.\n"
         self.logger.trace(
             "admin-bypass-repair-check-start",
             repo=self.repo,
@@ -251,181 +190,46 @@ class AdminBypassRepairer:
             check_name=check_name,
             details_url=details_url,
             log_path=log_path,
-            work_root=str(work_root),
-            head_sha=pr.head_ref_oid,
+            head_sha=start_head,
+            plan_name=plan.plan_name,
         )
-        self.run_claude_repair(work_root, prompt)
-        end_head = git_output(work_root, "rev-parse", "HEAD").strip()
-        status_lines = git_lines(work_root, "status", "--porcelain")
-        terminal = self.terminal_repair_outcome(pr, check_name, start_head, end_head, work_root)
-        if terminal:
-            return terminal
-        if end_head == start_head and not status_lines:
-            if not queue_only:
-                validation = validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
-                if not validation.get("valid"):
-                    return self.invalid_repair_outcome(pr, check_name, start_head, end_head, validation)
-            return self.blocked_outcome(
-                "queue_only_noop" if queue_only else "noop",
-                check_name,
-                start_head,
-                end_head,
-            )
-        if status_lines:
-            hard_reset_work_root(work_root, start_head)
-            return self.blocked_outcome(
-                "blocked_dirty",
-                check_name,
-                start_head,
-                end_head,
-                status_lines=status_lines,
-            )
-        end_head = normalize_repair_commit(work_root, start_head, end_head, check_name)
-        repair_commits = git_lines(work_root, "rev-list", "--reverse", f"{start_head}..{end_head}")
-        validation = validate_current_pr_body(work_root, pr.body, pr.base_ref_name)
-        if validation.get("valid"):
-            try:
-                self.push_branch(work_root, pr.head_ref_name, expected_head=pr.head_ref_oid)
-            except SafePushError as exc:
-                return self.blocked_outcome(
-                    "stale_head",
-                    check_name,
-                    start_head,
-                    end_head,
-                    repair_commits=repair_commits,
-                    errors=(str(exc),),
-                )
-            return self.blocked_outcome(
-                "pushed",
-                check_name,
-                start_head,
-                end_head,
-                repair_commits=repair_commits,
-            )
-        if is_prereq_split_validation(validation, pr.base_ref_name):
-            try:
-                created = create_repair_prerequisite(
-                    self.gh, self.ledger, self.logger, self.repo, work_root,
-                    pr.number, pr.head_ref_oid, check_name, start_head, repair_commits, now,
-                )
-            finally:
-                git_output(work_root, "checkout", "-B", pr.head_ref_name, start_head)
-                hard_reset_work_root(work_root, start_head)
-            return self.blocked_outcome(
-                "prereq_created",
-                check_name,
-                start_head,
-                end_head,
-                repair_commits=repair_commits,
-                prereq=created,
-            )
-        hard_reset_work_root(work_root, start_head)
-        return self.invalid_repair_outcome(
-            pr,
-            check_name,
-            start_head,
-            end_head,
-            validation,
-            repair_commits=repair_commits,
-        )
+        async_repair.submit_async_repair_plan(plan)
+        self.ledger.record("repair-check", pr.number, start_head, check_name, now)
+        return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
     def repair_conflict(self, pr: PrSnapshot, reason: str, now: int | None = None) -> RepairOutcome:
         check_name = "conflict"
-        self.ledger.record("conflict-repair", pr.number, pr.head_ref_oid, f"conflict:{pr.number}", now)
-        work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
-        work_root.parent.mkdir(parents=True, exist_ok=True)
-        checkout_pr_head(self.repo, pr, work_root)
-        start_head = git_output(work_root, "rev-parse", "HEAD").strip()
-        prompt = (
-            f"This PR has a merge conflict blocking it from merging. Diagnose why, then fix it.\n\n"
-            f"If rebasing the head branch onto its base branch (preserving the PR's intended changes) resolves it: "
-            f"do that, run the narrow proof for the conflict resolution, then commit locally. Do not push.\n\n"
-            f"If the real fix requires restructuring this PR instead of a straightforward rebase, do not force that "
-            f"into a single local commit here. Instead, submit an Invoker plan to do the restructuring, the same way "
-            f"a human would via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). "
-            f"Then make no commit in this checkout and exit 0.\n\n"
-            f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
-            f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
-            f"Head SHA: {pr.head_ref_oid}\nReason: {reason}\n"
+        start_head = pr.head_ref_oid
+        plan = async_repair.build_repair_conflict_plan(
+            pr, reason, repo=self.repo, start_head=start_head, state_file=self.ledger.path,
         )
         self.logger.trace(
             "admin-bypass-repair-conflict-start",
             repo=self.repo,
             pr_number=pr.number,
             reason=reason,
-            work_root=str(work_root),
             base_ref=pr.base_ref_name,
             head_ref=pr.head_ref_name,
-            head_sha=pr.head_ref_oid,
+            head_sha=start_head,
+            plan_name=plan.plan_name,
         )
-        self.run_claude_repair(work_root, prompt)
-        end_head = git_output(work_root, "rev-parse", "HEAD").strip()
-        status_lines = git_lines(work_root, "status", "--porcelain")
-        if end_head == start_head or status_lines:
-            if status_lines:
-                hard_reset_work_root(work_root, start_head)
-                return self.blocked_outcome(
-                    "blocked_dirty",
-                    check_name,
-                    start_head,
-                    end_head,
-                    status_lines=status_lines,
-                )
-            return self.blocked_outcome("noop", check_name, start_head, end_head)
-        try:
-            self.push_branch(work_root, pr.head_ref_name, expected_head=pr.head_ref_oid)
-        except SafePushError as exc:
-            return self.blocked_outcome(
-                "stale_head",
-                check_name,
-                start_head,
-                end_head,
-                errors=(str(exc),),
-            )
-        return self.blocked_outcome("pushed", check_name, start_head, end_head)
+        async_repair.submit_async_repair_plan(plan)
+        self.ledger.record("conflict-repair", pr.number, start_head, f"conflict:{pr.number}", now)
+        return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
     def repair_bot_thread(self, pr: PrSnapshot, thread_id: str, now: int | None = None) -> RepairOutcome:
-        self.ledger.record("repair-bot-thread", pr.number, pr.head_ref_oid, thread_id, now)
-        work_root = Path(os.environ.get("HOME", ".")) / ".invoker" / "mergify-admin-requeue-work" / str(pr.number)
-        work_root.parent.mkdir(parents=True, exist_ok=True)
-        checkout_pr_head(self.repo, pr, work_root)
-        start_head = git_output(work_root, "rev-parse", "HEAD").strip()
-        prompt = (
-            f"Resolve the unresolved review thread {thread_id}. Address the reviewer's feedback with "
-            f"real code changes, run the narrow proof for the fix, then commit locally. Do not push. "
-            f"If the thread is already resolved, or the PR is closed or merged, make no commit and exit 0.\n\n"
-            f"PR: #{pr.number}\nHead branch: {pr.head_ref_name}\nHead SHA: {pr.head_ref_oid}\nThread: {thread_id}\n"
+        start_head = pr.head_ref_oid
+        plan = async_repair.build_repair_bot_thread_plan(
+            pr, thread_id, repo=self.repo, start_head=start_head, state_file=self.ledger.path,
         )
         self.logger.trace(
             "admin-bypass-repair-bot-thread-start",
             repo=self.repo,
             pr_number=pr.number,
             thread_id=thread_id,
-            work_root=str(work_root),
-            head_sha=pr.head_ref_oid,
+            head_sha=start_head,
+            plan_name=plan.plan_name,
         )
-        self.run_claude_repair(work_root, prompt)
-        end_head = git_output(work_root, "rev-parse", "HEAD").strip()
-        status_lines = git_lines(work_root, "status", "--porcelain")
-        if end_head == start_head or status_lines:
-            if status_lines:
-                hard_reset_work_root(work_root, start_head)
-                return self.blocked_outcome(
-                    "blocked_dirty",
-                    thread_id,
-                    start_head,
-                    end_head,
-                    status_lines=status_lines,
-                )
-            return self.blocked_outcome("noop", thread_id, start_head, end_head)
-        try:
-            self.push_branch(work_root, pr.head_ref_name, expected_head=pr.head_ref_oid)
-        except SafePushError as exc:
-            return self.blocked_outcome(
-                "stale_head",
-                thread_id,
-                start_head,
-                end_head,
-                errors=(str(exc),),
-            )
-        return self.blocked_outcome("pushed", thread_id, start_head, end_head)
+        async_repair.submit_async_repair_plan(plan)
+        self.ledger.record("repair-bot-thread", pr.number, start_head, thread_id, now)
+        return self.blocked_outcome("submitted", thread_id, start_head, start_head)
