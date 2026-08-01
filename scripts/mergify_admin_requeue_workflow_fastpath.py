@@ -1,27 +1,11 @@
 from __future__ import annotations
 
 import json
-import subprocess
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-HEADLESS_LIB = REPO_ROOT / "scripts" / "headless-lib.sh"
-
-# Sources scripts/headless-lib.sh directly (never scripts/cron-pr-lib.sh): by the
-# time this module runs, cron-pr-lib.sh's cron_lock is already held by the
-# calling bash script (scripts/cron-pr-admin-bypass-land.sh), so re-sourcing it
-# and calling cron_lock again would self-deadlock or silently no-op.
-_SOURCE_HEADLESS_LIB = 'set -euo pipefail\nsource "$1"\n'
-
-
-def _run_headless(command: str, *extra_args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["bash", "-c", _SOURCE_HEADLESS_LIB + command, "bash", str(HEADLESS_LIB), *extra_args],
-        cwd=str(REPO_ROOT),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+try:
+    from .mergify_admin_requeue_headless_shell import run_headless as _run_headless
+except ImportError:
+    from mergify_admin_requeue_headless_shell import run_headless as _run_headless
 
 
 def resolve_workflow_for_pr(pr_number: int) -> str | None:
