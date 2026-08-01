@@ -483,8 +483,14 @@ class AdminBypassRepairer:
             )
         queue_pr_number = latest.queue_pr_number if latest else 0
         prompt = (
-            f"Fix only the failing check. Add or update a repro if the failure is reproducible. "
-            f"Commit locally if needed, do not push. If local proof shows the check is already green on the current head, make no commit and exit 0.\n\n"
+            f"This PR's CI check is failing. Diagnose why it is failing, then fix it. Add or update a repro if the failure is reproducible.\n\n"
+            f"If a code change fixes it: make the change in this checkout. Commit locally if needed, do not push. "
+            f"If local proof shows the check is already green on the current head, make no commit and exit 0.\n\n"
+            f"If the real fix requires restructuring this PR instead of editing it in place -- for example, splitting "
+            f"unrelated files into their own PR because they can't ship together -- do not force that into a single "
+            f"local commit here. Instead, submit an Invoker plan to do the restructuring, the same way a human would "
+            f"via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). Then make no "
+            f"commit in this checkout and exit 0.\n\n"
             f"PR: #{pr.number}\nFailed check: {check_name}\nDetails URL: {details_url}\nJob log path: {log_path}\n"
             f"Latest Mergify event: {json.dumps(latest.__dict__ if latest else None, sort_keys=True)}\n"
         )
@@ -580,9 +586,13 @@ class AdminBypassRepairer:
         checkout_pr_head(self.repo, pr, work_root)
         start_head = self.git_output(work_root, "rev-parse", "HEAD").strip()
         prompt = (
-            f"Resolve only the merge conflict that keeps this PR from merging. "
-            f"Rebase the PR head branch onto its base branch, preserve the PR's intended changes, "
-            f"run the narrow proof for the conflict resolution, then commit locally. Do not push. "
+            f"This PR has a merge conflict blocking it from merging. Diagnose why, then fix it.\n\n"
+            f"If rebasing the head branch onto its base branch (preserving the PR's intended changes) resolves it: "
+            f"do that, run the narrow proof for the conflict resolution, then commit locally. Do not push.\n\n"
+            f"If the real fix requires restructuring this PR instead of a straightforward rebase, do not force that "
+            f"into a single local commit here. Instead, submit an Invoker plan to do the restructuring, the same way "
+            f"a human would via the plan-to-invoker skill (see skills/plan-to-invoker/SKILL.md and ./submit-plan.sh). "
+            f"Then make no commit in this checkout and exit 0.\n\n"
             f"If the PR is already closed or merged, or the head branch no longer exists, make no commit and exit 0.\n\n"
             f"PR: #{pr.number}\nBase branch: {pr.base_ref_name}\nHead branch: {pr.head_ref_name}\n"
             f"Head SHA: {pr.head_ref_oid}\nReason: {reason}\n"
