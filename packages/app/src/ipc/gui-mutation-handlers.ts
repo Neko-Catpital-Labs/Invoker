@@ -748,6 +748,7 @@ export function createGuiMutationTaskActions(context: GuiMutationTaskActionsCont
       mutationTiming: activeMutationContext?.mutationTiming,
       cancelTask: (taskId: string) => performCancelTask(taskId),
       cancelWorkflow: (workflowId: string) => performCancelWorkflow(workflowId),
+      requestWorkflowMetadataPublish,
       waitForApproval: payload.waitForApproval,
       noTrack: payload.noTrack,
       preemptTaskSubgraph: (taskId: string) => preemptTaskSubgraph(taskId),

@@ -1024,6 +1024,7 @@ export async function headlessForkWorkflow(
     orchestrator: deps.orchestrator,
     logger: deps.logger,
   });
+  deps.requestWorkflowMetadataPublish?.('fork-workflow');
   const taskExecutor = createHeadlessExecutor(deps);
   const { runnable } = await dispatchStartedTasksWithGlobalTopup({
     orchestrator: deps.orchestrator,
