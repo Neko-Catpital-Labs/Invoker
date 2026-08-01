@@ -349,8 +349,8 @@ Failing checks
         prompts = []
         repairer = self.repairer(FakeGh(), ledger, "Neko-Catpital-Labs/Invoker")
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer, "git_output", return_value=HEAD):
-                with mock.patch.object(repairer, "git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                     with mock.patch.object(repairer, "run_claude_repair", side_effect=lambda _work_root, prompt: prompts.append(prompt)):
                         for epoch in range(3):
                             repairer.repair_conflict(item, "GitHub reports merge conflict", epoch)
@@ -367,8 +367,8 @@ Failing checks
         new_head = "b" * 40
         rev_parse = iter([HEAD, new_head])
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                with mock.patch.object(repairer, "git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                     with mock.patch.object(repairer, "run_claude_repair"):
                         with mock.patch.object(repairer, "push_branch", return_value=new_head) as push_branch:
                             result = repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
@@ -385,8 +385,8 @@ Failing checks
         new_head = "c" * 40
         rev_parse = iter([HEAD, new_head])
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
-            with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                with mock.patch.object(repairer, "git_lines", return_value=()):
+            with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                     with mock.patch.object(repairer, "run_claude_repair"):
                         with mock.patch.object(repairer, "push_branch", side_effect=SafePushError("stale-head: refs/heads/x is deadbeef; expected " + HEAD)):
                             result = repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
@@ -400,8 +400,8 @@ Failing checks
         repairer = self.repairer(object(), ledger)
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
-                with mock.patch.object(repairer, "git_output", return_value=HEAD):
-                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                         with mock.patch.object(repairer, "run_claude_repair", side_effect=subprocess.CalledProcessError(1, ["claude"])):
                             with self.assertRaises(subprocess.CalledProcessError):
                                 repairer.repair_check(item, "PR Body", 1)
@@ -461,8 +461,8 @@ Failing checks
         git_rev_parse = iter([HEAD, HEAD])
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
-                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                         with mock.patch.object(repairer, "run_claude_repair") as repair:
                             with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True, "errors": []}):
                                 with redirect_stderr(stderr):
@@ -501,8 +501,8 @@ Failing checks
         }
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
-                with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                    with mock.patch.object(repairer, "git_lines", return_value=()):
+                with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                         with mock.patch.object(repairer, "run_claude_repair"):
                             with mock.patch.object(repairer, "validate_current_pr_body", return_value=validation):
                                 result = repairer.repair_check(item, "PR Body")
@@ -535,8 +535,8 @@ Failing checks
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
                 with mock.patch.object(repairer, "job_log_has_evidence", return_value=True):
-                    with mock.patch.object(repairer, "git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
-                        with mock.patch.object(repairer, "git_lines", return_value=()):
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
+                        with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                             with mock.patch.object(repairer, "run_claude_repair") as repair:
                                 with redirect_stderr(stderr):
                                     result = repairer.repair_check(item, "required-fast / Guardrails")
@@ -564,7 +564,7 @@ Failing checks
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
                 with mock.patch.object(repairer, "job_log_has_evidence", return_value=False):
-                    with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
                         with mock.patch.object(repairer, "run_claude_repair") as repair:
                             result = repairer.repair_check(item, "required-fast / Guardrails")
         checkout.assert_called_once()
@@ -577,7 +577,7 @@ Failing checks
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log") as download:
                 with mock.patch.object(repairer, "job_log_is_empty", return_value=True):
-                    with mock.patch.object(repairer, "git_output", return_value=HEAD):
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
                         with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True}):
                             with mock.patch.object(repairer, "run_claude_repair") as repair:
                                 result = repairer.repair_check(item, "PR Body")
@@ -750,11 +750,12 @@ Failing checks
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head"):
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
                 with mock.patch.object(repairer, "run_claude_repair"):
-                    with mock.patch.object(repairer, "git_output", side_effect=fake_git_output):
-                        with mock.patch.object(repairer, "git_lines", side_effect=fake_git_lines):
-                            with mock.patch.object(repairer, "validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
-                                with mock.patch.object(repairer, "push_branch", return_value="pushed-sha") as push_branch:
-                                    result = repairer.repair_check(item, "PR Body", 123)
+                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=fake_git_output):
+                        with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", side_effect=fake_git_lines):
+                            with mock.patch("scripts.mergify_admin_requeue_repair_body.git_output", side_effect=fake_git_output):
+                                with mock.patch.object(repairer, "validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
+                                    with mock.patch.object(repairer, "push_branch", return_value="pushed-sha") as push_branch:
+                                        result = repairer.repair_check(item, "PR Body", 123)
 
         self.assertEqual(result.status, "prereq_created")
         push_branch.assert_called_once_with(mock.ANY, "stack/pr-babysit-prereq-5800-c2532d2", expect_missing=True)
