@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { WebClient } from '@slack/web-api';
-import type { SlackBugScanChannelSummary, SlackBugScanClient, SlackBugScanMessage } from '@invoker/execution-engine';
+import type { SlackBugScanChannelSummary, SlackBugScanClient, SlackBugScanMessage } from './contract.js';
 
 function resolveSlackOwnerEnvPath(env: NodeJS.ProcessEnv = process.env): string {
   const legacyOwnerEnvPath = path.join(homedir(), '.invoker', '.slack-owner.env');
