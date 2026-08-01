@@ -436,10 +436,24 @@ export async function runRemoteProvisionRepair(options: {
  * line, so pull it out of the persisted error text rather than recomputing the
  * repo-URL hash here.
  */
+/**
+ * Mirror paths are always `<invokerHome>/repos/<repoHash>` (see
+ * buildMirrorCloneScript in ssh-git-exec.ts). Requiring that shape means a
+ * truncated, empty, or otherwise malformed match can never resolve to
+ * something broader -- `/`, `~`/`$HOME`, or an unrelated directory -- before
+ * it reaches a remote `rm -rf`.
+ */
+function isSafeMirrorPath(path: string | undefined): path is string {
+  if (!path) return false;
+  if (path === '/' || path === '~' || path === '.' || path === '..') return false;
+  return /\/repos\/[^/]+\/?$/.test(path);
+}
+
 export function extractCorruptMirrorPath(errorText: string | undefined): string | undefined {
   if (typeof errorText !== 'string') return undefined;
   const match = errorText.match(/Git fetch failed for (\S+)/);
-  return match?.[1];
+  const candidate = match?.[1];
+  return isSafeMirrorPath(candidate) ? candidate : undefined;
 }
 
 export function buildRepoMirrorRepairScript(options: { mirrorPath: string }): string {
@@ -448,6 +462,10 @@ export function buildRepoMirrorRepairScript(options: { mirrorPath: string }): st
 ${buildPortableBase64DecodeFunction()}
 MIRROR_PATH=$(printf '%s' ${shellPosixSingleQuote(mirrorPathB64)} | invoker_base64_decode)
 ${bashNormalizeTildePath('MIRROR_PATH')}
+if [[ -z "$MIRROR_PATH" || "$MIRROR_PATH" == "/" || "$MIRROR_PATH" == "$HOME" || "$MIRROR_PATH" != */repos/* ]]; then
+  echo "refusing to act on unsafe mirror path: '$MIRROR_PATH'" >&2
+  exit 1
+fi
 rm -rf "$MIRROR_PATH"
 `;
 }
