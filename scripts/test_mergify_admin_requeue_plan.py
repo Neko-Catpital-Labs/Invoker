@@ -800,6 +800,22 @@ class InfraCrashStopsResubmission(PlannerTestCase):
         self.assertEqual((action.kind, action.key), ("comment_blocked", "infra-blocked:PRRT_bot"))
         self.assertEqual(ledger.count("repair-bot-thread", 10, HEAD, "PRRT_bot"), 1)
 
+    def test_plan_bot_thread_repairs_checks_thread_specific_workflow_name(self):
+        ledger = self._ledger()
+        ledger.record("repair-bot-thread", 10, HEAD, "PRRT_kwDOSFkSDM6VqStE", epoch=NOW - 100)
+        snapshot = pr(
+            number=10,
+            labels=frozenset({"admin-bypass"}),
+            review_threads=(m.ReviewThread("PRRT_kwDOSFkSDM6VqStE", False, ("coderabbitai[bot]",)),),
+        )
+        facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True) as crash_check:
+            action = p.plan_bot_thread_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual((action.kind, action.key), ("comment_blocked", "infra-blocked:PRRT_kwDOSFkSDM6VqStE"))
+        crash_check.assert_called_once_with(
+            f"admin-bypass-repair-bot-thread-pr-10-prrt-kwdosfksdm6vqste-{HEAD[:7]}"
+        )
+
     def test_mergify_failed_check_actions(self):
         ledger = self._ledger()
         ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 100)

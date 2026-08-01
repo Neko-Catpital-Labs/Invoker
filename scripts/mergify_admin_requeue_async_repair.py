@@ -37,8 +37,8 @@ def repair_conflict_plan_name(pr_number: int, start_head: str) -> str:
     return f"admin-bypass-repair-conflict-pr-{pr_number}-{start_head[:7]}"
 
 
-def repair_bot_thread_plan_name(pr_number: int, start_head: str) -> str:
-    return f"admin-bypass-repair-bot-thread-pr-{pr_number}-{start_head[:7]}"
+def repair_bot_thread_plan_name(pr_number: int, thread_id: str, start_head: str) -> str:
+    return f"admin-bypass-repair-bot-thread-pr-{pr_number}-{_slugify(thread_id)}-{start_head[:7]}"
 
 
 def _yaml_str(value: str) -> str:
@@ -249,7 +249,7 @@ def build_repair_bot_thread_plan(
     start_head: str,
     state_file: Path,
 ) -> AsyncRepairPlan:
-    name = repair_bot_thread_plan_name(pr.number, start_head)
+    name = repair_bot_thread_plan_name(pr.number, thread_id, start_head)
     prompt = (
         f"Resolve the unresolved review thread {thread_id}. Address the reviewer's feedback with "
         "real code changes, run the narrow proof for the fix, then commit locally. Do not push. "

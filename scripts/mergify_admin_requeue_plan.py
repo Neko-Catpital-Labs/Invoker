@@ -790,7 +790,7 @@ def plan_bot_thread_repairs(
                 return cap_action(pr, blocker, blocker.detail)
             crash_reason = repair_crash_reason(
                 ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key,
-                repair_bot_thread_plan_name(pr.number, pr.head_ref_oid),
+                repair_bot_thread_plan_name(pr.number, blocker.key, pr.head_ref_oid),
             )
             if crash_reason is not None:
                 return infra_blocked_action(pr, blocker.key, blocker.detail, crash_reason)

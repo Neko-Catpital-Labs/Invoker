@@ -126,6 +126,20 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("--json-kind 'repair-bot-thread-settled'", plan.yaml_text)
         self.assertIn("--json-key 'tbot'", plan.yaml_text)
         self.assertIn("Thread: tbot", plan.yaml_text)
+        self.assertEqual(plan.plan_name, f"admin-bypass-repair-bot-thread-pr-2647-tbot-{HEAD[:7]}")
+
+    def test_repair_bot_thread_plan_names_are_distinct_per_thread(self):
+        plan_a = async_repair.build_repair_bot_thread_plan(
+            pr(), "PRRT_kwDOSFkSDM6VqStE", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
+        )
+        plan_b = async_repair.build_repair_bot_thread_plan(
+            pr(), "PRRT_kwDOSFkSDM6VqStF", repo="owner/repo", start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertEqual(
+            plan_a.plan_name,
+            f"admin-bypass-repair-bot-thread-pr-2647-prrt-kwdosfksdm6vqste-{HEAD[:7]}",
+        )
+        self.assertNotEqual(plan_a.plan_name, plan_b.plan_name)
 
     def test_submit_async_repair_plan_calls_headless_run_and_cleans_up_temp_file(self):
         plan = async_repair.AsyncRepairPlan(plan_name="admin-bypass-repair-check-pr-1-abc", yaml_text="name: x\n")
