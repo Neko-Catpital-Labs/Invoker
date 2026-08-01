@@ -10,6 +10,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import scripts.mergify_admin_requeue as requeue
 import scripts.mergify_admin_requeue_exec as exec_impl
+import scripts.mergify_admin_requeue_headless_shell as headless_shell
 import scripts.mergify_admin_requeue_workflow_fastpath as fastpath
 
 from scripts.mergify_admin_requeue import (
@@ -1117,7 +1118,7 @@ The merge conditions cannot be satisfied due to failing checks
 class WorkflowFastpathTests(unittest.TestCase):
     def test_resolve_workflow_for_pr_sources_headless_lib_and_parses_workflow_id(self):
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout='{"workflowId": "wf-1-1"}\n', stderr="")
-        with mock.patch.object(fastpath.subprocess, "run", return_value=completed) as run:
+        with mock.patch.object(headless_shell.subprocess, "run", return_value=completed) as run:
             result = fastpath.resolve_workflow_for_pr(6579)
         self.assertEqual(result, "wf-1-1")
         args = run.call_args.args[0]
@@ -1130,19 +1131,19 @@ class WorkflowFastpathTests(unittest.TestCase):
 
     def test_resolve_workflow_for_pr_returns_none_on_genuine_miss(self):
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="{}\n", stderr="")
-        with mock.patch.object(fastpath.subprocess, "run", return_value=completed):
+        with mock.patch.object(headless_shell.subprocess, "run", return_value=completed):
             result = fastpath.resolve_workflow_for_pr(6579)
         self.assertIsNone(result)
 
     def test_resolve_workflow_for_pr_raises_on_lookup_failure(self):
         completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
-        with mock.patch.object(fastpath.subprocess, "run", return_value=completed):
+        with mock.patch.object(headless_shell.subprocess, "run", return_value=completed):
             with self.assertRaises(RuntimeError):
                 fastpath.resolve_workflow_for_pr(6579)
 
     def test_submit_rebase_recreate_command_shape(self):
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-        with mock.patch.object(fastpath.subprocess, "run", return_value=completed) as run:
+        with mock.patch.object(headless_shell.subprocess, "run", return_value=completed) as run:
             fastpath.submit_rebase_recreate("wf-1-1")
         args = run.call_args.args[0]
         self.assertEqual(args[0], "bash")
@@ -1154,13 +1155,13 @@ class WorkflowFastpathTests(unittest.TestCase):
 
     def test_submit_rebase_recreate_raises_on_failure(self):
         completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
-        with mock.patch.object(fastpath.subprocess, "run", return_value=completed):
+        with mock.patch.object(headless_shell.subprocess, "run", return_value=completed):
             with self.assertRaises(RuntimeError):
                 fastpath.submit_rebase_recreate("wf-1-1")
 
     def test_submit_repair_review_gate_ci_command_shape(self):
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
-        with mock.patch.object(fastpath.subprocess, "run", return_value=completed) as run:
+        with mock.patch.object(headless_shell.subprocess, "run", return_value=completed) as run:
             fastpath.submit_repair_review_gate_ci(6579)
         args = run.call_args.args[0]
         self.assertEqual(args[0], "bash")
@@ -1172,7 +1173,7 @@ class WorkflowFastpathTests(unittest.TestCase):
 
     def test_submit_repair_review_gate_ci_raises_on_failure(self):
         completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
-        with mock.patch.object(fastpath.subprocess, "run", return_value=completed):
+        with mock.patch.object(headless_shell.subprocess, "run", return_value=completed):
             with self.assertRaises(RuntimeError):
                 fastpath.submit_repair_review_gate_ci(6579)
 
