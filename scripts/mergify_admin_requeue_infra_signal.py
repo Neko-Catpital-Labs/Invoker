@@ -22,6 +22,8 @@ def find_latest_workflow_id(plan_name: str, *, run_headless_fn=run_headless) -> 
         workflows = json.loads(completed.stdout)
     except (json.JSONDecodeError, TypeError):
         return None
+    if not isinstance(workflows, list):
+        return None
     matches = [w for w in workflows if isinstance(w, dict) and w.get("name") == plan_name]
     if not matches:
         return None

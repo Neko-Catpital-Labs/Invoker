@@ -40,6 +40,15 @@ class FindLatestWorkflowId(unittest.TestCase):
         result = s.find_latest_workflow_id("plan-a", run_headless_fn=lambda *a: completed(stdout="not json"))
         self.assertIsNone(result)
 
+    def test_none_when_json_output_is_not_a_workflow_list(self):
+        for value in (None, 1, {"id": "wf-1", "name": "plan-a"}):
+            with self.subTest(value=value):
+                result = s.find_latest_workflow_id(
+                    "plan-a",
+                    run_headless_fn=lambda *a, value=value: completed(stdout=json.dumps(value)),
+                )
+                self.assertIsNone(result)
+
     def test_none_when_no_workflow_matches_the_name(self):
         result = s.find_latest_workflow_id(
             "plan-a",
