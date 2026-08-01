@@ -114,6 +114,10 @@ contextBridge.exposeInMainWorld(
   '__INVOKER_TRACE_RENDERER_TASK_GRAPH__',
   process.env.INVOKER_TRACE_RENDERER_TASK_GRAPH === '1',
 );
+contextBridge.exposeInMainWorld(
+  '__INVOKER_TRACE_RENDERER_WORKFLOW_EVENTS__',
+  process.env.INVOKER_TRACE_RENDERER_WORKFLOW_EVENTS === '1',
+);
 
 setTimeout(() => {
   ipcRenderer.invoke('invoker:report-ui-perf', 'preload_bootstrap_sync', {
