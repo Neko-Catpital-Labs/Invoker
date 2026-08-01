@@ -313,7 +313,7 @@ export function getPrAtomicityBlockers(options = {}) {
   const diffText = options.diffText ?? '';
   if (!diffText) return [];
 
-  return collectDiffAtomicityFindings({ diffText })
+  return collectDiffAtomicityFindings({ diffText, reviewLane: options.reviewLane })
     .filter((finding) => finding.severity === 'warning')
     .map((finding) => `Diff atomicity blocker: ${formatDiffAtomicityFindings([finding])[0]}`);
 }
@@ -345,7 +345,8 @@ export function getPrBodyWarnings(body, options = {}) {
   }
 
   if (options.diffText) {
-    const diffWarnings = collectDiffAtomicityFindings({ diffText: options.diffText })
+    const { reviewLane } = getReviewMetadata(body);
+    const diffWarnings = collectDiffAtomicityFindings({ diffText: options.diffText, reviewLane })
       .filter((finding) => finding.severity === 'warning');
     for (const line of formatDiffAtomicityFindings(diffWarnings)) {
       warnings.push(`Diff atomicity warning: ${line}`);

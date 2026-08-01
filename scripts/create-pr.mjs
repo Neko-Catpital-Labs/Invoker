@@ -42,7 +42,7 @@ import { randomBytes } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import aws4 from 'aws4';
 import { syncStackCommentsForPr } from './sync-stack-comments.mjs';
-import { getPrAtomicityBlockers, getPrBodyWarnings, validatePrBody } from './validate-pr-body.mjs';
+import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, validatePrBody } from './validate-pr-body.mjs';
 
 const DEFAULT_BASE_REMOTE = process.env.INVOKER_PARENT_REMOTE || 'origin';
 const HAS_EXPLICIT_NON_ORIGIN_BASE_REMOTE = Boolean(
@@ -252,10 +252,10 @@ function printPrBodyWarnings(body, changedFiles = [], diffText = '') {
   }
 }
 
-function assertNoStackAtomicityBlockers(baseBranch, mergifyState, diffText) {
+function assertNoStackAtomicityBlockers(baseBranch, mergifyState, diffText, reviewLane) {
   if (!isStackedPrContext(baseBranch, mergifyState)) return;
 
-  const blockers = getPrAtomicityBlockers({ diffText });
+  const blockers = getPrAtomicityBlockers({ diffText, reviewLane });
   if (blockers.length === 0) return;
 
   throw new Error(
@@ -903,7 +903,7 @@ async function main() {
   if (mergifyState.managed && requestedUpdatePath) {
     assertPublishedMergifyBranch(currentBranch, mergifyState.trackedBaseRef);
   }
-  assertNoStackAtomicityBlockers(args.base, mergifyState, diffText);
+  assertNoStackAtomicityBlockers(args.base, mergifyState, diffText, getReviewMetadata(body).reviewLane);
 
   if (isStackedPrContext(args.base, mergifyState)) {
     assertValidStackPrTitle(args.title);
