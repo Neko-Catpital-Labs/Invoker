@@ -1731,6 +1731,40 @@ describe('SshExecutor remote finalize retry/timeout', () => {
     expect(sshProcess.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
+  it('logs any remote command failure (non-zero exit), not just the finalize step', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const pending = (ssh as any).execRemoteCapture('git worktree list --porcelain', 'list_worktrees');
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    (sshProcess.stderr as any).emit('data', Buffer.from('fatal: not a git repository\n'));
+    sshProcess.emit('close', 128, null);
+    await expect(pending).rejects.toThrow();
+
+    const failureLogs = errorSpy.mock.calls
+      .map((call) => call[0])
+      .filter((line): line is string => typeof line === 'string' && line.includes('remote command failed'));
+    expect(failureLogs).toHaveLength(1);
+    expect(failureLogs[0]).toContain('phase=list_worktrees');
+    expect(failureLogs[0]).toContain('reason="exited with code 128"');
+    expect(failureLogs[0]).toContain('not a git repository');
+  });
+
+  it('logs a remote command spawn error the same way', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const pending = (ssh as any).execRemoteCapture('echo hi', 'detect_home');
+    const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
+    sshProcess.emit('error', new Error('spawn ssh ENOENT'));
+    await expect(pending).rejects.toThrow('spawn ssh ENOENT');
+
+    const failureLogs = errorSpy.mock.calls
+      .map((call) => call[0])
+      .filter((line): line is string => typeof line === 'string' && line.includes('remote command failed'));
+    expect(failureLogs).toHaveLength(1);
+    expect(failureLogs[0]).toContain('phase=detect_home');
+    expect(failureLogs[0]).toContain('spawn error: spawn ssh ENOENT');
+  });
+
   it('remoteGitRecordAndPush retries a hanging finalize step up to 3 times, then fails with the timeout reason logged', async () => {
     vi.useFakeTimers();
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
