@@ -489,8 +489,8 @@ export function WorkflowInspector({
     }
     if (workflow?.id && trimmed !== (workflow.baseBranch ?? '')) {
       void onSetMergeBranch?.(workflow.id, trimmed);
-      setBranchValue(trimmed);
     }
+    setBranchValue(trimmed);
   };
 
   if (collapsed) {
