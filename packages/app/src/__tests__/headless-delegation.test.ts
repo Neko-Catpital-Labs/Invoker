@@ -169,6 +169,12 @@ describe('headless delegation enforcement', () => {
       ).rejects.toThrow('Unknown command: list');
     });
 
+    it('rejects removed restart alias', async () => {
+      await expect(
+        runHeadless(['restart', 'wf-1/task-1'], mockDeps),
+      ).rejects.toThrow('Unknown command: restart');
+    });
+
     it('allows query workflow for a single workflow', async () => {
       mockDeps.persistence.loadWorkflow = vi.fn(() => ({
         id: 'wf-1',
