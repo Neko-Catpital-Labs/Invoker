@@ -16,6 +16,7 @@ import type {
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
+import type { SlackBugScanWorkerConfig } from './workers/slack-bug-scan-worker.js';
 import type {
   InfraRepairWorkerConfig,
   InfraRepairWorkerStore,
@@ -68,4 +69,6 @@ export interface WorkerRuntimeDependencies {
   workflowResume?: WorkflowResumeWorkerConfig;
   /** e2e auto-fix/default-branch CI watcher configuration. */
   e2eAutoFix?: E2eAutoFixWorkerConfig;
+  /** Slack bug-scan worker configuration (Slack client, classifier, plan submitter). Off by default. */
+  slackBugScan?: SlackBugScanWorkerConfig;
 }
