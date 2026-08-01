@@ -10,6 +10,7 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -98,6 +99,61 @@ describe('SshExecutor pre-flight validation', () => {
     await expect(ssh.start(req)).rejects.toThrow(
       'requires repoUrl',
     );
+  });
+
+  it('throws with requested agent name when explicit non-default executionAgent has no registry', async () => {
+    spawnedProcesses = [];
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'claude',
+        workspacePath: '/tmp/workspace',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "claude".*no configured agent set/s,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
+  it('uses the requested agent when the registry resolves it', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+      agentRegistry: registerBuiltinAgents(),
+    }) as any;
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '/tmp/workspace',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    expect(handle.agentSessionId).toBeDefined();
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const [, , , runScript, agentSessionId] = spawnStub.mock.calls[0];
+    expect(runScript).toMatch(/\bcodex\b/);
+    expect(runScript).not.toMatch(/\bclaude\b/);
+    expect(agentSessionId).toBe(handle.agentSessionId);
   });
 
   it('does not throw for reconciliation requests', async () => {

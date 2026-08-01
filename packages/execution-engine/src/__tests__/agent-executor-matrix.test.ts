@@ -16,6 +16,8 @@ import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from '../executor.js';
 
 // ── Mock agent for testing alternative stdinMode + args ──────
 
@@ -60,6 +62,46 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
   } as unknown as WorkRequest;
 }
 
+function makeAiRequest(inputs: Record<string, unknown> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Do something', ...inputs },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+class CommandBuilderExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'command-builder-test';
+
+  testBuildCommandAndArgs(
+    request: WorkRequest,
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ) {
+    return this.buildCommandAndArgs(request, opts);
+  }
+
+  async start(request: WorkRequest): Promise<ExecutorHandle> {
+    return { executionId: randomUUID(), taskId: request.actionId };
+  }
+
+  sendInput(): void {}
+
+  getTerminalSpec(): TerminalSpec | null {
+    return null;
+  }
+
+  getRestoredTerminalSpec(_meta: PersistedTaskMeta): TerminalSpec {
+    return {};
+  }
+
+  async destroyAll(): Promise<void> {}
+}
+
 // ── Agent definitions for the matrix ─────────────────────────
 
 const agents = [
@@ -101,6 +143,43 @@ const agents = [
 // ── Matrix tests ─────────────────────────────────────────────
 
 describe('Agent × Executor matrix', () => {
+  describe('BaseExecutor command building', () => {
+    it('throws with requested agent name when an explicit executionAgent has no configured registry', () => {
+      const executor = new CommandBuilderExecutor();
+      const request = makeAiRequest({ executionAgent: 'codex' });
+
+      expect(() => executor.testBuildCommandAndArgs(request)).toThrow(
+        /requested execution agent "codex".*no configured agent set/s,
+      );
+    });
+
+    it('keeps the legacy Claude fallback when executionAgent is truly defaulted', () => {
+      const executor = new CommandBuilderExecutor();
+      const request = makeAiRequest();
+
+      const result = executor.testBuildCommandAndArgs(request, { claudeCommand: 'legacy-claude' });
+
+      expect(result.cmd).toBe('legacy-claude');
+      expect(result.agentSessionId).toBeDefined();
+      expect(result.args).toContain('--dangerously-skip-permissions');
+    });
+
+    it('still uses the requested agent when a registry resolves it', () => {
+      const executor = new CommandBuilderExecutor();
+      const registry = new AgentRegistry();
+      registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+      const request = makeAiRequest({ executionAgent: 'codex' });
+
+      const result = executor.testBuildCommandAndArgs(request, {
+        claudeCommand: 'legacy-claude',
+        agentRegistry: registry,
+      });
+
+      expect(result.cmd).toBe('codex-test');
+      expect(result.agentSessionId).toBeDefined();
+    });
+  });
+
   describe.each(agents)('$label', (agentDef) => {
     let agent: ExecutionAgent;
     let registry: AgentRegistry;
