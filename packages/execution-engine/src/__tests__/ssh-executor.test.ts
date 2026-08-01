@@ -1716,6 +1716,7 @@ describe('SshExecutor remote finalize retry/timeout', () => {
   afterEach(() => {
     if (previousTimeoutEnv === undefined) delete process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS;
     else process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS = previousTimeoutEnv;
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
