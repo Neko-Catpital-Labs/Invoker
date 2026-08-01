@@ -572,6 +572,12 @@ export function registerPlanningTerminalSessionIpcHandlers(deps: {
     return embeddedTerminalManager.resize(sessionId, cols, rows);
   });
 
+  ipcMain.handle('invoker:planning-terminal-applied-size', async (_event, sessionId: string) => {
+    const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
+    if (!allowed.ok) return null;
+    return embeddedTerminalManager.getAppliedSize(sessionId);
+  });
+
   ipcMain.handle('invoker:planning-terminal-close', async (_event, sessionId: string) => {
     const allowed = planningTerminalOnly(embeddedTerminalManager, planningChatSessions, sessionId);
     if (!allowed.ok) return allowed;
