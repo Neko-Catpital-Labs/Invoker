@@ -72,4 +72,30 @@ assert.deepEqual(
   'a manifest-only change carries no review unit of its own',
 );
 
+const activationSurfaceCommandDispatchFiles = [
+  'packages/app/src/api-server.ts',
+  'packages/app/src/workflow-actions.ts',
+  'packages/app/src/web/web-invoker-dispatch.ts',
+];
+for (const path of activationSurfaceCommandDispatchFiles) {
+  assert.deepEqual(
+    classifyReviewUnitsForPath(path),
+    ['activation-surface'],
+    `command-dispatch file should classify as activation-surface: ${path}`,
+  );
+}
+
+const webTransportFiles = [
+  'packages/app/src/web/web-bridge-server.ts',
+  'packages/app/src/web/start-web-surface.ts',
+  'packages/app/src/web/task-graph-snapshot.ts',
+];
+for (const path of webTransportFiles) {
+  assert.deepEqual(
+    classifyReviewUnitsForPath(path),
+    ['routing'],
+    `HTTP transport file under packages/app/src/web/ should stay routing: ${path}`,
+  );
+}
+
 console.log('review-unit classification: all assertions passed');
