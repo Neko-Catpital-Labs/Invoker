@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { trimPreservingEscapeSequences } from './embedded-terminal-manager.js';
 import type {
   InAppPlanRequest,
   InAppPlanResponse,
@@ -345,9 +346,7 @@ export function ensurePlanningTerminalSummaryBridge(
   // out immediately; trim the older raw output instead of the freshly composed bridge.
   const rest = `${prefix}${suffix}`;
   const keepableRestLength = Math.max(0, maxLength - bridge.length);
-  const trimmedRest = rest.length <= keepableRestLength
-    ? rest
-    : rest.slice(rest.length - keepableRestLength);
+  const trimmedRest = trimPreservingEscapeSequences(rest, keepableRestLength);
   return `${bridge}${trimmedRest}`;
 }
 
