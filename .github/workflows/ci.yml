@@ -615,7 +615,6 @@ jobs:
               e2e/ui-delta-timeline.spec.ts
               e2e/pending-review-gate-target-repo.proof.spec.ts
               e2e/workflow-status-composition.spec.ts
-              e2e/queue-running-vs-queued.spec.ts
           - name: 4-of-9
             files: >-
               e2e/startup-window-liveness.spec.ts
@@ -640,7 +639,6 @@ jobs:
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
-              e2e/planning-tmux-blank-repro.spec.ts
           - name: 7-of-9
             files: >-
               e2e/worker-tab-scroll.spec.ts
@@ -661,8 +659,8 @@ jobs:
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
-              e2e/planning-terminal-live-model.proof.spec.ts
-              e2e/ui-delta-timeline.spec.ts
+              e2e/queue-running-vs-queued.spec.ts
+              e2e/planning-tmux-blank-repro.spec.ts
               e2e/workers-surface.spec.ts
 
     name: playwright / ${{ matrix.name }}
