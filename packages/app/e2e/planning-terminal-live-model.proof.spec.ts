@@ -122,7 +122,7 @@ async function submitPlanningText(page: Page, text: string): Promise<void> {
   await page.getByTestId('invoker-terminal-input').press('Enter');
 }
 
-async function attachPlanningState(page: Page | undefined, testInfo: TestInfo, codexPath: string): Promise<void> {
+async function attachPlanningState(page: Page | undefined, testInfo: TestInfo, cliPath: string): Promise<void> {
   if (!page) return;
   const evidence = await page.evaluate(async () => {
     const planning = await window.invoker.planningChatList().catch((error: unknown) => ({
@@ -139,7 +139,7 @@ async function attachPlanningState(page: Page | undefined, testInfo: TestInfo, c
     workflows: { ok: false, error: error instanceof Error ? error.message : String(error) },
   }));
   await testInfo.attach('live-planning-state.json', {
-    body: Buffer.from(JSON.stringify({ codexPath, ...evidence }, null, 2)),
+    body: Buffer.from(JSON.stringify({ cliPath, ...evidence }, null, 2)),
     contentType: 'application/json',
   });
 }
@@ -150,7 +150,7 @@ base.describe('Planning terminal live model proof', () => {
   base(`continues a real ${LIVE_PLANNER_TOOL} planning session, then drafts and submits a workflow`, async ({}, testInfo) => {
     base.setTimeout((LIVE_PLANNER_TIMEOUT_SECONDS * 2 + 120) * 1000);
 
-    const codexPath = requireCliOnPath(LIVE_PLANNER_TOOL);
+    const cliPath = requireCliOnPath(LIVE_PLANNER_TOOL);
     const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-live-planner-'));
     const configPath = path.join(testDir, 'e2e-config.json');
     const userDataDir = path.join(testDir, 'electron-user-data');
@@ -260,7 +260,7 @@ base.describe('Planning terminal live model proof', () => {
         await page.screenshot({ path: LIVE_PROOF_SCREENSHOT, fullPage: true });
       }
     } finally {
-      await attachPlanningState(page, testInfo, codexPath).catch(() => undefined);
+      await attachPlanningState(page, testInfo, cliPath).catch(() => undefined);
       const videoPromise = page?.video()?.path().catch(() => undefined);
       if (app) await closeApp(app).catch(() => undefined);
       const videoPath = await videoPromise;
