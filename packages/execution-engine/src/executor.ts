@@ -20,6 +20,10 @@ export interface TerminalSpec {
   args?: string[];
   /** Tail command for Linux terminal launch (e.g. 'exec_bash' or 'pause'). */
   linuxTerminalTail?: 'exec_bash' | 'pause';
+  /** Initial PTY column count. Defaults to 80 when omitted. */
+  cols?: number;
+  /** Initial PTY row count. Defaults to 24 when omitted. */
+  rows?: number;
 }
 
 export interface PersistedTaskMeta {
