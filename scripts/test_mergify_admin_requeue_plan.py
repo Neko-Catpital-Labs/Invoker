@@ -14,6 +14,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -716,6 +717,115 @@ class PlanStackActions(PlannerTestCase):
             [(action.kind, action.pr_number, action.detail) for action in self._plan(after_land)],
             [("requeue", 11, "eligible-when-ready")],
         )
+
+
+class RepairCrashReason(PlannerTestCase):
+    """A submitted repair whose own Invoker workflow crashed with the known
+    SSH/OAuth infra signature (the coding agent never launched) must not be
+    silently treated the same as a normal failed repair attempt: it should
+    neither keep eating the retry cap nor resubmit forever waiting on the
+    in-flight TTL, since no amount of waiting changes an infra crash."""
+
+    def test_none_when_never_submitted(self):
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra") as crash_check:
+            result = p.repair_crash_reason(self._ledger(), 1, HEAD, "repair-check", "build", "plan-name")
+        self.assertIsNone(result)
+        crash_check.assert_not_called()
+
+    def test_none_when_already_settled(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 100)
+        ledger.record("repair-check-settled", 1, HEAD, "build", epoch=NOW - 50)
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra") as crash_check:
+            result = p.repair_crash_reason(ledger, 1, HEAD, "repair-check", "build", "plan-name")
+        self.assertIsNone(result)
+        crash_check.assert_not_called()
+
+    def test_signature_returned_when_still_unsettled_and_workflow_crashed(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 100)
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True) as crash_check:
+            result = p.repair_crash_reason(ledger, 1, HEAD, "repair-check", "build", "plan-name")
+        self.assertEqual(result, p.SSH_OAUTH_INFRA_SIGNATURE)
+        crash_check.assert_called_once_with("plan-name")
+
+    def test_none_when_unsettled_but_workflow_did_not_crash_on_infra(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 100)
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
+            result = p.repair_crash_reason(ledger, 1, HEAD, "repair-check", "build", "plan-name")
+        self.assertIsNone(result)
+
+
+class InfraCrashStopsResubmission(PlannerTestCase):
+    """Each of the three repair call sites must report the infra crash once
+    and stop, instead of resubmitting, when the previously submitted repair
+    for the same (pr, head, kind, key) crashed on the SSH/OAuth signature."""
+
+    def test_plan_direct_repairs_failed_check(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 100)
+        snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")})
+        facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
+            action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual(action.kind, "comment_blocked")
+        self.assertEqual(action.key, "infra-blocked:build")
+        self.assertIn(p.SSH_OAUTH_INFRA_SIGNATURE, action.detail)
+        # The crashed attempt is not retried, and the cap is not spent on it.
+        self.assertEqual(ledger.count("repair-check", 1, HEAD, "build"), 1)
+
+    def test_plan_direct_repairs_conflict(self):
+        ledger = self._ledger()
+        key = "conflict:1"
+        ledger.record("conflict-repair", 1, HEAD, key, epoch=NOW - 100)
+        snapshot = pr(labels=frozenset({"admin-bypass"}), merge_state_status="DIRTY", mergeable="CONFLICTING")
+        facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
+            action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual((action.kind, action.key), ("comment_blocked", f"infra-blocked:{key}"))
+        self.assertEqual(ledger.count("conflict-repair", 1, HEAD, key), 1)
+
+    def test_plan_bot_thread_repairs(self):
+        ledger = self._ledger()
+        ledger.record("repair-bot-thread", 10, HEAD, "PRRT_bot", epoch=NOW - 100)
+        snapshot = pr(
+            number=10,
+            labels=frozenset({"admin-bypass"}),
+            review_threads=(m.ReviewThread("PRRT_bot", False, ("coderabbitai[bot]",)),),
+        )
+        facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
+            action = p.plan_bot_thread_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual((action.kind, action.key), ("comment_blocked", "infra-blocked:PRRT_bot"))
+        self.assertEqual(ledger.count("repair-bot-thread", 10, HEAD, "PRRT_bot"), 1)
+
+    def test_mergify_failed_check_actions(self):
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 100)
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="dequeued", failing=("build",)),
+        )
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=True):
+            actions = p.mergify_failed_check_actions(snapshot, ledger, max_repair_attempts=3, now=NOW)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual((actions[0].kind, actions[0].key), ("comment_blocked", "infra-blocked:build"))
+        self.assertEqual(ledger.count("repair-check", 1, HEAD, "build"), 1)
+
+    def test_real_infra_crash_does_not_block_a_genuinely_still_running_attempt(self):
+        # Regression guard: repair_task_crashed_on_infra is only consulted
+        # when the submission is not settled; if it returns False (a real
+        # workflow genuinely still running, or one that failed for an
+        # unrelated reason), normal repair_in_flight/TTL behavior must still
+        # apply unchanged.
+        ledger = self._ledger()
+        ledger.record("repair-check", 1, HEAD, "build", epoch=NOW - 100)
+        snapshot = pr(labels=frozenset({"admin-bypass"}), checks={"build": check("failure")})
+        facts, _ = self._facts(m.StackGroup("s", (snapshot,)), ledger=ledger)
+        with unittest.mock.patch.object(p, "repair_task_crashed_on_infra", return_value=False):
+            action = p.plan_direct_repairs(facts, ledger, max_repair_attempts=3, now=NOW)
+        self.assertIsNone(action)
 
 
 class PlanStackExecution(PlannerTestCase):
