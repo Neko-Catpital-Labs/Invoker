@@ -366,5 +366,10 @@ declare global {
       rows: number;
       buffer: { active: { getLine(n: number): { translateToString(trimRight?: boolean): string } | undefined } };
     } | null;
+    /** Live xterm.js Terminal instances backing open task terminals in the drawer, keyed by sessionId. Test-only. */
+    __INVOKER_TEST_TASK_TERMINALS__?: Map<string, {
+      rows: number;
+      buffer: { active: { getLine(n: number): { translateToString(trimRight?: boolean): string } | undefined } };
+    }>;
   }
 }
