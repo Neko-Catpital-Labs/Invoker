@@ -12,6 +12,7 @@ import {
   createPlanningCommandBuilderFromRegistry,
   discardPlanningChatDraft,
   listInAppPlanningPresets,
+  hydrateRemotePlanningTerminalSession,
   listPlanningChatSessions,
   planFromGoal,
   rebindPlanningChatRepo,
@@ -1469,6 +1470,12 @@ describe('planning chat worktree provisioning', () => {
     const sessionId = created.session.id;
     const expectedBranch = `invoker/planning/${sessionId}`;
 
+    expect(created.session.repoUrl).toBe('https://example.com/repo.git');
+    expect(created.session.baseBranch).toBe('main');
+    expect(created.session.baseCommit).toBe('fake-head-sha');
+    expect((created.session as { worktreePath?: string }).worktreePath).toBeUndefined();
+    expect((created.session as { worktreeBranch?: string }).worktreeBranch).toBeUndefined();
+
     expect(repoPool.ensureCloneThroughRepoQueue).toHaveBeenCalledWith('https://example.com/repo.git');
     expect(repoPool.resolveBaseCommit).toHaveBeenCalledWith('https://example.com/repo.git', 'main');
     expect(repoPool.acquireWorktree).toHaveBeenCalledWith(
@@ -1496,6 +1503,26 @@ describe('planning chat worktree provisioning', () => {
     }));
   });
 
+  it('preserves repo binding fields across the summary-to-hydrated-session round trip', async () => {
+    const worktreePath = '/fake/worktree/hydrate-round-trip';
+    const repoPool = createFakeRepoPool(worktreePath);
+    const sessions = createInAppPlanningChatSessions();
+
+    const created = await createPlanningChatSession({}, {
+      config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      repoPool,
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const hydrated = hydrateRemotePlanningTerminalSession(created.session);
+    expect(hydrated.repoUrl).toBe('https://example.com/repo.git');
+    expect(hydrated.baseBranch).toBe('main');
+    expect(hydrated.baseCommit).toBe('fake-head-sha');
+  });
+
   it('falls back to deps.workingDir exactly as before when no repoPool is supplied', async () => {
     const workingDir = mkdtempSync(join(tmpdir(), 'in-app-no-repo-pool-'));
     try {
@@ -1515,6 +1542,9 @@ describe('planning chat worktree provisioning', () => {
       expect(session?.worktreePath).toBeUndefined();
       expect(session?.worktreeBranch).toBeUndefined();
       expect(session?.conversation.workingDir).toBe(workingDir);
+      expect(created.session.repoUrl).toBeUndefined();
+      expect(created.session.baseBranch).toBeUndefined();
+      expect(created.session.baseCommit).toBeUndefined();
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }
@@ -1889,6 +1919,11 @@ describe('rebindPlanningChatRepo', () => {
       expect(stored?.repoUrl).toBe('https://example.com/other-repo.git');
       expect(stored?.baseCommit).toBe('new-head-sha');
       expect(stored?.worktreePath).toBe(worktreePath);
+      const invalidateMessage = stored?.messages.at(-1);
+      expect(invalidateMessage?.text).toBe(
+        'The target repository changed. The previous draft was cleared — ask Invoker to draft it again.',
+      );
+      expect(invalidateMessage?.tone).toBe('error');
 
       const persisted = adapter.loadInAppPlanningSession(sessionId);
       expect(persisted?.draftPlanText).toBeUndefined();

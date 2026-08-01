@@ -448,6 +448,9 @@ export function hydrateRemotePlanningTerminalSession(summary: InAppPlanningSessi
     id: summary.id,
     title: summary.title,
     presetKey: summary.presetKey,
+    repoUrl: summary.repoUrl,
+    baseBranch: summary.baseBranch,
+    baseCommit: summary.baseCommit,
     confirmationMode: summary.confirmationMode ?? 'require',
     status: summary.status,
     messages: summary.messages,
@@ -478,6 +481,9 @@ function sessionToSummary(session: InAppPlanningChatSession): InAppPlanningSessi
     draftPlanAvailable: hasDraftPlan(session),
     draftPlanSummary: session.draftPlanSummary,
     draftPlanText: session.draftPlanText,
+    repoUrl: session.repoUrl,
+    baseBranch: session.baseBranch,
+    baseCommit: session.baseCommit,
     submittedWorkflowId: session.submittedWorkflowId,
     submittedPlanName: session.submittedPlanName,
     terminalMode: session.terminalMode ?? 'chat',
@@ -1202,6 +1208,7 @@ export async function rebindPlanningChatRepo(
         session,
         'system',
         'The target repository changed. The previous draft was cleared — ask Invoker to draft it again.',
+        'error',
       );
     }
 

@@ -86,8 +86,6 @@ async function acquireProvisionAndSoftRelease(
   const acquired = await pool.acquireWorktree(repoUrl, branch, baseCommit, sessionId);
   await runBestEffortInstall(acquired.worktreePath);
   writePlanningMcpConfig(acquired.worktreePath, sessionId);
-  // A planning-chat worktree lives for the whole chat session, not a single task run,
-  // so it must not hold one of RepoPool's limited concurrent-worktree slots the whole time.
   acquired.softRelease();
   return acquired;
 }
