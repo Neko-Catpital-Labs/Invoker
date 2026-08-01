@@ -1291,6 +1291,10 @@ export const IpcChannels = {
     request: [event: TaskGraphEvent];
     response: void;
   },
+  'invoker:trace-renderer-workflow-event': {} as {
+    request: [workflows: unknown[]];
+    response: void;
+  },
   'invoker:get-ui-perf-stats': {} as {
     request: [];
     response: Record<string, unknown>;
