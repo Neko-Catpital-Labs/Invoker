@@ -69,6 +69,13 @@ export interface PrMaintenanceConfig {
   shell?: string;
 }
 
+export interface SlackBugScanConfig {
+  enabled?: boolean;
+  intervalMs?: number;
+  maxAutoSubmissionsPerDay?: number;
+  maxAutoSubmissionsPerTick?: number;
+}
+
 export interface InvokerConfig {
   defaultBranch?: string;
   /**
@@ -426,6 +433,7 @@ export interface InvokerConfig {
   diskHeadroom?: {
     cleanupEnabled?: boolean;
   };
+  slackBugScan?: SlackBugScanConfig;
 }
 export const DEFAULT_SLACK_HARNESS_PRESETS: NonNullable<InvokerConfig['slackHarnessPresets']> = {
   'cursor+claude': { tool: 'cursor', model: 'claude' },
