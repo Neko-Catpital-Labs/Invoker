@@ -31,6 +31,21 @@ import {
   createSshRemoteScriptError,
   parseOwnedWorktreePath,
 } from './ssh-git-exec.js';
+
+// The post-task "record and push" step opens a fresh SSH connection after the
+// task's own child process has already exited. Unlike that first connection,
+// nothing else bounds this one -- a stalled remote git/credential prompt would
+// otherwise wedge the task as "running" forever (BatchMode only governs the
+// SSH client's own prompts, not the remote git command's).
+const REMOTE_FINALIZE_MAX_ATTEMPTS = 3;
+const DEFAULT_REMOTE_FINALIZE_TIMEOUT_MS = 3 * 60 * 1000;
+
+function remoteFinalizeTimeoutMs(): number {
+  const raw = process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS?.trim();
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REMOTE_FINALIZE_TIMEOUT_MS;
+}
+
 export interface SshExecutorConfig {
   host: string;
   user: string;
@@ -330,7 +345,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     return ['bash', '-s'];
   }
 
-  private async execRemoteCapture(script: string, phase?: string): Promise<string> {
+  private async execRemoteCapture(script: string, phase?: string, opts: { timeoutMs?: number } = {}): Promise<string> {
     const bench = createExecutionBench({
       module: 'ssh-executor-start-bench',
       baseMetadata: {
@@ -350,23 +365,56 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       child.stdin.end();
       let out = '';
       let err = '';
+      let settled = false;
+      let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutTimer);
+        clearTimeout(killTimer);
+        fn();
+      };
       child.stdout?.on('data', (c: Buffer) => { out += c.toString(); });
       child.stderr?.on('data', (c: Buffer) => { err += c.toString(); });
       child.on('error', (error) => {
-        bench('SshExecutor.execRemoteCapture.spawnError', { error: error.message });
-        reject(error);
+        finish(() => {
+          bench('SshExecutor.execRemoteCapture.spawnError', { error: error.message });
+          reject(error);
+        });
       });
       child.on('close', (code) => {
-        bench('SshExecutor.execRemoteCapture.closed', {
-          code,
-          stdoutBytes: out.length,
-          stderrBytes: err.length,
+        finish(() => {
+          bench('SshExecutor.execRemoteCapture.closed', {
+            code,
+            stdoutBytes: out.length,
+            stderrBytes: err.length,
+          });
+          if (code === 0) resolve(out);
+          else {
+            reject(createSshRemoteScriptError(code, out, err, phase));
+          }
         });
-        if (code === 0) resolve(out);
-        else {
-          reject(createSshRemoteScriptError(code, out, err, phase));
-        }
       });
+      if (opts.timeoutMs && opts.timeoutMs > 0) {
+        timeoutTimer = setTimeout(() => {
+          if (settled) return;
+          bench('SshExecutor.execRemoteCapture.timedOut', { timeoutMs: opts.timeoutMs });
+          killProcessGroup(child, 'SIGTERM');
+          killTimer = setTimeout(() => {
+            if (!settled) killProcessGroup(child, 'SIGKILL');
+          }, SIGKILL_TIMEOUT_MS);
+          killTimer.unref?.();
+          finish(() => {
+            const timeoutError = createSshRemoteScriptError(null, out, err, phase) as Error & { timedOut?: boolean };
+            const prefix = `SSH remote command timed out after ${opts.timeoutMs}ms${phase ? ` (phase=${phase})` : ''}`;
+            timeoutError.message = `${prefix}\n${timeoutError.message}`;
+            timeoutError.timedOut = true;
+            reject(timeoutError);
+          });
+        }, opts.timeoutMs);
+        timeoutTimer.unref?.();
+      }
     });
   }
 
@@ -905,7 +953,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
    * Returns commit hash on success; `error` if commit or push failed.
    */
   private async remoteGitRecordAndPush(
-    _executionId: string,
+    executionId: string,
     request: WorkRequest,
     worktreePath: string,
     branch: string,
@@ -926,15 +974,31 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       pushRemoteUrl: request.inputs.branchRepoUrl?.trim() || undefined,
     });
 
-    try {
-      const stdout = await this.execRemoteCapture(recordScript);
-      return parseRecordAndPushOutput(stdout, 0, '');
-    } catch (err: any) {
-      const exitCode = err.exitCode ?? 1;
-      const stderr = err.stderr ?? err.message ?? '';
-      const stdout = err.stdout ?? '';
-      return parseRecordAndPushOutput(stdout, exitCode, stderr);
+    const timeoutMs = remoteFinalizeTimeoutMs();
+    let lastErr: any;
+    for (let attempt = 1; attempt <= REMOTE_FINALIZE_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        const stdout = await this.execRemoteCapture(recordScript, 'record_and_push', { timeoutMs });
+        return parseRecordAndPushOutput(stdout, 0, '');
+      } catch (err: any) {
+        lastErr = err;
+        const reason = err?.timedOut ? `timed out after ${timeoutMs}ms` : (err?.message ?? String(err));
+        console.info(
+          `[ssh-lifecycle] remote finalize attempt ${attempt}/${REMOTE_FINALIZE_MAX_ATTEMPTS} failed ` +
+            `task=${request.actionId} executionId=${executionId} reason=${reason}`,
+        );
+        this.emitOutput(executionId,
+          `[SshExecutor] Recording task result and pushing branch on remote failed ` +
+            `(attempt ${attempt}/${REMOTE_FINALIZE_MAX_ATTEMPTS}): ${reason}\n`);
+      }
     }
+    if (lastErr?.timedOut) {
+      return { error: `${lastErr.message} (gave up after ${REMOTE_FINALIZE_MAX_ATTEMPTS} attempts)` };
+    }
+    const exitCode = lastErr?.exitCode ?? 1;
+    const stderr = lastErr?.stderr || lastErr?.message || '';
+    const stdout = lastErr?.stdout ?? '';
+    return parseRecordAndPushOutput(stdout, exitCode, stderr);
   }
 
   async publishApprovedFix(
