@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Collection, Literal, Mapping
 
@@ -143,6 +144,39 @@ def cap_action(pr: PrSnapshot, blocker: Blocker, detail: str) -> Action:
     return Action("comment_blocked", pr.number, "capped", f"{detail}. The retry cap was reached for current head {pr.head_ref_oid}.")
 
 
+# An async repair submission (repairer.py's ledger.record(submit_kind, ...), written
+# only after a successful `headless_mutation run` submission) is "in flight" until a
+# same-kind "-settled" row lands with an equal-or-later epoch. The submitted plan's
+# `normalize` task writes that settle row unconditionally as its first action, so
+# reaching `normalize` at all -- pushed, no-op, prereq-created, or still-invalid --
+# frees this PR/blocker for its next tick. Only a crash before `normalize` ever runs
+# (the `repair` task itself dying) leaves no settle row; the TTL bounds that case so
+# a single wedged attempt can't block this (pr, headSha, blockerKey) forever.
+REPAIR_IN_FLIGHT_TTL_SECONDS = 5400
+
+
+def repair_in_flight(
+    ledger: Ledger,
+    pr_number: int,
+    head_sha: str,
+    submit_kind: str,
+    key: str,
+    now: int,
+    *,
+    ttl_seconds: int = REPAIR_IN_FLIGHT_TTL_SECONDS,
+) -> bool:
+    submitted = ledger.latest(submit_kind, pr_number, head_sha, key)
+    if submitted is None:
+        return False
+    submitted_epoch = int(submitted.get("epoch", 0) or 0)
+    settled = ledger.latest(f"{submit_kind}-settled", pr_number, head_sha, key)
+    if settled is not None and int(settled.get("epoch", 0) or 0) >= submitted_epoch:
+        return False
+    if now - submitted_epoch >= ttl_seconds:
+        return False
+    return True
+
+
 def mergify_condition_map(event: MergifyQueueEvent | None) -> dict[str, str]:
     return dict(event.condition_states) if event else {}
 
@@ -181,6 +215,8 @@ def effective_blockers(
 def mergify_failed_check_actions(
     pr: PrSnapshot,
     ledger: Ledger,
+    max_repair_attempts: int,
+    now: int,
     suppressed_failed_checks: Collection[str] = (),
 ) -> tuple[Action, ...]:
     suppressed = set(suppressed_failed_checks)
@@ -190,8 +226,10 @@ def mergify_failed_check_actions(
     for name in latest.failing_checks:
         if name in suppressed:
             continue
-        if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= 3:
+        if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= max_repair_attempts:
             return (cap_action(pr, Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"), f"Mergify queue check failed: {name}"),)
+        if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
+            continue
         return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
     return ()
 
@@ -578,6 +616,25 @@ def _bottom_has_pending_or_human_blocker(facts: StackFacts) -> bool:
     )
 
 
+# Kinds plan_direct_repairs/plan_bot_thread_repairs/mergify_failed_check_actions
+# normally turn into a repair action. When the one blocking such a kind is
+# in-flight, those planners skip it without producing an action -- correct for
+# "don't resubmit," but the blocker is still real. Without this check, the
+# ladder would fall through to plan_bottom_progress and requeue a PR whose
+# required check is still actually failing, just because this tick didn't
+# resubmit a repair for it.
+REPAIRABLE_BLOCKER_KINDS = frozenset({"failed_check", "conflict", "bot_review_thread", "outdated_bot_review_thread"})
+
+
+def _bottom_has_repairable_blocker(facts: StackFacts) -> bool:
+    if not facts.bottom:
+        return False
+    return any(
+        blocker.pr_number == facts.bottom.number and blocker.kind in REPAIRABLE_BLOCKER_KINDS
+        for blocker in facts.all_blockers
+    )
+
+
 def _candidate_prs(facts: StackFacts, pr_numbers: Collection[int] | None = None) -> tuple[PrSnapshot, ...]:
     if pr_numbers is None:
         return facts.stack.prs
@@ -589,15 +646,17 @@ def plan_mergify_queue_repairs(
     facts: StackFacts,
     ledger: Ledger,
     max_repair_attempts: int,
+    now: int,
     pr_numbers: Collection[int] | None = None,
 ) -> Action | None:
-    del max_repair_attempts
     for pr in _candidate_prs(facts, pr_numbers):
         if any(blocker.kind == "human_decision" for blocker in facts.blockers_by_pr[pr.number]):
             continue
         if facts.upper_stack_needs_acceptance and facts.bottom and pr.number == facts.bottom.number:
             continue
-        actions = mergify_failed_check_actions(pr, ledger, facts.suppressed_failed_checks_by_pr.get(pr.number, ()))
+        actions = mergify_failed_check_actions(
+            pr, ledger, max_repair_attempts, now, facts.suppressed_failed_checks_by_pr.get(pr.number, ()),
+        )
         if actions:
             return actions[0]
     return None
@@ -607,6 +666,7 @@ def plan_direct_repairs(
     facts: StackFacts,
     ledger: Ledger,
     max_repair_attempts: int,
+    now: int,
     pr_numbers: Collection[int] | None = None,
 ) -> Action | None:
     for pr in _candidate_prs(facts, pr_numbers):
@@ -617,11 +677,15 @@ def plan_direct_repairs(
                 key = f"conflict:{pr.number}"
                 if ledger.count("conflict-repair", pr.number, pr.head_ref_oid, key) >= max_repair_attempts:
                     return cap_action(pr, blocker, blocker.detail)
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
+                    continue
                 return Action("repair_conflict", pr.number, key, blocker.detail)
             if blocker.kind == "failed_check":
                 attempts = ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key)
-                if attempts >= max_repair_attempts and ledger.latest("repair-evaluated", pr.number, pr.head_ref_oid, blocker.key) is not None:
+                if attempts >= max_repair_attempts:
                     return cap_action(pr, blocker, blocker.detail)
+                if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
+                    continue
                 return Action("repair_check", pr.number, blocker.key, blocker.detail)
     return None
 
@@ -630,6 +694,7 @@ def plan_bot_thread_repairs(
     facts: StackFacts,
     ledger: Ledger,
     max_repair_attempts: int,
+    now: int,
     pr_numbers: Collection[int] | None = None,
 ) -> Action | None:
     for pr in _candidate_prs(facts, pr_numbers):
@@ -644,6 +709,8 @@ def plan_bot_thread_repairs(
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
             if ledger.count("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
                 return cap_action(pr, blocker, blocker.detail)
+            if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
+                continue
             return Action("repair_check", pr.number, "bot_review_thread:" + blocker.key, blocker.detail)
     return None
 
@@ -760,33 +827,34 @@ def plan_actions_from_facts(
     ledger: Ledger,
     max_requeue_attempts: int,
     max_repair_attempts: int,
+    now: int,
 ) -> tuple[Action, ...]:
     if facts.bottom:
         bottom_pr_numbers = (facts.bottom.number,)
-        action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers)
         if action is not None:
             return (action,)
-        action = plan_direct_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        action = plan_direct_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers)
         if action is not None:
             return (action,)
-        action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, bottom_pr_numbers)
+        action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, now, bottom_pr_numbers)
         if action is not None:
             return (action,)
         action = plan_hard_blockers(facts, ledger, bottom_pr_numbers)
         if action is not None:
             return (action,)
-        if _bottom_has_pending_or_human_blocker(facts):
+        if _bottom_has_pending_or_human_blocker(facts) or _bottom_has_repairable_blocker(facts):
             return ()
         action = plan_bottom_progress(facts, ledger, max_requeue_attempts)
         if action is not None:
             return (action,)
-    action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts)
+    action = plan_mergify_queue_repairs(facts, ledger, max_repair_attempts, now)
     if action is not None:
         return (action,)
-    action = plan_direct_repairs(facts, ledger, max_repair_attempts)
+    action = plan_direct_repairs(facts, ledger, max_repair_attempts, now)
     if action is not None:
         return (action,)
-    action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts)
+    action = plan_bot_thread_repairs(facts, ledger, max_repair_attempts, now)
     if action is not None:
         return (action,)
     action = plan_hard_blockers(facts, ledger)
@@ -814,7 +882,6 @@ def plan_stack_actions(
     suppressed_failed_checks_by_pr: Mapping[int, Collection[str]] | None = None,
     open_pr_numbers_by_head: Mapping[str, Collection[int]] | None = None,
 ) -> tuple[Action, ...]:
-    del now_epoch
     del suppressed_failed_checks_by_pr
     facts = build_stack_facts(
         stack,
@@ -824,7 +891,7 @@ def plan_stack_actions(
         open_pr_numbers_by_head=open_pr_numbers_by_head or {},
         trunk=TRUNK,
     )
-    return plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts)
+    return plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch)
 
 
 def plan_stack_execution(
@@ -838,7 +905,6 @@ def plan_stack_execution(
     max_repair_attempts: int = 3,
     trunk: str = TRUNK,
 ) -> StackExecutionPlan:
-    del now_epoch
     facts = build_stack_facts(stack, required_checks, ledger, open_pr_numbers, open_pr_numbers_by_head, trunk)
     summary = summarize_stack(facts)
     if facts.prereq_status and facts.prereq_status.is_open:
@@ -849,7 +915,7 @@ def plan_stack_execution(
             prereq_status=facts.prereq_status,
             queue_only_noop_check=facts.queue_only_noop_check,
         )
-    actions = plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts)
+    actions = plan_actions_from_facts(facts, ledger, max_requeue_attempts, max_repair_attempts, now_epoch)
     if actions:
         return StackExecutionPlan(
             summary=summary,

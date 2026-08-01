@@ -35,6 +35,7 @@ from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_
 from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
+from scripts.mergify_admin_requeue_plan import repair_in_flight
 from scripts.mergify_admin_requeue_repairer import AdminBypassRepairer
 
 REQUIRED = {"PR Body", "quality / TypeScript Types"}
@@ -273,17 +274,52 @@ Failing checks
         actions = plan_stack_actions(stack, REQUIRED, self.ledger(), 1)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
 
-    def test_failed_check_at_cap_gets_one_more_attempt_until_evaluated(self):
+    def test_failed_check_caps_after_max_repair_attempts(self):
         checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
         stack = StackGroup("s", (pr(2606, checks=checks, latest=mergify()),))
         ledger = self.ledger()
-        for epoch in range(3):
-            ledger.record("repair-check", 2606, HEAD, "PR Body", epoch)
-        actions = plan_stack_actions(stack, REQUIRED, ledger, 4)
+        # Two prior attempts, each submitted then settled, so neither is in-flight.
+        for epoch in range(2):
+            ledger.record("repair-check", 2606, HEAD, "PR Body", epoch * 2)
+            ledger.record("repair-check-settled", 2606, HEAD, "PR Body", epoch * 2 + 1)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 10)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("repair_check", 2606, "PR Body")])
-        ledger.record("repair-evaluated", 2606, HEAD, "PR Body", 4)
-        actions = plan_stack_actions(stack, REQUIRED, ledger, 5)
+        ledger.record("repair-check", 2606, HEAD, "PR Body", 10)
+        actions = plan_stack_actions(stack, REQUIRED, ledger, 11)
         self.assertEqual([(a.kind, a.pr_number, a.key) for a in actions], [("comment_blocked", 2606, "capped")])
+
+    def test_plan_direct_repairs_skips_in_flight_blocker_but_tries_next_stack(self):
+        stuck_checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stuck = pr(6951, checks=stuck_checks, latest=mergify())
+        ready_checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        ready = pr(5933, checks=ready_checks, latest=mergify())
+        ledger = self.ledger()
+        ledger.record("repair-check", 6951, HEAD, "PR Body", 1)
+        stuck_stack = StackGroup("s1", (stuck,))
+        ready_stack = StackGroup("s2", (ready,))
+        stuck_actions = plan_stack_actions(stuck_stack, REQUIRED, ledger, 2)
+        self.assertEqual(stuck_actions, ())
+        ready_actions = plan_stack_actions(ready_stack, REQUIRED, ledger, 2)
+        self.assertEqual([(a.kind, a.pr_number, a.key) for a in ready_actions], [("repair_check", 5933, "PR Body")])
+
+    def test_repair_in_flight_frees_budget_when_head_changes(self):
+        ledger = self.ledger()
+        ledger.record("repair-check", 6951, OLD, "PR Body", 1)
+        self.assertTrue(repair_in_flight(ledger, 6951, OLD, "repair-check", "PR Body", 2))
+        self.assertFalse(repair_in_flight(ledger, 6951, HEAD, "repair-check", "PR Body", 2))
+
+    def test_repair_in_flight_settles_once_a_settle_row_lands(self):
+        ledger = self.ledger()
+        ledger.record("repair-check", 6951, HEAD, "PR Body", 1)
+        self.assertTrue(repair_in_flight(ledger, 6951, HEAD, "repair-check", "PR Body", 2))
+        ledger.record("repair-check-settled", 6951, HEAD, "PR Body", 3)
+        self.assertFalse(repair_in_flight(ledger, 6951, HEAD, "repair-check", "PR Body", 4))
+
+    def test_repair_in_flight_expires_after_ttl(self):
+        ledger = self.ledger()
+        ledger.record("repair-check", 6951, HEAD, "PR Body", 1000)
+        self.assertTrue(repair_in_flight(ledger, 6951, HEAD, "repair-check", "PR Body", 1000 + 5399, ttl_seconds=5400))
+        self.assertFalse(repair_in_flight(ledger, 6951, HEAD, "repair-check", "PR Body", 1000 + 5400, ttl_seconds=5400))
 
     def test_pending_check_waits(self):
         checks = {"PR Body": check("PR Body", "pending"), "quality / TypeScript Types": check("quality / TypeScript Types")}
@@ -611,6 +647,29 @@ Failing checks
                             should_poll = exec_impl.run_cycle(args)
         self.assertEqual(repair_check.call_count, 1)
         self.assertEqual(fake_gh.comments, [("owner/repo", 6602, "@mergifyio queue")])
+        self.assertTrue(should_poll)
+
+    def test_run_cycle_attempts_every_independent_stack_in_one_tick(self):
+        # Direct regression test for the starvation bug: PR #5933's stuck check
+        # used to consume the single action slot every tick, so PR #6951 (a
+        # different, independent stack) was never even attempted. Async
+        # submission means both stacks should get a repair attempt in one tick.
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        checks_a = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        checks_b = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stuck = pr(5933, checks=checks_a, latest=mergify())
+        starved = pr(6951, checks=checks_b, latest=mergify())
+        stacks = (StackGroup("s1", (stuck,)), StackGroup("s2", (starved,)))
+        outcome = RepairOutcome(status="submitted", check_name="PR Body", start_head=HEAD, end_head=HEAD)
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=stacks, open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr", return_value=None):
+                        with mock.patch.object(AdminBypassRepairer, "repair_check", return_value=outcome) as repair_check:
+                            should_poll = exec_impl.run_cycle(args)
+        self.assertEqual(repair_check.call_count, 2)
+        called_prs = sorted(call.args[0].number for call in repair_check.call_args_list)
+        self.assertEqual(called_prs, [5933, 6951])
         self.assertTrue(should_poll)
 
     def test_run_cycle_waits_while_prerequisite_pr_is_open(self):
