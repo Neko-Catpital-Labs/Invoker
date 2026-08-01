@@ -57,6 +57,7 @@ ${BOLD}Configure:${RESET}
   set command <taskId> <cmd>                          Edit task command and re-run
   set prompt <taskId> <text>                          Edit task prompt and re-run
   set pool <taskId> <type> [poolMemberId]           Change execution pool (worktree|docker|ssh)
+  set task-pool <taskId> <poolId>                     Change execution pool by poolId (from executionPools config)
   set agent <taskId> <agent>                          Change execution agent (claude|codex|omp)
   set merge-mode <workflowId> <mode>                  manual | automatic | external_review
   set fix-prompt <taskId> <text>                      Update fix-session prompt and retry
