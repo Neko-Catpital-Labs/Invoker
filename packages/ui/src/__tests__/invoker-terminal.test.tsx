@@ -365,6 +365,12 @@ describe('Invoker terminal (component)', () => {
     }
   }
 
+  async function waitRealMs(ms: number): Promise<void> {
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, ms));
+    });
+  }
+
   it('does not mount planning tmux xterm or resize while inactive', async () => {
     render(<InvokerTerminal
       {...terminalProps({
@@ -382,6 +388,37 @@ describe('Invoker terminal (component)', () => {
     expect(xtermMock.fitInstances).toHaveLength(0);
     expect(mock.api.onTerminalOutput).not.toHaveBeenCalled();
     expect(mock.api.planningTerminalResize).not.toHaveBeenCalled();
+  });
+
+  it('keeps the same xterm Terminal instance across a chat/tmux mode toggle', async () => {
+    const rectSpy = mockElementRect(640, 400);
+
+    try {
+      const props = terminalProps({
+        mode: 'tmux' as const,
+        terminalSession: makePlanningTerminalSession(),
+      });
+      const { rerender } = render(<InvokerTerminal {...props} />);
+      await flushPlanningTerminalFit();
+
+      expect(xtermMock.instances).toHaveLength(1);
+      const firstInstance = xtermMock.instances[0];
+
+      rerender(<InvokerTerminal {...props} mode="chat" />);
+      await flushPlanningTerminalFit();
+
+      expect(xtermMock.instances).toHaveLength(1);
+      expect(firstInstance?.dispose).not.toHaveBeenCalled();
+
+      rerender(<InvokerTerminal {...props} mode="tmux" />);
+      await flushPlanningTerminalFit();
+
+      expect(xtermMock.instances).toHaveLength(1);
+      expect(xtermMock.instances[0]).toBe(firstInstance);
+      expect(firstInstance?.dispose).not.toHaveBeenCalled();
+    } finally {
+      rectSpy.mockRestore();
+    }
   });
 
   it('skips planning tmux fit and resize when proposed dimensions are tiny', async () => {
@@ -455,6 +492,110 @@ describe('Invoker terminal (component)', () => {
       rectSpy.mockRestore();
     }
   });
+
+  it('never retries a planning tmux resize the main process failed to apply', async () => {
+    const rectSpy = mockElementRect(640, 400);
+    xtermMock.setNextProposedDimensions({ cols: 100, rows: 30 });
+    vi.mocked(mock.api.planningTerminalResize).mockResolvedValueOnce({ ok: false, reason: 'session-not-found' });
+
+    try {
+      render(<InvokerTerminal
+        {...terminalProps({
+          mode: 'tmux',
+          terminalSession: makePlanningTerminalSession(),
+        })}
+      />);
+
+      await flushPlanningTerminalFit();
+      expect(mock.api.planningTerminalResize).toHaveBeenCalledTimes(1);
+
+      // The container's real size never changed, but nothing else has
+      // caused the renderer to distinguish "size we tried to send" from
+      // "size the PTY actually confirmed" — a window focus event re-fits
+      // to the same 100x30 and should retry, since the PTY never got it.
+      act(() => {
+        window.dispatchEvent(new Event('focus'));
+      });
+      await flushPlanningTerminalFit();
+
+      // This is the bug: the renderer treats its own failed attempt as
+      // success and never resends the same dimensions, so the PTY is
+      // left running at its stale/default size indefinitely.
+      expect(mock.api.planningTerminalResize).toHaveBeenCalledTimes(2);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it('retries a resize the main process falsely reported as applied, using a readback check', async () => {
+    const rectSpy = mockElementRect(640, 400);
+    xtermMock.setNextProposedDimensions({ cols: 100, rows: 30 });
+
+    let appliedSizeCalls = 0;
+    vi.mocked(mock.api.planningTerminalAppliedSize).mockImplementation(async () => {
+      appliedSizeCalls += 1;
+      // First readback proves the "successful" resize never actually
+      // stuck; second readback (after the forced retry) shows it caught up.
+      return appliedSizeCalls === 1 ? { cols: 80, rows: 24 } : { cols: 100, rows: 30 };
+    });
+
+    try {
+      render(<InvokerTerminal
+        {...terminalProps({
+          mode: 'tmux',
+          terminalSession: makePlanningTerminalSession(),
+        })}
+      />);
+
+      await flushPlanningTerminalFit();
+      expect(mock.api.planningTerminalResize).toHaveBeenCalledTimes(1);
+
+      // The main process claimed { ok: true } for that first resize, but a
+      // readback a moment later shows the PTY never actually adopted it —
+      // the reconcile loop must force a resend rather than trust the lie.
+      await waitRealMs(700);
+
+      expect(mock.api.planningTerminalAppliedSize).toHaveBeenCalledWith('planning-terminal-1');
+      expect(mock.api.planningTerminalResize).toHaveBeenCalledTimes(2);
+
+      // Once the readback confirms the retry actually stuck, the loop must
+      // stop — no further resize calls should appear after another round.
+      const callsAfterRetry = mock.api.planningTerminalResize.mock.calls.length;
+      await waitRealMs(700);
+      expect(mock.api.planningTerminalResize.mock.calls.length).toBe(callsAfterRetry);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it('gives up after a bounded number of reconcile attempts against a persistently wrong size', async () => {
+    const rectSpy = mockElementRect(640, 400);
+    xtermMock.setNextProposedDimensions({ cols: 100, rows: 30 });
+
+    // The main process always claims success, but the readback never
+    // matches — this must not retry forever.
+    vi.mocked(mock.api.planningTerminalAppliedSize).mockResolvedValue({ cols: 80, rows: 24 });
+
+    try {
+      render(<InvokerTerminal
+        {...terminalProps({
+          mode: 'tmux',
+          terminalSession: makePlanningTerminalSession(),
+        })}
+      />);
+
+      await flushPlanningTerminalFit();
+      await waitRealMs(4500);
+
+      const totalResizeCalls = mock.api.planningTerminalResize.mock.calls.length;
+      expect(totalResizeCalls).toBeGreaterThan(1);
+
+      await waitRealMs(700);
+      expect(mock.api.planningTerminalResize.mock.calls.length).toBe(totalResizeCalls);
+    } finally {
+      rectSpy.mockRestore();
+    }
+  }, 12000);
 
   it('generates a planning reply from plain language', async () => {
     render(<App />);

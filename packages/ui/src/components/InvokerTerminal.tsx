@@ -29,6 +29,8 @@ const TRANSCRIPT_BOTTOM_TOLERANCE_PX = 32;
 const MIN_PLANNING_TMUX_COLS = 20;
 const MIN_PLANNING_TMUX_ROWS = 5;
 const PLANNING_TMUX_FIT_SETTLE_FRAMES = 2;
+const PLANNING_TMUX_RECONCILE_MAX_ATTEMPTS = 6;
+const PLANNING_TMUX_RECONCILE_INTERVAL_MS = 500;
 
 function isTranscriptNearBottom(element: HTMLDivElement): boolean {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= TRANSCRIPT_BOTTOM_TOLERANCE_PX;
@@ -187,13 +189,16 @@ interface PlanningTmuxPaneProps {
   error?: string | null;
   readOnly?: boolean;
   terminalActive?: boolean;
+  /** Whether this pane is the visible one in the chat/tmux toggle (CSS-hidden, not unmounted, when false). */
+  visible?: boolean;
 }
 
-function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActive = true }: PlanningTmuxPaneProps): JSX.Element {
+function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActive = true, visible = true }: PlanningTmuxPaneProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<XTermTerminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const seededSnapshotRef = useRef<SeededOutputSnapshot | null>(null);
+  const scheduleFitRef = useRef<((opts?: { focus?: boolean }) => void) | null>(null);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -218,6 +223,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
     }
     termRef.current = term;
     fitRef.current = fit;
+    window.__INVOKER_TEST_ACTIVE_PLANNING_TMUX_TERMINAL__ = term;
 
     seedTerminalOutputSnapshot(term, session, seededSnapshotRef);
 
@@ -241,6 +247,49 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
     let scheduledFitKind: 'raf' | 'timeout' | null = null;
     let pendingFocus = false;
     let lastSentSize: { cols: number; rows: number } | null = null;
+    let reconcileTimeoutHandle: number | null = null;
+
+    const cancelReconcile = () => {
+      if (reconcileTimeoutHandle === null) return;
+      window.clearTimeout(reconcileTimeoutHandle);
+      reconcileTimeoutHandle = null;
+    };
+
+    // A resize the main process reported as applied may still not have
+    // stuck (e.g. it raced another in-flight resize, or the report itself
+    // was wrong). Re-check the PTY's own authoritative size for a bounded
+    // number of attempts and retry if it drifted, rather than trusting a
+    // single confirmation forever. The attempt counter is owned entirely by
+    // this loop — a "successful" retry must not reset it, or a main process
+    // that always claims success without the size actually sticking would
+    // retry every interval forever instead of eventually giving up.
+    const runReconcileCheck = async (attempt: number): Promise<void> => {
+      if (disposed || attempt >= PLANNING_TMUX_RECONCILE_MAX_ATTEMPTS) return;
+      const applied = await window.invoker?.planningTerminalAppliedSize?.(session.sessionId);
+      if (disposed || !applied || !lastSentSize) return;
+      if (applied.cols === lastSentSize.cols && applied.rows === lastSentSize.rows) return;
+
+      // The PTY's real size doesn't match what we believe was confirmed —
+      // force a resend rather than relying on tryFit's own dedupe, which is
+      // keyed on the very value that just proved unreliable. Skip having
+      // tryFit reschedule its own fresh reconcile window; this loop keeps
+      // governing the bounded cadence itself.
+      lastSentSize = null;
+      tryFit(false, { skipReconcileSchedule: true });
+      reconcileTimeoutHandle = window.setTimeout(() => {
+        reconcileTimeoutHandle = null;
+        void runReconcileCheck(attempt + 1);
+      }, PLANNING_TMUX_RECONCILE_INTERVAL_MS);
+    };
+
+    const scheduleReconcileCheck = () => {
+      if (disposed) return;
+      cancelReconcile();
+      reconcileTimeoutHandle = window.setTimeout(() => {
+        reconcileTimeoutHandle = null;
+        void runReconcileCheck(0);
+      }, PLANNING_TMUX_RECONCILE_INTERVAL_MS);
+    };
 
     const cancelScheduledFit = () => {
       if (scheduledFitHandle === null) return;
@@ -253,7 +302,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
       scheduledFitKind = null;
     };
 
-    const tryFit = (focusAfterFit: boolean): boolean => {
+    const tryFit = (focusAfterFit: boolean, options: { skipReconcileSchedule?: boolean } = {}): boolean => {
       try {
         if (disposed || !host.isConnected) return false;
         if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return false;
@@ -274,8 +323,16 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
         }
         const nextSize = { cols: term.cols, rows: term.rows };
         if (!lastSentSize || lastSentSize.cols !== nextSize.cols || lastSentSize.rows !== nextSize.rows) {
-          lastSentSize = nextSize;
-          void window.invoker?.planningTerminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+          const resizeCall = window.invoker?.planningTerminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+          void resizeCall
+            ?.then((result) => {
+              if (disposed || !result?.ok) return;
+              lastSentSize = nextSize;
+              if (!options.skipReconcileSchedule) scheduleReconcileCheck();
+            })
+            .catch(() => {
+              /* leave lastSentSize unset so the next fit opportunity retries the same size */
+            });
         }
         if (focusAfterFit) term.focus();
         return true;
@@ -337,11 +394,13 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleWindowFocus);
+    scheduleFitRef.current = scheduleFit;
     scheduleFit({ focus: true });
 
     return () => {
       disposed = true;
       cancelScheduledFit();
+      cancelReconcile();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleWindowFocus);
       resizeObserver?.disconnect();
@@ -354,8 +413,17 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
       }
       termRef.current = null;
       fitRef.current = null;
+      scheduleFitRef.current = null;
+      if (window.__INVOKER_TEST_ACTIVE_PLANNING_TMUX_TERMINAL__ === term) {
+        window.__INVOKER_TEST_ACTIVE_PLANNING_TMUX_TERMINAL__ = null;
+      }
     };
   }, [readOnly, session?.sessionId, terminalActive]);
+
+  useEffect(() => {
+    if (!visible) return;
+    scheduleFitRef.current?.({ focus: true });
+  }, [visible]);
 
   useEffect(() => {
     if (!terminalActive) return;
@@ -689,16 +757,23 @@ export function InvokerTerminal({
         </div>
       </div>
 
-      {mode === 'tmux' ? (
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        style={{ display: mode === 'tmux' ? 'flex' : 'none' }}
+      >
         <PlanningTmuxPane
           session={terminalSession}
           busy={terminalBusy}
           error={terminalError}
           readOnly={readOnly}
           terminalActive={terminalActive}
+          visible={mode === 'tmux'}
         />
-      ) : (
-        <>
+      </div>
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        style={{ display: mode === 'tmux' ? 'none' : 'flex' }}
+      >
           <div
             ref={transcriptRef}
             data-testid="invoker-terminal-transcript"
@@ -860,8 +935,7 @@ export function InvokerTerminal({
               </div>
             </div>
           </form>
-        </>
-      )}
+      </div>
     </section>
   );
 }
