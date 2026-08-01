@@ -8,6 +8,7 @@ import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
+import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
 
@@ -1737,7 +1738,7 @@ describe('SshExecutor remote finalize retry/timeout', () => {
     vi.useRealTimers();
   });
 
-  it('execRemoteCapture kills a hung child and rejects once its timeout elapses', async () => {
+  it('execRemoteCapture escalates a timed-out hung child from SIGTERM to SIGKILL', async () => {
     vi.useFakeTimers();
     const pending = (ssh as any).execRemoteCapture('some-script', 'test_phase', { timeoutMs: 20 });
     const assertion = expect(pending).rejects.toMatchObject({ timedOut: true });
@@ -1747,6 +1748,10 @@ describe('SshExecutor remote finalize retry/timeout', () => {
 
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
     expect(sshProcess.kill).toHaveBeenCalledWith('SIGTERM');
+
+    await vi.advanceTimersByTimeAsync(SIGKILL_TIMEOUT_MS);
+
+    expect(sshProcess.kill).toHaveBeenCalledWith('SIGKILL');
   });
 
   it('logs any remote command failure (non-zero exit), not just the finalize step', async () => {
