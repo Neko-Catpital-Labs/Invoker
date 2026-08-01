@@ -56,6 +56,13 @@ export interface HeadlessDeps {
   preemptWorkflowExecution?: (workflowId: string) => Promise<WorkflowCancelResult>;
   cancelTask?: (taskId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
   cancelWorkflow?: (workflowId: string) => Promise<{ cancelled: string[]; runningCancelled: string[] }>;
+  /**
+   * Notifies the renderer's workflow list (`invoker:workflows-changed`) that
+   * workflow metadata changed. Only present when a live GUI window can
+   * receive it (the shared-owner headless dispatch path); absent in
+   * standalone/owner-serve mode, where there is no renderer to notify.
+   */
+  requestWorkflowMetadataPublish?: (reason: string) => void;
   waitForApproval?: boolean;
   noTrack?: boolean;
   isStandaloneOwnerIdle?: () => boolean;
