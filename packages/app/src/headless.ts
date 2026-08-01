@@ -180,6 +180,9 @@ async function headlessSet(args: string[], deps: HeadlessDeps): Promise<void> {
     case 'agent':
       await headlessEditAgent(args[1], args[2], deps);
       break;
+    case 'task-pool':
+      await headlessEditTaskPool(args[1], args[2], deps);
+      break;
     case 'merge-mode':
       await headlessSetMergeMode(args[1], args[2], deps);
       break;
@@ -641,6 +644,34 @@ async function headlessEditAgent(taskId: string, agentName: string, deps: Headle
 
   if (deps.noTrack) {
     process.stdout.write('[headless] --no-track enabled: set agent accepted; exiting without tracking.\n');
+    return;
+  }
+  if (runnable.length === 0) {
+    return;
+  }
+  await trackHeadlessWorkflow(restored.workflowId, deps, {
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
+}
+
+async function headlessEditTaskPool(taskId: string, poolId: string, deps: HeadlessDeps): Promise<void> {
+  if (!taskId || !poolId) throw new Error('Missing arguments. Usage: --headless set task-pool <taskId> <poolId>');
+  const restored = restoreWorkflowForTaskUnlessDeleteAllWon(taskId, deps, 'set task-pool');
+  if (!restored) return;
+  taskId = restored.resolvedTaskId;
+  const taskExecutor = createHeadlessExecutor(deps);
+
+  const envelope = makeEnvelope('edit-task-pool', 'headless', 'task', { taskId, poolId });
+  const result = await deps.commandService.editTaskPool(envelope);
+  if (!result.ok) throw new Error(result.error.message);
+  const runnable = result.data.filter(isDispatchableLaunch);
+  await dispatchHeadlessRunnableTasks(deps, taskExecutor, runnable, 'edit-task-pool');
+  process.stdout.write(`Edited task "${taskId}" pool → "${poolId}"\n`);
+
+  if (deps.noTrack) {
+    process.stdout.write('[headless] --no-track enabled: set task-pool accepted; exiting without tracking.\n');
     return;
   }
   if (runnable.length === 0) {
