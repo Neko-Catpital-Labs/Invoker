@@ -29,6 +29,27 @@ except ImportError:
         StackGroup,
     )
 
+try:
+    from .mergify_admin_requeue_async_repair import (
+        repair_bot_thread_plan_name,
+        repair_check_plan_name,
+        repair_conflict_plan_name,
+    )
+    from .mergify_admin_requeue_infra_signal import (
+        SSH_OAUTH_INFRA_SIGNATURE,
+        repair_task_crashed_on_infra,
+    )
+except ImportError:
+    from mergify_admin_requeue_async_repair import (
+        repair_bot_thread_plan_name,
+        repair_check_plan_name,
+        repair_conflict_plan_name,
+    )
+    from mergify_admin_requeue_infra_signal import (
+        SSH_OAUTH_INFRA_SIGNATURE,
+        repair_task_crashed_on_infra,
+    )
+
 
 TRUNK = "master"
 
@@ -144,6 +165,45 @@ def cap_action(pr: PrSnapshot, blocker: Blocker, detail: str) -> Action:
     return Action("comment_blocked", pr.number, "capped", f"{detail}. The retry cap was reached for current head {pr.head_ref_oid}.")
 
 
+def infra_blocked_action(pr: PrSnapshot, key: str, detail: str, reason: str) -> Action:
+    return Action(
+        "comment_blocked",
+        pr.number,
+        f"infra-blocked:{key}",
+        f'{detail}. Repeated repair attempts crashed with an SSH execution-pool infra failure '
+        f'("{reason}"), not a problem with this PR\'s content. An operator needs to refresh that '
+        f'pool member\'s credentials before this can retry.',
+    )
+
+
+# Distinct from repair_in_flight's TTL-bounded "still might be running" check:
+# once the submitted attempt's own Invoker workflow already shows the crash
+# text below, there is nothing to wait out -- the coding agent never launched,
+# so no further wait changes the outcome. Checked before repair_in_flight so a
+# confirmed infra crash is reported accurately (and does not keep silently
+# eating retry-cap attempts) well before the TTL would otherwise expire.
+def repair_crash_reason(
+    ledger: Ledger,
+    pr_number: int,
+    head_sha: str,
+    submit_kind: str,
+    key: str,
+    plan_name: str,
+) -> str | None:
+    submitted = ledger.latest(submit_kind, pr_number, head_sha, key)
+    if submitted is None:
+        return None
+    settled = ledger.latest(f"{submit_kind}-settled", pr_number, head_sha, key)
+    if settled is not None and int(settled.get("epoch", 0) or 0) >= int(submitted.get("epoch", 0) or 0):
+        return None
+    # Named call (not a default-bound parameter) so tests can patch this
+    # module's `repair_task_crashed_on_infra` name directly instead of the
+    # real one, which shells out to a live Invoker instance.
+    if repair_task_crashed_on_infra(plan_name):
+        return SSH_OAUTH_INFRA_SIGNATURE
+    return None
+
+
 # An async repair submission (repairer.py's ledger.record(submit_kind, ...), written
 # only after a successful `headless_mutation run` submission) is "in flight" until a
 # same-kind "-settled" row lands with an equal-or-later epoch. The submitted plan's
@@ -226,11 +286,18 @@ def mergify_failed_check_actions(
     for name in latest.failing_checks:
         if name in suppressed:
             continue
+        detail = f"Mergify queue check failed: {name}"
         if ledger.count("repair-check", pr.number, pr.head_ref_oid, name) >= max_repair_attempts:
-            return (cap_action(pr, Blocker(name, "failed_check", pr.number, f"Mergify queue check failed: {name}"), f"Mergify queue check failed: {name}"),)
+            return (cap_action(pr, Blocker(name, "failed_check", pr.number, detail), detail),)
+        crash_reason = repair_crash_reason(
+            ledger, pr.number, pr.head_ref_oid, "repair-check", name,
+            repair_check_plan_name(pr.number, name, pr.head_ref_oid),
+        )
+        if crash_reason is not None:
+            return (infra_blocked_action(pr, name, detail, crash_reason),)
         if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", name, now):
             continue
-        return (Action("repair_check", pr.number, name, f"Mergify queue check failed: {name}"),)
+        return (Action("repair_check", pr.number, name, detail),)
     return ()
 
 
@@ -677,6 +744,12 @@ def plan_direct_repairs(
                 key = f"conflict:{pr.number}"
                 if ledger.count("conflict-repair", pr.number, pr.head_ref_oid, key) >= max_repair_attempts:
                     return cap_action(pr, blocker, blocker.detail)
+                crash_reason = repair_crash_reason(
+                    ledger, pr.number, pr.head_ref_oid, "conflict-repair", key,
+                    repair_conflict_plan_name(pr.number, pr.head_ref_oid),
+                )
+                if crash_reason is not None:
+                    return infra_blocked_action(pr, key, blocker.detail, crash_reason)
                 if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "conflict-repair", key, now):
                     continue
                 return Action("repair_conflict", pr.number, key, blocker.detail)
@@ -684,6 +757,12 @@ def plan_direct_repairs(
                 attempts = ledger.count("repair-check", pr.number, pr.head_ref_oid, blocker.key)
                 if attempts >= max_repair_attempts:
                     return cap_action(pr, blocker, blocker.detail)
+                crash_reason = repair_crash_reason(
+                    ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key,
+                    repair_check_plan_name(pr.number, blocker.key, pr.head_ref_oid),
+                )
+                if crash_reason is not None:
+                    return infra_blocked_action(pr, blocker.key, blocker.detail, crash_reason)
                 if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-check", blocker.key, now):
                     continue
                 return Action("repair_check", pr.number, blocker.key, blocker.detail)
@@ -709,6 +788,12 @@ def plan_bot_thread_repairs(
                 return Action("resolve_bot_threads", pr.number, blocker.key, blocker.detail)
             if ledger.count("repair-bot-thread", pr.number, pr.head_ref_oid, blocker.key) >= max_repair_attempts:
                 return cap_action(pr, blocker, blocker.detail)
+            crash_reason = repair_crash_reason(
+                ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key,
+                repair_bot_thread_plan_name(pr.number, pr.head_ref_oid),
+            )
+            if crash_reason is not None:
+                return infra_blocked_action(pr, blocker.key, blocker.detail, crash_reason)
             if repair_in_flight(ledger, pr.number, pr.head_ref_oid, "repair-bot-thread", blocker.key, now):
                 continue
             return Action("repair_check", pr.number, "bot_review_thread:" + blocker.key, blocker.detail)
