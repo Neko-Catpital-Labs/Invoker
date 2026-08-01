@@ -2,6 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+const childProcessMocks = vi.hoisted(() => ({
+  execFile: vi.fn((_file, _args, _options, callback) => {
+    callback?.(null, '', '');
+    return {} as never;
+  }),
+}));
+
+vi.mock('node:child_process', async () => {
+  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  return {
+    ...actual,
+    execFile: childProcessMocks.execFile,
+  };
+});
+
 import {
   ensurePlanningWorktreeReady,
   provisionPlanningWorktree,
@@ -42,10 +58,8 @@ describe('resolvePlanningWorktreeBranch', () => {
 });
 
 describe('provisionPlanningWorktree', () => {
-  let installSpy: ReturnType<typeof vi.fn> | undefined;
-
   beforeEach(() => {
-    installSpy = undefined;
+    childProcessMocks.execFile.mockClear();
   });
 
   it('calls pool methods in order and returns the acquired worktree, calling softRelease', async () => {
@@ -88,6 +102,15 @@ describe('provisionPlanningWorktree', () => {
       baseCommit: 'resolved-head-sha',
       branch: 'invoker/planning/session-1',
     });
+    expect(childProcessMocks.execFile).toHaveBeenCalledWith(
+      'pnpm',
+      ['install', '--frozen-lockfile', '--ignore-scripts'],
+      expect.objectContaining({
+        cwd: '/nonexistent/planning-worktree-path-for-test',
+        timeout: 120_000,
+      }),
+      expect.any(Function),
+    );
     expect(spies.softRelease).toHaveBeenCalledTimes(1);
   });
 });

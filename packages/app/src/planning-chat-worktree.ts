@@ -38,13 +38,13 @@ export interface PlanningWorktreeState {
 
 async function runBestEffortInstall(worktreePath: string): Promise<void> {
   try {
-    await execFileAsync('pnpm', ['install', '--frozen-lockfile'], {
+    await execFileAsync('pnpm', ['install', '--frozen-lockfile', '--ignore-scripts'], {
       cwd: worktreePath,
       timeout: PLANNING_WORKTREE_INSTALL_TIMEOUT_MS,
     });
   } catch (error) {
     console.warn(
-      `[planning-chat-worktree] pnpm install --frozen-lockfile failed in ${worktreePath}: ${
+      `[planning-chat-worktree] pnpm install --frozen-lockfile --ignore-scripts failed in ${worktreePath}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
