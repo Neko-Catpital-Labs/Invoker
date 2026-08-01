@@ -70,6 +70,27 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 describe('SshExecutor pre-flight validation', () => {
+  it('throws for explicit non-default executionAgent when no registry is configured', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(/codex/);
+    await expect(ssh.start(req)).rejects.toThrow(/no configured agent set/i);
+  });
+
   it('throws when SSH key file does not exist', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
