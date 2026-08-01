@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { looksLikeBugComplaint } from '../workers/slack-bug-scan-prefilter.js';
+import { looksLikeBugComplaint } from '../prefilter.js';
 
 describe('slack-bug-scan prefilter', () => {
   it('matches common complaint phrasing', () => {

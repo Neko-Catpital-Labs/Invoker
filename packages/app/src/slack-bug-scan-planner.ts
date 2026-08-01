@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '@invoker/contracts';
 import type { AgentRegistry } from '@invoker/execution-engine';
-import type { SlackBugScanPlanSubmitter } from '@invoker/execution-engine';
+import type { SlackBugScanPlanSubmitter } from '@invoker/slack-bug-scan';
 import type { InvokerConfig } from './config.js';
 import { loadPlanSubmissionBundle, type PlanSubmissionLoadDeps } from './plan-submission-loader.js';
 import { provisionPlanningWorktree, releasePlanningWorktree, type PlanningRepoPool } from './planning-chat-worktree.js';

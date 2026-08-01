@@ -1,50 +1,35 @@
 import type { Logger } from '@invoker/contracts';
+import {
+  resolveChannelRepoUrl,
+  resolveSlackBugScanIntervalMs,
+  resolveSlackBugScanMaxPerDay,
+  resolveSlackBugScanMaxPerTick,
+  SLACK_BUG_SCAN_WORKER_KIND,
+  type SlackBugScanClassifier,
+  type SlackBugScanClassifyResult,
+  type SlackBugScanClient,
+  type SlackBugScanDraftResult,
+  type SlackBugScanPlanSubmitter,
+} from '@invoker/slack-bug-scan';
 
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
 import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
 
-import type { SlackBugScanClient } from './slack-bug-scan-client.js';
-import { resolveChannelRepoUrl } from './slack-bug-scan-repo-url.js';
 import {
   recordCandidateOutcome,
   scanChannelForCandidates,
-  SLACK_BUG_SCAN_WORKER_KIND,
   type SlackBugScanCandidate,
 } from './slack-bug-scan-scanner.js';
-import {
-  resolveSlackBugScanIntervalMs,
-  resolveSlackBugScanMaxPerDay,
-  resolveSlackBugScanMaxPerTick,
-} from './slack-bug-scan.js';
 
-export { SLACK_BUG_SCAN_WORKER_KIND };
-
-export interface SlackBugScanClassifyResult {
-  isBugComplaint: boolean;
-  problemStatement?: string;
-}
-
-export type SlackBugScanClassifier = (input: {
-  channelId: string;
-  threadTs: string;
-  repoUrl: string;
-  threadText: string;
-}) => Promise<SlackBugScanClassifyResult>;
-
-export interface SlackBugScanDraftResult {
-  planName: string;
-  workflowId: string;
-}
-
-export type SlackBugScanPlanSubmitter = (input: {
-  channelId: string;
-  threadTs: string;
-  repoUrl: string;
-  problemStatement: string;
-  threadText: string;
-}) => Promise<SlackBugScanDraftResult>;
+export {
+  SLACK_BUG_SCAN_WORKER_KIND,
+  type SlackBugScanClassifier,
+  type SlackBugScanClassifyResult,
+  type SlackBugScanDraftResult,
+  type SlackBugScanPlanSubmitter,
+};
 
 export interface SlackBugScanWorkerConfig {
   enabled?: boolean;

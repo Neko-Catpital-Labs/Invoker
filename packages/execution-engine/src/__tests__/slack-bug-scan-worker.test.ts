@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createWorkerRegistry } from '../worker-registry.js';
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
+import type { SlackBugScanChannelSummary, SlackBugScanClient, SlackBugScanMessage } from '@invoker/slack-bug-scan';
 
 import {
   createSlackBugScanWorker,
@@ -11,7 +12,6 @@ import {
   type SlackBugScanClassifier,
   type SlackBugScanPlanSubmitter,
 } from '../workers/slack-bug-scan-worker.js';
-import type { SlackBugScanChannelSummary, SlackBugScanClient, SlackBugScanMessage } from '../workers/slack-bug-scan-client.js';
 
 function makeLogger() {
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() };
