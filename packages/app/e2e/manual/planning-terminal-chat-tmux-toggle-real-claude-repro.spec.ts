@@ -16,7 +16,7 @@
 
 import { execFileSync } from 'node:child_process';
 import type { Page } from '@playwright/test';
-import { expect, test } from './fixtures/electron-app.js';
+import { expect, test } from '../fixtures/electron-app.js';
 
 function resolveRealClaudeBinary(): string {
   const resolved = execFileSync('bash', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
