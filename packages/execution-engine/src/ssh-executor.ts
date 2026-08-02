@@ -422,9 +422,22 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
 
     let payload: string;
     let agentSessionId: string | undefined;
-    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const requestedExecutionAgent = request.inputs.executionAgent;
+    const executionAgent = requestedExecutionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const legacySshFallbackAgent = 'claude';
+    if (
+      request.actionType === 'ai_task'
+      && !this.agentRegistry
+      && requestedExecutionAgent !== undefined
+      && executionAgent !== legacySshFallbackAgent
+    ) {
+      throw new Error(
+        `Requested execution agent "${executionAgent}" could not be resolved for SSH execution: ` +
+        `no configured agent set was available.`,
+      );
+    }
     const effectiveAgentName = request.actionType === 'ai_task'
-      ? (this.agentRegistry ? executionAgent : 'claude')
+      ? (this.agentRegistry ? executionAgent : legacySshFallbackAgent)
       : undefined;
 
     if (request.actionType === 'command') {
@@ -448,9 +461,9 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       } else {
         const session = this.prepareClaudeSession(request);
         agentSessionId = session.sessionId;
-        payload = `claude ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
+        payload = `${legacySshFallbackAgent} ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
         bench('SshExecutor.payload.built', {
-          executionAgent: 'claude',
+          executionAgent: legacySshFallbackAgent,
           hasAgentSessionId: !!agentSessionId,
         });
       }

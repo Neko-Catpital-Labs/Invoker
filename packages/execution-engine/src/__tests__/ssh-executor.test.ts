@@ -81,6 +81,26 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('raises for an explicit agent when no registry is configured and SSH would substitute Claude', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        executionAgent: 'codex',
+        workspacePath: '/tmp/workspace',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Requested execution agent "codex".*configured agent set/i,
+    );
+  });
+
   it('throws when task has no repoUrl in managed mode', async () => {
     // Use /dev/null as a readable file to pass the key check
     const ssh = new SshExecutor({
