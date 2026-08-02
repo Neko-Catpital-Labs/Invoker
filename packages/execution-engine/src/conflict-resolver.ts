@@ -283,31 +283,32 @@ export function remoteAgentShellInvocation(): string[] {
 }
 
 /**
- * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
+ * Build the shell command to run an agent on a remote host via the agent
+ * registry. Throws when the registry is missing or cannot resolve the
+ * requested agent, instead of substituting a different one.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
   executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
   const name = agentName ?? DEFAULT_EXECUTION_AGENT;
-  if (agentRegistry) {
-    const agent = agentRegistry.get(name);
-    if (agent?.buildFixCommand) {
-      const spec = agent.buildFixCommand(prompt, { executionModel });
-      const sessionId = spec.sessionId ?? randomUUID();
-      const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
-      return { shellCommand: cmd, sessionId };
-    }
+  if (!agentRegistry) {
+    throw new Error(
+      `Cannot build remote command for requested execution agent "${name}": no configured agent set was available to resolve it`,
+    );
   }
-  // Fallback: claude-compatible CLI (for backwards compat without registry)
-  const sessionId = randomUUID();
-  return {
-    shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
-    sessionId,
-  };
+  const agent = agentRegistry.get(name);
+  if (!agent?.buildFixCommand) {
+    throw new Error(
+      `Cannot build remote command for requested execution agent "${name}": the configured agent set lacks that name or it does not support fix commands`,
+    );
+  }
+  const spec = agent.buildFixCommand(prompt, { executionModel });
+  const sessionId = spec.sessionId ?? randomUUID();
+  const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
+  return { shellCommand: cmd, sessionId };
 }
 
 export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {
