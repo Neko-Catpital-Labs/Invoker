@@ -451,12 +451,10 @@ export class PlanConversation {
   private onRawPlannerOutput?: RawPlannerOutputHandler;
   private plannerRetryLimit: number;
   private plannerRetryBaseDelayMs: number;
-  // Serializes turns on this conversation. Without this, two concurrent
-  // sendMessage calls (e.g. two Slack events for the same thread arriving
-  // close together) can interleave their per-turn side-channel files
-  // (plan-drafts, plan-intent): one turn's resetPlanDraftFile/
-  // resetPlanIntentSignalFile can wipe a file the other turn already wrote
-  // but hasn't read back yet.
+  // Serializes turns on this conversation. Without this, concurrent Slack
+  // events for the same thread can interleave per-turn side-channel files
+  // (plan-drafts, plan-intent) or observe temporary turn-local state such as
+  // runPlanConversion's plan mode.
   private turnInFlight = false;
   private turnQueue: Array<() => void> = [];
   private _initialized = false;
@@ -542,19 +540,36 @@ export class PlanConversation {
    * per-turn side-channel files) before starting.
    */
   async sendMessage(userMessage: string): Promise<string> {
+    return this.runSerializedTurn(() => this.sendMessageLocked(userMessage));
+  }
+
+  private async runSerializedTurn<T>(runLocked: () => Promise<T>): Promise<T> {
     if (this.turnInFlight) {
       await new Promise<void>((resolve) => this.turnQueue.push(resolve));
     }
     this.turnInFlight = true;
     // No `await` here on purpose: chaining via .finally() keeps this call's
-    // returned promise settling in lockstep with sendMessageLocked's own
+    // returned promise settling in lockstep with the locked turn's own
     // promise, with no added microtask tick before the planner subprocess is
     // spawned — callers/tests that synchronize on "the process was spawned"
     // via a single microtask wait stay correct.
-    return this.sendMessageLocked(userMessage).finally(() => {
-      this.turnInFlight = false;
-      this.turnQueue.shift()?.();
-    });
+    let turnPromise: Promise<T>;
+    try {
+      turnPromise = runLocked();
+    } catch (err) {
+      this.releaseSerializedTurn();
+      throw err;
+    }
+    return turnPromise.finally(() => this.releaseSerializedTurn());
+  }
+
+  private releaseSerializedTurn(): void {
+    const next = this.turnQueue.shift();
+    if (next) {
+      next();
+      return;
+    }
+    this.turnInFlight = false;
   }
 
   private async sendMessageLocked(userMessage: string): Promise<string> {
@@ -609,20 +624,20 @@ export class PlanConversation {
   }
 
   async runPlanConversion(): Promise<string> {
-    const previousMode = this.mode;
-    const previousConversationalPlanning = this.conversationalPlanning;
-    this.mode = 'plan';
-    this.conversationalPlanning = false;
-    try {
-      return await this.sendMessage(
+    return this.runSerializedTurn(() => {
+      const previousMode = this.mode;
+      const previousConversationalPlanning = this.conversationalPlanning;
+      this.mode = 'plan';
+      this.conversationalPlanning = false;
+      return this.sendMessageLocked(
         'Convert the established conversation scope into an Invoker YAML plan now. '
         + 'If the scope is still incomplete, ask the specific clarification instead of emitting YAML.',
-      );
-    } finally {
-      this.mode = previousMode;
-      this.conversationalPlanning = previousConversationalPlanning;
-      this.saveState();
-    }
+      ).finally(() => {
+        this.mode = previousMode;
+        this.conversationalPlanning = previousConversationalPlanning;
+        this.saveState();
+      });
+    });
   }
 
   /** Reasoning summaries from the most recent planner turn (Codex JSONL), if any. */

@@ -195,6 +195,14 @@ describe('plan intent signal file — concurrent turns are serialized', () => {
     throw new Error('condition never became true within maxTicks microtask flushes');
   }
 
+  function spawnedPromptAt(callIndex: number): string {
+    const args = mockSpawn.mock.calls[callIndex]?.[1];
+    if (!Array.isArray(args)) throw new Error(`spawn call ${callIndex} had no argv`);
+    const prompt = args[args.length - 1];
+    if (typeof prompt !== 'string') throw new Error(`spawn call ${callIndex} had no prompt`);
+    return prompt;
+  }
+
   it('does not let a second concurrent turn wipe a signal before the first turn reads it back', async () => {
     const conversation = new PlanConversation({ workingDir, threadTs: 'race-thread', mode: 'agent', plannerRetryLimit: 0 });
     const path = conversation.planIntentSignalFilePath();
@@ -238,5 +246,34 @@ describe('plan intent signal file — concurrent turns are serialized', () => {
     // B's own turn wrote nothing, so once B's (serialized, later) turn runs
     // its own reset+read, it correctly sees nothing.
     expect(signalWhenBResolved).toBeNull();
+  });
+
+  it('restores agent mode before waking a turn queued behind plan conversion', async () => {
+    const conversation = new PlanConversation({ workingDir, threadTs: 'mode-race-thread', mode: 'agent', plannerRetryLimit: 0 });
+    const conversion = controlledChild();
+    const queuedAgent = controlledChild();
+    mockSpawn.mockImplementationOnce(() => conversion.proc);
+    mockSpawn.mockImplementationOnce(() => queuedAgent.proc);
+
+    const conversionReply = conversation.runPlanConversion();
+    await flushUntil(() => mockSpawn.mock.calls.length >= 1);
+    expect(spawnedPromptAt(0)).toContain('Generate a YAML task plan');
+
+    const queuedReply = conversation.sendMessage('what did you change?');
+    await Promise.resolve();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    conversion.close('plan conversion reply');
+    await flushUntil(() => mockSpawn.mock.calls.length >= 2);
+
+    const queuedPrompt = spawnedPromptAt(1);
+    expect(queuedPrompt).toContain('Respond to the latest message as a normal coding agent in this worktree.');
+    expect(queuedPrompt).toContain('Do NOT generate or submit Invoker YAML yourself.');
+    expect(queuedPrompt).not.toContain('Generate a YAML task plan');
+
+    queuedAgent.close('agent reply');
+    await expect(conversionReply).resolves.toBe('plan conversion reply');
+    await expect(queuedReply).resolves.toBe('agent reply');
+    expect(conversation.conversationMode).toBe('agent');
   });
 });
