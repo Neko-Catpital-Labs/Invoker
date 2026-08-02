@@ -10,8 +10,6 @@ mergeMode: external_review
 repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
 tasks:
   - id: implement-all-in-one-autofix-recovery
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: |
       Review claim:
       - The recovery worker owns auto-fix recovery end to end.

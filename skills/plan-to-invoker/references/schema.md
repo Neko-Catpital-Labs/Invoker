@@ -59,8 +59,6 @@ Rules:
 | `prompt` | string | — | Task needs LLM reasoning. Include file paths, line numbers, specific instructions, zero-context execution framing ("assume no prior context"), and deterministic pass/fail expectations (`exit code 0`, expected output, or explicit pass condition). Mutually exclusive with `command`. |
 | `dependencies` | string[] | `[]` | Always include, even if empty. List task IDs that must complete first. |
 | `poolId` | string | configured default pool | Use only when a task must run on a specific configured execution pool. For normal worktree execution, omit it. |
-| `executionAgent` | `claude` \| `codex` \| `omp` | `codex` for prompt tasks | Set explicitly on every `prompt` task. Default to `codex` — this repo's config-level `defaultExecutionAgent` is `claude`, whose OAuth session is currently broken across most of the SSH pool, while codex reaches every pool member. Only omit or choose a different agent when the task has a specific, stated reason to use one (say why in `Alternative considerations`). Not applicable to `command` tasks. |
-| `executionModel` | string | `gpt-5.4` when `executionAgent: codex` | Set alongside `executionAgent: codex` so the task doesn't fall back to whatever the `codex` CLI itself defaults to. Must be one of the agent's live-discovered supported models (`codex debug models`); check before using an unfamiliar slug — model names churn (e.g. there is no `gpt-5.4-codex`, only `gpt-5.4`). |
 | `dockerImage` | string | — | Use for Docker tasks. Do not pair with `runnerKind`. |
 | `autoFix` | boolean | `false` | `true` for tasks that should auto-retry with experiments on failure. |
 | `pivot` | boolean | `false` | `true` to spawn experiment variants. Requires `experimentVariants`. |
@@ -82,8 +80,6 @@ Rules:
 | Task must use a configured pool | `poolId` | configured pool id |
 | Task must use Docker | `dockerImage` | image name |
 | Task should auto-retry on failure | `autoFix` | `true` |
-| Task runs an LLM (`prompt` task) | `executionAgent` | `codex` unless there's a specific stated reason otherwise |
-| Same, and `executionAgent` is `codex` | `executionModel` | `gpt-5.4` (verify against `codex debug models` first) |
 | Every generated plan | `repoUrl` | real remote URL from `git remote get-url origin` (or equivalent) |
 
 ## Implementation plans (convention)

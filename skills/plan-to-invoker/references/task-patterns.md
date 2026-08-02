@@ -168,7 +168,6 @@ When writing `prompt` fields for LLM tasks:
 5. **Keep scope narrow**: one logical change per task, not "implement the entire feature"
 6. **Assume zero context**: include explicit phrasing such as "assume no prior context" or "zero-context execution".
 7. **Include deterministic pass/fail expectations**: require explicit outcomes like `exit code 0`, `exits 0`, or expected output text.
-8. **Set `executionAgent: codex` and `executionModel: gpt-5.4`** on every prompt task, unless the task has a specific, stated reason to use a different agent. This repo's config-level default agent (`claude`) currently has a broken OAuth session across most of the SSH pool; codex reaches every pool member. See `references/schema.md`'s Task-Level Fields table for the full rationale, and re-check `codex debug models` before using an unfamiliar model slug — the exact set of available models changes over time.
 
 ## Experiment artifact handoff templates (required when experiments are planned)
 

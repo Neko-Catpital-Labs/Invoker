@@ -14,8 +14,6 @@ featureBranch: plan/prompt-edit-layered-split-with-dormant
 
 tasks:
   - id: prompt-edit-contact-surface
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: |
       Review claim:
       - Add the prompt-edit renderer contract without activating behavior.
@@ -66,8 +64,6 @@ tasks:
     dependencies: []
 
   - id: app-bridge-and-owner-delegation
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: |
       Review claim:
       - Route prompt-edit requests through the app bridge and owner delegation.
@@ -118,8 +114,6 @@ tasks:
     dependencies: [prompt-edit-contact-surface]
 
   - id: ui-prompt-editing-activation
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: |
       Review claim:
       - Prepare dormant TaskPanel prompt editing behind the existing UI pattern.
@@ -168,8 +162,6 @@ tasks:
     dependencies: [app-bridge-and-owner-delegation]
 
   - id: app-and-e2e-regressions
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: |
       Review claim:
       - Add focused app and E2E regressions for the prompt-edit path.

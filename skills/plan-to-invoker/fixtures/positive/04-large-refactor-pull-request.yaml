@@ -61,8 +61,6 @@ featureBranch: refactor/extract-graph-package
 
 tasks:
   - id: scaffold-package
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Create packages/graph with package.json and tsconfig"
     prompt: |
       Create packages/graph/ directory with:
@@ -76,8 +74,6 @@ tasks:
     dependencies: []
 
   - id: move-types
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Move type definitions from core to graph"
     prompt: |
       1. Copy packages/core/src/task-types.ts to packages/graph/src/types.ts
@@ -87,8 +83,6 @@ tasks:
     dependencies: [scaffold-package]
 
   - id: move-dag-utils
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Move DAG utility functions from core to graph"
     prompt: |
       1. Copy packages/core/src/dag.ts to packages/graph/src/dag.ts
@@ -98,8 +92,6 @@ tasks:
     dependencies: [scaffold-package]
 
   - id: extract-action-graph
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Extract ActionGraph class from StateMachine into graph package"
     prompt: |
       Create packages/graph/src/action-graph.ts:
@@ -115,8 +107,6 @@ tasks:
     dependencies: [move-types]
 
   - id: update-graph-index
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Finalize graph package exports"
     prompt: |
       Verify packages/graph/src/index.ts exports:
@@ -129,8 +119,6 @@ tasks:
     dependencies: [move-types, move-dag-utils, extract-action-graph]
 
   - id: refactor-state-machine
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Update StateMachine to use ActionGraph for storage"
     prompt: |
       In packages/core/src/state-machine.ts:
@@ -144,8 +132,6 @@ tasks:
     dependencies: [update-graph-index]
 
   - id: write-graph-tests
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Add unit tests for graph package"
     prompt: |
       Create tests in packages/graph/src/__tests__/:

@@ -250,9 +250,6 @@ function flush_task(    wc, and_count, valid_id, d, desc_lower, idx) {
     if (tolower(prompt_text) !~ /(acceptance criteria|must|ensure|verify|expected|should)/) {
       errors[++errn] = "Task \"" id "\" prompt missing explicit acceptance language (must/ensure/verify/expected)"
     }
-    if (enforce_layering == 1 && has_execution_agent == 0) {
-      errors[++errn] = "Task \"" id "\" missing required \"executionAgent:\" field (default to codex; the config-level default agent, claude, has a broken OAuth session across most of the SSH pool right now)"
-    }
   }
 
   desc_lower = tolower(desc)
@@ -516,7 +513,6 @@ BEGIN {
     desc = ""
     has_command = 0
     has_prompt = 0
-    has_execution_agent = 0
     command_line = ""
     prompt_text = ""
     dependencies_csv = ""
@@ -542,11 +538,6 @@ BEGIN {
     sub(/^[[:space:]]+command:[[:space:]]*/, "", command_line)
     command_line = trim(command_line)
     in_prompt_block = 0
-    next
-  }
-
-  if (line ~ /^[[:space:]]+executionAgent:[[:space:]]*/) {
-    has_execution_agent = 1
     next
   }
 

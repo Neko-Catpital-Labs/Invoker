@@ -13,8 +13,6 @@ repoUrl: {{repo_url}}
 
 tasks:
   - id: implement-{{feature_slug}}-persistence
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: |
       Implement the persistence-layer part of {{feature_summary}}.
       Review claim: Delivers the persistence layer for {{feature_summary}} with no unrelated edits. REPLACE_ME with the precise one-unit claim.

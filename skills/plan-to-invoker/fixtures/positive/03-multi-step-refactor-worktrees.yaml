@@ -22,8 +22,6 @@ featureBranch: refactor/config-validation
 
 tasks:
   - id: extract-validator
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Extract validation logic into separate validator.ts module"
     prompt: |
       In packages/config/src/validator.ts (create new file):
@@ -36,8 +34,6 @@ tasks:
     dependencies: []
 
   - id: add-validator-tests
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Add unit tests for the extracted validator"
     prompt: |
       Create packages/config/src/__tests__/validator.test.ts:
@@ -55,8 +51,6 @@ tasks:
     dependencies: [add-validator-tests]
 
   - id: add-schema-types
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Add TypeScript schema types for config validation"
     prompt: |
       In packages/config/src/schema.ts (create new file):

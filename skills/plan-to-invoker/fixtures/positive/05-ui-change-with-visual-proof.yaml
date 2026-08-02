@@ -28,8 +28,6 @@ featureBranch: fix/sidebar-collapse-animation
 
 tasks:
   - id: add-visual-proof-test
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Add E2E test case capturing sidebar collapse states for visual comparison"
     prompt: |
       In packages/app/e2e/visual-proof.spec.ts, add a new test case that must verify the
@@ -43,8 +41,6 @@ tasks:
     dependencies: []
 
   - id: fix-sidebar-transition
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: "Reorder CSS transition application in packages/ui/ Sidebar component"
     prompt: |
       In packages/ui/src/Sidebar.tsx, fix the collapse animation. The Sidebar must animate

@@ -18,8 +18,6 @@ externalDependencies:
 
 tasks:
   - id: implement-{{feature_slug}}-domain
-    executionAgent: codex
-    executionModel: gpt-5.4
     description: |
       Implement the domain-layer part of {{feature_summary}}.
       Review claim: Delivers the domain layer for {{feature_summary}} with no unrelated edits. REPLACE_ME with the precise one-unit claim.
