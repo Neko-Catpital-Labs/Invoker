@@ -700,6 +700,31 @@ describe('EmbeddedTerminalManager', () => {
     expect(mgr.list()).toHaveLength(0);
   });
 
+  it('reports no applied size while a spawn backend has not returned its process handle yet', () => {
+    let mgr: EmbeddedTerminalManager;
+    let observedSize: { cols: number; rows: number } | null | undefined;
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+      getAppliedSize: vi.fn(() => ({ cols: 120, rows: 40 })),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn(() => {
+        const [pendingSession] = mgr.list();
+        observedSize = mgr.getAppliedSize(pendingSession.sessionId);
+        return spawned;
+      }),
+    };
+    mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({ taskId: 'task-pending-size', spec: {}, cwd: '/tmp/wt' });
+
+    expect(observedSize).toBeNull();
+    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 120, rows: 40 });
+  });
+
   it('after exit, openOrReuse spawns a fresh session', () => {
     const child1 = createFakeChild();
     const child2 = createFakeChild();
