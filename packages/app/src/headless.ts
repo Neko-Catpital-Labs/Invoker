@@ -513,11 +513,16 @@ async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void>
   process.stdout.write(`${label} worker scan completed.\n`);
 }
 
-async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdle'>): Promise<void> {
+async function headlessOwnerServe(
+  deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdle' | 'standaloneOwnerShutdownSignal'>,
+): Promise<void> {
   process.stdout.write('[headless] standalone owner ready; waiting for delegated mutations.\n');
   const idlePollMs = 250;
   await new Promise<void>((resolve) => {
+    let settled = false;
     const finish = () => {
+      if (settled) return;
+      settled = true;
       clearInterval(idleTimer);
       resolve();
     };
@@ -526,7 +531,11 @@ async function headlessOwnerServe(deps: Pick<HeadlessDeps, 'isStandaloneOwnerIdl
         finish();
       }
     }, idlePollMs);
-    idleTimer.unref?.();
+    if (deps.standaloneOwnerShutdownSignal?.aborted) {
+      finish();
+    } else {
+      deps.standaloneOwnerShutdownSignal?.addEventListener('abort', finish, { once: true });
+    }
     process.once('SIGTERM', finish);
     process.once('SIGINT', finish);
   });

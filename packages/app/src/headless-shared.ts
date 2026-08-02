@@ -66,6 +66,7 @@ export interface HeadlessDeps {
   waitForApproval?: boolean;
   noTrack?: boolean;
   isStandaloneOwnerIdle?: () => boolean;
+  standaloneOwnerShutdownSignal?: AbortSignal;
   getBundledSkillsStatus?: () => BundledSkillsStatus;
   installBundledSkills?: (mode?: BundledSkillsInstallMode) => BundledSkillsStatus;
   repairReviewGateCi?: (prArg: string) => Promise<ReviewGateCiRepairCommandResult>;

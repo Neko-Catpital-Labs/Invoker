@@ -994,6 +994,7 @@ function startHeadlessMode(): void {
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     let headlessWebBridge: WebBridge | null = null;
+    const standaloneOwnerShutdownController = ownsHeadlessShutdown ? new AbortController() : undefined;
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1030,6 +1031,7 @@ function startHeadlessMode(): void {
         resetUiPerfStats: () => {},
         waitForApproval,
         noTrack,
+        standaloneOwnerShutdownSignal: standaloneOwnerShutdownController?.signal,
         executionAgentRegistry: agentRegistry,
         getBundledSkillsStatus,
         installBundledSkills: installPackagedSkills,
@@ -1402,6 +1404,16 @@ function startHeadlessMode(): void {
         let standaloneOwnerLastActivityAt = Date.now();
         const noteStandaloneOwnerActivity = (): void => {
           standaloneOwnerLastActivityAt = Date.now();
+        };
+        const requestStandaloneOwnerShutdownWhenIdle = (reason: string): void => {
+          if (!standaloneOwnerShutdownController) return;
+          if (!Number.isFinite(standaloneOwnerIdleTimeoutMs) || standaloneOwnerIdleTimeoutMs <= 0) return;
+          setTimeout(() => {
+            if (standaloneOwnerShutdownController.signal.aborted) return;
+            if (!headlessDeps.isStandaloneOwnerIdle?.()) return;
+            logger.info(`standalone owner shutdown requested after ${reason}`, { module: 'headless' });
+            standaloneOwnerShutdownController.abort();
+          }, standaloneOwnerIdleTimeoutMs + 250);
         };
         headlessDeps.isStandaloneOwnerIdle = () => {
           if (!Number.isFinite(standaloneOwnerIdleTimeoutMs) || standaloneOwnerIdleTimeoutMs <= 0) {
@@ -1829,11 +1841,22 @@ function startHeadlessMode(): void {
               mutationTiming: activeMutationContext?.mutationTiming,
             });
           });
+          if (args[0] === 'delete-all') {
+            requestStandaloneOwnerShutdownWhenIdle('headless.exec delete-all');
+          }
           return { ok: true };
         });
         messageBus.onRequest('headless.gui-mutation', async (req: unknown) => {
           noteStandaloneOwnerActivity();
-          return executeStandaloneGuiMutation(req as GuiMutationPayload);
+          const payload = req as GuiMutationPayload;
+          const result = await executeStandaloneGuiMutation(payload);
+          if (
+            payload.channel === 'invoker:delete-all-workflows'
+            || payload.channel === 'invoker:delete-all-workflows-bulk'
+          ) {
+            requestStandaloneOwnerShutdownWhenIdle(payload.channel);
+          }
+          return result;
         });
 
         lifecycleEventBridge = startLifecycleEventBridge({
@@ -3296,10 +3319,10 @@ startMainProcessBootstrap({
         embeddedTerminalManager.closeAll();
         terminalSessionPersistenceHandle?.dispose();
         terminalSessionPersistenceHandle = null;
-        if (executorRegistry) {
+        if (ownerMode && executorRegistry) {
           await Promise.all(executorRegistry.getAll().map(f => f.destroyAll()));
         }
-        if (orchestrator) {
+        if (ownerMode && orchestrator) {
           for (const task of orchestrator.getAllTasks()) {
             if (task.status === 'running' || task.status === 'fixing_with_ai') {
               if (persistence) {
@@ -3318,8 +3341,10 @@ startMainProcessBootstrap({
             }
           }
         }
-        if (persistence) {
+        if (ownerMode && persistence) {
           persistence.requeueRunningWorkflowMutationIntents();
+        }
+        if (persistence) {
           persistence.close();
         }
         guiInstanceLock?.release();

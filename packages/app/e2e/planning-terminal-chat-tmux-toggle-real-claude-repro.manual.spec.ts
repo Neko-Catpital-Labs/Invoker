@@ -3,7 +3,7 @@
  * driving the REAL `claude` CLI in the tmux pane instead of a synthetic
  * full-screen frame -- this is what the user actually typed and observed.
  *
- * Not part of the deterministic regression suite: a live CLI's screen can
+ * Manual-only verification: a live CLI's screen can
  * legitimately differ run to run (spinners, token/cost counters, auth
  * state), so this is a manual verification script, run on demand.
  *

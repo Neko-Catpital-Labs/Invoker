@@ -1,19 +1,12 @@
 /**
- * Reproduces a THIRD instance of the same underlying bug class, via a
- * different mechanism than the other two repros in this directory.
+ * Regression coverage for the planning terminal expand/collapse path.
  *
- * App.tsx renders TWO separate <InvokerTerminal> elements at two different
- * JSX positions: an inline one (~App.tsx:4748) and a fixed-overlay one
- * (~App.tsx:5083, only mounted while `planningTerminalExpanded` is true).
- * The inline instance's `terminalActive` prop is `!planningTerminalExpanded`
- * (App.tsx:4764) -- so expanding/collapsing the planning chat does not
- * merely show/hide an overlay, it also flips the INLINE instance's
- * `terminalActive` prop. PlanningTmuxPane's mount effect
- * (InvokerTerminal.tsx) is keyed on `terminalActive` in its dependency
- * array, so flipping it disposes the xterm.js Terminal and, when flipped
- * back, creates a brand-new one reseeded from the raw output log -- the
- * same garbling mechanism as the other two repros, triggered by the
- * Expand/Close buttons instead of a mode toggle or surface navigation.
+ * Expanding the planning chat legitimately changes xterm geometry and can
+ * reflow a live shell prompt. The invariant that matters for the historical
+ * garbling bug is that Expand/Close does not destroy and recreate the xterm.js
+ * terminal. This spec writes a cursor-addressed full-screen frame, then proves
+ * the same backend session and same xterm DOM node survive while the frame
+ * anchors remain visible before, during, and after expanded mode.
  */
 
 import type { Page } from '@playwright/test';
@@ -60,12 +53,32 @@ async function readTmuxBufferText(page: Page): Promise<string | null> {
   });
 }
 
-/** Expanding to a fixed full-screen overlay legitimately gives xterm.js more
- * rows to fill (a real resize, not corruption) -- trailing blank lines
- * differ for that reason alone. Strip them so the comparison only catches
- * actual content differences. */
-function trimTrailingBlankLines(text: string): string {
-  return text.replace(/(\n[ \t]*)+$/, '');
+/** Tags the live terminal's root DOM node so expand/collapse can prove the
+ * same xterm.js instance stayed mounted. */
+async function tagTerminalDomNode(page: Page): Promise<void> {
+  const tagged = await page.evaluate(() => {
+    const pane = document.querySelector('[data-testid="invoker-terminal-tmux-pane"]');
+    const xtermEl = pane?.querySelector('.xterm');
+    if (!xtermEl) return false;
+    xtermEl.setAttribute('data-expand-collapse-repro-marker', 'still-here');
+    return true;
+  });
+  expect(tagged, 'expected a live .xterm DOM node inside the tmux pane to tag').toBe(true);
+}
+
+async function terminalDomNodeMarkerSurvived(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const pane = document.querySelector('[data-testid="invoker-terminal-tmux-pane"]');
+    const xtermEl = pane?.querySelector('.xterm');
+    return xtermEl?.getAttribute('data-expand-collapse-repro-marker') === 'still-here';
+  });
+}
+
+function expectFrameAnchors(rendered: string | null, label: string): void {
+  expect(rendered, `${label}: expected the test hook to expose the live xterm.js Terminal`).not.toBeNull();
+  const lines = (rendered ?? '').split('\n');
+  expect(lines[2] ?? '', `${label}: top-left frame anchor must remain visible`).toContain('TOP LEFT FRAME');
+  expect(lines[9] ?? '', `${label}: bottom-right frame anchor must remain visible`).toContain('BOTTOM RIGHT FRAME');
 }
 
 async function closePlanningTerminalSessions(page: Page): Promise<void> {
@@ -84,7 +97,7 @@ const DRAW_FULL_SCREEN_FRAME =
   '\n';
 
 test.describe('Planning terminal Expand/Close garble repro', () => {
-  test('tmux pane keeps the same rendered content across an Expand -> Close round trip', async ({ page }, testInfo) => {
+  test('tmux pane preserves the same terminal instance and frame anchors across an Expand -> Close round trip', async ({ page }, testInfo) => {
     let sessionId = '';
     try {
       await openHome(page);
@@ -95,13 +108,16 @@ test.describe('Planning terminal Expand/Close garble repro', () => {
       await page.waitForTimeout(300);
 
       const renderedBeforeExpand = await readTmuxBufferText(page);
-      expect(renderedBeforeExpand, 'expected the test hook to expose the live xterm.js Terminal').not.toBeNull();
+      expectFrameAnchors(renderedBeforeExpand, 'before expand');
+      await tagTerminalDomNode(page);
       await testInfo.attach('rendered-buffer-before-expand', { body: renderedBeforeExpand ?? '', contentType: 'text/plain' });
 
       await page.getByRole('button', { name: 'Expand planning chat' }).click();
       const overlay = page.getByTestId('invoker-terminal-expanded');
       await expect(overlay).toBeVisible({ timeout: 10000 });
-      await expect(overlay.getByTestId('invoker-terminal-tmux-pane')).toBeVisible({ timeout: 10000 });
+      const paneWhileExpanded = overlay.getByTestId('invoker-terminal-tmux-pane');
+      await expect(paneWhileExpanded).toBeVisible({ timeout: 10000 });
+      await expect(paneWhileExpanded).toHaveAttribute('data-session-id', sessionId);
       await page.waitForTimeout(500);
 
       const renderedWhileExpanded = await readTmuxBufferText(page);
@@ -109,9 +125,18 @@ test.describe('Planning terminal Expand/Close garble repro', () => {
       const expandedScreenshot = testInfo.outputPath('expand-collapse-expanded.png');
       await page.screenshot({ path: expandedScreenshot });
       await testInfo.attach('while-expanded', { path: expandedScreenshot, contentType: 'image/png' });
+      expect(
+        await terminalDomNodeMarkerSurvived(page),
+        'the xterm terminal DOM node must be the SAME instance while expanded, not destroyed and recreated',
+      ).toBe(true);
+      expect(await readOutputSnapshot(page, sessionId), 'the backend session output must still contain the test frame marker after expanding').toContain(FRAME_MARKER);
+      expectFrameAnchors(renderedWhileExpanded, 'while expanded');
 
       await overlay.getByRole('button', { name: 'Close planning chat' }).click();
       await expect(overlay).toHaveCount(0);
+      const paneAfterClose = page.getByTestId('invoker-terminal-tmux-pane');
+      await expect(paneAfterClose).toBeVisible({ timeout: 10000 });
+      await expect(paneAfterClose).toHaveAttribute('data-session-id', sessionId);
       await page.waitForTimeout(500);
 
       const renderedAfterClose = await readTmuxBufferText(page);
@@ -119,17 +144,12 @@ test.describe('Planning terminal Expand/Close garble repro', () => {
       await page.screenshot({ path: afterScreenshot });
       await testInfo.attach('after-close', { path: afterScreenshot, contentType: 'image/png' });
       await testInfo.attach('rendered-buffer-after-close', { body: renderedAfterClose ?? '', contentType: 'text/plain' });
-
-      // Expanding genuinely resizes the pane (more rows in a fullscreen
-      // overlay), so compare ignoring trailing blank padding from that
-      // resize -- the actual content must still be untouched.
       expect(
-        trimTrailingBlankLines(renderedWhileExpanded ?? ''),
-        'the rendered terminal content must be unchanged (aside from added blank rows from the legitimate resize) when first expanding the planning chat',
-      ).toBe(trimTrailingBlankLines(renderedBeforeExpand ?? ''));
-      // Closing returns to the exact same viewport size as before expanding,
-      // so this must be a byte-for-byte match, not just a trimmed one.
-      expect(renderedAfterClose, 'the rendered terminal content must be identical after an Expand -> Close round trip').toBe(renderedBeforeExpand);
+        await terminalDomNodeMarkerSurvived(page),
+        'the xterm terminal DOM node must be the SAME instance after closing expanded mode, not destroyed and recreated',
+      ).toBe(true);
+      expect(await readOutputSnapshot(page, sessionId), 'the backend session output must still contain the test frame marker after closing expanded mode').toContain(FRAME_MARKER);
+      expectFrameAnchors(renderedAfterClose, 'after close');
     } finally {
       if (sessionId) {
         await closePlanningTerminalSessions(page);
