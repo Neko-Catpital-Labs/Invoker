@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
@@ -25,12 +26,14 @@ export type ElectronFixtures = {
   breakTerminalSpawn: boolean;
   /** When true, the invoker:get-planning-presets IPC handler throws (fault injection). */
   breakPlanningPresets: boolean;
+  standaloneOwnerIdleTimeoutMs: string;
   repoConfig: Partial<InvokerConfig>;
   page: Page;
   testDir: string;
 };
 
 const repoRoot = resolveRepoRoot(__dirname);
+type RuntimeMode = 'local-owner' | 'daemon-owner' | 'read-only' | 'connection-lost';
 
 async function removeTestDir(dir: string): Promise<void> {
   let lastError: unknown;
@@ -63,10 +66,62 @@ export async function deleteAllWorkflowsFast(page: Page): Promise<void> {
   });
 }
 
+export async function waitForInvokerBridge(page: Page, timeoutMs = 15_000): Promise<void> {
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: timeoutMs });
+}
+
+export async function waitForRuntimeMode(page: Page, mode: RuntimeMode, timeoutMs = 15_000): Promise<void> {
+  await waitForInvokerBridge(page, timeoutMs);
+  await expect
+    .poll(async () => {
+      const runtimeStatus = await page.evaluate(async () => window.invoker.getRuntimeStatus());
+      return runtimeStatus.mode;
+    }, { timeout: timeoutMs })
+    .toBe(mode);
+}
+
+export async function closeElectronApp(app: ElectronApplication): Promise<void> {
+  const child = app.process();
+  let childExited = child.exitCode !== null || child.signalCode !== null;
+  const childExitPromise = new Promise<void>((resolve) => {
+    if (childExited) {
+      resolve();
+      return;
+    }
+    const markChildExited = () => {
+      childExited = true;
+      resolve();
+    };
+    child.once('exit', markChildExited);
+    child.once('close', markChildExited);
+  });
+  const closePromise = app.close().catch(() => undefined);
+  const timedOut = await Promise.race([
+    closePromise.then(() => false),
+    delay(5_000).then(() => true),
+  ]);
+  if (!timedOut) return;
+
+  if (!childExited) {
+    child.kill('SIGTERM');
+    if (child.pid && process.platform !== 'win32') {
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        // Process group may already be gone.
+      }
+    }
+    await Promise.race([closePromise, childExitPromise, delay(2_000)]);
+    if (!childExited) child.kill('SIGKILL');
+  }
+}
+
 export const test = base.extend<ElectronFixtures>({
   guiOwnerMode: [process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui', { option: true }],
   breakTerminalSpawn: [false, { option: true }],
   breakPlanningPresets: [false, { option: true }],
+  standaloneOwnerIdleTimeoutMs: [process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000', { option: true }],
   repoConfig: [{ autoFixRetries: 0 }, { option: true }],
 
   testDir: async ({}, use) => {
@@ -77,7 +132,7 @@ export const test = base.extend<ElectronFixtures>({
     }
   },
 
-  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, repoConfig, testDir }, use) => {
+  electronApp: async ({ guiOwnerMode, breakTerminalSpawn, breakPlanningPresets, standaloneOwnerIdleTimeoutMs, repoConfig, testDir }, use) => {
     // Dummy `claude` on PATH + fix command — same as scripts/e2e-dry-run (no real CLI).
     const claudeMarker = path.join(repoRoot, 'scripts', 'e2e-dry-run', 'fixtures', 'claude-marker.sh');
     const stubDir = path.join(testDir, 'claude-stub');
@@ -185,8 +240,7 @@ exit 64
         INVOKER_ALLOW_DELETE_ALL: '1',
         INVOKER_E2E_ENABLE_COMPOSITOR: '1',
         INVOKER_REPO_CONFIG_PATH: configPath,
-        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:
-          process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '10000',
+        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: standaloneOwnerIdleTimeoutMs,
         INVOKER_EMBEDDED_TERMINAL_BACKEND:
           process.env.INVOKER_E2E_EMBEDDED_TERMINAL_BACKEND ?? 'pty',
         INVOKER_E2E_MARKER_ROOT: markerRoot,
@@ -215,13 +269,15 @@ exit 64
       },
     });
     await use(app);
-    await app.close();
+    await closeElectronApp(app);
   },
 
-  page: async ({ electronApp }, use) => {
+  page: async ({ electronApp, guiOwnerMode }, use) => {
     const page = await electronApp.firstWindow();
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+    await waitForInvokerBridge(page);
+    if (guiOwnerMode === 'auto' || guiOwnerMode === 'daemon') {
+      await waitForRuntimeMode(page, 'daemon-owner', 30_000);
+    }
 
     // Clear state from previous runs and reload for clean React state
     await page.evaluate(async () => {
@@ -229,8 +285,10 @@ exit 64
     });
     await deleteAllWorkflowsFast(page);
     await page.reload();
-    await page.waitForLoadState('domcontentloaded');
-    await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10000 });
+    await waitForInvokerBridge(page);
+    if (guiOwnerMode === 'auto' || guiOwnerMode === 'daemon') {
+      await waitForRuntimeMode(page, 'daemon-owner', 30_000);
+    }
 
     await use(page);
     try {
