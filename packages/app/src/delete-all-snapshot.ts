@@ -71,7 +71,7 @@ export async function createDeleteAllSnapshot(
 const DEFAULT_HOURLY_SNAPSHOT_RETENTION = 48;
 const HOURLY_SNAPSHOT_PREFIX = 'invoker.db.hourly-auto-';
 
-function hourlySnapshotRetention(): number {
+export function hourlySnapshotRetention(): number {
   const raw = process.env.INVOKER_HOURLY_BACKUP_RETENTION;
   // Treat empty/blank as unset: Number('') and Number('   ') are 0, which would
   // otherwise pass the >= 0 check and silently disable pruning (reintroducing the
