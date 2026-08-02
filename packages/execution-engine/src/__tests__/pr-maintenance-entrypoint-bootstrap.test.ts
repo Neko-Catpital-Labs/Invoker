@@ -14,6 +14,7 @@ const repoRoot = resolveRepoRoot(process.cwd());
 const PR_MAINTENANCE_ENTRYPOINTS = [
   { kind: 'pr-admin-bypass-land', scriptRelativePath: 'scripts/cron-pr-admin-bypass-land.sh' },
   { kind: 'pr-orphan-repair', scriptRelativePath: 'scripts/cron-pr-orphan-repair.sh' },
+  { kind: 'pr-duplicate-close', scriptRelativePath: 'scripts/cron-pr-duplicate-close.sh' },
 ] as const;
 
 describe('PR maintenance entrypoints bootstrap', () => {
@@ -101,6 +102,49 @@ describe('PR maintenance entrypoints bootstrap', () => {
     expect(readFileSync(capturePath, 'utf8')).toBe([
       `cwd=${repoRoot}`,
       'args=<scripts/mergify_admin_requeue.py><--once><--repo><owner/repo><--author><octocat><--dry-run>',
+      '',
+    ].join('\n'));
+  });
+
+  it('duplicate-close entrypoint forwards repo, author, and dry-run controls to Python', () => {
+    writeFileSync(join(stubBin, 'flock'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+    const capturePath = join(stubBin, 'python-args.txt');
+    const pythonStub = join(stubBin, 'python3');
+    writeFileSync(
+      pythonStub,
+      [
+        '#!/usr/bin/env bash',
+        '{',
+        '  printf "cwd=%s\\n" "$PWD"',
+        '  printf "args="',
+        '  printf "<%s>" "$@"',
+        '  printf "\\n"',
+        '} > "$PYTHON_CAPTURE"',
+        'exit 0',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync('bash', [resolve(repoRoot, 'scripts/cron-pr-duplicate-close.sh')], {
+      cwd: tmpdir(),
+      encoding: 'utf8',
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        PATH: `${stubBin}:${process.env.PATH ?? ''}`,
+        INVOKER_GITHUB_TARGET_REPO: 'owner/repo',
+        INVOKER_PR_CRON_AUTHOR: 'octocat',
+        INVOKER_PR_CRON_DRY_RUN: '1',
+        INVOKER_PR_CRON_LOCK: lockPath,
+        PYTHON_CAPTURE: capturePath,
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(readFileSync(capturePath, 'utf8')).toBe([
+      `cwd=${repoRoot}`,
+      'args=<scripts/pr_duplicate_close.py><--once><--repo><owner/repo><--author><octocat><--dry-run>',
       '',
     ].join('\n'));
   });
