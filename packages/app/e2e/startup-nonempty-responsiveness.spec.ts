@@ -54,9 +54,11 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
   const configPath = path.join(testDir, 'e2e-config.json');
   const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
   const electronUserDataDir = path.join(testDir, 'electron-user-data');
+  const homeDir = path.join(testDir, 'home');
   await fs.mkdir(stubDir, { recursive: true });
   await fs.mkdir(markerRoot, { recursive: true });
   await fs.mkdir(electronUserDataDir, { recursive: true });
+  await fs.mkdir(homeDir, { recursive: true });
   registerTrackedBrowserUserDataDir(electronUserDataDir);
   writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
   try {
@@ -76,6 +78,8 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
       ...process.env,
       NODE_ENV: 'test',
       INVOKER_TEST_WORKFLOW_IDS: '1',
+      INVOKER_DISABLE_SLACK: '1',
+      TZ: 'UTC',
       INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
       INVOKER_DB_DIR: testDir,
       INVOKER_IPC_SOCKET: ipcSocketPath,
@@ -83,10 +87,12 @@ async function launchElectronApp(testDir: string, extraEnv?: Record<string, stri
       INVOKER_E2E_ENABLE_COMPOSITOR: '1',
       INVOKER_REPO_CONFIG_PATH: configPath,
       INVOKER_E2E_MARKER_ROOT: markerRoot,
+      INVOKER_CLAUDE_COMMAND: claudeMarker,
       INVOKER_CLAUDE_FIX_COMMAND: claudeMarker,
+      INVOKER_USER_DATA_DIR: electronUserDataDir,
+      HOME: homeDir,
       PATH: `${stubDir}${path.delimiter}${process.env.PATH ?? ''}`,
       ...(extraEnv ?? {}),
-      INVOKER_USER_DATA_DIR: electronUserDataDir,
     },
   });
 }
