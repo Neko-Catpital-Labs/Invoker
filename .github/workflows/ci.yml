@@ -661,6 +661,10 @@ jobs:
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
               e2e/workers-surface.spec.ts
 
     name: playwright / ${{ matrix.name }}
@@ -702,10 +706,17 @@ jobs:
             ...(perfJob ? perfJob.strategy.matrix.include : []),
           ];
           const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
+          const manualOnly = new Set([
+            // Requires a real authenticated Claude CLI and is kept as an explicit on-demand repro.
+            'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+          ]);
           const discovered = fs.readdirSync('packages/app/e2e')
             .filter((file) => file.endsWith('.spec.ts'))
             .map((file) => `e2e/${file}`)
+            .filter((file) => !manualOnly.has(file))
             .sort();
+          const missingManualOnly = [...manualOnly].filter((file) => !fs.existsSync(`packages/app/${file}`));
+          const listedManualOnly = listed.filter((file) => manualOnly.has(file));
 
           const listedSet = new Set(listed);
           const discoveredSet = new Set(discovered);
@@ -713,11 +724,13 @@ jobs:
           const extra = listed.filter((file) => !discoveredSet.has(file));
           const duplicates = listed.filter((file, index) => listed.indexOf(file) !== index);
 
-          if (missing.length || extra.length || duplicates.length) {
+          if (missing.length || extra.length || duplicates.length || missingManualOnly.length || listedManualOnly.length) {
             console.error('Playwright shard inventory drift detected.');
             if (missing.length) console.error(`Missing from shards: ${missing.join(', ')}`);
             if (extra.length) console.error(`Extra in shards: ${extra.join(', ')}`);
             if (duplicates.length) console.error(`Duplicate shard entries: ${[...new Set(duplicates)].join(', ')}`);
+            if (missingManualOnly.length) console.error(`Missing manual-only specs: ${missingManualOnly.join(', ')}`);
+            if (listedManualOnly.length) console.error(`Manual-only specs must not be scheduled in CI shards: ${[...new Set(listedManualOnly)].join(', ')}`);
             process.exit(1);
           }
 
