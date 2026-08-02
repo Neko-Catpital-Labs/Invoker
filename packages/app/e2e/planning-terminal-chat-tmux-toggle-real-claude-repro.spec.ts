@@ -18,6 +18,8 @@ import { execFileSync } from 'node:child_process';
 import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures/electron-app.js';
 
+const REAL_CLAUDE_PROOF_ENABLED = process.env.INVOKER_E2E_REAL_CLAUDE === '1';
+
 function resolveRealClaudeBinary(): string {
   const resolved = execFileSync('bash', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
   if (!resolved) {
@@ -133,6 +135,8 @@ async function closePlanningTerminalSessions(page: Page): Promise<void> {
 }
 
 test.describe('Planning terminal Chat/Tmux toggle garble repro (real claude session)', () => {
+  test.skip(!REAL_CLAUDE_PROOF_ENABLED, 'Set INVOKER_E2E_REAL_CLAUDE=1 to run the real claude toggle proof.');
+
   test('tmux pane renders the real claude CLI identically before and after a Chat -> Tmux round trip', async ({ page }, testInfo) => {
     test.setTimeout(90000);
     const claudeBinary = resolveRealClaudeBinary();
