@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation, buildRemoteAgentCommand } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -530,6 +530,20 @@ describe('remote agent dispatch via registry', () => {
     // We can't call it without real SSH, but we verify it's callable.
     expect(typeof spawnRemoteAgentFixImpl).toBe('function');
     expect(spawnRemoteAgentFixImpl.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('buildRemoteAgentCommand throws naming explicit agent when no configured set is available', () => {
+    expect(() => buildRemoteAgentCommand('fix the merge conflict', undefined, 'omp')).toThrow(
+      /execution agent "omp".*no configured agent set was available or it lacked that name/,
+    );
+  });
+
+  it('buildRemoteAgentCommand uses the requested agent when it resolves', () => {
+    const result = buildRemoteAgentCommand('fix the merge conflict', registerBuiltinAgents(), 'codex');
+
+    expect(result.shellCommand).toContain("codex 'exec'");
+    expect(result.shellCommand).not.toContain('claude --session-id');
+    expect(result.sessionId).toBeTruthy();
   });
 
 
