@@ -315,6 +315,7 @@ export function classifyReviewUnitsForPath(filePath) {
     || path === 'packages/app/src/api-server.ts'
     || path === 'packages/app/src/workflow-actions.ts'
     || path === 'packages/app/src/workflow-mutation-facade.ts'
+    || path === 'packages/app/src/web/web-invoker-dispatch.ts'
     || path.startsWith('packages/app/src/ipc/')
   ) {
     return ['activation-surface'];
