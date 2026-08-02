@@ -728,6 +728,54 @@ async function handleInvalidReferenceRecovery(
   );
 }
 
+async function handleOauthSessionExpiredRecovery(
+  options: InfraRepairWorkerPolicyOptions,
+  candidate: ValidatedGenericSshInfraCandidate,
+): Promise<void> {
+  const cooldownMs = options.repairCooldownMs ?? DEFAULT_INFRA_REPAIR_COOLDOWN_MS;
+  const existing = options.store.getWorkerAction?.(
+    INFRA_REPAIR_WORKER_KIND,
+    targetRepairExternalKey(candidate.targetId, candidate.reason),
+  );
+  const nowMs = options.now?.() ?? Date.now();
+  if (existing && isRecentTargetActionWithinCooldown(existing, nowMs, cooldownMs)) {
+    recordTaskDecision(
+      options,
+      candidate,
+      candidate.reason,
+      'skipped',
+      `An OAuth-session-expired alert already exists for pool member ${candidate.targetId}`,
+      {
+        targetId: candidate.targetId,
+        alertStatus: existing.status,
+      },
+      'alert-cooldown',
+    );
+    return;
+  }
+
+  recordTargetRepairAction(
+    options,
+    candidate.targetId,
+    candidate.reason,
+    'failed',
+    `OAuth session expired on ${candidate.targetId} and cannot be refreshed automatically: an operator must re-authenticate that host or switch it to a non-interactive credential mode`,
+    {},
+    true,
+  );
+  recordTaskDecision(
+    options,
+    candidate,
+    candidate.reason,
+    'completed',
+    `Recorded OAuth-session-expired alert for ${candidate.targetId}; this failure will not be acted on again until an operator refreshes credentials`,
+    {
+      targetId: candidate.targetId,
+    },
+    'oauth-session-expired-alert',
+  );
+}
+
 async function handleValidatedGenericSshInfraCandidate(
   options: InfraRepairWorkerPolicyOptions,
   candidate: ValidatedGenericSshInfraCandidate,
@@ -750,6 +798,10 @@ async function handleValidatedGenericSshInfraCandidate(
   }
   if (candidate.reason === 'ssh-repo-mirror-corrupt') {
     await handleRepoMirrorCorruptRecovery(options, candidate);
+    return;
+  }
+  if (candidate.reason === 'ssh-oauth-session-expired') {
+    await handleOauthSessionExpiredRecovery(options, candidate);
     return;
   }
   await handleInvalidReferenceRecovery(options, candidate);
