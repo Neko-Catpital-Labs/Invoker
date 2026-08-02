@@ -35,6 +35,12 @@ export interface ConversationMessage {
 
 export type ConversationMode = 'agent' | 'plan';
 
+/** Written by an agent-mode turn to request planning permission instead of drafting YAML itself. */
+export interface PlanIntentSignal {
+  wantsPlan: true;
+  reason?: string;
+}
+
 export type PlanningCommandBuilder = (opts: {
   tool: string;
   model?: string;
@@ -202,13 +208,17 @@ export const SLACK_LOCAL_REPRO_POLICY = `Execution boundary:
 - Never run anything that changes state outside your worktree: \`git push\`, \`gh pr create\`/\`edit\`/\`merge\`, \`gh\` label writes, \`mergify stack push\`, \`scripts/safe-stack-push.mjs\`, or \`scripts/land-stack.mjs --execute\`.
 - If the request needs any of those, stop and hand off: describe the change, post the plan, and ask the user to confirm. Do not perform it yourself and do not offer a manual workaround for it.`;
 
-function buildAgentSystemPrompt(): string {
+function buildAgentSystemPrompt(intentSignalFilePath?: string): string {
+  const planIntentGuidance = intentSignalFilePath
+    ? `- Do NOT generate or submit Invoker YAML yourself. If — and only if — the user's latest message is itself asking you to draft a plan, convert this work into an Invoker submission, or execute/submit what was just discussed, write \`{"wantsPlan": true}\` to \`${intentSignalFilePath}\` using your file-writing tool. The Slack host will then ask the user to confirm via Approve/No buttons. Do not write that file speculatively, or for a message that isn't itself a plan/execution ask — a false positive interrupts the conversation with an unwanted confirmation prompt.
+- If you are not confident the user wants a plan, do not write that file. Instead tell the user in your reply to type \`/plan <request>\` in this thread to start planning explicitly.`
+    : `- Do NOT generate or submit Invoker YAML yourself. If the user asks for a plan or to act on this work, tell them to type \`/plan <request>\` in this thread to start planning explicitly.`;
   return `You are a normal coding agent running in a git worktree for a Slack thread.
 
 Default behavior:
 - Treat the thread like an ordinary OMP/Codex coding session.
 - Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
-- Do NOT generate or submit Invoker YAML yourself. Slack routing promotes planning requests to a planning conversation automatically, where the user can submit the resulting draft in this same thread.
+${planIntentGuidance}
 - Keep Slack replies short and concrete: changed files, verification, and any remaining risk. Return only the final user-facing message; never include chain-of-thought, reasoning traces, tool output, or raw planner JSONL.
 - To share a generated file (screenshot, diagram, report), write it inside your worktree and link it by absolute path as a markdown link, e.g. \`[chart](/abs/path/in/worktree/chart.png)\`. Files linked that way are uploaded to the thread. Files written outside your worktree cannot be shared, so do not put artifacts in /tmp.
 
@@ -444,6 +454,7 @@ export class PlanConversation {
   private _initialized = false;
   private _lastTurnReasoning: string[] = [];
   private _lastTurnDraftPlanText: string | null = null;
+  private _lastTurnPlanIntentSignal: PlanIntentSignal | null = null;
   private lastKnownGoodPlanText: string | null = null;
   private harnessSessionDriver?: HarnessSessionDriver;
   private _harnessSessionId?: string;
@@ -527,6 +538,7 @@ export class PlanConversation {
     const tInit = Date.now();
 
     this.resetPlanDraftFile();
+    this.resetPlanIntentSignalFile();
     this.messages.push({ role: 'user', content: userMessage });
 
     const prompt = this.buildTurnPrompt();
@@ -553,6 +565,7 @@ export class PlanConversation {
       : inlineDraft;
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
+    this._lastTurnPlanIntentSignal = this.mode === 'agent' ? this.readPlanIntentSignalFile() : null;
     if (!nextDraft) {
       message = removeStandaloneSubmitInstruction(message);
     }
@@ -591,6 +604,11 @@ export class PlanConversation {
 
   get lastTurnDraftPlanText(): string | null {
     return this._lastTurnDraftPlanText;
+  }
+
+  /** The plan-intent signal the model wrote this turn (agent mode only), if any. */
+  get lastTurnPlanIntentSignal(): PlanIntentSignal | null {
+    return this._lastTurnPlanIntentSignal;
   }
 
   /** Returns the raw plan text that was submitted via confirmation, or null. */
@@ -659,6 +677,44 @@ export class PlanConversation {
     }
   }
 
+  // An agent-mode turn writes this file when it judges the user's latest
+  // message is itself a plan/submission ask, instead of drafting YAML itself.
+  // Same shape as planDraftFilePath: gated on workingDir + threadTs, reset
+  // every turn so a stale signal from turn N can't leak into turn N+1.
+  // `.invoker/` is gitignored.
+  planIntentSignalFilePath(): string | null {
+    if (!this.workingDir || !this.threadTs) return null;
+    const safeId = this.threadTs.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return join(this.workingDir, '.invoker', 'plan-intent', `${safeId}.json`);
+  }
+
+  private readPlanIntentSignalFile(): PlanIntentSignal | null {
+    const path = this.planIntentSignalFilePath();
+    if (!path) return null;
+    try {
+      if (!existsSync(path)) return null;
+      const content = readFileSync(path, 'utf8').trim();
+      if (!content) return null;
+      const parsed = JSON.parse(content) as { wantsPlan?: unknown; reason?: unknown };
+      if (parsed.wantsPlan !== true) return null;
+      return { wantsPlan: true, reason: typeof parsed.reason === 'string' ? parsed.reason : undefined };
+    } catch (err) {
+      this.log('plan-conversation', 'error', `Failed to read plan intent signal file ${path}: ${err}`);
+      return null;
+    }
+  }
+
+  private resetPlanIntentSignalFile(): void {
+    const path = this.planIntentSignalFilePath();
+    if (!path) return;
+    try {
+      rmSync(path, { force: true });
+      mkdirSync(dirname(path), { recursive: true });
+    } catch (err) {
+      this.log('plan-conversation', 'error', `Failed to reset plan intent signal file ${path}: ${err}`);
+    }
+  }
+
   /** Returns the conversation history. */
   get history(): readonly ConversationMessage[] {
     return this.messages.filter((m) => m.content.length > 0);
@@ -670,6 +726,7 @@ export class PlanConversation {
     this._submittedPlanText = null;
     this._planSubmitted = false;
     this._lastTurnDraftPlanText = null;
+    this._lastTurnPlanIntentSignal = null;
     this.lastKnownGoodPlanText = null;
     if (this.conversationRepo && this.threadTs) {
       this.conversationRepo.deleteConversation(this.threadTs);
@@ -698,7 +755,7 @@ export class PlanConversation {
           preferStackedWorkflows: this.preferStackedWorkflows,
           planFilePath: this.planDraftFilePath() ?? undefined,
         })
-      : buildAgentSystemPrompt();
+      : buildAgentSystemPrompt(this.planIntentSignalFilePath() ?? undefined);
     const parts: string[] = [systemPrompt];
 
     if (this.messages.length > 1) {
