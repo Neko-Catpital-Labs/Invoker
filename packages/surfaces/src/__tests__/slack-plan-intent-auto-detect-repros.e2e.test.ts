@@ -114,6 +114,35 @@ function intentSignalPath(workingDir: string, threadTs: string): string {
   return join(workingDir, '.invoker', 'plan-intent', `${safeId}.json`);
 }
 
+// A manually-controlled child: unlike processWith, nothing closes it
+// automatically. Used to construct a specific interleaving deterministically
+// rather than relying on timer race luck.
+function controlledChild(): { proc: any; close: (stdout: string) => void } {
+  const proc = new EventEmitter() as any;
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = vi.fn();
+  return {
+    proc,
+    close: (stdout: string) => {
+      proc.stdout.emit('data', Buffer.from(stdout));
+      proc.emit('close', 0);
+    },
+  };
+}
+
+// How many internal awaits sit between an @mention landing and spawn()
+// actually being invoked is an implementation detail. Rather than hand-count
+// microtask ticks, flush them until the condition we actually care about
+// is true.
+async function flushUntil(predicate: () => boolean, maxTicks = 50): Promise<void> {
+  for (let i = 0; i < maxTicks; i++) {
+    if (predicate()) return;
+    await Promise.resolve();
+  }
+  throw new Error('condition never became true within maxTicks microtask flushes');
+}
+
 describe('Slack plan-intent auto-detect repro', () => {
   let workingDir: string;
   let adapter: SQLiteAdapter;
@@ -331,5 +360,50 @@ describe('Slack plan-intent auto-detect repro', () => {
     expect(say).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringContaining('@mention me first'),
     }));
+  });
+
+  it('does not let a second concurrent @mention on the same thread wipe the first turn\'s signal before it is read', async () => {
+    const threadTs = 'thread-race';
+    seedContext(slackSessionRepo, threadTs, workingDir);
+    const say = vi.fn().mockResolvedValue({ ts: 'msg-race' });
+    const path = intentSignalPath(workingDir, threadTs);
+    mkdirSync(join(workingDir, '.invoker', 'plan-intent'), { recursive: true });
+
+    const a = controlledChild();
+    const b = controlledChild();
+    mockSpawn.mockImplementationOnce(() => a.proc);
+    mockSpawn.mockImplementationOnce(() => b.proc);
+
+    // First Slack event for this thread: "submit it".
+    const replyA = handler(surface, 'app_mention')({
+      event: { text: '<@UBOT> submit it', ts: 'evt-a', thread_ts: threadTs, user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+    await flushUntil(() => mockSpawn.mock.calls.length >= 1);
+
+    // A's model "writes its file" mid-turn (process is still open).
+    writeFileSync(path, JSON.stringify({ wantsPlan: true }), 'utf8');
+
+    // A second Slack event for the SAME thread arrives before the first has
+    // finished — e.g. the user sent two messages in quick succession.
+    const replyB = handler(surface, 'app_mention')({
+      event: { text: '<@UBOT> actually never mind', ts: 'evt-b', thread_ts: threadTs, user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+
+    a.close('sure, want me to draft one for that?');
+    await replyA;
+
+    await flushUntil(() => mockSpawn.mock.calls.length >= 2);
+    b.close('ok, no plan then');
+    await replyB;
+
+    // The first turn's real signal must have produced the Approve/No
+    // buttons, keyed to its own request text — not lost to the second,
+    // concurrently-arriving turn's setup.
+    expect(buttonValue(say, 'lobby_plan_for_execution')).toBeTruthy();
+    const pending = slackSessionRepo.getPendingConfirmation(threadTs);
+    expect(pending).not.toBeNull();
+    expect((pending!.payload as { requestText?: string }).requestText).toBe('submit it');
   });
 });
