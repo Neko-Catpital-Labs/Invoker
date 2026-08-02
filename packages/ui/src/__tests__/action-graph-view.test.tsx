@@ -29,6 +29,7 @@ const graph: ActionGraphResponse = {
       taskId: 'task-a',
       workflowId: 'wf-1',
       durations: { heartbeatAgeMs: 8_000 },
+      history: [],
     },
   ],
   edges: [{ id: 'intent:1->attempt:task-a-a1', source: 'intent:1', target: 'attempt:task-a-a1' }],
@@ -42,6 +43,7 @@ describe('ActionGraphView', () => {
     expect(screen.getByText('invoker:retry-workflow')).toBeInTheDocument();
     expect(screen.getByText('queued 14m')).toBeInTheDocument();
     expect(screen.getByText('heartbeat 8s ago')).toBeInTheDocument();
+    expect(screen.getByTestId('action-graph-node-attempt:task-a')).toHaveTextContent('Task A');
     expect(screen.getByTestId('rf__edge-intent:1->attempt:task-a-a1')).toHaveAttribute('data-source', 'intent:1');
     expect(screen.getByTestId('rf__edge-intent:1->attempt:task-a-a1')).toHaveAttribute('data-target', 'attempt:task-a-a1');
   });

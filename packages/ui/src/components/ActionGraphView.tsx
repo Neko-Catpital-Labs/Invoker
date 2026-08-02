@@ -69,13 +69,20 @@ function primaryDurationLabel(node: ActionGraphNode): string {
   return node.status;
 }
 
+function actionGraphNodeTestId(node: ActionGraphNode): string {
+  if (node.type === 'task-attempt' && node.taskId && node.history !== undefined) {
+    return `action-graph-node-attempt:${node.taskId}`;
+  }
+  return `action-graph-node-${node.id}`;
+}
+
 function ActionNode({ data }: { data: { node: ActionGraphNode; selected: boolean } }): JSX.Element {
   const node = data.node;
   const className = statusClasses[node.status];
   return (
     <div
       className={`relative w-[230px] rounded border px-3 py-2 shadow-sm ${className} ${data.selected ? 'ring-2 ring-white/70' : ''}`}
-      data-testid={`action-graph-node-${node.id}`}
+      data-testid={actionGraphNodeTestId(node)}
     >
       <Handle
         type="target"
