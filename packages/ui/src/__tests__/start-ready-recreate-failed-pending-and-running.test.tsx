@@ -11,6 +11,10 @@ vi.mock('@xyflow/react', async () => {
 
 const { App } = await import('../App.js');
 
+// This file renders the full app shell twice and can exceed Vitest's default
+// 5s timeout on constrained CI runners. Keep the timeout scoped to this repro.
+vi.setConfig({ testTimeout: 20_000 });
+
 const previewResult: StartReadyResult = {
   preview: {
     readyTaskIds: ['wf-1/ready'],
