@@ -639,8 +639,12 @@ jobs:
               e2e/planning-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-live-model.proof.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
           - name: 7-of-9
             files: >-
               e2e/worker-tab-scroll.spec.ts
@@ -701,23 +705,29 @@ jobs:
             ...workflow.jobs.playwright.strategy.matrix.include,
             ...(perfJob ? perfJob.strategy.matrix.include : []),
           ];
+          const manualOnlySpecs = new Set([
+            'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+          ]);
           const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
-          const discovered = fs.readdirSync('packages/app/e2e')
+          const discoveredAll = fs.readdirSync('packages/app/e2e')
             .filter((file) => file.endsWith('.spec.ts'))
             .map((file) => `e2e/${file}`)
             .sort();
+          const discovered = discoveredAll.filter((file) => !manualOnlySpecs.has(file));
 
           const listedSet = new Set(listed);
           const discoveredSet = new Set(discovered);
           const missing = discovered.filter((file) => !listedSet.has(file));
           const extra = listed.filter((file) => !discoveredSet.has(file));
           const duplicates = listed.filter((file, index) => listed.indexOf(file) !== index);
+          const staleManualExclusions = [...manualOnlySpecs].filter((file) => !discoveredAll.includes(file));
 
-          if (missing.length || extra.length || duplicates.length) {
+          if (missing.length || extra.length || duplicates.length || staleManualExclusions.length) {
             console.error('Playwright shard inventory drift detected.');
             if (missing.length) console.error(`Missing from shards: ${missing.join(', ')}`);
             if (extra.length) console.error(`Extra in shards: ${extra.join(', ')}`);
             if (duplicates.length) console.error(`Duplicate shard entries: ${[...new Set(duplicates)].join(', ')}`);
+            if (staleManualExclusions.length) console.error(`Manual-only exclusions no longer exist: ${staleManualExclusions.join(', ')}`);
             process.exit(1);
           }
 
