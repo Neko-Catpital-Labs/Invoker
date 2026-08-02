@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import MergifyReporter from '@mergifyio/vitest';
 
+const maxWorkers = process.env.INVOKER_VITEST_MAX_WORKERS
+  ?? (process.env.INVOKER_VITEST_HIGH_RESOURCE === '1' ? undefined : 2);
+
 // Match a node_modules path segment for a given package name (handles both
 // flat `node_modules/<pkg>` and pnpm's `node_modules/.pnpm/<pkg>@.../node_modules/<pkg>`).
 function isFromPackage(id: string, pkg: string): boolean {
@@ -63,6 +66,14 @@ export default defineConfig({
     globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
+    testTimeout: 20_000,
+    pool: 'forks',
+    poolOptions: {
+      forks: {
+        ...(maxWorkers ? { maxForks: Number(maxWorkers) || maxWorkers } : {}),
+        maxMemoryLimitBeforeRecycle: 512 * 1024 * 1024,
+      },
+    },
     reporters: ['default', new MergifyReporter()],
   },
 });
