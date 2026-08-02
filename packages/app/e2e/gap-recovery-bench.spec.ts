@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { stringify as yamlStringify } from 'yaml';
 import type { ElectronApplication, Page } from '@playwright/test';
 
-import { E2E_REPO_URL } from './fixtures/electron-app.js';
+import { closeElectronApp, E2E_REPO_URL, waitForInvokerBridge } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const repoRoot = resolveRepoRoot(__dirname);
@@ -193,9 +193,8 @@ test('gap-recovery bench: 5 iterations of synthetic-gap → resync at 30 workflo
   try {
     const seedApp = await launchElectronApp(testDir);
     try {
-      const page = await seedApp.firstWindow({ timeout: 5000 });
-      await page.waitForLoadState('domcontentloaded');
-      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 5000 });
+      const page = await seedApp.firstWindow({ timeout: 30_000 });
+      await waitForInvokerBridge(page);
 
       for (let index = 0; index < WORKFLOW_COUNT; index += 1) {
         const planYaml = yamlStringify(buildPlan(index));
@@ -208,7 +207,7 @@ test('gap-recovery bench: 5 iterations of synthetic-gap → resync at 30 workflo
       const seededTasks = Array.isArray(seeded) ? seeded : seeded.tasks;
       expect(seededTasks.length).toBe(expectedTaskCount);
     } finally {
-      await seedApp.close();
+      await closeElectronApp(seedApp);
     }
 
     const app = await launchElectronApp(testDir, {
@@ -216,8 +215,7 @@ test('gap-recovery bench: 5 iterations of synthetic-gap → resync at 30 workflo
     });
     try {
       const page = await app.firstWindow({ timeout: 60_000 });
-      await page.waitForLoadState('domcontentloaded');
-      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 5000 });
+      await waitForInvokerBridge(page);
       await waitForWorkflowGraphVisible(page, 10000);
 
       await page.waitForTimeout(150);
@@ -269,7 +267,7 @@ test('gap-recovery bench: 5 iterations of synthetic-gap → resync at 30 workflo
 
       expect(iterations.length).toBe(ITERATIONS);
     } finally {
-      await app.close();
+      await closeElectronApp(app);
     }
   } finally {
     try {

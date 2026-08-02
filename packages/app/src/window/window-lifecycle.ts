@@ -133,25 +133,50 @@ export function createMainWindow(deps: MainWindowLifecycleDeps): BrowserWindow {
 
   const shouldShowWindow = process.env.NODE_ENV !== 'test' || deps.enableTestCompositor;
   if (shouldShowWindow) {
+    let windowMapped = false;
     let showTriggered = false;
-    const showWindow = (): void => {
-      if (mainWindow.isDestroyed() || showTriggered) return;
-      showTriggered = true;
-      deps.logger.info(keepE2eWindowHidden ? 'main window ready while hidden' : 'main window show()', { module: 'window' });
-      deps.recordStartupMark(keepE2eWindowHidden ? 'window.hidden-ready' : 'window.show');
+    let showFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    const mapWindow = (): void => {
+      if (mainWindow.isDestroyed() || windowMapped) return;
+      windowMapped = true;
       if (keepE2eWindowHidden && deps.enableTestCompositor) {
         mainWindow.showInactive();
       } else if (!keepE2eWindowHidden) {
         mainWindow.show();
         mainWindow.focus();
       }
+    };
+    const recordWindowReady = (): void => {
+      deps.logger.info(keepE2eWindowHidden ? 'main window ready while hidden' : 'main window show()', { module: 'window' });
+      deps.recordStartupMark(keepE2eWindowHidden ? 'window.hidden-ready' : 'window.show');
+      mapWindow();
+    };
+    const showWindow = (): void => {
+      if (mainWindow.isDestroyed() || showTriggered) return;
+      showTriggered = true;
+      if (showFallbackTimer) {
+        clearTimeout(showFallbackTimer);
+        showFallbackTimer = null;
+      }
+      recordWindowReady();
       deps.setUiInteractive(true);
       deps.recordStartupMark('ui.interactive');
       deps.startDeferredStartupWork();
     };
 
+    if (deps.enableTestCompositor && !keepE2eWindowHidden) {
+      deps.logger.info('main window mapped early for e2e compositor', { module: 'window' });
+      deps.recordStartupMark('window.mapped');
+      mapWindow();
+    }
     mainWindow.once('ready-to-show', showWindow);
-    setTimeout(showWindow, 1500).unref?.();
+    showFallbackTimer = setTimeout(showWindow, 1500);
+    mainWindow.on('closed', () => {
+      if (showFallbackTimer) {
+        clearTimeout(showFallbackTimer);
+        showFallbackTimer = null;
+      }
+    });
   } else {
     deps.setUiInteractive(true);
     deps.recordStartupMark('ui.interactive');
