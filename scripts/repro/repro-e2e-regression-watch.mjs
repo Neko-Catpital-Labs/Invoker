@@ -126,8 +126,8 @@ function testLiveDedupIsJobScoped() {
 function testWorkflowCommandMapping() {
   const defs = buildCiJobDefinitions();
   const expected = [
-    'playwright / 1-of-9',
-    'playwright / 9-of-9',
+    'playwright / 1-of-10',
+    'playwright / 10-of-10',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -137,7 +137,7 @@ function testWorkflowCommandMapping() {
     if (!def) fail(`missing CI job definition for ${name}`);
     if (!def.verifyCommand) fail(`CI job definition lacks verify command for ${name}`);
   }
-  if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
+  if (!defs.get('playwright / 1-of-10').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
