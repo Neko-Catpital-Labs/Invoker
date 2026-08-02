@@ -284,30 +284,46 @@ export function remoteAgentShellInvocation(): string[] {
 
 /**
  * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
+ * Uses the agent registry when available; preserves the legacy Claude path
+ * only when no different agent was explicitly requested.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
   executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
   const name = agentName ?? DEFAULT_EXECUTION_AGENT;
-  if (agentRegistry) {
-    const agent = agentRegistry.get(name);
-    if (agent?.buildFixCommand) {
-      const spec = agent.buildFixCommand(prompt, { executionModel });
-      const sessionId = spec.sessionId ?? randomUUID();
-      const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
-      return { shellCommand: cmd, sessionId };
+  if (!agentRegistry) {
+    const requestedAgent = agentName?.trim();
+    if (requestedAgent && requestedAgent !== 'claude') {
+      throw new Error(
+        `Execution agent "${requestedAgent}" was requested, but no configured agent set was available to resolve it.`,
+      );
     }
+    const sessionId = randomUUID();
+    return {
+      shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
+      sessionId,
+    };
   }
-  // Fallback: claude-compatible CLI (for backwards compat without registry)
-  const sessionId = randomUUID();
-  return {
-    shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
-    sessionId,
-  };
+
+  const agent = agentRegistry.get(name);
+  if (!agent) {
+    throw new Error(
+      `Execution agent "${name}" was requested, but the configured agent set did not include that name.`,
+    );
+  }
+  if (!agent.buildFixCommand) {
+    throw new Error(
+      `Execution agent "${name}" was requested, but it cannot build remote fix commands.`,
+    );
+  }
+
+  const spec = agent.buildFixCommand(prompt, { executionModel });
+  const sessionId = spec.sessionId ?? randomUUID();
+  const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
+  return { shellCommand: cmd, sessionId };
 }
 
 export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {

@@ -1137,6 +1137,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
       }
+      const requestedAgent = request.inputs.executionAgent?.trim();
+      if (requestedAgent) {
+        throw new Error(
+          `Execution agent "${requestedAgent}" was requested, but no configured agent registry was supplied to resolve it.`,
+        );
+      }
       // Fallback: use prepareClaudeSession when no agent registry is available
       const claudeCommand = opts?.claudeCommand ?? 'claude';
       const session = this.prepareClaudeSession(request);

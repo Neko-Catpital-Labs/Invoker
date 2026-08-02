@@ -423,6 +423,12 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     let payload: string;
     let agentSessionId: string | undefined;
     const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const requestedAgent = request.inputs.executionAgent?.trim();
+    if (request.actionType === 'ai_task' && !this.agentRegistry && requestedAgent) {
+      throw new Error(
+        `Execution agent "${requestedAgent}" was requested, but no configured agent registry was supplied to resolve it.`,
+      );
+    }
     const effectiveAgentName = request.actionType === 'ai_task'
       ? (this.agentRegistry ? executionAgent : 'claude')
       : undefined;
