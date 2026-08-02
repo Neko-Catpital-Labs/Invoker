@@ -284,9 +284,8 @@ export function remoteAgentShellInvocation(): string[] {
 
 /**
  * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
@@ -302,7 +301,12 @@ function buildRemoteAgentCommand(
       return { shellCommand: cmd, sessionId };
     }
   }
-  // Fallback: claude-compatible CLI (for backwards compat without registry)
+  if (agentRegistry || (agentName !== undefined && name !== 'claude')) {
+    throw new Error(
+      `Unable to resolve execution agent "${name}" for remote fix: ` +
+        'no configured agent set was available or it lacked that name.',
+    );
+  }
   const sessionId = randomUUID();
   return {
     shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
