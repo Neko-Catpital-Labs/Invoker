@@ -287,14 +287,19 @@ including the two above.
 
 ### Rule: name the technique
 
-Every `refactor`-lane PR title or commit message states which single named
-technique it applies, in the form `<Technique>: <what moved/changed>` — for
-example `Move Method: git primitives -> repair_body.py`, `Extract Variable:
-queue-only guard`, `Replace Conditional with Polymorphism: RepairOutcome
-status dispatch`. The PR body's `## Review Claim` restates the same
-technique by name. A vague claim like "clean up the repair module" is not
-acceptable in a `refactor`-lane PR; name the technique or split further
-until one name covers the whole slice.
+Every `refactor`-lane PR title states which single named technique it
+applies, using this exact bracket format right after the stack slice index:
+    [Tag](N)[REFACTOR: <Technique>] <description>
+For example: `[Admin-Bypass Async Repair](2)[REFACTOR: Move Method] git
+working-tree primitives -> repair_body.py`. The bracket is required exactly when `## Review Lane` is `refactor`, and forbidden otherwise --
+`scripts/create-pr.mjs`'s `assertValidStackPrTitle` enforces this for
+stacked PRs by cross-referencing the title against the declared lane. The
+PR body's `## Review Claim` restates the same technique by name. A vague
+claim like "clean up the repair module" is not acceptable in a
+`refactor`-lane PR; name the technique or split further until one name
+covers the whole slice. This bracket format applies to the `refactor`
+lane only -- every other lane keeps the plain `[Tag](N) <description>`
+format.
 
 This is not decoration: naming the technique is what lets a reviewer bring
 the technique's own well-known safety properties to the review ("Extract
