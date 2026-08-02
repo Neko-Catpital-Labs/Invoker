@@ -3,7 +3,8 @@
  * driving the REAL `claude` CLI in the tmux pane instead of a synthetic
  * full-screen frame -- this is what the user actually typed and observed.
  *
- * Not part of the deterministic regression suite: a live CLI's screen can
+ * Kept under e2e/manual because it is not part of the deterministic
+ * regression suite: a live CLI's screen can
  * legitimately differ run to run (spinners, token/cost counters, auth
  * state), so this is a manual verification script, run on demand.
  *
@@ -16,7 +17,7 @@
 
 import { execFileSync } from 'node:child_process';
 import type { Page } from '@playwright/test';
-import { expect, test } from './fixtures/electron-app.js';
+import { expect, test } from '../fixtures/electron-app.js';
 
 function resolveRealClaudeBinary(): string {
   const resolved = execFileSync('bash', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
