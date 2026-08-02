@@ -42,6 +42,13 @@ function mockSpawnChildWithStderr(stdoutData: string, stderrData: string, exitCo
   return child;
 }
 
+function makeDriverlessRegistry(name: string): AgentRegistry {
+  return {
+    get: () => ({ name, buildFixCommand: (p: string) => ({ cmd: name, args: ['-p', p] }) }),
+    getSessionDriver: () => undefined,
+  } as unknown as AgentRegistry;
+}
+
 describe('spawnRemoteAgentFixImpl processOutput', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -60,6 +67,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
         '/home/user/worktree',
         { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
         'claude',
+        makeDriverlessRegistry('claude'),
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
@@ -106,6 +114,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
           secretsFile,
         },
         'claude',
+        makeDriverlessRegistry('claude'),
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
@@ -196,6 +205,8 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
       'fix the bug',
       '/home/user/worktree',
       { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      'codex',
+      makeDriverlessRegistry('codex'),
     ).catch((e) => e as Error);
 
     expect(err).toBeInstanceOf(Error);
@@ -237,16 +248,18 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     expect(result.sessionId).toBe('local-uuid-abc');
   });
 
-  it('skips processOutput when no registry is provided', async () => {
+  it('skips processOutput when the registry has no session driver', async () => {
     const { spawn } = await import('node:child_process');
 
     vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('output', 0) as any);
 
-    // No registry → no driver → no processOutput call
+    // No driver → no processOutput call
     const result = await spawnRemoteAgentFixImpl(
       'fix the bug',
       '/home/user/worktree',
       { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      'claude',
+      makeDriverlessRegistry('claude'),
     );
 
     // Should still resolve with a UUID session ID
