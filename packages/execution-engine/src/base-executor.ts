@@ -22,6 +22,12 @@ const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
 const PROVISION_OUTPUT_TAIL_LINE_LIMIT = 50;
 const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
 
+function normalizeExplicitExecutionAgentName(name: string | null | undefined): string | undefined {
+  const trimmed = name?.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return undefined;
+  return trimmed;
+}
+
 export interface BaseEntry {
   request: WorkRequest;
   outputListeners: Set<(data: string) => void>;
@@ -1136,6 +1142,12 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
+      }
+      const requestedAgent = normalizeExplicitExecutionAgentName(request.inputs.executionAgent);
+      if (requestedAgent) {
+        throw new Error(
+          `Execution agent "${requestedAgent}" was requested, but no configured agent set was available to resolve it.`,
+        );
       }
       // Fallback: use prepareClaudeSession when no agent registry is available
       const claudeCommand = opts?.claudeCommand ?? 'claude';

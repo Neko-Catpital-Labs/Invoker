@@ -273,6 +273,12 @@ function shellQuote(s: string): string {
   return "'" + s.replace(/'/g, "'\\''") + "'";
 }
 
+function normalizeExplicitAgentName(name: string | null | undefined): string | undefined {
+  const trimmed = name?.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return undefined;
+  return trimmed;
+}
+
 /**
  * Remote shell for agent fix/resolve commands. Keep this non-login so remote
  * dotfiles cannot trigger login-shell bash bugs or mutate execution semantics.
@@ -284,15 +290,17 @@ export function remoteAgentShellInvocation(): string[] {
 
 /**
  * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
+ * Uses the agent registry when available; falls back to claude CLI only when
+ * the caller did not request a different agent.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
   executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
-  const name = agentName ?? DEFAULT_EXECUTION_AGENT;
+  const explicitName = normalizeExplicitAgentName(agentName);
+  const name = explicitName ?? DEFAULT_EXECUTION_AGENT;
   if (agentRegistry) {
     const agent = agentRegistry.get(name);
     if (agent?.buildFixCommand) {
@@ -301,6 +309,14 @@ function buildRemoteAgentCommand(
       const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
       return { shellCommand: cmd, sessionId };
     }
+    throw new Error(
+      `Execution agent "${name}" was requested, but the configured agent set did not include a fix-capable agent with that name.`,
+    );
+  }
+  if (explicitName && name !== 'claude') {
+    throw new Error(
+      `Execution agent "${name}" was requested, but no configured agent set was available to resolve it.`,
+    );
   }
   // Fallback: claude-compatible CLI (for backwards compat without registry)
   const sessionId = randomUUID();

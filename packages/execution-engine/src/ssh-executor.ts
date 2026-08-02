@@ -31,6 +31,13 @@ import {
   createSshRemoteScriptError,
   parseOwnedWorktreePath,
 } from './ssh-git-exec.js';
+
+function normalizeExplicitExecutionAgentName(name: string | null | undefined): string | undefined {
+  const trimmed = name?.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return undefined;
+  return trimmed;
+}
+
 export interface SshExecutorConfig {
   host: string;
   user: string;
@@ -423,6 +430,17 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     let payload: string;
     let agentSessionId: string | undefined;
     const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const requestedExecutionAgent = normalizeExplicitExecutionAgentName(request.inputs.executionAgent);
+    if (
+      request.actionType === 'ai_task'
+      && !this.agentRegistry
+      && requestedExecutionAgent
+      && requestedExecutionAgent !== DEFAULT_EXECUTION_AGENT
+    ) {
+      throw new Error(
+        `Execution agent "${requestedExecutionAgent}" was requested, but no configured agent set was available to resolve it.`,
+      );
+    }
     const effectiveAgentName = request.actionType === 'ai_task'
       ? (this.agentRegistry ? executionAgent : 'claude')
       : undefined;
