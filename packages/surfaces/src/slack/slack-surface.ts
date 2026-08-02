@@ -459,7 +459,7 @@ interface ConversationLike {
 /** An action staged for a thread, awaiting a yes/no (text or button) confirmation. */
 type PendingConfirm =
   | { kind: 'op'; op: WorkflowOp }
-  | { kind: 'plan_intent'; requestText: string; userId: string; context: PlanningContext; channel: string }
+  | { kind: 'plan_intent'; requestText: string; userId: string; context: PlanningContext; channel: string; alreadySent?: boolean }
   | { kind: 'restart' };
 
 interface SayResult {
@@ -1148,7 +1148,8 @@ export class SlackSurface implements Surface {
 
       this.persistLaunchContext(threadTs, { ...context, workingDir });
 
-      await this.handleConversationMessage(conversation, requestText, threadTs, say, channel, event.ts);
+      await this.handleConversationMessage(conversation, requestText, threadTs, say, channel, event.ts,
+        { userId: event.user ?? 'unknown', context });
     } finally {
       // Drop any leftover Processing… ack (success paths already replace/delete it).
       await this.clearImmediateAck(channel, threadTs);
@@ -1663,6 +1664,8 @@ export class SlackSurface implements Surface {
       return;
     }
     this.persistLaunchContext(threadTs, context);
+    // Do NOT pass a planIntentContext here: this replays the original turn after
+    // the user already clicked "Plan for execution" — re-detecting would loop.
     await this.handleConversationMessage(conversation, pending.requestText, threadTs, say, pending.channel);
   }
 
@@ -1671,7 +1674,13 @@ export class SlackSurface implements Surface {
     say: SayFn,
     threadTs: string,
   ): Promise<void> {
-    await this.startConversationIntent(pending, say, threadTs);
+    // alreadySent means the request text was already sent to the conversation
+    // once, by the agent-mode turn that detected the plan-intent signal and
+    // staged this confirm. Replaying it here would ask the model the same
+    // thing twice and post a redundant reply.
+    if (!pending.alreadySent) {
+      await this.startConversationIntent(pending, say, threadTs);
+    }
     await this.handleExplicitPlanAction(pending.channel, threadTs, pending.userId, say);
   }
 
@@ -2554,7 +2563,8 @@ ${text}`;
             preparedContext ? this.sessionOptionsFromContext(preparedContext, 'agent') : undefined,
           );
           if (!conversation) return;
-          await this.handleConversationMessage(conversation, localRequest.text, msg.thread_ts, say, channel);
+          await this.handleConversationMessage(conversation, localRequest.text, msg.thread_ts, say, channel, undefined,
+            preparedContext ? { userId: msg.user ?? 'unknown', context: preparedContext } : undefined);
           return;
         }
         const preset = this.resolveHarnessPreset(preparedContext?.presetKey ?? this.defaultHarnessPreset);
@@ -2582,6 +2592,7 @@ ${text}`;
     say: SayFn,
     channel: string = this.lobbyChannelId,
     sourceEventTs?: string,
+    planIntentContext?: { userId: string; context: PlanningContext },
   ): Promise<void> {
     const tEntry = Date.now();
     this.log('slack', 'info', `[TRACE] handleConversationMessage (thread_ts=${threadTs}, text="${text.slice(0, 80)}")`);
@@ -2672,6 +2683,24 @@ ${text}`;
         this.logResponsePosted(threadTs, sourceEventTs, posted?.ts, 'chunk');
       }
       const tPosting = Date.now();
+
+      if (planIntentContext && conversation.lastTurnPlanIntentSignal?.wantsPlan) {
+        try {
+          await this.stagePlanIntentConfirm(threadTs, channel, {
+            kind: 'plan_intent',
+            requestText: text,
+            userId: planIntentContext.userId,
+            context: planIntentContext.context,
+            channel,
+            // The turn's text was already sent above (this.log'd as
+            // "conversation.sendMessage returned" right before this block) -
+            // Approve must not replay it, or the model answers it twice.
+            alreadySent: true,
+          }, say);
+        } catch (err) {
+          this.log('slack', 'error', `[PLAN_INTENT_CONFIRM] failed to stage from auto-detect thread_ts=${threadTs}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+        }
+      }
 
       await this.uploadLinkedArtifacts(reply, conversation.workingDir, channel, threadTs);
       await cleanupHeartbeats();
