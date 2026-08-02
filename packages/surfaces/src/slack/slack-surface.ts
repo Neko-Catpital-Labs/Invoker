@@ -2541,8 +2541,34 @@ ${text}`;
       if (msg.channel && this.workflowChannelRepo?.getByChannelId(msg.channel)) return;
 
       const text = (msg.text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
-      if (text && (await this.resolveConfirm(msg.thread_ts, text, say, channel))) return;
       if (!text) return;
+
+      // /plan is a deterministic command and takes priority, mirroring the
+      // @mention handler's ordering: it must run before resolveConfirm, or a
+      // pending unrelated confirmation's "not a yes/no" fallback swallows it
+      // (deletes the pending confirm and replies instead of ever reaching
+      // this branch).
+      if (/^\/plan\s*$/i.test(text) || /^\/plan\s+.+/i.test(text)) {
+        const context = this.loadPlanningContext(msg.thread_ts);
+        if (!context) {
+          await say({ text: 'This thread has no pinned repository context yet. @mention me first to start planning.', thread_ts: msg.thread_ts });
+          return;
+        }
+        if (/^\/plan\s*$/i.test(text)) {
+          await this.handleExplicitPlanAction(channel, msg.thread_ts, msg.user ?? 'unknown', say);
+          return;
+        }
+        await this.stagePlanIntentConfirm(msg.thread_ts, channel, {
+          kind: 'plan_intent',
+          requestText: text.replace(/^\/plan\s+/i, ''),
+          userId: msg.user ?? 'unknown',
+          context,
+          channel,
+        }, say);
+        return;
+      }
+
+      if (await this.resolveConfirm(msg.thread_ts, text, say, channel)) return;
 
       const rebind = await this.maybeRebindThreadRepo(channel, msg.thread_ts, msg.user, text, say);
       if (rebind.rebound || rebind.blocked) return;
