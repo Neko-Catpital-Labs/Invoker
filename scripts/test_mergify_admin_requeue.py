@@ -425,7 +425,7 @@ Failing checks
         repairer = self.repairer(object(), self.ledger())
         submitted = []
         with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
-            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log"):
+            with mock.patch.object(repairer.executor, "download_job_log", return_value="job-log.txt"):
                 with mock.patch.object(repairer, "job_log_is_empty", return_value=False):
                     with mock.patch(
                         "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
@@ -440,7 +440,7 @@ Failing checks
         log = stderr.getvalue()
         self.assertIn('"event": "admin-bypass-repair-check-start"', log)
         self.assertIn('"check_name": "PR Body"', log)
-        self.assertIn('"log_path": "/tmp/pr-body.log"', log)
+        self.assertIn('"log_path": "job-log.txt"', log)
         self.assertIn('"pr_number": 2647', log)
 
     def test_plan_stack_actions_stop_retrying_after_repair_invalid(self):
@@ -466,7 +466,12 @@ Failing checks
         item = pr(5811, labels={"admin-bypass", "dequeued"}, checks={}, latest=latest)
         repairer = self.repairer(object(), self.ledger())
         submitted = []
-        with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/guardrails.log"):
+        log_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(log_dir.cleanup)
+        log_path = os.path.join(log_dir.name, "guardrails.log")
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write("guardrails failure: something broke\n")
+        with mock.patch.object(repairer.executor, "download_job_log", return_value=log_path):
             with mock.patch.object(repairer, "job_log_has_evidence", return_value=True):
                 with mock.patch(
                     "scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan",
@@ -476,7 +481,9 @@ Failing checks
         self.assertEqual(result.status, "submitted")
         self.assertEqual(len(submitted), 1)
         self.assertIn("Queue draft PR: #5854", submitted[0].yaml_text)
-        self.assertIn("Job log path: /tmp/guardrails.log", submitted[0].yaml_text)
+        self.assertIn("Job log (tail):", submitted[0].yaml_text)
+        self.assertIn("guardrails failure: something broke", submitted[0].yaml_text)
+        self.assertNotIn(log_path, submitted[0].yaml_text)
 
     def test_queue_only_repair_empty_job_log_returns_noop_without_submitting(self):
         latest = MergifyQueueEvent(
@@ -503,13 +510,16 @@ Failing checks
     def test_pr_body_valid_local_repair_returns_noop_without_submitting(self):
         item = pr(5810, checks={"PR Body": check("PR Body", "failure")}, body=PROOF_BODY)
         repairer = self.repairer(object(), self.ledger())
-        with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
-            with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log") as download:
-                with mock.patch.object(repairer, "job_log_is_empty", return_value=True):
-                    with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
-                        with mock.patch("scripts.mergify_admin_requeue_repairer.validate_current_pr_body", return_value={"valid": True}):
-                            with mock.patch("scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan") as submit:
-                                result = repairer.repair_check(item, "PR Body")
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        with mock.patch.dict(os.environ, {"HOME": home.name}):
+            with mock.patch("scripts.mergify_admin_requeue_repairer.checkout_pr_head") as checkout:
+                with mock.patch.object(repairer.executor, "download_job_log", return_value="job-log.txt") as download:
+                    with mock.patch.object(repairer, "job_log_is_empty", return_value=True):
+                        with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
+                            with mock.patch("scripts.mergify_admin_requeue_repairer.validate_current_pr_body", return_value={"valid": True}):
+                                with mock.patch("scripts.mergify_admin_requeue_repairer.async_repair.submit_async_repair_plan") as submit:
+                                    result = repairer.repair_check(item, "PR Body")
         checkout.assert_called_once()
         download.assert_called_once()
         submit.assert_not_called()

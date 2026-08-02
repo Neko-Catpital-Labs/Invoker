@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -92,6 +93,31 @@ class AsyncRepairPlanTests(unittest.TestCase):
         self.assertIn("Failed check: PR Body", plan.yaml_text)
         # PR titles with quotes/colons must not corrupt the YAML document.
         self.assertIn('Fix \\"quoted\\" title: with colons', plan.yaml_text)
+
+    def test_repair_check_plan_inlines_job_log_content_not_local_path(self):
+        # log_path is a tempfile on the orchestrator's own machine; the plan
+        # is dispatched to a separate headless worker that does not share
+        # that filesystem, so the prompt must carry the log content itself.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log_path = str(Path(tmp_dir) / "pr-body.log")
+            Path(log_path).write_text("some failure detail\n", encoding="utf-8")
+            plan = async_repair.build_repair_check_plan(
+                pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
+                log_path=log_path, queue_only=False, queue_pr_number=0, latest=None,
+                start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
+            )
+        self.assertIn("Job log (tail):", plan.yaml_text)
+        self.assertIn("some failure detail", plan.yaml_text)
+        self.assertNotIn(log_path, plan.yaml_text)
+
+    def test_repair_check_plan_job_log_missing_says_not_available(self):
+        plan = async_repair.build_repair_check_plan(
+            pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
+            log_path="/does/not/exist/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
+            start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
+        )
+        self.assertIn("Job log (tail):", plan.yaml_text)
+        self.assertIn("(not available)", plan.yaml_text)
 
     def test_repair_check_plan_queue_only_appends_queue_pr_line(self):
         plan = async_repair.build_repair_check_plan(
