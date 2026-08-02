@@ -423,6 +423,16 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     let payload: string;
     let agentSessionId: string | undefined;
     const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    if (
+      request.actionType === 'ai_task'
+      && !this.agentRegistry
+      && executionAgent !== DEFAULT_EXECUTION_AGENT
+    ) {
+      throw new Error(
+        `Unable to start SSH task with requested execution agent "${executionAgent}": ` +
+        'no agent registry was supplied to resolve it.',
+      );
+    }
     const effectiveAgentName = request.actionType === 'ai_task'
       ? (this.agentRegistry ? executionAgent : 'claude')
       : undefined;

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation, buildRemoteAgentCommand } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -460,6 +460,23 @@ describe('agent dispatch — codex vs claude', () => {
         },
       });
     });
+  });
+});
+
+describe('buildRemoteAgentCommand', () => {
+  it('throws and names the requested agent when no configured agent set is available', () => {
+    expect(() => buildRemoteAgentCommand('fix the bug', undefined, 'codex')).toThrow(
+      /requested execution agent "codex".*no configured agent set was available.*lacked that name/s,
+    );
+  });
+
+  it('uses the resolved agent command when the requested agent is registered', () => {
+    const registry = registerBuiltinAgents();
+    const result = buildRemoteAgentCommand('fix the bug', registry, 'codex');
+
+    expect(result.shellCommand).toContain('codex');
+    expect(result.shellCommand).not.toContain('claude --session-id');
+    expect(result.sessionId).toBeDefined();
   });
 });
 

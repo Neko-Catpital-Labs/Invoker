@@ -10,6 +10,7 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -98,6 +99,71 @@ describe('SshExecutor pre-flight validation', () => {
     await expect(ssh.start(req)).rejects.toThrow(
       'requires repoUrl',
     );
+  });
+
+  it('throws and names an explicit non-default executionAgent when no registry is supplied', async () => {
+    spawnedProcesses = [];
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'omp',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "omp".*no agent registry was supplied/s,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
+  it('uses the resolved executionAgent when a registry is supplied', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: registerBuiltinAgents(),
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/root';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    await ssh.start(req);
+
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    expect(spawnStub.mock.calls[0][6]).toBe('codex');
   });
 
   it('does not throw for reconciliation requests', async () => {

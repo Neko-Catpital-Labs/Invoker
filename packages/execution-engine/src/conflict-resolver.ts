@@ -284,15 +284,17 @@ export function remoteAgentShellInvocation(): string[] {
 
 /**
  * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
+ * Uses the agent registry when available; preserves the legacy Claude CLI path
+ * only when no non-Claude agent was requested and no registry was supplied.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
   executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
-  const name = agentName ?? DEFAULT_EXECUTION_AGENT;
+  const requestedName = agentName?.trim() || undefined;
+  const name = requestedName ?? DEFAULT_EXECUTION_AGENT;
   if (agentRegistry) {
     const agent = agentRegistry.get(name);
     if (agent?.buildFixCommand) {
@@ -301,6 +303,20 @@ function buildRemoteAgentCommand(
       const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
       return { shellCommand: cmd, sessionId };
     }
+  }
+  if (requestedName && requestedName !== 'claude') {
+    throw new Error(
+      `Unable to build remote agent command for requested execution agent "${name}": ` +
+      'no configured agent set was available, it lacked that name, ' +
+      'or the agent does not support remote fix commands.',
+    );
+  }
+  if (agentRegistry) {
+    throw new Error(
+      `Unable to build remote agent command for requested execution agent "${name}": ` +
+      'no configured agent set was available, it lacked that name, ' +
+      'or the agent does not support remote fix commands.',
+    );
   }
   // Fallback: claude-compatible CLI (for backwards compat without registry)
   const sessionId = randomUUID();

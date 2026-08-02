@@ -16,6 +16,8 @@ import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from '../executor.js';
 
 // ── Mock agent for testing alternative stdinMode + args ──────
 
@@ -60,6 +62,48 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
   } as unknown as WorkRequest;
 }
 
+function makeAiTaskRequest(inputs: Partial<WorkRequest['inputs']> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Do something', ...inputs },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+class TestExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'test';
+
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
+    throw new Error('Not implemented');
+  }
+
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null {
+    return null;
+  }
+
+  getRestoredTerminalSpec(_meta: PersistedTaskMeta): TerminalSpec {
+    throw new Error('Not implemented');
+  }
+
+  async destroyAll(): Promise<void> {
+    this.entries.clear();
+  }
+
+  testBuildCommandAndArgs(
+    request: WorkRequest,
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ) {
+    return this.buildCommandAndArgs(request, opts);
+  }
+}
+
 // ── Agent definitions for the matrix ─────────────────────────
 
 const agents = [
@@ -97,6 +141,30 @@ const agents = [
     expectedLinuxTerminalTail: undefined,
   },
 ];
+
+describe('BaseExecutor agent registry fallback', () => {
+  it('throws and names an explicit executionAgent when no registry is supplied', () => {
+    const executor = new TestExecutor();
+    const request = makeAiTaskRequest({ executionAgent: 'codex' });
+
+    expect(() => executor.testBuildCommandAndArgs(request)).toThrow(
+      /requested execution agent "codex".*no agent registry was supplied/s,
+    );
+  });
+
+  it('uses the resolved agent command when a registry is supplied', () => {
+    const executor = new TestExecutor();
+    const registry = new AgentRegistry();
+    registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+    const request = makeAiTaskRequest({ executionAgent: 'codex' });
+
+    const result = executor.testBuildCommandAndArgs(request, { agentRegistry: registry });
+
+    expect(result.cmd).toBe('codex-test');
+    expect(result.args).toContain('exec');
+    expect(result.agentSessionId).toBeDefined();
+  });
+});
 
 // ── Matrix tests ─────────────────────────────────────────────
 
