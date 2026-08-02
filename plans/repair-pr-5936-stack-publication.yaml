@@ -1,0 +1,108 @@
+name: "Repair PR 5936 stack publication"
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+
+tasks:
+  - id: repair-pr-5936-stack-tail
+    description: |
+      Repair the stale published stack tail for PR #5936.
+      Review claim: PR #5936 should expose only the canonical retry-mutation routing commit against the current upstream base, with downstream open stack branches refreshed as needed.
+      Review lane: cleanup
+      Safety invariant: Preserve the product changes already authored for PRs #5936-#5944; change only branch ancestry and PR metadata needed to remove already-merged lower-stack commits from #5936's live diff.
+      Slice rationale: This is a stack-publication repair, not a product-code change. The current checkout cannot make CI green without force-updating live PR branches.
+      Architectural effect: None. The repair changes published Git history shape so the existing one-file routing slice is reviewed against the right base.
+      Goal: Make PR #5936's PR Body check validate against a single routing review unit.
+      Motivation: PR #5936 currently has base `master` while its head still carries old pre-merge commits from PRs #5932-#5935, so the validator sees contract and activation-surface files in a routing PR.
+      Alternative considerations: Weakening the validator or relabeling the PR body was rejected because the live diff really spans multiple review units. A local commit was rejected because the fix requires republishing branch ancestry.
+      Implementation details: Fetch the live PR heads and current upstream `master`. Reproduce the PR Body failure before mutating any remote branch. Rebuild PR #5936 by replaying only its authored routing patch (`packages/app/src/persisted-workflow-mutation-coordinator.ts`, old commit `817ad96a94605689f2c5f08fd9e95a41a14f9a72`) onto the current upstream base after the merged lower-stack PRs. If downstream open PRs #5937-#5944 depend on the old #5936 ancestry, rebase or replay them in order onto the repaired predecessor branch. Use force-with-lease only for the exact existing stack branches being repaired. Refresh PR base/body metadata with the repo-local PR authoring flow or the documented `gh pr edit` escape hatch when create-pr cannot map a generated stack branch. Do not run `mergify stack push` from a generated `stack/...` branch.
+      Non-goals: No product behavior changes, no validator changes, no unrelated stack surgery, no new PRs, and no weakening of PR Body review-unit rules.
+      Files: none in this plan checkout. Live GitHub PR branches #5936-#5944 may be rebased or metadata-refreshed.
+      Change types:
+      - GitHub PR #5936: repair branch ancestry and PR metadata
+      - GitHub PRs #5937-#5944: repair downstream ancestry only if needed after #5936 is rebuilt
+      Acceptance criteria:
+      - The current #5936 PR Body failure is reproduced before mutation.
+      - PR #5936's live diff validates with `node scripts/validate-pr-body.mjs --body-file <body> --changed-files-file <files> --diff-file <diff>`.
+      - PR #5936's changed-file review units are exactly `routing`.
+      - Any downstream PR branch that depended on the old #5936 head is refreshed in stack order and left with truthful title/body/base metadata.
+    prompt: |
+      Assume no prior context. You must repair GitHub PR #5936 in Neko-Catpital-Labs/Invoker, verify it with scripts/validate-pr-body.mjs, and preserve only the packages/app/src/persisted-workflow-mutation-coordinator.ts routing patch on that PR's live diff: https://github.com/Neko-Catpital-Labs/Invoker/pull/5936
+
+      Review claim: PR #5936 should expose only the canonical retry-mutation routing commit against the current upstream base, with downstream open stack branches refreshed as needed.
+      Review lane: cleanup
+      Safety invariant: Preserve the product changes already authored for PRs #5936-#5944; change only branch ancestry and PR metadata needed to remove already-merged lower-stack commits from #5936's live diff.
+      Slice rationale: This is a stack-publication repair, not a product-code change. The current checkout cannot make CI green without force-updating live PR branches.
+      Architectural effect: None. The repair changes published Git history shape so the existing one-file routing slice is reviewed against the right base.
+      Goal: Make PR #5936's PR Body check validate against a single routing review unit.
+      Motivation: The failed PR Body log says `PR body Review Unit "routing" cannot ship with contract, activation-surface files in the same PR.` The live PR body declares Review Unit `routing`, but #5936's head still carries old pre-merge commits from lower stack PRs #5932-#5935. Those lower PRs are already merged into `master` as different SHAs, so GitHub still sees their files in #5936's diff.
+      Alternative considerations: Do not weaken the validator, broaden the PR body, or add a local commit to hide the problem. Do not run `mergify stack push` from a generated `stack/...` branch.
+      Implementation details:
+      1. Fetch current `master`, PR #5936, and downstream open stack PRs #5937-#5944.
+      2. Reproduce the current #5936 failure with `node scripts/validate-pr-body.mjs --body-file <body> --changed-files-file <files> --diff-file <diff>` using the live GitHub base/head.
+      3. Rebuild PR #5936 by replaying only its authored routing patch from old commit `817ad96a94605689f2c5f08fd9e95a41a14f9a72` onto current `master`. The resulting #5936 diff should change only `packages/app/src/persisted-workflow-mutation-coordinator.ts`.
+      4. Push the repaired #5936 branch with `git push --force-with-lease origin HEAD:stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-5--b22a30f7` only after validating the local diff.
+      5. Rebase or replay downstream open stack branches #5937-#5944 in order only if their live heads still depend on the old #5936 ancestry. Preserve each PR's authored patch intent and update each existing head branch with force-with-lease.
+      6. Refresh PR title/body/base metadata for any updated PR. Prefer `node scripts/create-pr.mjs --update-existing`; use `gh pr edit` only when the repo-local flow cannot map the generated stack branch.
+      7. Validate #5936's live diff again after the push. Also validate any downstream branch whose ancestry changed.
+      Non-goals: No product behavior changes, no validator changes, no unrelated stack surgery, no new PRs, no blanket force-pushes, and no queue/merge action.
+
+      Files:
+      - packages/app/src/persisted-workflow-mutation-coordinator.ts
+      - scripts/validate-pr-body.mjs
+      - scripts/review-unit-rules.mjs
+      - scripts/create-pr.mjs
+      - GitHub PR branch stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-5--b22a30f7
+      Change types:
+      - packages/app/src/persisted-workflow-mutation-coordinator.ts: preserve authored patch only
+      - GitHub PR #5936: repair branch ancestry and PR metadata
+      - GitHub PRs #5937-#5944: repair downstream ancestry only if needed after #5936 is rebuilt
+      Acceptance criteria:
+      - Must reproduce the existing #5936 PR Body failure before mutation.
+      - Must verify after mutation that #5936's live PR Body validation passes and its changed-file review units are exactly `routing`.
+      - Must ensure any downstream refreshed PR remains based on its repaired predecessor and has truthful PR body metadata.
+    dependencies: []
+
+  - id: verify-pr-5936-pr-body
+    description: |
+      Validate PR #5936's live PR Body inputs after the stack repair.
+      Review claim: The repaired live PR #5936 diff matches its `routing` review unit.
+      Review lane: proof
+      Safety invariant: This task is read-only and only fetches refs plus runs the existing PR Body validator.
+      Slice rationale: One proof task should run after the operational branch repair so the result is checked the same way CI checks it.
+      Architectural effect: None.
+      Goal: Prove the live #5936 PR Body check should pass after the stack repair.
+      Motivation: The failing CI job uses live GitHub PR body and diff metadata, so the final proof must use live PR refs as well.
+      Alternative considerations: Local commit-only validation was rejected because the failure is in published branch ancestry.
+      Implementation details: Fetch #5936's live base and pull head, compute the merge-base diff, and run `scripts/validate-pr-body.mjs`.
+      Non-goals: No code edits, no pushes, no PR metadata writes.
+    command: |
+      node --input-type=module -e "
+      import { execFileSync } from 'node:child_process';
+      import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+      import { tmpdir } from 'node:os';
+      import { join } from 'node:path';
+      const repo = 'Neko-Catpital-Labs/Invoker';
+      const headRef = 'refs/remotes/pr-5936-verify/head';
+      const baseRef = 'refs/remotes/pr-5936-verify/base';
+      const tmp = mkdtempSync(join(tmpdir(), 'pr-5936-verify-'));
+      try {
+        const liveBase = execFileSync('gh', ['pr', 'view', '5936', '--repo', repo, '--json', 'baseRefName', '--jq', '.baseRefName'], { encoding: 'utf8' }).trim();
+        const body = execFileSync('gh', ['pr', 'view', '5936', '--repo', repo, '--json', 'body', '--jq', '.body'], { encoding: 'utf8' });
+        const bodyPath = join(tmp, 'pr-body.md');
+        const filesPath = join(tmp, 'changed-files.txt');
+        const diffPath = join(tmp, 'pr.diff');
+        writeFileSync(bodyPath, body);
+        execFileSync('git', ['fetch', '--no-tags', 'origin', '+refs/heads/' + liveBase + ':' + baseRef, '+refs/pull/5936/head:' + headRef], { stdio: 'inherit' });
+        const baseSha = execFileSync('git', ['merge-base', baseRef, headRef], { encoding: 'utf8' }).trim();
+        const changedFiles = execFileSync('git', ['diff', '--name-only', baseSha, headRef], { encoding: 'utf8' });
+        const diffText = execFileSync('git', ['diff', '--find-renames', '--unified=200000', '--diff-filter=ACMRTD', baseSha, headRef, '--'], { encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 });
+        writeFileSync(filesPath, changedFiles);
+        writeFileSync(diffPath, diffText);
+        execFileSync('node', ['scripts/validate-pr-body.mjs', '--body-file', bodyPath, '--changed-files-file', filesPath, '--diff-file', diffPath], { stdio: 'inherit' });
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+      "
+    dependencies:
+      - repair-pr-5936-stack-tail
