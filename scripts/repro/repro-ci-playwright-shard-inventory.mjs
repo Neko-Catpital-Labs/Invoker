@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Reproduces the CI "Verify Playwright shard inventory" step locally so the
 // playwright / N-of-9 shard regression cannot recur silently. It asserts that
-// every packages/app/e2e spec is assigned to exactly one Playwright shard:
-// no spec missing from the matrix, no spec listed that does not exist, and no
-// spec assigned to more than one shard.
+// every automated packages/app/e2e spec is assigned to exactly one Playwright
+// shard: no spec missing from the matrix, no spec listed that does not exist,
+// and no spec assigned to more than one shard.
 //
 // The playwright / 8-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
@@ -30,6 +30,10 @@ function shardFiles(job) {
   );
 }
 
+const manualOnlySpecs = new Set([
+  'planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+]);
+
 function main() {
   const workflow = YAML.parse(readFileSync(workflowPath, 'utf8'));
   const listed = [
@@ -37,7 +41,7 @@ function main() {
     ...shardFiles(workflow.jobs?.['playwright-nightly-perf']),
   ];
   const discovered = readdirSync(e2eDir)
-    .filter((file) => file.endsWith('.spec.ts'))
+    .filter((file) => file.endsWith('.spec.ts') && !manualOnlySpecs.has(file))
     .map((file) => `e2e/${file}`)
     .sort();
 
@@ -56,7 +60,7 @@ function main() {
   }
 
   console.log(
-    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} spec files each assigned to exactly one shard.`,
+    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} automated spec files each assigned to exactly one shard.`,
   );
 }
 
