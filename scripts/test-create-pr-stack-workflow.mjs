@@ -110,6 +110,35 @@ Keep app exposure separate from core runtime behavior.
 </details>
 `;
 
+const REFACTOR_BODY = `## Summary
+This branch moves one helper into its own module.
+## Review Claim
+Move the helper with no behavior change.
+## Review Lane
+- refactor
+## Review Unit
+- ownership-refactor
+## Safety Invariant
+Only this one helper moves; every call site is re-pointed in this same PR.
+## Slice Rationale
+One technique, one PR.
+## Non-goals
+- No behavior change.
+## Test Plan
+<details>
+<summary>Test Plan</summary>
+- [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
+</details>
+## Revert Plan
+<details>
+<summary>Revert Plan</summary>
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+</details>
+`;
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -692,6 +721,152 @@ function testMergifyManagedUpdateRejectsNestedTitle() {
   }
 }
 
+function testRefactorLaneTitleWithTagAccepted() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-refactor-tag-accept';
+    createTrackedBranch(work, branch);
+    writeFileSync(join(work, 'pr-body-refactor.md'), REFACTOR_BODY);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Irefactortag001');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      '--title',
+      '[Test Stack](2)[REFACTOR: Move Method] move the helper',
+      '--base',
+      'master',
+      '--body-file',
+      'pr-body-refactor.md',
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 51,
+          html_url: 'https://example.com/pull/51',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/51' }),
+    });
+
+    assert(
+      result.status === 0,
+      `refactor lane with a [REFACTOR: ...] tag should be accepted\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stdout.trim() === 'https://example.com/pull/51',
+      `refactor-tagged update should print the PR URL\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testRefactorLaneTitleWithoutTagRejected() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-refactor-tag-missing';
+    createTrackedBranch(work, branch);
+    writeFileSync(join(work, 'pr-body-refactor.md'), REFACTOR_BODY);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Irefactortag002');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      '--title',
+      '[Test Stack](2) move the helper',
+      '--base',
+      'master',
+      '--body-file',
+      'pr-body-refactor.md',
+      '--update-existing',
+    ]);
+
+    assert(result.status === 1, `refactor lane without a [REFACTOR: ...] tag should be rejected\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('REFACTOR'), `missing refactor tag error should mention REFACTOR\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('technique'), `missing refactor tag error should mention the technique catalog\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'refactor lane missing tag rejection');
+    assert(readGhCalls(harness.ghLog).length === 0, 'refactor lane missing tag rejection should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNonRefactorLaneTitleWithTagRejected() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-refactor-tag-wrong-lane';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Irefactortag003');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      '--title',
+      '[Test Stack](2)[REFACTOR: Move Method] move the helper',
+      '--base',
+      'master',
+      '--body-file',
+      'pr-body.md',
+      '--update-existing',
+    ]);
+
+    assert(result.status === 1, `non-refactor lane with a [REFACTOR: ...] tag should be rejected\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('not refactor'), `wrong-lane refactor tag error should say the lane is not refactor\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('drop the tag'), `wrong-lane refactor tag error should suggest dropping the tag\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'non-refactor lane tag rejection');
+    assert(readGhCalls(harness.ghLog).length === 0, 'non-refactor lane tag rejection should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNonRefactorLanePlainTitleStillAccepted() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-refactor-tag-plain';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Irefactortag004');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      '--title',
+      '[Test Stack](2) move the helper',
+      '--base',
+      'master',
+      '--body-file',
+      'pr-body.md',
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 52,
+          html_url: 'https://example.com/pull/52',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/52' }),
+    });
+
+    assert(
+      result.status === 0,
+      `non-refactor lane with a plain title should stay accepted\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stdout.trim() === 'https://example.com/pull/52',
+      `plain-title update should print the PR URL\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testUnpublishedStackCommitsBlockUpdate() {
   const harness = createHarness();
   try {
@@ -1136,6 +1311,10 @@ const tests = [
   testMergifyManagedUpdateAcceptsLetteredTitle,
   testMergifyManagedUpdateRejectsPlainTitle,
   testMergifyManagedUpdateRejectsNestedTitle,
+  testRefactorLaneTitleWithTagAccepted,
+  testRefactorLaneTitleWithoutTagRejected,
+  testNonRefactorLaneTitleWithTagRejected,
+  testNonRefactorLanePlainTitleStillAccepted,
   testUnpublishedStackCommitsBlockUpdate,
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,
