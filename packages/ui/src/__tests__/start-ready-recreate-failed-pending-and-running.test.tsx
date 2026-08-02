@@ -9,6 +9,11 @@ vi.mock('@xyflow/react', async () => {
   return createReactFlowMock();
 });
 
+// Rendering the full <App /> exceeds Vitest's default 5s on 1-2 vCPU CI
+// runners. packages/ui/vite.config.ts does not extend vitest.shared.ts, so
+// keep the extra headroom scoped to this full-App repro file.
+vi.setConfig({ testTimeout: 20_000 });
+
 const { App } = await import('../App.js');
 
 const previewResult: StartReadyResult = {
