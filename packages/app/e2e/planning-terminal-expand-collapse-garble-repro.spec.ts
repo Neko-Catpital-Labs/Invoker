@@ -81,6 +81,11 @@ const DRAW_FULL_SCREEN_FRAME =
   "; printf '\\033[3;5HTOP LEFT FRAME'" +
   "; printf '\\033[10;20HBOTTOM RIGHT FRAME'" +
   `; printf '\\033[24;1H${FRAME_MARKER}'` +
+  // Keep the synthetic full-screen frame active while the pane resizes.
+  // If the command returns to an interactive shell prompt first, SIGWINCH
+  // legitimately redraws that prompt over the marker and hides the
+  // terminal-survival signal this repro is meant to assert.
+  '; sleep 3600' +
   '\n';
 
 test.describe('Planning terminal Expand/Close garble repro', () => {
