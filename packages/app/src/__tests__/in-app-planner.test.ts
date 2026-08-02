@@ -851,6 +851,170 @@ tasks:
     await expect(second).resolves.toEqual({ ok: true, planName: 'Mock Plan', workflowId: 'wf-1' });
   });
 
+  it('coalesces concurrent chat turns for one session — a later turn does not start until the earlier one finishes', async () => {
+    // End-to-end: the real conversation path (pendingSend chaining plus
+    // PlanConversation's own turn lock, both active) never lets two chat
+    // turns' planner calls run at once. See the plannerReplyOverride test
+    // below for a version that isolates pendingSend specifically.
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValueOnce('turn 1 reply');
+    const sessions = createInAppPlanningChatSessions();
+    const first = await sendPlanningChatMessage({
+      message: 'draft',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!first.ok) throw new Error(first.error);
+
+    const spawnSpy = vi.spyOn(PlanConversation.prototype, 'spawnPlanner');
+    let resolveTurn2: ((value: string) => void) | undefined;
+    spawnSpy.mockImplementationOnce(() => new Promise<string>((resolve) => { resolveTurn2 = resolve; }));
+    spawnSpy.mockResolvedValueOnce('turn 3 reply');
+    const callsBefore = spawnSpy.mock.calls.length;
+
+    const second = sendPlanningChatMessage({
+      sessionId: first.sessionId,
+      message: 'turn 2',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    const third = sendPlanningChatMessage({
+      sessionId: first.sessionId,
+      message: 'turn 3',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+
+    // Give the event loop plenty of chances to let turn 3 start if it were
+    // going to run concurrently with turn 2. With pendingSend serializing
+    // chat turns, only turn 2's planner call can have happened by now.
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(spawnSpy.mock.calls.length).toBe(callsBefore + 1);
+
+    resolveTurn2?.('turn 2 reply');
+    const secondResult = await second;
+    const thirdResult = await third;
+
+    expect(secondResult.ok && secondResult.reply).toBe('turn 2 reply');
+    expect(thirdResult.ok && thirdResult.reply).toBe('turn 3 reply');
+  });
+
+  it('pendingSend alone serializes chat turns when the planner call bypasses PlanConversation entirely', async () => {
+    // The previous test exercises the real PlanConversation.sendMessage path,
+    // which now has its own turn-serialization lock — so it can't tell
+    // apart "pendingSend serializes turns" from "PlanConversation's lock
+    // serializes turns underneath it; pendingSend just rides along". The
+    // plannerReplyOverride dependency skips conversation.sendMessage
+    // entirely, isolating pendingSend as the only thing that could possibly
+    // be serializing these calls.
+    const sessions = createInAppPlanningChatSessions();
+    const first = await sendPlanningChatMessage({
+      message: 'draft',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => 'turn 1 reply',
+    });
+    if (!first.ok) throw new Error(first.error);
+
+    let resolveTurn2: ((value: string) => void) | undefined;
+    const overrideCalls: string[] = [];
+    const plannerReplyOverride = vi.fn((formattedMessage: string) => {
+      overrideCalls.push(formattedMessage);
+      if (overrideCalls.length === 1) {
+        return new Promise<string>((resolve) => { resolveTurn2 = resolve; });
+      }
+      return Promise.resolve('turn 3 reply');
+    });
+
+    const second = sendPlanningChatMessage({
+      sessionId: first.sessionId,
+      message: 'turn 2',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride,
+    });
+    const third = sendPlanningChatMessage({
+      sessionId: first.sessionId,
+      message: 'turn 3',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride,
+    });
+
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(overrideCalls.length).toBe(1); // only turn 2's override call has fired so far
+
+    resolveTurn2?.('turn 2 reply');
+    const secondResult = await second;
+    const thirdResult = await third;
+
+    expect(secondResult.ok && secondResult.reply).toBe('turn 2 reply');
+    expect(thirdResult.ok && thirdResult.reply).toBe('turn 3 reply');
+    expect(overrideCalls.length).toBe(2);
+  });
+
+  it('never constructs a session in mode: agent (createSession and planFromGoal paths)', async () => {
+    // The single shared config builder every terminal PlanConversation goes
+    // through never sets `mode` at all, so every terminal session defaults
+    // to 'plan' — the agent-mode system prompt (and the plan-intent
+    // auto-detect wiring that currently only Slack connects) is unreachable
+    // here. If someone later wires agent mode into the terminal, this test
+    // breaks, forcing a conscious decision about whether plan-intent
+    // detection needs to come along too, instead of a silent half-wire.
+    let createSessionPrompt = '';
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementationOnce((prompt: string) => {
+      createSessionPrompt = prompt;
+      return Promise.resolve('turn 1 reply');
+    });
+    const sessions = createInAppPlanningChatSessions();
+    const created = await sendPlanningChatMessage({
+      message: 'draft',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!created.ok) throw new Error(created.error);
+    expect(sessions.get(created.sessionId)?.conversation.conversationMode).toBe('plan');
+    expect(createSessionPrompt).not.toContain('You are a normal coding agent');
+    expect(createSessionPrompt).not.toContain('wantsPlan');
+
+    let goalPrompt = '';
+    vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockImplementationOnce((prompt: string) => {
+      goalPrompt = prompt;
+      return Promise.resolve(VALID_PLAN);
+    });
+    const goalResult = await planFromGoal({ goal: 'build a REST API' }, {
+      config: {},
+      loadGeneratedPlan: vi.fn().mockResolvedValue({ planName: 'Mock Plan', workflowId: 'wf-1' }),
+      planningCommandBuilder,
+    });
+    expect(goalResult.ok).toBe(true);
+    expect(goalPrompt).not.toContain('You are a normal coding agent');
+    expect(goalPrompt).not.toContain('wantsPlan');
+  });
+
   it('returns load and parse failures as submit errors', async () => {
     vi.spyOn(PlanConversation.prototype, 'spawnPlanner').mockResolvedValue(VALID_PLAN);
     const sessions = createInAppPlanningChatSessions();
