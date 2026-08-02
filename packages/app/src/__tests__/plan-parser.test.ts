@@ -30,7 +30,7 @@ describe('applyPlanDefinitionDefaults', () => {
     expect(plan.baseBranch).toBe('master');
   });
 
-  it('preserves explicit workflow baseBranch values for stacked workflows', () => {
+  it('pins explicit workflow baseBranch values to master by default', () => {
     const plan = applyPlanDefinitionDefaults({
       name: 'X',
       baseBranch: 'upstream/develop',
@@ -38,6 +38,19 @@ describe('applyPlanDefinitionDefaults', () => {
       onFinish: 'merge',
       tasks: [{ id: 'a', description: 'd', command: 'echo' }],
     });
+    expect(plan.baseBranch).toBe('master');
+    expect(plan.featureBranch).toBe('feat/x');
+    expect(plan.onFinish).toBe('merge');
+  });
+
+  it('preserves explicit workflow baseBranch values for stacked workflow defaults', () => {
+    const plan = applyPlanDefinitionDefaults({
+      name: 'X',
+      baseBranch: 'upstream/develop',
+      featureBranch: 'feat/x',
+      onFinish: 'merge',
+      tasks: [{ id: 'a', description: 'd', command: 'echo' }],
+    }, { preserveExplicitBaseBranch: true });
     expect(plan.baseBranch).toBe('upstream/develop');
     expect(plan.featureBranch).toBe('feat/x');
     expect(plan.onFinish).toBe('merge');
@@ -881,7 +894,7 @@ tasks:
   });
 
   describe('onFinish parsing', () => {
-    it('parses plan with onFinish: merge and preserves explicit baseBranch', () => {
+    it('parses plan with onFinish: merge and pins explicit baseBranch to master', () => {
       const yaml = `
 name: Merge Plan
 repoUrl: git@github.com:test/repo.git
@@ -894,7 +907,7 @@ tasks:
 `;
       const plan = parsePlan(yaml);
       expect(plan.onFinish).toBe('merge');
-      expect(plan.baseBranch).toBe('upstream/develop');
+      expect(plan.baseBranch).toBe('master');
       expect(plan.featureBranch).toBe('feat/x');
     });
 
@@ -943,7 +956,7 @@ tasks:
       loadConfigSpy.mockRestore();
     });
 
-    it('preserves an explicit baseBranch override', () => {
+    it('pins an explicit baseBranch override', () => {
       const yaml = `
 name: Explicit Base
 repoUrl: git@github.com:test/repo.git
@@ -955,7 +968,7 @@ tasks:
     description: Build the project
 `;
       const plan = parsePlan(yaml);
-      expect(plan.baseBranch).toBe('origin/release');
+      expect(plan.baseBranch).toBe('master');
     });
 
     it('preserves stacked workflow baseBranch with externalDependencies', () => {
