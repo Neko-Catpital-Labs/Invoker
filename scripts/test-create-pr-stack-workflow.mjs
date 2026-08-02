@@ -110,6 +110,35 @@ Keep app exposure separate from core runtime behavior.
 </details>
 `;
 
+const REFACTOR_BODY = `## Summary
+This branch moves one helper into its own module.
+## Review Claim
+Move the helper with no behavior change.
+## Review Lane
+- refactor
+## Review Unit
+- ownership-refactor
+## Safety Invariant
+Only this one helper moves; every call site is re-pointed in this same PR.
+## Slice Rationale
+One technique, one PR.
+## Non-goals
+- No behavior change.
+## Test Plan
+<details>
+<summary>Test Plan</summary>
+- [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
+</details>
+## Revert Plan
+<details>
+<summary>Revert Plan</summary>
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+</details>
+`;
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -692,6 +721,132 @@ function testMergifyManagedUpdateRejectsNestedTitle() {
   }
 }
 
+function testRefactorLaneStackTitleAcceptsTechniqueTag() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-refactor-title-accept';
+    createTrackedBranch(work, branch);
+    writeFileSync(join(work, 'pr-body.md'), REFACTOR_BODY);
+    commitFile(work, 'helpers/moved-helper.js', 'export function movedHelper() { return true; }\n', 'move helper\n\nChange-Id: Irefactor0001');
+    commitFile(work, 'helpers/call-site.js', "import { movedHelper } from './moved-helper.js';\nmovedHelper();\n", 'repoint helper call site');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      ...stackTitleArgs('master', '[Test Stack](2)[REFACTOR: Move Method] move the helper'),
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 44,
+          html_url: 'https://example.com/pull/44',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/44' }),
+    });
+
+    assert(
+      result.status === 0,
+      `refactor-lane stack title should accept a technique tag\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stdout.trim() === 'https://example.com/pull/44', 'refactor title success should print the PR URL');
+    expectNoPush(harness, 'refactor-lane title tag success');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testRefactorLaneStackTitleRequiresTechniqueTag() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-refactor-title-reject';
+    createTrackedBranch(work, branch);
+    writeFileSync(join(work, 'pr-body.md'), REFACTOR_BODY);
+    commitFile(work, 'helpers/moved-helper.js', 'export function movedHelper() { return true; }\n', 'move helper\n\nChange-Id: Irefactor0002');
+    commitFile(work, 'helpers/call-site.js', "import { movedHelper } from './moved-helper.js';\nmovedHelper();\n", 'repoint helper call site');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      ...stackTitleArgs('master', '[Test Stack](2) move the helper'),
+      '--update-existing',
+    ]);
+
+    assert(result.status === 1, 'refactor-lane stack title should reject a missing technique tag');
+    assert(result.stderr.includes('REFACTOR'), `missing refactor tag error should mention REFACTOR\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('technique'), `missing refactor tag error should mention technique\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'refactor-lane missing title tag');
+    assert(readGhCalls(harness.ghLog).length === 0, 'missing refactor title tag should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNonRefactorLaneStackTitleRejectsTechniqueTag() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-non-refactor-title-reject';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'policy update\n\nChange-Id: Inonrefactor0001');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      ...stackTitleArgs('master', '[Test Stack](2)[REFACTOR: Move Method] move the helper'),
+      '--update-existing',
+    ]);
+
+    assert(result.status === 1, 'non-refactor stack title should reject a refactor technique tag');
+    assert(
+      result.stderr.includes('not refactor') || result.stderr.includes('drop the tag'),
+      `non-refactor tag error should explain the lane mismatch\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'non-refactor title tag rejection');
+    assert(readGhCalls(harness.ghLog).length === 0, 'non-refactor title tag rejection should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNonRefactorLaneStackTitleAcceptsPlainTitle() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-non-refactor-title-accept';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'policy update\n\nChange-Id: Inonrefactor0002');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [
+      ...stackTitleArgs('master', '[Test Stack](2) keep the policy title'),
+      '--update-existing',
+    ], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 45,
+          html_url: 'https://example.com/pull/45',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/45' }),
+    });
+
+    assert(
+      result.status === 0,
+      `non-refactor stack title should keep accepting a plain stack title\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stdout.trim() === 'https://example.com/pull/45', 'non-refactor plain title success should print the PR URL');
+    expectNoPush(harness, 'non-refactor plain title success');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testUnpublishedStackCommitsBlockUpdate() {
   const harness = createHarness();
   try {
@@ -1136,6 +1291,10 @@ const tests = [
   testMergifyManagedUpdateAcceptsLetteredTitle,
   testMergifyManagedUpdateRejectsPlainTitle,
   testMergifyManagedUpdateRejectsNestedTitle,
+  testRefactorLaneStackTitleAcceptsTechniqueTag,
+  testRefactorLaneStackTitleRequiresTechniqueTag,
+  testNonRefactorLaneStackTitleRejectsTechniqueTag,
+  testNonRefactorLaneStackTitleAcceptsPlainTitle,
   testUnpublishedStackCommitsBlockUpdate,
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,
