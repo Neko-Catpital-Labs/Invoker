@@ -16,6 +16,8 @@ import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, TerminalSpec } from '../executor.js';
 
 // ── Mock agent for testing alternative stdinMode + args ──────
 
@@ -58,6 +60,41 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
     callbackUrl: '',
     timestamps: {},
   } as unknown as WorkRequest;
+}
+
+function makeAiRequest(inputs: Partial<WorkRequest['inputs']> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Do something', ...inputs },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+class MatrixExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'matrix-test';
+
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
+    throw new Error('Not implemented');
+  }
+
+  async kill(_handle: ExecutorHandle): Promise<void> {}
+
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
+
+  getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
+
+  async destroyAll(): Promise<void> { this.entries.clear(); }
+
+  testBuildCommandAndArgs(request: WorkRequest, opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry }) {
+    return this.buildCommandAndArgs(request, opts);
+  }
 }
 
 // ── Agent definitions for the matrix ─────────────────────────
@@ -268,6 +305,27 @@ describe('Agent × Executor matrix', () => {
       // We have at least one 'ignore' and one 'pipe'
       expect(modes).toContain('ignore');
       expect(modes).toContain('pipe');
+    });
+
+    it('buildCommandAndArgs throws for explicit executionAgent when no registry is supplied', () => {
+      const executor = new MatrixExecutor();
+      const req = makeAiRequest({ executionAgent: 'omp' });
+
+      expect(() => executor.testBuildCommandAndArgs(req)).toThrow(
+        /requested execution agent "omp".*no configured agent set/,
+      );
+    });
+
+    it('buildCommandAndArgs keeps using the requested agent when it resolves', () => {
+      const executor = new MatrixExecutor();
+      const req = makeAiRequest({ executionAgent: 'mock-pipe' });
+
+      const result = executor.testBuildCommandAndArgs(req, { agentRegistry: registry });
+
+      expect(result.cmd).toBe('mock-agent');
+      expect(result.args).toContain('--prompt');
+      expect(result.args).toContain(result.fullPrompt);
+      expect(result.cmd).not.toBe('claude');
     });
   });
 });

@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import { AgentRegistry } from '../agent-registry.js';
+import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
@@ -98,6 +100,63 @@ describe('SshExecutor pre-flight validation', () => {
     await expect(ssh.start(req)).rejects.toThrow(
       'requires repoUrl',
     );
+  });
+
+  it('throws instead of falling back to claude when non-default executionAgent has no registry', async () => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do work',
+        description: 'test',
+        workspacePath: '/tmp/repo',
+        executionAgent: 'omp',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "omp".*no configured agent set/,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
+  it('keeps using the requested SSH agent when it resolves from the registry', async () => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+    const registry = new AgentRegistry();
+    registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      agentRegistry: registry,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do work',
+        description: 'test',
+        workspacePath: '/tmp/repo',
+        executionAgent: 'codex',
+      },
+    });
+
+    await ssh.start(req);
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const runScript = writeMock.mock.calls[0]![0] as string;
+    expect(runScript).toContain('codex-test');
+    expect(runScript).not.toContain('claude --session-id');
+    proc.emit('close', 0, null);
+    await new Promise((resolve) => setTimeout(resolve, 50));
   });
 
   it('does not throw for reconciliation requests', async () => {
