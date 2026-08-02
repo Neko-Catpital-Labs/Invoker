@@ -613,13 +613,9 @@ describe('EmbeddedTerminalManager', () => {
     );
   });
 
-  it('getAppliedSize reads the PTY back directly, exposing a resize that silently did not stick', () => {
+  it('getAppliedSize reports PTY wrapper-tracked dimensions, not native winsize', () => {
     const pty = createFakePty({ cols: 80, rows: 24 });
-    // Simulate a real-world dropped resize: the call is recorded but the
-    // underlying winsize never actually changes.
-    pty.resize = (cols: number, rows: number) => {
-      pty.__resized.push({ cols, rows });
-    };
+    const nativeWinsize = { cols: 80, rows: 24 };
     const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
     const mgr = new EmbeddedTerminalManager({
       backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
@@ -629,23 +625,26 @@ describe('EmbeddedTerminalManager', () => {
     const res = mgr.resize(session.sessionId, 120, 40);
 
     expect(res.ok).toBe(true);
-    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 80, rows: 24 });
+    expect(nativeWinsize).toEqual({ cols: 80, rows: 24 });
+    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 120, rows: 40 });
   });
 
-  it('getAppliedSize reflects a resize that actually applied', () => {
-    const pty = createFakePty({ cols: 80, rows: 24 });
+  it('getAppliedSize starts from the PTY wrapper-tracked spawn size', () => {
+    const pty = createFakePty({ cols: 132, rows: 43 });
     const ptySpawnFn = vi.fn(() => pty) as unknown as PtySpawnFn;
     const mgr = new EmbeddedTerminalManager({
       backend: createPtyTerminalBackend({ spawnFn: ptySpawnFn }),
     });
-    const session = mgr.openOrReuse({ taskId: 't', spec: { cwd: '/tmp' }, cwd: '/tmp' });
+    const session = mgr.openOrReuse({
+      taskId: 't',
+      spec: { command: 'claude', cwd: '/tmp', cols: 132, rows: 43 },
+      cwd: '/tmp',
+    });
 
-    mgr.resize(session.sessionId, 120, 40);
-
-    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 120, rows: 40 });
+    expect(mgr.getAppliedSize(session.sessionId)).toEqual({ cols: 132, rows: 43 });
   });
 
-  it('getAppliedSize returns null for the pipe-backed bash backend, which has no real TTY size', () => {
+  it('getAppliedSize returns null for the pipe-backed bash backend, which tracks no terminal size', () => {
     const child = createFakeChild();
     const bashSpawnFn = vi.fn(() => child) as unknown as BashSpawnFn;
     const mgr = new EmbeddedTerminalManager({

@@ -36,7 +36,9 @@ export interface PtyForkOptionsLike {
 }
 
 export interface PtyLike {
+  /** node-pty wrapper-tracked column count. */
   readonly cols: number;
+  /** node-pty wrapper-tracked row count. */
   readonly rows: number;
   onData(listener: (data: string) => void): { dispose: () => void };
   onExit(listener: (event: { exitCode: number }) => void): { dispose: () => void };
@@ -63,7 +65,11 @@ export interface SpawnedTerminalProcess {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   close(): void;
-  /** Authoritative applied size, read back from the real process. Null when the backend has no TTY (e.g. pipe-backed). */
+  /**
+   * Backend-visible terminal size, or null when the backend cannot track one.
+   * For node-pty this is pty.cols/rows: node-pty's wrapper-tracked size, not an
+   * independent OS PTY winsize query.
+   */
   getAppliedSize(): { cols: number; rows: number } | null;
 }
 
@@ -220,7 +226,7 @@ class BashTerminalBackend implements EmbeddedTerminalBackend {
         // Pipe-backed child processes are not TTYs; resize is a no-op.
       },
       getAppliedSize() {
-        // Pipes have no real terminal size to read back.
+        // Pipes have no terminal size for this manager to track.
         return null;
       },
       close() {
@@ -459,6 +465,7 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
   }
 
+  /** Returns the backend-tracked size; this is not an independent OS PTY size query. */
   getAppliedSize(sessionId: string): { cols: number; rows: number } | null {
     const state = this.sessions.get(sessionId);
     if (!state || state.mode === 'attached') return null;
@@ -569,6 +576,9 @@ export class EmbeddedTerminalManager extends EventEmitter {
       },
       resize() {
         // Resize before the backend returns a process handle is ignored.
+      },
+      getAppliedSize() {
+        return null;
       },
       close() {
         // There is no process handle to close yet.
