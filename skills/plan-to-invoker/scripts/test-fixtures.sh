@@ -309,6 +309,8 @@ mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-surface
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - Implement contact-surface wiring updates in a typed and deterministic way.
@@ -366,6 +368,8 @@ tasks:
       Assume no prior context. Modify packages/foo/src/surface.ts only. Pass condition: exits 0 after the surface compiles cleanly.
     dependencies: []
   - id: add-regression-tests
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - Add regression coverage for the new surface wiring.
@@ -467,6 +471,8 @@ mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-surface
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Goal:
       - Implement the contact surface slice.
@@ -493,6 +499,8 @@ tasks:
       - Verify the first implementation slice is present.
     dependencies: []
   - id: implement-bridge
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Goal:
       - Implement the bridge slice.
@@ -570,6 +578,8 @@ repoUrl: git@github.com:example-org/acme-repo.git
 featureBranch: plan/stack-step-1
 tasks:
   - id: implement-surface
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - Implement the first stacked workflow surface change.
@@ -669,6 +679,8 @@ externalDependencies:
     gatePolicy: completed
 tasks:
   - id: implement-terminal-surface
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - Implement the terminal stacked workflow surface change.
@@ -780,6 +792,8 @@ mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-bridge
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Goal:
       - Add bridge path for cost query wiring.
@@ -869,6 +883,8 @@ mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-bridge
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - Add bridge path for cost query wiring.
@@ -1040,6 +1056,8 @@ mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-runtime-flow
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - Implement deterministic runtime flow updates in task-runner.
@@ -1142,6 +1160,8 @@ mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-runtime-flow
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Goal:
       - Implement deterministic runtime flow updates.
@@ -1214,6 +1234,8 @@ mergeMode: external_review
 repoUrl: git@github.com:example-org/acme-repo.git
 tasks:
   - id: implement-owner-fallback
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - Add local fallback when refresh loses the owner bridge.

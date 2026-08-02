@@ -21,6 +21,8 @@ featureBranch: docs/dogfood-mergify-stack
 
 tasks:
   - id: refresh-dogfood-fixture
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - Refresh the positive dogfood fixture so later PR publication stays separate from plain approval.

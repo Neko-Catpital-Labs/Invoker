@@ -13,6 +13,8 @@ repoUrl: {{repo_url}}
 
 tasks:
   - id: fix-{{bug_slug}}
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Implement the fix for {{bug_summary}}.
       Review claim: The change corrects {{bug_summary}} at its source with no unrelated edits. REPLACE_ME with the precise defect claim.

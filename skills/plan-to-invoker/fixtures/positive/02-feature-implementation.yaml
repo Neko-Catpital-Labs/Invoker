@@ -23,6 +23,8 @@ featureBranch: feature/add-date-formatter
 
 tasks:
   - id: implement-formatter
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: "Add formatDate utility function to utils package"
     prompt: |
       In packages/utils/src/date.ts (create the file if it doesn't exist):
@@ -39,6 +41,8 @@ tasks:
     dependencies: []
 
   - id: write-tests
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: "Add unit tests for formatDate"
     prompt: |
       Create packages/utils/src/__tests__/date.test.ts:

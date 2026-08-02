@@ -82,6 +82,7 @@ def _repair_task_yaml(*, description: str, prompt: str) -> str:
         # codex reaches every SSH pool member; the default claude agent's
         # session is broken on most of them right now.
         "    executionAgent: codex\n"
+        "    executionModel: gpt-5.4\n"
         "    prompt: |\n"
         f"{_indent_block(prompt, 6)}\n"
     )

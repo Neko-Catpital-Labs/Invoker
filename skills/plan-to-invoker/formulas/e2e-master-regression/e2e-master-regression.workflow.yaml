@@ -18,6 +18,8 @@ repoUrl: {{repo_url}}
 
 tasks:
   - id: fix-{{bug_slug}}
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Fix the e2e regression first observed at master commit {{sha}}.
       Review claim: The change corrects the regression's root cause at its source, found during this task, with no unrelated edits.

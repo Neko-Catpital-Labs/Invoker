@@ -10,6 +10,8 @@ mergeMode: external_review
 repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
 tasks:
   - id: implement-broad-autofix-recovery-policy
+    executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Review claim:
       - The recovery worker should scan failed persisted tasks and submit auto-fix mutation intents for eligible tasks.

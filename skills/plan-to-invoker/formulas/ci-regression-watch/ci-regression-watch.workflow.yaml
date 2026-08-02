@@ -15,6 +15,7 @@ repoUrl: {{repo_url}}
 tasks:
   - id: fix-ci-{{job_slug}}
     executionAgent: codex
+    executionModel: gpt-5.4
     description: |
       Fix CI job {{job_name}} first observed failing at {{sha}}.
       Review claim: The change corrects the CI regression's root cause at its source, with no unrelated edits.

@@ -169,6 +169,7 @@ function testPlanVarsAndDryRunRendering() {
     if (rendered.submitted) fail('dry run must not submit');
     const planText = readFileSync(rendered.planPath, 'utf8');
     if (!planText.includes('executionAgent: codex')) fail('fix task must request codex (default claude agent hits the broken SSH pool)');
+    if (!planText.includes('executionModel: gpt-5.4')) fail('fix task must pin executionModel so it does not fall back to whatever codex itself defaults to');
   } finally {
     rmSync(outRoot, { recursive: true, force: true });
   }
