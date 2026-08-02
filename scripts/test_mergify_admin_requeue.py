@@ -35,13 +35,12 @@ from scripts.mergify_admin_requeue_gh_executor import ADMIN_BYPASS_NUDGE_LEDGER_
 from scripts.mergify_admin_requeue_model import LoadedStacks, RepairOutcome
 from scripts.mergify_admin_requeue_loader import AdminBypassStackLoader
 from scripts.mergify_admin_requeue_logger import AdminBypassLogger
-from scripts.mergify_admin_requeue_repairer import (
+from scripts.mergify_admin_requeue_repair_body import (
     NON_TRUNK_MANUAL_SPLIT_ERROR,
-    NON_TRUNK_PREREQ_ERROR,
     PROOF_POLICY_LANE_ERROR,
     PROOF_TOOLING_POLICY_UNIT_ERROR,
-    AdminBypassRepairer,
 )
+from scripts.mergify_admin_requeue_repairer import AdminBypassRepairer
 from scripts.pr_worker_safe_push import SafePushError
 
 REQUIRED = {"PR Body", "quality / TypeScript Types"}
@@ -464,7 +463,7 @@ Failing checks
                 with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
                     with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                         with mock.patch.object(repairer, "run_claude_repair") as repair:
-                            with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True, "errors": []}):
+                            with mock.patch("scripts.mergify_admin_requeue_repairer.validate_current_pr_body", return_value={"valid": True, "errors": []}):
                                 with redirect_stderr(stderr):
                                     result = repairer.repair_check(item, "PR Body")
         checkout.assert_called_once()
@@ -504,7 +503,7 @@ Failing checks
                 with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=lambda _work_root, *args: next(git_rev_parse) if args == ("rev-parse", "HEAD") else ""):
                     with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", return_value=()):
                         with mock.patch.object(repairer, "run_claude_repair"):
-                            with mock.patch.object(repairer, "validate_current_pr_body", return_value=validation):
+                            with mock.patch("scripts.mergify_admin_requeue_repairer.validate_current_pr_body", return_value=validation):
                                 result = repairer.repair_check(item, "PR Body")
         self.assertEqual(result.status, "blocked_invalid")
         self.assertIn(NON_TRUNK_MANUAL_SPLIT_ERROR, result.errors)
@@ -578,7 +577,7 @@ Failing checks
             with mock.patch.object(repairer.executor, "download_job_log", return_value="/tmp/pr-body.log") as download:
                 with mock.patch.object(repairer, "job_log_is_empty", return_value=True):
                     with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", return_value=HEAD):
-                        with mock.patch.object(repairer, "validate_current_pr_body", return_value={"valid": True}):
+                        with mock.patch("scripts.mergify_admin_requeue_repairer.validate_current_pr_body", return_value={"valid": True}):
                             with mock.patch.object(repairer, "run_claude_repair") as repair:
                                 result = repairer.repair_check(item, "PR Body")
         checkout.assert_called_once()
@@ -753,7 +752,7 @@ Failing checks
                     with mock.patch("scripts.mergify_admin_requeue_repairer.git_output", side_effect=fake_git_output):
                         with mock.patch("scripts.mergify_admin_requeue_repairer.git_lines", side_effect=fake_git_lines):
                             with mock.patch("scripts.mergify_admin_requeue_repair_body.git_output", side_effect=fake_git_output):
-                                with mock.patch.object(repairer, "validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
+                                with mock.patch("scripts.mergify_admin_requeue_repair_body.validate_local_pr_body", side_effect=lambda *_args: next(validator_results)):
                                     with mock.patch.object(repairer, "push_branch", return_value="pushed-sha") as push_branch:
                                         result = repairer.repair_check(item, "PR Body", 123)
 
