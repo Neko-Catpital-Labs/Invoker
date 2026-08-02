@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import { AgentRegistry } from '../agent-registry.js';
+import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
@@ -98,6 +100,58 @@ describe('SshExecutor pre-flight validation', () => {
     await expect(ssh.start(req)).rejects.toThrow(
       'requires repoUrl',
     );
+  });
+
+  it('throws with the requested agent name when an explicit AI task agent has no registry', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '~/repo',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /execution agent "codex".*no configured agent set/i,
+    );
+  });
+
+  it('uses the requested registry-backed agent when it resolves for an SSH AI task', async () => {
+    const registry = new AgentRegistry();
+    registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      agentRegistry: registry,
+    }) as any;
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      async (_executionId: string, _request: WorkRequest, handle: any) => handle,
+    );
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '~/repo',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    expect(handle.agentSessionId).toBeDefined();
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const script = spawnStub.mock.calls[0][3] as string;
+    expect(script).toContain('codex-test');
+    expect(script).not.toContain('claude --session-id');
   });
 
   it('does not throw for reconciliation requests', async () => {
