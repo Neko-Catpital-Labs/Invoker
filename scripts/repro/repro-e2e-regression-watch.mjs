@@ -65,22 +65,22 @@ function testJobClassification() {
 
 function testPerHeadFailureDedupAndRecovery() {
   const state = loadEmptyState();
-  reconcileCiRun(state, fakeRun(100, 'sha-x', [fakeJob('playwright / 1-of-9', 'failure', 10)]));
+  reconcileCiRun(state, fakeRun(100, 'sha-x', [fakeJob('playwright / 1-of-10', 'failure', 10)]));
   let failures = getActionableFailures(state);
   assertEqual(failures.length, 1, 'first failure creates one actionable failure');
   assertEqual(failures[0].firstBadSha, 'sha-x', 'first bad SHA is recorded');
-  assertEqual(state.heads['sha-x'].jobs['playwright / 1-of-9'].state, 'broken', 'head records broken job');
+  assertEqual(state.heads['sha-x'].jobs['playwright / 1-of-10'].state, 'broken', 'head records broken job');
 
-  reconcileCiRun(state, fakeRun(101, 'sha-x-plus-1', [fakeJob('playwright / 1-of-9', 'failure', 11)]));
+  reconcileCiRun(state, fakeRun(101, 'sha-x-plus-1', [fakeJob('playwright / 1-of-10', 'failure', 11)]));
   failures = getActionableFailures(state);
   assertEqual(failures.length, 1, 'duplicate failing HEAD keeps one actionable failure');
   assertEqual(failures[0].firstBadSha, 'sha-x', 'first bad SHA is stable across duplicates');
   assertEqual(failures[0].lastBadSha, 'sha-x-plus-1', 'latest bad SHA advances');
 
-  reconcileCiRun(state, fakeRun(102, 'sha-x-plus-2', [fakeJob('playwright / 1-of-9', 'success', 12)]));
+  reconcileCiRun(state, fakeRun(102, 'sha-x-plus-2', [fakeJob('playwright / 1-of-10', 'success', 12)]));
   failures = getActionableFailures(state);
   assertEqual(failures.length, 0, 'later successful HEAD clears active failure');
-  assertEqual(state.heads['sha-x-plus-2'].jobs['playwright / 1-of-9'].state, 'ok', 'success is recorded per head');
+  assertEqual(state.heads['sha-x-plus-2'].jobs['playwright / 1-of-10'].state, 'ok', 'success is recorded per head');
   console.log('[repro-e2e-regression-watch] per-HEAD dedup + recovery: PASS');
 }
 
@@ -100,22 +100,22 @@ function testCancelledAndSkippedDoNotClear() {
 function testEveryFailedJobQueuesSeparately() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(300, 'sha-many', [
-    fakeJob('playwright / 1-of-9', 'failure', 30),
-    fakeJob('playwright / 2-of-9', 'failure', 31),
+    fakeJob('playwright / 1-of-10', 'failure', 30),
+    fakeJob('playwright / 2-of-10', 'failure', 31),
     fakeJob('build-artifacts', 'success', 32),
   ]));
   const failures = getActionableFailures(state);
-  assertEqual(failures.map((f) => f.jobName), ['playwright / 1-of-9', 'playwright / 2-of-9'], 'each failed job is actionable');
+  assertEqual(failures.map((f) => f.jobName), ['playwright / 1-of-10', 'playwright / 2-of-10'], 'each failed job is actionable');
   console.log('[repro-e2e-regression-watch] every failed job queues separately: PASS');
 }
 
 function testLiveDedupIsJobScoped() {
   const sha = 'sha-dedup-test';
-  const job = 'playwright / 1-of-9';
+  const job = 'playwright / 1-of-10';
   const marker = buildMarker(sha, job);
   const fakeNonTerminal = () => JSON.stringify([{ status: 'running', description: `<!-- ${marker} -->` }]);
   const fakeTerminal = () => JSON.stringify([{ status: 'failed', description: `<!-- ${marker} -->` }]);
-  const fakeOtherJob = () => JSON.stringify([{ status: 'running', description: `<!-- ${buildMarker(sha, 'playwright / 2-of-9')} -->` }]);
+  const fakeOtherJob = () => JSON.stringify([{ status: 'running', description: `<!-- ${buildMarker(sha, 'playwright / 2-of-10')} -->` }]);
 
   if (!liveQueryHasNonTerminalWork(sha, job, fakeNonTerminal)) fail('non-terminal matching marker must dedupe');
   if (liveQueryHasNonTerminalWork(sha, job, fakeTerminal)) fail('terminal matching marker must not dedupe');
@@ -126,8 +126,8 @@ function testLiveDedupIsJobScoped() {
 function testWorkflowCommandMapping() {
   const defs = buildCiJobDefinitions();
   const expected = [
-    'playwright / 1-of-9',
-    'playwright / 9-of-9',
+    'playwright / 1-of-10',
+    'playwright / 10-of-10',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -137,7 +137,7 @@ function testWorkflowCommandMapping() {
     if (!def) fail(`missing CI job definition for ${name}`);
     if (!def.verifyCommand) fail(`CI job definition lacks verify command for ${name}`);
   }
-  if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
+  if (!defs.get('playwright / 1-of-10').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
@@ -176,7 +176,7 @@ function testPlanVarsAndDryRunRendering() {
 function testLiveSubmissionUsesNoTrack() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(450, 'abc456def456abc123def456abc123def456ab2', [
-    fakeJob('playwright / 2-of-9', 'failure', 45),
+    fakeJob('playwright / 2-of-10', 'failure', 45),
   ]));
   const [failure] = getActionableFailures(state);
   const calls = [];
