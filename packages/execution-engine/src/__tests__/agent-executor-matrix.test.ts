@@ -13,6 +13,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { WorkRequest } from '@invoker/contracts';
 import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, TerminalSpec } from '../executor.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
@@ -60,6 +62,39 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
   } as unknown as WorkRequest;
 }
 
+function makeAiRequest(inputs: Partial<WorkRequest['inputs']> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Implement the change', ...inputs },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+class TestExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'test';
+
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
+    throw new Error('Not implemented');
+  }
+
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
+  getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
+  async destroyAll(): Promise<void> { this.entries.clear(); }
+
+  testBuildCommandAndArgs(
+    request: WorkRequest,
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ) {
+    return this.buildCommandAndArgs(request, opts);
+  }
+}
+
 // ── Agent definitions for the matrix ─────────────────────────
 
 const agents = [
@@ -101,6 +136,41 @@ const agents = [
 // ── Matrix tests ─────────────────────────────────────────────
 
 describe('Agent × Executor matrix', () => {
+  describe('BaseExecutor command building', () => {
+    it('throws for an explicit agent when no configured set is available', () => {
+      const executor = new TestExecutor();
+
+      expect(() => executor.testBuildCommandAndArgs(makeAiRequest({ executionAgent: 'omp' }))).toThrow(
+        /requested execution agent "omp".*no configured agent set/i,
+      );
+    });
+
+    it('keeps the claude fallback when ai_task omits executionAgent', () => {
+      const executor = new TestExecutor();
+      const result = executor.testBuildCommandAndArgs(makeAiRequest(), { claudeCommand: 'claude-test' });
+
+      expect(result.cmd).toBe('claude-test');
+      expect(result.args).toContain('--session-id');
+      expect(result.args).toContain('-p');
+      expect(result.fullPrompt).toBe('Implement the change');
+    });
+
+    it('uses the registry-backed command when the requested agent resolves', () => {
+      const executor = new TestExecutor();
+      const registry = new AgentRegistry();
+      registry.registerExecution(new MockPipeAgent());
+
+      const result = executor.testBuildCommandAndArgs(
+        makeAiRequest({ executionAgent: 'mock-pipe' }),
+        { agentRegistry: registry },
+      );
+
+      expect(result.cmd).toBe('mock-agent');
+      expect(result.args).toContain('--prompt');
+      expect(result.fullPrompt).toBe('Implement the change');
+    });
+  });
+
   describe.each(agents)('$label', (agentDef) => {
     let agent: ExecutionAgent;
     let registry: AgentRegistry;

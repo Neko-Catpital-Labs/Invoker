@@ -284,15 +284,17 @@ export function remoteAgentShellInvocation(): string[] {
 
 /**
  * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
+ * Uses the agent registry to build the command for the requested agent.
+ * Without a registry, only legacy Claude-compatible calls can fall back.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
   executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
-  const name = agentName ?? DEFAULT_EXECUTION_AGENT;
+  const explicitName = agentName?.trim();
+  const name = explicitName || DEFAULT_EXECUTION_AGENT;
   if (agentRegistry) {
     const agent = agentRegistry.get(name);
     if (agent?.buildFixCommand) {
@@ -301,8 +303,17 @@ function buildRemoteAgentCommand(
       const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
       return { shellCommand: cmd, sessionId };
     }
+    throw new Error(
+      `Unable to resolve requested execution agent "${name}" for remote conflict repair: ` +
+      `no configured agent set was available, or the configured set did not include a fix-capable agent with that name.`,
+    );
   }
-  // Fallback: claude-compatible CLI (for backwards compat without registry)
+  if (explicitName && name !== 'claude') {
+    throw new Error(
+      `Unable to resolve requested execution agent "${name}" for remote conflict repair: ` +
+      `no configured agent set was available, or the configured set did not include a fix-capable agent with that name.`,
+    );
+  }
   const sessionId = randomUUID();
   return {
     shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,

@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
@@ -70,6 +71,56 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 describe('SshExecutor pre-flight validation', () => {
+  it('throws for an explicit non-default agent when no configured set is available', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'omp',
+        workspacePath: '/tmp/workspace',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "omp".*no configured agent set/i,
+    );
+  });
+
+  it('uses the registry-backed command when the requested agent resolves', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      agentRegistry: registerBuiltinAgents(),
+    }) as any;
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '/tmp/workspace',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    expect(handle.agentSessionId).toBeTruthy();
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const script = spawnStub.mock.calls[0]?.[3] as string;
+    expect(script).toContain('codex ');
+    expect(script).not.toContain('claude ');
+  });
+
   it('throws when SSH key file does not exist', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
