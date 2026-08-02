@@ -14,6 +14,8 @@ import { randomUUID } from 'node:crypto';
 import type { WorkRequest } from '@invoker/contracts';
 import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 import { AgentRegistry } from '../agent-registry.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from '../executor.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 
@@ -58,6 +60,38 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
     callbackUrl: '',
     timestamps: {},
   } as unknown as WorkRequest;
+}
+
+function makeAiTaskRequest(inputs: WorkRequest['inputs'] = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Do something', ...inputs },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+class MatrixExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'matrix-test';
+
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
+    throw new Error('Not implemented');
+  }
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
+  getRestoredTerminalSpec(_meta: PersistedTaskMeta): TerminalSpec { throw new Error('Not implemented'); }
+  async destroyAll(): Promise<void> { this.entries.clear(); }
+
+  testBuildCommandAndArgs(
+    request: WorkRequest,
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ) {
+    return this.buildCommandAndArgs(request, opts);
+  }
 }
 
 // ── Agent definitions for the matrix ─────────────────────────
@@ -268,6 +302,29 @@ describe('Agent × Executor matrix', () => {
       // We have at least one 'ignore' and one 'pipe'
       expect(modes).toContain('ignore');
       expect(modes).toContain('pipe');
+    });
+  });
+
+  describe('BaseExecutor command resolution', () => {
+    it('throws naming explicit executionAgent when no registry is available', () => {
+      const executor = new MatrixExecutor();
+      const request = makeAiTaskRequest({ executionAgent: 'omp' });
+
+      expect(() => executor.testBuildCommandAndArgs(request)).toThrow(
+        /Execution agent "omp" was requested.*no configured agent set/i,
+      );
+    });
+
+    it('uses the requested agent when it resolves through the registry', () => {
+      const executor = new MatrixExecutor();
+      const registry = new AgentRegistry();
+      registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+      const request = makeAiTaskRequest({ executionAgent: 'codex' });
+
+      const result = executor.testBuildCommandAndArgs(request, { agentRegistry: registry });
+
+      expect(result.cmd).toBe('codex-test');
+      expect(result.args).toContain('Do something');
     });
   });
 });

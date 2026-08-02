@@ -112,6 +112,27 @@ describe('SshExecutor pre-flight validation', () => {
     expect(handle.executionId).toBeDefined();
   });
 
+  it('throws naming explicit non-default executionAgent when no registry is available', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        workspacePath: '/tmp/workspace',
+        executionAgent: 'omp',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Execution agent "omp" was requested.*no configured agent set/i,
+    );
+  });
+
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
