@@ -661,6 +661,10 @@ jobs:
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
               e2e/workers-surface.spec.ts
 
     name: playwright / ${{ matrix.name }}
@@ -697,27 +701,36 @@ jobs:
 
           const workflow = YAML.parse(fs.readFileSync('.github/workflows/ci.yml', 'utf8'));
           const perfJob = workflow.jobs['playwright-nightly-perf'];
+          const manualSpecs = new Set([
+            // This proof intentionally drives a locally authenticated real Claude CLI.
+            'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+          ]);
           const shards = [
             ...workflow.jobs.playwright.strategy.matrix.include,
             ...(perfJob ? perfJob.strategy.matrix.include : []),
           ];
           const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
-          const discovered = fs.readdirSync('packages/app/e2e')
+          const discoveredAll = fs.readdirSync('packages/app/e2e')
             .filter((file) => file.endsWith('.spec.ts'))
             .map((file) => `e2e/${file}`)
             .sort();
+          const discovered = discoveredAll.filter((file) => !manualSpecs.has(file));
 
           const listedSet = new Set(listed);
           const discoveredSet = new Set(discovered);
           const missing = discovered.filter((file) => !listedSet.has(file));
           const extra = listed.filter((file) => !discoveredSet.has(file));
           const duplicates = listed.filter((file, index) => listed.indexOf(file) !== index);
+          const manualMissing = [...manualSpecs].filter((file) => !discoveredAll.includes(file));
+          const manualListed = listed.filter((file) => manualSpecs.has(file));
 
-          if (missing.length || extra.length || duplicates.length) {
+          if (missing.length || extra.length || duplicates.length || manualMissing.length || manualListed.length) {
             console.error('Playwright shard inventory drift detected.');
             if (missing.length) console.error(`Missing from shards: ${missing.join(', ')}`);
             if (extra.length) console.error(`Extra in shards: ${extra.join(', ')}`);
             if (duplicates.length) console.error(`Duplicate shard entries: ${[...new Set(duplicates)].join(', ')}`);
+            if (manualMissing.length) console.error(`Missing manual specs: ${manualMissing.join(', ')}`);
+            if (manualListed.length) console.error(`Manual specs listed in CI shards: ${[...new Set(manualListed)].join(', ')}`);
             process.exit(1);
           }
 
