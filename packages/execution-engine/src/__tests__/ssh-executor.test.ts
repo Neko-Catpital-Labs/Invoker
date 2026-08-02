@@ -100,6 +100,30 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws a named error when an explicit executionAgent has no registry', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    });
+    const execRemoteCaptureSpy = vi.spyOn(ssh as any, 'execRemoteCapture').mockResolvedValue('');
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'custom-agent',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Unable to resolve execution agent "custom-agent": no configured agent set was available\./,
+    );
+    expect(execRemoteCaptureSpy).not.toHaveBeenCalled();
+  });
+
   it('does not throw for reconciliation requests', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
