@@ -201,6 +201,7 @@ import type { WorkflowMutationContext } from './persisted-workflow-mutation-coor
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import {
   isTaskInFlightForForcedStop,
+  OWNER_RESTART_REASON,
   reconcileOrphanedInFlightTasksOnBoot,
 } from './reconcile-orphaned-running-tasks.js';
 import { recoverWorkflowMutationsOnStartup } from './workflow-mutation-startup.js';
@@ -1005,6 +1006,7 @@ function startHeadlessMode(): void {
         const orphaned = reconcileOrphanedInFlightTasksOnBoot({
           orchestrator,
           persistence,
+          reason: OWNER_RESTART_REASON,
         });
         if (orphaned.length > 0) {
           logger.info(
@@ -3003,6 +3005,7 @@ startMainProcessBootstrap({
           const orphaned = reconcileOrphanedInFlightTasksOnBoot({
             orchestrator,
             persistence,
+            reason: OWNER_RESTART_REASON,
           });
           if (orphaned.length > 0) {
             logger.info(
