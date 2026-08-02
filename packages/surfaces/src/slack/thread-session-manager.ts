@@ -14,7 +14,7 @@
  */
 
 import { PlanConversation } from './plan-conversation.js';
-import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
+import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from './plan-conversation.js';
 import type { ConversationRepository } from '@invoker/data-store';
 import type { HarnessSessionDriver } from '@invoker/execution-engine';
 import type { LogFn } from '../surface.js';
@@ -116,6 +116,10 @@ export class SessionHandle {
 
   get lastTurnDraftPlanText(): string | null {
     return this.conversation.lastTurnDraftPlanText;
+  }
+
+  get lastTurnPlanIntentSignal(): PlanIntentSignal | null {
+    return this.conversation.lastTurnPlanIntentSignal;
   }
 
   /**
