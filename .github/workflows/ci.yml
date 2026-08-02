@@ -701,10 +701,14 @@ jobs:
             ...workflow.jobs.playwright.strategy.matrix.include,
             ...(perfJob ? perfJob.strategy.matrix.include : []),
           ];
+          const manualOnlySpecs = new Set([
+            'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+          ]);
           const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
           const discovered = fs.readdirSync('packages/app/e2e')
             .filter((file) => file.endsWith('.spec.ts'))
             .map((file) => `e2e/${file}`)
+            .filter((file) => !manualOnlySpecs.has(file))
             .sort();
 
           const listedSet = new Set(listed);
@@ -777,6 +781,12 @@ jobs:
             files: >-
               e2e/ui-action-responsiveness-battery.spec.ts
               e2e/storm-scale-responsiveness.spec.ts
+          - name: terminal-garbling-repros
+            files: >-
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
 
     steps:
       - name: Checkout
@@ -819,7 +829,7 @@ jobs:
           git config --global user.email "ci@invoker.dev"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Run responsiveness battery
+      - name: Run nightly Playwright shard
         env:
           INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-nightly-perf-${{ matrix.name }}
           INVOKER_PLAYWRIGHT_WORKERS: '1'

@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$ROOT"
 
+# Codex runners are CI-like but do not always export GitHub's CI=true.
+if [ -n "${CODEX_CI:-}" ] && [ -z "${CI:-}" ]; then
+  export CI=true
+fi
+
 sanitize_label() {
   printf '%s' "$1" | tr -cs 'A-Za-z0-9._-' '-'
 }
