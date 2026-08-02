@@ -1022,7 +1022,7 @@ describe('PlanConversation prompt construction', () => {
     expect(conv.buildCursorPrompt()).not.toContain('prefer a workflow stack');
   });
 
-  it('agent mode refuses Invoker YAML and redirects within the same thread', () => {
+  it('agent mode refuses Invoker YAML and redirects to /plan when there is no thread to signal from', () => {
     const conv = new PlanConversation({ mode: 'agent' });
     (conv as any).messages.push({ role: 'user', content: 'Make me an Invoker plan to add a REST API' });
     const prompt = conv.buildCursorPrompt();
@@ -1030,11 +1030,25 @@ describe('PlanConversation prompt construction', () => {
     // Never the plan-mode system prompt in an agent thread.
     expect(prompt).not.toContain('Invoker orchestrator');
     expect(prompt).toContain('Do NOT generate or submit Invoker YAML yourself');
-    expect(prompt).toContain('promotes planning requests');
-    expect(prompt).toContain('same thread');
-    expect(prompt).not.toContain('start a new plan thread');
+    // No auto-promotion claim: nothing implements that, and it's the bug this replaces.
+    expect(prompt).not.toContain('automatically');
+    expect(prompt).not.toContain('promotes planning requests');
+    expect(prompt).toContain('type `/plan <request>`');
     expect(prompt).toContain('only the final user-facing message');
     expect(prompt).not.toContain('unless the user explicitly asks');
+  });
+
+  it('agent mode tells the model to signal plan-intent via file when a thread is pinned', () => {
+    const conv = new PlanConversation({ mode: 'agent', workingDir: '/tmp/worktree', threadTs: 'thread-abc' });
+    (conv as any).messages.push({ role: 'user', content: 'submit it' });
+    const prompt = conv.buildCursorPrompt();
+
+    expect(prompt).not.toContain('automatically');
+    expect(prompt).not.toContain('promotes planning requests');
+    expect(prompt).toContain('wantsPlan');
+    expect(prompt).toContain(String(conv.planIntentSignalFilePath()));
+    expect(prompt).toContain('type `/plan <request>`');
+    expect(prompt).toContain('a false positive interrupts the conversation');
   });
 });
 
