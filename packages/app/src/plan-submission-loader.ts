@@ -1,5 +1,5 @@
 import type { Logger } from '@invoker/contracts';
-import type { PlanDefinition } from '@invoker/workflow-core';
+import { PINNED_WORKFLOW_BASE_BRANCH, type PlanDefinition } from '@invoker/workflow-core';
 import { backupPlan } from './plan-backup.js';
 
 export interface PlanSubmissionLoadResult {
@@ -45,6 +45,9 @@ export async function loadPlanSubmissionBundle(
 
   for (const parsedPlan of submission.plans) {
     let plan = applyConfiguredPlanDefaults(parsedPlan);
+    if (!submission.isStack) {
+      plan = { ...plan, baseBranch: PINNED_WORKFLOW_BASE_BRANCH };
+    }
     if (upstream) {
       plan = {
         ...plan,
