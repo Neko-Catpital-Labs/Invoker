@@ -11,12 +11,13 @@
  * (electron-app.ts symlinks scripts/e2e-dry-run/fixtures/claude-marker.sh
  * as `claude` in a prepended stub dir) so other tests don't hit the real
  * network. This spec resolves and invokes the REAL binary by absolute path
- * to bypass that shadow on purpose.
+ * to bypass that shadow on purpose. It lives under e2e/manual so the CI
+ * shard-inventory guard ignores it like the other opt-in Playwright probes.
  */
 
 import { execFileSync } from 'node:child_process';
 import type { Page } from '@playwright/test';
-import { expect, test } from './fixtures/electron-app.js';
+import { expect, test } from '../fixtures/electron-app.js';
 
 function resolveRealClaudeBinary(): string {
   const resolved = execFileSync('bash', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
