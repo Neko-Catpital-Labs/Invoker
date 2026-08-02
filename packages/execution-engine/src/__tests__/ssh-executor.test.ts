@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
@@ -946,6 +947,65 @@ branch refs/heads/${targetBranch}
     expect(callScript).toContain('WT=$(normalize_remote_path \'/custom/path\')');
     expect(callScript).toContain('"$RUNNER_PATH" "$PAYLOAD_PATH"');
     expect(callScript).toContain('rm -rf "$STAGING_DIR"');
+  });
+
+  it('throws for an explicit AI agent when no registry is configured', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+    }) as any;
+
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'test prompt',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '/custom/path',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(/requested execution agent "codex"/);
+    await expect(ssh.start(req)).rejects.toThrow(/no configured agent set was available/);
+    expect(spawnStub).not.toHaveBeenCalled();
+  });
+
+  it('uses the requested AI agent when it resolves through the registry', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+      agentRegistry: registerBuiltinAgents(),
+    }) as any;
+
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'test prompt',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '/custom/path',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    expect(handle.agentSessionId).toBeDefined();
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const [, , , callScript] = spawnStub.mock.calls[0];
+    expect(callScript).toContain('codex');
+    expect(callScript).not.toContain('claude --session-id');
   });
 
   it('BYO mode throws when workspacePath is missing', async () => {
