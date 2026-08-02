@@ -39,7 +39,7 @@ import {
   isConfirmation,
   isNegation,
 } from './plan-conversation.js';
-import type { ConversationMode, PlanningCommandBuilder } from './plan-conversation.js';
+import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
 import type { LobbyControl } from './lobby-control.js';
 import { SessionManager, SessionIdentifier } from './thread-session-manager.js';
@@ -450,6 +450,7 @@ interface ConversationLike {
   getDraftedPlan(): string | null;
   readonly history: readonly { role: 'user' | 'assistant'; content: string }[];
   readonly lastTurnDraftPlanText: string | null;
+  readonly lastTurnPlanIntentSignal: PlanIntentSignal | null;
   readonly conversationMode: ConversationMode;
   readonly planSubmitted: boolean;
   readonly submittedPlanText: string | null;  readonly workingDir?: string;
