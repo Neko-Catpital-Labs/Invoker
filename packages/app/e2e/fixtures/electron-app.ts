@@ -10,6 +10,7 @@ import type { TaskStateChanges } from '@invoker/workflow-core';
 import type { InvokerConfig } from '../../src/config.js';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { test as base, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import type { ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -31,6 +32,60 @@ export type ElectronFixtures = {
 };
 
 const repoRoot = resolveRepoRoot(__dirname);
+const ELECTRON_APP_CLOSE_TIMEOUT_MS = 15_000;
+const ELECTRON_APP_KILL_TIMEOUT_MS = 5_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+function isChildRunning(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
+async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (!isChildRunning(child)) return true;
+  return await new Promise<boolean>((resolve) => {
+    let timer: NodeJS.Timeout;
+    const onExit = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    timer = setTimeout(() => {
+      child.off('exit', onExit);
+      resolve(false);
+    }, timeoutMs);
+    timer.unref?.();
+    child.once('exit', onExit);
+    if (!isChildRunning(child)) onExit();
+  });
+}
+
+export async function closeElectronApp(app: ElectronApplication): Promise<void> {
+  const child = app.process();
+  const closePromise = app.close().catch(() => undefined);
+  const closed = await Promise.race([
+    closePromise.then(() => true),
+    delay(ELECTRON_APP_CLOSE_TIMEOUT_MS).then(() => false),
+  ]);
+  if (closed) return;
+
+  if (isChildRunning(child)) {
+    child.kill('SIGTERM');
+  }
+  const exitedOnTerm = await waitForChildExit(child, ELECTRON_APP_KILL_TIMEOUT_MS);
+  if (!exitedOnTerm && isChildRunning(child)) {
+    child.kill('SIGKILL');
+    await waitForChildExit(child, 1_000);
+  }
+  await Promise.race([
+    closePromise,
+    delay(1_000),
+  ]);
+}
 
 async function removeTestDir(dir: string): Promise<void> {
   let lastError: unknown;
@@ -215,7 +270,7 @@ exit 64
       },
     });
     await use(app);
-    await app.close();
+    await closeElectronApp(app);
   },
 
   page: async ({ electronApp }, use) => {

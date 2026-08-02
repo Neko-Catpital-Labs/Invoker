@@ -37,6 +37,11 @@ elif [ -n "${INVOKER_PLAYWRIGHT_SHARD_INDEX:-}" ] && [ -n "${INVOKER_PLAYWRIGHT_
 fi
 RUN_LABEL="$(sanitize_label "$RUN_LABEL")"
 
+if [[ "$RUN_LABEL" == ci-playwright-* ]]; then
+  # Local CI-labeled repro commands should match the GitHub workflow env.
+  export CI="${CI:-true}"
+fi
+
 ARTIFACT_ROOT="$(git rev-parse --path-format=absolute --git-path "playwright-artifacts/$RUN_LABEL")"
 mkdir -p "$ARTIFACT_ROOT"
 

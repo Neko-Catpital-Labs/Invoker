@@ -6,6 +6,7 @@ import { stringify as yamlStringify } from 'yaml';
 
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import {
+  closeElectronApp,
   E2E_REPO_URL,
   expect,
   loadPlan,
@@ -25,6 +26,7 @@ import {
   parseJsonStdout,
   parseWorkflowId,
   runHeadlessClient,
+  terminateHeadlessOwnersForTestDir,
 } from './fixtures/headless-client.js';
 
 test.use({ guiOwnerMode: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon' });
@@ -95,104 +97,108 @@ async function settleHeadlessHerdWorkflows(page: Page): Promise<void> {
 
 test.describe('Headless thundering herd', () => {
   test('burst headless restarts do not spawn headless electron herds or freeze the UI', async ({ page, testDir }) => {
-    await loadPlan(page, HEADLESS_HERD_UI_PLAN);
-    await startPlan(page);
-    await page.locator('.react-flow__node[data-testid$="herd-ui-root"]').waitFor({ state: 'visible', timeout: 10000 });
+    try {
+      await loadPlan(page, HEADLESS_HERD_UI_PLAN);
+      await startPlan(page);
+      await page.locator('.react-flow__node[data-testid$="herd-ui-root"]').waitFor({ state: 'visible', timeout: 10000 });
 
-    // Discover the active workflow through the renderer bridge API
-    // (listWorkflows) rather than reaching into task config internals.
-    // This is the owner-boundary-compliant discovery path — the renderer
-    // exposes it via IPC without crossing into persistence directly.
-    const workflows = await page.evaluate(() => window.invoker.listWorkflows());
-    expect(workflows.length).toBeGreaterThan(0);
-    const currentWorkflowId = workflows[0].id as string;
+      // Discover the active workflow through the renderer bridge API
+      // (listWorkflows) rather than reaching into task config internals.
+      // This is the owner-boundary-compliant discovery path -- the renderer
+      // exposes it via IPC without crossing into persistence directly.
+      const workflows = await page.evaluate(() => window.invoker.listWorkflows());
+      expect(workflows.length).toBeGreaterThan(0);
+      const currentWorkflowId = workflows[0].id as string;
 
-    const herdPlan = {
-      name: 'Headless Herd Seed',
-      repoUrl: E2E_REPO_URL,
-      onFinish: 'none' as const,
-      tasks: [
-        {
-          id: 'burst-root',
-          description: 'Burst root',
-          command: 'echo burst-root',
-          dependencies: [],
-        },
-      ],
-    };
-    const planPath = path.join(testDir, 'headless-herd-plan.yaml');
-    await writeFile(planPath, yamlStringify(herdPlan), 'utf8');
+      const herdPlan = {
+        name: 'Headless Herd Seed',
+        repoUrl: E2E_REPO_URL,
+        onFinish: 'none' as const,
+        tasks: [
+          {
+            id: 'burst-root',
+            description: 'Burst root',
+            command: 'echo burst-root',
+            dependencies: [],
+          },
+        ],
+      };
+      const planPath = path.join(testDir, 'headless-herd-plan.yaml');
+      await writeFile(planPath, yamlStringify(herdPlan), 'utf8');
 
-    const workflowIds = new Set<string>();
-    workflowIds.add(currentWorkflowId);
-    for (let i = 0; i < HEADLESS_DELEGATED_WORKFLOW_COUNT; i += 1) {
-      const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
-      expectDelegated(result.stdout);
-      // Use the workflow id echoed by this exact submission. Querying shared
-      // persisted state from the app layer both violates the owner boundary
-      // and is ambiguous when many workflows are created concurrently.
-      const workflowId = parseWorkflowId(result.stdout);
-      workflowIds.add(workflowId);
+      const workflowIds = new Set<string>();
+      workflowIds.add(currentWorkflowId);
+      for (let i = 0; i < HEADLESS_DELEGATED_WORKFLOW_COUNT; i += 1) {
+        const result = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
+        expectDelegated(result.stdout);
+        // Use the workflow id echoed by this exact submission. Querying shared
+        // persisted state from the app layer both violates the owner boundary
+        // and is ambiguous when many workflows are created concurrently.
+        const workflowId = parseWorkflowId(result.stdout);
+        workflowIds.add(workflowId);
+      }
+
+      await page.waitForTimeout(500);
+
+      const perfWatermark = await activityLogWatermark(page);
+      const retryBurstStartedAt = Date.now();
+      const burst = Array.from(workflowIds).map((workflowId) =>
+        runHeadlessClient(testDir, ['retry', workflowId, '--no-track']),
+      );
+
+      const firstInteractionMs = await measureInspectorToggleResponsive(
+        page,
+        RESPONSIVE_INTERACTION_TIMEOUT_MS,
+        'during_retry_burst',
+      );
+
+      await page.waitForTimeout(1500);
+
+      const secondInteractionMs = await measureInspectorToggleResponsive(
+        page,
+        RESPONSIVE_INTERACTION_TIMEOUT_MS,
+        'after_retry_burst',
+      );
+
+      const retryResults = await Promise.all(burst);
+      const retryBurstWallMs = Date.now() - retryBurstStartedAt;
+      for (const result of retryResults) {
+        expectDelegated(result.stdout);
+      }
+
+      const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
+      const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
+      const delegatedPerf = parseJsonStdout(
+        (await runHeadlessClient(testDir, ['query', 'ui-perf', '--output', 'json'])).stdout,
+      );
+      const evidence = {
+        workflowCount: workflowIds.size,
+        retryCommandCount: burst.length,
+        retryBurstWallMs,
+        firstInteractionMs,
+        secondInteractionMs,
+        perf,
+        perfPayloads,
+        delegatedPerf,
+        budgets: HEADLESS_HERD_BUDGETS,
+      };
+      console.log(`HEADLESS_THUNDERING_HERD_BENCH_RESULT=${JSON.stringify(evidence)}`);
+
+      const evidenceMessage = JSON.stringify(evidence);
+      expect(burst.length, evidenceMessage).toBeGreaterThanOrEqual(HEADLESS_DELEGATED_WORKFLOW_COUNT + 1);
+      expect(retryBurstWallMs, evidenceMessage).toBeLessThanOrEqual(MAX_RETRY_BURST_WALL_MS);
+      expect(firstInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
+      expect(secondInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
+      expect(numberOrZero(perf.maxRendererEventLoopLagMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
+      expect(numberOrZero(perf.maxRendererLongTaskMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
+      expect(maxPayloadNumber(perfPayloads, 'renderer_event_loop_lag', 'lagMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
+      expect(maxPayloadNumber(perfPayloads, 'renderer_long_task', 'durationMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
+      expect(delegatedPerf.ownerMode, evidenceMessage).toBe('standalone');
+
+      await settleHeadlessHerdWorkflows(page);
+    } finally {
+      await terminateHeadlessOwnersForTestDir(testDir);
     }
-
-    await page.waitForTimeout(500);
-
-    const perfWatermark = await activityLogWatermark(page);
-    const retryBurstStartedAt = Date.now();
-    const burst = Array.from(workflowIds).map((workflowId) =>
-      runHeadlessClient(testDir, ['retry', workflowId, '--no-track']),
-    );
-
-    const firstInteractionMs = await measureInspectorToggleResponsive(
-      page,
-      RESPONSIVE_INTERACTION_TIMEOUT_MS,
-      'during_retry_burst',
-    );
-
-    await page.waitForTimeout(1500);
-
-    const secondInteractionMs = await measureInspectorToggleResponsive(
-      page,
-      RESPONSIVE_INTERACTION_TIMEOUT_MS,
-      'after_retry_burst',
-    );
-
-    const retryResults = await Promise.all(burst);
-    const retryBurstWallMs = Date.now() - retryBurstStartedAt;
-    for (const result of retryResults) {
-      expectDelegated(result.stdout);
-    }
-
-    const perf = await page.evaluate(async () => await window.invoker.getUiPerfStats());
-    const perfPayloads = await uiPerfPayloadsSince(page, perfWatermark);
-    const delegatedPerf = parseJsonStdout(
-      (await runHeadlessClient(testDir, ['query', 'ui-perf', '--output', 'json'])).stdout,
-    );
-    const evidence = {
-      workflowCount: workflowIds.size,
-      retryCommandCount: burst.length,
-      retryBurstWallMs,
-      firstInteractionMs,
-      secondInteractionMs,
-      perf,
-      perfPayloads,
-      delegatedPerf,
-      budgets: HEADLESS_HERD_BUDGETS,
-    };
-    console.log(`HEADLESS_THUNDERING_HERD_BENCH_RESULT=${JSON.stringify(evidence)}`);
-
-    const evidenceMessage = JSON.stringify(evidence);
-    expect(burst.length, evidenceMessage).toBeGreaterThanOrEqual(HEADLESS_DELEGATED_WORKFLOW_COUNT + 1);
-    expect(retryBurstWallMs, evidenceMessage).toBeLessThanOrEqual(MAX_RETRY_BURST_WALL_MS);
-    expect(firstInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
-    expect(secondInteractionMs, evidenceMessage).toBeLessThanOrEqual(MAX_INSPECTOR_TOGGLE_MS);
-    expect(numberOrZero(perf.maxRendererEventLoopLagMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
-    expect(numberOrZero(perf.maxRendererLongTaskMs), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
-    expect(maxPayloadNumber(perfPayloads, 'renderer_event_loop_lag', 'lagMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_EVENT_LOOP_LAG_MS);
-    expect(maxPayloadNumber(perfPayloads, 'renderer_long_task', 'durationMs'), evidenceMessage).toBeLessThanOrEqual(MAX_RENDERER_LONG_TASK_MS);
-    expect(delegatedPerf.ownerMode, evidenceMessage).toBe('standalone');
-
-    await settleHeadlessHerdWorkflows(page);
   });
 
   test('standalone owner serves delegated headless commands from isolated test paths', async ({ testDir }) => {
@@ -251,7 +257,9 @@ test.describe('Headless thundering herd', () => {
       expect(Array.isArray(queueStatus.running)).toBe(true);
       expect(Array.isArray(queueStatus.queued)).toBe(true);
     } finally {
-      await ownerApp.close().catch(() => undefined);
+      await terminateHeadlessOwnersForTestDir(testDir);
+      await closeElectronApp(ownerApp).catch(() => undefined);
+      await terminateHeadlessOwnersForTestDir(testDir);
     }
   });
 });

@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import * as path from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { resolveRepoRoot } from '@invoker/contracts';
 
@@ -33,6 +33,78 @@ export async function runHeadlessClient(testDir: string, args: string[]): Promis
     env: headlessTestEnv(testDir),
     maxBuffer: 10 * 1024 * 1024,
   });
+}
+
+async function readProcFile(pid: string, name: 'cmdline' | 'environ'): Promise<Buffer | null> {
+  try {
+    return await readFile(path.join('/proc', pid, name));
+  } catch {
+    return null;
+  }
+}
+
+function procFields(buffer: Buffer | null): string[] {
+  return buffer?.toString('utf8').split('\0').filter(Boolean) ?? [];
+}
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processIsRunning(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return !processIsRunning(pid);
+}
+
+async function headlessOwnerPidsForTestDir(testDir: string): Promise<number[]> {
+  if (process.platform !== 'linux') return [];
+  const entries = await readdir('/proc', { withFileTypes: true });
+  const pids: number[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+    const [cmdline, environ] = await Promise.all([
+      readProcFile(entry.name, 'cmdline'),
+      readProcFile(entry.name, 'environ'),
+    ]);
+    const args = procFields(cmdline);
+    if (!args.includes('--headless') || !args.includes('owner-serve')) continue;
+    if (!procFields(environ).includes(`INVOKER_DB_DIR=${testDir}`)) continue;
+    pids.push(Number(entry.name));
+  }
+  return [...new Set(pids)].sort((a, b) => b - a);
+}
+
+export async function terminateHeadlessOwnersForTestDir(testDir: string): Promise<void> {
+  const pids = await headlessOwnerPidsForTestDir(testDir);
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // Already gone.
+    }
+  }
+  const stillRunning: number[] = [];
+  for (const pid of pids) {
+    if (!await waitForExit(pid, 2_000)) {
+      stillRunning.push(pid);
+    }
+  }
+  for (const pid of stillRunning) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
 }
 
 export function parseWorkflowId(stdout: string): string {
