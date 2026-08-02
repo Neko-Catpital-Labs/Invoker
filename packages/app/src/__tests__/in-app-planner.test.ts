@@ -467,6 +467,30 @@ describe('planning chat', () => {
     expect(loadGeneratedPlan).not.toHaveBeenCalled();
   });
 
+  it('does not parse discarded YAML on unauthorized override turns', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sessions = createInAppPlanningChatSessions();
+    const invalidDraft = 'Here is a sketch.\n\n```yaml\n: invalid: yaml: {{{\n```';
+
+    const result = await sendPlanningChatMessage({
+      message: 'What would this involve?',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+      plannerReplyOverride: async () => invalidDraft,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      reply: invalidDraft,
+      draftPlanAvailable: false,
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('does not search an earlier draft when submitting after a summary-only turn', async () => {
     const workingDir = mkdtempSync(join(tmpdir(), 'in-app-draft-'));
     try {

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Reproduces the CI "Verify Playwright shard inventory" step locally so the
 // playwright / N-of-9 shard regression cannot recur silently. It asserts that
-// every packages/app/e2e spec is assigned to exactly one Playwright shard:
-// no spec missing from the matrix, no spec listed that does not exist, and no
-// spec assigned to more than one shard.
+// every automated packages/app/e2e spec is assigned to exactly one Playwright
+// shard: no spec missing from the matrix, no spec listed that does not exist,
+// and no spec assigned to more than one shard.
 //
 // The playwright / 8-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
@@ -18,6 +18,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import YAML from 'yaml';
+
+// Manual-only proof specs that intentionally require live local credentials or
+// tools are excluded from CI inventory. They stay runnable by explicit file path.
+const MANUAL_ONLY_PLAYWRIGHT_SPECS = new Set([
+  'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+]);
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.yml');
@@ -39,6 +45,7 @@ function main() {
   const discovered = readdirSync(e2eDir)
     .filter((file) => file.endsWith('.spec.ts'))
     .map((file) => `e2e/${file}`)
+    .filter((file) => !MANUAL_ONLY_PLAYWRIGHT_SPECS.has(file))
     .sort();
 
   const listedSet = new Set(listed);
@@ -56,7 +63,7 @@ function main() {
   }
 
   console.log(
-    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} spec files each assigned to exactly one shard.`,
+    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} automated spec files each assigned to exactly one shard.`,
   );
 }
 

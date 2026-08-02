@@ -905,13 +905,18 @@ export async function sendPlanningChatMessage(
           ? []
           : activeSession.conversation.lastTurnReasoning;
         const reasoning = reasoningParts.length > 0 ? reasoningParts.join('\n\n') : undefined;
+        const draftingAuthorized = isDraftingAuthorized(message, messagesBeforeTurn);
+        let immediateDraftPlanText: string | null | undefined = null;
+        if (draftingAuthorized) {
+          immediateDraftPlanText = deps.plannerReplyOverride
+            ? extractYamlPlan(reply)
+            : activeSession.conversation.lastTurnDraftPlanText;
+        }
         const result = evaluatePlanningTurn({
           userMessage: message,
           messagesBeforeTurn,
           assistantReply: reply,
-          immediateDraftPlanText: deps.plannerReplyOverride
-            ? extractYamlPlan(reply)
-            : activeSession.conversation.lastTurnDraftPlanText,
+          immediateDraftPlanText,
         });
         if (result.kind === 'message') {
           activeSession.status = hasDraftPlan(activeSession)
