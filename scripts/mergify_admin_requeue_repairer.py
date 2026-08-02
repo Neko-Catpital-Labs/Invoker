@@ -83,7 +83,7 @@ class AdminBypassRepairer:
             start_head,
             end_head,
             repair_commits=repair_commits,
-            errors=invalid_repair_errors(value, pr),
+            errors=invalid_repair_errors(value, pr.base_ref_name),
         )
 
     def blocked_outcome(
@@ -302,11 +302,11 @@ class AdminBypassRepairer:
                 end_head,
                 repair_commits=repair_commits,
             )
-        if is_prereq_split_validation(validation, pr):
+        if is_prereq_split_validation(validation, pr.base_ref_name):
             try:
                 created = create_repair_prerequisite(
                     self.gh, self.ledger, self.logger, self.repo, work_root,
-                    pr, check_name, start_head, repair_commits, now,
+                    pr.number, pr.head_ref_oid, check_name, start_head, repair_commits, now,
                 )
             finally:
                 git_output(work_root, "checkout", "-B", pr.head_ref_name, start_head)

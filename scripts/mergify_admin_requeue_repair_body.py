@@ -8,13 +8,13 @@ from typing import Mapping, Sequence
 
 try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
-    from .mergify_admin_requeue_model import Ledger, PrSnapshot
+    from .mergify_admin_requeue_model import Ledger
     from .mergify_admin_requeue_plan import TRUNK
     from .mergify_admin_requeue_snapshot import GhClient, run_logged
     from .pr_worker_safe_push import safe_push
 except ImportError:
     from mergify_admin_requeue_logger import AdminBypassLogger
-    from mergify_admin_requeue_model import Ledger, PrSnapshot
+    from mergify_admin_requeue_model import Ledger
     from mergify_admin_requeue_plan import TRUNK
     from mergify_admin_requeue_snapshot import GhClient, run_logged
     from pr_worker_safe_push import safe_push
@@ -190,8 +190,8 @@ def is_proof_tooling_policy_validation(value: Mapping[str, object]) -> bool:
     return bool(errors) and set(errors).issubset({PROOF_POLICY_LANE_ERROR, PROOF_TOOLING_POLICY_UNIT_ERROR})
 
 
-def is_prereq_split_validation(value: Mapping[str, object], pr: PrSnapshot) -> bool:
-    return pr.base_ref_name == TRUNK and is_proof_tooling_policy_validation(value)
+def is_prereq_split_validation(value: Mapping[str, object], base_ref_name: str) -> bool:
+    return base_ref_name == TRUNK and is_proof_tooling_policy_validation(value)
 
 
 def is_manual_split_validation(value: Mapping[str, object]) -> bool:
@@ -213,29 +213,29 @@ def is_manual_split_validation(value: Mapping[str, object]) -> bool:
     )
 
 
-def invalid_repair_errors(value: Mapping[str, object], pr: PrSnapshot) -> list[str]:
+def invalid_repair_errors(value: Mapping[str, object], base_ref_name: str) -> list[str]:
     errors = [str(error) for error in value.get("errors", [])]
-    if is_proof_tooling_policy_validation(value) and pr.base_ref_name != TRUNK:
+    if is_proof_tooling_policy_validation(value) and base_ref_name != TRUNK:
         errors = [*errors, NON_TRUNK_PREREQ_ERROR]
-    if is_manual_split_validation(value) and pr.base_ref_name != TRUNK:
+    if is_manual_split_validation(value) and base_ref_name != TRUNK:
         errors = [*errors, NON_TRUNK_MANUAL_SPLIT_ERROR]
     return errors
 
 
-def prerequisite_branch_name(pr: PrSnapshot, start_head: str) -> str:
-    return f"stack/pr-babysit-prereq-{pr.number}-{start_head[:7]}"
+def prerequisite_branch_name(pr_number: int, start_head: str) -> str:
+    return f"stack/pr-babysit-prereq-{pr_number}-{start_head[:7]}"
 
 
-def prerequisite_title(pr: PrSnapshot, check_name: str) -> str:
-    return f"[PR babysit] Tooling-policy repair prerequisite for #{pr.number}: {check_name}"
+def prerequisite_title(pr_number: int, check_name: str) -> str:
+    return f"[PR babysit] Tooling-policy repair prerequisite for #{pr_number}: {check_name}"
 
 
-def prerequisite_body(pr: PrSnapshot, check_name: str) -> str:
+def prerequisite_body(pr_number: int, check_name: str) -> str:
     return (
         "## Summary\n\n"
         "Worker-generated tooling-policy repair.\n\n"
         "## Review Claim\n\n"
-        f"This PR carries the worker-generated tooling-policy repair that unblocks {check_name} on #{pr.number}.\n\n"
+        f"This PR carries the worker-generated tooling-policy repair that unblocks {check_name} on #{pr_number}.\n\n"
         "## Review Lane\n\n"
         "- policy\n\n"
         "## Review Unit\n\n"
@@ -268,15 +268,16 @@ def create_repair_prerequisite(
     logger: AdminBypassLogger,
     repo: str,
     cwd: Path,
-    pr: PrSnapshot,
+    pr_number: int,
+    head_sha: str,
     check_name: str,
     start_head: str,
     repair_commits: Sequence[str],
     now: int | None,
 ) -> dict[str, object]:
-    branch_name = prerequisite_branch_name(pr, start_head)
-    title = prerequisite_title(pr, check_name)
-    body = prerequisite_body(pr, check_name)
+    branch_name = prerequisite_branch_name(pr_number, start_head)
+    title = prerequisite_title(pr_number, check_name)
+    body = prerequisite_body(pr_number, check_name)
     git_output(cwd, "checkout", "-B", branch_name, f"origin/{TRUNK}")
     git_output(cwd, "reset", "--hard", f"origin/{TRUNK}")
     for commit in repair_commits:
@@ -293,8 +294,8 @@ def create_repair_prerequisite(
     gh.edit_label(repo, prereq_number, add="admin-bypass")
     ledger.record(
         "repair-prereq-created",
-        pr.number,
-        pr.head_ref_oid,
+        pr_number,
+        head_sha,
         check_name,
         now,
         meta={"prNumber": prereq_number, "branch": branch_name},
@@ -302,7 +303,7 @@ def create_repair_prerequisite(
     logger.trace(
         "admin-bypass-repair-prereq-created",
         repo=repo,
-        pr_number=pr.number,
+        pr_number=pr_number,
         check_name=check_name,
         prereq_pr_number=prereq_number,
         prereq_branch=branch_name,
