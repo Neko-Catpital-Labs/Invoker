@@ -423,8 +423,15 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
     let payload: string;
     let agentSessionId: string | undefined;
     const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+    const legacyFallbackAgentName = 'claude';
+    if (request.actionType === 'ai_task' && !this.agentRegistry && executionAgent !== legacyFallbackAgentName) {
+      throw new Error(
+        `Unable to resolve requested execution agent "${executionAgent}": ` +
+        `no configured agent set was supplied for SSH execution.`,
+      );
+    }
     const effectiveAgentName = request.actionType === 'ai_task'
-      ? (this.agentRegistry ? executionAgent : 'claude')
+      ? (this.agentRegistry ? executionAgent : legacyFallbackAgentName)
       : undefined;
 
     if (request.actionType === 'command') {
@@ -450,7 +457,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
         agentSessionId = session.sessionId;
         payload = `claude ${session.cliArgs.map(a => this.shellQuote(a)).join(' ')}`;
         bench('SshExecutor.payload.built', {
-          executionAgent: 'claude',
+          executionAgent: legacyFallbackAgentName,
           hasAgentSessionId: !!agentSessionId,
         });
       }

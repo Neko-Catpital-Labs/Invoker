@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import { AgentRegistry } from '../agent-registry.js';
+import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
@@ -110,6 +112,52 @@ describe('SshExecutor pre-flight validation', () => {
     const handle = await ssh.start(req);
     expect(handle).toBeDefined();
     expect(handle.executionId).toBeDefined();
+  });
+
+  it('raises for an explicit non-claude agent when no configured set is supplied', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+
+    await expect(ssh.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        workspacePath: '/tmp/test-workspace',
+        executionAgent: 'codex',
+      },
+    }))).rejects.toThrow(/codex/);
+  });
+
+  it('uses the requested agent when it resolves through the registry', async () => {
+    const registry = new AgentRegistry();
+    registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      agentRegistry: registry,
+    }) as any;
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      async (_executionId: string, _request: WorkRequest, handle: any) => handle,
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        workspacePath: '/tmp/test-workspace',
+        executionAgent: 'codex',
+      },
+    }));
+
+    const script = spawnStub.mock.calls[0]![3] as string;
+    expect(script).toContain('codex-test');
+    expect(script).not.toContain('claude --session-id');
   });
 
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
