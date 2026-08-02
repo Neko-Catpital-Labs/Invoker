@@ -254,7 +254,7 @@ describe('Slack plan-intent confirmation repro', () => {
     expect(mockSpawn).toHaveBeenCalledTimes(2);
   });
 
-  it.fails('does not let a second plan-intent ask silently replace an unanswered one in the same thread', async () => {
+  it('does not let a second plan-intent ask silently replace an unanswered one in the same thread', async () => {
     const say = vi.fn().mockResolvedValue({ ts: 'clobber-first-message' });
     await handler(surface, 'app_mention')({
       event: { text: '<@UBOT> /plan add feature A', ts: 'clobber-thread', user: 'U_TEST', channel: 'C_LOBBY' },
@@ -290,7 +290,7 @@ describe('Slack plan-intent confirmation repro', () => {
     expect(JSON.stringify(mockSpawn.mock.calls[0])).not.toContain('feature B');
   });
 
-  it.fails('lets Approve be clicked again if drafting the plan itself fails', async () => {
+  it('lets Approve be clicked again if drafting the plan itself fails', async () => {
     const say = vi.fn().mockResolvedValue({ ts: 'fail-intent-message' });
     await handler(surface, 'app_mention')({
       event: { text: '<@UBOT> /plan add feature A', ts: 'fail-thread', user: 'U_TEST', channel: 'C_LOBBY' },

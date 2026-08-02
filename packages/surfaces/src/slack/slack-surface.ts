@@ -902,7 +902,27 @@ export class SlackSurface implements Surface {
       this.slackSessionRepo?.deletePendingConfirmation(action.value);
       this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] accepted key=${action.value}`);
       await respond?.({ text: '✅ Planning for execution.', replace_original: true });
-      await this.startPlanIntent(pending, this.lobbyButtonSay(body, respond), action.value);
+      const say = this.lobbyButtonSay(body, respond);
+      try {
+        await this.startPlanIntent(pending, say, action.value);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log('slack', 'error', `[PLAN_INTENT_CONFIRM] drafting failed key=${action.value}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+        this.pendingConfirms.set(action.value, pending);
+        this.slackSessionRepo?.createPendingConfirmation({
+          confirmKey: action.value,
+          threadTs: action.value,
+          channelId: pending.channel,
+          userId: pending.userId,
+          kind: pending.kind,
+          payload: pending,
+        });
+        await this.sayWithRateLimitRetry(say, {
+          text: `Planning failed: ${message}. Click Approve above to try again.`,
+          thread_ts: action.value,
+          blocks: this.buildPlanIntentBlocks(action.value) as never,
+        });
+      }
     });
 
     this.app.action('lobby_continue_conversation', async ({ action, body, ack, respond }) => {
@@ -1588,6 +1608,14 @@ export class SlackSurface implements Surface {
     pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
     say: SayFn,
   ): Promise<void> {
+    const existing = this.getPendingConfirm(threadTs);
+    if (existing?.kind === 'plan_intent') {
+      await say({
+        text: "There's already a pending planning question in this thread. Resolve it above (Plan for execution / No planning) before asking again.",
+        thread_ts: threadTs,
+      });
+      return;
+    }
     this.pendingConfirms.set(threadTs, pending);
     this.slackSessionRepo?.createPendingConfirmation({
       confirmKey: threadTs,
