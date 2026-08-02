@@ -159,6 +159,32 @@ describe('SshExecutor pre-flight validation', () => {
 });
 
 describe('SshExecutor managed workspace mode', () => {
+  it('rejects a non-default executionAgent when no registry is available', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+    const execRemoteCapture = vi.spyOn(ssh, 'execRemoteCapture').mockResolvedValue('');
+    const spawnRemote = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      async (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'run remotely',
+        executionAgent: 'custom-agent',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(/custom-agent/);
+    expect(execRemoteCapture).not.toHaveBeenCalled();
+    expect(spawnRemote).not.toHaveBeenCalled();
+  });
+
   it('happy path: creates worktree, runs command, sets workspacePath and branch', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
