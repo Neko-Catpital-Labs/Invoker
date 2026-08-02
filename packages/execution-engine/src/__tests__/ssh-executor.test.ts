@@ -100,6 +100,26 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws with the requested agent name when an explicit executionAgent has no registry', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        executionAgent: 'qwen',
+        workspacePath: '/tmp/workspace',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "qwen"/,
+    );
+  });
+
   it('does not throw for reconciliation requests', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
