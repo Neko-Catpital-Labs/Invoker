@@ -10,6 +10,7 @@
  */
 
 import { useState, useCallback, useMemo, useEffect, useRef, useLayoutEffect, type RefObject } from 'react';
+import { flushSync } from 'react-dom';
 import yaml from 'js-yaml';
 import type { ActionGraphNode, ExecutionDefaults, ExecutionHarnessOption, InAppPlanningSessionStatus, InAppPlanningSessionSummary, InvokerSetupRequest, InvokerSetupResult, PlanningConfirmationMode, ReviewGateQueryResponse, RuntimeStatus, StartReadyFreshBaseScope, StartReadyRequest, StartReadyResult, TerminalOutputEvent, TerminalSessionDescriptor, WorkflowMutationFailedEvent } from '@invoker/contracts';
 import type { TaskState, TaskReplacementDef, ExternalGatePolicyUpdate, WorkflowMeta, WorkflowStatus, WorkerActionSummary, WorkerLogEntry, WorkerStatusEntry } from './types.js';
@@ -2297,11 +2298,13 @@ export function App() {
 
   const handleWorkflowClick = useCallback((workflowId: string) => {
     armSuppressDagSurfaceDismiss();
-    setWorkflowSelectionDismissed(false);
-    setSelectedWorkflowId(workflowId);
-    setSelectedTaskId(null);
-    setContextMenu(null);
-    setWorkflowContextMenu(null);
+    flushSync(() => {
+      setWorkflowSelectionDismissed(false);
+      setSelectedWorkflowId(workflowId);
+      setSelectedTaskId(null);
+      setContextMenu(null);
+      setWorkflowContextMenu(null);
+    });
   }, [armSuppressDagSurfaceDismiss]);
 
   const handleWorkflowContextMenu = useCallback((event: React.MouseEvent<Element>, workflowId: string) => {
