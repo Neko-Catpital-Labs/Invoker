@@ -47,6 +47,10 @@ const POLICY = {
     severity: 'warning',
     message: 'A refactor-lane PR adds a symbol with no reference anywhere else in the diff; confirm the extraction also re-pointed its call sites in this PR.',
   },
+  'refactor-multiple-symbols': {
+    severity: 'warning',
+    message: 'A refactor-lane PR touches more than one top-level symbol in this diff; confirm this is one cohesive move (see the dependency-cluster exception in the review-compression skill\'s Decomposition & Extraction Refactors section) or split into separate PRs.',
+  },
 };
 
 function stripPrefix(marker) {
@@ -299,7 +303,7 @@ function collectRefactorDeadSymbolCandidates(file) {
   return candidates;
 }
 
-function collectRefactorDeadSymbolFindings(files) {
+function collectRefactorFindings(files) {
   const candidates = files.flatMap((file) => collectRefactorDeadSymbolCandidates(file));
   if (candidates.length === 0) {
     return [];
@@ -310,6 +314,11 @@ function collectRefactorDeadSymbolFindings(files) {
     const occurrences = haystack.match(new RegExp(`\\b${candidate.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'g'));
     if (!occurrences || occurrences.length <= 1) {
       findings.push(makeFinding('refactor-dead-symbol', candidate.path, candidate.line, candidate.source));
+    }
+  }
+  if (candidates.length > 1) {
+    for (const candidate of candidates) {
+      findings.push(makeFinding('refactor-multiple-symbols', candidate.path, candidate.line, candidate.source));
     }
   }
   return findings;
@@ -333,7 +342,7 @@ export function collectDiffAtomicityFindings(options = {}) {
   const findings = [];
 
   if (reviewLane === 'refactor') {
-    findings.push(...collectRefactorDeadSymbolFindings(files));
+    findings.push(...collectRefactorFindings(files));
   }
 
   const hasGenerated = files.some((file) => file.category === 'generated');
