@@ -21,6 +21,12 @@ vi.mock('@xyflow/react', async () => {
 // The App module and its grace constant must resolve after the mock installs.
 const { App, SELECTED_WORKFLOW_VANISH_GRACE_MS } = await import('../App.js');
 
+// Full <App /> selection-churn regressions can exceed Vitest's default 5s
+// timeout on the constrained Runner_Vitest host, especially the case that must
+// wait through SELECTED_WORKFLOW_VANISH_GRACE_MS. Keep the behavioral assertions
+// intact and use the same file-local budget as adjacent App regression suites.
+vi.setConfig({ testTimeout: 20_000 });
+
 const workflowA: WorkflowMeta = { id: 'wf-a', name: 'Workflow A', status: 'running' };
 const workflowB: WorkflowMeta = { id: 'wf-b', name: 'Workflow B', status: 'running' };
 

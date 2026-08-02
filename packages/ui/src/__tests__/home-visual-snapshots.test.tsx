@@ -19,6 +19,12 @@ vi.mock('@xyflow/react', async () => {
 
 const { App } = await import('../App.js');
 
+// These are full <App /> structural snapshot tests. On the constrained
+// Runner_Vitest host they can exceed Vitest's default 5s per-test timeout
+// even when every assertion is making progress, so match the neighboring
+// full-App regression suites' file-local budget.
+vi.setConfig({ testTimeout: 20_000 });
+
 describe('Visual proof snapshots', () => {
   let mock: MockInvoker;
 
