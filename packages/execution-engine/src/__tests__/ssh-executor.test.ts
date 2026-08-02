@@ -10,6 +10,7 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -70,6 +71,69 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 describe('SshExecutor pre-flight validation', () => {
+  it('throws instead of falling back to claude when an explicit ai_task agent has no registry', async () => {
+    spawnedProcesses = [];
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    });
+
+    await expect(ssh.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    }))).rejects.toThrow(
+      /Execution agent "codex".*configured agent set.*lacked that name/,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
+  it('uses the registry-backed SSH payload when the requested ai_task agent resolves', async () => {
+    spawnedProcesses = [];
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: registerBuiltinAgents(),
+    }) as any;
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return '__INVOKER_BASE_REF__=origin/main\n__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1';
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/root';
+      if (script.includes('worktree list --porcelain')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    let capturedScript = '';
+    vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any, script: string) => {
+        capturedScript = script;
+        return handle;
+      },
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    }));
+
+    expect(capturedScript).toContain('codex');
+    expect(capturedScript).not.toContain('claude --session-id');
+  });
+
   it('throws when SSH key file does not exist', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
