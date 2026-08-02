@@ -10,20 +10,37 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
-import { normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
+import { normalizeWorkflowBaseBranch, PINNED_WORKFLOW_BASE_BRANCH } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
-/** Workflow base branches default to master, while explicit stack bases are preserved. */
-function resolveDefaultBaseBranch(plan: PlanDefinition): string {
-  return normalizeWorkflowBaseBranch(plan.baseBranch);
+interface PlanDefaultOptions {
+  preserveExplicitBaseBranch?: boolean;
+}
+
+function hasWorkflowExternalDependencies(plan: PlanDefinition): boolean {
+  return Array.isArray(plan.externalDependencies) && plan.externalDependencies.length > 0;
+}
+
+/** Standalone plans pin to master; stack-linked workflows preserve their explicit upstream base. */
+function resolveDefaultBaseBranch(plan: PlanDefinition, options: PlanDefaultOptions = {}): string {
+  if (options.preserveExplicitBaseBranch || hasWorkflowExternalDependencies(plan)) {
+    return normalizeWorkflowBaseBranch(plan.baseBranch);
+  }
+  if ((plan.baseBranch?.trim() ?? '') === '') {
+    return normalizeWorkflowBaseBranch(plan.baseBranch);
+  }
+  return PINNED_WORKFLOW_BASE_BRANCH;
 }
 
 /**
  * Top-level plan defaults aligned with {@link parsePlan} (merge target, feature branch, onFinish).
  * Use when a {@link PlanDefinition} is built outside the YAML parser — e.g. GUI `yaml.load` + IPC.
  */
-export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinition {
+export function applyPlanDefinitionDefaults(
+  plan: PlanDefinition,
+  options: PlanDefaultOptions = {},
+): PlanDefinition {
   const slug = plan.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const fb = plan.featureBranch;
   const featureBranch = typeof fb === 'string' && fb.trim() !== '' ? fb.trim() : `plan/${slug}`;
@@ -31,7 +48,7 @@ export function applyPlanDefinitionDefaults(plan: PlanDefinition): PlanDefinitio
   return {
     ...plan,
     onFinish: plan.onFinish ?? 'pull_request',
-    baseBranch: resolveDefaultBaseBranch(plan),
+    baseBranch: resolveDefaultBaseBranch(plan, options),
     featureBranch,
   };
 }
@@ -299,7 +316,11 @@ function assertNoLegacyRoutingKeys(ownerLabel: string, value: object): void {
  * Parse a YAML string into a validated PlanDefinition.
  * Throws PlanParseError if validation fails.
  */
-function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
+function parseRawPlan(
+  raw: RawPlan,
+  ownerLabel = 'Plan',
+  options: PlanDefaultOptions = {},
+): PlanDefinition {
   if (!raw || typeof raw !== 'object') {
     throw new PlanParseError(`${ownerLabel} must be a YAML object`);
   }
@@ -456,7 +477,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     intermediateRepoUrl: raw.intermediateRepoUrl,
     externalDependencies: topLevelExternalDependencies,
     tasks,
-  });
+  }, options);
 }
 
 function inheritStackWorkflowDefaults(stack: RawPlanBundle, workflow: RawPlan): RawPlan {
@@ -531,7 +552,11 @@ export function parsePlanSubmissionBundle(yamlContent: string): PlanSubmissionBu
     if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) {
       throw new PlanParseError(`Workflow at index ${index} must be an object with a "name" field`);
     }
-    return parseRawPlan(inheritStackWorkflowDefaults(raw, workflow), `Workflow ${index + 1}`);
+    return parseRawPlan(
+      inheritStackWorkflowDefaults(raw, workflow),
+      `Workflow ${index + 1}`,
+      { preserveExplicitBaseBranch: true },
+    );
   });
 
   return { name: raw.name, plans, isStack: true };
