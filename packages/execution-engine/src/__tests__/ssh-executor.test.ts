@@ -100,6 +100,24 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws naming an explicit executionAgent when no registry is supplied', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Implement the task',
+        description: 'test',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(/execution agent "codex".*no configured agent set/s);
+  });
+
   it('does not throw for reconciliation requests', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
