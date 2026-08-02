@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, buildRemoteAgentCommand, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -561,6 +561,20 @@ describe('remote agent dispatch via registry', () => {
     // Must NOT contain codex-specific flags
     expect(spec.args).not.toContain('exec');
     expect(spec.args).not.toContain('--full-auto');
+  });
+
+  it('throws with the requested agent name when no configured set is available', () => {
+    expect(() => buildRemoteAgentCommand('fix the merge conflict', undefined, 'codex')).toThrow(
+      /requested execution agent "codex".*no configured agent set/i,
+    );
+  });
+
+  it('keeps using the resolved registry-backed remote command', () => {
+    const result = buildRemoteAgentCommand('fix the merge conflict', registerBuiltinAgents(), 'codex');
+
+    expect(result.shellCommand).toContain('codex ');
+    expect(result.shellCommand).toContain('exec');
+    expect(result.shellCommand).not.toContain('claude --session-id');
   });
 });
 

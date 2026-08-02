@@ -10,6 +10,7 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -110,6 +111,58 @@ describe('SshExecutor pre-flight validation', () => {
     const handle = await ssh.start(req);
     expect(handle).toBeDefined();
     expect(handle.executionId).toBeDefined();
+  });
+
+  it('throws with the requested agent name when an explicit SSH ai_task agent has no registry', async () => {
+    spawnedProcesses = [];
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '~/repo',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "codex".*no configured agent set/i,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
+  it('keeps using the resolved registry-backed SSH ai_task command', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      agentRegistry: registerBuiltinAgents(),
+    }) as any;
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: WorkRequest, handle: any) => handle,
+    );
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '~/repo',
+      },
+    });
+
+    const handle = await ssh.start(req);
+    const runScript = spawnStub.mock.calls[0]![3] as string;
+
+    expect(handle.agentSessionId).toBeDefined();
+    expect(runScript).toContain('codex');
+    expect(runScript).toContain('exec');
+    expect(runScript).not.toContain('claude --session-id');
   });
 
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
