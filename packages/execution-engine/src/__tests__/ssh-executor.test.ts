@@ -100,6 +100,27 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws when an explicit non-default agent has no configured set', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'g2',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Unable to resolve execution agent "g2".*no configured agent set.*lacked that name/s,
+    );
+  });
+
   it('does not throw for reconciliation requests', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

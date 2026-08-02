@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, buildRemoteAgentCommand, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -367,6 +367,20 @@ describe('agent dispatch — codex vs claude', () => {
       const spec = agent.buildFixCommand!('fix the bug');
       expect(spec.cmd).toBe('claude');
       expect(spec.args).toContain('-p');
+    });
+
+    it('buildRemoteAgentCommand uses a resolved requested agent', () => {
+      const registry = registerBuiltinAgents();
+      const result = buildRemoteAgentCommand('fix the bug', registry, 'codex');
+      expect(result.shellCommand).toContain('codex');
+      expect(result.shellCommand).not.toContain('claude --session-id');
+      expect(result.sessionId).toBeDefined();
+    });
+
+    it('buildRemoteAgentCommand throws when an explicit agent has no configured set', () => {
+      expect(() => buildRemoteAgentCommand('fix the bug', undefined, 'g2')).toThrow(
+        /Unable to resolve execution agent "g2".*no configured agent set.*lacked that name/s,
+      );
     });
   });
 

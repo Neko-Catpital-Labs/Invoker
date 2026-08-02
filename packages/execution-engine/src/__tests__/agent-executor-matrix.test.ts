@@ -16,6 +16,8 @@ import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, TerminalSpec } from '../executor.js';
 
 // ── Mock agent for testing alternative stdinMode + args ──────
 
@@ -58,6 +60,35 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
     callbackUrl: '',
     timestamps: {},
   } as unknown as WorkRequest;
+}
+
+function makeAiRequest(inputs: Partial<WorkRequest['inputs']> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Do the work', ...inputs },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+class TestExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'test';
+
+  async start(_request: WorkRequest): Promise<ExecutorHandle> {
+    throw new Error('Not implemented');
+  }
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
+  getRestoredTerminalSpec(): TerminalSpec { throw new Error('Not implemented'); }
+  async destroyAll(): Promise<void> {}
+
+  testBuildCommandAndArgs(request: WorkRequest, opts?: { agentRegistry?: AgentRegistry }) {
+    return this.buildCommandAndArgs(request, opts);
+  }
 }
 
 // ── Agent definitions for the matrix ─────────────────────────
@@ -268,6 +299,25 @@ describe('Agent × Executor matrix', () => {
       // We have at least one 'ignore' and one 'pipe'
       expect(modes).toContain('ignore');
       expect(modes).toContain('pipe');
+    });
+
+    it('buildCommandAndArgs uses a resolved requested agent', () => {
+      const executor = new TestExecutor();
+      const result = executor.testBuildCommandAndArgs(
+        makeAiRequest({ executionAgent: 'mock-pipe' }),
+        { agentRegistry: registry },
+      );
+      expect(result.cmd).toBe('mock-agent');
+      expect(result.fullPrompt).toBe('Do the work');
+    });
+
+    it('buildCommandAndArgs throws when an explicit agent has no configured set', () => {
+      const executor = new TestExecutor();
+      expect(() => executor.testBuildCommandAndArgs(
+        makeAiRequest({ executionAgent: 'g2' }),
+      )).toThrow(
+        /Unable to resolve execution agent "g2".*no configured agent set.*lacked that name/s,
+      );
     });
   });
 });
