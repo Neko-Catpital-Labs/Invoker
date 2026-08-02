@@ -426,7 +426,7 @@ export function createMockInvoker(
     approveMerge: vi.fn(async () => accepted('invoker:approve-merge')),
     resolveConflict: vi.fn(async () => accepted('invoker:resolve-conflict')),
     fixWithAgent: vi.fn(async () => accepted('invoker:fix-with-agent')),
-    setMergeMode: vi.fn(async () => accepted('invoker:set-merge-mode')),
+    setWorkflowMergeMode: vi.fn(async () => accepted('invoker:set-workflow-merge-mode')),
     checkPrStatuses: vi.fn(async () => {}),
     cancelTask: vi.fn(async () => accepted('invoker:cancel-task')),
     cancelWorkflow: vi.fn(async () => accepted('invoker:cancel-workflow')),

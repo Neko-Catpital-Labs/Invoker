@@ -3780,7 +3780,7 @@ export function App() {
     async (workflowId: string, mergeMode: 'manual' | 'automatic' | 'external_review') => {
       if (!invoker) return;
       try {
-        const result = await invoker.setMergeMode(workflowId, mergeMode);
+        const result = await invoker.setWorkflowMergeMode(workflowId, mergeMode);
         trackAcceptedMutation(result);
       } catch (err) {
         notifyMutationError('Failed to set merge mode:', err);

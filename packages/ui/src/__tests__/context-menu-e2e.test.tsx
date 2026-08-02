@@ -48,6 +48,8 @@ const workflows: WorkflowMeta[] = [
 
 const FLOATING_GRAPH_PANEL_LOCAL_Z_INDEX = 10;
 const APP_CONTEXT_MENU_TEST_TIMEOUT_MS = 20_000;
+// Matches useTasks' test-visible graph event batch window so mock updates flush under act.
+const TASK_GRAPH_EVENT_FLUSH_MS = 125;
 
 describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS }, () => {
   let mock: MockInvoker;
@@ -73,7 +75,10 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
   ) {
     render(<App />);
     fireEvent.click(await screen.findByTestId('sidebar-planning'));
-    act(() => mock.setTasks(tasks, workflowList));
+    await act(async () => {
+      mock.setTasks(tasks, workflowList);
+      await new Promise((resolve) => setTimeout(resolve, TASK_GRAPH_EVENT_FLUSH_MS));
+    });
     expect(await screen.findByTestId('workflow-node-wf-1')).toBeInTheDocument();
   }
 
@@ -379,8 +384,11 @@ describe('Context menu (component)', { timeout: APP_CONTEXT_MENU_TEST_TIMEOUT_MS
 
     async function setupStack() {
       render(<App />);
-    fireEvent.click(await screen.findByTestId('sidebar-planning'));
-      act(() => mock.setTasks([upTask, downTask], stackWorkflows));
+      fireEvent.click(await screen.findByTestId('sidebar-planning'));
+      await act(async () => {
+        mock.setTasks([upTask, downTask], stackWorkflows);
+        await new Promise((resolve) => setTimeout(resolve, TASK_GRAPH_EVENT_FLUSH_MS));
+      });
       await waitFor(() => {
         expect(screen.getByTestId('workflow-node-wf-down')).toBeInTheDocument();
       });
