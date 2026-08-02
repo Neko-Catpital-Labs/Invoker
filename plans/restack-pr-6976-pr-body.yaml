@@ -1,0 +1,83 @@
+name: Restack PR 6976 after merged terminal prerequisites
+onFinish: none
+mergeMode: manual
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+description: |
+  PR #6976 currently fails the PR Body check because its branch still contains
+  prerequisite commits that have already landed on master through squash merges.
+  The live diff against master therefore includes both `contract` and `routing`
+  files while the PR body correctly declares only `Review Unit: routing`.
+
+  This operational workflow restacks the existing PR branch onto current
+  `origin/master`, preserving only the 2b commit, then validates the live PR body
+  against the restacked diff before force-with-lease updating the existing PR
+  branch.
+
+tasks:
+  - id: restack-pr-6976-branch
+    description: |
+      Restack the existing PR #6976 branch so the PR Body validator sees only the current routing slice.
+      Review claim: The existing PR branch should be rewritten to contain only the 2b routing commit on top of current master.
+      Safety invariant: The command refuses to push unless the remote branch is still at `35927dc2ef3c4176958f499cc88257802bef0554`, and uses `--force-with-lease` against that exact expected head.
+      Slice rationale: This is branch surgery for a squash-merged prerequisite, not a source-code change in this checkout.
+      Architectural effect: None; the resulting PR diff keeps the same backend routing behavior while dropping already-merged prerequisite commits from the branch ancestry.
+      Goal: Make the PR Body check pass for #6976 without bundling `contract` and `routing` review units.
+      Motivation: The live validator fails with `Review Unit "routing" cannot ship with contract files`; the contract file is from merged PR #6975.
+      Alternative considerations: Changing the PR body cannot satisfy the one-review-unit rule, and adding a local repair commit would not remove the stale stacked ancestry.
+      Implementation details: Fetch `master` and the live PR branch, detach at the remote branch, rebase commits after `1cfc6391a99fd3ecf0a1e00413e4eca060403566` onto `origin/master`, run `node scripts/validate-pr-body-local.mjs`, require the changed-file set to contain only the four 2b files, then push with an exact lease.
+      Layer: tooling-policy
+      Feature state: active
+    command: |
+      set -eu
+
+      repo="Neko-Catpital-Labs/Invoker"
+      branch="stack/EdbertChan/repro/tmux-garble-remount/terminal-garbling-2b-confirm-terminal-resize--9042edea"
+      expected_head="35927dc2ef3c4176958f499cc88257802bef0554"
+      drop_after="1cfc6391a99fd3ecf0a1e00413e4eca060403566"
+      body_file="$(mktemp)"
+      changed_file="$(mktemp)"
+      cleanup() {
+        rm -f "$body_file" "$changed_file" "${changed_file}.expected"
+      }
+      trap cleanup EXIT
+
+      git fetch origin "+refs/heads/master:refs/remotes/origin/master" "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+      remote_head="$(git rev-parse "refs/remotes/origin/${branch}")"
+      if [ "$remote_head" != "$expected_head" ]; then
+        echo "Refusing to restack: expected ${expected_head}, got ${remote_head}." >&2
+        exit 1
+      fi
+
+      git switch --detach "refs/remotes/origin/${branch}"
+      git rebase --onto origin/master "$drop_after" HEAD
+
+      gh pr view 6976 --repo "$repo" --json body -q .body > "$body_file"
+      if [ ! -d node_modules ]; then
+        pnpm install --no-frozen-lockfile --ignore-scripts
+      fi
+
+      node scripts/validate-pr-body-local.mjs --body-file "$body_file" --base master
+      git diff --name-only origin/master...HEAD | sort > "$changed_file"
+      cat > "${changed_file}.expected" <<'EOF'
+      packages/app/src/__tests__/embedded-terminal-manager.test.ts
+      packages/app/src/embedded-terminal-manager.ts
+      packages/app/src/terminal-session-ipc.ts
+      packages/execution-engine/src/executor.ts
+      EOF
+      sed -i 's/^      //' "${changed_file}.expected"
+      if ! diff -u "${changed_file}.expected" "$changed_file"; then
+        echo "Restacked diff does not match the expected #6976 routing slice." >&2
+        exit 1
+      fi
+
+      new_head="$(git rev-parse HEAD)"
+      git push --force-with-lease="refs/heads/${branch}:${expected_head}" origin "HEAD:refs/heads/${branch}"
+      git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+      if [ "$(git rev-parse "refs/remotes/origin/${branch}")" != "$new_head" ]; then
+        echo "Remote branch did not update to ${new_head}." >&2
+        exit 1
+      fi
+
+      printf 'Restacked PR #6976 to %s and validated PR Body.\n' "$new_head"
+    dependencies: []
