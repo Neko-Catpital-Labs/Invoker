@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from '../../../execution-engine/src/__tests__/fixtures/pr-6976-oauth-session-expired.js';
 import { FailureClassifier, SSH_INFRA_FAILURE_CLASSES } from '../failure-classifier.js';
 
 describe('FailureClassifier.classifyError', () => {
@@ -29,6 +30,11 @@ describe('FailureClassifier.classifyError', () => {
       + '[WARNING] Continuing with existing refs. Tasks may use stale commits.\n'
       + "ERROR: base ref 'master' not found and fallback 'origin/master' also missing\n",
     )).toBe('ssh-repo-mirror-corrupt');
+  });
+
+  it('classifies the OAuth-session-expired signature', () => {
+    expect(FailureClassifier.classifyError(PR_6976_OAUTH_SESSION_EXPIRED_ERROR))
+      .toBe('ssh-oauth-session-expired');
   });
 
   it('does not classify a bare "not a git repository" outside the bootstrap-clone phase', () => {

@@ -7,6 +7,7 @@ import type {
 } from '@invoker/data-store';
 import type { TaskState } from '@invoker/workflow-core';
 
+import { PR_6976_OAUTH_SESSION_EXPIRED_ERROR } from './fixtures/pr-6976-oauth-session-expired.js';
 import {
   buildRepoMirrorRepairScript,
   createInfraRepairTick,
@@ -442,6 +443,86 @@ describe('infra-repair worker', () => {
     const retrySubmissions = h.submissions.filter((submission) => submission.channel === INFRA_REPAIR_RETRY_TASK_CHANNEL);
     expect(retrySubmissions).toHaveLength(2);
     expect(parseInfraRepairRetryTaskMutationArgs(retrySubmissions[1]?.args ?? [])).toEqual({ taskId: 'wf-1/task-2' });
+  });
+
+  it('records an OAuth-session-expired alert without queueing any follow-up mutation', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: PR_6976_OAUTH_SESSION_EXPIRED_ERROR,
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(h.runRemoteProvisionRepairFn).not.toHaveBeenCalled();
+    expect(h.runRepoMirrorRepairFn).not.toHaveBeenCalled();
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-target',
+        subjectType: 'infra-target',
+        subjectId: 'remote-1',
+        status: 'failed',
+        payload: expect.objectContaining({
+          infraReason: 'ssh-oauth-session-expired',
+        }),
+      }),
+      expect.objectContaining({
+        workerKind: INFRA_REPAIR_WORKER_KIND,
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-1',
+        status: 'completed',
+        payload: expect.objectContaining({
+          infraReason: 'ssh-oauth-session-expired',
+        }),
+      }),
+    ]));
+  });
+
+  it('does not record a second OAuth-session-expired alert within the cooldown window', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: PR_6976_OAUTH_SESSION_EXPIRED_ERROR,
+        },
+      }),
+    ]);
+
+    await h.tick(POLL_CTX);
+
+    const targetActionWrites = () => h.actions.get(
+      `${INFRA_REPAIR_WORKER_KIND}:target:remote-1:repair:ssh-oauth-session-expired`,
+    );
+    const firstAlert = targetActionWrites();
+    expect(firstAlert?.status).toBe('failed');
+
+    h.tasks.set('wf-1/task-2', makeTask({
+      id: 'wf-1/task-2',
+      execution: {
+        error: PR_6976_OAUTH_SESSION_EXPIRED_ERROR,
+        branch: 'feature/task-2',
+        workspacePath: '~/.invoker/worktrees/repo/task-2',
+      },
+      taskStateVersion: 8,
+    }));
+
+    await h.tick({ ...POLL_CTX, tickNumber: 2 });
+
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(targetActionWrites()).toEqual(firstAlert);
+    expect(workerActions(h.actions)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        actionType: 'repair-infra-failure',
+        taskId: 'wf-1/task-2',
+        status: 'skipped',
+        payload: expect.objectContaining({
+          reason: 'alert-cooldown',
+        }),
+      }),
+    ]));
   });
 
   it('records a failed action and submits nothing when remote repair fails', async () => {
