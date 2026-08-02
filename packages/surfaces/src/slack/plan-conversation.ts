@@ -451,6 +451,14 @@ export class PlanConversation {
   private onRawPlannerOutput?: RawPlannerOutputHandler;
   private plannerRetryLimit: number;
   private plannerRetryBaseDelayMs: number;
+  // Serializes turns on this conversation. Without this, two concurrent
+  // sendMessage calls (e.g. two Slack events for the same thread arriving
+  // close together) can interleave their per-turn side-channel files
+  // (plan-drafts, plan-intent): one turn's resetPlanDraftFile/
+  // resetPlanIntentSignalFile can wipe a file the other turn already wrote
+  // but hasn't read back yet.
+  private turnInFlight = false;
+  private turnQueue: Array<() => void> = [];
   private _initialized = false;
   private _lastTurnReasoning: string[] = [];
   private _lastTurnDraftPlanText: string | null = null;
@@ -528,8 +536,28 @@ export class PlanConversation {
    * Send a user message to the planner and return its reply. Pure conversation:
    * drafting a plan never auto-submits it — submission is an explicit step
    * driven by the surface (the `submit` verb), so a stray "yes" can't ship a plan.
+   *
+   * Turns on this conversation are serialized: a call queued while another is
+   * in flight waits for it to fully finish (including reading back its own
+   * per-turn side-channel files) before starting.
    */
   async sendMessage(userMessage: string): Promise<string> {
+    if (this.turnInFlight) {
+      await new Promise<void>((resolve) => this.turnQueue.push(resolve));
+    }
+    this.turnInFlight = true;
+    // No `await` here on purpose: chaining via .finally() keeps this call's
+    // returned promise settling in lockstep with sendMessageLocked's own
+    // promise, with no added microtask tick before the planner subprocess is
+    // spawned — callers/tests that synchronize on "the process was spawned"
+    // via a single microtask wait stay correct.
+    return this.sendMessageLocked(userMessage).finally(() => {
+      this.turnInFlight = false;
+      this.turnQueue.shift()?.();
+    });
+  }
+
+  private async sendMessageLocked(userMessage: string): Promise<string> {
     const t0 = Date.now();
     const turn = this.messages.filter(m => m.role === 'user').length + 1;
     this.log('plan-conversation', 'info', `[TRACE] sendMessage() start (threadTs=${this.threadTs}, initialized=${this._initialized}, msgCount=${this.messages.length}, turn=${turn})`);
