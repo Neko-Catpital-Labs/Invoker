@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import { AgentRegistry } from '../agent-registry.js';
+import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
@@ -110,6 +112,61 @@ describe('SshExecutor pre-flight validation', () => {
     const handle = await ssh.start(req);
     expect(handle).toBeDefined();
     expect(handle.executionId).toBeDefined();
+  });
+
+  it('raises with the requested agent name when a non-default agent has no configured set', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the work',
+        executionAgent: 'omp',
+        description: 'test',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /execution agent "omp".*no configured execution agent set/i,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
+  it('builds the requested SSH payload when the agent resolves through the registry', async () => {
+    const registry = new AgentRegistry();
+    registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      agentRegistry: registry,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the work',
+        executionAgent: 'codex',
+        description: 'test',
+        workspacePath: '/tmp/workspace',
+      },
+    });
+
+    const handle = await ssh.start(req);
+    expect(handle.agentSessionId).toBeDefined();
+
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    expect(proc).toBeDefined();
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+    expect(script).toContain('codex-test');
+    expect(script).toContain('exec');
+    expect(script).not.toContain('claude --session-id');
+
+    proc.emit('close', 0, null);
+    await new Promise((r) => setTimeout(r, 50));
   });
 
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
