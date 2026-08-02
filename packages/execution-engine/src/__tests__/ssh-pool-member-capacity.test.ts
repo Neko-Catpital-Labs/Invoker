@@ -472,6 +472,124 @@ describe('execution-pool member circuit breaker', () => {
     expect(getPendingSelection(runner, 'wf-1/task-a').member.id).toBe('remote-b');
   });
 
+  it('takes a member out of rotation when a task finalizes as ssh-oauth-session-expired and routes the next task to a healthy member', async () => {
+    const failingTask = makeTask('wf-1/task-a');
+    const tasks = new Map([[failingTask.id, failingTask]]);
+    const completeByTaskId = new Map<string, (response: any) => void>();
+    const sshExecutor = {
+      type: 'ssh',
+      start: vi.fn(async (request: any) => ({
+        executionId: `exec-${request.actionId}`,
+        taskId: request.actionId,
+        workspacePath: `/remote/${request.actionId}`,
+      })),
+      onComplete: vi.fn((handle: any, cb: any) => {
+        completeByTaskId.set(handle.taskId, cb);
+      }),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const runner = makeRunner({
+      members: [
+        { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 },
+        { id: 'remote-b', type: 'ssh', maxConcurrentTasks: 1 },
+      ],
+      sshExecutor,
+      orchestrator: {
+        getTask: (id: string) => tasks.get(id) ?? null,
+        getAllTasks: () => [...tasks.values()],
+        markTaskRunningAfterLaunch: () => true,
+        handleWorkerResponse: () => [],
+        deferTask: vi.fn(),
+      },
+      persistence: {
+        logEvent: vi.fn(),
+        updateTask: vi.fn(),
+        updateAttempt: vi.fn(),
+        appendTaskOutput: vi.fn(),
+      },
+    });
+
+    const run = runner.executeTask(failingTask);
+    await vi.waitFor(() => expect(completeByTaskId.has(failingTask.id)).toBe(true));
+
+    failingTask.execution = { ...failingTask.execution, failureClass: 'ssh-oauth-session-expired' };
+    completeByTaskId.get(failingTask.id)?.({
+      requestId: `fail-${failingTask.id}`,
+      actionId: failingTask.id,
+      attemptId: failingTask.execution.selectedAttemptId,
+      status: 'failed',
+      outputs: { exitCode: 1, error: 'Failed to authenticate: OAuth session expired and could not be refreshed' },
+    });
+    await run;
+
+    expect(runner.getPoolMemberHealthSnapshot().map((h) => h.memberKey)).toContain('ssh:remote-a');
+    const nextTask = makeTask('wf-2/task-b');
+    runner.selectExecutor(nextTask);
+    expect(getPendingSelection(runner, nextTask.id).member.id).toBe('remote-b');
+  });
+
+  it('does not quarantine the member when a task finalizes failed with a different or missing failure class', async () => {
+    const failingTask = makeTask('wf-1/task-a');
+    const tasks = new Map([[failingTask.id, failingTask]]);
+    const completeByTaskId = new Map<string, (response: any) => void>();
+    const sshExecutor = {
+      type: 'ssh',
+      start: vi.fn(async (request: any) => ({
+        executionId: `exec-${request.actionId}`,
+        taskId: request.actionId,
+        workspacePath: `/remote/${request.actionId}`,
+      })),
+      onComplete: vi.fn((handle: any, cb: any) => {
+        completeByTaskId.set(handle.taskId, cb);
+      }),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(),
+      destroyAll: vi.fn(),
+    };
+    const runner = makeRunner({
+      members: [
+        { id: 'remote-a', type: 'ssh', maxConcurrentTasks: 1 },
+        { id: 'remote-b', type: 'ssh', maxConcurrentTasks: 1 },
+      ],
+      sshExecutor,
+      orchestrator: {
+        getTask: (id: string) => tasks.get(id) ?? null,
+        getAllTasks: () => [...tasks.values()],
+        markTaskRunningAfterLaunch: () => true,
+        handleWorkerResponse: () => [],
+        deferTask: vi.fn(),
+      },
+      persistence: {
+        logEvent: vi.fn(),
+        updateTask: vi.fn(),
+        updateAttempt: vi.fn(),
+        appendTaskOutput: vi.fn(),
+      },
+    });
+
+    const run = runner.executeTask(failingTask);
+    await vi.waitFor(() => expect(completeByTaskId.has(failingTask.id)).toBe(true));
+
+    failingTask.execution = { ...failingTask.execution, failureClass: 'ssh-worktree-missing' };
+    completeByTaskId.get(failingTask.id)?.({
+      requestId: `fail-${failingTask.id}`,
+      actionId: failingTask.id,
+      attemptId: failingTask.execution.selectedAttemptId,
+      status: 'failed',
+      outputs: { exitCode: 1, error: 'SSH remote script failed (exit=1, phase=run_task)' },
+    });
+    await run;
+
+    expect(runner.getPoolMemberHealthSnapshot()).toHaveLength(0);
+    const nextTask = makeTask('wf-2/task-b');
+    runner.selectExecutor(nextTask);
+    expect(getPendingSelection(runner, nextTask.id).member.id).toBe('remote-a');
+  });
+
   it('re-admits a member automatically once its cooldown expires', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-07-09T00:00:00Z'));
