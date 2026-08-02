@@ -112,6 +112,30 @@ describe('SshExecutor pre-flight validation', () => {
     expect(handle.executionId).toBeDefined();
   });
 
+  it('throws for an explicit unresolved agent without a registry instead of substituting Claude', async () => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'test',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "codex".*no configured agent set/,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
