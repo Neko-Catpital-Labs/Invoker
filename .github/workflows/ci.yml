@@ -113,13 +113,13 @@ jobs:
   # UI component suite (@invoker/ui vitest, ~2-3m). Runs on every PR for early
   # feedback AND on merge-queue refs, where `.mergify.yml` requires it — this is
   # the gate that blocks behavioral UI regressions (e.g. the sidebar navigation
-  # guard) that still type-check. Scoped to @invoker/ui on purpose: the full
-  # Vitest Workspace is red on master (worker-registry + SSH executor drift).
+  # guard) that still type-check. Scoped to @invoker/ui so ordinary PRs keep a
+  # fast UI gate while the full Vitest Workspace runs on protected refs.
   ui-vitest:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Reclaim workspace
@@ -615,7 +615,6 @@ jobs:
               e2e/ui-delta-timeline.spec.ts
               e2e/pending-review-gate-target-repo.proof.spec.ts
               e2e/workflow-status-composition.spec.ts
-              e2e/queue-running-vs-queued.spec.ts
           - name: 4-of-9
             files: >-
               e2e/startup-window-liveness.spec.ts
@@ -640,7 +639,6 @@ jobs:
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
-              e2e/planning-tmux-blank-repro.spec.ts
           - name: 7-of-9
             files: >-
               e2e/worker-tab-scroll.spec.ts
@@ -662,6 +660,8 @@ jobs:
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/queue-running-vs-queued.spec.ts
+              e2e/planning-tmux-blank-repro.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
