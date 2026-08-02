@@ -660,7 +660,11 @@ jobs:
           - name: 9-of-9
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
               e2e/workers-surface.spec.ts
 
     name: playwright / ${{ matrix.name }}
@@ -702,8 +706,10 @@ jobs:
             ...(perfJob ? perfJob.strategy.matrix.include : []),
           ];
           const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
+          const isAutomaticSpec = (file) => file.endsWith('.spec.ts') && !file.endsWith('.manual.spec.ts');
           const discovered = fs.readdirSync('packages/app/e2e')
-            .filter((file) => file.endsWith('.spec.ts'))
+            // Manual specs may require local CLI/auth state and stay runnable by explicit path.
+            .filter(isAutomaticSpec)
             .map((file) => `e2e/${file}`)
             .sort();
 
