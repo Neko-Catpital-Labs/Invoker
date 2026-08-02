@@ -112,7 +112,7 @@ const DRAW_FULL_SCREEN_FRAME =
   "; printf '\\033[3;5HTOP LEFT FRAME'" +
   "; printf '\\033[10;20HBOTTOM RIGHT FRAME'" +
   `; printf '\\033[24;1H${FRAME_MARKER}'` +
-  '\n';
+  '; sleep 30\n';
 
 test.describe('Planning terminal Chat/Tmux toggle garble repro', () => {
   test('tmux pane keeps the same terminal instance and content across a Chat -> Tmux round trip', async ({ page }, testInfo) => {

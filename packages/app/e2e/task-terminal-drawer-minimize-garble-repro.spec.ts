@@ -64,7 +64,7 @@ const DRAW_FULL_SCREEN_FRAME =
   "; printf '\\033[3;5HTOP LEFT FRAME'" +
   "; printf '\\033[10;20HBOTTOM RIGHT FRAME'" +
   `; printf '\\033[24;1H${FRAME_MARKER}'` +
-  '\n';
+  '; sleep 30\n';
 
 test.describe('Task terminal drawer minimize garble repro', () => {
   test('task terminal keeps the same rendered content across a minimize -> restore round trip', async ({ page, testDir }) => {
