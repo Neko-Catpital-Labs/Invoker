@@ -34,6 +34,30 @@ if [ -z "$merge_base" ]; then
   merge_base="$(git merge-base "origin/$BASE_REF" "$HEAD_SHA")"
 fi
 
+our_commits="$(git log --format=%H --reverse "$merge_base..$HEAD_SHA")"
+if [ -n "$our_commits" ]; then
+  cherry_marks="$(git cherry "origin/$BASE_REF" "$HEAD_SHA" "$merge_base")"
+  clean_split=1
+  landed_prefix_end=""
+  seen_new=0
+  for commit in $our_commits; do
+    mark="$(printf '%s\n' "$cherry_marks" | awk -v sha="$commit" '$2 == sha { print $1 }')"
+    if [ "$mark" = "-" ]; then
+      if [ "$seen_new" = "1" ]; then
+        clean_split=0
+        break
+      fi
+      landed_prefix_end="$commit"
+    elif [ "$mark" = "+" ]; then
+      seen_new=1
+    fi
+  done
+  if [ "$clean_split" = "1" ] && [ -n "$landed_prefix_end" ]; then
+    echo "Note: this branch's commits up to $landed_prefix_end already landed on origin/$BASE_REF via squash merge; using that commit as the diff base instead of the undershot merge-base ($merge_base)." >&2
+    merge_base="$landed_prefix_end"
+  fi
+fi
+
 if [ -n "$BASE_SHA" ] && [ "$merge_base" != "$BASE_SHA" ]; then
   echo "Note: event base.sha ($BASE_SHA) is not this PR's current merge-base; diffing against the live merge-base ($merge_base) instead." >&2
 fi
