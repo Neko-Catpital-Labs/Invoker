@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SessionManager, SessionIdentifier, SessionHandle } from '../slack/thread-session-manager.js';
 import * as child_process from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // ── Mock child_process.spawn ────────────────────────────────
 
@@ -370,5 +373,90 @@ describe('SessionManager', () => {
 
     // Sending a message after dispose should throw
     await expect(handle!.sendMessage('test')).rejects.toThrow('disposed');
+  });
+});
+
+// SessionHandle.lastTurnPlanIntentSignal / lastTurnDraftPlanText are pure
+// proxy getters onto the wrapped PlanConversation. Every other test in this
+// file either stops short of reading them or (elsewhere in the package)
+// exercises PlanConversation directly, bypassing SessionHandle/SessionManager
+// entirely. These prove the proxy through the real pooling path production
+// Slack traffic takes: getOrCreateSession -> sendMessage -> getter.
+describe('SessionHandle real-conversation proxy getters', () => {
+  let workingDir: string;
+  let manager: SessionManager;
+  let mockRepo: ReturnType<typeof createMockRepo>;
+
+  beforeEach(() => {
+    workingDir = mkdtempSync(join(tmpdir(), 'session-handle-proxy-'));
+    mockRepo = createMockRepo();
+    // No `mode` override: SessionManager defaults fresh sessions to 'agent'
+    // (thread-session-manager.ts:279,401), which is what gates
+    // lastTurnPlanIntentSignal open.
+    manager = new SessionManager({
+      cursorCommand: 'cursor',
+      workingDir,
+      conversationRepo: mockRepo as any,
+      evictionIntervalMs: 60_000,
+    });
+    manager.start();
+  });
+
+  afterEach(() => {
+    manager.stop();
+    rmSync(workingDir, { recursive: true, force: true });
+  });
+
+  function mockChildThatWrites(write: () => void, stdout: string): void {
+    mockSpawn.mockImplementationOnce(() => {
+      const { EventEmitter } = require('node:events');
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = vi.fn();
+      setTimeout(() => {
+        write();
+        proc.stdout.emit('data', Buffer.from(stdout));
+        proc.emit('close', 0);
+      }, 0);
+      return proc;
+    });
+  }
+
+  it('proxies lastTurnPlanIntentSignal through a real getOrCreateSession -> sendMessage -> getter path', async () => {
+    const id = new SessionIdentifier('C123', 'thread-proxy-intent');
+    const handle = await manager.getOrCreateSession(id, 'U001');
+    expect(handle).not.toBeNull();
+
+    const signalDir = join(workingDir, '.invoker', 'plan-intent');
+    mkdirSync(signalDir, { recursive: true });
+    const signalPath = join(signalDir, 'thread-proxy-intent.json');
+    mockChildThatWrites(
+      () => writeFileSync(signalPath, JSON.stringify({ wantsPlan: true }), 'utf8'),
+      'sure, want me to draft one for that?',
+    );
+
+    await handle!.sendMessage('submit it');
+
+    expect(handle!.lastTurnPlanIntentSignal).toEqual({ wantsPlan: true, reason: undefined });
+  });
+
+  it('proxies lastTurnDraftPlanText through a real getOrCreateSession -> sendMessage -> getter path', async () => {
+    const id = new SessionIdentifier('C123', 'thread-proxy-draft');
+    const handle = await manager.getOrCreateSession(id, 'U001');
+    expect(handle).not.toBeNull();
+
+    const draftDir = join(workingDir, '.invoker', 'plan-drafts');
+    mkdirSync(draftDir, { recursive: true });
+    const draftPath = join(draftDir, 'thread-proxy-draft.yaml');
+    const plan = 'name: "Proxy Plan"\nonFinish: none\ntasks:\n  - id: t\n    description: "d"\n    command: "pnpm test"\n    dependencies: []\n';
+    mockChildThatWrites(
+      () => writeFileSync(draftPath, plan, 'utf8'),
+      'drafted the plan, see file',
+    );
+
+    await handle!.sendMessage('draft a plan');
+
+    expect(handle!.lastTurnDraftPlanText).toBe(plan.trim());
   });
 });
