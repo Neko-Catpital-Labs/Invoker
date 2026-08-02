@@ -720,10 +720,21 @@ function findSafeTrimStart(snapshot: string, naiveCutIndex: number): number {
   return cutIsInsideSequence ? escapeIndex : naiveCutIndex;
 }
 
+/**
+ * Trims `text` to at most `maxChars`, backing the cut point up to the start
+ * of any ANSI/VT escape sequence it would otherwise slice through. Shared
+ * by any code path that trims raw PTY-originated text to a length budget --
+ * blindly slicing such text by character count risks leaving a dangling
+ * escape-sequence fragment that a terminal renders as garbled literal text.
+ */
+export function trimPreservingEscapeSequences(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const naiveCutIndex = text.length - maxChars;
+  return text.slice(findSafeTrimStart(text, naiveCutIndex));
+}
+
 function trimOutputSnapshot(snapshot: string): string {
-  if (snapshot.length <= MAX_OUTPUT_SNAPSHOT_CHARS) return snapshot;
-  const naiveCutIndex = snapshot.length - MAX_OUTPUT_SNAPSHOT_CHARS;
-  return snapshot.slice(findSafeTrimStart(snapshot, naiveCutIndex));
+  return trimPreservingEscapeSequences(snapshot, MAX_OUTPUT_SNAPSHOT_CHARS);
 }
 
 function resolveBackend(options: EmbeddedTerminalManagerOptions): EmbeddedTerminalBackend {
