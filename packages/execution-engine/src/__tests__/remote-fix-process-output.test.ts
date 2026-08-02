@@ -44,7 +44,7 @@ function mockSpawnChildWithStderr(stdoutData: string, stderrData: string, exitCo
 
 describe('spawnRemoteAgentFixImpl processOutput', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('does not export API keys into the remote fix shell by default', async () => {
@@ -53,6 +53,11 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     process.env.ANTHROPIC_API_KEY = 'ambient-key-that-should-not-forward';
     const child = mockSpawnChild('ok', 0) as any;
     vi.mocked(spawn).mockReturnValueOnce(child);
+    const registry = {
+      get: () => ({ name: 'claude', buildFixCommand: () => ({ cmd: 'claude', args: ['-p', 'fix'], sessionId: 'local-uuid' }) }),
+      getOrThrow: () => ({ name: 'claude', buildFixCommand: () => ({ cmd: 'claude', args: ['-p', 'fix'], sessionId: 'local-uuid' }) }),
+      getSessionDriver: () => undefined,
+    } as unknown as AgentRegistry;
 
     try {
       await spawnRemoteAgentFixImpl(
@@ -60,6 +65,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
         '/home/user/worktree',
         { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
         'claude',
+        registry,
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
@@ -93,6 +99,11 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     );
     const child = mockSpawnChild('ok', 0) as any;
     vi.mocked(spawn).mockReturnValueOnce(child);
+    const registry = {
+      get: () => ({ name: 'claude', buildFixCommand: () => ({ cmd: 'claude', args: ['-p', 'fix'], sessionId: 'local-uuid' }) }),
+      getOrThrow: () => ({ name: 'claude', buildFixCommand: () => ({ cmd: 'claude', args: ['-p', 'fix'], sessionId: 'local-uuid' }) }),
+      getSessionDriver: () => undefined,
+    } as unknown as AgentRegistry;
 
     try {
       await spawnRemoteAgentFixImpl(
@@ -106,6 +117,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
           secretsFile,
         },
         'claude',
+        registry,
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
@@ -191,11 +203,18 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     vi.mocked(spawn).mockReturnValueOnce(
       mockSpawnChildWithStderr('partial output', 'Welcome to Ubuntu\nreal failure\n', 1) as any,
     );
+    const registry = {
+      get: () => ({ name: 'codex', buildFixCommand: () => ({ cmd: 'codex', args: ['exec', 'fix'], sessionId: 'local-uuid' }) }),
+      getOrThrow: () => ({ name: 'codex', buildFixCommand: () => ({ cmd: 'codex', args: ['exec', 'fix'], sessionId: 'local-uuid' }) }),
+      getSessionDriver: () => undefined,
+    } as unknown as AgentRegistry;
 
     const err = await spawnRemoteAgentFixImpl(
       'fix the bug',
       '/home/user/worktree',
       { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      'codex',
+      registry,
     ).catch((e) => e as Error);
 
     expect(err).toBeInstanceOf(Error);
@@ -237,20 +256,17 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     expect(result.sessionId).toBe('local-uuid-abc');
   });
 
-  it('skips processOutput when no registry is provided', async () => {
+  it('throws before spawning when no registry is provided for a requested agent', async () => {
     const { spawn } = await import('node:child_process');
 
-    vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('output', 0) as any);
-
-    // No registry → no driver → no processOutput call
-    const result = await spawnRemoteAgentFixImpl(
-      'fix the bug',
-      '/home/user/worktree',
-      { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
-    );
-
-    // Should still resolve with a UUID session ID
-    expect(result.stdout).toBe('output');
-    expect(result.sessionId).toBeDefined();
+    expect(() =>
+      spawnRemoteAgentFixImpl(
+        'fix the bug',
+        '/home/user/worktree',
+        { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+        'codex',
+      ),
+    ).toThrow(/requested execution agent "codex"/);
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
