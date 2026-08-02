@@ -406,6 +406,31 @@ assert(
   'a .py extraction whose call site is re-pointed in the same diff should not warn',
 );
 
+const multipleSymbolsDiff = `diff --git a/scripts/repair_body.py b/scripts/repair_body.py
+--- a/scripts/repair_body.py
++++ b/scripts/repair_body.py
+@@ -0,0 +1,4 @@
++def helper_one(x):
++    return x
++
++def helper_two(y):
++    return y
+`;
+const multipleSymbolsBlockers = getPrAtomicityBlockers({ diffText: multipleSymbolsDiff, reviewLane: 'refactor' });
+assert(
+  multipleSymbolsBlockers.filter((warning) => warning.includes('refactor-multiple-symbols')).length === 2,
+  'a refactor-lane PR adding two unrelated top-level symbols should warn once per symbol',
+);
+const multipleSymbolsBehaviorLaneBlockers = getPrAtomicityBlockers({ diffText: multipleSymbolsDiff, reviewLane: 'behavior' });
+assert(
+  !multipleSymbolsBehaviorLaneBlockers.some((warning) => warning.includes('refactor-multiple-symbols')),
+  'the same multi-symbol diff outside refactor lane should not warn',
+);
+assert(
+  !reworkedExtractionBlockers.some((warning) => warning.includes('refactor-multiple-symbols')),
+  'a refactor-lane diff with exactly one top-level definition should not warn about multiple symbols',
+);
+
 const lightweightErrors = await validatePrBody(lightweight);
 assert(lightweightErrors.some((error) => error.includes('Unsupported section: ## Testing')), 'lightweight format should reject ## Testing');
 assert(lightweightErrors.some((error) => error.includes('Unsupported section: ## Notes')), 'lightweight format should reject ## Notes');
