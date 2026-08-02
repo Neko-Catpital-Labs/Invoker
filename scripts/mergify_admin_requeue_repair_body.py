@@ -4,16 +4,20 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 try:
-    from .mergify_admin_requeue_model import PrSnapshot
+    from .mergify_admin_requeue_logger import AdminBypassLogger
+    from .mergify_admin_requeue_model import Ledger, PrSnapshot
     from .mergify_admin_requeue_plan import TRUNK
-    from .mergify_admin_requeue_snapshot import run_logged
+    from .mergify_admin_requeue_snapshot import GhClient, run_logged
+    from .pr_worker_safe_push import safe_push
 except ImportError:
-    from mergify_admin_requeue_model import PrSnapshot
+    from mergify_admin_requeue_logger import AdminBypassLogger
+    from mergify_admin_requeue_model import Ledger, PrSnapshot
     from mergify_admin_requeue_plan import TRUNK
-    from mergify_admin_requeue_snapshot import run_logged
+    from mergify_admin_requeue_snapshot import GhClient, run_logged
+    from pr_worker_safe_push import safe_push
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -216,3 +220,92 @@ def invalid_repair_errors(value: Mapping[str, object], pr: PrSnapshot) -> list[s
     if is_manual_split_validation(value) and pr.base_ref_name != TRUNK:
         errors = [*errors, NON_TRUNK_MANUAL_SPLIT_ERROR]
     return errors
+
+
+def prerequisite_branch_name(pr: PrSnapshot, start_head: str) -> str:
+    return f"stack/pr-babysit-prereq-{pr.number}-{start_head[:7]}"
+
+
+def prerequisite_title(pr: PrSnapshot, check_name: str) -> str:
+    return f"[PR babysit] Tooling-policy repair prerequisite for #{pr.number}: {check_name}"
+
+
+def prerequisite_body(pr: PrSnapshot, check_name: str) -> str:
+    return (
+        "## Summary\n\n"
+        "Worker-generated tooling-policy repair.\n\n"
+        "## Review Claim\n\n"
+        f"This PR carries the worker-generated tooling-policy repair that unblocks {check_name} on #{pr.number}.\n\n"
+        "## Review Lane\n\n"
+        "- policy\n\n"
+        "## Review Unit\n\n"
+        "- tooling-policy\n\n"
+        "## Safety Invariant\n\n"
+        "Contains only the worker-generated repair commit; the original PR branch stays proof-only.\n\n"
+        "## Slice Rationale\n\n"
+        "The repair changed tooling-policy files that a proof PR body cannot carry, so the repair must land first.\n\n"
+        "## Non-goals\n\n"
+        "- No product behavior change.\n\n"
+        "## Test Plan\n\n"
+        "<details>\n"
+        "<summary>Test Plan</summary>\n\n"
+        f"- [ ] Let CI rerun {check_name}.\n\n"
+        "</details>\n\n"
+        "## Revert Plan\n\n"
+        "<details>\n"
+        "<summary>Revert Plan</summary>\n\n"
+        "- Safe to revert? Yes.\n"
+        "- Revert command: `git revert <sha>`\n"
+        "- Post-revert steps: None.\n"
+        "- Data migration? No.\n\n"
+        "</details>\n"
+    )
+
+
+def create_repair_prerequisite(
+    gh: GhClient,
+    ledger: Ledger,
+    logger: AdminBypassLogger,
+    repo: str,
+    cwd: Path,
+    pr: PrSnapshot,
+    check_name: str,
+    start_head: str,
+    repair_commits: Sequence[str],
+    now: int | None,
+) -> dict[str, object]:
+    branch_name = prerequisite_branch_name(pr, start_head)
+    title = prerequisite_title(pr, check_name)
+    body = prerequisite_body(pr, check_name)
+    git_output(cwd, "checkout", "-B", branch_name, f"origin/{TRUNK}")
+    git_output(cwd, "reset", "--hard", f"origin/{TRUNK}")
+    for commit in repair_commits:
+        git_output(cwd, "cherry-pick", commit)
+    validation = validate_current_pr_body(cwd, body, TRUNK)
+    if not validation.get("valid"):
+        errors = [str(error) for error in validation.get("errors", [])]
+        raise RuntimeError("prerequisite PR body failed validation: " + "; ".join(errors))
+    safe_push(branch=branch_name, expect_missing=True, cwd=cwd)
+    created = gh.create_pr(repo, title, body, branch_name, TRUNK)
+    prereq_number = int(created.get("number") or 0)
+    if prereq_number <= 0:
+        raise RuntimeError("GitHub did not return a prerequisite PR number")
+    gh.edit_label(repo, prereq_number, add="admin-bypass")
+    ledger.record(
+        "repair-prereq-created",
+        pr.number,
+        pr.head_ref_oid,
+        check_name,
+        now,
+        meta={"prNumber": prereq_number, "branch": branch_name},
+    )
+    logger.trace(
+        "admin-bypass-repair-prereq-created",
+        repo=repo,
+        pr_number=pr.number,
+        check_name=check_name,
+        prereq_pr_number=prereq_number,
+        prereq_branch=branch_name,
+        repair_commits=list(repair_commits),
+    )
+    return {"prNumber": prereq_number, "branch": branch_name, "title": title}
