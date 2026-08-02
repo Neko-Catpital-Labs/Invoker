@@ -10,12 +10,18 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from '@invoker/workflow-core';
-import { normalizeWorkflowBaseBranch } from '@invoker/workflow-core';
+import { normalizeWorkflowBaseBranch, PINNED_WORKFLOW_BASE_BRANCH } from '@invoker/workflow-core';
 import { loadConfig, resolveDefaultExecutionAgent } from './config.js';
 import { normalizeMergeModeForPersistence } from './merge-mode.js';
 
 /** Workflow base branches default to master, while explicit stack bases are preserved. */
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
+  const onFinish = plan.onFinish ?? 'pull_request';
+  const hasWorkflowDependencies = (plan.externalDependencies?.length ?? 0) > 0;
+  if (onFinish !== 'pull_request' || hasWorkflowDependencies) {
+    return normalizeWorkflowBaseBranch(plan.baseBranch);
+  }
+  if ((plan.baseBranch?.trim() ?? '') !== '') return PINNED_WORKFLOW_BASE_BRANCH;
   return normalizeWorkflowBaseBranch(plan.baseBranch);
 }
 

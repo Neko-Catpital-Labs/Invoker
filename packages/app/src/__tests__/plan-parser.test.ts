@@ -60,6 +60,18 @@ describe('applyPlanDefinitionDefaults', () => {
     });
     expect(spaces.baseBranch).toBe('master');
   });
+
+  it('pins explicit standalone pull request baseBranch values to master', () => {
+    const plan = applyPlanDefinitionDefaults({
+      name: 'Standalone PR Plan',
+      repoUrl: 'git@github.com:test/repo.git',
+      baseBranch: 'release',
+      onFinish: 'pull_request',
+      tasks: [{ id: 'a', description: 'd', command: 'echo' }],
+    });
+
+    expect(plan.baseBranch).toBe('master');
+  });
 });
 
 describe('parsePlan', () => {

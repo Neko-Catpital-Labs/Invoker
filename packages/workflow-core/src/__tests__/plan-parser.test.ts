@@ -19,7 +19,7 @@ tasks:
     expect(plan.tasks.map((t) => t.id)).toEqual(['build', 'deploy']);
   });
 
-  it('preserves explicit baseBranch values for stacked workflows', () => {
+  it('pins explicit standalone pull_request baseBranch values to master', () => {
     const yaml = `
 name: Base Branch Policy
 repoUrl: git@github.com:test/repo.git
@@ -30,7 +30,27 @@ tasks:
     command: echo "build"
 `;
     const plan = parsePlan(yaml);
-    expect(plan.baseBranch).toBe('release');
+    expect(plan.baseBranch).toBe('master');
+  });
+
+  it('preserves explicit baseBranch values for stacked workflows', () => {
+    const yaml = `
+name: Base Branch Policy
+repoUrl: git@github.com:test/repo.git
+onFinish: pull_request
+baseBranch: plan/upstream
+externalDependencies:
+  - workflowId: wf-upstream
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+tasks:
+  - id: build
+    description: Build it
+    command: echo "build"
+`;
+    const plan = parsePlan(yaml);
+    expect(plan.baseBranch).toBe('plan/upstream');
   });
 
   it('rejects plans with duplicate task ids', () => {

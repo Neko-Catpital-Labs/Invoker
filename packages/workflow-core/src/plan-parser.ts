@@ -1,6 +1,6 @@
 import { parse as parseYaml } from 'yaml';
 import type { PlanDefinition } from './orchestrator.js';
-import { normalizeWorkflowBaseBranch } from './repo-default-branch.js';
+import { normalizeWorkflowBaseBranch, PINNED_WORKFLOW_BASE_BRANCH } from './repo-default-branch.js';
 
 export class PlanParseError extends Error {
   constructor(message: string) {
@@ -60,6 +60,12 @@ export interface RawPlan {
 
 
 function resolveDefaultBaseBranch(plan: PlanDefinition): string {
+  const onFinish = plan.onFinish ?? 'pull_request';
+  const hasWorkflowDependencies = (plan.externalDependencies?.length ?? 0) > 0;
+  if (onFinish !== 'pull_request' || hasWorkflowDependencies) {
+    return normalizeWorkflowBaseBranch(plan.baseBranch);
+  }
+  if ((plan.baseBranch?.trim() ?? '') !== '') return PINNED_WORKFLOW_BASE_BRANCH;
   return normalizeWorkflowBaseBranch(plan.baseBranch);
 }
 
