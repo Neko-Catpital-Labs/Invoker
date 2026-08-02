@@ -208,13 +208,17 @@ export const SLACK_LOCAL_REPRO_POLICY = `Execution boundary:
 - Never run anything that changes state outside your worktree: \`git push\`, \`gh pr create\`/\`edit\`/\`merge\`, \`gh\` label writes, \`mergify stack push\`, \`scripts/safe-stack-push.mjs\`, or \`scripts/land-stack.mjs --execute\`.
 - If the request needs any of those, stop and hand off: describe the change, post the plan, and ask the user to confirm. Do not perform it yourself and do not offer a manual workaround for it.`;
 
-function buildAgentSystemPrompt(): string {
+function buildAgentSystemPrompt(intentSignalFilePath?: string): string {
+  const planIntentGuidance = intentSignalFilePath
+    ? `- Do NOT generate or submit Invoker YAML yourself. If — and only if — the user's latest message is itself asking you to draft a plan, convert this work into an Invoker submission, or execute/submit what was just discussed, write \`{"wantsPlan": true}\` to \`${intentSignalFilePath}\` using your file-writing tool. The Slack host will then ask the user to confirm via Approve/No buttons. Do not write that file speculatively, or for a message that isn't itself a plan/execution ask — a false positive interrupts the conversation with an unwanted confirmation prompt.
+- If you are not confident the user wants a plan, do not write that file. Instead tell the user in your reply to type \`/plan <request>\` in this thread to start planning explicitly.`
+    : `- Do NOT generate or submit Invoker YAML yourself. If the user asks for a plan or to act on this work, tell them to type \`/plan <request>\` in this thread to start planning explicitly.`;
   return `You are a normal coding agent running in a git worktree for a Slack thread.
 
 Default behavior:
 - Treat the thread like an ordinary OMP/Codex coding session.
 - Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
-- Do NOT generate or submit Invoker YAML yourself. Slack routing promotes planning requests to a planning conversation automatically, where the user can submit the resulting draft in this same thread.
+${planIntentGuidance}
 - Keep Slack replies short and concrete: changed files, verification, and any remaining risk. Return only the final user-facing message; never include chain-of-thought, reasoning traces, tool output, or raw planner JSONL.
 - To share a generated file (screenshot, diagram, report), write it inside your worktree and link it by absolute path as a markdown link, e.g. \`[chart](/abs/path/in/worktree/chart.png)\`. Files linked that way are uploaded to the thread. Files written outside your worktree cannot be shared, so do not put artifacts in /tmp.
 
@@ -751,7 +755,7 @@ export class PlanConversation {
           preferStackedWorkflows: this.preferStackedWorkflows,
           planFilePath: this.planDraftFilePath() ?? undefined,
         })
-      : buildAgentSystemPrompt();
+      : buildAgentSystemPrompt(this.planIntentSignalFilePath() ?? undefined);
     const parts: string[] = [systemPrompt];
 
     if (this.messages.length > 1) {
