@@ -81,6 +81,27 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws when an explicit executionAgent has no registry to resolve it', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "codex".*no configured agent set/,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
   it('throws when task has no repoUrl in managed mode', async () => {
     // Use /dev/null as a readable file to pass the key check
     const ssh = new SshExecutor({

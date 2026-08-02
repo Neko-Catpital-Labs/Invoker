@@ -284,30 +284,38 @@ export function remoteAgentShellInvocation(): string[] {
 
 /**
  * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
+ * Uses the agent registry to resolve the requested agent.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
   executionModel?: string,
 ): { shellCommand: string; sessionId: string } {
   const name = agentName ?? DEFAULT_EXECUTION_AGENT;
-  if (agentRegistry) {
-    const agent = agentRegistry.get(name);
-    if (agent?.buildFixCommand) {
-      const spec = agent.buildFixCommand(prompt, { executionModel });
-      const sessionId = spec.sessionId ?? randomUUID();
-      const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
-      return { shellCommand: cmd, sessionId };
-    }
+  if (!agentRegistry) {
+    throw new Error(
+      `Unable to resolve requested execution agent "${name}" for remote conflict resolution: ` +
+      'no configured agent set was available.',
+    );
   }
-  // Fallback: claude-compatible CLI (for backwards compat without registry)
-  const sessionId = randomUUID();
-  return {
-    shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
-    sessionId,
-  };
+  const agent = agentRegistry.get(name);
+  if (!agent) {
+    throw new Error(
+      `Unable to resolve requested execution agent "${name}" for remote conflict resolution: ` +
+      'the configured agent set did not include that name.',
+    );
+  }
+  if (!agent.buildFixCommand) {
+    throw new Error(
+      `Unable to resolve requested execution agent "${name}" for remote conflict resolution: ` +
+      'the configured agent cannot build a remote fix command.',
+    );
+  }
+  const spec = agent.buildFixCommand(prompt, { executionModel });
+  const sessionId = spec.sessionId ?? randomUUID();
+  const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
+  return { shellCommand: cmd, sessionId };
 }
 
 export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {
