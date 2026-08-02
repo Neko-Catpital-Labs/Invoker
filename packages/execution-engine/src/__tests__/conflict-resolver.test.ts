@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, buildRemoteAgentCommand, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -530,6 +530,12 @@ describe('remote agent dispatch via registry', () => {
     // We can't call it without real SSH, but we verify it's callable.
     expect(typeof spawnRemoteAgentFixImpl).toBe('function');
     expect(spawnRemoteAgentFixImpl.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('buildRemoteAgentCommand throws for an explicit unresolved agent with no configured set', () => {
+    expect(() => buildRemoteAgentCommand('fix the conflict', undefined, 'codex')).toThrow(
+      /requested execution agent "codex".*no configured agent set was available/s,
+    );
   });
 
 

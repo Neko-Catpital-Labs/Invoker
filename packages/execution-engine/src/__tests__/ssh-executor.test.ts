@@ -112,6 +112,31 @@ describe('SshExecutor pre-flight validation', () => {
     expect(handle.executionId).toBeDefined();
   });
 
+  it('throws for an explicit unresolved ai_task agent when no registry is configured', async () => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: false,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Implement the feature',
+        description: 'test',
+        executionAgent: 'codex',
+        workspacePath: '/tmp/worktree',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "codex".*no agent registry was provided/s,
+    );
+    expect(spawnedProcesses).toHaveLength(0);
+  });
+
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
