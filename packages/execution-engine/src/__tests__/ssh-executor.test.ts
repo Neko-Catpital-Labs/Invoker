@@ -112,6 +112,25 @@ describe('SshExecutor pre-flight validation', () => {
     expect(handle.executionId).toBeDefined();
   });
 
+  it('rejects an explicit executionAgent when no registry is configured', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the work',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Execution agent "codex".*no configured agent set/i,
+    );
+  });
+
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

@@ -42,6 +42,22 @@ function mockSpawnChildWithStderr(stdoutData: string, stderrData: string, exitCo
   return child;
 }
 
+function mockAgentRegistry(
+  agentName: string,
+  spec = { cmd: agentName, args: ['-p', 'fix'], sessionId: 'local-uuid' },
+  driver?: unknown,
+): AgentRegistry {
+  const agent = {
+    name: agentName,
+    buildFixCommand: () => spec,
+  };
+  return {
+    get: (name: string) => name === agentName ? agent : undefined,
+    getOrThrow: () => agent,
+    getSessionDriver: (name: string) => name === agentName ? driver : undefined,
+  } as unknown as AgentRegistry;
+}
+
 describe('spawnRemoteAgentFixImpl processOutput', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -53,6 +69,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     process.env.ANTHROPIC_API_KEY = 'ambient-key-that-should-not-forward';
     const child = mockSpawnChild('ok', 0) as any;
     vi.mocked(spawn).mockReturnValueOnce(child);
+    const registry = mockAgentRegistry('claude');
 
     try {
       await spawnRemoteAgentFixImpl(
@@ -60,6 +77,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
         '/home/user/worktree',
         { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
         'claude',
+        registry,
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
@@ -93,6 +111,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     );
     const child = mockSpawnChild('ok', 0) as any;
     vi.mocked(spawn).mockReturnValueOnce(child);
+    const registry = mockAgentRegistry('claude');
 
     try {
       await spawnRemoteAgentFixImpl(
@@ -106,6 +125,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
           secretsFile,
         },
         'claude',
+        registry,
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
@@ -191,11 +211,14 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     vi.mocked(spawn).mockReturnValueOnce(
       mockSpawnChildWithStderr('partial output', 'Welcome to Ubuntu\nreal failure\n', 1) as any,
     );
+    const registry = mockAgentRegistry('codex', { cmd: 'codex', args: ['exec', 'fix'], sessionId: 'local-uuid' });
 
     const err = await spawnRemoteAgentFixImpl(
       'fix the bug',
       '/home/user/worktree',
       { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      'codex',
+      registry,
     ).catch((e) => e as Error);
 
     expect(err).toBeInstanceOf(Error);
@@ -237,20 +260,18 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     expect(result.sessionId).toBe('local-uuid-abc');
   });
 
-  it('skips processOutput when no registry is provided', async () => {
+  it('rejects before spawning when no registry is provided', async () => {
     const { spawn } = await import('node:child_process');
 
     vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('output', 0) as any);
 
-    // No registry → no driver → no processOutput call
-    const result = await spawnRemoteAgentFixImpl(
-      'fix the bug',
-      '/home/user/worktree',
-      { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
-    );
-
-    // Should still resolve with a UUID session ID
-    expect(result.stdout).toBe('output');
-    expect(result.sessionId).toBeDefined();
+    expect(() =>
+      spawnRemoteAgentFixImpl(
+        'fix the bug',
+        '/home/user/worktree',
+        { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      ),
+    ).toThrow(/Execution agent "codex".*no configured agent set.*lacked that name/i);
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
