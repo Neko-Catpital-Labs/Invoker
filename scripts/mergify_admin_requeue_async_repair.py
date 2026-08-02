@@ -123,6 +123,26 @@ _RESTRUCTURE_ESCAPE_HATCH = (
 )
 
 
+_JOB_LOG_EXCERPT_MAX_CHARS = 20000
+
+
+def _job_log_excerpt(log_path: str) -> str:
+    # log_path (from GhExecutor.download_job_log) is a local tempfile on the
+    # orchestrator's own machine. submit_async_repair_plan dispatches this
+    # prompt to Invoker's headless runner, which executes on a separate
+    # worker that does not share that filesystem, so the path itself would
+    # not resolve there -- inline the tail of the log content instead.
+    if not log_path:
+        return "(not available)"
+    try:
+        text = Path(log_path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "(not available)"
+    if not text:
+        return "(empty)"
+    return text[-_JOB_LOG_EXCERPT_MAX_CHARS:]
+
+
 def build_repair_check_plan(
     pr: PrSnapshot,
     check_name: str,
@@ -151,7 +171,7 @@ def build_repair_check_plan(
         f"  git fetch origin {pr.head_ref_name} && git checkout {pr.head_ref_name}\n\n"
         f"Failed check: {check_name}\n"
         f"Details URL: {details_url}\n"
-        f"Job log path: {log_path}\n"
+        f"Job log (tail):\n{_job_log_excerpt(log_path)}\n"
         f"Latest Mergify event: {json.dumps(dataclasses.asdict(latest) if latest else None, sort_keys=True)}\n"
     )
     if queue_only:
