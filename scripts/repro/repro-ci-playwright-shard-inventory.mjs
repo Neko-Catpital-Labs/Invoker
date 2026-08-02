@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // Reproduces the CI "Verify Playwright shard inventory" step locally so the
 // playwright / N-of-9 shard regression cannot recur silently. It asserts that
-// every packages/app/e2e spec is assigned to exactly one Playwright shard:
-// no spec missing from the matrix, no spec listed that does not exist, and no
-// spec assigned to more than one shard.
+// every deterministic packages/app/e2e spec is assigned to exactly one
+// Playwright shard: no spec missing from the matrix, no spec listed that does
+// not exist, and no spec assigned to more than one shard.
 //
-// The playwright / 8-of-9 shard first went red at
+// The playwright / 9-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
 // (e2e/planning-terminal-live-model.proof.spec.ts and e2e/ui-delta-timeline.spec.ts)
 // were listed in a second shard while already owned by 6-of-9 and 3-of-9.
@@ -22,6 +22,11 @@ import YAML from 'yaml';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.yml');
 const e2eDir = resolve(repoRoot, process.argv[3] ?? 'packages/app/e2e');
+const manualE2eSpecs = new Set([
+  // This spec intentionally drives the real `claude` CLI and is documented in
+  // the file as an on-demand manual verification, not deterministic CI proof.
+  'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+]);
 
 function shardFiles(job) {
   if (!job?.strategy?.matrix?.include) return [];
@@ -36,10 +41,12 @@ function main() {
     ...shardFiles(workflow.jobs?.playwright),
     ...shardFiles(workflow.jobs?.['playwright-nightly-perf']),
   ];
-  const discovered = readdirSync(e2eDir)
+  const discoveredAll = readdirSync(e2eDir)
     .filter((file) => file.endsWith('.spec.ts'))
     .map((file) => `e2e/${file}`)
     .sort();
+  const discovered = discoveredAll.filter((file) => !manualE2eSpecs.has(file));
+  const staleManualExclusions = [...manualE2eSpecs].filter((file) => !discoveredAll.includes(file));
 
   const listedSet = new Set(listed);
   const discoveredSet = new Set(discovered);
@@ -47,16 +54,17 @@ function main() {
   const extra = listed.filter((file) => !discoveredSet.has(file));
   const duplicates = [...new Set(listed.filter((file, index) => listed.indexOf(file) !== index))];
 
-  if (missing.length || extra.length || duplicates.length) {
+  if (missing.length || extra.length || duplicates.length || staleManualExclusions.length) {
     console.error('[repro-ci-playwright-shard-inventory] Playwright shard inventory drift detected.');
     if (missing.length) console.error(`  Missing from shards: ${missing.join(', ')}`);
     if (extra.length) console.error(`  Extra in shards: ${extra.join(', ')}`);
     if (duplicates.length) console.error(`  Duplicate shard entries: ${duplicates.join(', ')}`);
+    if (staleManualExclusions.length) console.error(`  Stale manual exclusions: ${staleManualExclusions.join(', ')}`);
     process.exit(1);
   }
 
   console.log(
-    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} spec files each assigned to exactly one shard.`,
+    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} deterministic spec files each assigned to exactly one shard.`,
   );
 }
 
