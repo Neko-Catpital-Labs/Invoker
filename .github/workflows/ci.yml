@@ -636,11 +636,16 @@ jobs:
             files: >-
               e2e/embedded-terminal-spawn-failure.spec.ts
               e2e/embedded-terminal-restart-persistence.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
               e2e/planning-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
               e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
           - name: 7-of-9
             files: >-
               e2e/worker-tab-scroll.spec.ts
