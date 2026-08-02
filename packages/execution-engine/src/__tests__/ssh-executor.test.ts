@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import { AgentRegistry } from '../agent-registry.js';
+import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
@@ -110,6 +112,65 @@ describe('SshExecutor pre-flight validation', () => {
     const handle = await ssh.start(req);
     expect(handle).toBeDefined();
     expect(handle.executionId).toBeDefined();
+  });
+
+  it('throws for an explicit non-default executionAgent when no registry is configured', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+    const startManagedWorkspace = vi.spyOn(ssh, 'startManagedWorkspace').mockImplementation(
+      async (_request: WorkRequest, handle: any) => handle,
+    );
+
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'claude',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Execution agent "claude" could not be resolved.*no configured agent set was available/,
+    );
+    expect(startManagedWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('uses the requested SSH agent when it resolves', async () => {
+    const registry = new AgentRegistry();
+    registry.registerExecution(new ClaudeExecutionAgent({ command: 'claude-test' }));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: registry,
+    }) as any;
+    const startManagedWorkspace = vi.spyOn(ssh, 'startManagedWorkspace').mockImplementation(
+      async (_request: WorkRequest, handle: any) => handle,
+    );
+
+    await ssh.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'claude',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    }));
+
+    expect(startManagedWorkspace).toHaveBeenCalledTimes(1);
+    const [, , , payload, agentSessionId, effectiveAgentName] = startManagedWorkspace.mock.calls[0];
+    expect(payload).toContain('claude-test ');
+    expect(payload).toContain('-p');
+    expect(agentSessionId).toEqual(expect.any(String));
+    expect(effectiveAgentName).toBe('claude');
   });
 
   it('falls back to a resolvable base ref when requested baseBranch is missing on remote', async () => {
