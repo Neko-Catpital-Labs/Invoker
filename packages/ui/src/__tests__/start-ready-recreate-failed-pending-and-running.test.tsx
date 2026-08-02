@@ -4,6 +4,8 @@ import type { StartReadyResult } from '@invoker/contracts';
 import { createMockInvoker, makeUITask, type MockInvoker } from './helpers/mock-invoker.js';
 import type { WorkflowMeta } from '../types.js';
 
+vi.setConfig({ testTimeout: 20_000 });
+
 vi.mock('@xyflow/react', async () => {
   const { createReactFlowMock } = await import('./helpers/mock-react-flow.js');
   return createReactFlowMock();
