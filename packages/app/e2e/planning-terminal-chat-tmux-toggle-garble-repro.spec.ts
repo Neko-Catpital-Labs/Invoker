@@ -8,9 +8,8 @@
  * "keeps the same xterm Terminal instance across a chat/tmux mode toggle"):
  * the Chat/Tmux toggle in InvokerTerminal.tsx used to fully unmount
  * PlanningTmuxPane, destroying its xterm.js Terminal, then rebuild a brand
- * new one on switch-back and replay the raw output log into it. That fix
- * was reverted in this worktree to investigate a separate resize/PTY-size
- * bug first, so this spec is currently expected to FAIL again.
+ * new one on switch-back and replay the raw output log into it. This spec
+ * guards that toggling modes preserves the same terminal instance.
  *
  * A synthetic full-screen frame (absolute cursor-positioned ANSI writes) is
  * used in place of a real `claude` session so the repro is deterministic
