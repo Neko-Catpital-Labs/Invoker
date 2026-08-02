@@ -591,7 +591,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: 1-of-9
+          - name: 1-of-10
             files: >-
               e2e/visual-proof.spec.ts
               e2e/edit-task-command.spec.ts
@@ -599,7 +599,7 @@ jobs:
               e2e/launching-stall-watchdog.spec.ts
               e2e/embedded-terminal-pty.spec.ts
               e2e/keyboard-navigation.spec.ts
-          - name: 2-of-9
+          - name: 2-of-10
             files: >-
               e2e/claude-planning-preset-visual-proof.spec.ts
               e2e/planning-presets-load-failure.spec.ts
@@ -607,7 +607,7 @@ jobs:
               e2e/invalid-merge-workspace-visual.spec.ts
               e2e/invalid-task-workspace-visual.spec.ts
               e2e/persistence-lifecycle.spec.ts
-          - name: 3-of-9
+          - name: 3-of-10
             files: >-
               e2e/task-death-logs.spec.ts
               e2e/restart-failed-task.spec.ts
@@ -615,8 +615,7 @@ jobs:
               e2e/ui-delta-timeline.spec.ts
               e2e/pending-review-gate-target-repo.proof.spec.ts
               e2e/workflow-status-composition.spec.ts
-              e2e/queue-running-vs-queued.spec.ts
-          - name: 4-of-9
+          - name: 4-of-10
             files: >-
               e2e/startup-window-liveness.spec.ts
               e2e/workflow-lifecycle.spec.ts
@@ -624,7 +623,7 @@ jobs:
               e2e/edit-task-prompt.spec.ts
               e2e/fix-with-claude.spec.ts
               e2e/fix-with-agent-transition.spec.ts
-          - name: 5-of-9
+          - name: 5-of-10
             files: >-
               e2e/autofix-worker-ui.spec.ts
               e2e/orphan-relaunch.spec.ts
@@ -632,16 +631,15 @@ jobs:
               e2e/planning-chat-send-long-deadline.spec.ts
               e2e/system-setup-visual-proof.spec.ts
               e2e/startup-nonempty-responsiveness.spec.ts
-          - name: 6-of-9
+          - name: 6-of-10
             files: >-
               e2e/embedded-terminal-spawn-failure.spec.ts
               e2e/embedded-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-restart-persistence.spec.ts
               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
-              e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-terminal-tmux-blank-repro.spec.ts
               e2e/planning-tmux-blank-repro.spec.ts
-          - name: 7-of-9
+          - name: 7-of-10
             files: >-
               e2e/worker-tab-scroll.spec.ts
               e2e/workflow-delete-latency.spec.ts
@@ -649,7 +647,7 @@ jobs:
               e2e/dag-click-hitch-responsiveness.spec.ts
               e2e/terminal-upsert-hitch-responsiveness.spec.ts
               e2e/attention-click-hitch-responsiveness.spec.ts
-          - name: 8-of-9
+          - name: 8-of-10
             files: >-
               e2e/focus-switch-hitch-responsiveness.spec.ts
               e2e/planning-chat-hitch-responsiveness.spec.ts
@@ -657,11 +655,20 @@ jobs:
               e2e/task-new-attempt-reset.spec.ts
               e2e/persistence-recovery.spec.ts
               e2e/start-ready-production-click.spec.ts
-          - name: 9-of-9
+          - name: 9-of-10
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/queue-running-vs-queued.spec.ts
+          - name: 10-of-10
+            files: >-
+              e2e/planning-terminal-live-model.proof.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
