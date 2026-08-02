@@ -361,5 +361,10 @@ declare global {
     __INVOKER_TRACE_RENDERER_WORKFLOW_EVENTS__?: boolean;
     __INVOKER_TEST_OPEN_TERMINAL__?: (taskId: string) => ReturnType<InvokerAPI['openTerminal']>;
     __INVOKER_TEST_ON_TERMINAL_OUTPUT__?: (cb: (event: TerminalOutputEvent) => void) => () => void;
+    /** The live xterm.js Terminal instance backing the planning Tmux pane, when one is mounted. Test-only. */
+    __INVOKER_TEST_ACTIVE_PLANNING_TMUX_TERMINAL__?: {
+      rows: number;
+      buffer: { active: { getLine(n: number): { translateToString(trimRight?: boolean): string } | undefined } };
+    } | null;
   }
 }
