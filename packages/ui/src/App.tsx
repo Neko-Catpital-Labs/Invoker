@@ -42,6 +42,7 @@ import { groupWorkflowCoreActivity } from './lib/workflow-core-activity.js';
 import { ActionGraphView } from './components/ActionGraphView.js';
 import { WorkflowStatusChips } from './components/WorkflowStatusChips.js';
 import { TerminalDrawer, type TerminalDrawerState } from './components/TerminalDrawer.js';
+import { KeepMounted } from './components/KeepMounted.js';
 import { LeftStatusColumn } from './components/LeftStatusColumn.js';
 import { BrowserTaskRow, BrowserWorkflowRow } from './components/BrowserListRows.js';
 import { useTheme } from './lib/theme.js';
@@ -4744,7 +4745,13 @@ export function App() {
             )}
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-hidden bg-background">
+        <div
+          className={planningTerminalExpanded ? 'fixed inset-0 z-50 flex flex-col bg-card' : 'min-h-0 flex-1 overflow-hidden bg-background'}
+          data-testid={planningTerminalExpanded ? 'invoker-terminal-expanded' : undefined}
+          role={planningTerminalExpanded ? 'dialog' : undefined}
+          aria-modal={planningTerminalExpanded ? true : undefined}
+          aria-label={planningTerminalExpanded ? 'Planning chat' : undefined}
+        >
           <InvokerTerminal
             activeConversationKey={activePlanningConversationKey}
             lines={terminalLines}
@@ -4757,11 +4764,11 @@ export function App() {
             draftPlanSummary={draftPlanSummary}
             planningStream={activePlanningStream}
             readOnly={activePlanningReadOnly}
+            expanded={planningTerminalExpanded}
             mode={activePlanningMode}
             terminalSession={activePlanningTerminalSession}
             terminalBusy={activePlanningTerminalBusy}
             terminalError={activePlanningTerminalError}
-            terminalActive={!planningTerminalExpanded}
             submittedPlanName={activePlanningSession.submittedPlanName}
             onValueChange={setPlanningInput}
             onSubmit={() => void handlePlanningSubmit()}
@@ -4769,8 +4776,13 @@ export function App() {
             onConfirmationModeChange={handlePlanningConfirmationModeChange}
             onModeChange={(mode) => void handlePlanningModeChange(mode)}
             onExpand={() => setPlanningTerminalExpanded(true)}
-            onOpenGraph={() => navigatePlanGraphPreservingViewport('planning-open-graph')}
+            onCloseExpanded={() => setPlanningTerminalExpanded(false)}
+            onOpenGraph={() => {
+              setPlanningTerminalExpanded(false);
+              navigatePlanGraphPreservingViewport('planning-open-graph');
+            }}
             onReviewDraft={() => {
+              setPlanningTerminalExpanded(false);
               setReviewDraftSessionId(activePlanningSession.id);
               setPlanningContextCollapsed(false);
             }}
@@ -4872,7 +4884,6 @@ export function App() {
       <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
         {renderGraphCanvas()}
       </div>
-      {viewMode === 'dag' && renderGraphTerminalChrome()}
     </div>
   );
 
@@ -4995,20 +5006,25 @@ export function App() {
 
         <div className="flex min-h-0 flex-1 overflow-hidden">
           <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-            {sidebarSurface === 'home' ? (
-              renderPlanningTerminalSurface()
-            ) : sidebarSurface === 'planning' ? (
+            <KeepMounted active={sidebarSurface === 'home'} className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {renderPlanningTerminalSurface()}
+            </KeepMounted>
+            {sidebarSurface === 'planning' ? (
               renderGraphWorkspace('Plan graph', homeSubtitle, true)
             ) : sidebarSurface === 'workers' ? (
               renderWorkersSurface()
-            ) : (
+            ) : sidebarSurface !== 'home' ? (
               <div className="flex min-h-0 flex-1 overflow-hidden">
                 {renderBrowserRail()}
                 {renderBrowserDetailWorkspace()}
               </div>
-            )}
+            ) : null}
 
-            {sidebarSurface === 'planning' && viewMode === 'dag' && renderGraphTerminalChrome()}
+            <KeepMounted
+              active={viewMode === 'dag' && (sidebarSurface === 'planning' || sidebarSurface === 'workflows' || sidebarSurface === 'attention')}
+            >
+              {renderGraphTerminalChrome()}
+            </KeepMounted>
           </main>
 
           {sidebarSurface !== 'home' && sidebarSurface !== 'workers' && (
@@ -5071,53 +5087,6 @@ export function App() {
         </div>
       </div>
 
-
-      {planningTerminalExpanded && (
-        <div
-          data-testid="invoker-terminal-expanded"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Planning chat"
-          className="fixed inset-0 z-50 flex flex-col bg-card"
-        >
-          <InvokerTerminal
-            activeConversationKey={activePlanningConversationKey}
-            lines={terminalLines}
-            busy={activePlanningSessionBusy}
-            value={planningInput}
-            selectedPresetKey={selectedPlanningPresetKey}
-            presetOptions={planningPresetOptions}
-            selectedConfirmationMode={selectedPlanningConfirmationMode}
-            draftPlanAvailable={draftPlanAvailable}
-            draftPlanSummary={draftPlanSummary}
-            planningStream={activePlanningStream}
-            expanded
-            mode={activePlanningMode}
-            terminalSession={activePlanningTerminalSession}
-            terminalBusy={activePlanningTerminalBusy}
-            terminalError={activePlanningTerminalError}
-            terminalActive
-            submittedPlanName={activePlanningSession.submittedPlanName}
-            onValueChange={setPlanningInput}
-            readOnly={activePlanningReadOnly}
-            onSubmit={() => void handlePlanningSubmit()}
-            onPresetChange={handlePlanningPresetChange}
-            onConfirmationModeChange={handlePlanningConfirmationModeChange}
-            onModeChange={(mode) => void handlePlanningModeChange(mode)}
-            onExpand={() => setPlanningTerminalExpanded(true)}
-            onCloseExpanded={() => setPlanningTerminalExpanded(false)}
-            onOpenGraph={() => {
-              setPlanningTerminalExpanded(false);
-              navigatePlanGraphPreservingViewport('planning-expanded-open-graph');
-            }}
-            onReviewDraft={() => {
-              setPlanningTerminalExpanded(false);
-              setReviewDraftSessionId(activePlanningSession.id);
-              setPlanningContextCollapsed(false);
-            }}
-          />
-        </div>
-      )}
 
       {graphMaximized && (
         <div
