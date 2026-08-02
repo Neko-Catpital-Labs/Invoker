@@ -35,6 +35,12 @@ export interface ConversationMessage {
 
 export type ConversationMode = 'agent' | 'plan';
 
+/** Written by an agent-mode turn to request planning permission instead of drafting YAML itself. */
+export interface PlanIntentSignal {
+  wantsPlan: true;
+  reason?: string;
+}
+
 export type PlanningCommandBuilder = (opts: {
   tool: string;
   model?: string;
@@ -444,6 +450,7 @@ export class PlanConversation {
   private _initialized = false;
   private _lastTurnReasoning: string[] = [];
   private _lastTurnDraftPlanText: string | null = null;
+  private _lastTurnPlanIntentSignal: PlanIntentSignal | null = null;
   private lastKnownGoodPlanText: string | null = null;
   private harnessSessionDriver?: HarnessSessionDriver;
   private _harnessSessionId?: string;
@@ -527,6 +534,7 @@ export class PlanConversation {
     const tInit = Date.now();
 
     this.resetPlanDraftFile();
+    this.resetPlanIntentSignalFile();
     this.messages.push({ role: 'user', content: userMessage });
 
     const prompt = this.buildTurnPrompt();
@@ -553,6 +561,7 @@ export class PlanConversation {
       : inlineDraft;
     this._lastTurnDraftPlanText = nextDraft;
     if (nextDraft) this.lastKnownGoodPlanText = nextDraft;
+    this._lastTurnPlanIntentSignal = this.mode === 'agent' ? this.readPlanIntentSignalFile() : null;
     if (!nextDraft) {
       message = removeStandaloneSubmitInstruction(message);
     }
@@ -591,6 +600,11 @@ export class PlanConversation {
 
   get lastTurnDraftPlanText(): string | null {
     return this._lastTurnDraftPlanText;
+  }
+
+  /** The plan-intent signal the model wrote this turn (agent mode only), if any. */
+  get lastTurnPlanIntentSignal(): PlanIntentSignal | null {
+    return this._lastTurnPlanIntentSignal;
   }
 
   /** Returns the raw plan text that was submitted via confirmation, or null. */
@@ -659,6 +673,44 @@ export class PlanConversation {
     }
   }
 
+  // An agent-mode turn writes this file when it judges the user's latest
+  // message is itself a plan/submission ask, instead of drafting YAML itself.
+  // Same shape as planDraftFilePath: gated on workingDir + threadTs, reset
+  // every turn so a stale signal from turn N can't leak into turn N+1.
+  // `.invoker/` is gitignored.
+  planIntentSignalFilePath(): string | null {
+    if (!this.workingDir || !this.threadTs) return null;
+    const safeId = this.threadTs.replace(/[^a-zA-Z0-9._-]/g, '_');
+    return join(this.workingDir, '.invoker', 'plan-intent', `${safeId}.json`);
+  }
+
+  private readPlanIntentSignalFile(): PlanIntentSignal | null {
+    const path = this.planIntentSignalFilePath();
+    if (!path) return null;
+    try {
+      if (!existsSync(path)) return null;
+      const content = readFileSync(path, 'utf8').trim();
+      if (!content) return null;
+      const parsed = JSON.parse(content) as { wantsPlan?: unknown; reason?: unknown };
+      if (parsed.wantsPlan !== true) return null;
+      return { wantsPlan: true, reason: typeof parsed.reason === 'string' ? parsed.reason : undefined };
+    } catch (err) {
+      this.log('plan-conversation', 'error', `Failed to read plan intent signal file ${path}: ${err}`);
+      return null;
+    }
+  }
+
+  private resetPlanIntentSignalFile(): void {
+    const path = this.planIntentSignalFilePath();
+    if (!path) return;
+    try {
+      rmSync(path, { force: true });
+      mkdirSync(dirname(path), { recursive: true });
+    } catch (err) {
+      this.log('plan-conversation', 'error', `Failed to reset plan intent signal file ${path}: ${err}`);
+    }
+  }
+
   /** Returns the conversation history. */
   get history(): readonly ConversationMessage[] {
     return this.messages.filter((m) => m.content.length > 0);
@@ -670,6 +722,7 @@ export class PlanConversation {
     this._submittedPlanText = null;
     this._planSubmitted = false;
     this._lastTurnDraftPlanText = null;
+    this._lastTurnPlanIntentSignal = null;
     this.lastKnownGoodPlanText = null;
     if (this.conversationRepo && this.threadTs) {
       this.conversationRepo.deleteConversation(this.threadTs);
