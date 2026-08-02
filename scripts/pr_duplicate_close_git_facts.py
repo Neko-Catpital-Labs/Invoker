@@ -24,8 +24,15 @@ class GitFactsClient:
             capture_output=True,
         )
 
-    def fetch(self, remote: str = "origin", ref: str = "master") -> None:
-        subprocess.run(["git", "fetch", remote, ref], cwd=self.cwd, check=True, text=True, capture_output=True)
+    def fetch(self, remote: str = "origin", ref: str = "master", timeout: float = 30.0) -> None:
+        subprocess.run(
+            ["git", "fetch", remote, ref],
+            cwd=self.cwd,
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
 
     def merge_base(self, ref_a: str, ref_b: str) -> str | None:
         completed = self._run(["git", "merge-base", ref_a, ref_b])
