@@ -113,7 +113,7 @@ export function isSafeRemoteInvokerHomePath(remotePath: string): boolean {
   return true;
 }
 
-function isDeletingOrphanName(name: string): boolean {
+export function isDeletingOrphanName(name: string): boolean {
   return name.includes('.deleting.');
 }
 
