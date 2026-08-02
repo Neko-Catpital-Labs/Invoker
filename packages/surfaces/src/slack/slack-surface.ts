@@ -902,7 +902,27 @@ export class SlackSurface implements Surface {
       this.slackSessionRepo?.deletePendingConfirmation(action.value);
       this.log('slack', 'info', `[PLAN_INTENT_CONFIRM] accepted key=${action.value}`);
       await respond?.({ text: '✅ Planning for execution.', replace_original: true });
-      await this.startPlanIntent(pending, this.lobbyButtonSay(body, respond), action.value);
+      const say = this.lobbyButtonSay(body, respond);
+      try {
+        await this.startPlanIntent(pending, say, action.value);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log('slack', 'error', `[PLAN_INTENT_CONFIRM] drafting failed key=${action.value}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+        this.pendingConfirms.set(action.value, pending);
+        this.slackSessionRepo?.createPendingConfirmation({
+          confirmKey: action.value,
+          threadTs: action.value,
+          channelId: pending.channel,
+          userId: pending.userId,
+          kind: pending.kind,
+          payload: pending,
+        });
+        await this.sayWithRateLimitRetry(say, {
+          text: `Planning failed: ${message}. Click Approve above to try again.`,
+          thread_ts: action.value,
+          blocks: this.buildPlanIntentBlocks(action.value) as never,
+        });
+      }
     });
 
     this.app.action('lobby_continue_conversation', async ({ action, body, ack, respond }) => {
@@ -1179,7 +1199,18 @@ export class SlackSurface implements Surface {
       requestedBy: context.requestedBy ?? userId,
       confirmationMode: draftReview.confirmationMode,
     });
-    await this.postSlackPlanDraft(draft, draftReview.summary, say);
+    try {
+      await this.postSlackPlanDraft(draft, draftReview.summary, say);
+    } catch (error) {
+      // The draft row already exists at this point and postSlackPlanDraft has
+      // already surfaced the failure by updating the Slack message in place,
+      // so this must not propagate: letting it reach the button handler's
+      // catch would restore the pending confirmation and offer "click
+      // Approve to retry", which re-runs this whole method and creates a
+      // second, orphaned draft instead of reconciling the one that exists.
+      this.log('slack', 'error', `Posting plan draft ${draft.draftId}:${draft.version} failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     if (draftReview.confirmationMode === 'auto_submit') {
       try {
         await this.submitSlackPlanDraft(this.slackPlanDraftRepo.get(draft.draftId, draft.version) ?? draft, { userId });
@@ -1588,6 +1619,14 @@ export class SlackSurface implements Surface {
     pending: Extract<PendingConfirm, { kind: 'plan_intent' }>,
     say: SayFn,
   ): Promise<void> {
+    const existing = this.getPendingConfirm(threadTs);
+    if (existing) {
+      await say({
+        text: 'There is already a pending confirmation in this thread. Resolve it before asking again.',
+        thread_ts: threadTs,
+      });
+      return;
+    }
     this.pendingConfirms.set(threadTs, pending);
     this.slackSessionRepo?.createPendingConfirmation({
       confirmKey: threadTs,
