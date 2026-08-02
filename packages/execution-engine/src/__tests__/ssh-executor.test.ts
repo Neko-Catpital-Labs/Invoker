@@ -100,6 +100,33 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws with requested agent name when explicit ai_task has no registry', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+    const startManagedWorkspace = vi.spyOn(ssh, 'startManagedWorkspace').mockResolvedValue({
+      executionId: 'unused',
+      taskId: 'test-task',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do remote work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'omp',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /requested execution agent "omp".*no configured agent set/s,
+    );
+    expect(startManagedWorkspace).not.toHaveBeenCalled();
+  });
+
   it('does not throw for reconciliation requests', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',

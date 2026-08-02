@@ -13,6 +13,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { WorkRequest } from '@invoker/contracts';
 import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
+import { BaseExecutor } from '../base-executor.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
@@ -58,6 +59,47 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
     callbackUrl: '',
     timestamps: {},
   } as unknown as WorkRequest;
+}
+
+function makeAiTaskRequest(inputs: Partial<WorkRequest['inputs']> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    executionGeneration: 0,
+    actionType: 'ai_task',
+    inputs: {
+      prompt: 'Do the task',
+      description: 'test ai task',
+      ...inputs,
+    },
+    callbackUrl: '',
+    timestamps: { createdAt: new Date().toISOString() },
+  };
+}
+
+class CommandBuilderExecutor extends BaseExecutor<any> {
+  readonly type = 'test-command-builder';
+
+  build(
+    request: WorkRequest,
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ): { cmd: string; args: string[]; agentSessionId?: string; fullPrompt?: string } {
+    return this.buildCommandAndArgs(request, opts);
+  }
+
+  async start(): Promise<any> {
+    throw new Error('not implemented');
+  }
+
+  sendInput(): void {}
+
+  getTerminalSpec(): any {
+    return null;
+  }
+
+  getRestoredTerminalSpec(): any {
+    return { command: 'test-command-builder' };
+  }
 }
 
 // ── Agent definitions for the matrix ─────────────────────────
@@ -268,6 +310,34 @@ describe('Agent × Executor matrix', () => {
       // We have at least one 'ignore' and one 'pipe'
       expect(modes).toContain('ignore');
       expect(modes).toContain('pipe');
+    });
+
+    it('BaseExecutor throws with requested agent name when explicit ai_task has no registry', () => {
+      const executor = new CommandBuilderExecutor();
+
+      expect(() => executor.build(makeAiTaskRequest({ executionAgent: 'omp' }))).toThrow(
+        /requested execution agent "omp".*no configured agent set/s,
+      );
+    });
+
+    it('BaseExecutor keeps registry-backed command behavior when requested agent resolves', () => {
+      const executor = new CommandBuilderExecutor();
+
+      const result = executor.build(makeAiTaskRequest({ executionAgent: 'mock-pipe' }), { agentRegistry: registry });
+
+      expect(result.cmd).toBe('mock-agent');
+      expect(result.args).toContain('--prompt');
+      expect(result.fullPrompt).toBe('Do the task');
+    });
+
+    it('BaseExecutor keeps Claude fallback only when ai_task omits executionAgent', () => {
+      const executor = new CommandBuilderExecutor();
+
+      const result = executor.build(makeAiTaskRequest(), { claudeCommand: 'claude-test' });
+
+      expect(result.cmd).toBe('claude-test');
+      expect(result.args).toContain('--session-id');
+      expect(result.fullPrompt).toBe('Do the task');
     });
   });
 });
