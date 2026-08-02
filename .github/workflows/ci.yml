@@ -661,8 +661,10 @@ jobs:
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
-              e2e/planning-terminal-live-model.proof.spec.ts
-              e2e/ui-delta-timeline.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
               e2e/workers-surface.spec.ts
 
     name: playwright / ${{ matrix.name }}
@@ -704,9 +706,16 @@ jobs:
             ...(perfJob ? perfJob.strategy.matrix.include : []),
           ];
           const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
+          const manualOnly = new Set([
+            // Requires a real authenticated `claude` CLI and unstable live TUI output.
+            'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+          ]);
+          const staleManualOnly = [...manualOnly]
+            .filter((file) => !fs.existsSync(`packages/app/${file}`));
           const discovered = fs.readdirSync('packages/app/e2e')
             .filter((file) => file.endsWith('.spec.ts'))
             .map((file) => `e2e/${file}`)
+            .filter((file) => !manualOnly.has(file))
             .sort();
 
           const listedSet = new Set(listed);
@@ -715,8 +724,9 @@ jobs:
           const extra = listed.filter((file) => !discoveredSet.has(file));
           const duplicates = listed.filter((file, index) => listed.indexOf(file) !== index);
 
-          if (missing.length || extra.length || duplicates.length) {
+          if (staleManualOnly.length || missing.length || extra.length || duplicates.length) {
             console.error('Playwright shard inventory drift detected.');
+            if (staleManualOnly.length) console.error(`Stale manual-only shard exceptions: ${staleManualOnly.join(', ')}`);
             if (missing.length) console.error(`Missing from shards: ${missing.join(', ')}`);
             if (extra.length) console.error(`Extra in shards: ${extra.join(', ')}`);
             if (duplicates.length) console.error(`Duplicate shard entries: ${[...new Set(duplicates)].join(', ')}`);
