@@ -10,6 +10,7 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -47,6 +48,24 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function mockManagedSshStart(ssh: SshExecutor) {
+  vi.spyOn(ssh as any, 'execRemoteCapture').mockImplementation(async (script: string) => {
+    if (script.includes('__INVOKER_BASE_REF__=')) {
+      return [
+        '__INVOKER_BASE_REF__=origin/main',
+        '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+      ].join('\n');
+    }
+    if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+    if (script.includes('worktree list --porcelain')) return '';
+    return '';
+  });
+  vi.spyOn(ssh as any, 'setupTaskBranch').mockResolvedValue(undefined);
+  return vi.spyOn(ssh as any, 'spawnSshRemoteStdin').mockImplementation(
+    (_executionId: string, _request: WorkRequest, handle: any) => handle,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +117,60 @@ describe('SshExecutor pre-flight validation', () => {
     await expect(ssh.start(req)).rejects.toThrow(
       'requires repoUrl',
     );
+  });
+
+  it('throws instead of substituting claude when explicit executionAgent has no registry', async () => {
+    spawnedProcesses = [];
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    });
+    const spawnStub = mockManagedSshStart(ssh);
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(/requested executionAgent "codex"/);
+    await expect(ssh.start(req)).rejects.toThrow(/no agent registry was supplied/);
+    expect(spawnStub).not.toHaveBeenCalled();
+  });
+
+  it('uses the requested agent when SSH has a registry that resolves it', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: registerBuiltinAgents(),
+    });
+    const spawnStub = mockManagedSshStart(ssh);
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    const handle = await ssh.start(req);
+
+    expect(handle.agentSessionId).toBeDefined();
+    expect(spawnStub).toHaveBeenCalledTimes(1);
+    const [, , , script, agentSessionId, , effectiveAgentName] = spawnStub.mock.calls[0];
+    expect(script).toContain('codex');
+    expect(script).not.toContain('claude --session-id');
+    expect(agentSessionId).toBe(handle.agentSessionId);
+    expect(effectiveAgentName).toBe('codex');
   });
 
   it('does not throw for reconciliation requests', async () => {
