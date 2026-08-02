@@ -110,6 +110,56 @@ Keep app exposure separate from core runtime behavior.
 </details>
 `;
 
+const REFACTOR_BODY = `## Summary
+
+This branch moves one helper into its own module.
+
+## Review Claim
+
+Move the helper with no behavior change.
+
+## Review Lane
+
+- refactor
+
+## Review Unit
+
+- ownership-refactor
+
+## Safety Invariant
+
+Only this one helper moves; every call site is re-pointed in this same PR.
+
+## Slice Rationale
+
+One technique, one PR.
+
+## Non-goals
+
+- No behavior change.
+
+## Test Plan
+
+<details>
+<summary>Test Plan</summary>
+
+- [ ] \`node scripts/test-create-pr-stack-workflow.mjs\`
+
+</details>
+
+## Revert Plan
+
+<details>
+<summary>Revert Plan</summary>
+
+- Safe to revert? Yes
+- Revert command: \`git revert <sha>\`
+- Post-revert steps: None
+- Data migration? No
+
+</details>
+`;
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -281,6 +331,16 @@ function createRepo(harness) {
   return { originBare, work };
 }
 
+function createManagedStackUpdateRepo(harness, { branch = 'stack/test-title-lane', body = VALID_BODY } = {}) {
+  const { work } = createRepo(harness);
+  writeFileSync(join(work, 'pr-body.md'), body);
+  createTrackedBranch(work, branch);
+  commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Ititlelane0001');
+  gitQuiet(work, 'push', '-u', 'origin', branch);
+  setManagedBranchConfig(work, branch);
+  return { work, branch };
+}
+
 function commitFile(work, fileName, content, message) {
   mkdirSync(dirname(join(work, fileName)), { recursive: true });
   writeFileSync(join(work, fileName), content);
@@ -330,6 +390,29 @@ function baseArgs() {
 
 function stackTitleArgs(base = 'master', title = '[Graph Blanking](1) Preserve graph blanking') {
   return ['--title', title, '--base', base, '--body-file', 'pr-body.md'];
+}
+
+function managedStackUpdateEnv(branch, title, prNumber = 52) {
+  return {
+    GH_API_PULLS_JSON: JSON.stringify([
+      {
+        number: prNumber,
+        title,
+        html_url: `https://example.com/pull/${prNumber}`,
+        head: { ref: branch, repo: { full_name: 'owner/repo' } },
+      },
+    ]),
+    GH_API_OPEN_PULLS_JSON: JSON.stringify([
+      {
+        number: prNumber,
+        title,
+        html_url: `https://example.com/pull/${prNumber}`,
+        base: { ref: 'master' },
+        head: { ref: branch, repo: { full_name: 'owner/repo' } },
+      },
+    ]),
+    GH_PATCH_RESPONSE: JSON.stringify({ html_url: `https://example.com/pull/${prNumber}`, number: prNumber }),
+  };
 }
 
 function expectNoPush(harness, label) {
@@ -687,6 +770,103 @@ function testMergifyManagedUpdateRejectsNestedTitle() {
     assert(result.stderr.includes('exactly one slice index'), 'nested stack title error should explain format');
     expectNoPush(harness, 'managed nested title rejection');
     assert(readGhCalls(harness.ghLog).length === 0, 'managed nested title rejection should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testRefactorLaneAcceptsTechniqueTaggedStackTitle() {
+  const harness = createHarness();
+  try {
+    const title = '[Test Stack](2)[REFACTOR: Move Method] move the helper';
+    const { work, branch } = createManagedStackUpdateRepo(harness, {
+      branch: 'stack/test-refactor-title-tag',
+      body: REFACTOR_BODY,
+    });
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs('master', title), '--update-existing'], managedStackUpdateEnv(branch, title));
+
+    const ghLog = existsSync(harness.ghLog) ? readFileSync(harness.ghLog, 'utf-8') : '';
+    assert(
+      result.status === 0,
+      `refactor-lane stack title should accept a technique tag\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ngh log:\n${ghLog}`,
+    );
+    assert(result.stdout.trim() === 'https://example.com/pull/52', 'refactor tagged stack update should print the PR URL');
+    expectNoPush(harness, 'refactor tagged stack title');
+    const patchCall = readGhCalls(harness.ghLog).find((call) => call.route.endsWith('/pulls/52'));
+    assert(Boolean(patchCall), 'refactor tagged stack update should patch the existing PR');
+    assert(patchCall.stdin.includes(`"title":"${title}"`), 'refactor tagged stack update should include the title');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testRefactorLaneRejectsStackTitleWithoutTechniqueTag() {
+  const harness = createHarness();
+  try {
+    const { work } = createManagedStackUpdateRepo(harness, {
+      branch: 'stack/test-refactor-title-missing-tag',
+      body: REFACTOR_BODY,
+    });
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs('master', '[Test Stack](2) move the helper'), '--update-existing']);
+
+    assert(result.status === 1, 'refactor-lane stack title should require a technique tag');
+    assert(result.stderr.includes('REFACTOR'), `missing technique-tag error should mention REFACTOR\nstderr:\n${result.stderr}`);
+    assert(result.stderr.includes('technique'), `missing technique-tag error should mention technique\nstderr:\n${result.stderr}`);
+    expectNoPush(harness, 'refactor missing technique tag');
+    assert(readGhCalls(harness.ghLog).length === 0, 'refactor missing technique tag should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNonRefactorLaneRejectsTechniqueTaggedStackTitle() {
+  const harness = createHarness();
+  try {
+    const { work } = createManagedStackUpdateRepo(harness, {
+      branch: 'stack/test-non-refactor-title-tag',
+      body: VALID_BODY,
+    });
+
+    const result = runCreatePr(work, harness, [
+      ...stackTitleArgs('master', '[Test Stack](2)[REFACTOR: Move Method] move the helper'),
+      '--update-existing',
+    ]);
+
+    assert(result.status === 1, 'non-refactor lane should reject a refactor technique tag');
+    assert(
+      result.stderr.includes('not refactor') || result.stderr.includes('drop the tag'),
+      `non-refactor technique-tag error should explain the lane mismatch\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'non-refactor technique tag');
+    assert(readGhCalls(harness.ghLog).length === 0, 'non-refactor technique tag should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testNonRefactorLaneAcceptsPlainStackTitle() {
+  const harness = createHarness();
+  try {
+    const title = '[Test Stack](3) keep invalidation routing local';
+    const { work, branch } = createManagedStackUpdateRepo(harness, {
+      branch: 'stack/test-non-refactor-plain-title',
+      body: ROUTING_BODY,
+    });
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs('master', title), '--update-existing'], managedStackUpdateEnv(branch, title, 53));
+
+    const ghLog = existsSync(harness.ghLog) ? readFileSync(harness.ghLog, 'utf-8') : '';
+    assert(
+      result.status === 0,
+      `non-refactor stack title should still accept the plain stacked shape\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}\ngh log:\n${ghLog}`,
+    );
+    assert(result.stdout.trim() === 'https://example.com/pull/53', 'non-refactor plain stack update should print the PR URL');
+    expectNoPush(harness, 'non-refactor plain stack title');
+    const patchCall = readGhCalls(harness.ghLog).find((call) => call.route.endsWith('/pulls/53'));
+    assert(Boolean(patchCall), 'non-refactor plain stack update should patch the existing PR');
+    assert(patchCall.stdin.includes(`"title":"${title}"`), 'non-refactor plain stack update should include the title');
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -1136,6 +1316,10 @@ const tests = [
   testMergifyManagedUpdateAcceptsLetteredTitle,
   testMergifyManagedUpdateRejectsPlainTitle,
   testMergifyManagedUpdateRejectsNestedTitle,
+  testRefactorLaneAcceptsTechniqueTaggedStackTitle,
+  testRefactorLaneRejectsStackTitleWithoutTechniqueTag,
+  testNonRefactorLaneRejectsTechniqueTaggedStackTitle,
+  testNonRefactorLaneAcceptsPlainStackTitle,
   testUnpublishedStackCommitsBlockUpdate,
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,

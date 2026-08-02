@@ -205,22 +205,40 @@ function parseArgs() {
 }
 
 const TRUNK_BRANCHES = new Set(['main', 'master', 'develop']);
-const STACK_PR_TITLE_PATTERN = /^\[[^\[\]\r\n]{3,80}\]\([1-9]\d*[a-z]?\)(?:\s+\S.*)?$/;
+const STACK_PR_TITLE_PATTERN = /^\[[^\[\]\r\n]{3,80}\]\([1-9]\d*[a-z]?\)(?:\[REFACTOR: [^\[\]\r\n]{2,80}\])?(?:\s+\S.*)?$/;
+const REFACTOR_TAG_PATTERN = /\[REFACTOR: [^\[\]\r\n]{2,80}\]/;
 
 function isStackedPrContext(baseBranch, mergifyState) {
   return mergifyState.managed || !TRUNK_BRANCHES.has(baseBranch);
 }
 
-function assertValidStackPrTitle(title) {
-  if (STACK_PR_TITLE_PATTERN.test(title.trim())) return;
-
-  throw new Error(
-    [
-      'Stack PR titles must start with a shared idea and exactly one slice index.',
-      'Use: [Graph Blanking](1) Preserve selected graph while loading',
-      'Use lettered replacements when one published slice must split: [Graph Blanking](3a) Split follow-up slice',
-    ].join('\n'),
-  );
+function assertValidStackPrTitle(title, reviewLane) {
+  const trimmed = title.trim();
+  if (!STACK_PR_TITLE_PATTERN.test(trimmed)) {
+    throw new Error(
+      [
+        'Stack PR titles must start with a shared idea and exactly one slice index.',
+        'Use: [Graph Blanking](1) Preserve selected graph while loading',
+        'Use lettered replacements when one published slice must split: [Graph Blanking](3a) Split follow-up slice',
+        'Refactor-lane PRs add a technique tag right after the slice index: [Graph Blanking](2)[REFACTOR: Move Method] git primitives -> repair_body.py',
+      ].join('\n'),
+    );
+  }
+  const hasRefactorTag = REFACTOR_TAG_PATTERN.test(trimmed);
+  if (reviewLane === 'refactor' && !hasRefactorTag) {
+    throw new Error(
+      [
+        'Review Lane is "refactor" but the title has no [REFACTOR: <Technique>] tag.',
+        'Name the technique from the catalog in the review-compression skill file\'s Naming the Technique section.',
+        'Example: [Graph Blanking](2)[REFACTOR: Move Method] git primitives -> repair_body.py',
+      ].join('\n'),
+    );
+  }
+  if (reviewLane !== 'refactor' && hasRefactorTag) {
+    throw new Error(
+      `Title has a [REFACTOR: ...] tag but Review Lane is "${reviewLane || '(missing)'}", not refactor. Either set Review Lane to refactor or drop the tag.`,
+    );
+  }
 }
 
 async function assertValidPrBody(body, options = {}) {
@@ -903,10 +921,11 @@ async function main() {
   if (mergifyState.managed && requestedUpdatePath) {
     assertPublishedMergifyBranch(currentBranch, mergifyState.trackedBaseRef);
   }
-  assertNoStackAtomicityBlockers(args.base, mergifyState, diffText, getReviewMetadata(body).reviewLane);
+  const reviewLane = getReviewMetadata(body).reviewLane;
+  assertNoStackAtomicityBlockers(args.base, mergifyState, diffText, reviewLane);
 
   if (isStackedPrContext(args.base, mergifyState)) {
-    assertValidStackPrTitle(args.title);
+    assertValidStackPrTitle(args.title, reviewLane);
   }
 
   if (!nwo) {
