@@ -81,6 +81,9 @@ const DRAW_FULL_SCREEN_FRAME =
   "; printf '\\033[3;5HTOP LEFT FRAME'" +
   "; printf '\\033[10;20HBOTTOM RIGHT FRAME'" +
   `; printf '\\033[24;1H${FRAME_MARKER}'` +
+  // Keep the shell prompt from repainting/reflowing during the legitimate
+  // expanded-pane PTY resize; this repro is about preserving the frame.
+  '; sleep 3600' +
   '\n';
 
 test.describe('Planning terminal Expand/Close garble repro', () => {
