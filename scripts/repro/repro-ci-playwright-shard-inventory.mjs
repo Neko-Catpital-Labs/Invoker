@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 // Reproduces the CI "Verify Playwright shard inventory" step locally so the
 // playwright / N-of-9 shard regression cannot recur silently. It asserts that
-// every packages/app/e2e spec is assigned to exactly one Playwright shard:
-// no spec missing from the matrix, no spec listed that does not exist, and no
-// spec assigned to more than one shard.
+// every top-level packages/app/e2e spec is assigned to exactly one Playwright
+// shard: no spec missing from the matrix, no spec listed that does not exist,
+// and no spec assigned to more than one shard.
 //
 // The playwright / 8-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
 // (e2e/planning-terminal-live-model.proof.spec.ts and e2e/ui-delta-timeline.spec.ts)
 // were listed in a second shard while already owned by 6-of-9 and 3-of-9.
 // Duplicate assignment makes a shard run the same spec twice and fail.
+//
+// Manual or opt-in e2e proofs live below a subdirectory, so they are not part
+// of this top-level CI shard contract.
 //
 // Usage:
 //   node scripts/repro/repro-ci-playwright-shard-inventory.mjs [workflow.yml] [e2eDir]
