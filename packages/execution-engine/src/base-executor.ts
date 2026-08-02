@@ -1113,8 +1113,8 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
 
   /**
    * Build command, args, and optional agent session from a WorkRequest.
-   * When an AgentRegistry is available, uses it for 'claude' actions;
-   * otherwise falls back to prepareClaudeSession().
+   * When an AgentRegistry is available, uses it for agent actions;
+   * otherwise falls back to prepareClaudeSession() only for legacy defaulted tasks.
    */
   protected buildCommandAndArgs(
     request: WorkRequest,
@@ -1136,6 +1136,15 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
+      }
+      if (request.inputs.executionAgent !== undefined) {
+        const requestedAgent = typeof request.inputs.executionAgent === 'string'
+          ? request.inputs.executionAgent.trim()
+          : String(request.inputs.executionAgent);
+        throw new Error(
+          `Requested execution agent "${requestedAgent}" could not be resolved: ` +
+          `no configured agent set was available or it lacked that name.`,
+        );
       }
       // Fallback: use prepareClaudeSession when no agent registry is available
       const claudeCommand = opts?.claudeCommand ?? 'claude';

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnRemoteAgentFixImpl } from '../conflict-resolver.js';
 import type { AgentRegistry } from '../agent-registry.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 vi.mock('node:child_process');
 
@@ -43,8 +44,9 @@ function mockSpawnChildWithStderr(stdoutData: string, stderrData: string, exitCo
 }
 
 describe('spawnRemoteAgentFixImpl processOutput', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+  beforeEach(async () => {
+    const { spawn } = await import('node:child_process');
+    vi.mocked(spawn).mockReset();
   });
 
   it('does not export API keys into the remote fix shell by default', async () => {
@@ -60,6 +62,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
         '/home/user/worktree',
         { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
         'claude',
+        registerBuiltinAgents(),
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
@@ -106,6 +109,7 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
           secretsFile,
         },
         'claude',
+        registerBuiltinAgents(),
       );
 
       const script = child.stdin.write.mock.calls[0][0] as string;
@@ -196,6 +200,8 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
       'fix the bug',
       '/home/user/worktree',
       { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      undefined,
+      registerBuiltinAgents(),
     ).catch((e) => e as Error);
 
     expect(err).toBeInstanceOf(Error);
@@ -237,20 +243,16 @@ describe('spawnRemoteAgentFixImpl processOutput', () => {
     expect(result.sessionId).toBe('local-uuid-abc');
   });
 
-  it('skips processOutput when no registry is provided', async () => {
+  it('throws before spawning when no registry is provided', async () => {
     const { spawn } = await import('node:child_process');
 
-    vi.mocked(spawn).mockReturnValueOnce(mockSpawnChild('output', 0) as any);
-
-    // No registry → no driver → no processOutput call
-    const result = await spawnRemoteAgentFixImpl(
-      'fix the bug',
-      '/home/user/worktree',
-      { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
-    );
-
-    // Should still resolve with a UUID session ID
-    expect(result.stdout).toBe('output');
-    expect(result.sessionId).toBeDefined();
+    expect(() =>
+      spawnRemoteAgentFixImpl(
+        'fix the bug',
+        '/home/user/worktree',
+        { host: '1.2.3.4', user: 'invoker', sshKeyPath: '/tmp/key' },
+      ),
+    ).toThrow(/codex/);
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
