@@ -5,7 +5,9 @@
  *
  * Not part of the deterministic regression suite: a live CLI's screen can
  * legitimately differ run to run (spinners, token/cost counters, auth
- * state), so this is a manual verification script, run on demand.
+ * state), so this is a manual verification script, run on demand. Keep it
+ * out of the `.spec.ts` suffix so CI's strict shard inventory only covers
+ * deterministic Playwright specs.
  *
  * The e2e fixture normally shadows `claude` on PATH with a no-op stub
  * (electron-app.ts symlinks scripts/e2e-dry-run/fixtures/claude-marker.sh
