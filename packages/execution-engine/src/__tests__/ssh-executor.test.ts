@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import type { ExecutionAgent } from '../agent.js';
+import { AgentRegistry } from '../agent-registry.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
@@ -98,6 +100,72 @@ describe('SshExecutor pre-flight validation', () => {
     await expect(ssh.start(req)).rejects.toThrow(
       'requires repoUrl',
     );
+  });
+
+  it('throws for a non-default executionAgent when no configured agent set is available', async () => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the work',
+        description: 'test',
+        executionAgent: 'omp',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /execution agent "omp".*no configured agent set/i,
+    );
+    expect(spawnedProcesses.length).toBe(0);
+  });
+
+  it('uses a configured registry when the SSH executionAgent resolves', async () => {
+    spawnedProcesses = [];
+    vi.clearAllMocks();
+    const registry = new AgentRegistry();
+    const agent: ExecutionAgent = {
+      name: 'omp',
+      stdinMode: 'ignore',
+      buildCommand: (fullPrompt: string) => ({
+        cmd: 'omp',
+        args: ['run', fullPrompt],
+        sessionId: 'omp-session',
+      }),
+      buildResumeArgs: (sessionId: string) => ({ cmd: 'omp', args: ['resume', sessionId] }),
+    };
+    registry.registerExecution(agent);
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      agentRegistry: registry,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'do the work',
+        description: 'test',
+        executionAgent: 'omp',
+        workspacePath: '/remote/repo',
+      },
+    });
+
+    const handle = await ssh.start(req);
+    expect(handle.agentSessionId).toBe('omp-session');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const writeMock = (proc.stdin as any).write as ReturnType<typeof vi.fn>;
+    const script = writeMock.mock.calls[0]![0] as string;
+    expect(script).toContain("omp 'run' 'do the work'");
+    expect(script).not.toContain('claude');
+
+    proc.emit('close', 0, null);
+    await new Promise((resolve) => setTimeout(resolve, 50));
   });
 
   it('does not throw for reconciliation requests', async () => {
