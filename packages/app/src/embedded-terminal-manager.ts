@@ -36,6 +36,8 @@ export interface PtyForkOptionsLike {
 }
 
 export interface PtyLike {
+  readonly cols: number;
+  readonly rows: number;
   onData(listener: (data: string) => void): { dispose: () => void };
   onExit(listener: (event: { exitCode: number }) => void): { dispose: () => void };
   write(data: string): void;
@@ -61,6 +63,8 @@ export interface SpawnedTerminalProcess {
   write(data: string): void;
   resize(cols: number, rows: number): void;
   close(): void;
+  /** Authoritative applied size, read back from the real process. Null when the backend has no TTY (e.g. pipe-backed). */
+  getAppliedSize(): { cols: number; rows: number } | null;
 }
 
 export interface EmbeddedTerminalBackend {
@@ -215,6 +219,10 @@ class BashTerminalBackend implements EmbeddedTerminalBackend {
       resize() {
         // Pipe-backed child processes are not TTYs; resize is a no-op.
       },
+      getAppliedSize() {
+        // Pipes have no real terminal size to read back.
+        return null;
+      },
       close() {
         try {
           if (!child.killed) child.kill();
@@ -245,8 +253,8 @@ class PtyTerminalBackend implements EmbeddedTerminalBackend {
     const args = opts.spec.command ? opts.spec.args ?? [] : [];
     const pty = this.spawnFn(command, args, {
       name: 'xterm-256color',
-      cols: 80,
-      rows: 24,
+      cols: opts.spec.cols ?? 80,
+      rows: opts.spec.rows ?? 24,
       cwd: opts.cwd,
       env: { ...process.env, TERM: process.env.TERM ?? 'xterm-256color' },
     });
@@ -259,6 +267,9 @@ class PtyTerminalBackend implements EmbeddedTerminalBackend {
       },
       resize(cols: number, rows: number) {
         pty.resize(cols, rows);
+      },
+      getAppliedSize() {
+        return { cols: pty.cols, rows: pty.rows };
       },
       close() {
         try {
@@ -448,6 +459,12 @@ export class EmbeddedTerminalManager extends EventEmitter {
     }
   }
 
+  getAppliedSize(sessionId: string): { cols: number; rows: number } | null {
+    const state = this.sessions.get(sessionId);
+    if (!state || state.mode === 'attached') return null;
+    return state.process.getAppliedSize();
+  }
+
   close(sessionId: string): { ok: boolean; reason?: string } {
     const state = this.sessions.get(sessionId);
     if (!state) return { ok: false, reason: `Unknown session "${sessionId}".` };
@@ -552,6 +569,10 @@ export class EmbeddedTerminalManager extends EventEmitter {
       },
       resize() {
         // Resize before the backend returns a process handle is ignored.
+      },
+      getAppliedSize() {
+        // No process handle yet, so there is no real size to read back.
+        return null;
       },
       close() {
         // There is no process handle to close yet.
