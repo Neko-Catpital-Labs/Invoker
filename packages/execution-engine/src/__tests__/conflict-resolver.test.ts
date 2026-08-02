@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, buildRemoteAgentCommand, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -460,6 +460,28 @@ describe('agent dispatch — codex vs claude', () => {
         },
       });
     });
+  });
+});
+
+describe('buildRemoteAgentCommand unresolvable agent', () => {
+  it('raises naming the requested agent when no agent registry is available', () => {
+    expect(() => buildRemoteAgentCommand('fix it', undefined, 'codex')).toThrow(
+      /requested execution agent "codex"/,
+    );
+  });
+
+  it('raises naming the requested agent when the registry lacks that name', () => {
+    const registry = registerBuiltinAgents();
+    expect(() => buildRemoteAgentCommand('fix it', registry, 'no-such-agent')).toThrow(
+      /requested execution agent "no-such-agent"/,
+    );
+  });
+
+  it('still builds the command when the registry resolves the requested agent', () => {
+    const registry = registerBuiltinAgents();
+    const { shellCommand, sessionId } = buildRemoteAgentCommand('fix it', registry, 'codex');
+    expect(shellCommand).toContain('codex');
+    expect(sessionId).toBeTruthy();
   });
 });
 
