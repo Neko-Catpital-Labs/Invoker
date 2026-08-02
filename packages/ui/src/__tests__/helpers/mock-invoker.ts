@@ -247,6 +247,7 @@ export function createMockInvoker(
     planningTerminalList: vi.fn(async () => []),
     planningTerminalWrite: vi.fn(async () => ({ ok: true })),
     planningTerminalResize: vi.fn(async () => ({ ok: true })),
+    planningTerminalAppliedSize: vi.fn(async () => null),
     planningTerminalClose: vi.fn(async () => ({ ok: true })),
     getPlanningPresets: vi.fn(async () => [
       { key: 'codex', label: 'Codex', tool: 'codex', isDefault: true, defaultConfirmationMode: 'require' },
