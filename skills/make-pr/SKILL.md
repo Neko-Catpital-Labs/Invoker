@@ -25,6 +25,17 @@ Order slices so a reviewer reads the evidence before the change it justifies (se
 - Keep each slice green for CI: write the proof to assert the current (buggy) behavior, or mark the unfixed expectation pending (`it.fails` / skip with a TODO); the fix slice then flips it to the corrected behavior.
 - Foundation (types, helpers, migrations, flags) precedes behavior; cleanup and docs come last.
 
+### Refactor-lane title tag
+
+A refactor-lane stacked PR title carries the applied technique in a
+bracket right after the slice index: `[Tag](N)[REFACTOR: <Technique>]
+<description>`, for example `[Admin-Bypass Async Repair](2)[REFACTOR:
+Move Method] git working-tree primitives -> repair_body.py`. See
+the review-compression skill file's Naming the Technique section for
+the technique catalog and the full rule. `node scripts/create-pr.mjs`
+rejects a stacked refactor-lane title missing the bracket, and rejects
+the bracket on any other lane.
+
 ## What this skill covers
 
 - PR title/body authoring for Invoker

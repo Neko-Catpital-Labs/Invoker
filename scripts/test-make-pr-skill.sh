@@ -152,6 +152,12 @@ must_contain "$REVIEW_COMPRESSION_MD" "multiple distinct extractions from one fi
 # The new grain must NOT split the identical mechanical migration grouping.
 must_contain "$REVIEW_COMPRESSION_MD" "exact same mechanical migration across" "review-compression must keep grouping the same mechanical migration across files"
 
+# Refactor-lane PR titles carry the applied technique in a bracket.
+must_contain "$REVIEW_COMPRESSION_MD" "[Tag](N)[REFACTOR: <Technique>] <description>" "review-compression must document the refactor-lane title bracket format"
+must_contain "$REVIEW_COMPRESSION_MD" "required exactly when \`## Review Lane\` is \`refactor\`, and forbidden otherwise" "review-compression must state the bracket is required for refactor lane only"
+must_contain "$SKILL_MD" "### Refactor-lane title tag" "make-pr skill must document the refactor-lane title bracket subsection"
+must_contain "$SKILL_MD" "rejects a stacked refactor-lane title missing the bracket" "make-pr skill must state create-pr.mjs enforces the refactor title bracket"
+
 # Stale GitHub PR metadata after a branch update is a common landing failure.
 # The skill must both trigger on it and tell the author what to re-check.
 must_contain "$SKILL_MD" "whenever a branch/PR change means the GitHub PR" "make-pr skill must trigger when a branch change could stale GitHub PR metadata"
