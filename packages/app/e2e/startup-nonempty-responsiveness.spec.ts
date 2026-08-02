@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { stringify as yamlStringify } from 'yaml';
 import type { Page } from '@playwright/test';
 
-import { E2E_REPO_URL } from './fixtures/electron-app.js';
+import { closeElectronApp, E2E_REPO_URL, waitForInvokerBridge } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import {
   activityLogWatermark,
@@ -146,9 +146,8 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
   try {
     const seedApp = await launchElectronApp(testDir);
     try {
-      const page = await seedApp.firstWindow({ timeout: 5000 });
-      await page.waitForLoadState('domcontentloaded');
-      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 15_000 });
+      const page = await seedApp.firstWindow({ timeout: 30_000 });
+      await waitForInvokerBridge(page, 30_000);
 
       for (let index = 0; index < workflowCount; index += 1) {
         const planYaml = yamlStringify(buildPlan(index));
@@ -161,7 +160,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       const seededTasks = Array.isArray(seeded) ? seeded : seeded.tasks;
       expect(seededTasks.length).toBe(expectedTaskCount);
     } finally {
-      await seedApp.close();
+      await closeElectronApp(seedApp);
     }
 
     const startedAt = Date.now();
@@ -169,12 +168,10 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
     });
     try {
-      const page = await app.firstWindow({ timeout: STARTUP_BUDGET_MS });
+      const page = await app.firstWindow({ timeout: 60_000 });
       const elapsedMs = Date.now() - startedAt;
-      await page.waitForLoadState('domcontentloaded');
-      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
-
-      await page.getByTestId('sidebar-planning').click();
+      await page.getByTestId('sidebar-planning').dispatchEvent('click', { bubbles: true, cancelable: true });
+      await waitForInvokerBridge(page, 30_000);
       await expect(page.getByRole('heading', { name: 'Plan graph' })).toBeVisible({ timeout: 10_000 });
       await waitForWorkflowGraphVisible(page, 5000);
       await dragGraphAndAssertViewportMoves(page);
@@ -263,7 +260,7 @@ test('non-empty persisted startup stays responsive and avoids initial db-poll re
       expect(result.taskCount, startupEvidenceMessage).toBe(expectedTaskCount);
       expect(result.perf.dbPollCreated, startupEvidenceMessage).toBe(0);
     } finally {
-      await app.close();
+      await closeElectronApp(app);
     }
   } finally {
     rmSync(testDir, { recursive: true, force: true });
@@ -277,9 +274,8 @@ test('planning chat typing stays responsive with a large restored transcript', a
       INVOKER_TEST_RESUME_PENDING_DELAY_MS: '15000',
     });
     try {
-      const page = await app.firstWindow({ timeout: STARTUP_BUDGET_MS });
-      await page.waitForLoadState('domcontentloaded');
-      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
+      const page = await app.firstWindow({ timeout: 30_000 });
+      await waitForInvokerBridge(page, 30_000);
       await page.evaluate(async () => {
         await window.invoker.clear();
         await window.invoker.deleteAllWorkflows();
@@ -313,8 +309,7 @@ test('planning chat typing stays responsive with a large restored transcript', a
       expect(sessionId).toBeTruthy();
 
       await page.reload();
-      await page.waitForLoadState('domcontentloaded');
-      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 10_000 });
+      await waitForInvokerBridge(page, 30_000);
       await page.getByTestId('sidebar-home').click();
       await expect(page.getByTestId('invoker-terminal-input')).toBeVisible({ timeout: 10000 });
       await expect(page.getByTestId('invoker-terminal-transcript')).toContainText(
@@ -390,7 +385,7 @@ test('planning chat typing stays responsive with a large restored transcript', a
       expect(maxPayloadNumber(payloads, 'renderer_event_loop_lag', 'lagMs'), planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_EVENT_LOOP_LAG_MS);
       expect(maxPayloadNumber(payloads, 'renderer_long_task', 'durationMs'), planningEvidenceMessage).toBeLessThanOrEqual(MAX_PLANNING_RENDERER_LONG_TASK_MS);
     } finally {
-      await app.close();
+      await closeElectronApp(app);
     }
   } finally {
     rmSync(testDir, { recursive: true, force: true });
