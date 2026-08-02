@@ -100,6 +100,28 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws for an explicit non-Claude executionAgent without a configured agent set', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    });
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'test prompt',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Execution agent "codex".*no configured agent set was available/,
+    );
+  });
+
   it('does not throw for reconciliation requests', async () => {
     const ssh = new SshExecutor({
       host: 'localhost',
