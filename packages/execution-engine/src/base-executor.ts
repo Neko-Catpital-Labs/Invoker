@@ -1129,13 +1129,20 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       };
     }
     if (request.actionType === 'ai_task') {
+      const requestedAgentName = request.inputs.executionAgent;
       if (opts?.agentRegistry) {
-        const agentName = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
+        const agentName = requestedAgentName ?? DEFAULT_EXECUTION_AGENT;
         const agent = opts.agentRegistry.getOrThrow(agentName);
         assertExecutionModelSupported(agent, request.inputs.executionModel);
         const fullPrompt = this.buildFullPrompt(request);
         const spec = agent.buildCommand(fullPrompt, { executionModel: request.inputs.executionModel });
         return { cmd: spec.cmd, args: spec.args, agentSessionId: spec.sessionId, fullPrompt: spec.fullPrompt };
+      }
+      if (requestedAgentName !== undefined) {
+        throw new Error(
+          `Unable to resolve execution agent "${requestedAgentName}": ` +
+          `no configured agent set was available.`,
+        );
       }
       // Fallback: use prepareClaudeSession when no agent registry is available
       const claudeCommand = opts?.claudeCommand ?? 'claude';
