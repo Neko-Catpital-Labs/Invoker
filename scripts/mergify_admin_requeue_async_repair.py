@@ -25,6 +25,22 @@ def _slugify(value: str, *, max_len: int = 40) -> str:
     return (slug or "check")[:max_len].strip("-") or "check"
 
 
+# Shared with mergify_admin_requeue_infra_signal.py, which needs the exact
+# plan_name a build_repair_*_plan call below already produced, to look up that
+# same submission's Invoker workflow by name before deciding whether to submit
+# another one.
+def repair_check_plan_name(pr_number: int, check_name: str, start_head: str) -> str:
+    return f"admin-bypass-repair-check-pr-{pr_number}-{_slugify(check_name)}-{start_head[:7]}"
+
+
+def repair_conflict_plan_name(pr_number: int, start_head: str) -> str:
+    return f"admin-bypass-repair-conflict-pr-{pr_number}-{start_head[:7]}"
+
+
+def repair_bot_thread_plan_name(pr_number: int, start_head: str) -> str:
+    return f"admin-bypass-repair-bot-thread-pr-{pr_number}-{start_head[:7]}"
+
+
 def _yaml_str(value: str) -> str:
     # JSON string encoding is a valid YAML flow scalar and, unlike naive shell
     # quoting, correctly escapes quotes/colons/backslashes in PR titles/branch
@@ -156,7 +172,7 @@ def build_repair_check_plan(
     start_head: str,
     state_file: Path,
 ) -> AsyncRepairPlan:
-    name = f"admin-bypass-repair-check-pr-{pr.number}-{_slugify(check_name)}-{start_head[:7]}"
+    name = repair_check_plan_name(pr.number, check_name, start_head)
     prompt = (
         "This PR's CI check is failing. Diagnose why it is failing, then fix it. Add or "
         "update a repro if the failure is reproducible.\n\n"
@@ -215,7 +231,7 @@ def build_repair_conflict_plan(
     start_head: str,
     state_file: Path,
 ) -> AsyncRepairPlan:
-    name = f"admin-bypass-repair-conflict-pr-{pr.number}-{start_head[:7]}"
+    name = repair_conflict_plan_name(pr.number, start_head)
     prompt = (
         "This PR has a merge conflict blocking it from merging. Diagnose why, then fix it.\n\n"
         "If rebasing the head branch onto its base branch (preserving the PR's intended changes) resolves it: "
@@ -253,7 +269,7 @@ def build_repair_bot_thread_plan(
     start_head: str,
     state_file: Path,
 ) -> AsyncRepairPlan:
-    name = f"admin-bypass-repair-bot-thread-pr-{pr.number}-{start_head[:7]}"
+    name = repair_bot_thread_plan_name(pr.number, start_head)
     prompt = (
         f"Resolve the unresolved review thread {thread_id}. Address the reviewer's feedback with "
         "real code changes, run the narrow proof for the fix, then commit locally. Do not push. "
