@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Reproduces the CI "Verify Playwright shard inventory" step locally so the
 // playwright / N-of-9 shard regression cannot recur silently. It asserts that
-// every packages/app/e2e spec is assigned to exactly one Playwright shard:
-// no spec missing from the matrix, no spec listed that does not exist, and no
-// spec assigned to more than one shard.
+// every CI-owned packages/app/e2e spec is assigned to exactly one Playwright
+// shard: no spec missing from the matrix, no spec listed that does not exist,
+// and no spec assigned to more than one shard.
 //
 // The playwright / 8-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
@@ -22,6 +22,11 @@ import YAML from 'yaml';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.yml');
 const e2eDir = resolve(repoRoot, process.argv[3] ?? 'packages/app/e2e');
+const manualE2eSpecs = new Set([
+  // This proof depends on a real authenticated `claude` CLI and is
+  // intentionally documented as an on-demand manual verification.
+  'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+]);
 
 function shardFiles(job) {
   if (!job?.strategy?.matrix?.include) return [];
@@ -39,6 +44,7 @@ function main() {
   const discovered = readdirSync(e2eDir)
     .filter((file) => file.endsWith('.spec.ts'))
     .map((file) => `e2e/${file}`)
+    .filter((file) => !manualE2eSpecs.has(file))
     .sort();
 
   const listedSet = new Set(listed);

@@ -661,6 +661,10 @@ jobs:
             files: >-
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
+              e2e/planning-surface-navigation-garble-repro.spec.ts
+              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
+              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
+              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
               e2e/workers-surface.spec.ts
 
     name: playwright / ${{ matrix.name }}
@@ -696,6 +700,11 @@ jobs:
           const YAML = require('yaml');
 
           const workflow = YAML.parse(fs.readFileSync('.github/workflows/ci.yml', 'utf8'));
+          const manualE2eSpecs = new Set([
+            // This proof depends on a real authenticated `claude` CLI and is
+            // intentionally documented as an on-demand manual verification.
+            'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+          ]);
           const perfJob = workflow.jobs['playwright-nightly-perf'];
           const shards = [
             ...workflow.jobs.playwright.strategy.matrix.include,
@@ -705,6 +714,7 @@ jobs:
           const discovered = fs.readdirSync('packages/app/e2e')
             .filter((file) => file.endsWith('.spec.ts'))
             .map((file) => `e2e/${file}`)
+            .filter((file) => !manualE2eSpecs.has(file))
             .sort();
 
           const listedSet = new Set(listed);
