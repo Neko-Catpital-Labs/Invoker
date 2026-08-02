@@ -1,5 +1,6 @@
 export * from './adapter.js';
 export * from './attempt-read-models.js';
+export * from './hourly-snapshot-retention.js';
 export * from './sqlite-adapter.js';
 export * from './slow-query-aggregator.js';
 export * from './conversation-repository.js';

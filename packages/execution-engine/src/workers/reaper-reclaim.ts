@@ -12,8 +12,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { Logger } from '@invoker/contracts';
+import { hourlySnapshotRetention, pruneHourlySnapshots } from '@invoker/data-store';
 
-import { hourlySnapshotRetention, pruneHourlySnapshots } from '../../../app/src/delete-all-snapshot.js';
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
 import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
 
