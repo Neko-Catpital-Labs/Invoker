@@ -67,6 +67,18 @@ function processWith(stdout: string): any {
   return process;
 }
 
+function processWithFailure(exitCode: number, stderr: string): any {
+  const process = new EventEmitter() as any;
+  process.stdout = new EventEmitter();
+  process.stderr = new EventEmitter();
+  process.kill = vi.fn();
+  queueMicrotask(() => {
+    process.stderr.emit('data', Buffer.from(stderr));
+    process.emit('close', exitCode);
+  });
+  return process;
+}
+
 function handler(surface: SlackSurface, pattern: string): Function {
   const found = (surface.getApp() as any)._eventHandlers.find((entry: MockHandler) => entry.pattern === pattern);
   if (!found) throw new Error(`Missing ${pattern} handler`);
@@ -240,5 +252,83 @@ describe('Slack plan-intent confirmation repro', () => {
     });
 
     expect(mockSpawn).toHaveBeenCalledTimes(2);
+  });
+
+  it.fails('does not let a second plan-intent ask silently replace an unanswered one in the same thread', async () => {
+    const say = vi.fn().mockResolvedValue({ ts: 'clobber-first-message' });
+    await handler(surface, 'app_mention')({
+      event: { text: '<@UBOT> /plan add feature A', ts: 'clobber-thread', user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+    const firstKey = buttonValue(say, 'lobby_plan_for_execution');
+    say.mockClear();
+
+    // The user (or an agent asking on its own) tries to start a second plan-intent
+    // ask in the same thread before the first one has been answered. thread_ts
+    // points back at the original message, exactly like a real threaded reply.
+    await handler(surface, 'app_mention')({
+      event: { text: '<@UBOT> /plan actually add feature B instead', ts: 'clobber-thread-2', thread_ts: 'clobber-thread', user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+
+    // No second set of buttons, and the user is told why.
+    expect(() => buttonValue(say, 'lobby_plan_for_execution')).toThrow('Missing lobby_plan_for_execution button');
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('already a pending planning question'),
+    }));
+
+    // The original ask must still be intact and resolve to the original request.
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await actionHandler(surface, 'lobby_plan_for_execution')({
+      action: { type: 'button', value: firstKey },
+      body: { channel: { id: 'C_LOBBY' }, message: { ts: 'clobber-first-message', thread_ts: 'clobber-thread' } },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond: vi.fn().mockResolvedValue(undefined),
+    });
+    expect(JSON.stringify(mockSpawn.mock.calls[0])).toContain('feature A');
+    expect(JSON.stringify(mockSpawn.mock.calls[0])).not.toContain('feature B');
+  });
+
+  it.fails('lets Approve be clicked again if drafting the plan itself fails', async () => {
+    const say = vi.fn().mockResolvedValue({ ts: 'fail-intent-message' });
+    await handler(surface, 'app_mention')({
+      event: { text: '<@UBOT> /plan add feature A', ts: 'fail-thread', user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+    const key = buttonValue(say, 'lobby_plan_for_execution');
+
+    // The agent turn succeeds, but the planner call itself blows up (e.g. an
+    // infra failure), mirroring what "Application quit" was actually masking.
+    mockSpawn.mockImplementationOnce(() => processWith('got it, continuing'));
+    mockSpawn.mockImplementationOnce(() => processWithFailure(1, 'planner crashed: OAuth session expired'));
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await actionHandler(surface, 'lobby_plan_for_execution')({
+      action: { type: 'button', value: key },
+      body: { channel: { id: 'C_LOBBY' }, message: { ts: 'fail-intent-message', thread_ts: 'fail-thread' } },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+    });
+
+    // The user must be told it failed, not left with silence after "Planning for execution."
+    // Button-triggered replies post via the Slack client, not the mention `say`.
+    expect(sharedSlack.client.chat.postMessage.mock.calls.some(
+      ([msg]: [{ text?: string }]) => typeof msg?.text === 'string' && /failed/i.test(msg.text),
+    )).toBe(true);
+
+    // And the confirmation must still be retryable without retyping the request.
+    expect(slackSessionRepo.getPendingConfirmation(key)).not.toBeNull();
+
+    mockSpawn.mockImplementationOnce(() => processWith('got it, continuing'));
+    mockSpawn.mockImplementationOnce(() => processWith(plan));
+    await actionHandler(surface, 'lobby_plan_for_execution')({
+      action: { type: 'button', value: key },
+      body: { channel: { id: 'C_LOBBY' }, message: { ts: 'fail-intent-message', thread_ts: 'fail-thread' } },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+    });
+
+    expect(mockSpawn).toHaveBeenCalledTimes(4);
+    expect(slackSessionRepo.getPendingConfirmation(key)).toBeNull();
   });
 });
