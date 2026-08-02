@@ -2,7 +2,7 @@
 // Exercises scripts/e2e-regression-watch.mjs's pure logic and dry-run formula
 // path. The optional live smoke uses real GitHub read APIs only when
 // INVOKER_E2E_REGRESSION_WATCH_LIVE=1 is set.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -167,6 +167,8 @@ function testPlanVarsAndDryRunRendering() {
     });
     if (!rendered.planPath.endsWith('ci-regression-watch.yaml')) fail('dry run did not render expected plan path');
     if (rendered.submitted) fail('dry run must not submit');
+    const planText = readFileSync(rendered.planPath, 'utf8');
+    if (!planText.includes('executionAgent: codex')) fail('fix task must request codex (default claude agent hits the broken SSH pool)');
   } finally {
     rmSync(outRoot, { recursive: true, force: true });
   }
