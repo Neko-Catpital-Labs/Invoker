@@ -5,6 +5,10 @@
 // no spec missing from the matrix, no spec listed that does not exist, and no
 // spec assigned to more than one shard.
 //
+// Manual-only live-auth proofs stay runnable by explicit file path but are not
+// CI-managed, because they require local credentials and non-deterministic CLI
+// output.
+//
 // The playwright / 8-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
 // (e2e/planning-terminal-live-model.proof.spec.ts and e2e/ui-delta-timeline.spec.ts)
@@ -22,6 +26,9 @@ import YAML from 'yaml';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.yml');
 const e2eDir = resolve(repoRoot, process.argv[3] ?? 'packages/app/e2e');
+const manualOnlySpecs = new Set([
+  'planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+]);
 
 function shardFiles(job) {
   if (!job?.strategy?.matrix?.include) return [];
@@ -37,7 +44,7 @@ function main() {
     ...shardFiles(workflow.jobs?.['playwright-nightly-perf']),
   ];
   const discovered = readdirSync(e2eDir)
-    .filter((file) => file.endsWith('.spec.ts'))
+    .filter((file) => file.endsWith('.spec.ts') && !manualOnlySpecs.has(file))
     .map((file) => `e2e/${file}`)
     .sort();
 
