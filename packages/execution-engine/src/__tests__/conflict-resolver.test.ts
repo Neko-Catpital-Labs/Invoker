@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation, buildRemoteAgentCommand } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -532,6 +532,21 @@ describe('remote agent dispatch via registry', () => {
     expect(spawnRemoteAgentFixImpl.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('buildRemoteAgentCommand throws for explicit agent when no configured set is available', () => {
+    expect(() => buildRemoteAgentCommand('fix the merge conflict', undefined, 'omp')).toThrow(
+      /Unable to resolve execution agent "omp"[\s\S]*no configured agent set/,
+    );
+  });
+
+  it('buildRemoteAgentCommand uses the requested registry-backed agent when it resolves', () => {
+    const registry = registerBuiltinAgents();
+
+    const result = buildRemoteAgentCommand('fix the merge conflict', registry, 'codex');
+
+    expect(result.shellCommand).toContain('codex');
+    expect(result.shellCommand).not.toContain('claude --session-id');
+    expect(result.sessionId).toBeTruthy();
+  });
 
   it('codex agent buildFixCommand generates correct remote shell command shape', () => {
     const registry = registerBuiltinAgents();

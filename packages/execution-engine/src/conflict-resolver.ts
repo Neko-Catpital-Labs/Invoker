@@ -284,9 +284,10 @@ export function remoteAgentShellInvocation(): string[] {
 
 /**
  * Build the shell command to run an agent on a remote host.
- * Uses the agent registry when available; falls back to claude CLI.
+ * Uses the configured agent registry so the requested agent cannot be
+ * silently substituted by a different hardcoded CLI.
  */
-function buildRemoteAgentCommand(
+export function buildRemoteAgentCommand(
   prompt: string,
   agentRegistry?: AgentRegistry,
   agentName?: string,
@@ -301,13 +302,24 @@ function buildRemoteAgentCommand(
       const cmd = `${spec.cmd} ${spec.args.map(a => shellQuote(a)).join(' ')}`;
       return { shellCommand: cmd, sessionId };
     }
+    throw new Error(
+      `Unable to resolve execution agent "${name}" for remote agent command: ` +
+      `the configured agent set did not include an agent named "${name}" with a fix command.`,
+    );
   }
-  // Fallback: claude-compatible CLI (for backwards compat without registry)
-  const sessionId = randomUUID();
-  return {
-    shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
-    sessionId,
-  };
+
+  if (!agentName || name === 'claude') {
+    const sessionId = randomUUID();
+    return {
+      shellCommand: `claude --session-id ${shellQuote(sessionId)} -p ${shellQuote(prompt)} --dangerously-skip-permissions`,
+      sessionId,
+    };
+  }
+
+  throw new Error(
+    `Unable to resolve execution agent "${name}" for remote agent command: ` +
+    `no configured agent set was available.`,
+  );
 }
 
 export function resolveSelectedRemoteTargetId(host: ConflictResolverHost, taskId: string, task: ReturnType<Orchestrator['getTask']> & {}): string | undefined {

@@ -81,6 +81,29 @@ describe('SshExecutor pre-flight validation', () => {
     );
   });
 
+  it('throws for non-default executionAgent when no configured set is available', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+    }) as any;
+    const spawnSpy = vi.spyOn(ssh, 'spawnSshRemoteStdin');
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        workspacePath: '/remote/workspace',
+        executionAgent: 'omp',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(
+      /Unable to resolve execution agent "omp"[\s\S]*no configured agent set/,
+    );
+    expect(spawnSpy).not.toHaveBeenCalled();
+  });
+
   it('throws when task has no repoUrl in managed mode', async () => {
     // Use /dev/null as a readable file to pass the key check
     const ssh = new SshExecutor({
