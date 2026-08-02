@@ -55,6 +55,7 @@ interface TaskDAGProps {
   statusFilters?: Set<string>;
   runningTaskIds?: ReadonlySet<string>;
   surfaceMode?: 'default' | 'browser' | 'overlay';
+  layoutMode?: 'elk' | 'fallback';
 }
 
 const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
@@ -173,7 +174,7 @@ function mergeMeasuredNodeState(prevNodes: Node[], nextNodes: Node[]): Node[] {
   });
 }
 
-function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds, surfaceMode = 'default' }: TaskDAGProps) {
+function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskClick, onTaskDoubleClick, onTaskContextMenu, onManualViewport, statusFilters, runningTaskIds, surfaceMode = 'default', layoutMode = 'elk' }: TaskDAGProps) {
   const { fitView, setCenter, getZoom } = useReactFlow();
   const graphRootRef = useRef<HTMLDivElement>(null);
   const prevNodeCount = useRef(0);
@@ -273,7 +274,7 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
   }, [rawGraph.layoutKey, surfaceMode]);
 
   useEffect(() => {
-    if (rawGraph.taskArray.length === 0) return;
+    if (layoutMode === 'fallback' || rawGraph.taskArray.length === 0) return;
     let stale = false;
     const layoutTasks = [...rawGraph.taskArray].sort((a, b) => a.id.localeCompare(b.id));
     const layoutEdges = rawGraph.rawEdges.map(({ id, source, target }) => ({ id, source, target }));
@@ -288,9 +289,12 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     return () => {
       stale = true;
     };
-  }, [rawGraph.layoutKey]);
+  }, [layoutMode, rawGraph.layoutKey]);
 
   const activeLayout = useMemo(() => {
+    if (layoutMode === 'fallback') {
+      return rawGraph.fallbackLayout;
+    }
     if (layoutState && layoutHasAllTasks(layoutState.result, rawGraph.taskArray)) {
       return layoutState.result;
     }
@@ -310,12 +314,14 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
       }
     }
     return { positions, edgePoints: new Map(), usedFallback };
-  }, [layoutState, rawGraph.fallbackLayout, rawGraph.taskArray]);
+  }, [layoutMode, layoutState, rawGraph.fallbackLayout, rawGraph.taskArray]);
 
   const emptyEdgePoints = useMemo(() => new Map<string, { x: number; y: number }[]>(), []);
   const routedEdgePoints = useMemo(
-    () => layoutState?.key === rawGraph.layoutKey ? layoutState.result.edgePoints : emptyEdgePoints,
-    [emptyEdgePoints, layoutState, rawGraph.layoutKey],
+    () => layoutMode === 'fallback' || layoutState?.key !== rawGraph.layoutKey
+      ? emptyEdgePoints
+      : layoutState.result.edgePoints,
+    [emptyEdgePoints, layoutMode, layoutState, rawGraph.layoutKey],
   );
 
   const { nodes, edges } = useMemo(() => {

@@ -4062,6 +4062,7 @@ export function App() {
           statusFilters={new Set<string>()}
           runningTaskIds={runningTaskIds}
           surfaceMode={floating ? 'default' : 'browser'}
+          layoutMode={floating ? 'fallback' : 'elk'}
         />
       </div>
     );
