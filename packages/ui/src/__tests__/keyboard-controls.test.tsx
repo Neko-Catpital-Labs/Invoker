@@ -367,7 +367,7 @@ describe('Side rail controls (component)', () => {
 
     key('ArrowDown');
     await waitFor(() => {
-      expect(screen.queryByTestId('terminal-drawer-body')).not.toBeInTheDocument();
+      expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
     });
   });
 
