@@ -217,7 +217,7 @@ describe('Slack plan-intent auto-detect repro', () => {
     });
 
     expect(say).not.toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining('already a pending planning question'),
+      text: expect.stringContaining('already a pending confirmation'),
     }));
     expect(tryButtonValue(say, 'lobby_plan_for_execution')).toBeUndefined();
     // The auto-detected turn already asked the model "submit it" once, before
