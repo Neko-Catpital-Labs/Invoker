@@ -13,6 +13,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { WorkRequest } from '@invoker/contracts';
 import type { ExecutionAgent, AgentCommandSpec } from '../agent.js';
+import { BaseExecutor, type BaseEntry } from '../base-executor.js';
+import type { ExecutorHandle, PersistedTaskMeta, TerminalSpec } from '../executor.js';
 import { AgentRegistry } from '../agent-registry.js';
 import { ClaudeExecutionAgent } from '../agents/claude-execution-agent.js';
 import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
@@ -58,6 +60,39 @@ function makeCommandRequest(command = 'echo hello'): WorkRequest {
     callbackUrl: '',
     timestamps: {},
   } as unknown as WorkRequest;
+}
+
+function makeAiTaskRequest(inputs: Partial<WorkRequest['inputs']> = {}): WorkRequest {
+  return {
+    requestId: randomUUID(),
+    actionId: randomUUID(),
+    taskId: `task-${randomUUID().slice(0, 8)}`,
+    actionType: 'ai_task',
+    inputs: { prompt: 'Do the work', ...inputs },
+    upstreamContext: [],
+    callbackUrl: '',
+    timestamps: {},
+  } as unknown as WorkRequest;
+}
+
+class ExposedBaseExecutor extends BaseExecutor<BaseEntry> {
+  readonly type = 'test';
+
+  exposeBuildCommandAndArgs(
+    request: WorkRequest,
+    opts?: { claudeCommand?: string; agentRegistry?: AgentRegistry },
+  ) {
+    return this.buildCommandAndArgs(request, opts);
+  }
+
+  async start(request: WorkRequest): Promise<ExecutorHandle> {
+    return this.createHandle(request);
+  }
+
+  sendInput(_handle: ExecutorHandle, _input: string): void {}
+  getTerminalSpec(_handle: ExecutorHandle): TerminalSpec | null { return null; }
+  getRestoredTerminalSpec(_meta: PersistedTaskMeta): TerminalSpec { return { command: 'bash', args: [] }; }
+  async destroyAll(): Promise<void> { this.entries.clear(); }
 }
 
 // ── Agent definitions for the matrix ─────────────────────────
@@ -268,6 +303,31 @@ describe('Agent × Executor matrix', () => {
       // We have at least one 'ignore' and one 'pipe'
       expect(modes).toContain('ignore');
       expect(modes).toContain('pipe');
+    });
+  });
+
+  describe('BaseExecutor command building', () => {
+    it('rejects an explicit executionAgent when no configured set is available', () => {
+      const executor = new ExposedBaseExecutor();
+      const request = makeAiTaskRequest({ executionAgent: 'codex' });
+
+      expect(() => executor.exposeBuildCommandAndArgs(request)).toThrow(/codex/);
+      expect(() => executor.exposeBuildCommandAndArgs(request)).toThrow(/no configured agent set/i);
+    });
+
+    it('uses the requested agent when it resolves through the configured set', () => {
+      const executor = new ExposedBaseExecutor();
+      const registry = new AgentRegistry();
+      registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+
+      const result = executor.exposeBuildCommandAndArgs(
+        makeAiTaskRequest({ executionAgent: 'codex' }),
+        { agentRegistry: registry },
+      );
+
+      expect(result.cmd).toBe('codex-test');
+      expect(result.args).toContain('exec');
+      expect(result.fullPrompt).toBe('Do the work');
     });
   });
 });
