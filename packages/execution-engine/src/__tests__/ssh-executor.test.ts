@@ -10,6 +10,7 @@ import type { PersistedTaskMeta } from '../executor.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
+import { registerBuiltinAgents } from '../agents/index.js';
 
 function makeRequest(overrides: Partial<WorkRequest> = {}): WorkRequest {
   return {
@@ -227,6 +228,73 @@ describe('SshExecutor managed workspace mode', () => {
     expect(callScript).toContain("trap 'cleanup_runtime' EXIT");
     expect(callAgentId).toBeUndefined();
     expect(callFinalize).toEqual({ branch: handle.branch, worktreePath: handle.workspacePath });
+  });
+
+  it('uses the requested agent when resolved and throws naming a non-default agent when the registry is missing', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: registerBuiltinAgents(),
+    }) as any;
+
+    vi.spyOn(ssh, 'execRemoteCapture').mockImplementation(async (script: string) => {
+      if (script.includes('__INVOKER_BASE_REF__=')) {
+        return [
+          '__INVOKER_BASE_REF__=origin/main',
+          '__INVOKER_BASE_HEAD__=abc123def456abc123def456abc123def456abc1',
+        ].join('\n');
+      }
+      if (script.includes('printf %s "$HOME"')) return '/home/testuser';
+      if (script.includes('worktree list --porcelain')) return '';
+      if (script.includes('worktree prune')) return '';
+      return '';
+    });
+    vi.spyOn(ssh, 'setupTaskBranch').mockResolvedValue(undefined);
+    const spawnStub = vi.spyOn(ssh, 'spawnSshRemoteStdin').mockImplementation(
+      (_executionId: string, _request: any, handle: any) => handle,
+    );
+
+    const resolvedRequest = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        repoUrl: 'git@github.com:owner/repo.git',
+        executionAgent: 'codex',
+      },
+    });
+
+    await ssh.start(resolvedRequest);
+
+    const callScript = spawnStub.mock.calls[0][3];
+    const callEffectiveAgentName = spawnStub.mock.calls[0][6];
+    expect(callScript).toContain("codex 'exec'");
+    expect(callScript).not.toContain("claude '--session-id'");
+    expect(callEffectiveAgentName).toBe('codex');
+
+    const sshWithoutRegistry = new SshExecutor({
+      host: 'localhost',
+      user: 'testuser',
+      sshKeyPath: '/dev/null',
+    });
+    await expect(sshWithoutRegistry.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'omp',
+      },
+    }))).rejects.toThrow(/omp/);
+    await expect(sshWithoutRegistry.start(makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do the work',
+        description: 'test',
+        executionAgent: 'omp',
+      },
+    }))).rejects.toThrow(/no configured agent registry was supplied/);
   });
 
   it('managed mode skips provisioning when provisionCommand is unset', async () => {

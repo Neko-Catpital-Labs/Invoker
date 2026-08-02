@@ -422,10 +422,24 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
 
     let payload: string;
     let agentSessionId: string | undefined;
-    const executionAgent = request.inputs.executionAgent ?? DEFAULT_EXECUTION_AGENT;
-    const effectiveAgentName = request.actionType === 'ai_task'
-      ? (this.agentRegistry ? executionAgent : 'claude')
-      : undefined;
+    const requestedExecutionAgent = request.inputs.executionAgent?.trim();
+    const executionAgent = requestedExecutionAgent && requestedExecutionAgent !== 'null' && requestedExecutionAgent !== 'undefined'
+      ? requestedExecutionAgent
+      : DEFAULT_EXECUTION_AGENT;
+    let effectiveAgentName: string | undefined;
+    if (request.actionType === 'ai_task') {
+      if (this.agentRegistry) {
+        effectiveAgentName = executionAgent;
+      } else {
+        if (executionAgent !== DEFAULT_EXECUTION_AGENT) {
+          throw new Error(
+            `Unable to resolve requested execution agent "${executionAgent}" for SSH ai_task: ` +
+            'no configured agent registry was supplied.',
+          );
+        }
+        effectiveAgentName = 'claude';
+      }
+    }
 
     if (request.actionType === 'command') {
       const command = request.inputs.command;
