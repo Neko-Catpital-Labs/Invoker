@@ -160,6 +160,10 @@ describe('window-lifecycle', () => {
     expect(options.skipTaskbar).toBe(true);
     expect(options.x).toBeUndefined();
     expect(options.y).toBeUndefined();
+    expect(electronMock.fakeWindow.show).toHaveBeenCalledTimes(1);
+    expect(electronMock.fakeWindow.focus).toHaveBeenCalledTimes(1);
+    expect(setUiInteractive).not.toHaveBeenCalled();
+    expect(recordStartupMark).toHaveBeenCalledWith('window.mapped');
 
     const readyHandler = electronMock.fakeWindow.once.mock.calls.find(([eventName]) => eventName === 'ready-to-show')?.[1];
     expect(readyHandler).toBeDefined();
