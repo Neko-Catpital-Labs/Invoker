@@ -16,6 +16,7 @@ export default defineConfig({
   globalSetup: './e2e/global-setup.ts',
   globalTeardown: './e2e/global-teardown.ts',
   testDir: './e2e',
+  testIgnore: process.env.INVOKER_E2E_INCLUDE_MANUAL === '1' ? [] : ['**/*.manual.spec.ts'],
   timeout: 120000,
   retries: Number.isInteger(retries) && retries >= 0 ? retries : 0,
   workers: Number.isFinite(workers) && workers > 0 ? workers : 1,

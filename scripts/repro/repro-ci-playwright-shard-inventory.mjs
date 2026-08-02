@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Reproduces the CI "Verify Playwright shard inventory" step locally so the
 // playwright / N-of-9 shard regression cannot recur silently. It asserts that
-// every packages/app/e2e spec is assigned to exactly one Playwright shard:
-// no spec missing from the matrix, no spec listed that does not exist, and no
-// spec assigned to more than one shard.
+// every non-manual packages/app/e2e spec is assigned to exactly one Playwright
+// shard: no spec missing from the matrix, no spec listed that does not exist,
+// and no spec assigned to more than one shard.
 //
 // The playwright / 8-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
@@ -38,6 +38,7 @@ function main() {
   ];
   const discovered = readdirSync(e2eDir)
     .filter((file) => file.endsWith('.spec.ts'))
+    .filter((file) => !file.endsWith('.manual.spec.ts'))
     .map((file) => `e2e/${file}`)
     .sort();
 
