@@ -61,6 +61,8 @@ const nodeTypes = { taskNode: TaskNode, mergeGateNode: MergeGateNode };
 const edgeTypes = { bundled: BundledEdge };
 const WORKFLOW_GAP = 100;
 const WATCHDOG_RECOVERY_MISS_COUNT = 3;
+const FLOATING_LARGE_GRAPH_LAYOUT_DEFER_MS = 300;
+const FLOATING_LARGE_GRAPH_TASK_THRESHOLD = 20;
 
 type RawTaskEdge = LayoutEdge & {
   kind: 'local' | 'external';
@@ -277,18 +279,31 @@ function TaskDAGInner({ tasks, workflows, selectedTaskId, cameraCommand, onTaskC
     let stale = false;
     const layoutTasks = [...rawGraph.taskArray].sort((a, b) => a.id.localeCompare(b.id));
     const layoutEdges = rawGraph.rawEdges.map(({ id, source, target }) => ({ id, source, target }));
+    const deferLayout =
+      surfaceMode === 'default' &&
+      layoutTasks.length > FLOATING_LARGE_GRAPH_TASK_THRESHOLD;
 
-    void layoutTaskGraph(layoutTasks, layoutEdges).then((result) => {
-      if (!stale) {
-        lastLayoutRef.current = result;
-        setLayoutState({ key: rawGraph.layoutKey, result });
-      }
-    });
+    const runLayout = () => {
+      void layoutTaskGraph(layoutTasks, layoutEdges).then((result) => {
+        if (!stale) {
+          lastLayoutRef.current = result;
+          setLayoutState({ key: rawGraph.layoutKey, result });
+        }
+      });
+    };
+
+    const timer = deferLayout
+      ? window.setTimeout(runLayout, FLOATING_LARGE_GRAPH_LAYOUT_DEFER_MS)
+      : undefined;
+    if (!deferLayout) {
+      runLayout();
+    }
 
     return () => {
       stale = true;
+      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [rawGraph.layoutKey]);
+  }, [rawGraph.layoutKey, surfaceMode]);
 
   const activeLayout = useMemo(() => {
     if (layoutState && layoutHasAllTasks(layoutState.result, rawGraph.taskArray)) {
