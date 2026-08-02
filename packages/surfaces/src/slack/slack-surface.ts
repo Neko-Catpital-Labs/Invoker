@@ -1199,7 +1199,18 @@ export class SlackSurface implements Surface {
       requestedBy: context.requestedBy ?? userId,
       confirmationMode: draftReview.confirmationMode,
     });
-    await this.postSlackPlanDraft(draft, draftReview.summary, say);
+    try {
+      await this.postSlackPlanDraft(draft, draftReview.summary, say);
+    } catch (error) {
+      // The draft row already exists at this point and postSlackPlanDraft has
+      // already surfaced the failure by updating the Slack message in place,
+      // so this must not propagate: letting it reach the button handler's
+      // catch would restore the pending confirmation and offer "click
+      // Approve to retry", which re-runs this whole method and creates a
+      // second, orphaned draft instead of reconciling the one that exists.
+      this.log('slack', 'error', `Posting plan draft ${draft.draftId}:${draft.version} failed: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     if (draftReview.confirmationMode === 'auto_submit') {
       try {
         await this.submitSlackPlanDraft(this.slackPlanDraftRepo.get(draft.draftId, draft.version) ?? draft, { userId });
@@ -1609,9 +1620,9 @@ export class SlackSurface implements Surface {
     say: SayFn,
   ): Promise<void> {
     const existing = this.getPendingConfirm(threadTs);
-    if (existing?.kind === 'plan_intent') {
+    if (existing) {
       await say({
-        text: "There's already a pending planning question in this thread. Resolve it above (Plan for execution / No planning) before asking again.",
+        text: 'There is already a pending confirmation in this thread. Resolve it before asking again.',
         thread_ts: threadTs,
       });
       return;

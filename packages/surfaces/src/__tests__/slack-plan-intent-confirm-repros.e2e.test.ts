@@ -274,7 +274,7 @@ describe('Slack plan-intent confirmation repro', () => {
     // No second set of buttons, and the user is told why.
     expect(() => buttonValue(say, 'lobby_plan_for_execution')).toThrow('Missing lobby_plan_for_execution button');
     expect(say).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining('already a pending planning question'),
+      text: expect.stringContaining('already a pending confirmation'),
     }));
 
     // The original ask must still be intact and resolve to the original request.
