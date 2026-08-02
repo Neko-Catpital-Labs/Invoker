@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation, buildRemoteAgentCommand } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -467,6 +467,20 @@ describe('remote agent dispatch via registry', () => {
   // We can't easily test actual SSH spawning, but we can verify the exported
   // function signature accepts the new agentRegistry parameter. The real
   // command generation is tested indirectly via resolveConflictRemote behavior.
+
+  it('throws instead of falling back to claude when explicit remote agent cannot resolve', () => {
+    expect(() => buildRemoteAgentCommand('fix the bug', undefined, 'codex')).toThrow(/codex/);
+    expect(() => buildRemoteAgentCommand('fix the bug', undefined, 'codex')).toThrow(/no configured agent set/);
+  });
+
+  it('keeps using the resolved registry-backed remote agent command', () => {
+    const registry = registerBuiltinAgents();
+    const result = buildRemoteAgentCommand('fix the bug', registry, 'codex');
+
+    expect(result.shellCommand).toContain('codex');
+    expect(result.shellCommand).toContain('exec');
+    expect(result.shellCommand).not.toContain('claude --session-id');
+  });
 
   it('resolveConflictRemote uses registry-backed command for codex', async () => {
     const registry = registerBuiltinAgents();
