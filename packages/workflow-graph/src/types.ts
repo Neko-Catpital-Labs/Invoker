@@ -191,7 +191,8 @@ export type SshInfraFailureClass =
   | 'ssh-env-invalid-export'
   | 'ssh-worktree-missing'
   | 'ssh-invalid-reference'
-  | 'ssh-repo-mirror-corrupt';
+  | 'ssh-repo-mirror-corrupt'
+  | 'ssh-oauth-session-expired';
 
 export type FailureClass = 'liveness_stall' | SshInfraFailureClass;
 
