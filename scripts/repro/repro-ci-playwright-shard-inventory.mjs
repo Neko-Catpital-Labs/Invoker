@@ -3,13 +3,18 @@
 // playwright / N-of-9 shard regression cannot recur silently. It asserts that
 // every CI-owned packages/app/e2e spec is assigned to exactly one Playwright
 // shard: no spec missing from the matrix, no spec listed that does not exist,
-// and no spec assigned to more than one shard.
+// no spec assigned to more than one shard, and every manual-only allowlist
+// entry still exists.
 //
 // The playwright / 8-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
 // (e2e/planning-terminal-live-model.proof.spec.ts and e2e/ui-delta-timeline.spec.ts)
 // were listed in a second shard while already owned by 6-of-9 and 3-of-9.
 // Duplicate assignment makes a shard run the same spec twice and fail.
+//
+// The manual real-Claude repro intentionally stays out of CI because it
+// requires a real local `claude` binary and auth state. Keep it explicit here
+// so future unassigned deterministic specs still fail the guard.
 //
 // Usage:
 //   node scripts/repro/repro-ci-playwright-shard-inventory.mjs [workflow.yml] [e2eDir]
@@ -42,20 +47,27 @@ function main() {
     ...shardFiles(workflow.jobs?.playwright),
     ...shardFiles(workflow.jobs?.['playwright-nightly-perf']),
   ];
-  const discovered = readdirSync(e2eDir)
+  const allDiscovered = readdirSync(e2eDir)
     .filter((file) => file.endsWith('.spec.ts'))
+    .sort();
+  const allDiscoveredSet = new Set(allDiscovered);
+  const discovered = allDiscovered
     .filter((file) => !MANUAL_ONLY_SPECS.has(file))
     .map((file) => `e2e/${file}`)
     .sort();
 
   const listedSet = new Set(listed);
   const discoveredSet = new Set(discovered);
+  const manualMissing = [...MANUAL_ONLY_SPECS]
+    .filter((file) => !allDiscoveredSet.has(file))
+    .map((file) => `e2e/${file}`);
   const missing = discovered.filter((file) => !listedSet.has(file));
   const extra = listed.filter((file) => !discoveredSet.has(file));
   const duplicates = [...new Set(listed.filter((file, index) => listed.indexOf(file) !== index))];
 
-  if (missing.length || extra.length || duplicates.length) {
+  if (manualMissing.length || missing.length || extra.length || duplicates.length) {
     console.error('[repro-ci-playwright-shard-inventory] Playwright shard inventory drift detected.');
+    if (manualMissing.length) console.error(`  Manual spec allowlist entries do not exist: ${manualMissing.join(', ')}`);
     if (missing.length) console.error(`  Missing from shards: ${missing.join(', ')}`);
     if (extra.length) console.error(`  Extra in shards: ${extra.join(', ')}`);
     if (duplicates.length) console.error(`  Duplicate shard entries: ${duplicates.join(', ')}`);
@@ -63,7 +75,7 @@ function main() {
   }
 
   console.log(
-    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} CI-owned spec files each assigned to exactly one shard.`,
+    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} CI-owned spec files each assigned to exactly one shard; ${MANUAL_ONLY_SPECS.size} manual-only spec accounted for.`,
   );
 }
 
