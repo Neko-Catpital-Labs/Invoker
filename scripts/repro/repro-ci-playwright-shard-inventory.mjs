@@ -22,6 +22,11 @@ import YAML from 'yaml';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.yml');
 const e2eDir = resolve(repoRoot, process.argv[3] ?? 'packages/app/e2e');
+const MANUAL_ONLY_SPECS = new Set([
+  // Requires a real, authenticated Claude CLI and intentionally bypasses
+  // the e2e fixture's deterministic claude stub.
+  'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+]);
 
 function shardFiles(job) {
   if (!job?.strategy?.matrix?.include) return [];
@@ -39,6 +44,7 @@ function main() {
   const discovered = readdirSync(e2eDir)
     .filter((file) => file.endsWith('.spec.ts'))
     .map((file) => `e2e/${file}`)
+    .filter((file) => !MANUAL_ONLY_SPECS.has(file))
     .sort();
 
   const listedSet = new Set(listed);
