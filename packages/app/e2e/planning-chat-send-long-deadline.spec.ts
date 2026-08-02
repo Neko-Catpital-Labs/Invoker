@@ -1,7 +1,7 @@
 import { stringify as yamlStringify } from 'yaml';
-import { test, expect, E2E_REPO_URL } from './fixtures/electron-app';
+import { test, expect, E2E_REPO_URL, waitForRuntimeMode } from './fixtures/electron-app';
 
-test.use({ guiOwnerMode: 'auto' });
+test.use({ guiOwnerMode: 'auto', standaloneOwnerIdleTimeoutMs: '90000' });
 
 const PLAN_YAML = yamlStringify({
   name: 'Long Deadline Proof Plan',
@@ -21,6 +21,7 @@ test('planning-chat-send survives a planner reply slower than the old 30s transp
   // This window is a delegate, not the owner: planningChatSend goes out over
   // the real IPC socket transport (headless.gui-mutation), the exact path
   // that used to hard-timeout at 30s regardless of how long the planner took.
+  await waitForRuntimeMode(page, 'daemon-owner', 30_000);
   const runtimeStatus = await page.evaluate(async () => window.invoker.getRuntimeStatus());
   expect(runtimeStatus.mode).toBe('daemon-owner');
 
