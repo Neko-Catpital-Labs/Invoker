@@ -256,6 +256,38 @@ describe('Slack plan-intent auto-detect repro', () => {
     createSpy.mockRestore();
   });
 
+  it('a bare /plan reply takes priority over an unrelated pending confirm instead of being swallowed by it', async () => {
+    seedContext(slackSessionRepo, 'thread-priority', workingDir);
+    const say = vi.fn().mockResolvedValue({ ts: 'msg-p1' });
+
+    // First /plan reply stages a pending plan_intent confirm.
+    await handler(surface, 'message')({
+      event: { text: '/plan add a REST endpoint', ts: 'msg-p1', thread_ts: 'thread-priority', user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+    expect(buttonValue(say, 'lobby_plan_for_execution')).toBeTruthy();
+    expect(slackSessionRepo.getPendingConfirmation('thread-priority')).not.toBeNull();
+    say.mockClear();
+
+    // A second /plan reply, before the first is answered, must reach the
+    // /plan handling (and get the "already pending" guard message) — not be
+    // silently swallowed by resolveConfirm's "not a yes/no" fallback, which
+    // would instead delete the pending confirm and say something unrelated.
+    await handler(surface, 'message')({
+      event: { text: '/plan actually add a different endpoint', ts: 'msg-p2', thread_ts: 'thread-priority', user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+
+    expect(say).not.toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('Dropped the pending approval'),
+    }));
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('already a pending planning question'),
+    }));
+    // The original pending confirm must survive, not be dropped.
+    expect(slackSessionRepo.getPendingConfirmation('thread-priority')).not.toBeNull();
+  });
+
   it('skips detection for a bare in-thread reply with no pinned context yet', async () => {
     const say = vi.fn().mockResolvedValue({ ts: 'msg-4' });
     const path = intentSignalPath(workingDir, 'thread-4');
@@ -271,5 +303,33 @@ describe('Slack plan-intent auto-detect repro', () => {
     });
 
     expect(tryButtonValue(say, 'lobby_plan_for_execution')).toBeUndefined();
+  });
+
+  it('stages a plan question for a bare in-thread /plan reply, without re-mentioning the bot', async () => {
+    seedContext(slackSessionRepo, 'thread-5', workingDir);
+    const say = vi.fn().mockResolvedValue({ ts: 'msg-5' });
+
+    await handler(surface, 'message')({
+      event: { text: '/plan add a REST endpoint', ts: 'msg-5', thread_ts: 'thread-5', user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(buttonValue(say, 'lobby_plan_for_execution')).toBeTruthy();
+    expect(buttonValue(say, 'lobby_continue_conversation')).toBeTruthy();
+  });
+
+  it('tells the user to @mention first when a bare in-thread /plan has no pinned context', async () => {
+    const say = vi.fn().mockResolvedValue({ ts: 'msg-6' });
+
+    await handler(surface, 'message')({
+      event: { text: '/plan add a REST endpoint', ts: 'msg-6', thread_ts: 'thread-6', user: 'U_TEST', channel: 'C_LOBBY' },
+      say,
+    });
+
+    expect(tryButtonValue(say, 'lobby_plan_for_execution')).toBeUndefined();
+    expect(say).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('@mention me first'),
+    }));
   });
 });
