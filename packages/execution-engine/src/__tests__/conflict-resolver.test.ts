@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation } from '../conflict-resolver.js';
+import { buildFixPrompt, resolveConflictImpl, fixWithAgentImpl, spawnRemoteAgentFixImpl, remoteAgentShellInvocation, buildRemoteAgentCommand } from '../conflict-resolver.js';
 import type { ConflictResolverHost } from '../conflict-resolver.js';
 import type { Orchestrator } from '@invoker/workflow-core';
 import { registerBuiltinAgents } from '../agents/index.js';
@@ -530,6 +530,20 @@ describe('remote agent dispatch via registry', () => {
     // We can't call it without real SSH, but we verify it's callable.
     expect(typeof spawnRemoteAgentFixImpl).toBe('function');
     expect(spawnRemoteAgentFixImpl.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('buildRemoteAgentCommand throws for an explicit unresolved agent without a configured set', () => {
+    expect(() => buildRemoteAgentCommand('fix the bug', undefined, 'codex')).toThrow(/codex/);
+    expect(() => buildRemoteAgentCommand('fix the bug', undefined, 'codex')).toThrow(/no configured agent set/);
+  });
+
+  it('buildRemoteAgentCommand keeps using the registry when the requested agent resolves', () => {
+    const registry = registerBuiltinAgents();
+    const { shellCommand, sessionId } = buildRemoteAgentCommand('fix the bug', registry, 'codex');
+
+    expect(shellCommand).toContain('codex');
+    expect(shellCommand).not.toContain('claude --session-id');
+    expect(sessionId).toBeDefined();
   });
 
 

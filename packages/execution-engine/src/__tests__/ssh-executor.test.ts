@@ -7,6 +7,8 @@ import { join } from 'node:path';
 import { SshExecutor } from '../ssh-executor.js';
 import type { WorkRequest } from '@invoker/contracts';
 import type { PersistedTaskMeta } from '../executor.js';
+import { AgentRegistry } from '../agent-registry.js';
+import { CodexExecutionAgent } from '../agents/codex-execution-agent.js';
 import { createSshRemoteScriptError } from '../ssh-git-exec.js';
 import { computeRepoUrlHash } from '../git-utils.js';
 import { computeContentHash, buildExperimentBranchName, formatLifecycleTag } from '../branch-utils.js';
@@ -98,6 +100,61 @@ describe('SshExecutor pre-flight validation', () => {
     await expect(ssh.start(req)).rejects.toThrow(
       'requires repoUrl',
     );
+  });
+
+  it('throws for an explicit executionAgent without a registry instead of substituting claude', async () => {
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+    }) as any;
+    const startManagedWorkspaceSpy = vi.spyOn(ssh, 'startManagedWorkspace').mockImplementation(
+      async (_request: WorkRequest, handle: any) => handle,
+    );
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        executionAgent: 'codex',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await expect(ssh.start(req)).rejects.toThrow(/codex/);
+    await expect(ssh.start(req)).rejects.toThrow(/no configured agent set/);
+    expect(startManagedWorkspaceSpy).not.toHaveBeenCalled();
+  });
+
+  it('uses the registry-backed SSH payload when the requested agent resolves', async () => {
+    const registry = new AgentRegistry();
+    registry.registerExecution(new CodexExecutionAgent({ command: 'codex-test' }));
+    const ssh = new SshExecutor({
+      host: 'localhost',
+      user: 'root',
+      sshKeyPath: '/dev/null',
+      managedWorkspaces: true,
+      agentRegistry: registry,
+    }) as any;
+    const startManagedWorkspaceSpy = vi.spyOn(ssh, 'startManagedWorkspace').mockImplementation(
+      async (_request: WorkRequest, handle: any) => handle,
+    );
+    const req = makeRequest({
+      actionType: 'ai_task',
+      inputs: {
+        prompt: 'Do something',
+        description: 'test',
+        executionAgent: 'codex',
+        repoUrl: 'git@github.com:owner/repo.git',
+      },
+    });
+
+    await ssh.start(req);
+
+    expect(startManagedWorkspaceSpy).toHaveBeenCalledTimes(1);
+    expect(startManagedWorkspaceSpy.mock.calls[0][3]).toContain('codex-test');
+    expect(startManagedWorkspaceSpy.mock.calls[0][5]).toBe('codex');
   });
 
   it('does not throw for reconciliation requests', async () => {
