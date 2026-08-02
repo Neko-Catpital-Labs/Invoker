@@ -1,10 +1,10 @@
 import type { Logger } from '@invoker/contracts';
 import type { WorkflowMutationPriority } from '@invoker/data-store';
 import { Channels, type MessageBus, type Unsubscribe } from '@invoker/transport';
-import type { TaskState } from '@invoker/workflow-core';
+import type { FailureClass, TaskState } from '@invoker/workflow-core';
 
 import type { AutoFixRecoveryStore } from '../auto-fix-recovery.js';
-import { isLivenessFailureTask } from '../auto-fix-gating.js';
+import { isRequeueEligibleFailureTask } from '../auto-fix-gating.js';
 import type { WorkflowLifecycleEvent, RecoveryWorkerWakeupHint } from '../lifecycle-events.js';
 import {
   createRequeueAttemptLedger,
@@ -100,6 +100,23 @@ export function buildStallEscalationPrompt(attempts: number, budget: number): st
   );
 }
 
+export function buildRequeueEscalationPrompt(
+  failureClass: FailureClass | undefined,
+  attempts: number,
+  budget: number,
+): string {
+  if (failureClass === 'ssh-oauth-session-expired') {
+    return (
+      `Automatic recovery gave up: this task was requeued ${attempts} time(s) ` +
+      `(budget ${budget}) but kept failing because the SSH pool member's OAuth session ` +
+      `expired and could not be refreshed automatically. An operator must re-authenticate ` +
+      `that host or switch it to a non-interactive credential mode, then resume or retry ` +
+      `this task.`
+    );
+  }
+  return buildStallEscalationPrompt(attempts, budget);
+}
+
 function workflowIdForTask(task: TaskState): string | undefined {
   return task.config.workflowId ?? task.id.split('/')[0];
 }
@@ -108,7 +125,7 @@ export function listRequeueScanCandidates(store: AutoFixRecoveryStore): RequeueC
   const candidates: RequeueCandidate[] = [];
   for (const workflow of store.listWorkflows()) {
     for (const task of store.loadTasks(workflow.id)) {
-      if (task.status !== 'failed' || !isLivenessFailureTask(task)) continue;
+      if (task.status !== 'failed' || !isRequeueEligibleFailureTask(task)) continue;
       const workflowId = workflowIdForTask(task);
       if (workflowId) candidates.push({ taskId: task.id, workflowId });
     }
@@ -142,10 +159,11 @@ export function createRequeueRecoveryTick(options: RequeueWorkerPolicyOptions): 
     for (const candidate of candidates) {
       if (handled.has(candidate.taskId)) continue;
       const latest = loadLatestTask(candidate, options.store);
-      // Re-check authoritative state: only a task still parked as a liveness
-      // stall is actionable (a requeue/escalation already applied would have
-      // cleared the class or moved it out of `failed`).
-      if (!latest || latest.status !== 'failed' || !isLivenessFailureTask(latest)) continue;
+      // Re-check authoritative state: only a task still parked with a
+      // requeue-eligible failure class is actionable (a requeue/escalation
+      // already applied would have cleared the class or moved it out of
+      // `failed`).
+      if (!latest || latest.status !== 'failed' || !isRequeueEligibleFailureTask(latest)) continue;
       const workflowId = workflowIdForTask(latest);
       if (!workflowId) continue;
       handled.add(candidate.taskId);
@@ -167,7 +185,7 @@ export function createRequeueRecoveryTick(options: RequeueWorkerPolicyOptions): 
 
       if (decision.kind === 'escalate') {
         if (options.ledger.hasEscalated(key)) continue;
-        const prompt = buildStallEscalationPrompt(decision.attempts, decision.budget);
+        const prompt = buildRequeueEscalationPrompt(latest.execution.failureClass, decision.attempts, decision.budget);
         const intentId = options.submitter.submit(
           workflowId,
           'normal',

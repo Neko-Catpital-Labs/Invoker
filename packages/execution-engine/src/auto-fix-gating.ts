@@ -19,3 +19,11 @@ export function shouldSkipAutoFixForError(errorText: unknown): boolean {
 export function isLivenessFailureTask(task: Pick<TaskState, 'execution'>): boolean {
   return FailureClassifier.isLiveness(task.execution.failureClass);
 }
+
+export function isSshOauthExpiredFailureTask(task: Pick<TaskState, 'execution'>): boolean {
+  return task.execution.failureClass === 'ssh-oauth-session-expired';
+}
+
+export function isRequeueEligibleFailureTask(task: Pick<TaskState, 'execution'>): boolean {
+  return isLivenessFailureTask(task) || isSshOauthExpiredFailureTask(task);
+}

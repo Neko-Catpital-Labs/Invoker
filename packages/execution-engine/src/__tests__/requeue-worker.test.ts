@@ -131,6 +131,56 @@ describe('requeue worker tick', () => {
     expect(parsed.prompt).toMatch(/stalled/i);
   });
 
+  it('lists and requeues a failed ssh-oauth-session-expired task', async () => {
+    const oauthTask = makeTask({
+      id: 'wf-1/ssh-task',
+      execution: {
+        error: 'Failed to authenticate: OAuth session expired and could not be refreshed',
+        failureClass: 'ssh-oauth-session-expired',
+        generation: 2,
+        selectedAttemptId: 'attempt-1',
+      },
+    });
+    const candidates = listRequeueScanCandidates({
+      listWorkflows: () => [{ id: 'wf-1' }],
+      loadTasks: () => [oauthTask],
+      listWorkflowMutationIntents: () => [],
+    });
+    expect(candidates).toEqual([{ taskId: 'wf-1/ssh-task', workflowId: 'wf-1' }]);
+
+    const h = harness(oauthTask);
+    await h.tick(POLL_CTX);
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    const [, , channel, args] = h.submit.mock.calls[0];
+    expect(channel).toBe(REQUEUE_COMMAND_CHANNEL);
+    expect(parseRequeueMutationArgs(args)).toEqual({ taskId: 'wf-1/ssh-task' });
+  });
+
+  it('escalates an exhausted ssh-oauth-session-expired task with OAuth wording, not the liveness wording', async () => {
+    const oauthTask = makeTask({
+      id: 'wf-1/ssh-task',
+      execution: {
+        error: 'Failed to authenticate: OAuth session expired and could not be refreshed',
+        failureClass: 'ssh-oauth-session-expired',
+        generation: 2,
+        selectedAttemptId: 'attempt-1',
+      },
+    });
+    const h = harness(oauthTask, { budget: 2, backoffMs: 120_000 });
+    await h.tick(POLL_CTX);
+    h.setNow(120_000);
+    await h.tick(POLL_CTX);
+    h.setNow(240_000);
+    await h.tick(POLL_CTX);
+    const escalations = h.submit.mock.calls.filter((c) => c[2] === REQUEUE_ESCALATE_CHANNEL);
+    expect(escalations).toHaveLength(1);
+    const parsed = parseRequeueEscalateMutationArgs(escalations[0][3]);
+    expect(parsed.taskId).toBe('wf-1/ssh-task');
+    expect(parsed.prompt).toMatch(/OAuth session/);
+    expect(parsed.prompt).toMatch(/re-authenticate/);
+    expect(parsed.prompt).not.toMatch(/liveness timeout/);
+  });
+
   it('ignores a failed task that is not a liveness stall', async () => {
     const h = harness(makeTask({ execution: { failureClass: undefined, error: 'real bug', generation: 2 } }));
     await h.tick(POLL_CTX);
