@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 // Reproduces the CI "Verify Playwright shard inventory" step locally so the
-// playwright / N-of-9 shard regression cannot recur silently. It asserts that
-// every packages/app/e2e spec is assigned to exactly one Playwright shard:
-// no spec missing from the matrix, no spec listed that does not exist, and no
-// spec assigned to more than one shard.
+// Playwright shard regressions cannot recur silently. It asserts that every
+// deterministic packages/app/e2e spec is assigned to exactly one Playwright
+// shard: no spec missing from the matrix, no spec listed that does not exist,
+// and no spec assigned to more than one shard.
 //
 // The playwright / 8-of-9 shard first went red at
 // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
 // (e2e/planning-terminal-live-model.proof.spec.ts and e2e/ui-delta-timeline.spec.ts)
 // were listed in a second shard while already owned by 6-of-9 and 3-of-9.
 // Duplicate assignment makes a shard run the same spec twice and fail.
+//
+// Live external proofs that are intentionally manual-only are excluded by
+// explicit allowlist; they must not appear in a CI shard.
 //
 // Usage:
 //   node scripts/repro/repro-ci-playwright-shard-inventory.mjs [workflow.yml] [e2eDir]
@@ -22,6 +25,10 @@ import YAML from 'yaml';
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.yml');
 const e2eDir = resolve(repoRoot, process.argv[3] ?? 'packages/app/e2e');
+
+const manualOnlySpecs = new Set([
+  'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
+]);
 
 function shardFiles(job) {
   if (!job?.strategy?.matrix?.include) return [];
@@ -36,10 +43,12 @@ function main() {
     ...shardFiles(workflow.jobs?.playwright),
     ...shardFiles(workflow.jobs?.['playwright-nightly-perf']),
   ];
-  const discovered = readdirSync(e2eDir)
+  const discoveredAll = readdirSync(e2eDir)
     .filter((file) => file.endsWith('.spec.ts'))
     .map((file) => `e2e/${file}`)
     .sort();
+  const discovered = discoveredAll.filter((file) => !manualOnlySpecs.has(file));
+  const excludedManualSpecs = discoveredAll.filter((file) => manualOnlySpecs.has(file));
 
   const listedSet = new Set(listed);
   const discoveredSet = new Set(discovered);
@@ -56,7 +65,7 @@ function main() {
   }
 
   console.log(
-    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} spec files each assigned to exactly one shard.`,
+    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} deterministic spec files each assigned to exactly one shard; ${excludedManualSpecs.length} manual-only spec excluded.`,
   );
 }
 
