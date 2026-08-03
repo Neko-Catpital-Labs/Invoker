@@ -97,7 +97,7 @@ elif $FOLLOW; then
     local cmd_status=0
 
     set +e
-    cmd_out="$(headless_mutation recreate "$wf_id" 2>&1)"
+    cmd_out="$(headless_mutation --no-track recreate "$wf_id" 2>&1)"
     cmd_status=$?
     set -e
 

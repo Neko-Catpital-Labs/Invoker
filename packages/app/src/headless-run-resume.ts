@@ -857,38 +857,54 @@ export async function headlessRecreateWorkflow(workflowId: string, deps: Headles
   if (!recreateWfResult.ok) throw new Error(recreateWfResult.error.message);
   const started = recreateWfResult.data;
   const runnable = started.filter(isDispatchableLaunch);
-  if (runnable.length > 0) {
+
+  const dispatchRecreatedTasks = async (tasks: TaskState[]): Promise<void> => {
     const te = createHeadlessExecutor(deps);
     remoteFetchForPool.enabled = false;
-    let topup: TaskState[] = [];
     try {
-      await te.executeTasks(runnable);
-      topup = await executeGlobalTopup({
+      await te.executeTasks(tasks);
+      await executeGlobalTopup({
         orchestrator: deps.orchestrator,
         taskExecutor: te,
         logger: deps.logger,
         context: 'headless.recreate-workflow',
-        alreadyDispatched: runnable,
+        alreadyDispatched: tasks,
         mutationTiming: deps.mutationTiming,
       });
     } finally {
       remoteFetchForPool.enabled = true;
     }
-    if (runnable.length + topup.length === 0) {
-      return;
-    }
-    if (deps.noTrack) {
-      process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
-      return;
-    }
-    await trackHeadlessWorkflow(workflowId, deps, {
-      printSummary: false,
-      printTaskOutput: true,
-      setExitCodeOnFailure: false,
-    });
-  }
+  };
+
   const tasksStarted = runnable.length;
   process.stdout.write(`Recreate workflow "${workflowId}" — ${tasksStarted} task(s) to execute (pool fetch skipped)\n`);
+  if (runnable.length === 0) {
+    return;
+  }
+
+  if (deps.noTrack) {
+    if (deps.deferRunnableTasks) {
+      deps.deferRunnableTasks(runnable, workflowId);
+    } else {
+      void Promise.resolve()
+        .then(() => dispatchRecreatedTasks(runnable))
+        .catch((err) => {
+          deps.logger.error(
+            `background no-track workflow recreate failed for ${workflowId}: ${err instanceof Error ? err.stack ?? err.message : String(err)}`,
+            { module: 'headless' },
+          );
+        });
+    }
+    process.stdout.write('[headless] --no-track enabled: recreate accepted; exiting without tracking.\n');
+    return;
+  }
+
+  await dispatchRecreatedTasks(runnable);
+  await trackHeadlessWorkflow(workflowId, deps, {
+    printSummary: false,
+    printTaskOutput: true,
+    setExitCodeOnFailure: false,
+  });
 }
 
 export async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise<void> {

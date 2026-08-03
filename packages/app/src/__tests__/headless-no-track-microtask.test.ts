@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { headlessStartReady, headlessRetryTask } from '../headless-run-resume.js';
+import { headlessRecreateWorkflow, headlessStartReady, headlessRetryTask } from '../headless-run-resume.js';
 import type { HeadlessDeps } from '../headless-shared.js';
 
 function makeRunningTask(id: string, workflowId: string): any {
@@ -95,5 +95,30 @@ describe('--no-track microtask dispatch (no deferRunnableTasks)', () => {
     expect(deps.preemptTaskSubgraph).not.toHaveBeenCalled();
     expect(executeTasks).toHaveBeenCalledTimes(1);
     expect(executeTasks).toHaveBeenCalledWith([task]);
+  });
+
+  it('headlessRecreateWorkflow returns before no-track runnable execution settles', async () => {
+    const task = makeRunningTask('wf-1/task-1', 'wf-1');
+    let resolveExecute: (() => void) | undefined;
+    executeTasks.mockImplementation(() => new Promise<void>((resolve) => {
+      resolveExecute = resolve;
+    }));
+    deps.preemptWorkflowExecution = vi.fn(async () => ({ cancelled: [], runningCancelled: [] }));
+    deps.orchestrator.startExecution = vi.fn(() => []);
+    deps.commandService.recreateWorkflow = vi.fn(async () => ({ ok: true as const, data: [task] }));
+
+    let returned = false;
+    const call = headlessRecreateWorkflow('wf-1', deps).then(() => {
+      returned = true;
+    });
+    await flushMicrotasks();
+
+    expect(returned).toBe(true);
+    expect(deps.preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+    expect(deps.commandService.recreateWorkflow).toHaveBeenCalledTimes(1);
+    expect(executeTasks).toHaveBeenCalledWith([task]);
+
+    resolveExecute?.();
+    await call;
   });
 });
