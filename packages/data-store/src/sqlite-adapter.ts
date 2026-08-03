@@ -506,6 +506,8 @@ export interface TaskLaunchDispatch {
   generation: number;
   /** Set once the executor is confirmed live (markLaunchDispatchAccepted). */
   acknowledgedAt?: string;
+  /** Category label for why an 'abandoned' row was abandoned. */
+  abandonReason?: string;
 }
 
 type TerminalSessionRow = {
@@ -3597,6 +3599,22 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return row ? Number(row.count) : 0;
   }
 
+  /**
+   * Relabels a task's prior stuck-lease abandons so they stop counting
+   * toward `MAX_STUCK_LEASE_RETRIES`. Wired into the same recreate-class
+   * reset call sites as `resetAutoFixBudgetForTasks` -- a deliberate fresh
+   * start should not stay haunted by unrelated past stuck-lease incidents.
+   */
+  resetStuckLeaseAbandonCount(taskId: string): number {
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET abandon_reason = 'stuck-lease-reset'
+       WHERE task_id = ? AND state = 'abandoned' AND abandon_reason = 'stuck-lease'`,
+      [taskId],
+    );
+    return this.db.getRowsModified?.() ?? 0;
+  }
+
   loadLaunchDispatchByAttempt(attemptId: string): TaskLaunchDispatch | undefined {
     const row = this.queryOne(
       `SELECT * FROM task_launch_dispatch
@@ -3689,7 +3707,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
                    completed_at = ?,
                    last_error = ?,
                    dispatch_owner = NULL,
-                   fenced_until = NULL
+                   fenced_until = NULL,
+                   abandon_reason = 'stale-claim'
              WHERE id = ?
                AND state = 'enqueued'`,
             [now, staleReason, candidateId],
@@ -3821,11 +3840,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /**
    * Terminal abandon: row leaves the live set. Returns false when the row
    * is already terminal so callers can treat a race as a no-op.
+   *
+   * `abandonReason` is a stable category label (e.g. 'stuck-lease',
+   * 'not_launch_ready', 'task_missing'), separate from `errorMessage`
+   * (a human-readable detail stored in `last_error`) -- it's what lets
+   * `countAbandonedLaunchDispatchesForTask` count only stuck-lease
+   * abandons instead of every reason a row can leave the live set.
    */
   markLaunchDispatchAbandoned(
     id: number,
     errorMessage: string,
     nowIso?: string,
+    abandonReason?: string,
   ): boolean {
     const now = nowIso ?? new Date().toISOString();
     this.execRun(
@@ -3834,10 +3860,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
              completed_at = ?,
              last_error = ?,
              dispatch_owner = NULL,
-             fenced_until = NULL
+             fenced_until = NULL,
+             abandon_reason = COALESCE(?, abandon_reason)
        WHERE id = ?
          AND state NOT IN ('completed', 'abandoned')`,
-      [now, errorMessage, id],
+      [now, errorMessage, abandonReason ?? null, id],
     );
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
@@ -3871,7 +3898,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
                 completed_at = ?,
                 last_error = ?,
                 dispatch_owner = NULL,
-                fenced_until = NULL
+                fenced_until = NULL,
+                abandon_reason = 'lifecycle-reset'
           WHERE id IN (${idPlaceholders})
             AND state IN ('enqueued', 'leased')`,
         [now, reason, ...rowIds],

@@ -397,6 +397,7 @@ export const SCHEMA_DDL = `
         attempts_count INTEGER NOT NULL DEFAULT 0,
         last_error TEXT,
         generation INTEGER NOT NULL,
+        abandon_reason TEXT,
         FOREIGN KEY (task_id) REFERENCES tasks(id),
         FOREIGN KEY (workflow_id) REFERENCES workflows(id)
       );
@@ -602,6 +603,11 @@ export const COLUMN_MIGRATIONS = [
   'ALTER TABLE in_app_planning_sessions ADD COLUMN base_commit TEXT',
   'ALTER TABLE in_app_planning_sessions ADD COLUMN worktree_path TEXT',
   'ALTER TABLE in_app_planning_sessions ADD COLUMN worktree_branch TEXT',
+  // abandon_reason: why a launch dispatch row was abandoned (e.g.
+  // 'stuck-lease', 'lifecycle-reset', 'stale-claim', or an
+  // abandonInvalidDispatch reason string). Lets the stuck-lease retry
+  // cap count only stuck-lease abandons, not every abandon reason.
+  'ALTER TABLE task_launch_dispatch ADD COLUMN abandon_reason TEXT',
 ];
 
 /**
