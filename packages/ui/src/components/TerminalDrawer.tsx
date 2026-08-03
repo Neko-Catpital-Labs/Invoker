@@ -14,6 +14,10 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const MIN_TASK_TERMINAL_COLS = 20;
+const MIN_TASK_TERMINAL_ROWS = 5;
+const TASK_TERMINAL_FIT_SETTLE_FRAMES = 2;
+const TASK_TERMINAL_MAXIMIZED_RESIZE_DEBOUNCE_MS = 200;
 const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
 
 /**
@@ -134,11 +138,18 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const sessionRef = useRef(session);
   const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
   const fitFrameRef = useRef<number | null>(null);
-  const secondFitFrameRef = useRef<number | null>(null);
+  const backendResizeTimeoutRef = useRef<number | null>(null);
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   isActiveRef.current = isActive;
   drawerStateRef.current = drawerState;
   sessionRef.current = session;
+
+  const clearPendingBackendResize = useCallback(() => {
+    if (backendResizeTimeoutRef.current === null) return;
+    window.clearTimeout(backendResizeTimeoutRef.current);
+    backendResizeTimeoutRef.current = null;
+  }, []);
 
   const clearScheduledFit = useCallback(() => {
     if (fitFrameRef.current !== null) {
@@ -147,26 +158,55 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
       }
       fitFrameRef.current = null;
     }
-    if (secondFitFrameRef.current !== null) {
-      if (typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(secondFitFrameRef.current);
-      }
-      secondFitFrameRef.current = null;
-    }
-  }, []);
+    clearPendingBackendResize();
+  }, [clearPendingBackendResize]);
 
-  const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
+  const sendBackendResize = useCallback((cols: number, rows: number) => {
+    const previous = lastSentSizeRef.current;
+    if (previous?.cols === cols && previous.rows === rows) return;
+    lastSentSizeRef.current = { cols, rows };
+    void window.invoker?.terminalResize?.(session.sessionId, cols, rows);
+  }, [session.sessionId]);
+
+  const scheduleBackendResize = useCallback((cols: number, rows: number) => {
+    clearPendingBackendResize();
+    if (drawerStateRef.current === 'minimized') return;
+    if (drawerStateRef.current !== 'maximized') {
+      sendBackendResize(cols, rows);
+      return;
+    }
+
+    backendResizeTimeoutRef.current = window.setTimeout(() => {
+      backendResizeTimeoutRef.current = null;
+      if (!isActiveRef.current || drawerStateRef.current !== 'maximized') return;
+      sendBackendResize(cols, rows);
+    }, TASK_TERMINAL_MAXIMIZED_RESIZE_DEBOUNCE_MS);
+  }, [clearPendingBackendResize, sendBackendResize]);
+
+  const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer') => {
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
+    const host = containerRef.current;
     const term = termRef.current;
     const fit = fitRef.current;
-    if (!term || !fit) return;
+    if (!host || !term || !fit) return;
     try {
+      const rect = host.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const proposedDimensions = fit.proposeDimensions();
+      if (
+        !proposedDimensions ||
+        proposedDimensions.cols < MIN_TASK_TERMINAL_COLS ||
+        proposedDimensions.rows < MIN_TASK_TERMINAL_ROWS
+      ) {
+        return;
+      }
       const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      scheduleBackendResize(term.cols, term.rows);
       reportTerminalPerf('embedded_terminal_resize', {
         source,
         durationMs: roundMs(nowMs() - startedAt),
@@ -179,21 +219,27 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     } catch {
       /* host has zero size, terminal disposed, or fit unsupported */
     }
-  }, [session.sessionId, session.taskId]);
+  }, [scheduleBackendResize, session.sessionId, session.taskId]);
 
   const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
     clearScheduledFit();
-    fitVisibleTerminal(source);
-    if (typeof requestAnimationFrame !== 'function') return;
+    if (typeof requestAnimationFrame !== 'function') {
+      fitVisibleTerminal(source);
+      return;
+    }
 
-    fitFrameRef.current = requestAnimationFrame(() => {
-      fitFrameRef.current = null;
-      fitVisibleTerminal('followup_frame');
-      secondFitFrameRef.current = requestAnimationFrame(() => {
-        secondFitFrameRef.current = null;
-        fitVisibleTerminal('followup_frame');
+    const runAfterFrames = (remainingFrames: number) => {
+      fitFrameRef.current = requestAnimationFrame(() => {
+        fitFrameRef.current = null;
+        if (remainingFrames > 0) {
+          runAfterFrames(remainingFrames - 1);
+          return;
+        }
+        fitVisibleTerminal(source);
       });
-    });
+    };
+
+    runAfterFrames(TASK_TERMINAL_FIT_SETTLE_FRAMES);
   }, [clearScheduledFit, fitVisibleTerminal]);
 
   useEffect(() => {
