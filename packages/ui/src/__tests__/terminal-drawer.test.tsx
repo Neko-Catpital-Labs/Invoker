@@ -230,6 +230,37 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('keeps a minimized active pane mounted without fitting or resizing it', async () => {
+    const session = makeTerminalSession('task-alpha');
+
+    render(
+      <TerminalDrawer
+        state="minimized"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    await waitFor(() => {
+      expect(xtermMock.fitInstances).toHaveLength(1);
+      expect(screen.getByTestId('terminal-pane-task-alpha').querySelector('.xterm')).not.toBeNull();
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(xtermMock.fitInstances[0].fit).not.toHaveBeenCalled();
+    expect(xtermMock.instances[0].refresh).not.toHaveBeenCalled();
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
+    expect(xtermMock.instances[0].dispose).not.toHaveBeenCalled();
+  });
+
   it('refits the newly active pane when terminal tabs switch', async () => {
     const alpha = makeTerminalSession('task-alpha');
     const beta = makeTerminalSession('task-beta');
