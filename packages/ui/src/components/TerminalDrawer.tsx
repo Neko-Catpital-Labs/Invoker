@@ -14,6 +14,8 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const MIN_TERMINAL_FIT_COLS = 20;
+const MIN_TERMINAL_FIT_ROWS = 5;
 const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
 
 /**
@@ -160,7 +162,20 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
+    if (drawerStateRef.current === 'minimized') return;
+    const host = containerRef.current;
+    if (!host?.isConnected) return;
+    const rect = host.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
     try {
+      const proposedDimensions = fit.proposeDimensions();
+      if (
+        !proposedDimensions ||
+        proposedDimensions.cols < MIN_TERMINAL_FIT_COLS ||
+        proposedDimensions.rows < MIN_TERMINAL_FIT_ROWS
+      ) {
+        return;
+      }
       const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
