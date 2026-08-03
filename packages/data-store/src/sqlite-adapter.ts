@@ -504,6 +504,8 @@ export interface TaskLaunchDispatch {
   attemptsCount: number;
   lastError?: string;
   generation: number;
+  /** Set once the executor is confirmed live (markLaunchDispatchAccepted). */
+  acknowledgedAt?: string;
 }
 
 type TerminalSessionRow = {
@@ -3764,6 +3766,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
 
+  /** Guarded by `acknowledged_at IS NULL`: an accepted row must not be silently re-enqueued after a failure. */
   markLaunchDispatchFailed(
     id: number,
     errorMessage: string,
@@ -3776,7 +3779,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
              dispatch_owner = NULL,
              fenced_until = NULL
        WHERE id = ?
-         AND state NOT IN ('completed', 'abandoned')`,
+         AND state NOT IN ('completed', 'abandoned')
+         AND acknowledged_at IS NULL`,
       [errorMessage, id],
     );
     return (this.db.getRowsModified?.() ?? 0) > 0;
@@ -3797,9 +3801,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
          WHERE state = 'leased'
            AND fenced_until IS NOT NULL
            AND fenced_until < ?
+           AND acknowledged_at IS NULL
            AND (
              attempts_count >= ?
-             OR (acknowledged_at IS NULL AND ? IS NOT NULL AND enqueued_at <= ?)
+             OR (? IS NOT NULL AND enqueued_at <= ?)
            )
          ORDER BY id ASC`,
       [now, options.maxAttempts, ageCutoff, ageCutoff],
@@ -3877,6 +3882,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     });
   }
 
+  /**
+   * Crash-recovery: a claim whose fence expired before launching is reset to
+   * 'enqueued'. Guarded by `acknowledged_at IS NULL` so a healthy task that
+   * just runs longer than its fence is never mistaken for a crashed claim.
+   */
   reapExpiredLaunchDispatchLeases(options: {
     nowIso?: string;
     maxAttempts?: number;
@@ -3889,7 +3899,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
            WHERE state = 'leased'
              AND fenced_until IS NOT NULL
              AND fenced_until < ?
-             AND attempts_count < ?`,
+             AND attempts_count < ?
+             AND acknowledged_at IS NULL`,
         [now, maxAttempts],
       );
       if (expired.length === 0) return [];
@@ -3901,7 +3912,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
          WHERE state = 'leased'
            AND fenced_until IS NOT NULL
            AND fenced_until < ?
-           AND attempts_count < ?`,
+           AND attempts_count < ?
+           AND acknowledged_at IS NULL`,
         [now, maxAttempts],
       );
       return expired.map((row) => {
