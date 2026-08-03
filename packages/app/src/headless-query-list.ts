@@ -2,8 +2,9 @@
  * Headless "query" command family: the mostly read-only `query <sub>` router
  * (workflows · tasks · task · queue · review-gate · action-graph · audit ·
  * session · workers · worker-actions · cost · cost-events ·
- * costs · ui-perf · stats), the cost-event collection/rollup
- * helpers, agent session resolution, and `query-select`.
+ * costs · ui-perf · stats · execution-leases · mutation-locks), the
+ * cost-event collection/rollup helpers, agent session resolution, and
+ * `query-select`.
  *
  * It depends on `headless-shared.ts` and reuses `worker-control.ts` for the
  * worker-decisions view.
@@ -52,7 +53,7 @@ import {
  * per request, so concurrent delegated queries never cross output.
  */
 const queryOutputSink = new AsyncLocalStorage<(chunk: string) => void>();
-const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats, execution-leases';
+const QUERY_SUBCOMMANDS = 'workflows, workflow, tasks, task, task-output, container-id, queue, review-gate, action-graph, audit, session, workers, worker-actions, worker-decisions, cost, cost-events, costs, ui-perf, stats, execution-leases, mutation-locks';
 const QUERY_SUBCOMMAND_USAGE = QUERY_SUBCOMMANDS.replaceAll(', ', '|');
 
 function writeOut(chunk: string): void {
@@ -483,6 +484,77 @@ export async function headlessQuery(args: string[], deps: HeadlessQueryDeps): Pr
             )),
           ];
           writeOut(lines.join('\n') + '\n');
+          break;
+        }
+      }
+      break;
+    }
+    case 'mutation-locks': {
+      const workflowFilter = flags.workflow ?? flags.positional[0];
+      const leases = deps.persistence.listWorkflowMutationLeases()
+        .filter((lease) => !workflowFilter || lease.workflowId === workflowFilter)
+        .map((lease) => ({
+          workflowId: lease.workflowId,
+          ownerId: lease.ownerId,
+          activeIntentId: lease.activeIntentId ?? null,
+          activeMutationKind: lease.activeMutationKind ?? null,
+          leasedAt: lease.leasedAt,
+          lastHeartbeatAt: lease.lastHeartbeatAt,
+          leaseExpiresAt: lease.leaseExpiresAt,
+        }));
+      const intents = deps.persistence
+        .listWorkflowMutationIntents(workflowFilter, ['queued', 'running'])
+        .map((intent) => ({
+          id: intent.id,
+          workflowId: intent.workflowId,
+          channel: intent.channel,
+          status: intent.status,
+          priority: intent.priority,
+          ownerId: intent.ownerId ?? null,
+          createdAt: intent.createdAt,
+          startedAt: intent.startedAt ?? null,
+        }));
+      const result = { leases, intents };
+      switch (flags.output) {
+        case 'label':
+          writeOut([...leases.map((l) => l.workflowId), ...intents.map((i) => String(i.id))].join('\n') + '\n');
+          break;
+        case 'json':
+          writeOut(formatAsJson(result) + '\n');
+          break;
+        case 'jsonl':
+          writeOut(formatAsJsonl([...leases, ...intents]) + '\n');
+          break;
+        default: {
+          const nowIso = new Date().toISOString();
+          const leaseLines = leases.length === 0
+            ? ['No workflow mutation leases.']
+            : [
+                'WORKFLOW\tOWNER\tACTIVE_INTENT\tKIND\tHEARTBEAT\tEXPIRES\tSTATE',
+                ...leases.map((l) => [
+                  l.workflowId,
+                  l.ownerId,
+                  l.activeIntentId ?? '-',
+                  l.activeMutationKind ?? '-',
+                  l.lastHeartbeatAt,
+                  l.leaseExpiresAt,
+                  l.leaseExpiresAt > nowIso ? 'live' : 'EXPIRED',
+                ].join('\t')),
+              ];
+          const intentLines = intents.length === 0
+            ? ['No queued or running mutation intents.']
+            : [
+                'ID\tWORKFLOW\tCHANNEL\tSTATUS\tOWNER\tCREATED_AT',
+                ...intents.map((i) => [
+                  i.id,
+                  i.workflowId,
+                  i.channel,
+                  i.status,
+                  i.ownerId ?? '-',
+                  i.createdAt,
+                ].join('\t')),
+              ];
+          writeOut([...leaseLines, '', ...intentLines].join('\n') + '\n');
           break;
         }
       }
