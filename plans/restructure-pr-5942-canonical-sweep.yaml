@@ -1,0 +1,273 @@
+name: "Restructure PR 5942 canonical sweep"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+featureBranch: repair/pr-5942-canonical-sweep-stack
+description: |
+  Rebuild the deprecated merge-mode/retry-path cleanup stack so PR #5942's
+  canonical sweep verifier is not replayed on stale branch history.
+
+  Diagnosis from the repair attempt:
+  - PR #5942 is open, head branch exists, and head SHA is
+    b4b19b6fb6635add73f22c7bceb17ef980e52233.
+  - GitHub currently targets PR #5942 at `master`; the originally supplied
+    stack base branch no longer exists.
+  - A direct merge of the stale PR head into `origin/master` conflicts in
+    api/headless/ipc/execution files because the PR head carries older copies
+    of stack commits #1-#10.
+  - Replaying only commit b4b19b6 onto `origin/master` succeeds mechanically,
+    but `pnpm verify-empty-canonical-sweeps` fails on current `master`.
+  - Downstream PRs #5943/#5944 remove docs and IPC contract hits, while current
+    `master` also has drift-harness and removed-alias negative-test literals
+    that must be handled before the verifier can pass.
+
+  Standalone workflow waiver:
+  This workflow intentionally contains several small prompt tasks because the
+  user asked for one submitted Invoker handoff after the local repair proved the
+  fix needs stack restructuring. The tasks are split by review unit inside this
+  one workflow, then joined by one focused proof command.
+
+tasks:
+  - id: canonicalize-app-legacy-literals
+    description: |
+      Canonicalize app-side legacy merge-mode literals that make the sweep fail.
+      Review claim: App regression fixtures and removed-alias tests no longer contain the removed top-level merge-mode command literal while preserving the same behavior.
+      Review lane: behavior
+      Safety invariant: Keep the drift harness files and keep removed aliases rejected before Electron startup.
+      Slice rationale: This app slice is separate because it touches active app tests and drift fixtures, not docs, contracts, or the verifier script.
+      Architectural effect: No new runtime path; existing app surfaces continue using canonical workflow merge-mode APIs and removed aliases remain blocked locally.
+      Goal: Remove app-side static hits for the removed merge-mode command vocabulary.
+      Motivation: Current `master` added drift fixtures after the stale stack branch, so replaying PR #5942 would either delete those files or make the sweep fail.
+      Alternative considerations: Deleting the drift harness was rejected because it is unrelated master functionality; allowing the old literal globally was rejected because it weakens the sweep.
+      Implementation details: Update only the listed app files so canonical names are used in drift scenario ids/lists and the removed alias negative test/guard avoids a static literal while preserving rejection behavior.
+      Non-goals: No docs edits, no contract edits, no verifier script edits, no unrelated drift coverage changes.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - packages/app/src/headless-command-registry.ts
+      - packages/app/src/__tests__/headless-client.test.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      Change types:
+      - packages/app/src/headless-command-registry.ts: modify
+      - packages/app/src/__tests__/headless-client.test.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      Acceptance criteria:
+      - Drift scenario ids/lists use canonical workflow merge-mode vocabulary.
+      - The drift scenario action calls the canonical merge-mode API available on current `master`.
+      - Removed top-level headless alias behavior is still covered and still rejects before Electron startup.
+      - `rg -n 'set-merge-mode' packages/app/src/headless-command-registry.ts packages/app/src/__tests__/headless-client.test.ts packages/app/e2e/drift` prints no hits.
+    prompt: |
+      Review claim: App regression fixtures and removed-alias tests no longer contain the removed top-level merge-mode command literal while preserving the same behavior.
+      Review lane: behavior
+      Safety invariant: Keep the drift harness files and keep removed aliases rejected before Electron startup.
+      Slice rationale: This app slice is separate because it touches active app tests and drift fixtures, not docs, contracts, or the verifier script.
+      Architectural effect: No new runtime path; existing app surfaces continue using canonical workflow merge-mode APIs and removed aliases remain blocked locally.
+      Goal: Remove app-side static hits for the removed merge-mode command vocabulary.
+      Motivation: Current `master` added drift fixtures after the stale stack branch, so replaying PR #5942 would either delete those files or make the sweep fail.
+      Alternative considerations: Deleting the drift harness was rejected because it is unrelated master functionality; allowing the old literal globally was rejected because it weakens the sweep.
+      Implementation details:
+      - Assume no prior context. Work from current `master`.
+      - Update `packages/app/e2e/drift/scenario-catalog.ts`, `packages/app/e2e/drift/drift-battery.spec.ts`, and `packages/app/e2e/drift/drift-thundering-herd.spec.ts` so the merge-mode drift scenario uses canonical workflow merge-mode naming instead of the removed top-level command vocabulary.
+      - Keep the drift harness files in place. Do not delete `packages/app/e2e/drift/*`.
+      - Update the scenario action to call the canonical merge-mode API already present on current `master`.
+      - Update `packages/app/src/headless-command-registry.ts` and `packages/app/src/__tests__/headless-client.test.ts` so removed aliases are still rejected before Electron startup, but the removed command string is not present as a static source literal.
+      - Preserve the existing negative behavior and focused test coverage.
+      Non-goals: No docs edits, no contract edits, no verifier script edits, no unrelated drift coverage changes.
+      Files:
+      - packages/app/src/headless-command-registry.ts
+      - packages/app/src/__tests__/headless-client.test.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      Change types:
+      - packages/app/src/headless-command-registry.ts: modify
+      - packages/app/src/__tests__/headless-client.test.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      Acceptance criteria:
+      - Drift scenario ids/lists use canonical workflow merge-mode vocabulary.
+      - The drift scenario action calls the canonical merge-mode API available on current `master`.
+      - Removed top-level headless alias behavior is still covered and still rejects before Electron startup.
+      - `rg -n 'set-merge-mode' packages/app/src/headless-command-registry.ts packages/app/src/__tests__/headless-client.test.ts packages/app/e2e/drift` prints no hits.
+    dependencies: []
+
+  - id: refresh-persistence-architecture-doc
+    description: |
+      Refresh the persistence architecture prose for canonical names.
+      Review claim: The persistence architecture document describes only canonical retry and workflow merge-mode surfaces.
+      Review lane: docs
+      Safety invariant: Touch only the persistence architecture Markdown document.
+      Slice rationale: Documentation cleanup is split from app and contract edits so prose review stays local.
+      Architectural effect: No runtime effect; the architecture reference now matches the canonical surface names.
+      Goal: Remove stale restart-task and set-merge-mode prose from the persistence architecture document.
+      Motivation: PR #5943 already represents this cleanup, and the verifier cannot pass while the document carries old names.
+      Alternative considerations: Allowing docs exceptions in the sweep was rejected because this document is the canonical architecture reference.
+      Implementation details: Apply the persistence prose cleanup represented by PR #5943, adjusted onto current `master`.
+      Non-goals: No source edits, no verifier edits, no broad docs rewrite.
+      Layer: docs
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: modify
+      Acceptance criteria:
+      - The document no longer contains deprecated restart-task or set-merge-mode channel names.
+      - `rg -n 'invoker:restart-task|restartTask\(|set-merge-mode' docs/persistence-architecture-single-writer.md` prints no hits.
+    prompt: |
+      Review claim: The persistence architecture document describes only canonical retry and workflow merge-mode surfaces.
+      Review lane: docs
+      Safety invariant: Touch only the persistence architecture Markdown document.
+      Slice rationale: Documentation cleanup is split from app and contract edits so prose review stays local.
+      Architectural effect: No runtime effect; the architecture reference now matches the canonical surface names.
+      Goal: Remove stale restart-task and set-merge-mode prose from the persistence architecture document.
+      Motivation: PR #5943 already represents this cleanup, and the verifier cannot pass while the document carries old names.
+      Alternative considerations: Allowing docs exceptions in the sweep was rejected because this document is the canonical architecture reference.
+      Implementation details:
+      - Assume no prior context. Work from the current workflow branch after the app cleanup task.
+      - Use PR #5943's intent as source material, but apply the edit onto current `master` history.
+      - Update only `docs/persistence-architecture-single-writer.md`.
+      - Replace deprecated restart-task and set-merge-mode references with the current canonical retry/recreate/workflow merge-mode surfaces.
+      Non-goals: No source edits, no verifier edits, no broad docs rewrite.
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: modify
+      Acceptance criteria:
+      - The document no longer contains deprecated restart-task or set-merge-mode channel names.
+      - `rg -n 'invoker:restart-task|restartTask\(|set-merge-mode' docs/persistence-architecture-single-writer.md` prints no hits.
+    dependencies:
+      - canonicalize-app-legacy-literals
+
+  - id: drop-deprecated-ipc-contract-names
+    description: |
+      Drop deprecated IPC contract channel names.
+      Review claim: IPC contracts expose canonical retry-task and workflow merge-mode channel names without deprecated channel aliases.
+      Review lane: behavior
+      Safety invariant: Touch only the IPC channel contract file and preserve the canonical channel definitions.
+      Slice rationale: Contract cleanup is split from app fixtures and docs because it changes a public typed surface.
+      Architectural effect: The typed IPC surface no longer advertises removed channel aliases.
+      Goal: Remove deprecated IPC channel definitions that the repository sweep should reject.
+      Motivation: PR #5944 already represents this cleanup, and the verifier cannot pass while deprecated IPC keys remain.
+      Alternative considerations: Keeping deprecated contract keys as compatibility aliases was rejected by the cleanup stack's stated direction.
+      Implementation details: Apply the IPC contract deletion represented by PR #5944, adjusted onto current `master`.
+      Non-goals: No handler rewrites, no UI changes, no docs edits, no verifier edits.
+      Layer: transport
+      Feature state: active
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      Acceptance criteria:
+      - Deprecated `invoker:restart-task` and `invoker:set-merge-mode` contract entries are gone.
+      - Canonical retry-task and set-workflow-merge-mode contract entries remain.
+      - `rg -n 'invoker:restart-task|invoker:set-merge-mode' packages/contracts/src/ipc-channels.ts` prints no hits.
+    prompt: |
+      Review claim: IPC contracts expose canonical retry-task and workflow merge-mode channel names without deprecated channel aliases.
+      Review lane: behavior
+      Safety invariant: Touch only the IPC channel contract file and preserve the canonical channel definitions.
+      Slice rationale: Contract cleanup is split from app fixtures and docs because it changes a public typed surface.
+      Architectural effect: The typed IPC surface no longer advertises removed channel aliases.
+      Goal: Remove deprecated IPC channel definitions that the repository sweep should reject.
+      Motivation: PR #5944 already represents this cleanup, and the verifier cannot pass while deprecated IPC keys remain.
+      Alternative considerations: Keeping deprecated contract keys as compatibility aliases was rejected by the cleanup stack's stated direction.
+      Implementation details:
+      - Assume no prior context. Work from the current workflow branch after the docs cleanup task.
+      - Use PR #5944's intent as source material, but apply the deletion onto current `master` history.
+      - Update only `packages/contracts/src/ipc-channels.ts`.
+      - Remove deprecated `invoker:restart-task` and `invoker:set-merge-mode` contract entries.
+      - Preserve canonical `invoker:retry-task` and `invoker:set-workflow-merge-mode` entries.
+      Non-goals: No handler rewrites, no UI changes, no docs edits, no verifier edits.
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      Acceptance criteria:
+      - Deprecated `invoker:restart-task` and `invoker:set-merge-mode` contract entries are gone.
+      - Canonical retry-task and set-workflow-merge-mode contract entries remain.
+      - `rg -n 'invoker:restart-task|invoker:set-merge-mode' packages/contracts/src/ipc-channels.ts` prints no hits.
+    dependencies:
+      - refresh-persistence-architecture-doc
+
+  - id: add-canonical-sweep-verifier
+    description: |
+      Add the canonical sweep verifier after its prerequisites.
+      Review claim: A repository-level verifier catches reintroduced removed alias, endpoint, and compatibility strings.
+      Review lane: policy
+      Safety invariant: Touch only the package script entry and the verifier shell script.
+      Slice rationale: The verifier lands after cleanup tasks so its focused proof can pass on the branch that introduces it.
+      Architectural effect: No runtime effect; the repository gains a deterministic policy check.
+      Goal: Add PR #5942's intended canonical sweep helper without stale stack history.
+      Motivation: PR #5942's intended change is useful, but it must be based on the cleanup it proves.
+      Alternative considerations: Adding broad allowlists was rejected except for the existing SQLite migration compatibility hit.
+      Implementation details: Add the package script and shell verifier represented by PR #5942, adjusted only as needed for the cleaned current branch.
+      Non-goals: No app cleanup, no docs cleanup, no contract cleanup in this task.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - package.json
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - package.json: modify
+      - scripts/verify-empty-canonical-sweeps.sh: modify
+      Acceptance criteria:
+      - `package.json` exposes `verify-empty-canonical-sweeps`.
+      - `scripts/verify-empty-canonical-sweeps.sh` scans `packages`, `docs`, and `invoker-ctl`.
+      - The verifier allows exactly the existing SQLite migration compatibility hit and fails on other removed alias or endpoint hits.
+      - `bash scripts/verify-empty-canonical-sweeps.sh` exits 0.
+    prompt: |
+      Review claim: A repository-level verifier catches reintroduced removed alias, endpoint, and compatibility strings.
+      Review lane: policy
+      Safety invariant: Touch only the package script entry and the verifier shell script.
+      Slice rationale: The verifier lands after cleanup tasks so its focused proof can pass on the branch that introduces it.
+      Architectural effect: No runtime effect; the repository gains a deterministic policy check.
+      Goal: Add PR #5942's intended canonical sweep helper without stale stack history.
+      Motivation: PR #5942's intended change is useful, but it must be based on the cleanup it proves.
+      Alternative considerations: Adding broad allowlists was rejected except for the existing SQLite migration compatibility hit.
+      Implementation details:
+      - Assume no prior context. Work from the current workflow branch after the app, docs, and contract cleanup tasks.
+      - Use PR #5942 commit b4b19b6fb6635add73f22c7bceb17ef980e52233 as source material for `package.json` and `scripts/verify-empty-canonical-sweeps.sh`.
+      - Add the package script `verify-empty-canonical-sweeps`.
+      - Add the shell verifier and keep its scan paths to `packages`, `docs`, and `invoker-ctl`.
+      - The verifier should reject removed alias or endpoint strings and allow exactly the existing SQLite migration compatibility hit.
+      - Do not weaken the sweep to allow app/docs/contract hits fixed by earlier tasks.
+      Non-goals: No app cleanup, no docs cleanup, no contract cleanup in this task.
+      Files:
+      - package.json
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - package.json: modify
+      - scripts/verify-empty-canonical-sweeps.sh: modify
+      Acceptance criteria:
+      - `package.json` exposes `verify-empty-canonical-sweeps`.
+      - `scripts/verify-empty-canonical-sweeps.sh` scans `packages`, `docs`, and `invoker-ctl`.
+      - The verifier allows exactly the existing SQLite migration compatibility hit and fails on other removed alias or endpoint hits.
+      - `bash scripts/verify-empty-canonical-sweeps.sh` exits 0.
+    dependencies:
+      - drop-deprecated-ipc-contract-names
+
+  - id: verify-canonical-sweep-stack
+    description: |
+      Run focused proof for the canonical sweep restructuring.
+      Review claim: The focused commands pass after the app, docs, contract, and verifier tasks are all applied.
+      Review lane: proof
+      Safety invariant: This task only runs deterministic local verification commands after the implementation tasks.
+      Slice rationale: One proof task validates the static sweep plus focused app tests touched by the restructuring.
+      Architectural effect: None; the command task adds no product behavior.
+      Goal: Prove the restructured branch is ready for review.
+      Motivation: The local repair attempt found that `pnpm verify-empty-canonical-sweeps` fails before restructuring, so this exact command must pass after the delegated fix.
+      Alternative considerations: Manual inspection was rejected because the failure is a static repository invariant plus focused behavior tests.
+      Implementation details: Execute the package script and focused app vitest files from the repository root.
+      Non-goals: No source edits in this verification task.
+      Layer exception: allowed
+      - Proof depends on earlier app_regression, docs, and transport tasks so validation runs after all prerequisite cleanup and verifier changes are present.
+      Layer: e2e_regression
+      Feature state: active
+    command: "pnpm verify-empty-canonical-sweeps && pnpm --dir packages/app exec vitest run src/__tests__/headless-client.test.ts src/__tests__/gui-mutation-translation.test.ts"
+    dependencies:
+      - add-canonical-sweep-verifier
