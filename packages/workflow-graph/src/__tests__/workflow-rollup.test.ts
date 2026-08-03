@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeWorkflowRollupFromSummaries, hasFailedDependencyPath } from '../workflow-rollup.js';
+import {
+  computeWorkflowRollupFromSummaries,
+  computeWorkflowStatusFromTaskGraph,
+  createEmptyWorkflowTaskStatusCounts,
+  hasFailedDependencyPath,
+} from '../workflow-rollup.js';
 import type { TaskStatus } from '../types.js';
 
 function task(id: string, status: TaskStatus, dependencies: string[] = []) {
@@ -9,6 +14,14 @@ function task(id: string, status: TaskStatus, dependencies: string[] = []) {
     status,
     dependencies,
   };
+}
+
+function countsFor(tasks: ReturnType<typeof task>[]) {
+  const counts = createEmptyWorkflowTaskStatusCounts();
+  for (const summary of tasks) {
+    counts[summary.status] += 1;
+  }
+  return counts;
 }
 
 describe('workflow rollup', () => {
@@ -110,6 +123,12 @@ describe('workflow rollup', () => {
     expect(rollup.status).not.toBe('completed');
     expect(rollup.countsByStatus.completed).toBe(2);
     expect(rollup.countsByStatus.closed).toBe(1);
+  });
+
+  it('derives running directly when a failed task is restarted', () => {
+    const tasks = [task('t1', 'running')];
+
+    expect(computeWorkflowStatusFromTaskGraph(tasks, countsFor(tasks))).toBe('running');
   });
 });
 
