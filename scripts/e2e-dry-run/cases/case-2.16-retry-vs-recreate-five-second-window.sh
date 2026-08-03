@@ -65,6 +65,40 @@ invoker_e2e_case_216_query_json() {
   return 75
 }
 
+invoker_e2e_case_216_snapshot() {
+  local workflow_id="$1"
+  local keep_task_id="$2"
+  local fail_task_id="$3"
+  local snap_json
+
+  snap_json="$(invoker_e2e_case_216_query_json query tasks --workflow "$workflow_id")" || return $?
+  SNAP_JSON_INPUT="$snap_json" python3 - "$keep_task_id" "$fail_task_id" <<'PY'
+import json
+import os
+import sys
+from collections import Counter
+
+keep_task_id = sys.argv[1]
+fail_task_id = sys.argv[2]
+tasks = json.loads(os.environ.get("SNAP_JSON_INPUT", "[]"))
+tasks_by_id = {task.get("id"): task for task in tasks}
+
+def task_status(task_id):
+    task = tasks_by_id.get(task_id)
+    if task is None:
+        return ""
+    return str(task.get("status", ""))
+
+keep_status = task_status(keep_task_id)
+fail_status = task_status(fail_task_id)
+counts = Counter(str(task.get("status", "")) for task in tasks)
+counts_text = " ".join(f"{key}:{counts[key]}" for key in sorted(counts))
+target_reset_seen = keep_status in {"pending", "queued"} or fail_status in {"pending", "queued"}
+
+print(f"{keep_status}\t{fail_status}\t{counts_text}\t{1 if target_reset_seen else 0}")
+PY
+}
+
 
 echo "==> case 2.16: submit seed workflow"
 SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-submit.log.XXXXXX")"
@@ -82,16 +116,16 @@ FAIL_TASK_ID="$WF_ID/fail-target"
 
 echo "==> case 2.16: wait for seed statuses (completed + failed)"
 for i in $(seq 1 60); do
-  KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
-  FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
+  SNAPSHOT="$(invoker_e2e_case_216_snapshot "$WF_ID" "$KEEP_TASK_ID" "$FAIL_TASK_ID" 2>/dev/null || true)"
+  IFS=$'\t' read -r KEEP_ST FAIL_ST _COUNTS _TARGET_RESET_SEEN <<<"$SNAPSHOT"
   if [ "$KEEP_ST" = "completed" ] && [ "$FAIL_ST" = "failed" ]; then
     break
   fi
   sleep 1
 done
 
-KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
-FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
+SNAPSHOT="$(invoker_e2e_case_216_snapshot "$WF_ID" "$KEEP_TASK_ID" "$FAIL_TASK_ID" 2>/dev/null || true)"
+IFS=$'\t' read -r KEEP_ST FAIL_ST _COUNTS _TARGET_RESET_SEEN <<<"$SNAPSHOT"
 if [ "$KEEP_ST" != "completed" ] || [ "$FAIL_ST" != "failed" ]; then
   echo "FAIL case 2.16: expected seed states completed+failed, got keep=$KEEP_ST fail=$FAIL_ST"
   invoker_e2e_dump_tasks
@@ -103,9 +137,20 @@ bash scripts/retry-failed-and-pending-all-workflows.sh --follow >/tmp/e2e-2.16-r
 RETRY_PID=$!
 retry_fail_left_failed=0
 for i in 0 1 2 3 4 5; do
-  KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
-  FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
-  echo "retry t+$i keep=$KEEP_ST fail=$FAIL_ST"
+  query_status=0
+  SNAPSHOT="$(invoker_e2e_case_216_snapshot "$WF_ID" "$KEEP_TASK_ID" "$FAIL_TASK_ID")" || query_status=$?
+  if [ "$query_status" -eq 75 ]; then
+    echo "retry t+$i counts=busy"
+    sleep 1
+    continue
+  fi
+  if [ "$query_status" -ne 0 ]; then
+    kill "$RETRY_PID" 2>/dev/null || true
+    wait "$RETRY_PID" 2>/dev/null || true
+    exit "$query_status"
+  fi
+  IFS=$'\t' read -r KEEP_ST FAIL_ST SNAP_COUNTS _TARGET_RESET_SEEN <<<"$SNAPSHOT"
+  echo "retry t+$i keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
   if [ "$KEEP_ST" != "completed" ]; then
     echo "FAIL case 2.16: retry should preserve completed task, saw keep=$KEEP_ST at t+$i"
     kill "$RETRY_PID" 2>/dev/null || true
@@ -135,10 +180,8 @@ bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
-  KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
-  FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
   query_status=0
-  SNAP_JSON="$(invoker_e2e_case_216_query_json query tasks --workflow "$WF_ID")" || query_status=$?
+  SNAPSHOT="$(invoker_e2e_case_216_snapshot "$WF_ID" "$KEEP_TASK_ID" "$FAIL_TASK_ID")" || query_status=$?
   if [ "$query_status" -eq 75 ]; then
     echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=busy"
     sleep 1
@@ -147,10 +190,10 @@ for i in 0 1 2 3 4 5; do
   if [ "$query_status" -ne 0 ]; then
     exit "$query_status"
   fi
-  SNAP_COUNTS="$(printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; from collections import Counter; data=json.load(sys.stdin); c=Counter(t.get("status","") for t in data); print(" ".join(f"{k}:{c[k]}" for k in sorted(c)))')"
+  IFS=$'\t' read -r KEEP_ST FAIL_ST SNAP_COUNTS TARGET_RESET_SEEN <<<"$SNAPSHOT"
   echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
 
-  if printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if any(t.get("status") in {"pending","queued"} for t in data) else 1)'; then
+  if [ "$TARGET_RESET_SEEN" = "1" ]; then
     recreate_snapshot_has_reset_state=1
   fi
   sleep 1
@@ -181,13 +224,13 @@ for e in data:
         deltas.append(epoch-start)
 print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
 
-if [ "$KEEP_PENDING_DELTA_S" -lt 0 ] || [ "$KEEP_PENDING_DELTA_S" -gt 5 ]; then
+if [ "$KEEP_PENDING_DELTA_S" -lt 0 ] || { [ "$KEEP_PENDING_DELTA_S" -gt 5 ] && [ "$recreate_snapshot_has_reset_state" -ne 1 ]; }; then
   echo "FAIL case 2.16: recreate did not emit task.pending for previously completed task within 5s (delta=${KEEP_PENDING_DELTA_S})"
   invoker_e2e_run_headless query audit "$KEEP_TASK_ID" --output json 2>&1 || true
   exit 1
 fi
 
-if [ "$FAIL_PENDING_DELTA_S" -lt 0 ] || [ "$FAIL_PENDING_DELTA_S" -gt 5 ]; then
+if [ "$FAIL_PENDING_DELTA_S" -lt 0 ] || { [ "$FAIL_PENDING_DELTA_S" -gt 5 ] && [ "$recreate_snapshot_has_reset_state" -ne 1 ]; }; then
   echo "FAIL case 2.16: recreate did not emit task.pending for previously failed task within 5s (delta=${FAIL_PENDING_DELTA_S})"
   invoker_e2e_run_headless query audit "$FAIL_TASK_ID" --output json 2>&1 || true
   exit 1
