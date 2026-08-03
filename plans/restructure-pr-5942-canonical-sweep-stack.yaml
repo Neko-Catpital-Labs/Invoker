@@ -1,0 +1,130 @@
+name: "Restructure PR 5942 canonical sweep verifier"
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+featureBranch: plan/restructure-pr-5942-canonical-sweep-stack
+description: |
+  Restructure the remove-deprecated-merge-mode-and-retry-paths stack so PR #5942 does not land a verifier before the code and docs that make the verifier true.
+
+  Conflict diagnosis from the repair checkout: PR #5942 is open at head SHA b4b19b6fb6635add73f22c7bceb17ef980e52233, but `master` already contains stack steps 1-10 under different SHAs. A mechanical rebase drops or skips the obsolete predecessor commits and leaves only the step-11 verifier commit on top of `master`. That resolves the Git conflict, but the PR's own narrow proof, `pnpm run verify-empty-canonical-sweeps`, fails because the verifier flags doc and contract cleanups that are explicitly deferred to PR #5943 and PR #5944, plus intentional removed-alias rejection references.
+
+  The workflow should reshape the stack the way a reviewer would expect: no PR should advertise a passing sweep proof while depending on later PRs for that proof, and the final sweep should still reject real reintroduced legacy command, IPC, HTTP, or compatibility labels.
+
+tasks:
+  - id: restructure-canonical-sweep-stack
+    description: |
+      Restructure PR #5942 and the adjacent stack slices so the canonical sweep verifier lands only where its proof can pass.
+      Review claim: The canonical sweep verifier is positioned and scoped so the PR that introduces or activates it can run its own proof without depending on later stack entries.
+      Safety invariant: The change must preserve already-landed runtime behavior from stack steps 1-10 and must not remove intentional negative tests or removed-alias rejection guards.
+      Slice rationale: This is one stack-surgery slice because the conflict is caused by stale predecessor ancestry and the proof failure is caused by verifier ordering across PR #5942, #5943, and #5944.
+      Architectural effect: No new runtime path is introduced; the effect is to make the tooling-policy gate accurately reflect the canonical command, IPC, HTTP, and storage-label surfaces.
+      Goal: Produce a reviewable stack shape where each PR's claimed proof passes at that PR's own head.
+      Motivation: A straight rebase makes PR #5942 mergeable but leaves its advertised `bash scripts/verify-empty-canonical-sweeps.sh` proof failing on `master`.
+      Alternative considerations: Do not silently weaken the verifier to ignore true live legacy surfaces. Do not fold unrelated cleanup into a single oversized conflict-resolution commit. Either move the verifier activation after the docs and contract cleanup slices, or split PR #5942 into a dormant helper introduction plus a later activation/checker-tightening slice.
+      Implementation details: Start from current `master`, fetch PR #5942, #5943, and #5944, and inspect their current head branches before editing. Preserve the intended landed content of stack steps 1-10 already on `master`. Rework the remaining stack so the docs refresh and deprecated IPC-channel deletion happen before any PR whose test plan runs the empty canonical sweep, or split the sweep helper into a non-asserting/dormant helper PR and a later activation PR. Update `scripts/verify-empty-canonical-sweeps.sh` so intentional references are explicit allowlist entries: the removed headless alias rejection guard in `packages/app/src/headless-command-registry.ts` and the tests that prove removed aliases or routes return errors may remain, but live command registries, docs tables, contracts, handlers, API routes, and user-facing usage text must not retain deprecated names. Update PR body/test-plan text if the verifier is split so each PR advertises only proofs that pass at that point in the stack. Publish the final authored stack with Mergify Stacks after local verification is green.
+      Non-goals: No unrelated refactors, no UI redesign, no product behavior change outside removing or documenting the deprecated command/IPC/API surfaces already targeted by this stack.
+      Layer: transport
+      Feature state: active
+      Files:
+      - scripts/verify-empty-canonical-sweeps.sh
+      - package.json
+      - docs/persistence-architecture-single-writer.md
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/src/headless-command-registry.ts
+      - packages/app/src/__tests__/headless-client.test.ts
+      - packages/app/src/__tests__/api-server.test.ts
+      - packages/app/src/__tests__/parity-regression.test.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - Stack branch/review structure: reorder or split PR #5942/#5943/#5944 so proof dependencies flow forward.
+      - scripts/verify-empty-canonical-sweeps.sh: modify only to encode precise allowlist rules for intentional rejection references.
+      - package.json: keep or move the verifier script entry with the verifier activation slice.
+      - docs/persistence-architecture-single-writer.md: modify only if the docs cleanup remains in the same activated verifier slice.
+      - packages/contracts/src/ipc-channels.ts: modify only if the deprecated IPC cleanup remains in the same activated verifier slice.
+      - tests: modify only when needed to keep removed-alias rejection coverage while avoiding false-positive verifier matches.
+      Acceptance criteria:
+      - PR #5942, or its replacement first verifier slice, is based on current `master` without stale predecessor commits.
+      - No PR in the resulting stack has a test plan that depends on later stack entries.
+      - `pnpm run verify-empty-canonical-sweeps` exits 0 at the PR head that advertises it.
+      - The verifier still fails for real deprecated live surfaces and allows only documented negative-test or rejection-guard references.
+      - The final PR stack is published with Mergify Stacks for the Invoker repository.
+    prompt: |
+      Assume no prior context. You are restructuring an Invoker PR stack, not doing a normal one-commit merge-conflict repair.
+
+      Review claim: The canonical sweep verifier is positioned and scoped so the PR that introduces or activates it can run its own proof without depending on later stack entries.
+      Safety invariant: Preserve already-landed runtime behavior from stack steps 1-10 and keep intentional negative tests or removed-alias rejection guards.
+      Slice rationale: This is one stack-surgery slice because the Git conflict is stale predecessor ancestry while the proof failure is verifier ordering across PR #5942, #5943, and #5944.
+      Architectural effect: No new runtime path is introduced; the tooling-policy gate becomes an accurate guard for canonical command, IPC, HTTP, and storage-label surfaces.
+      Goal: Produce a reviewable stack shape where each PR's claimed proof passes at that PR's own head.
+      Motivation: In the repair checkout, a straight rebase of PR #5942 onto `master` skipped stale stack commits and left only the verifier commit, but `pnpm run verify-empty-canonical-sweeps` failed.
+      Alternative considerations: Do not silently weaken the verifier to ignore true live legacy surfaces. Do not fold unrelated cleanup into one oversized conflict-resolution commit. Either move verifier activation after docs and contract cleanup, or split PR #5942 into a dormant helper introduction plus a later activation/checker-tightening slice.
+      Implementation details: Fetch these refs: PR #5942 head `stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-11-add--d1404549`, PR #5943 head `stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-12--9bfcc7ba`, and PR #5944 head `stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-13-drop--b15de57b`. Current `master` already contains stack steps 1-10 under different SHAs. Rebase or reconstruct the remaining stack from `master`, preserving the intended content of #5942/#5943/#5944 but changing the ordering or split so each PR proof is truthful. The observed failing proof on rebased #5942 was `pnpm run verify-empty-canonical-sweeps`; it reported stale `set-merge-mode` references in docs/contracts/headless alias rejection tests/drift fixtures and stale `/restart` references in API negative tests. The upper stack shows #5943 refreshes docs and #5944 drops deprecated IPC channel names, while the final stack still legitimately contains the removed headless alias string in `isRemovedHeadlessCommandAlias` and tests proving it is rejected. Encode those intentional references as explicit allowlist entries and keep the verifier strict for live docs, contracts, handlers, routes, registries, and usage text. Update PR body/test-plan text when a proof moves to a later slice. After local verification is green, publish/update the resulting Invoker PR stack with Mergify Stacks.
+      Non-goals: No unrelated refactors, no UI redesign, no behavior change outside the deprecated-surface cleanup already targeted by this stack.
+
+      Files:
+      - scripts/verify-empty-canonical-sweeps.sh
+      - package.json
+      - docs/persistence-architecture-single-writer.md
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/src/headless-command-registry.ts
+      - packages/app/src/__tests__/headless-client.test.ts
+      - packages/app/src/__tests__/api-server.test.ts
+      - packages/app/src/__tests__/parity-regression.test.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - Stack branch/review structure: reorder or split PR #5942/#5943/#5944 so proof dependencies flow forward.
+      - scripts/verify-empty-canonical-sweeps.sh: modify only to encode precise allowlist rules for intentional rejection references.
+      - package.json: keep or move the verifier script entry with the verifier activation slice.
+      - docs/persistence-architecture-single-writer.md: modify only if the docs cleanup remains in the same activated verifier slice.
+      - packages/contracts/src/ipc-channels.ts: modify only if the deprecated IPC cleanup remains in the same activated verifier slice.
+      - tests: modify only when needed to keep removed-alias rejection coverage while avoiding false-positive verifier matches.
+      Acceptance criteria:
+      - PR #5942, or its replacement first verifier slice, is based on current `master` without stale predecessor commits.
+      - No PR in the resulting stack has a test plan that depends on later stack entries.
+      - `pnpm run verify-empty-canonical-sweeps` exits 0 at the PR head that advertises it.
+      - The verifier still fails for real deprecated live surfaces and allows only documented negative-test or rejection-guard references.
+      - Focused package tests covering removed aliases and routes pass.
+      - The final PR stack is published with Mergify Stacks for the Invoker repository.
+    dependencies: []
+
+  - id: verify-canonical-sweep-focus
+    description: |
+      Run the focused verifier and regression tests for the restructured canonical-sweep stack.
+      Review claim: The restructured stack has a passing canonical sweep and keeps removed-alias/removed-route rejection coverage intact.
+      Safety invariant: This task only runs deterministic local proof commands after the implementation task.
+      Slice rationale: The focused proof directly exercises the failure found during conflict repair before the broader suite runs.
+      Architectural effect: None; this is verification only.
+      Goal: Prove the sweep verifier and the adjacent app tests agree on what is a removed surface versus an intentional rejection reference.
+      Motivation: The original PR's advertised proof failed after a clean rebase onto `master`.
+      Alternative considerations: Manual `rg` inspection alone was rejected because the verifier must be executable and repeatable.
+      Implementation details: Run `pnpm run verify-empty-canonical-sweeps`, then run the focused app tests that cover removed headless aliases and removed HTTP restart routes.
+      Non-goals: No code edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run verify-empty-canonical-sweeps && cd packages/app && pnpm test -- src/__tests__/headless-client.test.ts src/__tests__/api-server.test.ts src/__tests__/parity-regression.test.ts"
+    dependencies:
+      - restructure-canonical-sweep-stack
+
+  - id: verify-full-suite
+    description: |
+      Run the terminal Invoker regression gate after the stack restructuring and focused proof.
+      Review claim: The final restructured stack does not regress the repository's required test surface.
+      Safety invariant: This task only runs the existing repository-wide test gate and depends on all earlier work.
+      Slice rationale: A standalone implementation workflow needs a terminal full-suite gate before PR publication.
+      Architectural effect: None; this is verification only.
+      Goal: Prove the restructured stack remains compatible with the required CI-equivalent local surface.
+      Motivation: Stack surgery touches publication shape and verifier policy, so the final gate should be broader than the focused sweep proof.
+      Alternative considerations: Skipping the full suite was rejected because this is the terminal workflow in a standalone implementation plan.
+      Implementation details: Run `pnpm run test:all` from the repository root.
+      Non-goals: No code edits in this task.
+      Layer: e2e_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies:
+      - restructure-canonical-sweep-stack
+      - verify-canonical-sweep-focus
