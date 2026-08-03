@@ -1,0 +1,121 @@
+name: "Repair PR 5942 canonical verifier stack"
+onFinish: none
+mergeMode: manual
+repoUrl: git@github.com:Neko-Catpital-Labs/Invoker.git
+description: |
+  Restructure the existing remove-deprecated-merge-mode-and-retry-paths PR stack instead of forcing PR #5942 into a misleading single local rebase.
+
+  Diagnosis from the conflict repair attempt: PR #5942 is open and its head branch exists at b4b19b6fb6635add73f22c7bceb17ef980e52233, but GitHub now bases it on master. The old stack base named in the repair request no longer exists as a remote branch. A full `git rebase origin/master` stops in packages/contracts/src/ipc-channels.ts because old stack commit 1 tries to replay legacy `invoker:restart-task` beside the already-landed canonical `invoker:retry-task` state. A targeted `git rebase --onto origin/master f4ec35dfb` leaves only the verifier commit, but `pnpm verify-empty-canonical-sweeps` fails because the verifier runs before later cleanup steps and because it also matches intentional removed-alias rejection tests.
+
+tasks:
+  - id: prepare-pr-5942-stack-restructure
+    description: |
+      Prepare a local candidate stack repair for PRs #5942, #5943, and #5944 without publishing refs.
+      Review claim: The stack is reordered or otherwise reshaped so the canonical sweep verifier lands only after the cleanup it enforces.
+      Review lane: stack-repair
+      Safety invariant: Do not push, close, retarget, or force-update GitHub refs in this task; stop if any involved PR is closed, merged, missing, or has moved unexpectedly.
+      Slice rationale: One branch-surgery preparation slice is enough because the broken state is an ordering problem across three already-authored stack commits, not a new product behavior change.
+      Architectural effect: No runtime architecture change is introduced by the repair mechanics; the resulting code architecture should keep deprecated live IPC, headless, and HTTP surfaces removed while preserving intentional rejection tests.
+      Goal: Produce a local commit stack based on current origin/master that preserves the intended cleanup and verifier changes without leaving PR #5942 as a verifier that fails before downstream cleanup.
+      Motivation: PR #5942 cannot be fixed by a straightforward rebase because the verifier is ordered before some cleanup and is too broad for intentional negative-test references.
+      Alternative considerations: A plain local rebase was rejected because it produces a mergeable-looking verifier commit whose own proof fails. Folding every later cleanup into a single commit was rejected because it destroys the reviewable stack shape.
+      Implementation details: Fetch origin/master plus PR branches #5942, #5943, and #5944. Verify PR #5942 is open, base master, head b4b19b6fb6635add73f22c7bceb17ef980e52233, and mergeable status is still CONFLICTING or DIRTY for the same reason. Build a fresh local candidate stack from origin/master that preserves the intended changes from #5942 through #5944. Prefer keeping review slices separate: cleanup/prose before deprecated IPC deletion before the canonical sweep verifier. It is acceptable to move the verifier commit to the top of the stack, or to replace #5942 with the first cleanup slice and move the verifier content to a later PR, as long as the verifier change is preserved and every existing intended code/doc cleanup remains reviewable. Refine scripts/verify-empty-canonical-sweeps.sh so it rejects live deprecated surfaces but allows intentional removed-alias rejection tests and the headless removed-alias guard. Preserve useful Change-Id trailers when rewriting commits so existing PRs can be updated by the normal stack publication flow.
+      Non-goals: Do not publish branches, create a replacement PR, collapse the whole stack into one commit, remove negative tests that prove removed aliases are rejected, or make unrelated cleanup.
+      Layer: owner_delegation
+      Feature state: active
+      Files: scripts/verify-empty-canonical-sweeps.sh; package.json; docs/persistence-architecture-single-writer.md; packages/contracts/src/ipc-channels.ts; packages/app/src/headless-command-registry.ts; packages/app/src/__tests__/headless-client.test.ts; packages/app/src/__tests__/api-server.test.ts; packages/app/e2e/drift/scenario-catalog.ts; packages/app/e2e/drift/drift-battery.spec.ts; packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      Change types:
+      - scripts/verify-empty-canonical-sweeps.sh: modify if needed
+      - package.json: keep verifier script entry if verifier remains in this stack
+      - docs/persistence-architecture-single-writer.md: reorder or preserve cleanup commit
+      - packages/contracts/src/ipc-channels.ts: reorder or preserve deprecated IPC deletion
+      - packages/app and e2e tests: preserve intentional rejection coverage; do not remove solely to satisfy grep
+      Acceptance criteria:
+      - Local candidate stack is based on current origin/master.
+      - Candidate preserves PR #5942 verifier intent plus downstream cleanup from #5943 and #5944.
+      - `pnpm verify-empty-canonical-sweeps` exits 0 on the candidate stack tip.
+      - `git merge-tree` or an equivalent dry merge shows the candidate bottom PR can merge into origin/master without content conflicts.
+    prompt: |
+      Assume no prior context. You are repairing an existing GitHub PR stack in Neko-Catpital-Labs/Invoker.
+      Goal: Prepare, but do not publish, a local candidate stack repair for PR #5942 and its downstream stack PRs #5943 and #5944.
+      Review claim: The stack is reordered or otherwise reshaped so the canonical sweep verifier lands only after the cleanup it enforces.
+      Review lane: stack-repair
+      Safety invariant: Do not push, close, retarget, or force-update GitHub refs in this task. Before doing any local rewrite, verify PR #5942, #5943, and #5944 are open and their head branches still exist. Stop with a clear report if any PR is closed, merged, missing, or moved unexpectedly.
+      Slice rationale: The failure spans already-authored stack commits, so the repair must preserve separate review slices instead of folding everything into one commit.
+      Architectural effect: The repair should not introduce a new runtime subsystem. The final code stack should keep deprecated live IPC, headless, and HTTP surfaces removed while preserving intentional negative tests that prove removed aliases are rejected.
+      Motivation: A straightforward rebase of PR #5942 onto master is misleading. `git rebase origin/master` replays old stack commits and conflicts in packages/contracts/src/ipc-channels.ts. `git rebase --onto origin/master f4ec35dfb` leaves only the verifier commit, but `pnpm verify-empty-canonical-sweeps` fails because the verifier precedes later cleanup and matches intentional removed-alias rejection tests.
+      Alternative considerations: Do not collapse #5942-#5944 into one commit. Do not delete negative tests only to satisfy grep. Do not push from this preparation task.
+      Implementation details: Fetch origin/master and the head branches for PRs #5942, #5943, and #5944. Build a fresh local candidate stack from origin/master that preserves the intended changes from the three PRs. Prefer the order: docs cleanup, deprecated IPC deletion, then canonical sweep verifier. If keeping existing PR numbers requires changing which content lives in #5942, document the mapping in the task result. Refine scripts/verify-empty-canonical-sweeps.sh so it rejects live deprecated surfaces but allows intentional references in removed-alias rejection tests and the removed-alias guard. Preserve Change-Id trailers where practical so the normal Mergify stack publication flow can update existing PRs. Commit the local candidate stack only in this workflow worktree.
+      Non-goals: No branch publication, no replacement PR creation, no unrelated cleanup, no changes outside the remove-deprecated-merge-mode-and-retry-paths stack.
+      Files: scripts/verify-empty-canonical-sweeps.sh; package.json; docs/persistence-architecture-single-writer.md; packages/contracts/src/ipc-channels.ts; packages/app/src/headless-command-registry.ts; packages/app/src/__tests__/headless-client.test.ts; packages/app/src/__tests__/api-server.test.ts; packages/app/e2e/drift/scenario-catalog.ts; packages/app/e2e/drift/drift-battery.spec.ts; packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      Change types: Preserve and reorder existing cleanup commits; modify the verifier only enough to distinguish live deprecated surfaces from intentional removed-alias rejection coverage.
+      Acceptance criteria:
+      - PR state was checked before rewrite, including #5942 head b4b19b6fb6635add73f22c7bceb17ef980e52233 or an explicit moved-head stop.
+      - Local candidate stack is based on current origin/master.
+      - `pnpm verify-empty-canonical-sweeps` exits 0 on the candidate stack tip.
+      - A dry merge check shows the candidate bottom slice can merge into origin/master without content conflicts.
+    dependencies: []
+
+  - id: verify-pr-5942-stack-candidate
+    description: |
+      Run the narrow verifier on the prepared candidate stack.
+      Review claim: The canonical sweep verifier passes only after the stack repair preserves cleanup ordering and allows intentional rejection-test references.
+      Review lane: proof
+      Safety invariant: This task only runs the repository verifier and does not mutate local or remote refs.
+      Slice rationale: A separate proof task makes the pass/fail result visible before any publication step.
+      Architectural effect: None; this is deterministic verification of the repaired stack tip.
+      Goal: Prove the candidate stack tip satisfies the verifier added by the repaired PR stack.
+      Motivation: The original straightforward rebase failed this exact command, so it is the narrow proof for the restructuring.
+      Alternative considerations: Manual grep inspection alone was rejected because the repository already has a scripted proof.
+      Implementation details: Run `pnpm verify-empty-canonical-sweeps` from the repository root.
+      Non-goals: No code edits and no GitHub operations.
+      Layer: e2e_regression
+      Feature state: active
+    command: "pnpm verify-empty-canonical-sweeps"
+    dependencies:
+      - prepare-pr-5942-stack-restructure
+
+  - id: publish-pr-5942-stack-restructure
+    description: |
+      Publish the repaired PR stack only after the local candidate and verifier have passed.
+      Review claim: Existing PR stack refs are updated with lease checks so PR #5942 no longer blocks on the stale stack conflict and the verifier remains after its cleanup.
+      Review lane: publication
+      Safety invariant: Re-check open PR state and head SHAs immediately before publishing; use the repo's normal Mergify stack publication flow or force-with-lease only, never a plain force push.
+      Slice rationale: Publication is separated from preparation and proof because it mutates remote PR refs.
+      Architectural effect: No code architecture change beyond publishing the already-verified local candidate stack.
+      Goal: Update the existing PR stack so GitHub no longer reports PR #5942 as a stale conflict blocker.
+      Motivation: The local candidate is only useful once the existing PR refs are safely updated.
+      Alternative considerations: Creating an unrelated replacement PR was rejected unless existing PRs cannot be safely updated.
+      Implementation details: After manual approval, re-fetch and re-check #5942, #5943, and #5944. Stop without pushing if any PR is closed, merged, missing, or has an unexpected head. Publish the prepared stack using `mergify stack push` if it can preserve/update the existing stack; otherwise use explicit `git push --force-with-lease` updates for the affected head branches and retarget PR bases as needed. Poll `gh pr view 5942 --json mergeable,mergeStateStatus,state,baseRefName,headRefOid` until GitHub reports a non-CONFLICTING state or a clear failure. Report the final PR numbers, bases, head SHAs, and proof command output.
+      Non-goals: No plain force pushes, no unrelated PR edits, no merging PRs.
+      Layer: owner_delegation
+      Feature state: active
+      Files: existing PR branches for #5942, #5943, and #5944 only
+      Change types:
+      - GitHub PR refs: update only after lease/state checks
+      - PR bases/titles/bodies: update only if required to keep the reordered stack understandable
+      Acceptance criteria:
+      - Remote updates use Mergify stack publication or force-with-lease.
+      - PR #5942 is no longer reported as CONFLICTING due to stale stack history, or the task stops with a concrete GitHub-side blocker.
+      - The final report includes proof that `pnpm verify-empty-canonical-sweeps` passed before publication.
+    prompt: |
+      Assume no prior context. You are publishing a prepared local candidate stack repair for existing PRs #5942, #5943, and #5944 in Neko-Catpital-Labs/Invoker.
+      Goal: Safely update the existing PR stack refs so PR #5942 no longer blocks on a stale stack merge conflict.
+      Review claim: Existing PR stack refs are updated with lease checks so the verifier remains after the cleanup it enforces.
+      Review lane: publication
+      Safety invariant: Re-check PR state and head SHAs immediately before publishing. Use Mergify stack publication or explicit `git push --force-with-lease`; never use a plain force push. Stop without publishing if any involved PR is closed, merged, missing, or moved unexpectedly.
+      Slice rationale: Publication is separate from preparation and verification because it mutates remote refs.
+      Architectural effect: No new code architecture change; this publishes the verified local candidate stack.
+      Motivation: GitHub currently reports PR #5942 as CONFLICTING because it is based on master while its head still contains stale stack ancestors and its verifier commit is ordered before downstream cleanup.
+      Alternative considerations: Do not create an unrelated replacement PR unless the existing stack cannot be safely updated; if that happens, report the blocker instead of improvising.
+      Implementation details: Confirm the previous verification task passed and include the `scripts/verify-empty-canonical-sweeps.sh` proof output in the final report. Fetch all involved refs. Re-check `gh pr view` for #5942, #5943, and #5944. Publish the prepared stack with `mergify stack push` if it can preserve/update the existing PR stack. If manual ref updates are required, use `git push --force-with-lease` with the exact expected old SHA for each affected head branch, and retarget PR bases with `gh pr edit` only as needed to keep the stack order coherent. After publishing, poll GitHub mergeability for #5942 until it is no longer CONFLICTING or until GitHub returns a concrete blocker. Report final PR bases, head SHAs, and the proof output.
+      Non-goals: No plain force pushes, no merging, no unrelated PR edits.
+      Files: existing PR branches for #5942, #5943, and #5944 only
+      Change types: Remote PR branch/base updates only after explicit lease and state checks.
+      Acceptance criteria:
+      - Remote updates used Mergify stack publication or force-with-lease.
+      - PR #5942 is no longer CONFLICTING due to stale stack history, or a concrete blocker is reported.
+      - The final report includes final PR bases, head SHAs, and the successful verifier output.
+    requiresManualApproval: true
+    dependencies:
+      - verify-pr-5942-stack-candidate
