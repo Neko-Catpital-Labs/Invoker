@@ -503,6 +503,37 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('keeps minimized active terminals mounted without resizing the backend PTY', async () => {
+    const session = makeTerminalSession('task-alpha');
+    const props = {
+      onCycle: vi.fn(),
+      sessions: [session],
+      activeSessionId: session.sessionId,
+      onSelectSession: vi.fn(),
+      onCloseSession: vi.fn(),
+    };
+
+    const { rerender } = render(<TerminalDrawer state="partial" {...props} />);
+    await expectPaneReady('task-alpha');
+    await waitFor(() => {
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
+    vi.mocked(mock.api.terminalResize).mockClear();
+    const fitCallsBeforeMinimize = xtermMock.fitInstances[0].fit.mock.calls.length;
+
+    rerender(<TerminalDrawer state="minimized" {...props} />);
+
+    expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(xtermMock.fitInstances[0].fit.mock.calls.length).toBe(fitCallsBeforeMinimize);
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
+    expect(screen.getByTestId('terminal-pane-task-alpha').querySelector('.xterm')).not.toBeNull();
+  });
+
   it('reports embedded terminal attach, snapshot, input, and output perf markers', async () => {
     const session = makeTerminalSession('task-alpha', {
       outputSnapshot: 'early line\n',

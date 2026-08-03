@@ -56,6 +56,11 @@ type SeededOutputSnapshot = {
   term: XTermTerminal;
 };
 
+type TerminalSize = {
+  cols: number;
+  rows: number;
+};
+
 function nowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
 }
@@ -135,6 +140,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
+  const lastSentSizeRef = useRef<TerminalSize | null>(null);
 
   isActiveRef.current = isActive;
   drawerStateRef.current = drawerState;
@@ -157,6 +163,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -166,7 +173,16 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      const nextSize = { cols: term.cols, rows: term.rows };
+      const lastSentSize = lastSentSizeRef.current;
+      if (
+        !lastSentSize ||
+        lastSentSize.cols !== nextSize.cols ||
+        lastSentSize.rows !== nextSize.rows
+      ) {
+        lastSentSizeRef.current = nextSize;
+        void window.invoker?.terminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+      }
       reportTerminalPerf('embedded_terminal_resize', {
         source,
         durationMs: roundMs(nowMs() - startedAt),
