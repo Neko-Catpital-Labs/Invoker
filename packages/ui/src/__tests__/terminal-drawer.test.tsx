@@ -24,10 +24,12 @@ vi.mock('@xyflow/react', async () => {
 
 const xtermMock = vi.hoisted(() => {
   type DataHandler = (data: string) => void;
+  type TerminalDimensions = { cols: number; rows: number };
 
   const instances: MockTerminal[] = [];
   const fitInstances: MockFitAddon[] = [];
   const writeLog: string[] = [];
+  let nextProposedDimensions: TerminalDimensions | undefined = { cols: 80, rows: 24 };
 
   class MockTerminal {
     cols = 80;
@@ -61,6 +63,7 @@ const xtermMock = vi.hoisted(() => {
   }
 
   class MockFitAddon {
+    proposeDimensions = vi.fn(() => nextProposedDimensions);
     fit = vi.fn();
 
     constructor() {
@@ -74,10 +77,14 @@ const xtermMock = vi.hoisted(() => {
     instances,
     fitInstances,
     writeLog,
+    setNextProposedDimensions: (dimensions: TerminalDimensions | undefined) => {
+      nextProposedDimensions = dimensions;
+    },
     reset: () => {
       instances.length = 0;
       fitInstances.length = 0;
       writeLog.length = 0;
+      nextProposedDimensions = { cols: 80, rows: 24 };
     },
   };
 });
@@ -228,6 +235,43 @@ describe('Terminal drawer (component)', () => {
       expect(xtermMock.instances[0].refresh.mock.calls.length).toBeGreaterThan(partialRefreshCalls);
       expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
     });
+  });
+
+  it('does not refit or resize a hidden minimized drawer terminal', async () => {
+    const session = makeTerminalSession('task-alpha');
+    const props = {
+      onCycle: vi.fn(),
+      sessions: [session],
+      activeSessionId: session.sessionId,
+      onSelectSession: vi.fn(),
+      onCloseSession: vi.fn(),
+    };
+
+    const { rerender } = render(<TerminalDrawer state="minimized" {...props} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-pane-task-alpha').querySelector('.xterm')).not.toBeNull();
+    });
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+    expect(xtermMock.instances[0]?.refresh).not.toHaveBeenCalled();
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
+
+    rerender(<TerminalDrawer state="partial" {...props} />);
+    await expectPaneReady('task-alpha');
+    await waitFor(() => {
+      expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
+
+    xtermMock.fitInstances[0].fit.mockClear();
+    xtermMock.instances[0].refresh.mockClear();
+    vi.mocked(mock.api.terminalResize).mockClear();
+
+    rerender(<TerminalDrawer state="minimized" {...props} />);
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    expect(xtermMock.fitInstances[0].fit).not.toHaveBeenCalled();
+    expect(xtermMock.instances[0].refresh).not.toHaveBeenCalled();
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
   });
 
   it('refits the newly active pane when terminal tabs switch', async () => {

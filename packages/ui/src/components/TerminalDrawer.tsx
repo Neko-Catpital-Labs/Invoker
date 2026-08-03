@@ -15,6 +15,8 @@ import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
 const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
+const MIN_TERMINAL_COLS = 2;
+const MIN_TERMINAL_ROWS = 2;
 
 /**
  * The drawer has one explicit state model:
@@ -157,10 +159,20 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
     try {
+      const proposedDimensions = fit.proposeDimensions();
+      if (
+        !proposedDimensions ||
+        proposedDimensions.cols < MIN_TERMINAL_COLS ||
+        proposedDimensions.rows < MIN_TERMINAL_ROWS
+      ) {
+        return;
+      }
+
       const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
@@ -298,7 +310,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
         resizeObserver = null;
       }
     }
-    if (isActiveRef.current) {
+    if (isActiveRef.current && drawerStateRef.current !== 'minimized') {
       scheduleFit('active_session');
       try {
         term.focus();
@@ -333,7 +345,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
-    if (!isActive) {
+    if (!isActive || drawerState === 'minimized') {
       clearScheduledFit();
       return;
     }
