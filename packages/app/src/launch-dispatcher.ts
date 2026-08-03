@@ -174,7 +174,58 @@ export class LaunchDispatcher {
     }
   }
 
+  /**
+   * A resource lease expires on a heartbeat clock independent of
+   * task_launch_dispatch. A same-owner, still-alive lease is healed
+   * (renewed) instead of released; true orphans are still released.
+   */
   private sweepExpiredResourceLeases(): void {
+    const list = this.persistence.listExpiredExecutionResourceLeases;
+    const renew = this.persistence.renewExecutionResourceLease;
+    const runner = this.taskRunnerProvider?.();
+    if (
+      typeof list !== 'function'
+      || typeof renew !== 'function'
+      || !runner?.runnerInstanceId
+      || typeof runner.hasActiveExecution !== 'function'
+    ) {
+      this.sweepExpiredResourceLeasesUnconditionally();
+      return;
+    }
+    try {
+      const expired = list.call(this.persistence);
+      let released = 0;
+      let healed = 0;
+      for (const row of expired) {
+        const sameOwner = (row.metadata as { runnerInstanceId?: string } | undefined)?.runnerInstanceId === runner.runnerInstanceId;
+        const stillAlive = sameOwner && !!row.taskId && runner.hasActiveExecution!(row.taskId);
+        if (stillAlive) {
+          renew.call(this.persistence, row.resourceKey, row.holderId);
+          healed += 1;
+        } else {
+          this.persistence.releaseExecutionResourceLease(row.resourceKey, row.holderId);
+          released += 1;
+        }
+      }
+      if (healed > 0 || released > 0) {
+        this.logger?.info?.('[launch-dispatcher] swept expired execution resource leases', {
+          ownerId: this.ownerId,
+          released,
+          healed,
+          module: 'launch-dispatcher',
+        });
+      }
+    } catch (err) {
+      this.logger?.warn?.('[launch-dispatcher] expired execution resource lease sweep failed', {
+        ownerId: this.ownerId,
+        error: err instanceof Error ? err.message : String(err),
+        module: 'launch-dispatcher',
+      });
+    }
+  }
+
+  /** Fallback when the liveness-aware sweep isn't wired: old, blunt behavior. */
+  private sweepExpiredResourceLeasesUnconditionally(): void {
     const sweep = this.persistence.releaseExpiredExecutionResourceLeases;
     if (typeof sweep !== 'function') return;
     try {
