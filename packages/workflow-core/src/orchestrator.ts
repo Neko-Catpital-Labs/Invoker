@@ -866,6 +866,7 @@ export class Orchestrator {
     }
     this.persistence.saveTask(wfId, task);
     this.stateMachine.restoreTask(task);
+    this.queueStatusUiCache = null;
     return task;
   }
 
@@ -2943,6 +2944,7 @@ export class Orchestrator {
 
     // 3. DB first — single source of truth
     this.persistence.deleteWorkflow?.(workflowId);
+    this.queueStatusUiCache = null;
 
     // 4. Clean scheduler: free slots for all tasks in this workflow
     for (const task of affectedTasks) {
