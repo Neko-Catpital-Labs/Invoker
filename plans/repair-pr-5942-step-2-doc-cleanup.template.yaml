@@ -1,0 +1,110 @@
+name: "Repair PR 5942 Step 2: Document canonical merge-mode channel"
+description: |
+  Split the documentation correction out of PR #5942 so the docs change is
+  reviewed separately from product contract cleanup and tooling policy.
+
+  This workflow depends on the merge gate from step 1 and updates only the
+  persistence architecture document. After the resulting Invoker-on-Invoker
+  branch is ready, publish it with Mergify Stacks above step 1.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+featureBranch: plan/repair-pr-5942-doc-cleanup
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: implement-merge-mode-doc-cleanup
+    description: |
+      Review claim:
+      - The persistence architecture document names the canonical workflow merge-mode IPC channel.
+      Review lane:
+      - docs
+      Safety invariant:
+      - This slice changes prose only and does not alter runtime behavior.
+      Slice rationale:
+      - The docs correction must land after the product contract cleanup but before the sweep checker that scans documentation.
+      Architectural effect:
+      - The architecture table documents the current owner-boundary command path.
+      Goal:
+      - Recreate only the documentation correction from PR #5942 on top of the step 1 branch.
+      Motivation:
+      - PR #5942 fails PR Body validation because a tooling-policy body carries a docs file.
+      Alternative considerations:
+      - Option A (chosen): split documentation into this middle stack slice.
+      - Option B: keep docs bundled with the tooling checker, which the validator rejects.
+      Implementation details:
+      - Update `docs/persistence-architecture-single-writer.md` so the merge-mode row uses `invoker:set-workflow-merge-mode` and the current handler location.
+      Non-goals:
+      - Do not edit product contract or drift scenario files in this slice.
+      - Do not add the canonical sweep script in this slice.
+      Layer: docs
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: docs-only
+      Acceptance criteria:
+      - The document contains `invoker:set-workflow-merge-mode`.
+      - The document no longer contains `invoker:set-merge-mode`.
+    prompt: |
+      Review claim:
+      - The persistence architecture document names the canonical workflow merge-mode IPC channel.
+      Review lane:
+      - docs
+      Safety invariant:
+      - This slice changes prose only and does not alter runtime behavior.
+      Slice rationale:
+      - Documentation is isolated from the product and tooling-policy slices so PR Body validation has one review unit.
+      Architectural effect:
+      - The owner-boundary command table describes the current merge-mode command path.
+      Goal:
+      - Assume no prior context. On top of the upstream step 1 branch, recreate only the docs correction from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation:
+      - PR #5942 fails PR Body validation because the mixed diff includes docs under a tooling-policy PR body.
+      Alternative considerations:
+      - Option A (chosen): put the docs update in its own workflow.
+      - Option B: bundle docs with the sweep checker, which the validator rejects.
+      Implementation details:
+      - Modify `docs/persistence-architecture-single-writer.md` so the merge-mode row uses `invoker:set-workflow-merge-mode`, `gui-mutation-handlers.ts:2276`, and the existing `setWorkflowMergeMode()` persistence path.
+      Non-goals:
+      - Do not edit `packages/contracts/src/ipc-channels.ts`.
+      - Do not edit `packages/app/e2e/drift/*`.
+      - Do not edit `package.json` or create scripts.
+      Acceptance criteria:
+      - Pass condition: `rg -n 'invoker:set-workflow-merge-mode' docs/persistence-architecture-single-writer.md` exits 0.
+      - Pass condition: `test "$(rg -n 'invoker:set-merge-mode' docs/persistence-architecture-single-writer.md | wc -l)" -eq 0` exits 0.
+    dependencies: []
+
+  - id: verify-doc-cleanup-patterns
+    description: |
+      Review claim:
+      - Focused checks prove the docs slice uses only the canonical merge-mode channel.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command is read-only and changes no repository files.
+      Slice rationale:
+      - The downstream sweep checker scans docs, so this slice needs a direct prose check first.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Verify the docs channel rename.
+      Motivation:
+      - Prevent the final sweep helper from failing on stale documentation prose.
+      Alternative considerations:
+      - Option A (chosen): focused docs pattern proof.
+      - Option B: rely only on the final sweep helper.
+      Implementation details:
+      - Require the canonical channel and reject the old channel in the docs file.
+      Non-goals:
+      - Do not modify source files.
+      Layer: docs
+      Feature state: active
+    command: "test \"$(rg -n 'invoker:set-merge-mode' docs/persistence-architecture-single-writer.md | wc -l)\" -eq 0 && rg -n 'invoker:set-workflow-merge-mode' docs/persistence-architecture-single-writer.md"
+    dependencies: [implement-merge-mode-doc-cleanup]

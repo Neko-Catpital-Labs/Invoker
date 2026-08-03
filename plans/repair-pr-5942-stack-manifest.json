@@ -1,0 +1,19 @@
+{
+  "workflows": [
+    {
+      "label": "Repair PR 5942 Step 1: Remove merge-mode contract alias",
+      "planFile": "plans/repair-pr-5942-step-1-contract-cleanup.yaml",
+      "order": 1
+    },
+    {
+      "label": "Repair PR 5942 Step 2: Document canonical merge-mode channel",
+      "planFile": "plans/repair-pr-5942-step-2-doc-cleanup.template.yaml",
+      "order": 2
+    },
+    {
+      "label": "Repair PR 5942 Step 3: Add canonical sweep verifier",
+      "planFile": "plans/repair-pr-5942-step-3-canonical-sweep-verifier.template.yaml",
+      "order": 3
+    }
+  ]
+}

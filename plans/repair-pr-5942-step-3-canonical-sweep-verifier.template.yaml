@@ -1,0 +1,141 @@
+name: "Repair PR 5942 Step 3: Add canonical sweep verifier"
+description: |
+  Recreate the intended tooling-policy slice from PR #5942 after the product and
+  docs cleanup slices are separated. The helper can then honestly assert that
+  deprecated merge-mode and retry strings stay out of the repository.
+
+  This workflow depends on the merge gate from step 2 and should publish with
+  Mergify Stacks above the first two replacement PRs.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+featureBranch: plan/repair-pr-5942-canonical-sweep-verifier
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: implement-canonical-sweep-verifier
+    description: |
+      Review claim:
+      - A repository sweep lint step flags reintroduced deprecated merge-mode, restart, and compatibility strings while allowing intentional migration guards.
+      Review lane:
+      - policy
+      Safety invariant:
+      - The checker is additive and does not change product runtime behavior.
+      Slice rationale:
+      - The sweep helper must land after product and docs stale strings are removed so the tooling-policy PR contains only policy files.
+      Architectural effect:
+      - Repository policy gains a repeatable guard for deprecated command and compatibility names.
+      Goal:
+      - Recreate only the script and package script entry from PR #5942 on top of the step 2 branch.
+      Motivation:
+      - PR #5942 fails PR Body validation because this tooling-policy work is bundled with contract and docs changes.
+      Alternative considerations:
+      - Option A (chosen): land the checker as the terminal stack slice after cleanup.
+      - Option B: weaken the PR Body rule or relabel the mixed PR, which would hide unrelated review units.
+      Implementation details:
+      - Add `scripts/verify-empty-canonical-sweeps.sh` with scoped `rg` checks and intentional allowlists.
+      - Add the `verify-empty-canonical-sweeps` package script.
+      Non-goals:
+      - Do not edit product contract, drift scenario, or documentation files in this slice.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - package.json
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - package.json: config-only
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      Acceptance criteria:
+      - `pnpm run verify-empty-canonical-sweeps` exits 0.
+      - The script reports `PASS: repository canonical sweeps found only allowed compatibility guards`.
+    prompt: |
+      Review claim:
+      - A repository sweep lint step flags reintroduced deprecated merge-mode, restart, and compatibility strings while allowing intentional migration guards.
+      Review lane:
+      - policy
+      Safety invariant:
+      - The checker is additive and does not change product runtime behavior.
+      Slice rationale:
+      - This terminal stack slice contains only tooling-policy files after upstream cleanup has removed stale product and docs strings.
+      Architectural effect:
+      - Repository policy gains a repeatable guard for deprecated command and compatibility names.
+      Goal:
+      - Assume no prior context. On top of the upstream step 2 branch, recreate only the tooling-policy sweep helper from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation:
+      - PR #5942 fails PR Body validation because the checker is bundled with contract and docs changes.
+      Alternative considerations:
+      - Option A (chosen): land the checker as the final replacement stack slice.
+      - Option B: force the mixed PR through, which violates the diff-aware PR Body validator.
+      Implementation details:
+      - Create `scripts/verify-empty-canonical-sweeps.sh` as an executable bash script using `rg` to reject stale `set-merge-mode`, restart, and compatibility-label strings while allowing the known `headless-command-registry.ts` alias guard and the one sqlite migration compatibility guard.
+      - Update `package.json` with `verify-empty-canonical-sweeps`: `bash scripts/verify-empty-canonical-sweeps.sh`.
+      Non-goals:
+      - Do not edit `packages/contracts/src/ipc-channels.ts`.
+      - Do not edit `packages/app/e2e/drift/*`.
+      - Do not edit `docs/persistence-architecture-single-writer.md`.
+      Acceptance criteria:
+      - Pass condition: `pnpm run verify-empty-canonical-sweeps` exits 0.
+      - Expected output includes `PASS: repository canonical sweeps found only allowed compatibility guards`.
+    dependencies: []
+
+  - id: verify-canonical-sweep-helper
+    description: |
+      Review claim:
+      - The canonical sweep helper passes on the cleaned stack.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command is read-only and changes no repository files.
+      Slice rationale:
+      - The helper is the focused proof for the terminal tooling-policy slice.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Run the canonical sweep helper.
+      Motivation:
+      - Prove the new package script exits successfully after the upstream cleanup slices.
+      Alternative considerations:
+      - Option A (chosen): run the package script directly.
+      - Option B: rely on CI to discover script failures later.
+      Implementation details:
+      - Execute the repository package script and require exit code 0.
+      Non-goals:
+      - Do not modify source files.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run verify-empty-canonical-sweeps"
+    dependencies: [implement-canonical-sweep-verifier]
+
+  - id: verify-replacement-stack-full-suite
+    description: |
+      Review claim:
+      - The replacement PR stack passes the repository-wide test gate.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command is read-only and runs after the terminal implementation task.
+      Slice rationale:
+      - A full-suite gate belongs on the final stack slice, not on each non-terminal slice.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Run the repository full test suite for the replacement stack.
+      Motivation:
+      - Prove the integrated product, docs, and tooling-policy stack is ready for review.
+      Alternative considerations:
+      - Option A (chosen): final `pnpm run test:all` gate.
+      - Option B: focused checks only, which gives less confidence for a replacement stack.
+      Implementation details:
+      - Execute the existing full-suite command after the sweep helper passes.
+      Non-goals:
+      - Do not modify source files.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies: [verify-canonical-sweep-helper]

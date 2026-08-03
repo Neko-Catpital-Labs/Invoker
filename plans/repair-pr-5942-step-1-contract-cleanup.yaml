@@ -1,0 +1,143 @@
+name: "Repair PR 5942 Step 1: Remove merge-mode contract alias"
+description: |
+  Split the product contract cleanup out of PR #5942 so it can be reviewed as a
+  behavior slice instead of being bundled with docs and tooling policy.
+
+  This workflow recreates only the contract and directly affected drift scenario
+  changes from PR head fd3cab221191d8c2c7be949f2ba923fabcf91bbd. After the
+  resulting Invoker-on-Invoker branch is ready, publish it with Mergify Stacks as
+  the first PR in the replacement stack for #5942.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+featureBranch: plan/repair-pr-5942-contract-cleanup
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: implement-merge-mode-contract-cleanup
+    description: |
+      Review claim:
+      - The deprecated `invoker:set-merge-mode` IPC contract alias is removed while drift scenario identifiers use the canonical workflow merge-mode name.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - The canonical `invoker:set-workflow-merge-mode` contract remains present and the directly affected drift scenarios keep covering the same workflow metadata path.
+      Slice rationale:
+      - This product contract change must land separately from documentation and tooling-policy files so PR body validation has one review unit.
+      Architectural effect:
+      - The IPC contract surface no longer advertises the old merge-mode alias; the canonical workflow merge-mode channel remains the supported surface.
+      Goal:
+      - Recreate the product contract and drift scenario portion of PR #5942 on top of `master`.
+      Motivation:
+      - PR #5942 fails the PR Body check because its tooling-policy body carries product contract files.
+      Alternative considerations:
+      - Option A (chosen): split the contract cleanup into this first stack slice.
+      - Option B: edit the PR body in place, which the validator still rejects because scripts, docs, and contract files ship together.
+      Implementation details:
+      - Remove the `invoker:set-merge-mode` entry from `packages/contracts/src/ipc-channels.ts`.
+      - Rename the affected drift scenario id and references from `set-merge-mode` to `set-workflow-merge-mode`.
+      Non-goals:
+      - Do not add the canonical sweep script in this slice.
+      - Do not edit documentation in this slice.
+      Layer: transport
+      Feature state: active
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: test-only
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: test-only
+      - packages/app/e2e/drift/scenario-catalog.ts: test-only
+      Acceptance criteria:
+      - `rg -n 'invoker:set-merge-mode' packages/contracts/src/ipc-channels.ts` finds no matches.
+      - The affected drift scenario files use `set-workflow-merge-mode`.
+      - TypeScript type checking exits 0.
+    prompt: |
+      Review claim:
+      - The deprecated `invoker:set-merge-mode` IPC contract alias is removed while drift scenario identifiers use the canonical workflow merge-mode name.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Keep the canonical `invoker:set-workflow-merge-mode` contract present and preserve drift scenario coverage of the workflow metadata path.
+      Slice rationale:
+      - This product contract cleanup is the first replacement stack slice for PR #5942.
+      Architectural effect:
+      - The IPC contract surface stops exporting the old merge-mode alias.
+      Goal:
+      - Assume no prior context. On top of `master`, recreate only the product contract and drift scenario changes from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation:
+      - PR #5942 fails PR Body validation because product contract files are bundled with docs and tooling-policy files.
+      Alternative considerations:
+      - Option A (chosen): split this product contract change into its own workflow.
+      - Option B: keep the mixed PR and change metadata, which does not satisfy the diff-aware validator.
+      Implementation details:
+      - Modify `packages/contracts/src/ipc-channels.ts` to delete only the `invoker:set-merge-mode` channel entry while leaving `invoker:set-workflow-merge-mode` intact.
+      - Modify `packages/app/e2e/drift/drift-battery.spec.ts`, `packages/app/e2e/drift/drift-thundering-herd.spec.ts`, and `packages/app/e2e/drift/scenario-catalog.ts` so the affected scenario id and plan label use `set-workflow-merge-mode`.
+      Non-goals:
+      - Do not edit `docs/persistence-architecture-single-writer.md`.
+      - Do not edit `package.json`.
+      - Do not create or edit `scripts/verify-empty-canonical-sweeps.sh`.
+      Acceptance criteria:
+      - Pass condition: `rg -n 'invoker:set-merge-mode' packages/contracts/src/ipc-channels.ts` finds no matches after the change.
+      - Pass condition: the affected drift scenario files contain `set-workflow-merge-mode`.
+      - Pass condition: `pnpm run check:types` exits 0.
+    dependencies: []
+
+  - id: verify-contract-cleanup-patterns
+    description: |
+      Review claim:
+      - Focused checks prove the contract alias removal and scenario rename are present.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command is read-only and changes no repository files.
+      Slice rationale:
+      - A fast pattern check catches the exact regression that caused the mixed PR to need product cleanup.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Verify the product contract cleanup patterns.
+      Motivation:
+      - Keep non-terminal stack verification focused before broader checks later in the stack.
+      Alternative considerations:
+      - Option A (chosen): focused pattern proof in this workflow.
+      - Option B: wait for the final full-suite gate only.
+      Implementation details:
+      - Count old contract alias hits and require canonical scenario hits.
+      Non-goals:
+      - Do not modify source files.
+      Layer: app_regression
+      Feature state: active
+    command: "test \"$(rg -n 'invoker:set-merge-mode' packages/contracts/src/ipc-channels.ts | wc -l)\" -eq 0 && rg -n 'set-workflow-merge-mode' packages/app/e2e/drift/scenario-catalog.ts packages/app/e2e/drift/drift-battery.spec.ts packages/app/e2e/drift/drift-thundering-herd.spec.ts"
+    dependencies: [implement-merge-mode-contract-cleanup]
+
+  - id: verify-contract-cleanup-types
+    description: |
+      Review claim:
+      - TypeScript still accepts the contract cleanup.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This command is read-only and changes no repository files.
+      Slice rationale:
+      - Type checking proves consumers no longer require the removed IPC alias.
+      Architectural effect:
+      - No architecture change.
+      Goal:
+      - Run TypeScript type checking for the contract cleanup.
+      Motivation:
+      - Catch any remaining typed reference to the removed alias before the next stack slice.
+      Alternative considerations:
+      - Option A (chosen): run the repository type check.
+      - Option B: rely only on pattern checks.
+      Implementation details:
+      - Execute the existing type-check script.
+      Non-goals:
+      - Do not modify source files.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run check:types"
+    dependencies: [implement-merge-mode-contract-cleanup]
