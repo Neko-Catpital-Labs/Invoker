@@ -888,6 +888,56 @@ function testUnpublishedStackCommitsBlockUpdate() {
   }
 }
 
+function testNestedMergifyPublishedBranchRecognizedBySha() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/EdbertChan/owner-shutdown-signals/catch-sigterm-sigint-in-owner-serve';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'catch sigterm and sigint\n\nChange-Id: Ishutdown0001');
+    setManagedBranchConfig(work, branch);
+
+    const nestedRemoteBranch =
+      'stack/EdbertChan/stack/EdbertChan/owner-shutdown-signals/catch-sigterm-sigint-in-owner-serve/catch-sigterm-sigint-owner-serve-process-instead--72172374';
+    gitQuiet(work, 'push', 'origin', `HEAD:refs/heads/${nestedRemoteBranch}`);
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing'], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 77,
+          html_url: 'https://example.com/pull/77',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/77' }),
+    });
+
+    assert(
+      result.status === 0,
+      `nested mergify-published branch should be recognized by SHA match\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      !result.stderr.includes('unpublished local commits'),
+      `nested mergify-published branch should not report unpublished commits\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'nested mergify-published branch update');
+
+    commitFile(work, 'stack.txt', 'stack\nmore\n', 'truly unpublished follow-up\n\nChange-Id: Ishutdown0002');
+    const secondResult = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing']);
+    assert(secondResult.status === 1, 'a genuinely unpublished follow-up commit should still be rejected');
+    assert(
+      secondResult.stderr.includes('unpublished local commits'),
+      `genuinely unpublished commit should still be reported\nstderr:\n${secondResult.stderr}`,
+    );
+    assert(
+      secondResult.stderr.includes('Run `mergify stack push` first'),
+      'genuinely unpublished commit should still require mergify stack push',
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testCurrentBranchPrLookupFailure() {
   const harness = createHarness();
   try {
@@ -1316,6 +1366,7 @@ const tests = [
   testNonRefactorLaneTitleWithTagRejected,
   testNonRefactorLanePlainTitleStillAccepted,
   testUnpublishedStackCommitsBlockUpdate,
+  testNestedMergifyPublishedBranchRecognizedBySha,
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,
