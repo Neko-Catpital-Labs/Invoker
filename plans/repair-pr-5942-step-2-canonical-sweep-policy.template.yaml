@@ -1,0 +1,84 @@
+name: "Repair PR 5942 Step 2: Canonical sweep policy"
+description: |
+  Recreate the tooling-policy portion of PR #5942 as its own review slice.
+
+  This slice adds the repository sweep helper and package script after the
+  contract/drift canonicalization slice has landed or reached review-ready.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+featureBranch: repair/pr-5942-canonical-sweep-policy
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: split-canonical-sweep-policy
+    description: |
+      Review claim: A repository sweep helper and package script flag reintroduced deprecated merge-mode and compatibility strings.
+      Review lane: policy
+      Safety invariant: Only `scripts/verify-empty-canonical-sweeps.sh` and the root `package.json` script entry change in this tooling-policy slice.
+      Slice rationale: The policy helper must not ship with product or prose files because the review gate rejects mixed units.
+      Architectural effect: CI/local policy gains one opt-in guard; product behavior is unchanged.
+      Goal: Produce the policy verifier from PR #5942 as its own tooling-policy PR.
+      Motivation: The original PR failed because the policy-lane body also carried product and prose files.
+      Alternative considerations: Broadening the review gate was rejected; the right fix is separate review slices.
+      Implementation details: Add `scripts/verify-empty-canonical-sweeps.sh` from PR #5942 and add the root `verify-empty-canonical-sweeps` package script.
+      Non-goals: No product edits, no E2E fixture edits, no prose update, no runtime edits.
+      Layer: domain
+      Feature state: active
+      Files:
+      - scripts/verify-empty-canonical-sweeps.sh
+      - package.json
+      Change types:
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      - package.json: modify
+      Acceptance criteria:
+      - `bash scripts/verify-empty-canonical-sweeps.sh` exits 0.
+      - `pnpm run verify-empty-canonical-sweeps` exists and runs the same helper.
+      - The resulting PR body declares Review Lane `policy` and Review Unit `tooling-policy`.
+    prompt: |
+      Review claim: A repository sweep helper and package script flag reintroduced deprecated merge-mode and compatibility strings.
+      Review lane: policy
+      Safety invariant: Only `scripts/verify-empty-canonical-sweeps.sh` and the root `package.json` script entry change in this tooling-policy slice.
+      Slice rationale: The policy helper must not ship with product or prose files because the review gate rejects mixed units.
+      Architectural effect: CI/local policy gains one opt-in guard; product behavior is unchanged.
+      Goal: Create the policy review slice for PR #5942.
+      Motivation: The original PR failed review because it mixed policy, product, and prose files.
+      Alternative considerations: Do not weaken the gate or relabel mixed files; separate the files.
+      Implementation details: Assume no prior context. Use PR #5942 at head `fd3cab221191d8c2c7be949f2ba923fabcf91bbd` as the source patch, but apply only `scripts/verify-empty-canonical-sweeps.sh` and the root `package.json` script entry named `verify-empty-canonical-sweeps`. The script must fail on unexpected legacy `set-merge-mode`, restart, and compatibility-label hits while allowing the explicit compatibility guard in `packages/data-store/src/sqlite-migrations.ts`.
+      Non-goals: No product edits, no E2E fixture edits, no prose update, no runtime edits.
+      Files:
+      - scripts/verify-empty-canonical-sweeps.sh
+      - package.json
+      Change types:
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      - package.json: modify
+      Acceptance criteria:
+      - `bash scripts/verify-empty-canonical-sweeps.sh` exits 0.
+      - `pnpm run verify-empty-canonical-sweeps` exists and runs the helper.
+      - The PR body metadata uses Review Lane `policy` and Review Unit `tooling-policy`.
+    dependencies: []
+
+  - id: verify-canonical-sweep-policy
+    description: |
+      Review claim: The canonical sweep helper passes on the split stack state.
+      Review lane: proof
+      Safety invariant: This task runs the new checker only and does not modify source files.
+      Slice rationale: The policy slice is proven by its own deterministic checker.
+      Architectural effect: No architecture change; this is proof of the policy command.
+      Goal: Verify the repository sweep helper after it is added.
+      Motivation: The helper is useful only if it passes on the canonicalized repository state.
+      Alternative considerations: Manual grep inspection was rejected as non-deterministic.
+      Implementation details: Execute `bash scripts/verify-empty-canonical-sweeps.sh` from the repository root.
+      Non-goals: Do not edit files during verification.
+      Layer exception: allowed
+      Layer: e2e_regression
+      Feature state: active
+    command: "bash scripts/verify-empty-canonical-sweeps.sh"
+    dependencies:
+      - split-canonical-sweep-policy

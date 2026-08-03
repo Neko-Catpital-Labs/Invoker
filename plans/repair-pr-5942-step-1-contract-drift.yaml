@@ -1,0 +1,89 @@
+name: "Repair PR 5942 Step 1: Contract drift canonicalization"
+description: |
+  Recreate the product-facing portion of PR #5942 as its own review slice.
+
+  The failed review gate rejected PR #5942 because one policy-lane PR also
+  shipped contract and prose files. This first slice carries only the canonical
+  workflow merge-mode contract cleanup and directly affected drift coverage.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+featureBranch: repair/pr-5942-contract-drift-canonicalization
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: split-contract-drift-canonicalization
+    description: |
+      Review claim: The deprecated `invoker:set-merge-mode` IPC contract is retired while drift scenarios use the canonical workflow merge-mode identifier.
+      Review lane: behavior
+      Safety invariant: Only the contract alias retirement and directly affected drift scenario identifiers change; no prose, scripts, or package metadata ship in this slice.
+      Slice rationale: Contract work must review separately from the repository sweep policy and prose updates so the review gate sees only one review unit.
+      Architectural effect: The public IPC contract no longer exposes the deprecated merge-mode alias; test fixtures point at the canonical workflow merge-mode path.
+      Goal: Produce a product-facing PR #5942 slice with a contract-focused PR body lane/unit.
+      Motivation: The failed PR Body check reported `contract`, `tooling-policy`, and `docs` in one PR, which cannot land together under the current review policy.
+      Alternative considerations: Rewording the original PR body was rejected because file classification would still see mixed units.
+      Implementation details: Apply only the PR #5942 changes for `packages/contracts/src/ipc-channels.ts`, `packages/app/e2e/drift/drift-battery.spec.ts`, `packages/app/e2e/drift/drift-thundering-herd.spec.ts`, and `packages/app/e2e/drift/scenario-catalog.ts`.
+      Non-goals: No repository sweep script, no package.json script entry, no prose update, no unrelated merge-mode edits.
+      Layer: api
+      Feature state: active
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      Acceptance criteria:
+      - `packages/contracts/src/ipc-channels.ts` no longer defines `invoker:set-merge-mode`.
+      - Drift scenario ids use `set-workflow-merge-mode` where PR #5942 changed them.
+      - The resulting PR body declares Review Lane `behavior` and Review Unit `contract`.
+      - `cd packages/contracts && pnpm test` exits 0.
+    prompt: |
+      Review claim: The deprecated `invoker:set-merge-mode` IPC contract is retired while drift scenarios use the canonical workflow merge-mode identifier.
+      Review lane: behavior
+      Safety invariant: Only the contract alias retirement and directly affected drift scenario identifiers change; no prose, scripts, or package metadata ship in this slice.
+      Slice rationale: Contract work must review separately from the repository sweep policy and prose updates so the review gate sees only one review unit.
+      Architectural effect: The public IPC contract no longer exposes the deprecated merge-mode alias; test fixtures point at the canonical workflow merge-mode path.
+      Goal: Create the contract/drift review slice for PR #5942.
+      Motivation: The original PR failed review because it mixed contract, policy, and prose files.
+      Alternative considerations: Do not only edit PR body metadata; the gate classifies the changed files.
+      Implementation details: Assume no prior context. Use PR #5942 at head `fd3cab221191d8c2c7be949f2ba923fabcf91bbd` as the source patch, but apply only these files: `packages/contracts/src/ipc-channels.ts`, `packages/app/e2e/drift/drift-battery.spec.ts`, `packages/app/e2e/drift/drift-thundering-herd.spec.ts`, and `packages/app/e2e/drift/scenario-catalog.ts`. Retire the deprecated `invoker:set-merge-mode` IPC channel and rename the affected drift scenario identifier text to `set-workflow-merge-mode`. Do not edit prose, scripts, or `package.json`.
+      Non-goals: No repository sweep script, no package script entry, no prose update, no unrelated edits.
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      Acceptance criteria:
+      - `packages/contracts/src/ipc-channels.ts` no longer defines `invoker:set-merge-mode`.
+      - Drift scenario ids use `set-workflow-merge-mode` where PR #5942 changed them.
+      - The PR body metadata uses Review Lane `behavior` and Review Unit `contract`.
+      - `cd packages/contracts && pnpm test` exits 0.
+    dependencies: []
+
+  - id: verify-contract-drift-canonicalization
+    description: |
+      Review claim: The contract package still passes after the canonical merge-mode contract slice.
+      Review lane: proof
+      Safety invariant: This task runs only package-local tests and does not modify source files.
+      Slice rationale: Focused package proof is enough for the contract deletion; broader E2E drift runs remain optional follow-up proof.
+      Architectural effect: No architecture change; this is deterministic proof for the contract slice.
+      Goal: Verify the package affected by the contract surface change.
+      Motivation: The slice must still prove the contract package compiles and its tests pass.
+      Alternative considerations: Full Electron drift E2E was left to normal CI because this handoff needs focused contract proof.
+      Implementation details: Run `pnpm test` from `packages/contracts`.
+      Non-goals: Do not edit product files during verification.
+      Layer exception: allowed
+      Layer: e2e_regression
+      Feature state: active
+    command: "cd packages/contracts && pnpm test"
+    dependencies:
+      - split-contract-drift-canonicalization

@@ -1,0 +1,79 @@
+name: "Repair PR 5942 Step 3: Document canonical merge-mode path"
+description: |
+  Recreate the documentation portion of PR #5942 as its own docs slice.
+
+  This final slice updates the persistence architecture table after the
+  product and policy slices have been separated.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+featureBranch: repair/pr-5942-doc-canonical-merge-mode
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: split-doc-canonical-merge-mode
+    description: |
+      Review claim: The persistence architecture document names the canonical workflow merge-mode IPC path.
+      Review lane: docs
+      Safety invariant: Only `docs/persistence-architecture-single-writer.md` changes in this docs slice.
+      Slice rationale: Prose must review separately from product contract deletion and policy tooling to satisfy the PR Body gate.
+      Architectural effect: Documentation reflects the current owner-boundary command map; runtime behavior is unchanged.
+      Goal: Split the documentation update from PR #5942 into a docs-only PR.
+      Motivation: The original PR failed because a policy body shipped docs and contract paths.
+      Alternative considerations: Folding docs into the policy PR was rejected by the path-based PR Body validator.
+      Implementation details: Update the GUI IPC handler row from `invoker:set-merge-mode` to `invoker:set-workflow-merge-mode` with the current handler location.
+      Non-goals: No script changes, no package changes, no contract changes, no E2E fixture changes.
+      Layer: docs
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: modify
+      Acceptance criteria:
+      - The document contains `invoker:set-workflow-merge-mode` in the GUI IPC handler table.
+      - The resulting PR body declares Review Lane `docs` and Review Unit `docs`.
+      - `rg -n 'invoker:set-workflow-merge-mode' docs/persistence-architecture-single-writer.md` exits 0.
+    prompt: |
+      Review claim: The persistence architecture document names the canonical workflow merge-mode IPC path.
+      Review lane: docs
+      Safety invariant: Only `docs/persistence-architecture-single-writer.md` changes in this docs slice.
+      Slice rationale: Prose must review separately from product contract deletion and policy tooling to satisfy the PR Body gate.
+      Architectural effect: Documentation reflects the current owner-boundary command map; runtime behavior is unchanged.
+      Goal: Create the docs split slice for PR #5942.
+      Motivation: The original PR failed PR Body because it mixed docs with policy and contract files.
+      Alternative considerations: Do not bundle this prose with the policy verifier; the validator classifies `docs/` as a docs unit.
+      Implementation details: Assume no prior context. Use PR #5942 at head `fd3cab221191d8c2c7be949f2ba923fabcf91bbd` as the source patch, but apply only `docs/persistence-architecture-single-writer.md`. Update the GUI IPC handler table row from `invoker:set-merge-mode` / `main.ts:1129` to `invoker:set-workflow-merge-mode` / `gui-mutation-handlers.ts:2276`.
+      Non-goals: No script changes, no package changes, no contract changes, no E2E fixture changes.
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: modify
+      Acceptance criteria:
+      - The document contains `invoker:set-workflow-merge-mode` in the GUI IPC handler table.
+      - The PR body metadata uses Review Lane `docs` and Review Unit `docs`.
+      - `rg -n 'invoker:set-workflow-merge-mode' docs/persistence-architecture-single-writer.md` exits 0.
+    dependencies: []
+
+  - id: verify-doc-canonical-merge-mode
+    description: |
+      Review claim: The docs slice contains the canonical workflow merge-mode IPC path.
+      Review lane: proof
+      Safety invariant: This task reads the docs file only and does not modify source files.
+      Slice rationale: A focused text check proves the docs-only update without pulling product or policy paths into the PR.
+      Architectural effect: No architecture change; this is documentation proof only.
+      Goal: Verify the updated architecture table mentions the canonical path.
+      Motivation: The docs update should be mechanically checkable.
+      Alternative considerations: Manual inspection was rejected as non-deterministic.
+      Implementation details: Search the docs file for `invoker:set-workflow-merge-mode`.
+      Non-goals: Do not edit files during verification.
+      Layer: docs
+      Feature state: active
+    command: "rg -n 'invoker:set-workflow-merge-mode' docs/persistence-architecture-single-writer.md"
+    dependencies:
+      - split-doc-canonical-merge-mode
