@@ -1,0 +1,1432 @@
+diff --git a/packages/app/src/delete-all-snapshot.ts b/packages/app/src/delete-all-snapshot.ts
+index 98edfd45f..549ff40b4 100644
+--- a/packages/app/src/delete-all-snapshot.ts
++++ b/packages/app/src/delete-all-snapshot.ts
+@@ -1,149 +1,91 @@
+-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
++import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+ import * as path from 'node:path';
+-import { resolveInvokerHomeRoot } from '@invoker/contracts';
++import {
++  resolveInvokerHomeRoot,
++  hourlySnapshotRetention,
++  pruneHourlySnapshots,
++} from '@invoker/contracts';
+ 
+-export { resolveInvokerHomeRoot };
++export { resolveInvokerHomeRoot, hourlySnapshotRetention, pruneHourlySnapshots };
+ 
+ /**
+  * Caller-supplied backup implementation, expected to write a fully
+  * consistent single-file SQLite database at `destinationPath`.
+  *
+  * In production this is bound to `SQLiteAdapter.backupTo`, which uses the
+  * SQLite online backup API (via `node:sqlite`). That path is the reason
+  * this callback exists: it checkpoints the WAL frames into the destination
+  * as part of the backup, producing a snapshot that includes recent commits
+  * still living in the source database's `-wal` file. The raw `copyFileSync`
+  * fallback below preserves the sidecar-free WAL safety introduced in the
+  * previous slice but produces a potentially stale snapshot (any commits
+  * still in the live `-wal` are missing).
+  */
+ export type SnapshotBackupFn = (destinationPath: string) => Promise<void>;
+ 
+ function utcTimestampCompact(): string {
+   const iso = new Date().toISOString();
+   return iso.replace(/[-:]/g, '').replace('T', '-').replace('.', '-');
+ }
+ 
+ async function createDbSnapshot(
+   label: string,
+   invokerHomeRoot: string,
+   backup: SnapshotBackupFn | undefined,
+ ): Promise<string | null> {
+   const dbPath = path.join(invokerHomeRoot, 'invoker.db');
+   if (!existsSync(dbPath)) return null;
+ 
+   const backupDir = path.join(invokerHomeRoot, 'db-backups');
+   mkdirSync(backupDir, { recursive: true });
+ 
+   const stamp = utcTimestampCompact();
+   const snapshotPath = path.join(backupDir, `invoker.db.${label}-${stamp}`);
+ 
+   if (backup) {
+     // WAL-safe AND WAL-complete path: the callback (SQLiteAdapter.backupTo)
+     // checkpoints the source's WAL frames into the snapshot as part of the
+     // online backup, producing a fully up-to-date single-file DB. Nothing
+     // touches the live `-shm`, so the owner connection is unaffected.
+     await backup(snapshotPath);
+   } else {
+     // Fallback for callers without a live adapter (e.g. one-off restore
+     // utilities): copy the main .db only. This is WAL-safe but may miss
+     // commits still in the live `-wal`. Preserved for backward compatibility.
+     copyFileSync(dbPath, snapshotPath);
+   }
+ 
+   return snapshotPath;
+ }
+ 
+ /**
+  * Create a DB snapshot before destructive `delete-all`.
+  *
+  * `backup` should be `SQLiteAdapter.backupTo` bound to the running owner
+  * adapter. When omitted, falls back to a sidecar-free file copy of the
+  * main `.db` — WAL-safe but potentially stale.
+  */
+ export async function createDeleteAllSnapshot(
+   invokerHomeRoot: string = resolveInvokerHomeRoot(),
+   backup?: SnapshotBackupFn,
+ ): Promise<string | null> {
+   return createDbSnapshot('before-delete-all', invokerHomeRoot, backup);
+ }
+ 
+-const DEFAULT_HOURLY_SNAPSHOT_RETENTION = 48;
+-const HOURLY_SNAPSHOT_PREFIX = 'invoker.db.hourly-auto-';
+-
+-function hourlySnapshotRetention(): number {
+-  const raw = process.env.INVOKER_HOURLY_BACKUP_RETENTION;
+-  // Treat empty/blank as unset: Number('') and Number('   ') are 0, which would
+-  // otherwise pass the >= 0 check and silently disable pruning (reintroducing the
+-  // unbounded growth this guards against). `export VAR=` should fall back, not disable.
+-  if (raw === undefined || raw.trim() === '') return DEFAULT_HOURLY_SNAPSHOT_RETENTION;
+-  const parsed = Number(raw);
+-  return Number.isFinite(parsed) && parsed >= 0
+-    ? Math.floor(parsed)
+-    : DEFAULT_HOURLY_SNAPSHOT_RETENTION;
+-}
+-
+-/**
+- * Delete the oldest `hourly-auto` snapshots (and any legacy `-wal`/`-shm`
+- * sidecars left over from the pre-fix raw-copy era) so at most `retain`
+- * remain. Without this the hourly backup grows without bound — a single
+- * host accumulated 1,554 snapshots (~363 GB). `retain <= 0` disables
+- * pruning. Only `hourly-auto` snapshots are pruned; manual and
+- * pre-delete-all snapshots are left untouched. Returns the number of
+- * snapshots removed.
+- */
+-export function pruneHourlySnapshots(backupDir: string, retain: number): number {
+-  if (retain <= 0) return 0;
+-  let entries: string[];
+-  try {
+-    entries = readdirSync(backupDir);
+-  } catch {
+-    return 0;
+-  }
+-  // Base snapshot files only; the timestamp suffix (YYYYMMDD-HHMMSS-mmmZ) sorts
+-  // chronologically, so the oldest snapshots come first.
+-  const snapshots = entries
+-    .filter(
+-      (name) =>
+-        name.startsWith(HOURLY_SNAPSHOT_PREFIX) &&
+-        !name.endsWith('-wal') &&
+-        !name.endsWith('-shm'),
+-    )
+-    .sort();
+-  const excess = snapshots.length - retain;
+-  if (excess <= 0) return 0;
+-  let removed = 0;
+-  for (const name of snapshots.slice(0, excess)) {
+-    for (const suffix of ['', '-wal', '-shm']) {
+-      try {
+-        rmSync(path.join(backupDir, `${name}${suffix}`), { force: true });
+-      } catch (err) {
+-        console.warn(
+-          `[delete-all-snapshot] failed to prune snapshot file ${name}${suffix}: ${
+-            err instanceof Error ? err.message : String(err)
+-          }`,
+-        );
+-      }
+-    }
+-    removed += 1;
+-  }
+-  return removed;
+-}
+-
+ /**
+  * Hourly periodic backup snapshot, bounded by `INVOKER_HOURLY_BACKUP_RETENTION`.
+  *
+  * `backup` should be `SQLiteAdapter.backupTo` bound to the running owner
+  * adapter — see {@link createDeleteAllSnapshot} for rationale.
+  */
+ export async function createHourlySnapshot(
+   invokerHomeRoot: string = resolveInvokerHomeRoot(),
+   backup?: SnapshotBackupFn,
+   retain: number = hourlySnapshotRetention(),
+ ): Promise<string | null> {
+   const snapshotPath = await createDbSnapshot('hourly-auto', invokerHomeRoot, backup);
+   if (snapshotPath !== null) {
+     pruneHourlySnapshots(path.join(invokerHomeRoot, 'db-backups'), retain);
+   }
+   return snapshotPath;
+ }
+diff --git a/packages/contracts/src/hourly-snapshot-retention.ts b/packages/contracts/src/hourly-snapshot-retention.ts
+new file mode 100644
+index 000000000..12dcda38d
+--- /dev/null
++++ b/packages/contracts/src/hourly-snapshot-retention.ts
+@@ -0,0 +1,64 @@
++import { readdirSync, rmSync } from 'node:fs';
++import * as path from 'node:path';
++
++const DEFAULT_HOURLY_SNAPSHOT_RETENTION = 48;
++const HOURLY_SNAPSHOT_PREFIX = 'invoker.db.hourly-auto-';
++
++export function hourlySnapshotRetention(): number {
++  const raw = process.env.INVOKER_HOURLY_BACKUP_RETENTION;
++  // Treat empty/blank as unset: Number('') and Number('   ') are 0, which would
++  // otherwise pass the >= 0 check and silently disable pruning (reintroducing the
++  // unbounded growth this guards against). `export VAR=` should fall back, not disable.
++  if (raw === undefined || raw.trim() === '') return DEFAULT_HOURLY_SNAPSHOT_RETENTION;
++  const parsed = Number(raw);
++  return Number.isFinite(parsed) && parsed >= 0
++    ? Math.floor(parsed)
++    : DEFAULT_HOURLY_SNAPSHOT_RETENTION;
++}
++
++/**
++ * Delete the oldest `hourly-auto` snapshots (and any legacy `-wal`/`-shm`
++ * sidecars left over from the pre-fix raw-copy era) so at most `retain`
++ * remain. Without this the hourly backup grows without bound — a single
++ * host accumulated 1,554 snapshots (~363 GB). `retain <= 0` disables
++ * pruning. Only `hourly-auto` snapshots are pruned; manual and
++ * pre-delete-all snapshots are left untouched. Returns the number of
++ * snapshots removed.
++ */
++export function pruneHourlySnapshots(backupDir: string, retain: number): number {
++  if (retain <= 0) return 0;
++  let entries: string[];
++  try {
++    entries = readdirSync(backupDir);
++  } catch {
++    return 0;
++  }
++  // Base snapshot files only; the timestamp suffix (YYYYMMDD-HHMMSS-mmmZ) sorts
++  // chronologically, so the oldest snapshots come first.
++  const snapshots = entries
++    .filter(
++      (name) =>
++        name.startsWith(HOURLY_SNAPSHOT_PREFIX) &&
++        !name.endsWith('-wal') &&
++        !name.endsWith('-shm'),
++    )
++    .sort();
++  const excess = snapshots.length - retain;
++  if (excess <= 0) return 0;
++  let removed = 0;
++  for (const name of snapshots.slice(0, excess)) {
++    for (const suffix of ['', '-wal', '-shm']) {
++      try {
++        rmSync(path.join(backupDir, `${name}${suffix}`), { force: true });
++      } catch (err) {
++        console.warn(
++          `[hourly-snapshot-retention] failed to prune snapshot file ${name}${suffix}: ${
++            err instanceof Error ? err.message : String(err)
++          }`,
++        );
++      }
++    }
++    removed += 1;
++  }
++  return removed;
++}
+diff --git a/packages/contracts/src/index.ts b/packages/contracts/src/index.ts
+index d83134146..bde8ab42d 100644
+--- a/packages/contracts/src/index.ts
++++ b/packages/contracts/src/index.ts
+@@ -1,16 +1,17 @@
+ // @invoker/contracts - Shared interfaces and type definitions
+ 
+ export * from './types.ts';
+ export * from './validation.ts';
+ export * from './logger.ts';
+ export * from './command-envelope.ts';
+ export * from './ipc-channels.ts';
+ export * from './repo-root.ts';
+ export * from './cost-types.ts';
+ export * from './launch-timeouts.ts';
+ export * from './invoker-home.ts';
++export * from './hourly-snapshot-retention.ts';
+ export * from './invoker-config-io.ts';
+ export * from './config-diagnostics.ts';
+ export * from './prerequisites.ts';
+ export * from './headless-owner-launch.ts';
+ export { EXTERNAL_DEPENDENCIES, DEFAULT_DRAFTER_MCP_PACKAGE_SPEC } from './external-dependencies.ts';
+diff --git a/packages/execution-engine/src/__tests__/reaper-reclaim.test.ts b/packages/execution-engine/src/__tests__/reaper-reclaim.test.ts
+new file mode 100644
+index 000000000..3f6e4cb5e
+--- /dev/null
++++ b/packages/execution-engine/src/__tests__/reaper-reclaim.test.ts
+@@ -0,0 +1,218 @@
++import {
++  existsSync,
++  mkdirSync,
++  mkdtempSync,
++  readdirSync,
++  readFileSync,
++  rmSync,
++  utimesSync,
++  writeFileSync,
++} from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { afterEach, describe, expect, it, vi } from 'vitest';
++
++import type { RemoteDiskTarget } from '../workers/disk-headroom-monitor.js';
++import {
++  AUTOMATION_CHECKOUT_DIRS,
++  buildDeletingOrphanReapScript,
++  DELETING_ORPHAN_MIN_AGE_MINUTES,
++  enforceHourlySnapshotRetention,
++  reapDeletingOrphans,
++  reapStaleAutomationCheckouts,
++  trimOversizedLogs,
++} from '../workers/reaper-reclaim.js';
++
++const tempDirs: string[] = [];
++
++afterEach(() => {
++  vi.unstubAllEnvs();
++  for (const dir of tempDirs.splice(0)) {
++    rmSync(dir, { recursive: true, force: true });
++  }
++});
++
++function makeHome(): { root: string; home: string } {
++  const root = mkdtempSync(join(tmpdir(), 'invoker-reaper-'));
++  tempDirs.push(root);
++  const home = join(root, '.invoker');
++  mkdirSync(home, { recursive: true });
++  return { root, home };
++}
++
++function backdate(path: string, ageMs: number): void {
++  const seconds = (Date.now() - ageMs) / 1000;
++  utimesSync(path, seconds, seconds);
++}
++
++describe('reapDeletingOrphans', () => {
++  it('removes a stale dot-deleting orphan locally and leaves a fresh one alone', async () => {
++    const { root, home } = makeHome();
++    mkdirSync(join(home, 'merge-clones.deleting.123', 'stale'), { recursive: true });
++    writeFileSync(join(home, 'merge-clones.deleting.123', 'stale', 'file.txt'), 'x');
++    backdate(join(home, 'merge-clones.deleting.123'), 40 * 60 * 1000);
++    mkdirSync(join(home, 'repos.deleting.999'), { recursive: true });
++    mkdirSync(join(home, 'worktrees', 'active'), { recursive: true });
++    writeFileSync(join(home, 'invoker.db'), 'keep-me');
++
++    const results = await reapDeletingOrphans({
++      invokerHome: home,
++      userHome: root,
++      remoteTargets: [],
++    });
++
++    expect(results).toHaveLength(1);
++    expect(results[0]).toMatchObject({ ok: true, reason: 'reap-orphans', detail: 'removed 1' });
++    expect(existsSync(join(home, 'merge-clones.deleting.123'))).toBe(false);
++    expect(existsSync(join(home, 'repos.deleting.999'))).toBe(true);
++    expect(existsSync(join(home, 'worktrees', 'active'))).toBe(true);
++    expect(existsSync(join(home, 'invoker.db'))).toBe(true);
++  });
++
++  it('runs the age-gated orphan reap script on every configured remote target', async () => {
++    const { root, home } = makeHome();
++    const target: RemoteDiskTarget = {
++      name: 'remote-1',
++      connection: { host: 'h', user: 'u', sshKeyPath: '/k' },
++      remotePath: '~/.invoker',
++    };
++    const runRemoteScript = vi.fn(async () => 'ok');
++
++    const results = await reapDeletingOrphans({
++      invokerHome: home,
++      userHome: root,
++      remoteTargets: [target],
++      runRemoteScript,
++    });
++
++    expect(results).toHaveLength(2);
++    expect(results[1]).toMatchObject({ ok: true, targetKey: 'ssh:remote-1 ~/.invoker' });
++    expect(runRemoteScript).toHaveBeenCalledTimes(1);
++    const script = runRemoteScript.mock.calls[0]?.[1] as unknown as string;
++    expect(script).toContain('Refusing unsafe INVOKER_HOME');
++    expect(script).toContain("-name '*.deleting.*'");
++    expect(script).toContain(`-mmin +${DELETING_ORPHAN_MIN_AGE_MINUTES}`);
++    expect(script).toContain('-maxdepth 1');
++    expect(script).not.toContain('pkill');
++  });
++
++  it('refuses unsafe local and remote homes without touching anything', async () => {
++    const runRemoteScript = vi.fn(async () => 'ok');
++    const results = await reapDeletingOrphans({
++      invokerHome: '/',
++      remoteTargets: [
++        { name: 'remote-1', connection: { host: 'h', user: 'u', sshKeyPath: '/k' }, remotePath: '~' },
++      ],
++      runRemoteScript,
++    });
++
++    expect(results[0]).toMatchObject({ ok: false, reason: 'path-guard' });
++    expect(results[1]).toMatchObject({ ok: false, reason: 'path-guard' });
++    expect(runRemoteScript).not.toHaveBeenCalled();
++  });
++
++  it('embeds only the narrow orphan glob in the remote script, not the reclaimable-dir wipe', () => {
++    const script = buildDeletingOrphanReapScript('~/.invoker');
++    expect(script).toContain("'*.deleting.*'");
++    expect(script).not.toContain('$INVOKER_HOME/worktrees');
++    expect(script).not.toContain('$INVOKER_HOME/repos');
++    expect(script).not.toContain('TMP_CLEAN');
++  });
++});
++
++describe('reapStaleAutomationCheckouts', () => {
++  it('removes children older than forty-eight hours and keeps fresh ones and the locations', () => {
++    const { root, home } = makeHome();
++    for (const dirName of AUTOMATION_CHECKOUT_DIRS) {
++      mkdirSync(join(home, dirName, 'old-item', 'checkout'), { recursive: true });
++      writeFileSync(join(home, dirName, 'old-item', 'checkout', 'file.txt'), 'x');
++      backdate(join(home, dirName, 'old-item'), 49 * 60 * 60 * 1000);
++      mkdirSync(join(home, dirName, 'fresh-item'), { recursive: true });
++    }
++
++    const removed = reapStaleAutomationCheckouts({ invokerHome: home, userHome: root });
++
++    expect(removed).toHaveLength(AUTOMATION_CHECKOUT_DIRS.length);
++    for (const dirName of AUTOMATION_CHECKOUT_DIRS) {
++      expect(existsSync(join(home, dirName))).toBe(true);
++      expect(existsSync(join(home, dirName, 'old-item'))).toBe(false);
++      expect(existsSync(join(home, dirName, 'fresh-item'))).toBe(true);
++    }
++  });
++
++  it('returns nothing when the locations are absent', () => {
++    const { root, home } = makeHome();
++    expect(reapStaleAutomationCheckouts({ invokerHome: home, userHome: root })).toEqual([]);
++  });
++});
++
++describe('enforceHourlySnapshotRetention', () => {
++  it('trims a pile larger than the configured limit to exactly that limit', () => {
++    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '2');
++    const { root, home } = makeHome();
++    const backupDir = join(home, 'db-backups');
++    mkdirSync(backupDir, { recursive: true });
++    for (let i = 1; i <= 4; i += 1) {
++      writeFileSync(join(backupDir, `invoker.db.hourly-auto-20260101-00000${i}-000Z`), `${i}`);
++    }
++    writeFileSync(join(backupDir, 'invoker.db.before-delete-all-20260101-000001-000Z'), 'manual');
++
++    const removed = enforceHourlySnapshotRetention(home, root);
++
++    expect(removed).toBe(2);
++    const remaining = readdirSync(backupDir).sort();
++    expect(remaining).toEqual([
++      'invoker.db.before-delete-all-20260101-000001-000Z',
++      'invoker.db.hourly-auto-20260101-000003-000Z',
++      'invoker.db.hourly-auto-20260101-000004-000Z',
++    ]);
++  });
++
++  it('leaves a pile within the configured limit alone', () => {
++    vi.stubEnv('INVOKER_HOURLY_BACKUP_RETENTION', '2');
++    const { root, home } = makeHome();
++    const backupDir = join(home, 'db-backups');
++    mkdirSync(backupDir, { recursive: true });
++    writeFileSync(join(backupDir, 'invoker.db.hourly-auto-20260101-000001-000Z'), '1');
++
++    expect(enforceHourlySnapshotRetention(home, root)).toBe(0);
++    expect(readdirSync(backupDir)).toEqual(['invoker.db.hourly-auto-20260101-000001-000Z']);
++  });
++});
++
++describe('trimOversizedLogs', () => {
++  it('rewrites an oversized log in place keeping only its most recent portion', () => {
++    const { root, home } = makeHome();
++    const big = 'a'.repeat(90) + '0123456789';
++    writeFileSync(join(home, 'invoker.log'), big);
++    writeFileSync(join(home, 'other-worker.log'), big);
++
++    const trimmed = trimOversizedLogs({
++      invokerHome: home,
++      userHome: root,
++      maxBytes: 50,
++      keepBytes: 10,
++    });
++
++    expect(trimmed.sort()).toEqual([join(home, 'invoker.log'), join(home, 'other-worker.log')]);
++    expect(readFileSync(join(home, 'invoker.log'), 'utf8')).toBe('0123456789');
++    expect(readFileSync(join(home, 'other-worker.log'), 'utf8')).toBe('0123456789');
++  });
++
++  it('leaves a small log and non-log files alone', () => {
++    const { root, home } = makeHome();
++    writeFileSync(join(home, 'gui.log'), 'small');
++    writeFileSync(join(home, 'invoker.db'), 'x'.repeat(100));
++
++    const trimmed = trimOversizedLogs({
++      invokerHome: home,
++      userHome: root,
++      maxBytes: 50,
++      keepBytes: 10,
++    });
++
++    expect(trimmed).toEqual([]);
++    expect(readFileSync(join(home, 'gui.log'), 'utf8')).toBe('small');
++    expect(readFileSync(join(home, 'invoker.db'), 'utf8')).toBe('x'.repeat(100));
++  });
++});
+diff --git a/packages/execution-engine/src/__tests__/reaper-worker.test.ts b/packages/execution-engine/src/__tests__/reaper-worker.test.ts
+new file mode 100644
+index 000000000..6612f1570
+--- /dev/null
++++ b/packages/execution-engine/src/__tests__/reaper-worker.test.ts
+@@ -0,0 +1,133 @@
++import { describe, expect, it, vi } from 'vitest';
++
++import { registerBuiltinWorkers } from '../builtin-workers.js';
++import { createWorkerRegistry } from '../worker-registry.js';
++import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
++
++import type { DiskCleanupResult } from '../workers/disk-headroom-reclaim.js';
++import {
++  createReaperWorker,
++  REAPER_WORKER_KIND,
++  registerReaperWorker,
++} from '../workers/reaper-worker.js';
++
++function makeLogger() {
++  const logger = {
++    debug: vi.fn(),
++    info: vi.fn(),
++    warn: vi.fn(),
++    error: vi.fn(),
++    child: vi.fn(),
++  };
++
++  logger.child.mockImplementation(() => logger as any);
++  return logger as any;
++}
++
++function okResult(targetKey: string): DiskCleanupResult {
++  return { targetKey, ok: true, reason: 'reap-orphans', detail: 'removed 1' };
++}
++
++describe('reaper worker', () => {
++  it('is registered among the built-in workers and builds a runtime from dependencies', () => {
++    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
++    registerBuiltinWorkers(registry);
++
++    const definition = registry.get(REAPER_WORKER_KIND);
++    expect(definition).toBeTruthy();
++
++    const runtime = definition!.factory({
++      store: {} as any,
++      submitter: { submit: vi.fn() } as any,
++      logger: makeLogger(),
++      diskHeadroom: { localPath: '/tmp/invoker-home', remoteTargets: [] },
++    } satisfies WorkerRuntimeDependencies);
++    expect(runtime.identity.kind).toBe(REAPER_WORKER_KIND);
++  });
++
++  it('calls each of the four checks once per tick and writes one record-keeping entry', async () => {
++    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
++    registerReaperWorker(registry);
++    expect(registry.get(REAPER_WORKER_KIND)).toBeTruthy();
++
++    const reapOrphans = vi.fn(async () => [okResult('local /tmp/invoker-home')]);
++    const reapCheckouts = vi.fn(() => ['/tmp/invoker-home/mergify-admin-requeue-work/old-item']);
++    const enforceRetention = vi.fn(() => 2);
++    const trimLogs = vi.fn(() => ['/tmp/invoker-home/invoker.log']);
++    const upsertWorkerAction = vi.fn((row: any) => row);
++
++    const runtime = createReaperWorker({
++      logger: makeLogger(),
++      invokerHome: '/tmp/invoker-home',
++      remoteTargets: [],
++      intervalMs: 0,
++      tickOnStart: false,
++      store: { upsertWorkerAction },
++      reapOrphans,
++      reapCheckouts,
++      enforceRetention,
++      trimLogs,
++    });
++
++    await runtime.tick('manual');
++
++    expect(reapOrphans).toHaveBeenCalledTimes(1);
++    expect(reapOrphans.mock.calls[0]?.[0]).toMatchObject({
++      invokerHome: '/tmp/invoker-home',
++      remoteTargets: [],
++    });
++    expect(reapCheckouts).toHaveBeenCalledTimes(1);
++    expect(reapCheckouts.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home' });
++    expect(enforceRetention).toHaveBeenCalledTimes(1);
++    expect(enforceRetention.mock.calls[0]?.[0]).toBe('/tmp/invoker-home');
++    expect(trimLogs).toHaveBeenCalledTimes(1);
++    expect(trimLogs.mock.calls[0]?.[0]).toMatchObject({ invokerHome: '/tmp/invoker-home' });
++
++    expect(upsertWorkerAction).toHaveBeenCalledTimes(1);
++    expect(upsertWorkerAction.mock.calls[0]?.[0]).toMatchObject({
++      workerKind: REAPER_WORKER_KIND,
++      actionType: 'reaper-pass',
++      externalKey: 'pass',
++      subjectType: 'invoker-home',
++      subjectId: '/tmp/invoker-home',
++      status: 'completed',
++      attemptCount: 1,
++    });
++    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('checkouts removed 1');
++    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('snapshots pruned 2');
++    expect(upsertWorkerAction.mock.calls[0]?.[0].summary).toContain('logs trimmed 1');
++  });
++
++  it('records a failed pass when an orphan target fails', async () => {
++    const failedResult: DiskCleanupResult = {
++      targetKey: 'ssh:remote-1 ~/.invoker',
++      ok: false,
++      reason: 'cleanup-error',
++      detail: 'ssh timed out',
++    };
++    const upsertWorkerAction = vi.fn((row: any) => row);
++
++    const runtime = createReaperWorker({
++      logger: makeLogger(),
++      invokerHome: '/tmp/invoker-home',
++      intervalMs: 0,
++      tickOnStart: false,
++      store: { upsertWorkerAction },
++      reapOrphans: vi.fn(async () => [okResult('local /tmp/invoker-home'), failedResult]),
++      reapCheckouts: vi.fn(() => []),
++      enforceRetention: vi.fn(() => 0),
++      trimLogs: vi.fn(() => []),
++    });
++
++    await runtime.tick('manual');
++
++    expect(upsertWorkerAction).toHaveBeenCalledTimes(1);
++    expect(upsertWorkerAction.mock.calls[0]?.[0]).toMatchObject({
++      workerKind: REAPER_WORKER_KIND,
++      status: 'failed',
++    });
++    expect(upsertWorkerAction.mock.calls[0]?.[0].payload).toMatchObject({
++      reason: 'cleanup-error',
++    });
++  });
++});
+diff --git a/packages/execution-engine/src/builtin-workers.ts b/packages/execution-engine/src/builtin-workers.ts
+index 7a076c8ea..d58f16b56 100644
+--- a/packages/execution-engine/src/builtin-workers.ts
++++ b/packages/execution-engine/src/builtin-workers.ts
+@@ -1,27 +1,29 @@
+ import { registerAutoFixWorker } from './auto-fix-recovery.js';
+ import { registerAutoApproveWorker } from './workers/auto-approve-worker.js';
+ import type { WorkerRuntimeDependencies } from './worker-runtime-dependencies.js';
+ import type { WorkerRegistry } from './worker-registry.js';
+ import { registerE2eAutoFixWorker } from './workers/e2e-autofix-worker.js';
+ import { registerDiskHeadroomWorker } from './workers/disk-headroom-worker.js';
+ import { registerInfraRepairWorker } from './workers/infra-repair-worker.js';
+ import { registerPrMaintenanceWorkers } from './workers/pr-maintenance-workers.js';
+ import { registerPrStatusWorker } from './workers/pr-status-worker.js';
++import { registerReaperWorker } from './workers/reaper-worker.js';
+ import { registerRequeueWorker } from './workers/requeue-worker.js';
+ import { registerWorkflowResumeWorker } from './workers/workflow-resume-worker.js';
+ 
+ /** Register every built-in worker in the stable built-in order. */
+ export function registerBuiltinWorkers(
+   registry: WorkerRegistry<WorkerRuntimeDependencies>,
+ ): WorkerRegistry<WorkerRuntimeDependencies> {
+   registerAutoFixWorker(registry);
+   registerRequeueWorker(registry);
+   registerWorkflowResumeWorker(registry);
+   registerPrStatusWorker(registry);
+   registerInfraRepairWorker(registry);
+   registerDiskHeadroomWorker(registry);
++  registerReaperWorker(registry);
+   registerAutoApproveWorker(registry);
+   registerPrMaintenanceWorkers(registry);
+   registerE2eAutoFixWorker(registry);
+   return registry;
+ }
+diff --git a/packages/execution-engine/src/workers/disk-headroom-reclaim.ts b/packages/execution-engine/src/workers/disk-headroom-reclaim.ts
+index 1bc7c5ac5..52058c915 100644
+--- a/packages/execution-engine/src/workers/disk-headroom-reclaim.ts
++++ b/packages/execution-engine/src/workers/disk-headroom-reclaim.ts
+@@ -1,358 +1,358 @@
+ /**
+  * Critical-disk remediation for the disk-headroom worker.
+  *
+  * Wipes reclaimable Invoker-managed dirs under the Invoker home only.
+  * Never touches invoker.db / config.json / the home root / paths outside the home.
+  */
+ 
+ import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+ import { homedir } from 'node:os';
+ import { join } from 'node:path';
+ 
+ import type { Logger } from '@invoker/contracts';
+ 
+ import { buildSshConnectionArgs } from '../ssh-transport-options.js';
+ import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
+ 
+ import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
+ 
+ export const DEFAULT_DISK_CLEANUP_COOLDOWN_MS = 30 * 60 * 1000;
+ 
+ /** Invoker-managed dirs reclaimed on critical disk pressure (local + remote). */
+ export const DISK_RECLAIMABLE_DIRS = [
+   'runtime',
+   'repos',
+   'worktrees',
+   'merge-clones',
+   'merge-launches',
+   'pr-cron-work',
+ ] as const;
+ 
+ export type DiskReclaimableDir = (typeof DISK_RECLAIMABLE_DIRS)[number];
+ 
+ /**
+  * Invoker/test scratch name globs reclaimed from the shared temp dir. The
+  * disk-headroom cleaner never wipes `/tmp` wholesale — only entries matching
+  * these globs, plus stale mktemp leftovers older than the age threshold below.
+  */
+ export const TMP_SCRATCH_GLOBS = [
+   'invoker-*',
+   'scoped_dir*',
+   'electron-download-*',
+   'playwright-artifacts-*',
+   'playwright-transform-cache-*',
+   'esbuild-*.map',
+   'node-compile-cache',
+   'runner-test-*',
+   'omp-*',
+ ] as const;
+ 
+ export const TMP_TRANSIENT_TEST_GLOBS = [
+   'invoker-e2e-db.*',
+   'invoker-e2e-home.*',
+   'invoker-chaos-*-db.*',
+   'invoker-chaos-*-home.*',
+ ] as const;
+ 
+ /** Leave temp entries newer than this alone — an active run may still hold them. */
+ export const TMP_SCRATCH_MIN_AGE_MINUTES = 60;
+ 
+ export interface DiskCleanupResult {
+   targetKey: string;
+   ok: boolean;
+   reason: string;
+   detail?: string;
+ }
+ 
+ /**
+  * Refuse empty, `/`, and `$HOME` (or literal `~`) so cleanup cannot wipe the
+  * whole machine. Relative paths and other absolute homes are allowed.
+  */
+ export function isSafeInvokerHome(
+   invokerHome: string,
+   userHome: string = homedir(),
+ ): boolean {
+   const trimmed = invokerHome.trim();
+   if (!trimmed) return false;
+   if (trimmed === '/' || trimmed === '~') return false;
+   const expanded = expandTildeHome(trimmed, userHome);
+   if (!expanded || expanded === '/') return false;
+   if (expanded === userHome || expanded === `${userHome}/`) return false;
+   return true;
+ }
+ 
+ export function expandTildeHome(path: string, userHome: string = homedir()): string {
+   if (path === '~') return userHome;
+   if (path.startsWith('~/')) return join(userHome, path.slice(2));
+   return path;
+ }
+ 
+ /** True unless explicitly disabled with `INVOKER_DISK_CLEANUP_ENABLED=0|false`. */
+ export function resolveDiskCleanupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+   const raw = env.INVOKER_DISK_CLEANUP_ENABLED;
+   if (raw === undefined || raw === '') return true;
+   return raw !== '0' && raw.toLowerCase() !== 'false';
+ }
+ 
+ export function resolveDiskCleanupCooldownMs(env: NodeJS.ProcessEnv = process.env): number {
+   const raw = env.INVOKER_DISK_CLEANUP_COOLDOWN_MS;
+   if (!raw) return DEFAULT_DISK_CLEANUP_COOLDOWN_MS;
+   const n = Number.parseInt(raw, 10);
+   if (!Number.isFinite(n) || n < 0) return DEFAULT_DISK_CLEANUP_COOLDOWN_MS;
+   return n;
+ }
+ 
+ /**
+  * Whether a configured remote path is safe to pass into the cleanup script.
+  * `~/.invoker` is allowed (expanded on the remote). Bare `~` / `$HOME` / `/` are not.
+  */
+ export function isSafeRemoteInvokerHomePath(remotePath: string): boolean {
+   const raw = remotePath.trim();
+   if (!raw || raw === '/' || raw === '~' || raw === '$HOME') return false;
+   if (raw === '~/') return false;
+   return true;
+ }
+ 
+-function isDeletingOrphanName(name: string): boolean {
++export function isDeletingOrphanName(name: string): boolean {
+   return name.includes('.deleting.');
+ }
+ 
+ /**
+  * Remote bash that frees Invoker-managed disk under `$INVOKER_HOME`.
+  * Kills only provision grinders (pnpm install / electron unzip), not every
+  * process whose argv mentions the home (that can kill the SSH session).
+  * Deletes synchronously so SSH timeout cannot leave fire-and-forget orphans.
+  */
+ export function buildInvokerHomeCleanupScript(invokerHome: string): string {
+   const homeQ = shellPosixSingleQuote(invokerHome);
+   const removeCalls = DISK_RECLAIMABLE_DIRS
+     .map((name) => `remove_path "$INVOKER_HOME/${name}"`)
+     .join('\n');
+   const mkdirArgs = DISK_RECLAIMABLE_DIRS
+     .map((name) => `"$INVOKER_HOME/${name}"`)
+     .join(' ');
+   const tmpGlobList = TMP_SCRATCH_GLOBS.join(' ');
+   const transientTestGlobList = TMP_TRANSIENT_TEST_GLOBS.join(' ');
+   return `set +e
+ INVOKER_HOME=${homeQ}
+ ${bashNormalizeTildePath('INVOKER_HOME')}
+ case "$INVOKER_HOME" in
+   ""|"/"|"$HOME"|"~")
+     echo "Refusing unsafe INVOKER_HOME: $INVOKER_HOME" >&2
+     exit 64
+     ;;
+ esac
+ echo "[disk-headroom-cleanup] begin home=$INVOKER_HOME"
+ df -h / | tail -1
+ # Provision grinders only — do not pkill -f INVOKER_HOME (kills this SSH session).
+ pkill -9 -f 'pnpm install --frozen-lockfile' >/dev/null 2>&1
+ pkill -9 -f 'pnpm install' >/dev/null 2>&1
+ pkill -9 -f 'electron-v[0-9].*-linux-x64.zip' >/dev/null 2>&1
+ pkill -9 -f 'node_modules/.pnpm/electron@' >/dev/null 2>&1
+ sleep 1
+ # Prior rename leftovers from interrupted cleanups.
+ rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
+ remove_path() {
+   local path="$1"
+   if [ -e "$path" ]; then
+     local staged="\${path}.deleting.$$"
+     if mv "$path" "$staged" 2>/dev/null; then
+       rm -rf "$staged" 2>/dev/null || true
+     fi
+     rm -rf "$path" 2>/dev/null || true
+   fi
+ }
+ ${removeCalls}
+ rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
+ mkdir -p ${mkdirArgs}
+ chmod 700 ${mkdirArgs}
+ # Shared temp dir: reclaim only Invoker/test scratch, never a blanket /tmp wipe.
+ # Age guard leaves entries newer than ${TMP_SCRATCH_MIN_AGE_MINUTES}m alone (an active run may hold them).
+ TMP_CLEAN="\${TMPDIR:-/tmp}"
+ TMP_CLEAN="\${TMP_CLEAN%/}"
+ case "$TMP_CLEAN" in
+   ""|"/"|"$HOME") TMP_CLEAN=/tmp ;;
+ esac
+ # Never reap a temp entry that holds mineable .jsonl session data (agent transcripts).
+ reap_tmp() {
+   [ -e "$1" ] || return 0
+   if find "$1" -type f -name '*.jsonl' -print -quit 2>/dev/null | grep -q .; then
+     return 0
+   fi
+   rm -rf "$1" >/dev/null 2>&1
+ }
+ reap_transient_test_tmp() {
+   [ -e "$1" ] || return 0
+   rm -rf "$1" >/dev/null 2>&1
+ }
+ set -f
+ for pat in ${transientTestGlobList}; do
+   find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -name "$pat" -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+     ! -path "$INVOKER_HOME" -print0 2>/dev/null | while IFS= read -r -d '' entry; do
+     reap_transient_test_tmp "$entry"
+   done
+ done
+ for pat in ${tmpGlobList}; do
+   find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -name "$pat" -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+     ! -path "$INVOKER_HOME" -print0 2>/dev/null | while IFS= read -r -d '' entry; do
+     reap_tmp "$entry"
+   done
+ done
+ set +f
+ find "$TMP_CLEAN" -mindepth 1 -maxdepth 1 -mmin +${TMP_SCRATCH_MIN_AGE_MINUTES} \\
+   ! -path "$INVOKER_HOME" \\
+   ! -name 'systemd-private-*' ! -name 'snap-*' ! -name '.*-unix' \\
+   ! -name 'ssh-*' ! -name 'claude-*' ! -name '*.lock' \\
+   -print0 2>/dev/null | while IFS= read -r -d '' entry; do
+   reap_tmp "$entry"
+ done
+ echo "[disk-headroom-cleanup] done"
+ df -h / | tail -1
+ exit 0
+ `;
+ }
+ 
+ function removeLocalDir(path: string, errors: string[]): void {
+   if (!existsSync(path)) return;
+   try {
+     rmSync(path, { recursive: true, force: true });
+   } catch (err) {
+     errors.push(`${path}: ${err instanceof Error ? err.message : String(err)}`);
+   }
+ }
+ 
+ function ensureLocalDir(path: string, errors: string[]): void {
+   try {
+     mkdirSync(path, { recursive: true, mode: 0o700 });
+   } catch (err) {
+     errors.push(`mkdir ${path}: ${err instanceof Error ? err.message : String(err)}`);
+   }
+ }
+ 
+ function sweepLocalDeletingOrphans(home: string, errors: string[]): void {
+   if (!existsSync(home)) return;
+   let entries: string[];
+   try {
+     entries = readdirSync(home);
+   } catch (err) {
+     errors.push(`readdir ${home}: ${err instanceof Error ? err.message : String(err)}`);
+     return;
+   }
+   for (const name of entries) {
+     if (!isDeletingOrphanName(name)) continue;
+     removeLocalDir(join(home, name), errors);
+   }
+ }
+ 
+ export async function cleanupLocalInvokerHome(opts: {
+   invokerHome: string;
+   targetKey?: string;
+   logger?: Logger;
+   userHome?: string;
+ }): Promise<DiskCleanupResult> {
+   const targetKey = opts.targetKey ?? `local ${opts.invokerHome}`;
+   const userHome = opts.userHome ?? homedir();
+   const home = expandTildeHome(opts.invokerHome, userHome);
+   if (!isSafeInvokerHome(home, userHome)) {
+     return { targetKey, ok: false, reason: 'path-guard', detail: home };
+   }
+ 
+   opts.logger?.info?.(`[disk-headroom-cleanup] local begin home=${home}`, {
+     module: 'disk-headroom',
+     targetKey,
+   });
+ 
+   const errors: string[] = [];
+   sweepLocalDeletingOrphans(home, errors);
+   for (const name of DISK_RECLAIMABLE_DIRS) {
+     removeLocalDir(join(home, name), errors);
+   }
+   for (const name of DISK_RECLAIMABLE_DIRS) {
+     ensureLocalDir(join(home, name), errors);
+   }
+ 
+   if (errors.length > 0) {
+     opts.logger?.warn?.(`[disk-headroom-cleanup] local partial failures`, {
+       module: 'disk-headroom',
+       targetKey,
+       errors,
+     });
+     return {
+       targetKey,
+       ok: false,
+       reason: 'cleanup-error',
+       detail: errors.slice(0, 5).join('; '),
+     };
+   }
+ 
+   opts.logger?.info?.(`[disk-headroom-cleanup] local done home=${home}`, {
+     module: 'disk-headroom',
+     targetKey,
+   });
+   return { targetKey, ok: true, reason: 'critical-cleanup' };
+ }
+ 
+ export async function cleanupRemoteInvokerHome(opts: {
+   target: RemoteDiskTarget;
+   logger?: Logger;
+   runRemoteScript?: (target: RemoteDiskTarget, script: string) => Promise<string>;
+ }): Promise<DiskCleanupResult> {
+   const targetKey = `ssh:${opts.target.name} ${opts.target.remotePath}`;
+   if (!isSafeRemoteInvokerHomePath(opts.target.remotePath)) {
+     return {
+       targetKey,
+       ok: false,
+       reason: 'path-guard',
+       detail: opts.target.remotePath,
+     };
+   }
+ 
+   const script = buildInvokerHomeCleanupScript(opts.target.remotePath);
+   const run = opts.runRemoteScript ?? defaultRunRemoteCleanup;
+   try {
+     opts.logger?.info?.(`[disk-headroom-cleanup] remote begin ${targetKey}`, {
+       module: 'disk-headroom',
+       targetKey,
+     });
+     const output = await run(opts.target, script);
+     opts.logger?.info?.(`[disk-headroom-cleanup] remote done ${targetKey}`, {
+       module: 'disk-headroom',
+       targetKey,
+       outputTail: output.slice(-400),
+     });
+     return { targetKey, ok: true, reason: 'critical-cleanup', detail: output.slice(-400) };
+   } catch (err) {
+     const detail = err instanceof Error ? err.message : String(err);
+     opts.logger?.error?.(`[disk-headroom-cleanup] remote failed ${targetKey}: ${detail}`, {
+       module: 'disk-headroom',
+       targetKey,
+     });
+     return { targetKey, ok: false, reason: 'cleanup-error', detail };
+   }
+ }
+ 
+ function defaultRunRemoteCleanup(target: RemoteDiskTarget, script: string): Promise<string> {
+   const sshArgs = buildSshConnectionArgs(target.connection, { batchMode: true });
+   return execRemoteCapture({
+     sshArgs,
+     script,
+     phase: `disk-headroom-cleanup:${target.name}`,
+   });
+ }
+ 
+ export class DiskCleanupCooldownTracker {
+   private readonly lastCleanupAt = new Map<string, number>();
+ 
+   constructor(private readonly cooldownMs: number) {}
+ 
+   canCleanup(targetKey: string, nowMs: number = Date.now()): boolean {
+     if (this.cooldownMs <= 0) return true;
+     const last = this.lastCleanupAt.get(targetKey);
+     if (last === undefined) return true;
+     return nowMs - last >= this.cooldownMs;
+   }
+ 
+   markCleaned(targetKey: string, nowMs: number = Date.now()): void {
+     this.lastCleanupAt.set(targetKey, nowMs);
+   }
+ }
+diff --git a/packages/execution-engine/src/workers/reaper-reclaim.ts b/packages/execution-engine/src/workers/reaper-reclaim.ts
+new file mode 100644
+index 000000000..b08e52ed7
+--- /dev/null
++++ b/packages/execution-engine/src/workers/reaper-reclaim.ts
+@@ -0,0 +1,279 @@
++import {
++  closeSync,
++  existsSync,
++  openSync,
++  readdirSync,
++  readSync,
++  rmSync,
++  statSync,
++  writeFileSync,
++} from 'node:fs';
++import { homedir } from 'node:os';
++import { join } from 'node:path';
++
++import { hourlySnapshotRetention, pruneHourlySnapshots, type Logger } from '@invoker/contracts';
++
++import { buildSshConnectionArgs } from '../ssh-transport-options.js';
++import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
++
++import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
++import {
++  expandTildeHome,
++  isDeletingOrphanName,
++  isSafeInvokerHome,
++  isSafeRemoteInvokerHomePath,
++  type DiskCleanupResult,
++} from './disk-headroom-reclaim.js';
++
++export const DELETING_ORPHAN_MIN_AGE_MINUTES = 30;
++
++export const AUTOMATION_CHECKOUT_DIRS = [
++  'mergify-admin-requeue-work',
++  'land-admin-bypass-work',
++] as const;
++
++export const AUTOMATION_CHECKOUT_MIN_AGE_HOURS = 48;
++
++export const LOG_TRIM_MAX_BYTES = 100 * 1024 * 1024;
++export const LOG_TRIM_KEEP_BYTES = 20 * 1024 * 1024;
++export const REAPER_LOG_SUFFIX = '.log';
++
++function errorDetail(err: unknown): string {
++  return err instanceof Error ? err.message : String(err);
++}
++
++function entryAgeMs(path: string, nowMs: number): number | null {
++  try {
++    return nowMs - statSync(path).mtimeMs;
++  } catch {
++    return null;
++  }
++}
++
++export function buildDeletingOrphanReapScript(invokerHome: string): string {
++  const homeQ = shellPosixSingleQuote(invokerHome);
++  return `set +e
++INVOKER_HOME=${homeQ}
++${bashNormalizeTildePath('INVOKER_HOME')}
++case "$INVOKER_HOME" in
++  ""|"/"|"$HOME"|"~")
++    echo "Refusing unsafe INVOKER_HOME: $INVOKER_HOME" >&2
++    exit 64
++    ;;
++esac
++find "$INVOKER_HOME" -mindepth 1 -maxdepth 1 -name '*.deleting.*' -mmin +${DELETING_ORPHAN_MIN_AGE_MINUTES} \\
++  -print0 2>/dev/null | while IFS= read -r -d '' entry; do
++  rm -rf "$entry" >/dev/null 2>&1
++done
++exit 0
++`;
++}
++
++export function reapLocalDeletingOrphans(opts: {
++  invokerHome: string;
++  logger?: Logger;
++  userHome?: string;
++  nowMs?: number;
++}): DiskCleanupResult {
++  const targetKey = `local ${opts.invokerHome}`;
++  const userHome = opts.userHome ?? homedir();
++  const home = expandTildeHome(opts.invokerHome, userHome);
++  if (!isSafeInvokerHome(home, userHome)) {
++    return { targetKey, ok: false, reason: 'path-guard', detail: home };
++  }
++  if (!existsSync(home)) {
++    return { targetKey, ok: true, reason: 'reap-orphans', detail: 'removed 0' };
++  }
++
++  const nowMs = opts.nowMs ?? Date.now();
++  const minAgeMs = DELETING_ORPHAN_MIN_AGE_MINUTES * 60 * 1000;
++  const errors: string[] = [];
++  let removed = 0;
++
++  let entries: string[] = [];
++  try {
++    entries = readdirSync(home);
++  } catch (err) {
++    errors.push(`readdir ${home}: ${errorDetail(err)}`);
++  }
++  for (const name of entries) {
++    if (!isDeletingOrphanName(name)) continue;
++    const path = join(home, name);
++    const ageMs = entryAgeMs(path, nowMs);
++    if (ageMs === null || ageMs < minAgeMs) continue;
++    try {
++      rmSync(path, { recursive: true, force: true });
++      removed += 1;
++      opts.logger?.info?.(`[reaper] removed orphan ${path}`, { module: 'reaper', targetKey });
++    } catch (err) {
++      errors.push(`${path}: ${errorDetail(err)}`);
++    }
++  }
++
++  if (errors.length > 0) {
++    return { targetKey, ok: false, reason: 'cleanup-error', detail: errors.slice(0, 5).join('; ') };
++  }
++  return { targetKey, ok: true, reason: 'reap-orphans', detail: `removed ${removed}` };
++}
++
++export async function reapRemoteDeletingOrphans(opts: {
++  target: RemoteDiskTarget;
++  logger?: Logger;
++  runRemoteScript?: (target: RemoteDiskTarget, script: string) => Promise<string>;
++}): Promise<DiskCleanupResult> {
++  const targetKey = `ssh:${opts.target.name} ${opts.target.remotePath}`;
++  if (!isSafeRemoteInvokerHomePath(opts.target.remotePath)) {
++    return { targetKey, ok: false, reason: 'path-guard', detail: opts.target.remotePath };
++  }
++
++  const script = buildDeletingOrphanReapScript(opts.target.remotePath);
++  const run = opts.runRemoteScript ?? defaultRunRemoteReap;
++  try {
++    const output = await run(opts.target, script);
++    return { targetKey, ok: true, reason: 'reap-orphans', detail: output.slice(-400) };
++  } catch (err) {
++    const detail = errorDetail(err);
++    opts.logger?.error?.(`[reaper] remote orphan reap failed ${targetKey}: ${detail}`, {
++      module: 'reaper',
++      targetKey,
++    });
++    return { targetKey, ok: false, reason: 'cleanup-error', detail };
++  }
++}
++
++function defaultRunRemoteReap(target: RemoteDiskTarget, script: string): Promise<string> {
++  const sshArgs = buildSshConnectionArgs(target.connection, { batchMode: true });
++  return execRemoteCapture({
++    sshArgs,
++    script,
++    phase: `reaper-orphans:${target.name}`,
++  });
++}
++
++export async function reapDeletingOrphans(opts: {
++  invokerHome: string;
++  remoteTargets?: RemoteDiskTarget[];
++  logger?: Logger;
++  userHome?: string;
++  nowMs?: number;
++  runRemoteScript?: (target: RemoteDiskTarget, script: string) => Promise<string>;
++}): Promise<DiskCleanupResult[]> {
++  const results: DiskCleanupResult[] = [reapLocalDeletingOrphans(opts)];
++  for (const target of opts.remoteTargets ?? []) {
++    results.push(
++      await reapRemoteDeletingOrphans({
++        target,
++        logger: opts.logger,
++        runRemoteScript: opts.runRemoteScript,
++      }),
++    );
++  }
++  return results;
++}
++
++export function reapStaleAutomationCheckouts(opts: {
++  invokerHome: string;
++  logger?: Logger;
++  userHome?: string;
++  nowMs?: number;
++}): string[] {
++  const userHome = opts.userHome ?? homedir();
++  const home = expandTildeHome(opts.invokerHome, userHome);
++  if (!isSafeInvokerHome(home, userHome)) return [];
++
++  const nowMs = opts.nowMs ?? Date.now();
++  const minAgeMs = AUTOMATION_CHECKOUT_MIN_AGE_HOURS * 60 * 60 * 1000;
++  const removed: string[] = [];
++
++  for (const dirName of AUTOMATION_CHECKOUT_DIRS) {
++    const dir = join(home, dirName);
++    let entries: string[];
++    try {
++      entries = readdirSync(dir);
++    } catch {
++      continue;
++    }
++    for (const name of entries) {
++      const path = join(dir, name);
++      const ageMs = entryAgeMs(path, nowMs);
++      if (ageMs === null || ageMs < minAgeMs) continue;
++      try {
++        rmSync(path, { recursive: true, force: true });
++        removed.push(path);
++        opts.logger?.info?.(`[reaper] removed stale checkout ${path}`, { module: 'reaper' });
++      } catch (err) {
++        opts.logger?.warn?.(`[reaper] failed to remove ${path}: ${errorDetail(err)}`, {
++          module: 'reaper',
++        });
++      }
++    }
++  }
++  return removed;
++}
++
++export function enforceHourlySnapshotRetention(
++  invokerHome: string,
++  userHome: string = homedir(),
++): number {
++  const home = expandTildeHome(invokerHome, userHome);
++  return pruneHourlySnapshots(join(home, 'db-backups'), hourlySnapshotRetention());
++}
++
++export function trimOversizedLogs(opts: {
++  invokerHome: string;
++  logger?: Logger;
++  userHome?: string;
++  maxBytes?: number;
++  keepBytes?: number;
++}): string[] {
++  const userHome = opts.userHome ?? homedir();
++  const home = expandTildeHome(opts.invokerHome, userHome);
++  if (!isSafeInvokerHome(home, userHome)) return [];
++
++  const maxBytes = opts.maxBytes ?? LOG_TRIM_MAX_BYTES;
++  const keepBytes = opts.keepBytes ?? LOG_TRIM_KEEP_BYTES;
++
++  let entries: string[];
++  try {
++    entries = readdirSync(home);
++  } catch {
++    return [];
++  }
++
++  const trimmed: string[] = [];
++  for (const name of entries) {
++    if (!name.endsWith(REAPER_LOG_SUFFIX)) continue;
++    const path = join(home, name);
++    let size: number;
++    try {
++      const stat = statSync(path);
++      if (!stat.isFile()) continue;
++      size = stat.size;
++    } catch {
++      continue;
++    }
++    if (size <= maxBytes) continue;
++    try {
++      trimLogTail(path, size, keepBytes);
++      trimmed.push(path);
++      opts.logger?.info?.(`[reaper] trimmed log ${path} from ${size} bytes`, { module: 'reaper' });
++    } catch (err) {
++      opts.logger?.warn?.(`[reaper] failed to trim ${path}: ${errorDetail(err)}`, {
++        module: 'reaper',
++      });
++    }
++  }
++  return trimmed;
++}
++
++function trimLogTail(path: string, size: number, keepBytes: number): void {
++  const length = Math.min(keepBytes, size);
++  const tail = Buffer.alloc(length);
++  const fd = openSync(path, 'r');
++  try {
++    readSync(fd, tail, 0, length, size - length);
++  } finally {
++    closeSync(fd);
++  }
++  writeFileSync(path, tail);
++}
+diff --git a/packages/execution-engine/src/workers/reaper-worker.ts b/packages/execution-engine/src/workers/reaper-worker.ts
+new file mode 100644
+index 000000000..379c92d8e
+--- /dev/null
++++ b/packages/execution-engine/src/workers/reaper-worker.ts
+@@ -0,0 +1,127 @@
++import type { Logger } from '@invoker/contracts';
++
++import { resolveInvokerHomeRoot } from '../worker-lock.js';
++import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
++import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
++import type { WorkerRegistry } from '../worker-registry.js';
++import { createWorkerRuntime, type WorkerRuntime, type WorkerTick } from '../worker-runtime.js';
++
++import type { RemoteDiskTarget } from './disk-headroom-monitor.js';
++import {
++  enforceHourlySnapshotRetention,
++  reapDeletingOrphans,
++  reapStaleAutomationCheckouts,
++  trimOversizedLogs,
++} from './reaper-reclaim.js';
++
++export const REAPER_WORKER_KIND = 'reaper';
++
++export const DEFAULT_REAPER_INTERVAL_MS = 60 * 60 * 1000;
++
++export function resolveReaperIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
++  const raw = env.INVOKER_REAPER_INTERVAL_MS;
++  if (!raw) return DEFAULT_REAPER_INTERVAL_MS;
++  const n = Number.parseInt(raw, 10);
++  if (!Number.isFinite(n) || n <= 0) return DEFAULT_REAPER_INTERVAL_MS;
++  return n;
++}
++
++export interface ReaperWorkerOptions {
++  logger: Logger;
++  invokerHome: string;
++  remoteTargets?: RemoteDiskTarget[];
++  intervalMs?: number;
++  tickOnStart?: boolean;
++  store?: WorkerDecisionStore;
++  /** Test seam: override the orphaned dot-deleting reap. */
++  reapOrphans?: typeof reapDeletingOrphans;
++  /** Test seam: override the stale automation-checkout reap. */
++  reapCheckouts?: typeof reapStaleAutomationCheckouts;
++  /** Test seam: override snapshot-retention enforcement. */
++  enforceRetention?: typeof enforceHourlySnapshotRetention;
++  /** Test seam: override oversized-log trimming. */
++  trimLogs?: typeof trimOversizedLogs;
++  /** Test seam: wrap the worker tick for observability. */
++  onTick?: WorkerTick;
++}
++
++export function createReaperWorker(options: ReaperWorkerOptions): WorkerRuntime {
++  const reapOrphans = options.reapOrphans ?? reapDeletingOrphans;
++  const reapCheckouts = options.reapCheckouts ?? reapStaleAutomationCheckouts;
++  const enforceRetention = options.enforceRetention ?? enforceHourlySnapshotRetention;
++  const trimLogs = options.trimLogs ?? trimOversizedLogs;
++
++  return createWorkerRuntime({
++    kind: REAPER_WORKER_KIND,
++    logger: options.logger,
++    intervalMs: options.intervalMs ?? resolveReaperIntervalMs(),
++    tickOnStart: options.tickOnStart ?? true,
++    onTick: async (ctx) => {
++      ctx.signal?.throwIfAborted();
++      await options.onTick?.(ctx);
++      ctx.signal?.throwIfAborted();
++
++      const orphanResults = await reapOrphans({
++        invokerHome: options.invokerHome,
++        remoteTargets: options.remoteTargets ?? [],
++        logger: options.logger,
++      });
++      if (ctx.signal?.aborted) return;
++
++      const checkoutsRemoved = reapCheckouts({
++        invokerHome: options.invokerHome,
++        logger: options.logger,
++      });
++      const snapshotsPruned = enforceRetention(options.invokerHome);
++      const logsTrimmed = trimLogs({
++        invokerHome: options.invokerHome,
++        logger: options.logger,
++      });
++
++      const failed = orphanResults.filter((result) => !result.ok);
++      const summary =
++        `Reaper pass: orphan targets ${orphanResults.length - failed.length}/${orphanResults.length} ok, `
++        + `checkouts removed ${checkoutsRemoved.length}, snapshots pruned ${snapshotsPruned}, `
++        + `logs trimmed ${logsTrimmed.length}`;
++
++      if (options.store) {
++        recordWorkerDecisionRow(options.store, {
++          workerKind: REAPER_WORKER_KIND,
++          actionType: 'reaper-pass',
++          externalKey: 'pass',
++          subjectType: 'invoker-home',
++          subjectId: options.invokerHome,
++          status: failed.length > 0 ? 'failed' : 'completed',
++          summary,
++          ...(failed.length > 0 ? { reason: failed[0]?.reason } : {}),
++          payload: {
++            orphanResults,
++            checkoutsRemoved,
++            snapshotsPruned,
++            logsTrimmed,
++          },
++          incrementAttempt: true,
++        });
++      }
++      options.logger.info?.(`[reaper] ${summary}`, { module: 'reaper' });
++    },
++  });
++}
++
++/** Register the built-in reaper worker (interval-driven disk hygiene). */
++export function registerReaperWorker(
++  registry: WorkerRegistry<WorkerRuntimeDependencies>,
++): WorkerRegistry<WorkerRuntimeDependencies> {
++  registry.register({
++    kind: REAPER_WORKER_KIND,
++    note: 'Reaps orphaned .deleting dirs, stale automation checkouts, excess hourly snapshots, and oversized logs on an interval.',
++    factory: (deps: WorkerRuntimeDependencies): WorkerRuntime =>
++      createReaperWorker({
++        logger: deps.logger,
++        invokerHome: deps.diskHeadroom?.localPath ?? resolveInvokerHomeRoot(),
++        remoteTargets: deps.diskHeadroom?.remoteTargets ?? [],
++        store: deps.store,
++      }),
++  });
++  return registry;
++}
