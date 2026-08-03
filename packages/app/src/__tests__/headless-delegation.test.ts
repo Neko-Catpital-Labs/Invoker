@@ -1103,6 +1103,45 @@ describe('headless delegation enforcement', () => {
         expect(mockDeps.commandService.recreateWorkflow).toHaveBeenCalled();
       });
 
+      it('headless workflow recreate with deps.noTrack=true can defer runnable execution to the caller', async () => {
+        const deferRunnableTasks = vi.fn();
+        const preemptWorkflowExecution = vi.fn(async () => ({ cancelled: [], runningCancelled: [] }));
+        const runnableTask = {
+          id: 'wf-1/task-1',
+          status: 'running',
+          config: { workflowId: 'wf-1' },
+          execution: { selectedAttemptId: 'attempt-1' },
+        } as any;
+        (mockDeps.commandService as any).recreateWorkflow = vi.fn(async () => ({
+          ok: true as const,
+          data: [runnableTask],
+        }));
+        mockDeps.orchestrator.startExecution = vi.fn(() => []);
+        const executeTasksSpy = vi
+          .spyOn(TaskRunner.prototype, 'executeTasks')
+          .mockResolvedValue(undefined);
+
+        const depsWithNoTrack: HeadlessDeps = {
+          ...mockDeps,
+          noTrack: true,
+          deferRunnableTasks,
+          preemptWorkflowExecution,
+        } as HeadlessDeps;
+
+        try {
+          await runHeadless(['recreate', 'wf-1'], depsWithNoTrack);
+        } finally {
+          executeTasksSpy.mockRestore();
+        }
+
+        expect(preemptWorkflowExecution).toHaveBeenCalledWith('wf-1');
+        expect(mockDeps.commandService.recreateWorkflow).toHaveBeenCalled();
+        expect(deferRunnableTasks).toHaveBeenCalledTimes(1);
+        expect(deferRunnableTasks.mock.calls[0]?.[1]).toBe('wf-1');
+        expect(deferRunnableTasks.mock.calls[0]?.[0]).toEqual([runnableTask]);
+        expect(executeTasksSpy).not.toHaveBeenCalled();
+      });
+
       it('headless recreate dispatches runnable tasks before waiting for completion', async () => {
         let taskStatus: 'running' | 'completed' = 'running';
         (mockDeps.commandService as any).recreateWorkflow = vi.fn(async () => ({

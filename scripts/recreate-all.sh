@@ -24,6 +24,7 @@ STATUS_FILTER=""
 PARALLELISM=""
 FOLLOW=false
 DEFAULT_PARALLELISM=4
+FOLLOW_TIMEOUT_SECONDS="${INVOKER_RECREATE_ALL_FOLLOW_TIMEOUT_SECONDS:-1800}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +40,82 @@ if [[ -n "$PARALLELISM" ]] && ! [[ "$PARALLELISM" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --parallel value: $PARALLELISM (expected integer >= 1)" >&2
   exit 1
 fi
+if ! [[ "$FOLLOW_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid INVOKER_RECREATE_ALL_FOLLOW_TIMEOUT_SECONDS value: $FOLLOW_TIMEOUT_SECONDS (expected integer >= 1)" >&2
+  exit 1
+fi
+
+workflow_is_settled_for_follow() {
+  local wf_id="$1"
+  local tasks_json
+
+  if ! tasks_json="$(headless_query query tasks --workflow "$wf_id" --output json)"; then
+    return 1
+  fi
+
+  printf '%s' "$tasks_json" | python3 -c '
+import json
+import sys
+
+try:
+    tasks = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+
+if not tasks:
+    raise SystemExit(0)
+
+active_statuses = {"queued", "running", "fixing_with_ai"}
+human_or_terminal_blocked = {
+    "failed",
+    "closed",
+    "needs_input",
+    "awaiting_approval",
+    "review_ready",
+    "blocked",
+    "stale",
+}
+
+has_active = False
+has_pending = False
+has_human_or_terminal_blocked = False
+for task in tasks:
+    status = task.get("status", "")
+    execution = task.get("execution") or {}
+    phase = execution.get("phase")
+    if status in active_statuses or (status == "pending" and phase == "launching"):
+        has_active = True
+    if status == "pending":
+        has_pending = True
+    if status in human_or_terminal_blocked:
+        has_human_or_terminal_blocked = True
+
+if has_active:
+    raise SystemExit(1)
+if has_human_or_terminal_blocked:
+    raise SystemExit(0)
+if not has_pending:
+    raise SystemExit(0)
+raise SystemExit(1)
+'
+}
+
+wait_for_workflow_follow() {
+  local wf_id="$1"
+  local start now
+  start="$(date +%s)"
+  while true; do
+    if workflow_is_settled_for_follow "$wf_id"; then
+      return 0
+    fi
+    now="$(date +%s)"
+    if (( now - start >= FOLLOW_TIMEOUT_SECONDS )); then
+      echo "[$wf_id] timed out waiting for workflow to settle after recreate" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
 
 # ---------------------------------------------------------------------------
 # Query workflows
@@ -97,15 +174,18 @@ elif $FOLLOW; then
     local cmd_status=0
 
     set +e
-    cmd_out="$(headless_mutation recreate "$wf_id" 2>&1)"
+    cmd_out="$(headless_mutation --no-track recreate "$wf_id" 2>&1)"
     cmd_status=$?
     set -e
 
-    if [[ "$cmd_status" -eq 0 ]]; then
+    if [[ "$cmd_status" -eq 0 ]] && wait_for_workflow_follow "$wf_id"; then
       echo "[$wf_id] OK"
       printf "%s\n" "$cmd_out"
       printf "%s\tSUCCEEDED\n" "$wf_id" >> "$result_file"
     else
+      if [[ "$cmd_status" -eq 0 ]]; then
+        cmd_status=124
+      fi
       echo "[$wf_id] FAILED (exit $cmd_status)"
       printf "%s\n" "$cmd_out"
       printf "%s\tFAILED\n" "$wf_id" >> "$result_file"
