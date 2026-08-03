@@ -143,6 +143,15 @@ const NOOP_LOGGER: Logger = {
  * it as a benign race.
  */
 export interface LaunchOutboxAck {
+  /**
+   * Mark that the executor is confirmed live (markTaskRunningAfterLaunch
+   * accepted the launch). This is distinct from completeDispatch: it
+   * signals the LAUNCH HANDOFF succeeded, not that the task's work is done.
+   * Stops the stuck-launch age check (LAUNCH_STUCK_ABANDON_MS) from firing
+   * on this row -- that check exists to catch launches that never start,
+   * not tasks that legitimately run long after starting successfully.
+   */
+  acceptDispatch(dispatchId: number): boolean;
   completeDispatch(dispatchId: number): boolean;
   failDispatch(dispatchId: number, error: unknown): boolean;
 }
