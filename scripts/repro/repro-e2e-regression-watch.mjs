@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / terminal-garbling',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,16 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const terminalGarblingCommand = defs.get('playwright / terminal-garbling').verifyCommand;
+  if (terminalGarblingCommand.includes('No local verify command is mapped')) {
+    fail('named playwright shard must not use the fallback verify command');
+  }
+  if (!terminalGarblingCommand.includes('ci-playwright-terminal-garbling')) {
+    fail('named playwright shard command must carry the terminal-garbling run label');
+  }
+  if (!terminalGarblingCommand.includes('task-terminal-drawer-minimize-garble-repro.spec.ts')) {
+    fail('named playwright shard command must include the terminal drawer garble repro');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -156,6 +167,17 @@ function testPlanVarsAndDryRunRendering() {
   const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
   if (!vars.marker.includes('job=required-fast / Vitest Workspace')) fail('marker must include job name');
   if (!vars.verify_command.includes('10-vitest-workspace.sh')) fail('verify command must be job-specific');
+
+  const terminalGarblingVars = buildPlanVars({
+    firstBadSha: 'e21a96567a3fff62cf9c71befc3f0a7db15ab9c5',
+    jobName: 'playwright / terminal-garbling',
+  }, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (!terminalGarblingVars.verify_command.includes('ci-playwright-terminal-garbling')) {
+    fail('named playwright shard plan must render the shard-specific verify command');
+  }
+  if (terminalGarblingVars.verify_command.includes('No local verify command is mapped')) {
+    fail('named playwright shard plan must not render the fallback verify command');
+  }
 
   const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-render-'));
   try {
