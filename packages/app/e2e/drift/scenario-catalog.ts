@@ -414,17 +414,17 @@ const deleteAllWorkflowsScenario: DriftScenario = {
   },
 };
 
-const setMergeModeScenario: DriftScenario = {
-  id: 'set-merge-mode',
+const setWorkflowMergeModeScenario: DriftScenario = {
+  id: 'set-workflow-merge-mode',
   channel: 'workflow-metadata',
   driver: 'ipc',
   description: 'Change a workflow\'s merge mode',
   async setup(page, testDir) {
-    const workflowId = await loadPlanAndGetWorkflowId(page, plan('drift scenario set-merge-mode'));
+    const workflowId = await loadPlanAndGetWorkflowId(page, plan('drift scenario set-workflow-merge-mode'));
     return { page, testDir, workflowId, taskId: '' };
   },
   async act(ctx) {
-    await ctx.page.evaluate((workflowId) => window.invoker.setMergeMode(workflowId, 'automatic'), ctx.workflowId);
+    await ctx.page.evaluate((workflowId) => window.invoker.setWorkflowMergeMode(workflowId, 'automatic'), ctx.workflowId);
     return { workflowId: ctx.workflowId };
   },
 };
@@ -559,7 +559,7 @@ export const DRIFT_SCENARIOS: readonly DriftScenario[] = [
   deleteWorkflowScenario,
   deleteTaskScenario,
   deleteAllWorkflowsScenario,
-  setMergeModeScenario,
+  setWorkflowMergeModeScenario,
   setMergeBranchScenario,
   forkWorkflowScenario,
   setWorkflowMetadataScenario,

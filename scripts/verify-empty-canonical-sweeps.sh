@@ -12,19 +12,49 @@ fi
 
 paths=(packages docs invoker-ctl)
 
-expect_empty() {
+expect_no_unexpected_hits() {
   local label="$1"
   local pattern="$2"
+  shift 2
   local hits
+  local unexpected
+  local line
+  local allowed_pattern
+  local allowed
   hits="$(rg -n --hidden -e "$pattern" "${paths[@]}" || true)"
   if [[ -n "$hits" ]]; then
-    printf '%s\n' "$hits" >&2
-    fail "unexpected hits for ${label}"
+    unexpected=""
+    while IFS= read -r line; do
+      allowed=false
+      for allowed_pattern in "$@"; do
+        if [[ "$line" == $allowed_pattern ]]; then
+          allowed=true
+          break
+        fi
+      done
+      if [[ "$allowed" == false ]]; then
+        unexpected+="${line}"$'\n'
+      fi
+    done <<< "$hits"
+    if [[ -n "$unexpected" ]]; then
+      printf '%s' "$unexpected" >&2
+      fail "unexpected hits for ${label}"
+    fi
   fi
 }
 
-expect_empty "removed merge-mode alias" 'set-merge-mode'
-expect_empty "removed restart surfaces" 'invoker:restart-task|restartTask\(|/api/tasks/.*/restart|/api/workflows/.*/restart'
+expect_no_unexpected_hits "removed merge-mode alias" 'set-merge-mode' \
+  "packages/app/src/__tests__/headless-client.test.ts:*expect(output).not.toContain('set-merge-mode')*" \
+  "packages/app/src/__tests__/headless-client.test.ts:*runHeadlessClientCommand*set-merge-mode*" \
+  "packages/app/src/__tests__/headless-client.test.ts:*toThrow('Unknown command: set-merge-mode')*" \
+  "packages/app/src/headless-command-registry.ts:*return command === 'set-merge-mode';*"
+expect_no_unexpected_hits "removed restart surfaces" 'invoker:restart-task|restartTask\(|/api/tasks/.*/restart|/api/workflows/.*/restart' \
+  "packages/app/src/__tests__/api-server.test.ts:*POST /api/tasks/:id/restart*" \
+  "packages/app/src/__tests__/api-server.test.ts:*/api/tasks/task-1/restart*" \
+  "packages/app/src/__tests__/api-server.test.ts:*POST /api/workflows/:id/restart*" \
+  "packages/app/src/__tests__/api-server.test.ts:*/api/workflows/wf-1/restart*" \
+  "packages/app/src/__tests__/parity-regression.test.ts:*/api/tasks/task-1/restart*" \
+  "packages/app/src/__tests__/parity-regression.test.ts:*/api/workflows/wf-1/restart*"
 
 compat_hits="$(
   rg -n --hidden -e "github \\| external_review|merge_mode = 'github'|Use /api/.*/restart" "${paths[@]}" || true
@@ -45,4 +75,4 @@ if [[ -n "$compat_hits" ]]; then
   fi
 fi
 
-printf 'PASS: repository canonical sweeps are empty except the allowed SQLite migration\n'
+printf 'PASS: repository canonical sweeps are empty except allowed migration and rejection coverage\n'

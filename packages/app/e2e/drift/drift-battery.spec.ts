@@ -45,7 +45,7 @@ const CORE_BATTERY_IDS = [
   'approve',
   'detach-workflow',
   'delete-task',
-  'set-merge-mode',
+  'set-workflow-merge-mode',
 ];
 
 const batteryIds = MODE === 'nightly' ? IPC_DRIVEN_IDS : CORE_BATTERY_IDS;

@@ -47,7 +47,7 @@ This table lists every mutating command path and how the owner-boundary contract
 | `invoker:recreate-task` | main.ts:1060 | N/A (owner) | `sharedRecreateTask()` → persistence | |
 | `invoker:retry-workflow` | main.ts:1077 | N/A (owner) | `sharedRetryWorkflow()` → orchestrator | |
 | `invoker:rebase-recreate` | gui-mutation-handlers.ts:2060 | N/A (owner) | `rebaseRecreate()` → persistence + orchestrator | Fresh-base workflow recreation |
-| `invoker:set-merge-mode` | main.ts:1129 | N/A (owner) | `setWorkflowMergeMode()` → persistence.updateWorkflow | |
+| `invoker:set-workflow-merge-mode` | gui-mutation-handlers.ts:2276 | N/A (owner) | `setWorkflowMergeMode()` → persistence.updateWorkflow | |
 | `invoker:approve-merge` | main.ts:1147 | N/A (owner) | `orchestrator.approve()` → persistence | |
 | `invoker:resolve-conflict` | main.ts:1182 | N/A (owner) | `resolveConflictAction()` → persistence + orchestrator | |
 | `invoker:fix-with-agent` | main.ts:1196 | N/A (owner) | `orchestrator.beginConflictResolution()` → persistence | |
