@@ -606,9 +606,9 @@ export function InvokerTerminal({
     inputRef.current?.focus();
   };
 
-  const composerDisabledCursorClass = busy ? 'disabled:cursor-wait' : readOnly ? 'disabled:cursor-not-allowed' : '';
+  const composerDisabledCursorClass = busy || readOnly ? 'disabled:cursor-not-allowed' : '';
   const sendButtonDisabled = busy || readOnly || !value.trim();
-  const sendButtonDisabledCursorClass = busy ? 'disabled:cursor-wait' : 'disabled:cursor-not-allowed';
+  const sendButtonDisabledCursorClass = 'disabled:cursor-not-allowed';
 
   const handleValueChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const startedAt = nowMs();
@@ -688,22 +688,25 @@ export function InvokerTerminal({
           </div>
         );
       })}
-      {planningStream && planningStream.text ? (
+      {busy ? (
         <div
           data-testid="invoker-terminal-planner-stream"
-          data-state={planningStream.status}
+          data-state={planningStream?.status ?? 'working'}
           className={`flex items-center gap-2 text-xs ${
-            planningStream.status === 'failed'
+            planningStream?.status === 'failed'
               ? 'text-destructive'
               : 'text-muted-foreground'
           }`}
         >
-          <span aria-hidden="true" className={planningStream.status === 'failed' ? '' : 'animate-pulse'}>●</span>
-          <span>{planningStream.status === 'failed' ? 'Planning stopped. Try again when ready.' : 'Drafting your plan…'}</span>
+          <span
+            aria-hidden="true"
+            className="inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-muted-foreground border-t-foreground"
+          />
+          <span>{planningStream ? (planningStream.status === 'failed' ? 'Planning stopped. Try again when ready.' : 'Drafting your plan…') : 'Working…'}</span>
         </div>
       ) : null}
     </>
-  ), [lines, planningStream]);
+  ), [busy, lines, planningStream]);
   return (
     <section className="flex h-full min-h-0 flex-col bg-background">
       <div className="flex items-center justify-end gap-2 border-b border-border bg-background px-4 py-2.5">
@@ -780,7 +783,7 @@ export function InvokerTerminal({
             onScroll={handleTranscriptScroll}
             className="min-h-0 flex-1 space-y-5 overflow-y-auto bg-background px-5 py-5 font-sans text-[13.5px] leading-6"
           >
-            {lines.length === 0 && !planningStream?.text ? (
+            {lines.length === 0 && !planningStream?.text && !busy ? (
               <div data-testid="invoker-terminal-empty-hero" className="flex h-full min-h-[220px] flex-col justify-center gap-4">
                 <div>
                   <h3 className="text-lg font-semibold tracking-tight text-foreground">What do you want to build?</h3>
