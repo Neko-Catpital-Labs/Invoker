@@ -15,6 +15,9 @@ import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
 const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
+const MIN_TASK_TERMINAL_COLS = 20;
+const MIN_TASK_TERMINAL_ROWS = 5;
+const TASK_TERMINAL_FIT_SETTLE_FRAMES = 2;
 
 /**
  * The drawer has one explicit state model:
@@ -132,6 +135,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const isActiveRef = useRef(isActive);
   const drawerStateRef = useRef(drawerState);
   const sessionRef = useRef(session);
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
@@ -161,19 +165,44 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     const fit = fitRef.current;
     if (!term || !fit) return;
     try {
+      const proposedDimensions = fit.proposeDimensions();
+      if (
+        !proposedDimensions ||
+        proposedDimensions.cols < MIN_TASK_TERMINAL_COLS ||
+        proposedDimensions.rows < MIN_TASK_TERMINAL_ROWS
+      ) {
+        return;
+      }
+
       const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      const nextSize = { cols: term.cols, rows: term.rows };
+      const lastSentSize = lastSentSizeRef.current;
+      if (lastSentSize && lastSentSize.cols === nextSize.cols && lastSentSize.rows === nextSize.rows) {
+        return;
+      }
+      lastSentSizeRef.current = nextSize;
+      void window.invoker?.terminalResize?.(session.sessionId, nextSize.cols, nextSize.rows)
+        ?.then((result) => {
+          if (!result?.ok && lastSentSizeRef.current?.cols === nextSize.cols && lastSentSizeRef.current?.rows === nextSize.rows) {
+            lastSentSizeRef.current = null;
+          }
+        })
+        .catch(() => {
+          if (lastSentSizeRef.current?.cols === nextSize.cols && lastSentSizeRef.current?.rows === nextSize.rows) {
+            lastSentSizeRef.current = null;
+          }
+        });
       reportTerminalPerf('embedded_terminal_resize', {
         source,
         durationMs: roundMs(nowMs() - startedAt),
         sessionId: session.sessionId,
         taskId: session.taskId,
-        cols: term.cols,
-        rows: term.rows,
+        cols: nextSize.cols,
+        rows: nextSize.rows,
         active: isActiveRef.current,
       });
     } catch {
@@ -183,15 +212,16 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
     clearScheduledFit();
-    fitVisibleTerminal(source);
-    if (typeof requestAnimationFrame !== 'function') return;
+    if (typeof requestAnimationFrame !== 'function') {
+      fitVisibleTerminal(source);
+      return;
+    }
 
     fitFrameRef.current = requestAnimationFrame(() => {
       fitFrameRef.current = null;
-      fitVisibleTerminal('followup_frame');
       secondFitFrameRef.current = requestAnimationFrame(() => {
         secondFitFrameRef.current = null;
-        fitVisibleTerminal('followup_frame');
+        fitVisibleTerminal(source);
       });
     });
   }, [clearScheduledFit, fitVisibleTerminal]);
