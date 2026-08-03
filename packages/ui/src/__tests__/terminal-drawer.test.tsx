@@ -61,6 +61,7 @@ const xtermMock = vi.hoisted(() => {
   }
 
   class MockFitAddon {
+    proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
     fit = vi.fn();
 
     constructor() {
@@ -228,6 +229,33 @@ describe('Terminal drawer (component)', () => {
       expect(xtermMock.instances[0].refresh.mock.calls.length).toBeGreaterThan(partialRefreshCalls);
       expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
     });
+  });
+
+  it('does not send duplicate backend resizes for a quick maximize/minimize/restore cycle', async () => {
+    const session = makeTerminalSession('task-alpha');
+    const props = {
+      onCycle: vi.fn(),
+      sessions: [session],
+      activeSessionId: session.sessionId,
+      onSelectSession: vi.fn(),
+      onCloseSession: vi.fn(),
+    };
+
+    const { rerender } = render(<TerminalDrawer state="partial" {...props} />);
+    await expectPaneReady('task-alpha');
+    await waitFor(() => {
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
+
+    vi.mocked(mock.api.terminalResize).mockClear();
+    rerender(<TerminalDrawer state="maximized" {...props} />);
+    rerender(<TerminalDrawer state="minimized" {...props} />);
+    rerender(<TerminalDrawer state="partial" {...props} />);
+
+    await new Promise((resolve) => {
+      window.setTimeout(resolve, 250);
+    });
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
   });
 
   it('refits the newly active pane when terminal tabs switch', async () => {
