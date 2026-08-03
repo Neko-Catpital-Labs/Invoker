@@ -342,6 +342,61 @@ describe('SSH pool member capacity', () => {
       { err: killErr },
     );
   });
+
+  it('killActiveExecution releases the resource lease only after executor.kill resolves', async () => {
+    const task = makeTask('wf-1/task-lease-order');
+    const order: string[] = [];
+    let resolveKill: (() => void) | undefined;
+    const sshExecutor = {
+      type: 'ssh',
+      start: vi.fn(),
+      onComplete: vi.fn(),
+      onOutput: vi.fn(),
+      onHeartbeat: vi.fn(),
+      kill: vi.fn(() => new Promise<void>((resolve) => {
+        resolveKill = () => {
+          order.push('kill-resolved');
+          resolve();
+        };
+      })),
+      destroyAll: vi.fn(),
+    };
+    const releaseExecutionResourceLease = vi.fn(() => {
+      order.push('lease-released');
+    });
+    const runner = makeRunner({
+      sshExecutor,
+      orchestrator: {
+        getTask: (id: string) => id === task.id ? task : null,
+        getAllTasks: () => [task],
+      },
+      persistence: {
+        logEvent: vi.fn(),
+        releaseExecutionResourceLease,
+      },
+    });
+
+    (runner as any).activeExecutions.set(task.execution.selectedAttemptId, {
+      handle: { executionId: 'exec-lease-order', taskId: task.id },
+      executor: sshExecutor,
+      taskId: task.id,
+      leaseResourceKey: 'ssh:lease-order-host',
+      leaseHolderId: 'holder-lease-order',
+    });
+
+    const killPromise = runner.killActiveExecution(task.id);
+    // Still mid-flight: executor.kill has not resolved yet, so the SIGTERM
+    // grace period is (simulated as) still open -- the lease must not be
+    // released while the real process could still be alive.
+    await Promise.resolve();
+    expect(releaseExecutionResourceLease).not.toHaveBeenCalled();
+
+    resolveKill?.();
+    await expect(killPromise).resolves.toBe(true);
+
+    expect(releaseExecutionResourceLease).toHaveBeenCalledWith('ssh:lease-order-host', 'holder-lease-order');
+    expect(order).toEqual(['kill-resolved', 'lease-released']);
+  });
   it('uses execution resource leases to defer across TaskRunner instances', async () => {
     const adapter = await SQLiteAdapter.create(':memory:');
     try {
