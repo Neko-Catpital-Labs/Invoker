@@ -10,16 +10,24 @@ if ! command -v rg >/dev/null 2>&1; then
   fail "rg is required"
 fi
 
-paths=(packages docs invoker-ctl)
+paths=(.)
 source_globs=(
   --glob '!**/__tests__/**'
   --glob '!**/*.test.ts'
   --glob '!**/*.spec.ts'
+  --glob '!scripts/verify-empty-canonical-sweeps.sh'
+  --glob '!skills/*/fixtures/**'
 )
 
 rg_source_hits() {
   local pattern="$1"
-  rg -n --hidden "${source_globs[@]}" -e "$pattern" "${paths[@]}" || true
+  local status=0
+  local hits
+  hits="$(rg -n --hidden "${source_globs[@]}" -e "$pattern" "${paths[@]}")" || status=$?
+  if (( status > 1 )); then
+    fail "rg failed with exit status ${status}"
+  fi
+  printf '%s' "$hits" | sed 's#^\./##'
 }
 
 expect_empty() {
