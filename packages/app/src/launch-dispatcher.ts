@@ -620,29 +620,39 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Record a launch failure. Normal failures are retried by re-enqueuing
-   * the row. A row that has already used its retry budget is abandoned
-   * instead. The TaskRunner still owns the task failure response, so this
-   * path must not prepare a fresh attempt here.
+   * Record a launch failure. Normal pre-launch failures are retried by
+   * re-enqueuing the row. A row that has already used its retry budget,
+   * OR that already reached `acceptDispatch` (the executor was confirmed
+   * live), is abandoned instead -- re-enqueuing an accepted row would
+   * silently make a real, post-accept failure look like "never launched,"
+   * the same bug `reapExpiredLeases` and `listAbandonableLaunchDispatchLeases`
+   * were fixed to avoid. The TaskRunner still owns the task failure
+   * response, so this path must not prepare a fresh attempt here.
    */
   failDispatch(dispatchId: number, error: unknown): boolean {
     const message =
       error instanceof Error ? error.message : String(error ?? 'unknown launch error');
     const row = this.persistence.loadLaunchDispatchById(dispatchId);
 
-    if (row && this.shouldAbandonAfterFastFailure(row)) {
-      const accepted = this.abandonDispatch(
-        row,
-        this.launchDispatchAbandonedMessage(row, message),
+    if (row && (this.shouldAbandonAfterFastFailure(row) || row.acknowledgedAt)) {
+      const reason = row.acknowledgedAt
+        ? `Post-accept launch failure (dispatch already running): ${message}`
+        : this.launchDispatchAbandonedMessage(row, message);
+      const accepted = this.abandonDispatch(row, reason);
+      this.logger?.warn?.(
+        row.acknowledgedAt
+          ? '[launch-dispatcher] abandoned a post-accept failure instead of re-enqueuing'
+          : '[launch-dispatcher] abandoned after fast failures',
+        {
+          ownerId: this.ownerId,
+          dispatchId,
+          attemptsCount: row.attemptsCount,
+          acknowledged: Boolean(row.acknowledgedAt),
+          error: message,
+          accepted,
+          module: 'launch-dispatcher',
+        },
       );
-      this.logger?.warn?.('[launch-dispatcher] abandoned after fast failures', {
-        ownerId: this.ownerId,
-        dispatchId,
-        attemptsCount: row.attemptsCount,
-        error: message,
-        accepted,
-        module: 'launch-dispatcher',
-      });
       return accepted;
     }
 

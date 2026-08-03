@@ -504,6 +504,8 @@ export interface TaskLaunchDispatch {
   attemptsCount: number;
   lastError?: string;
   generation: number;
+  /** Set once the executor is confirmed live (markLaunchDispatchAccepted). */
+  acknowledgedAt?: string;
 }
 
 type TerminalSessionRow = {
@@ -3764,6 +3766,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
 
+  /**
+   * Re-enqueue a failed launch attempt so it can be retried. Guarded by
+   * `acknowledged_at IS NULL`: once the executor is confirmed live, a
+   * later failure must not silently look like "never launched" -- the
+   * caller (launch-dispatcher.ts's failDispatch) treats that case as a
+   * terminal abandon instead, so this update becomes a no-op by design.
+   */
   markLaunchDispatchFailed(
     id: number,
     errorMessage: string,
@@ -3776,7 +3785,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
              dispatch_owner = NULL,
              fenced_until = NULL
        WHERE id = ?
-         AND state NOT IN ('completed', 'abandoned')`,
+         AND state NOT IN ('completed', 'abandoned')
+         AND acknowledged_at IS NULL`,
       [errorMessage, id],
     );
     return (this.db.getRowsModified?.() ?? 0) > 0;
@@ -3797,9 +3807,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
          WHERE state = 'leased'
            AND fenced_until IS NOT NULL
            AND fenced_until < ?
+           AND acknowledged_at IS NULL
            AND (
              attempts_count >= ?
-             OR (acknowledged_at IS NULL AND ? IS NOT NULL AND enqueued_at <= ?)
+             OR (? IS NOT NULL AND enqueued_at <= ?)
            )
          ORDER BY id ASC`,
       [now, options.maxAttempts, ageCutoff, ageCutoff],
@@ -3877,6 +3888,18 @@ export class SQLiteAdapter implements PersistenceAdapter {
     });
   }
 
+  /**
+   * Crash-recovery reaper: a claim (`state='leased'`) whose fence expired
+   * without ever launching is treated as an abandoned claim -- probably
+   * the dispatcher process that claimed it died before handoff -- and is
+   * given back to the pool as 'enqueued' for a later poll to retry.
+   *
+   * Guarded by `acknowledged_at IS NULL` so this never touches a row whose
+   * launch actually succeeded: a healthy task that just runs longer than
+   * its fence is not a crashed claim, and resetting it here would cause
+   * dispatchActive() to re-claim and re-dispatch a task that is already
+   * running (see abandonInvalidDispatch's 'not_launch_ready' path).
+   */
   reapExpiredLaunchDispatchLeases(options: {
     nowIso?: string;
     maxAttempts?: number;
@@ -3889,7 +3912,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
            WHERE state = 'leased'
              AND fenced_until IS NOT NULL
              AND fenced_until < ?
-             AND attempts_count < ?`,
+             AND attempts_count < ?
+             AND acknowledged_at IS NULL`,
         [now, maxAttempts],
       );
       if (expired.length === 0) return [];
@@ -3901,7 +3925,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
          WHERE state = 'leased'
            AND fenced_until IS NOT NULL
            AND fenced_until < ?
-           AND attempts_count < ?`,
+           AND attempts_count < ?
+           AND acknowledged_at IS NULL`,
         [now, maxAttempts],
       );
       return expired.map((row) => {
