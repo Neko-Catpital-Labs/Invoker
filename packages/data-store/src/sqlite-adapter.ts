@@ -3619,10 +3619,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
   claimLaunchDispatchAtomic(options: {
     ownerId: string;
     nowIso?: string;
+    leaseMs?: number;
   }): TaskLaunchDispatch | undefined {
     const now = options.nowIso ?? new Date().toISOString();
     const fencedUntil = new Date(
-      new Date(now).getTime() + DISPATCH_LEASE_MS,
+      new Date(now).getTime() + (options.leaseMs ?? DISPATCH_LEASE_MS),
     ).toISOString();
     return this.runTransaction(() => {
       while (true) {
