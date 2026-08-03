@@ -73,6 +73,10 @@ function isActiveForInvalidation(status: TaskStatus): boolean {
   );
 }
 
+export function isWorkerResponseGenerationValid(response: WorkResponse, activeGeneration: number): boolean {
+  return response.executionGeneration === undefined || response.executionGeneration === activeGeneration;
+}
+
 import { getTransitiveDependents } from '@invoker/workflow-graph';
 import { ActionGraph } from '@invoker/workflow-graph';
 import {
@@ -1529,10 +1533,7 @@ export class Orchestrator {
           return [];
         }
         const activeGeneration = this.getExecutionGeneration(earlyTask);
-        if (
-          response.executionGeneration !== undefined &&
-          response.executionGeneration !== activeGeneration
-        ) {
+        if (!isWorkerResponseGenerationValid(response, activeGeneration)) {
           this.logger.warn('[worker-response] STALE_GENERATION_REJECTED', {
             taskId: earlyTask.id,
             responseGeneration: response.executionGeneration,
