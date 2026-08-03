@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { WorkflowMutationIntent, WorkflowMutationPriority } from '@invoker/data-store';
-import type { TaskState } from '@invoker/workflow-core';
+import { SSH_INFRA_FAILURE_CLASSES, type TaskState } from '@invoker/workflow-core';
 
 import { createRequeueAttemptLedger } from '../requeue-attempt-ledger.js';
 import {
@@ -135,6 +135,28 @@ describe('requeue worker tick', () => {
     const h = harness(makeTask({ execution: { failureClass: undefined, error: 'real bug', generation: 2 } }));
     await h.tick(POLL_CTX);
     expect(h.submit).not.toHaveBeenCalled();
+  });
+
+  it('never lists an infra-repair-owned SSH failure class as a requeue candidate', () => {
+    // Ownership boundary: SSH infra failures (worktree-missing, oauth-expired,
+    // repo-mirror-corrupt, ...) are the infra-repair worker's job to alert on,
+    // not the requeue worker's job to blindly resubmit. Retrying a task whose
+    // failure is an environment/credential problem just re-fails it and burns
+    // the requeue budget before an operator ever sees it. This runs against
+    // every class the classifier currently knows about, so a future SSH infra
+    // class added to that list is covered automatically.
+    for (const failureClass of SSH_INFRA_FAILURE_CLASSES) {
+      const infraTask = makeTask({
+        id: `wf-1/${failureClass}`,
+        execution: { failureClass, error: `simulated ${failureClass}`, generation: 1 },
+      });
+      const candidates = listRequeueScanCandidates({
+        listWorkflows: () => [{ id: 'wf-1' }],
+        loadTasks: () => [infraTask],
+        listWorkflowMutationIntents: () => [],
+      });
+      expect(candidates).toEqual([]);
+    }
   });
 
   it('ignores a task that is no longer failed', async () => {
