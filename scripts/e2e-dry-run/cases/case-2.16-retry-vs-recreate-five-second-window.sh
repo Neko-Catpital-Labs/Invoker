@@ -79,6 +79,8 @@ fi
 
 KEEP_TASK_ID="$WF_ID/keep-completed"
 FAIL_TASK_ID="$WF_ID/fail-target"
+WORKFLOW_IDS_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-workflows.XXXXXX")"
+printf '%s\n' "$WF_ID" > "$WORKFLOW_IDS_FILE"
 
 echo "==> case 2.16: wait for seed statuses (completed + failed)"
 for i in $(seq 1 60); do
@@ -131,7 +133,7 @@ fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
 RECREATE_START_EPOCH="$(date +%s)"
-bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
+INVOKER_HEADLESS_WORKFLOW_IDS_FILE="$WORKFLOW_IDS_FILE" bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
@@ -201,4 +203,5 @@ fi
 
 rm -f "$PLAN_PATH"
 rm -f "$SUBMIT_LOG"
+rm -f "$WORKFLOW_IDS_FILE"
 echo "PASS case 2.16 (retry preserved completed; recreate reset completed task within 5s)"
