@@ -49,7 +49,34 @@ if [[ -n "$STATUS_FILTER" ]]; then
   QUERY_ARGS+=(--status "$STATUS_FILTER")
 fi
 
-WORKFLOWS=$(headless_workflow_ids "${QUERY_ARGS[@]}")
+query_workflow_ids() {
+  # In isolated/headless runs, spawning Electron just to list workflow ids can
+  # consume most of the recreate timing budget. Workflow status is derived from
+  # tasks, so keep filtered queries on the canonical headless path.
+  if [[ -z "$STATUS_FILTER" ]] && [[ -n "${INVOKER_DB_DIR:-}" ]] && command -v python3 >/dev/null 2>&1; then
+    local db_path="$INVOKER_DB_DIR/invoker.db"
+    if [[ -f "$db_path" ]]; then
+      if python3 - "$db_path" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
+conn.execute("PRAGMA query_only = ON")
+for (workflow_id,) in conn.execute("SELECT id FROM workflows ORDER BY created_at DESC"):
+    if workflow_id:
+        print(workflow_id)
+PY
+      then
+        return 0
+      fi
+    fi
+  fi
+
+  headless_workflow_ids "${QUERY_ARGS[@]}"
+}
+
+WORKFLOWS=$(query_workflow_ids)
 
 if [[ -z "$WORKFLOWS" ]]; then
   echo "No workflows found."
