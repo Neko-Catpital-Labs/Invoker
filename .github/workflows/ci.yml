@@ -113,13 +113,13 @@ jobs:
   # UI component suite (@invoker/ui vitest, ~2-3m). Runs on every PR for early
   # feedback AND on merge-queue refs, where `.mergify.yml` requires it — this is
   # the gate that blocks behavioral UI regressions (e.g. the sidebar navigation
-  # guard) that still type-check. Scoped to @invoker/ui on purpose: the full
-  # Vitest Workspace is red on master (worker-registry + SSH executor drift).
+  # guard) that still type-check. Scoped to @invoker/ui on purpose; the full
+  # Vitest Workspace runs as a required-fast default-branch/merge-queue gate.
   ui-vitest:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Reclaim workspace
