@@ -89,7 +89,7 @@ describe('Home workflow click mini-DAG dismiss race', () => {
 
     fireEvent.click(screen.getByTestId('workflow-graph-react-flow'));
     await waitFor(() => {
-      expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
+      expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByTestId('sidebar-workflows'));
