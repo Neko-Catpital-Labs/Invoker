@@ -61,6 +61,7 @@ const xtermMock = vi.hoisted(() => {
   }
 
   class MockFitAddon {
+    proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
     fit = vi.fn();
 
     constructor() {
@@ -138,6 +139,12 @@ async function selectWorkflow(): Promise<void> {
   await waitFor(() => {
     expect(screen.getByTestId('rf__node-task-alpha')).toBeInTheDocument();
   });
+}
+
+async function drainTerminalFitFrames(): Promise<void> {
+  for (let index = 0; index < 3; index += 1) {
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+  }
 }
 
 describe('Terminal drawer (component)', () => {
@@ -228,6 +235,30 @@ describe('Terminal drawer (component)', () => {
       expect(xtermMock.instances[0].refresh.mock.calls.length).toBeGreaterThan(partialRefreshCalls);
       expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
     });
+  });
+
+  it('does not resend the backend resize when drawer chrome changes but terminal dimensions are unchanged', async () => {
+    const session = makeTerminalSession('task-alpha');
+    const props = {
+      onCycle: vi.fn(),
+      sessions: [session],
+      activeSessionId: session.sessionId,
+      onSelectSession: vi.fn(),
+      onCloseSession: vi.fn(),
+    };
+
+    const { rerender } = render(<TerminalDrawer state="partial" {...props} />);
+    await waitFor(() => {
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
+
+    vi.mocked(mock.api.terminalResize).mockClear();
+    rerender(<TerminalDrawer state="maximized" {...props} />);
+    rerender(<TerminalDrawer state="minimized" {...props} />);
+    rerender(<TerminalDrawer state="partial" {...props} />);
+    await drainTerminalFitFrames();
+
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
   });
 
   it('refits the newly active pane when terminal tabs switch', async () => {
@@ -666,7 +697,7 @@ describe('Terminal drawer (component)', () => {
       expect(mock.api.reportUiPerf).toHaveBeenCalledWith(
         'embedded_terminal_resize',
         expect.objectContaining({
-          source: 'active_session',
+          source: 'followup_frame',
           sessionId: beta.sessionId,
           taskId: beta.taskId,
           active: true,

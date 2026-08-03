@@ -15,6 +15,9 @@ import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
 const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
+const TASK_TERMINAL_FIT_SETTLE_FRAMES = 2;
+const MIN_TASK_TERMINAL_COLS = 20;
+const MIN_TASK_TERMINAL_ROWS = 5;
 
 /**
  * The drawer has one explicit state model:
@@ -54,6 +57,11 @@ interface TerminalSessionPaneProps {
 type SeededOutputSnapshot = {
   sessionId: string;
   term: XTermTerminal;
+};
+
+type TerminalSize = {
+  cols: number;
+  rows: number;
 };
 
 function nowMs(): number {
@@ -135,6 +143,8 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
+  const fitTimeoutRef = useRef<number | null>(null);
+  const lastRequestedSizeRef = useRef<TerminalSize | null>(null);
 
   isActiveRef.current = isActive;
   drawerStateRef.current = drawerState;
@@ -153,20 +163,58 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
       }
       secondFitFrameRef.current = null;
     }
+    if (fitTimeoutRef.current !== null) {
+      window.clearTimeout(fitTimeoutRef.current);
+      fitTimeoutRef.current = null;
+    }
   }, []);
 
   const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
+    const host = containerRef.current;
     const term = termRef.current;
     const fit = fitRef.current;
-    if (!term || !fit) return;
+    if (!host || !term || !fit) return;
     try {
+      const proposeDimensions = (fit as FitAddon & { proposeDimensions?: () => { cols: number; rows: number } | undefined }).proposeDimensions;
+      if (typeof proposeDimensions === 'function') {
+        const proposedDimensions = proposeDimensions.call(fit);
+        if (
+          !proposedDimensions ||
+          proposedDimensions.cols < MIN_TASK_TERMINAL_COLS ||
+          proposedDimensions.rows < MIN_TASK_TERMINAL_ROWS
+        ) {
+          return;
+        }
+      }
       const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      const nextSize = { cols: term.cols, rows: term.rows };
+      const lastRequestedSize = lastRequestedSizeRef.current;
+      if (
+        lastRequestedSize?.cols !== nextSize.cols ||
+        lastRequestedSize.rows !== nextSize.rows
+      ) {
+        lastRequestedSizeRef.current = nextSize;
+        const resizeCall = window.invoker?.terminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+        void resizeCall
+          ?.then((result) => {
+            if (result?.ok !== false) return;
+            const currentSize = lastRequestedSizeRef.current;
+            if (currentSize?.cols === nextSize.cols && currentSize.rows === nextSize.rows) {
+              lastRequestedSizeRef.current = null;
+            }
+          })
+          .catch(() => {
+            const currentSize = lastRequestedSizeRef.current;
+            if (currentSize?.cols === nextSize.cols && currentSize.rows === nextSize.rows) {
+              lastRequestedSizeRef.current = null;
+            }
+          });
+      }
       reportTerminalPerf('embedded_terminal_resize', {
         source,
         durationMs: roundMs(nowMs() - startedAt),
@@ -183,12 +231,20 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
     clearScheduledFit();
-    fitVisibleTerminal(source);
-    if (typeof requestAnimationFrame !== 'function') return;
+    if (typeof requestAnimationFrame !== 'function') {
+      fitTimeoutRef.current = window.setTimeout(() => {
+        fitTimeoutRef.current = null;
+        fitVisibleTerminal(source);
+      }, 0);
+      return;
+    }
 
     fitFrameRef.current = requestAnimationFrame(() => {
       fitFrameRef.current = null;
-      fitVisibleTerminal('followup_frame');
+      if (TASK_TERMINAL_FIT_SETTLE_FRAMES <= 1) {
+        fitVisibleTerminal(source);
+        return;
+      }
       secondFitFrameRef.current = requestAnimationFrame(() => {
         secondFitFrameRef.current = null;
         fitVisibleTerminal('followup_frame');
