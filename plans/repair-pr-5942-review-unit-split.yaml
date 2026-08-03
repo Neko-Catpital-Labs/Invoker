@@ -1,0 +1,211 @@
+name: "Repair PR 5942 review-unit split"
+description: |
+  Repair pull request #5942 by restructuring its published stack instead of
+  editing this checkout. The PR Body check is failing because the live PR body
+  declares `Review Lane: policy` and `Review Unit: tooling-policy`, while the
+  diff against `master` contains contract, docs, policy, and product-test files.
+
+  The workflow must preserve the existing code intent while rebuilding the PR
+  stack so each published PR has exactly one review lane and review unit. PR
+  #5942 should remain the canonical sweep verifier slice only if its live diff
+  is reduced to `package.json` and `scripts/verify-empty-canonical-sweeps.sh`
+  against its actual base.
+onFinish: none
+mergeMode: manual
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+
+tasks:
+  - id: reproduce-pr-5942-pr-body-failure
+    description: |
+      Review claim:
+      - Reproduce PR #5942's PR Body failure with the repo-local validator before any branch surgery.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This task only fetches live PR metadata and runs the trusted-base validator; it does not modify local source files or GitHub state.
+      Slice rationale:
+      - Reproducing the exact validator failure prevents a metadata-only repair from hiding a mixed review-unit diff.
+      Architectural effect:
+      - None; this is read-only proof of the live PR composition.
+      Goal:
+      - Prove that #5942 fails because the live diff mixes policy, contract, docs, and product-test scope.
+      Motivation:
+      - The repair path must target the actual PR Body blocker, not an inferred code failure.
+      Alternative considerations:
+      - Manual inspection alone was rejected because the live PR body or base can change after a failed Actions run.
+      Implementation details:
+      - Fetch `refs/pull/5942/head`, fetch `master`, read the live PR body with `gh pr view`, and run `node scripts/validate-pr-body.mjs` against the same body, changed-files list, and diff shape used by CI.
+      Non-goals:
+      - No branch edits, PR body edits, force pushes, requeues, or local source modifications.
+      Layer: e2e_regression
+      Feature state: active
+    command: |
+      set -eu
+      tmpdir="$(mktemp -d)"
+      trap "rm -rf \"$tmpdir\"" EXIT
+      gh pr view 5942 --repo Neko-Catpital-Labs/Invoker --json body -q .body > "$tmpdir/pr-body.md"
+      git fetch origin master "+refs/pull/5942/head:refs/remotes/pull/5942/head"
+      git diff --name-only origin/master...refs/remotes/pull/5942/head > "$tmpdir/changed-files.txt"
+      git diff origin/master...refs/remotes/pull/5942/head > "$tmpdir/pr.diff"
+      set +e
+      output="$(node scripts/validate-pr-body.mjs --body-file "$tmpdir/pr-body.md" --changed-files-file "$tmpdir/changed-files.txt" --diff-file "$tmpdir/pr.diff" 2>&1)"
+      status="$?"
+      set -e
+      printf "%s\n" "$output"
+      test "$status" -eq 1
+      printf "%s\n" "$output" | grep -F "Review lane policy cannot ship with product files"
+      printf "%s\n" "$output" | grep -F "Review Unit \"tooling-policy\" cannot ship with contract, docs files"
+      printf "%s\n" "Changed files:"
+      cat "$tmpdir/changed-files.txt"
+    dependencies: []
+
+  - id: restructure-pr-5942-stack
+    description: |
+      Review claim:
+      - Restructure #5942 so every live PR in the rebuilt stack contains one validator-compatible review lane and review unit.
+      Review lane:
+      - policy
+      Safety invariant:
+      - Preserve the existing source semantics and change only branch composition, PR bases, PR titles, and PR bodies unless conflict resolution is required by the split.
+      Slice rationale:
+      - The current PR mixes contract, docs, product-test, and tooling-policy files; one operational branch-surgery task can rebuild the published stack without pretending the mixed diff is one review unit.
+      Architectural effect:
+      - No product architecture changes are introduced; the review architecture changes from one mixed PR to a stack of single-unit PRs.
+      Goal:
+      - Make #5942's PR Body check pass by isolating the canonical sweep verifier from contract cleanup, drift proof, and docs edits.
+      Motivation:
+      - CI enforces the declared Review Lane and Review Unit against changed files, and the current branch cannot truthfully pass as `tooling-policy`.
+      Alternative considerations:
+      - Do not relabel the mixed PR as another lane, weaken the validator, or force all files into one local repair commit.
+      Implementation details:
+      - Use the repo-local make-pr and review-compression rules from `origin/master` to rebuild or retarget the stack. Keep #5942 as the canonical sweep verifier slice only if its live diff against its actual base contains `package.json` and `scripts/verify-empty-canonical-sweeps.sh` and no contract, docs, or product-test files.
+      Non-goals:
+      - No validator weakening, no unrelated cleanup, no product behavior edits beyond preserving the already-authored branch changes, and no raw unguarded stack publication.
+      Layer: owner_delegation
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      - package.json
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      - packages/contracts/src/ipc-channels.ts
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - docs/persistence-architecture-single-writer.md: modify
+      - package.json: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      - packages/contracts/src/ipc-channels.ts: modify
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      Acceptance criteria:
+      - #5942's live diff against its actual base contains only `package.json` and `scripts/verify-empty-canonical-sweeps.sh`, or #5942 is explicitly superseded by a replacement canonical-sweep PR with the same property and a clear supersession note.
+      - Every live predecessor or replacement PR created by the split has a body using the canonical PR schema and passes `node scripts/validate-pr-body.mjs` against its actual base.
+      - The stack is published through the repo-local guarded Mergify flow and live PR metadata is audited after publication.
+    prompt: |
+      Review claim:
+      - Restructure #5942 so every live PR in the rebuilt stack contains one validator-compatible review lane and review unit.
+      Review lane:
+      - policy
+      Safety invariant:
+      - Preserve the existing source semantics and change only branch composition, PR bases, PR titles, and PR bodies unless conflict resolution is required by the split.
+      Slice rationale:
+      - The current PR mixes contract, docs, product-test, and tooling-policy files; one operational branch-surgery task can rebuild the published stack without pretending the mixed diff is one review unit.
+      Architectural effect:
+      - No product architecture changes are introduced; the review architecture changes from one mixed PR to a stack of single-unit PRs.
+      Goal:
+      - Make #5942's PR Body check pass by isolating the canonical sweep verifier from contract cleanup, drift proof, and docs edits.
+      Motivation:
+      - CI enforces the declared Review Lane and Review Unit against changed files, and the current branch cannot truthfully pass as `tooling-policy`.
+      Alternative considerations:
+      - Do not relabel the mixed PR as another lane, weaken the validator, or force all files into one local repair commit.
+      Implementation details:
+      - Assume no prior context. Target repository: `Neko-Catpital-Labs/Invoker`. Target PR: #5942, titled `[Remove deprecated merge-mode and retry paths](11) Add canonical sweep verifier`.
+      - First read `skills/make-pr/SKILL.md` and `skills/review-compression/SKILL.md` from `origin/master`.
+      - Reproduce the failure locally using `node scripts/validate-pr-body.mjs` with the live PR body and the live PR diff before publishing any changes.
+      - Do not fix this by changing only PR prose. The current diff contains these files:
+        - `docs/persistence-architecture-single-writer.md`
+        - `package.json`
+        - `packages/app/e2e/drift/drift-battery.spec.ts`
+        - `packages/app/e2e/drift/drift-thundering-herd.spec.ts`
+        - `packages/app/e2e/drift/scenario-catalog.ts`
+        - `packages/contracts/src/ipc-channels.ts`
+        - `scripts/verify-empty-canonical-sweeps.sh`
+      - Rebuild or retarget the stack so each published PR has one review lane and one review unit:
+        - Contract behavior slice: `packages/contracts/src/ipc-channels.ts`.
+        - Proof slice: drift E2E/scenario updates under `packages/app/e2e/drift/**`.
+        - Docs slice: `docs/persistence-architecture-single-writer.md`.
+        - Tooling-policy slice: `package.json` plus `scripts/verify-empty-canonical-sweeps.sh`.
+      - If equivalent predecessor PRs already exist in the live stack, reuse or retarget them instead of duplicating work. If replacement PRs are required, keep clear titles and canonical PR bodies for each slice.
+      - Keep #5942 as the canonical sweep verifier PR only when its live diff against its actual base contains only `package.json` and `scripts/verify-empty-canonical-sweeps.sh`. Otherwise mark #5942 as superseded and create/update the replacement canonical-sweep PR.
+      - Publish Invoker-on-Invoker stack changes through the repo-local make-pr flow and guarded Mergify path. Run the safe stack dry-run first, use the guarded execution path for publication, and immediately audit live PR titles, bodies, bases, and heads after publication.
+      - For every live PR touched or created, validate the body against the exact current base with `node scripts/validate-pr-body.mjs --body-file <file> --changed-files-file <files> --diff-file <diff>`.
+      Non-goals:
+      - No validator weakening, no unrelated cleanup, no product behavior edits beyond preserving the already-authored branch changes, and no raw unguarded stack publication.
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      - package.json
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      - packages/contracts/src/ipc-channels.ts
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - docs/persistence-architecture-single-writer.md: modify
+      - package.json: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      - packages/contracts/src/ipc-channels.ts: modify
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      Acceptance criteria:
+      - #5942's live diff against its actual base contains only `package.json` and `scripts/verify-empty-canonical-sweeps.sh`, or #5942 is explicitly superseded by a replacement canonical-sweep PR with the same property and a clear supersession note.
+      - Every live predecessor or replacement PR created by the split has a body using the canonical PR schema and passes `node scripts/validate-pr-body.mjs` against its actual base.
+      - The stack is published through the repo-local guarded Mergify flow and live PR metadata is audited after publication.
+    dependencies: [reproduce-pr-5942-pr-body-failure]
+
+  - id: verify-pr-5942-canonical-sweep-pr-body
+    description: |
+      Review claim:
+      - Verify the live canonical-sweep PR body after restructuring.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This task only reads GitHub PR metadata and runs the local validator against fetched refs.
+      Slice rationale:
+      - The terminal proof checks the same class of failure that blocked #5942 before handoff.
+      Architectural effect:
+      - None; this is read-only validation of the published PR state.
+      Goal:
+      - Confirm that #5942 is now a tooling-policy-only PR against its actual base.
+      Motivation:
+      - The failed check is specifically `PR Body`, so the final proof should exercise that validator path.
+      Alternative considerations:
+      - Relying on a later GitHub Actions rerun alone would leave the handoff without deterministic local proof.
+      Implementation details:
+      - Fetch #5942's live base and head, ensure the changed files are only the canonical sweep verifier files, and run `node scripts/validate-pr-body.mjs` with the live body and diff.
+      Non-goals:
+      - No source changes, PR body edits, branch pushes, queue changes, or Mergify actions.
+      Layer exception: allowed
+      - Proof depends on the branch-surgery task so the validator runs after publication.
+      Layer: e2e_regression
+      Feature state: active
+    command: |
+      set -eu
+      tmpdir="$(mktemp -d)"
+      trap "rm -rf \"$tmpdir\"" EXIT
+      state="$(gh pr view 5942 --repo Neko-Catpital-Labs/Invoker --json state --jq .state)"
+      test "$state" = "OPEN"
+      base_ref="$(gh pr view 5942 --repo Neko-Catpital-Labs/Invoker --json baseRefName --jq .baseRefName)"
+      gh pr view 5942 --repo Neko-Catpital-Labs/Invoker --json body -q .body > "$tmpdir/pr-body.md"
+      git fetch origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" "+refs/pull/5942/head:refs/remotes/pull/5942/head"
+      git diff --name-only "refs/remotes/origin/${base_ref}...refs/remotes/pull/5942/head" > "$tmpdir/changed-files.txt"
+      git diff "refs/remotes/origin/${base_ref}...refs/remotes/pull/5942/head" > "$tmpdir/pr.diff"
+      printf "%s\n" "Changed files for #5942 against ${base_ref}:"
+      cat "$tmpdir/changed-files.txt"
+      unexpected="$(grep -Ev "^(package.json|scripts/verify-empty-canonical-sweeps.sh)$" "$tmpdir/changed-files.txt" || true)"
+      test -z "$unexpected"
+      node scripts/validate-pr-body.mjs --body-file "$tmpdir/pr-body.md" --changed-files-file "$tmpdir/changed-files.txt" --diff-file "$tmpdir/pr.diff"
+    dependencies: [restructure-pr-5942-stack]
