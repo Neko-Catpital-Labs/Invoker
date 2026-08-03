@@ -1223,6 +1223,55 @@ describe('LaunchDispatcher', () => {
       expect(leases[0]?.resourceKey).toBe('ssh:live');
     });
 
+    it('poll heals a stalled-heartbeat lease on a genuinely live process instead of releasing it', () => {
+      // Same runner instance, task still actively executing -- a stalled
+      // heartbeat here is not the same as an orphaned lease. Releasing it
+      // would let a different task claim the same SSH slot while this one
+      // is still using it.
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:stalled-heartbeat-live',
+        resourceType: 'ssh',
+        holderId: 'holder-live-task',
+        taskId: 'wf-r/still-running',
+        leaseMs: -1,
+        metadata: { runnerInstanceId: 'runner-1' },
+      })).toBe(true);
+      // True orphan: same runner instance, but no active execution for
+      // this task anymore (e.g. it already finished or crashed).
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:orphan-same-runner',
+        resourceType: 'ssh',
+        holderId: 'holder-orphan',
+        taskId: 'wf-r/no-longer-running',
+        leaseMs: -1,
+        metadata: { runnerInstanceId: 'runner-1' },
+      })).toBe(true);
+      // True orphan: a different runner instance entirely (crashed owner).
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:different-owner',
+        resourceType: 'ssh',
+        holderId: 'holder-other-owner',
+        taskId: 'wf-r/still-running',
+        leaseMs: -1,
+        metadata: { runnerInstanceId: 'runner-2-crashed' },
+      })).toBe(true);
+
+      const hasActiveExecution = vi.fn((taskId: string) => taskId === 'wf-r/still-running');
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-sweep-liveness',
+        taskRunnerProvider: () => ({
+          executeTask: vi.fn(),
+          runnerInstanceId: 'runner-1',
+          hasActiveExecution,
+        }),
+      });
+      dispatcher.poll();
+
+      const remainingKeys = adapter.listExecutionResourceLeases().map((l) => l.resourceKey).sort();
+      expect(remainingKeys).toEqual(['ssh:stalled-heartbeat-live']);
+    });
+
     it('re-tops stranded ready work when free scheduler slots remain', () => {
       const strandedTask = {
         id: 'wf/ready',
