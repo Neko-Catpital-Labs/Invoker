@@ -1842,7 +1842,7 @@ describe('SQLiteAdapter', () => {
       expect(adapter.loadLaunchDispatchById(unrelated.id)?.state).toBe('enqueued');
     });
 
-    it.fails('abandonLaunchDispatchesForTasks tags rows with abandon_reason=lifecycle-reset', () => {
+    it('abandonLaunchDispatchesForTasks tags rows with abandon_reason=lifecycle-reset', () => {
       adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
       saveLaunchTask('wf-launch', 'wf-launch/t1', 'attempt-reason-check');
       const row = adapter.enqueueLaunchDispatch({
@@ -1858,7 +1858,7 @@ describe('SQLiteAdapter', () => {
       expect(adapter.countAbandonedLaunchDispatchesForTask('wf-launch/t1')).toBe(0);
     });
 
-    it.fails('countAbandonedLaunchDispatchesForTask only counts stuck-lease abandons, and resetStuckLeaseAbandonCount clears them', () => {
+    it('countAbandonedLaunchDispatchesForTask only counts stuck-lease abandons, and resetStuckLeaseAbandonCount clears them', () => {
       adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
       saveLaunchTask('wf-launch', 'wf-launch/t1', 'attempt-mixed-1');
 
