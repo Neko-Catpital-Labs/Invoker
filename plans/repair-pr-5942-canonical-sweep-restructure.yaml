@@ -1,0 +1,211 @@
+name: "Repair PR 5942 canonical sweep verifier"
+description: |
+  PR #5942 is blocked by a stacked-branch conflict: the head branch still
+  carries stale predecessor commits, while the base branch already contains
+  repaired equivalents. Replaying only the PR's top verifier commit onto the
+  current base is clean, but the verifier then fails because banned
+  `set-merge-mode` references remain in docs, contracts, drift fixtures, and
+  headless rejection tests.
+
+  Standalone workflow waiver: this is a targeted repair workflow for one
+  conflicted PR, and the user asked for one submitted Invoker plan rather than
+  a local repair commit. The workflow still splits the work into separate
+  review-unit tasks so each resulting diff is inspectable.
+
+  Because the target repo is Invoker itself, keep `onFinish: pull_request` and
+  `mergeMode: external_review`; after the branch is ready, publish or update
+  the GitHub stack with Mergify Stacks.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+baseBranch: stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-10-point--46055b80
+
+tasks:
+  - id: update-canonical-surface-docs
+    description: |
+      Review claim: `docs/persistence-architecture-single-writer.md` names the current canonical merge-mode surface.
+      Review lane: docs
+      Safety invariant: This slice is prose-only and leaves runtime files untouched.
+      Slice rationale: Documentation wording is isolated so reviewers can inspect it without app or script edits.
+      Architectural effect: None; the document now describes the current naming contract.
+      Goal: Remove stale prose that makes the canonical sweep fail.
+      Motivation: A repository sweep cannot be useful while docs still teach deprecated names.
+      Alternative considerations: Keeping prose exceptions in the verifier was rejected because docs are a user-facing surface.
+      Implementation details: Edit `docs/persistence-architecture-single-writer.md` to describe only the current merge-mode IPC name and keep the allowed SQLite migration context clear.
+      Non-goals: No runtime edits, no test edits, and no SQLite migration deletion.
+      Layer: docs
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: modify
+      Acceptance criteria:
+      - `rg -n --hidden -e 'set-merge-mode' docs/persistence-architecture-single-writer.md` has no hit that describes a live surface.
+      - The allowed SQLite migration context remains documented if it is present in the file.
+    prompt: |
+      Assume no prior context. You are repairing PR #5942 in `Neko-Catpital-Labs/Invoker`.
+      Review claim: `docs/persistence-architecture-single-writer.md` names the current canonical merge-mode surface.
+      Review lane: docs
+      Safety invariant: This slice is prose-only and leaves runtime files untouched.
+      Slice rationale: Documentation wording is isolated so reviewers can inspect it without app or script edits.
+      Architectural effect: None; the document now describes the current naming contract.
+      Goal: Remove stale prose that makes the canonical sweep fail.
+      Motivation: A repository sweep cannot be useful while docs still teach deprecated names.
+      Alternative considerations: Keeping prose exceptions in the verifier was rejected because docs are a user-facing surface.
+      Implementation details: Edit `docs/persistence-architecture-single-writer.md` to describe only the current merge-mode IPC name and keep the allowed SQLite migration context clear.
+      Non-goals: No runtime edits, no test edits, and no SQLite migration deletion.
+      Files: `docs/persistence-architecture-single-writer.md`.
+      Change types: `docs/persistence-architecture-single-writer.md: modify`.
+      Acceptance criteria: `rg -n --hidden -e 'set-merge-mode' docs/persistence-architecture-single-writer.md` must have no hit that describes a live surface, and the task must leave runtime files unchanged. Deterministic pass condition: the focused grep either exits 1 for no hits or prints only explicitly documented non-live context.
+    dependencies: []
+
+  - id: align-merge-mode-ipc-contract
+    description: |
+      Review claim: `packages/contracts/src/ipc-channels.ts` contains the canonical merge-mode IPC channel shape.
+      Review lane: behavior
+      Safety invariant: This slice edits the shared type declaration and directly related type expectations only.
+      Slice rationale: Contract naming is separated from app call-site edits so reviewers can approve the public channel shape locally.
+      Architectural effect: The type surface now matches the canonical merge-mode channel naming used by callers.
+      Goal: Make the IPC contract stop tripping the canonical sweep.
+      Motivation: The verifier must fail on a deprecated IPC name if it remains in the shared contract.
+      Alternative considerations: Hiding contract hits in a verifier exception was rejected because the contract is a live integration surface.
+      Implementation details: Edit `packages/contracts/src/ipc-channels.ts` and only directly required type-level tests so the merge-mode IPC declaration uses the canonical name.
+      Non-goals: No docs edits, no script edits, and no unrelated IPC channel changes.
+      Layer: transport
+      Feature state: active
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      Acceptance criteria:
+      - `rg -n --hidden -e 'invoker:set-merge-mode' packages/contracts/src/ipc-channels.ts` exits 1.
+      - Any affected TypeScript expectation still names the canonical merge-mode channel.
+    prompt: |
+      Assume no prior context. You are repairing PR #5942 in `Neko-Catpital-Labs/Invoker`.
+      Review claim: `packages/contracts/src/ipc-channels.ts` contains the canonical merge-mode IPC channel shape.
+      Review lane: behavior
+      Safety invariant: This slice edits the shared type declaration and directly related type expectations only.
+      Slice rationale: Contract naming is separated from app call-site edits so reviewers can approve the public channel shape locally.
+      Architectural effect: The type surface now matches the canonical merge-mode channel naming used by callers.
+      Goal: Make the IPC contract stop tripping the canonical sweep.
+      Motivation: The verifier must fail on a deprecated IPC name if it remains in the shared contract.
+      Alternative considerations: Hiding contract hits in a verifier exception was rejected because the contract is a live integration surface.
+      Implementation details: Edit `packages/contracts/src/ipc-channels.ts` and only directly required type-level tests so the merge-mode IPC declaration uses the canonical name.
+      Non-goals: No docs edits, no script edits, and no unrelated IPC channel changes.
+      Files: `packages/contracts/src/ipc-channels.ts`.
+      Change types: `packages/contracts/src/ipc-channels.ts: modify`.
+      Acceptance criteria: `rg -n --hidden -e 'invoker:set-merge-mode' packages/contracts/src/ipc-channels.ts` must exit 1, and any affected TypeScript expectation must still name the canonical merge-mode channel. Deterministic pass condition: the focused grep exits 1 and relevant package checks exit code 0.
+    dependencies: []
+
+  - id: align-app-merge-mode-surfaces
+    description: |
+      Review claim: App command fixtures use canonical merge-mode naming while preserving negative coverage for the retired literal.
+      Review lane: behavior
+      Safety invariant: This slice is limited to app command metadata, app tests, and drift fixtures named by the failed sweep.
+      Slice rationale: App-facing naming is isolated from prose and verifier script edits so reviewer focus stays on user-visible app behavior.
+      Architectural effect: The app no longer presents the retired merge-mode literal as an active fixture or callable command.
+      Goal: Make app files stop tripping the canonical sweep while preserving useful negative coverage.
+      Motivation: The direct replay fails on app hits in headless command metadata, headless tests, and drift fixtures.
+      Alternative considerations: Dropping negative coverage entirely was rejected because the retired literal should still be proven unavailable when that can be done without making it look live.
+      Implementation details: Edit `packages/app/src/headless-command-registry.ts`, `packages/app/src/__tests__/headless-client.test.ts`, and the drift files that still contain the retired literal. Keep the canonical command path covered and keep any negative fixture narrow enough for the verifier to classify as non-live.
+      Non-goals: No docs edits, no verifier implementation edits, and no unrelated app command behavior.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/app/src/headless-command-registry.ts
+      - packages/app/src/__tests__/headless-client.test.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      Change types:
+      - packages/app/src/headless-command-registry.ts: modify
+      - packages/app/src/__tests__/headless-client.test.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      Acceptance criteria:
+      - `rg -n --hidden -e 'set-merge-mode' packages/app/src/headless-command-registry.ts packages/app/e2e/drift packages/app/src/__tests__/headless-client.test.ts` prints no live fixture or callable command hit.
+      - `cd packages/app && pnpm test -- headless-client.test.ts` exits 0 if that focused test selector is supported; otherwise run the nearest package-local headless client test command and require exit code 0.
+    prompt: |
+      Assume no prior context. You are repairing PR #5942 in `Neko-Catpital-Labs/Invoker`.
+      Review claim: App command fixtures use canonical merge-mode naming while preserving negative coverage for the retired literal.
+      Review lane: behavior
+      Safety invariant: This slice is limited to app command metadata, app tests, and drift fixtures named by the failed sweep.
+      Slice rationale: App-facing naming is isolated from prose and verifier script edits so reviewer focus stays on user-visible app behavior.
+      Architectural effect: The app no longer presents the retired merge-mode literal as an active fixture or callable command.
+      Goal: Make app files stop tripping the canonical sweep while preserving useful negative coverage.
+      Motivation: The direct replay fails on app hits in headless command metadata, headless tests, and drift fixtures.
+      Alternative considerations: Dropping negative coverage entirely was rejected because the retired literal should still be proven unavailable when that can be done without making it look live.
+      Implementation details: Edit `packages/app/src/headless-command-registry.ts`, `packages/app/src/__tests__/headless-client.test.ts`, `packages/app/e2e/drift/scenario-catalog.ts`, `packages/app/e2e/drift/drift-battery.spec.ts`, and `packages/app/e2e/drift/drift-thundering-herd.spec.ts`. Keep the canonical command path covered and keep any negative fixture narrow enough for the verifier to classify as non-live.
+      Non-goals: No docs edits, no verifier implementation edits, and no unrelated app command behavior.
+      Files: `packages/app/src/headless-command-registry.ts`, `packages/app/src/__tests__/headless-client.test.ts`, `packages/app/e2e/drift/scenario-catalog.ts`, `packages/app/e2e/drift/drift-battery.spec.ts`, `packages/app/e2e/drift/drift-thundering-herd.spec.ts`.
+      Change types: `packages/app/src/headless-command-registry.ts: modify`; `packages/app/src/__tests__/headless-client.test.ts: modify`; `packages/app/e2e/drift/scenario-catalog.ts: modify`; `packages/app/e2e/drift/drift-battery.spec.ts: modify`; `packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify`.
+      Acceptance criteria: `rg -n --hidden -e 'set-merge-mode' packages/app/src/headless-command-registry.ts packages/app/e2e/drift packages/app/src/__tests__/headless-client.test.ts` must print no live fixture or callable command hit. Verify with a package-local app test command for `headless-client.test.ts` or the nearest supported selector and require exit code 0. Deterministic pass condition: focused grep and focused app test both pass.
+    dependencies:
+      - align-merge-mode-ipc-contract
+
+  - id: add-canonical-sweep-proof
+    description: |
+      Review claim: The repository sweep script defines the banned-literal proof for canonical merge-mode and restart names.
+      Review lane: policy
+      Safety invariant: This slice only adds repository tooling and a package entry after docs and app surfaces are aligned.
+      Slice rationale: Tooling policy is separate from product edits so reviewers can inspect the exact search rules independently.
+      Architectural effect: None; the new script is a deterministic guard over existing source paths.
+      Goal: Add the verifier that PR #5942 intended, with pass/fail behavior that matches the repaired source tree.
+      Motivation: The submitted verifier failed after a direct replay, so the rebuilt proof must encode the final accepted exceptions explicitly.
+      Alternative considerations: A broad allowlist was rejected because it would let active deprecated references drift back into the repository.
+      Implementation details: Add or update `scripts/verify-empty-canonical-sweeps.sh` and `package.json` so `pnpm run verify-empty-canonical-sweeps` checks the approved source roots, permits only explicit non-live exceptions, and preserves the allowed SQLite migration exception for `merge_mode = 'github'`.
+      Non-goals: No product behavior edits in this task and no unrelated package scripts.
+      Layer: e2e_regression
+      Layer exception: allowed because this proof task intentionally waits for docs and app-source alignment before checking the whole tree.
+      Feature state: active
+      Files:
+      - package.json
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - package.json: modify
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      Acceptance criteria:
+      - `pnpm run verify-empty-canonical-sweeps` exits 0 from the repo root.
+      - The script fails on unapproved `set-merge-mode`, restart-route, or stale compatibility-label hits.
+      - The script preserves the allowed SQLite migration exception for `merge_mode = 'github'`.
+    prompt: |
+      Assume no prior context. You are repairing PR #5942 in `Neko-Catpital-Labs/Invoker`.
+      Review claim: The repository sweep script defines the banned-literal proof for canonical merge-mode and restart names.
+      Review lane: policy
+      Safety invariant: This slice only adds repository tooling and a package entry after docs and app surfaces are aligned.
+      Slice rationale: Tooling policy is separate from product edits so reviewers can inspect the exact search rules independently.
+      Architectural effect: None; the new script is a deterministic guard over existing source paths.
+      Goal: Add the verifier that PR #5942 intended, with pass/fail behavior that matches the repaired source tree.
+      Motivation: The submitted verifier failed after a direct replay, so the rebuilt proof must encode the final accepted exceptions explicitly.
+      Alternative considerations: A broad allowlist was rejected because it would let active deprecated references drift back into the repository.
+      Implementation details: Add or update `scripts/verify-empty-canonical-sweeps.sh` and `package.json` so `pnpm run verify-empty-canonical-sweeps` checks the approved source roots, permits only explicit non-live exceptions, and preserves the allowed SQLite migration exception for `merge_mode = 'github'`.
+      Non-goals: No product behavior edits in this task and no unrelated package scripts.
+      Files: `package.json`, `scripts/verify-empty-canonical-sweeps.sh`.
+      Change types: `package.json: modify`; `scripts/verify-empty-canonical-sweeps.sh: create`.
+      Acceptance criteria: `pnpm run verify-empty-canonical-sweeps` must exit 0 from the repo root; the script must fail on unapproved `set-merge-mode`, restart-route, or stale compatibility-label hits; the script must preserve the allowed SQLite migration exception for `merge_mode = 'github'`. Deterministic pass condition: the package script exits 0 and prints a clear PASS line.
+    dependencies:
+      - update-canonical-surface-docs
+      - align-app-merge-mode-surfaces
+
+  - id: verify-full-suite
+    description: |
+      Review claim: The restructured verifier PR remains compatible with the repository-wide required test surface.
+      Review lane: proof
+      Safety invariant: This task is read-only and runs after the focused verifier passes.
+      Slice rationale: The standalone implementation workflow ends with the required full-suite gate for an Invoker-on-Invoker pull-request plan.
+      Architectural effect: None; this is verification only.
+      Goal: Run the full test surface after the verifier restructuring.
+      Motivation: The repair touches docs, app behavior, contracts, and tooling, so the final gate should catch integration regressions.
+      Alternative considerations: Focused grep proof alone was rejected because it cannot prove the edited TypeScript surfaces still build.
+      Implementation details: Execute `pnpm run test:all` from the repo root and require exit code 0.
+      Non-goals: No code edits in this task.
+      Layer: e2e_regression
+      Layer exception: allowed because repository-wide verification must depend on every lower-order and docs/tooling repair slice.
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies:
+      - update-canonical-surface-docs
+      - align-merge-mode-ipc-contract
+      - align-app-merge-mode-surfaces
+      - add-canonical-sweep-proof
