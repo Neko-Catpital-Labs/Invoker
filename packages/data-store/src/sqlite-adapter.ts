@@ -3586,14 +3586,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   /**
-   * Durable, generation-independent count of how many times a task's launch
-   * dispatch has been abandoned (any reason). Each `prepareTaskForNewAttempt`
-   * call creates a new row, so this is the only place the total survives
-   * across attempts -- used to cap `abandonStuckLeases` retries per task.
+   * Durable count of stuck-lease abandons for a task, used to cap
+   * `abandonStuckLeases` retries. Scoped to `abandon_reason = 'stuck-lease'`
+   * so cancel/retry/recreate abandons don't erode this budget.
    */
   countAbandonedLaunchDispatchesForTask(taskId: string): number {
     const row = this.queryOne(
-      `SELECT COUNT(*) as count FROM task_launch_dispatch WHERE task_id = ? AND state = 'abandoned'`,
+      `SELECT COUNT(*) as count FROM task_launch_dispatch WHERE task_id = ? AND state = 'abandoned' AND abandon_reason = 'stuck-lease'`,
       [taskId],
     );
     return row ? Number(row.count) : 0;
