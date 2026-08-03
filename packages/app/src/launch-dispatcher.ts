@@ -35,6 +35,13 @@ export type LaunchDispatcherPersistence = Pick<
   | 'logEvent'
 > & {
   releaseExpiredExecutionResourceLeases?(nowIso?: string): number;
+  listExpiredExecutionResourceLeases?(nowIso?: string): Array<{
+    resourceKey: string;
+    holderId: string;
+    taskId?: string;
+    metadata?: unknown;
+  }>;
+  renewExecutionResourceLease?(resourceKey: string, holderId: string): boolean;
 };
 
 /**
@@ -70,6 +77,13 @@ export interface LaunchDispatcherTaskRunner {
     task: TaskState,
     dispatchOpts?: { dispatchId: number; launchOutbox: LaunchOutboxAck },
   ): Promise<void>;
+  /**
+   * Optional: lets `sweepExpiredResourceLeases` tell a stalled-heartbeat
+   * lease on a genuinely live process apart from a true orphan before
+   * deciding whether to renew or release it.
+   */
+  readonly runnerInstanceId?: string;
+  hasActiveExecution?(taskId: string): boolean;
 }
 
 export interface LaunchDispatcherOptions {

@@ -382,6 +382,16 @@ export class TaskRunner {
   }
 
   /**
+   * True when this TaskRunner instance genuinely still has a live executor
+   * for `taskId`. Used to distinguish "the heartbeat stalled but the
+   * process is still alive" from "the process is actually gone" before
+   * treating a resource lease as safe to hand to a different task.
+   */
+  hasActiveExecution(taskId: string): boolean {
+    return this.resolveActiveExecution(taskId) !== undefined;
+  }
+
+  /**
    * Stop the executor child for a task that is currently in-flight (after orchestrator.cancelTask).
    */
   async killActiveExecution(taskId: string): Promise<boolean> {
