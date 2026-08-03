@@ -62,10 +62,7 @@ describe('launch-dispatcher stuck-lease retry storm', () => {
     };
   }
 
-  // Expected to fail until the next slice in this stack lands the durable
-  // per-task retry cap: abandonStuckLeases has no stopper today, so this
-  // currently retries every single cycle, unbounded.
-  it.fails('does not retry a task whose launch dispatch never completes forever', () => {
+  it('does not retry a task whose launch dispatch never completes forever', () => {
     adapter.saveWorkflow({
       id: 'wf-storm',
       name: 'wf-storm',
