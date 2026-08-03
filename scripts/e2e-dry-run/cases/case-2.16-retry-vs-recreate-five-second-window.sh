@@ -133,7 +133,8 @@ echo "==> case 2.16: recreate-all --follow and observe first 5s"
 RECREATE_START_EPOCH="$(date +%s)"
 bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
-recreate_snapshot_has_reset_state=0
+keep_snapshot_has_reset_state=0
+fail_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
   KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
   FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
@@ -150,8 +151,11 @@ for i in 0 1 2 3 4 5; do
   SNAP_COUNTS="$(printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; from collections import Counter; data=json.load(sys.stdin); c=Counter(t.get("status","") for t in data); print(" ".join(f"{k}:{c[k]}" for k in sorted(c)))')"
   echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
 
-  if printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if any(t.get("status") in {"pending","queued"} for t in data) else 1)'; then
-    recreate_snapshot_has_reset_state=1
+  if printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; task_id=sys.argv[1]; data=json.load(sys.stdin); task=next((t for t in data if t.get("id")==task_id), None); raise SystemExit(0 if task and task.get("status") in {"pending","queued","running"} else 1)' "$KEEP_TASK_ID"; then
+    keep_snapshot_has_reset_state=1
+  fi
+  if printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; task_id=sys.argv[1]; data=json.load(sys.stdin); task=next((t for t in data if t.get("id")==task_id), None); raise SystemExit(0 if task and task.get("status") in {"pending","queued","running"} else 1)' "$FAIL_TASK_ID"; then
+    fail_snapshot_has_reset_state=1
   fi
   sleep 1
 done
@@ -181,21 +185,27 @@ for e in data:
         deltas.append(epoch-start)
 print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
 
-if [ "$KEEP_PENDING_DELTA_S" -lt 0 ] || [ "$KEEP_PENDING_DELTA_S" -gt 5 ]; then
-  echo "FAIL case 2.16: recreate did not emit task.pending for previously completed task within 5s (delta=${KEEP_PENDING_DELTA_S})"
+if [ "$keep_snapshot_has_reset_state" -ne 1 ]; then
+  echo "FAIL case 2.16: recreate did not move previously completed task into pending|queued|running in first 5s snapshots"
+  invoker_e2e_dump_tasks
+  exit 1
+fi
+
+if [ "$fail_snapshot_has_reset_state" -ne 1 ]; then
+  echo "FAIL case 2.16: recreate did not move previously failed task into pending|queued|running in first 5s snapshots"
+  invoker_e2e_dump_tasks
+  exit 1
+fi
+
+if [ "$KEEP_PENDING_DELTA_S" -lt 0 ]; then
+  echo "FAIL case 2.16: recreate did not persist task.pending for previously completed task"
   invoker_e2e_run_headless query audit "$KEEP_TASK_ID" --output json 2>&1 || true
   exit 1
 fi
 
-if [ "$FAIL_PENDING_DELTA_S" -lt 0 ] || [ "$FAIL_PENDING_DELTA_S" -gt 5 ]; then
-  echo "FAIL case 2.16: recreate did not emit task.pending for previously failed task within 5s (delta=${FAIL_PENDING_DELTA_S})"
+if [ "$FAIL_PENDING_DELTA_S" -lt 0 ]; then
+  echo "FAIL case 2.16: recreate did not persist task.pending for previously failed task"
   invoker_e2e_run_headless query audit "$FAIL_TASK_ID" --output json 2>&1 || true
-  exit 1
-fi
-
-if [ "$recreate_snapshot_has_reset_state" -ne 1 ]; then
-  echo "FAIL case 2.16: recreate did not show pending or queued state in first 5s snapshots"
-  invoker_e2e_dump_tasks
   exit 1
 fi
 

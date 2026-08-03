@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+if [ -n "${TMPDIR:-}" ]; then
+  mkdir -p "$TMPDIR"
+fi
+
 EXTENDED="${INVOKER_TEST_ALL_EXTENDED:-0}"
 DANGEROUS="${INVOKER_TEST_ALL_DANGEROUS:-0}"
 FAIL_FAST="${INVOKER_TEST_ALL_FAIL_FAST:-0}"
