@@ -130,6 +130,14 @@ async function expectPaneReady(taskId: string) {
   return pane;
 }
 
+async function flushDrawerFitFrames(count = 2): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+  }
+}
+
 async function selectWorkflow(): Promise<void> {
   await waitFor(() => {
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
@@ -227,6 +235,48 @@ describe('Terminal drawer (component)', () => {
       expect(xtermMock.fitInstances[0].fit.mock.calls.length).toBeGreaterThan(partialFitCalls);
       expect(xtermMock.instances[0].refresh.mock.calls.length).toBeGreaterThan(partialRefreshCalls);
       expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
+    });
+  });
+
+  it('does not fit or resize the active pane while the drawer is minimized', async () => {
+    const session = makeTerminalSession('task-alpha');
+    const props = {
+      onCycle: vi.fn(),
+      sessions: [session],
+      activeSessionId: session.sessionId,
+      onSelectSession: vi.fn(),
+      onCloseSession: vi.fn(),
+    };
+
+    const { rerender } = render(<TerminalDrawer state="partial" {...props} />);
+    await expectPaneReady('task-alpha');
+    await waitFor(() => {
+      expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
+    await flushDrawerFitFrames();
+
+    const fit = xtermMock.fitInstances[0];
+    const term = xtermMock.instances[0];
+    expect(fit).toBeTruthy();
+    expect(term).toBeTruthy();
+    fit?.fit.mockClear();
+    term?.refresh.mockClear();
+    vi.mocked(mock.api.terminalResize).mockClear();
+
+    rerender(<TerminalDrawer state="minimized" {...props} />);
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    await flushDrawerFitFrames();
+
+    expect(fit?.fit).not.toHaveBeenCalled();
+    expect(term?.refresh).not.toHaveBeenCalled();
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
+
+    rerender(<TerminalDrawer state="partial" {...props} />);
+    expect(screen.getByTestId('terminal-drawer-body')).toBeVisible();
+    await waitFor(() => {
+      expect(fit?.fit).toHaveBeenCalled();
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
     });
   });
 
