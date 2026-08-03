@@ -1,0 +1,152 @@
+name: "Repair PR 7054 branch structure"
+description: |
+  PR #7054 fails the PR Body check because its historical branch diff still
+  includes stale stack files from admin-bypass/CI-regression routing work, while
+  the PR body correctly describes only the SSH executor remote-command failure
+  logging slice.
+
+  Current master already contains the intended timeout/retry and remote-command
+  logging behavior through merged PRs #7053 and #7089. This workflow rebuilds
+  the existing PR branch from current master, carries forward only any genuinely
+  unlanded SSH executor delta if one remains, validates the live PR body against
+  that cleaned diff, then updates the existing head branch with a lease.
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+baseBranch: master
+
+tasks:
+  - id: rebuild-pr-7054-head
+    description: |
+      Rebuild the existing PR #7054 branch so it no longer carries stale stack files.
+      Review claim: The branch restructure makes PR #7054's live diff match its SSH executor logging review claim, or proves the PR is fully superseded by master.
+      Review lane: cleanup
+      Safety invariant: The workflow starts from current master, preserves master-side changes, and uses the captured head SHA so the existing PR branch is updated only if it has not moved.
+      Slice rationale: One cleanup slice: remove stale branch ancestry from this PR without adding new product behavior.
+      Architectural effect: None; this changes branch structure only, not the runtime architecture.
+      Goal: Leave local HEAD as current master plus only any genuinely unlanded SSH executor delta for PR #7054.
+      Motivation: The PR Body validator rejects the current branch because it spans product, tooling-policy, proof, and docs units; no body-only edit can make that mixed diff valid.
+      Alternative considerations: Widening the PR body was rejected because the validator requires one review unit per PR. A normal local fix commit was rejected because the historical merge-base would still expose stale stack files.
+      Implementation details: Fetch the live PR branch, confirm it is still at 5bc44c1eaa2a328b1f7e1b0de90d60ac305bd01c, rebuild from origin/master, skip already-landed commits from #7053 and #7089, and carry forward only a non-empty SSH executor delta if master is missing it.
+      Non-goals: No tooling-policy edits, no docs edits, no repro-file edits, no unrelated conflict repair commits, and no push from this task.
+      Layer: owner_delegation
+      Feature state: active
+      Files: packages/execution-engine/src/ssh-executor.ts; packages/execution-engine/src/__tests__/ssh-executor.test.ts
+      Change types:
+      - packages/execution-engine/src/ssh-executor.ts: modify
+      - packages/execution-engine/src/__tests__/ssh-executor.test.ts: modify
+      Acceptance criteria:
+      - The final diff against origin/master is empty or limited to the two SSH executor files.
+      - The final diff does not include scripts/** or skills/**.
+      - Existing master changes in the SSH executor are preserved.
+    executionAgent: codex
+    prompt: |
+      Goal: Repair existing PR #7054 by rebuilding its head branch structure so the PR Body check can validate the live PR body against a one-unit diff.
+      Review lane: cleanup
+      Motivation: PR #7054 fails only because the branch diff still includes stale admin-bypass/CI-regression stack files:
+      - scripts/mergify_admin_requeue_async_repair.py
+      - scripts/repro/repro-e2e-regression-watch.mjs
+      - scripts/test_mergify_admin_requeue_async_repair.py
+      - skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml
+      Alternative considerations: Do not broaden the PR body to cover those files; the PR Body validator requires one review unit per PR. Do not resolve conflicts by deleting newer master changes.
+      Implementation details:
+      - Assume no prior context. Work in the workflow checkout for Neko-Catpital-Labs/Invoker.
+      - Target PR: https://github.com/Neko-Catpital-Labs/Invoker/pull/7054
+      - Head branch: stack/EdbertChan/remote-command-failure-logging/log-remote-cmd-failure-finalize-step--04170825
+      - Captured head SHA: 5bc44c1eaa2a328b1f7e1b0de90d60ac305bd01c
+      - Base branch: master
+      - First run `git fetch origin master stack/EdbertChan/remote-command-failure-logging/log-remote-cmd-failure-finalize-step--04170825`.
+      - Confirm the remote head branch still resolves to 5bc44c1eaa2a328b1f7e1b0de90d60ac305bd01c. If it moved, stop without edits and report stale-head.
+      - Start from current `origin/master`, not from the stale branch tree.
+      - Current master already contains PR #7053 (`1680b41b782e32b88fa74a64510c2ed0f26d4350`) and PR #7089 (`7531d904e6dc4ae3e7ce3703a50b705434cfab3e`). Skip any #7054 commits whose behavior is already present there, including conflicts from applying `3fe232c1e` and empty application of `4089eca7c`.
+      - If no non-empty delta remains, leave HEAD exactly at `origin/master`; the downstream safe-push task will update the PR branch to the no-op/superseded state with a lease.
+      - If a non-empty delta remains, it must touch only `packages/execution-engine/src/ssh-executor.ts` and `packages/execution-engine/src/__tests__/ssh-executor.test.ts`; commit that local residual cleanup/replay with a clear message.
+      - Do not push. The downstream `safe-push-pr-7054` task owns the only remote branch update.
+      Non-goals: No edits to scripts/**, skills/**, docs/**, `.github/**`, unrelated tests, PR queue labels, or Mergify stack metadata.
+      Acceptance criteria:
+      - `git diff --name-only origin/master...HEAD` is empty or lists only the two SSH executor files.
+      - `node scripts/validate-pr-body-local.mjs --body-file <live-body-file> --base master --base-remote origin` exits 0.
+      - `cd packages/execution-engine && pnpm test -- ssh-executor` exits 0.
+    dependencies: []
+
+  - id: validate-pr-7054-shape
+    description: |
+      Validate the rebuilt branch against the live PR body before any remote update.
+      Review claim: The local rebuilt branch has a PR Body-compatible diff shape.
+      Review lane: proof
+      Safety invariant: This task is read-only and fails before push if any stale scripts or skills files remain in the diff.
+      Slice rationale: One proof slice: validate the exact body/diff contract that failed in CI.
+      Architectural effect: None.
+      Goal: Prove the rebuilt branch no longer spans docs, policy, or proof files.
+      Motivation: The failed check is deterministic and should be reproduced locally before changing the remote branch.
+      Alternative considerations: Waiting for CI without local validation was rejected because the failure reproduces with the checked-in validator.
+      Implementation details: Fetch the live body, reject unexpected changed files, run the local PR body validator, then rerun the focused SSH executor test surface.
+      Non-goals: No code edits and no remote writes.
+      Layer: e2e_regression
+      Feature state: active
+    command: |
+      set -eu
+      body_file="$(mktemp)"
+      trap 'rm -f "$body_file"' EXIT
+      gh pr view 7054 --repo Neko-Catpital-Labs/Invoker --json body --jq .body > "$body_file"
+      changed="$(git diff --name-only origin/master...HEAD)"
+      unexpected="$(printf '%s\n' "$changed" | awk 'NF && $0 != "packages/execution-engine/src/ssh-executor.ts" && $0 != "packages/execution-engine/src/__tests__/ssh-executor.test.ts" { print }')"
+      if [ -n "$unexpected" ]; then
+        printf 'Unexpected files remain in PR #7054 diff:\n%s\n' "$unexpected" >&2
+        exit 1
+      fi
+      node scripts/validate-pr-body-local.mjs --body-file "$body_file" --base master --base-remote origin
+      cd packages/execution-engine
+      pnpm test -- ssh-executor
+    dependencies:
+      - rebuild-pr-7054-head
+
+  - id: safe-push-pr-7054
+    description: |
+      Update the existing PR #7054 branch only if its remote head is unchanged.
+      Review claim: The cleaned branch can replace the stale PR head without racing another writer.
+      Review lane: cleanup
+      Safety invariant: `scripts/pr_worker_safe_push.py` uses force-with-lease against the captured SHA, so the push fails instead of overwriting a branch that moved.
+      Slice rationale: One publication slice: perform the existing-PR branch update only after local validation passes.
+      Architectural effect: None.
+      Goal: Replace the stale branch head with the validated rebuilt HEAD.
+      Motivation: The PR Body check runs on the remote PR branch, so the cleaned local branch must be published safely.
+      Alternative considerations: Raw `git push --force` was rejected; use the repo's lease-checking helper.
+      Implementation details: Push local HEAD to the existing PR branch with expected head 5bc44c1eaa2a328b1f7e1b0de90d60ac305bd01c.
+      Non-goals: No PR body edits, no Mergify stack push, no label changes.
+      Layer: owner_delegation
+      Feature state: active
+    command: "python3 scripts/pr_worker_safe_push.py --branch 'stack/EdbertChan/remote-command-failure-logging/log-remote-cmd-failure-finalize-step--04170825' --expected-head '5bc44c1eaa2a328b1f7e1b0de90d60ac305bd01c' --cwd ."
+    dependencies:
+      - validate-pr-7054-shape
+
+  - id: verify-live-pr-7054-head
+    description: |
+      Re-check the live PR branch after the safe update.
+      Review claim: The published PR #7054 head matches the validated local branch.
+      Review lane: proof
+      Safety invariant: This task is read-only and only validates the remote branch state after the lease-guarded push.
+      Slice rationale: One proof slice: confirm the remote PR head now has the validated diff shape.
+      Architectural effect: None.
+      Goal: Confirm PR #7054's live branch now matches local HEAD and remains PR Body-compatible.
+      Motivation: The failure occurred in CI against the live PR branch, so post-push verification should read that same branch.
+      Alternative considerations: Relying only on the push exit code was rejected because the PR Body check uses live GitHub PR metadata.
+      Implementation details: Fetch refs/pull/7054/head, compare it with local HEAD, and rerun the local PR body validator against the live body.
+      Non-goals: No code edits and no remote writes.
+      Layer: e2e_regression
+      Feature state: active
+    command: |
+      set -eu
+      body_file="$(mktemp)"
+      trap 'rm -f "$body_file"' EXIT
+      git fetch --no-tags --depth=1 origin "+refs/pull/7054/head:refs/remotes/pull/7054/head"
+      live_head="$(git rev-parse refs/remotes/pull/7054/head^{commit})"
+      local_head="$(git rev-parse HEAD)"
+      if [ "$live_head" != "$local_head" ]; then
+        printf 'Live PR head %s did not match validated local HEAD %s\n' "$live_head" "$local_head" >&2
+        exit 1
+      fi
+      gh pr view 7054 --repo Neko-Catpital-Labs/Invoker --json body --jq .body > "$body_file"
+      node scripts/validate-pr-body-local.mjs --body-file "$body_file" --base master --base-remote origin
+    dependencies:
+      - safe-push-pr-7054
