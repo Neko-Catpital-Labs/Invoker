@@ -130,8 +130,11 @@ if [ "$retry_fail_left_failed" -ne 1 ]; then
 fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
+RECREATE_WORKFLOWS_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-workflows.XXXXXX")"
+printf '%s\n' "$WF_ID" > "$RECREATE_WORKFLOWS_FILE"
 RECREATE_START_EPOCH="$(date +%s)"
-bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
+env INVOKER_HEADLESS_WORKFLOW_IDS_FILE="$RECREATE_WORKFLOWS_FILE" \
+  bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
@@ -201,4 +204,5 @@ fi
 
 rm -f "$PLAN_PATH"
 rm -f "$SUBMIT_LOG"
+rm -f "$RECREATE_WORKFLOWS_FILE"
 echo "PASS case 2.16 (retry preserved completed; recreate reset completed task within 5s)"
