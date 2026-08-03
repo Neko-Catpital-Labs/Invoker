@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / terminal-garbling',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,16 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const terminalGarblingCommand = defs.get('playwright / terminal-garbling').verifyCommand;
+  if (!terminalGarblingCommand.includes('ci-playwright-terminal-garbling')) {
+    fail('terminal-garbling command must preserve the CI run label');
+  }
+  if (!terminalGarblingCommand.includes('e2e/task-terminal-drawer-minimize-garble-repro.spec.ts')) {
+    fail('terminal-garbling command must include the drawer minimize repro');
+  }
+  if (terminalGarblingCommand.includes('No local verify command is mapped')) {
+    fail('terminal-garbling command must not render the fallback verifier');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -173,6 +184,22 @@ function testPlanVarsAndDryRunRendering() {
     rmSync(outRoot, { recursive: true, force: true });
   }
   console.log('[repro-e2e-regression-watch] plan vars + dry-run rendering: PASS');
+}
+
+function testTerminalGarblingPlanVarsUseMappedVerifier() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(425, 'abc425def456abc123def456abc123def456ab4', [
+    fakeJob('playwright / terminal-garbling', 'failure', 42),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', buildCiJobDefinitions());
+  if (!vars.verify_command.includes('ci-playwright-terminal-garbling')) {
+    fail('terminal-garbling plan vars must use the mapped Playwright verifier');
+  }
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('terminal-garbling plan vars must not use the fallback verifier');
+  }
+  console.log('[repro-e2e-regression-watch] terminal-garbling plan vars mapping: PASS');
 }
 
 function testLiveSubmissionUsesNoTrack() {
@@ -229,6 +256,7 @@ function main() {
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
   testPlanVarsAndDryRunRendering();
+  testTerminalGarblingPlanVarsUseMappedVerifier();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();
   console.log('[repro-e2e-regression-watch] all checks passed');
