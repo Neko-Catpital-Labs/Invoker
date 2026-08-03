@@ -13,5 +13,6 @@ export * from './hourly-snapshot-retention.ts';
 export * from './invoker-config-io.ts';
 export * from './config-diagnostics.ts';
 export * from './prerequisites.ts';
+export * from './remote-target-onboarding.ts';
 export * from './headless-owner-launch.ts';
 export { EXTERNAL_DEPENDENCIES, DEFAULT_DRAFTER_MCP_PACKAGE_SPEC } from './external-dependencies.ts';
