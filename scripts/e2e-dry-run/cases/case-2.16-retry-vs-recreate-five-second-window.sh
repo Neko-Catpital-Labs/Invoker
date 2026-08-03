@@ -10,7 +10,7 @@ export INVOKER_DISABLE_EXCLUSIVE_LOCKING=1
 # sampling first-5s state changes. Keep shared WAL here; production owners
 # still exercise exclusive locking separately.
 invoker_e2e_init
-trap invoker_e2e_cleanup EXIT
+trap 'rm -f "${RECREATE_WORKFLOWS_FILE:-}"; invoker_e2e_cleanup' EXIT
 
 cd "$INVOKER_E2E_REPO_ROOT"
 unset ELECTRON_RUN_AS_NODE
@@ -130,8 +130,10 @@ if [ "$retry_fail_left_failed" -ne 1 ]; then
 fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
+RECREATE_WORKFLOWS_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-workflows.XXXXXX")"
+printf '%s\n' "$WF_ID" > "$RECREATE_WORKFLOWS_FILE"
 RECREATE_START_EPOCH="$(date +%s)"
-bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
+INVOKER_HEADLESS_WORKFLOW_IDS_FILE="$RECREATE_WORKFLOWS_FILE" bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
