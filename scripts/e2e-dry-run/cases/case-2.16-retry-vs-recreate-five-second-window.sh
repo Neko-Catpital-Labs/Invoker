@@ -130,8 +130,12 @@ if [ "$retry_fail_left_failed" -ne 1 ]; then
 fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
+# Keep the stopwatch on the reset path. Workflow discovery cold-starts another
+# headless client and can consume the entire five-second CI window by itself.
+RECREATE_WORKFLOWS_FILE="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-recreate-workflows.XXXXXX")"
+printf '%s\n' "$WF_ID" > "$RECREATE_WORKFLOWS_FILE"
 RECREATE_START_EPOCH="$(date +%s)"
-bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
+INVOKER_HEADLESS_WORKFLOW_IDS_FILE="$RECREATE_WORKFLOWS_FILE" bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
 for i in 0 1 2 3 4 5; do
@@ -157,6 +161,7 @@ for i in 0 1 2 3 4 5; do
 done
 kill "$RECREATE_PID" 2>/dev/null || true
 wait "$RECREATE_PID" 2>/dev/null || true
+rm -f "$RECREATE_WORKFLOWS_FILE"
 
 KEEP_PENDING_DELTA_S="$(invoker_e2e_case_216_query_json query audit "$KEEP_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
 for e in data:
