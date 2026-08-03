@@ -23,7 +23,7 @@
 #   ./invoker-ctl edit-type <taskId> <type>        Change a task's executor type
 #   ./invoker-ctl edit-agent <taskId> <agent>      Change a task's execution agent
 #   ./invoker-ctl delete-workflow <workflowId>     Delete a workflow
-#   ./invoker-ctl set-merge-mode <id> <mode>       Set workflow merge mode
+#   ./invoker-ctl set merge-mode <id> <mode>       Set workflow merge mode
 
 set -euo pipefail
 
@@ -84,15 +84,19 @@ case "${1:-}" in
     curl -sf -X DELETE "$BASE/api/workflows/$2" | fmt '.'
     ;;
 
-  set-merge-mode)
-    if [ -z "${2:-}" ] || [ -z "${3:-}" ]; then
-      echo "Usage: invoker-ctl set-merge-mode <workflowId> <mode>" >&2
+  set)
+    if [ "${2:-}" != "merge-mode" ]; then
+      echo "Usage: invoker-ctl set merge-mode <workflowId> <mode>" >&2
+      exit 1
+    fi
+    if [ -z "${3:-}" ] || [ -z "${4:-}" ]; then
+      echo "Usage: invoker-ctl set merge-mode <workflowId> <mode>" >&2
       echo "  mode: manual | automatic | external_review" >&2
       exit 1
     fi
     curl -sf -X POST -H 'Content-Type: application/json' \
-      -d "{\"mode\":\"$3\"}" \
-      "$BASE/api/workflows/$2/merge-mode" | fmt '.'
+      -d "{\"mode\":\"$4\"}" \
+      "$BASE/api/workflows/$3/merge-mode" | fmt '.'
     ;;
 
   heartbeat)
@@ -241,7 +245,7 @@ Usage:
   invoker-ctl edit-type <taskId> <type>        Change a task's executor type
   invoker-ctl edit-agent <taskId> <agent>      Change a task's execution agent (claude|codex)
   invoker-ctl delete-workflow <workflowId>     Delete a workflow
-  invoker-ctl set-merge-mode <id> <mode>       Set merge mode (manual|automatic|external_review)
+  invoker-ctl set merge-mode <id> <mode>       Set merge mode (manual | automatic | external_review)
 
 Environment:
   INVOKER_API_PORT    API port (default: 4100)
@@ -249,12 +253,13 @@ Environment:
 Examples:
   invoker-ctl workflows                       List all workflows
   invoker-ctl recreate-workflow abc123          Recreate workflow abc123
+  invoker-ctl retry-task add-config           Retry a failed task
   invoker-ctl tasks running                   List all running tasks with heartbeat info
   invoker-ctl heartbeat add-config            Check if add-config task is alive
   invoker-ctl cancel add-config               Kill a stalled task
   invoker-ctl input my-task "yes"             Send input to a waiting task
   invoker-ctl edit my-task "npm run build"    Change task command
-  invoker-ctl set-merge-mode wf-1 automatic   Set merge mode to automatic
+  invoker-ctl set merge-mode wf-1 automatic   Set merge mode to automatic
 EOF
     ;;
 
