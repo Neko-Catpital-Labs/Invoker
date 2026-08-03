@@ -349,7 +349,7 @@ export class LaunchDispatcher {
     reason: string,
     details: Record<string, unknown> = {},
   ): void {
-    const accepted = this.persistence.markLaunchDispatchAbandoned(dispatch.id, message);
+    const accepted = this.persistence.markLaunchDispatchAbandoned(dispatch.id, message, undefined, reason);
     if (accepted) {
       this.releaseTaskResourceLeases(dispatch.taskId, dispatch.id, reason);
     }
@@ -425,7 +425,7 @@ export class LaunchDispatcher {
         row,
         row.lastError ?? 'no concrete error recorded',
       );
-      if (!this.abandonDispatch(row, message, nowIso)) continue;
+      if (!this.abandonDispatch(row, message, nowIso, 'stuck-lease')) continue;
       abandoned += 1;
       this.recordAbandonedStuckLease(row, message);
     }
@@ -453,8 +453,13 @@ export class LaunchDispatcher {
     return `Launch dispatch abandoned after ${row.attemptsCount} attempt(s); last error: ${lastError}`;
   }
 
-  private abandonDispatch(row: TaskLaunchDispatch, message: string, nowIso?: string): boolean {
-    const accepted = this.persistence.markLaunchDispatchAbandoned(row.id, message, nowIso);
+  private abandonDispatch(
+    row: TaskLaunchDispatch,
+    message: string,
+    nowIso?: string,
+    abandonReason?: string,
+  ): boolean {
+    const accepted = this.persistence.markLaunchDispatchAbandoned(row.id, message, nowIso, abandonReason);
     if (!accepted) return false;
 
     this.releaseTaskResourceLeases(row.taskId, row.id);
@@ -632,10 +637,11 @@ export class LaunchDispatcher {
     const row = this.persistence.loadLaunchDispatchById(dispatchId);
 
     if (row && (this.shouldAbandonAfterFastFailure(row) || row.acknowledgedAt)) {
-      const reason = row.acknowledgedAt
+      const detail = row.acknowledgedAt
         ? `Post-accept launch failure (dispatch already running): ${message}`
         : this.launchDispatchAbandonedMessage(row, message);
-      const accepted = this.abandonDispatch(row, reason);
+      const abandonReason = row.acknowledgedAt ? 'post-accept-failure' : 'fast-failure';
+      const accepted = this.abandonDispatch(row, detail, undefined, abandonReason);
       this.logger?.warn?.(
         row.acknowledgedAt
           ? '[launch-dispatcher] abandoned a post-accept failure instead of re-enqueuing'
