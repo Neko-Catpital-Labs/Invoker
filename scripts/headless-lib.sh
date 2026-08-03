@@ -95,10 +95,62 @@ headless_mutation() {
   INVOKER_HEADLESS_REQUIRE_EXISTING_OWNER=1 node "$IPC_HELPER" exec "${ipc_args[@]}" -- "${headless_args[@]}"
 }
 
+# Fast path for bulk wrappers that only need workflow IDs. Spinning up Electron
+# just to list IDs can consume most of a short reset-timing budget.
+headless_workflow_ids_from_db() {
+  if [[ "$#" -ne 4 ]]; then
+    return 1
+  fi
+  if [[ "${1:-}" != "query" || "${2:-}" != "workflows" || "${3:-}" != "--output" || "${4:-}" != "label" ]]; then
+    return 1
+  fi
+
+  local db_path="${INVOKER_DB_PATH:-}"
+  if [[ -z "$db_path" && -n "${INVOKER_DB_DIR:-}" ]]; then
+    db_path="${INVOKER_DB_DIR%/}/invoker.db"
+  fi
+  if [[ -z "$db_path" ]]; then
+    db_path="${HOME:-}/.invoker/invoker.db"
+  fi
+  if [[ -z "$db_path" || ! -f "$db_path" ]]; then
+    return 1
+  fi
+
+  local output
+  if output="$(node --no-warnings - "$db_path" 2>/dev/null <<'NODE'
+const { DatabaseSync } = require('node:sqlite');
+
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+try {
+  db.exec('PRAGMA query_only = ON');
+  const rows = db
+    .prepare('SELECT id FROM workflows ORDER BY created_at DESC')
+    .all();
+  for (const row of rows) {
+    const id = String(row.id ?? '');
+    if (/^wf-[0-9]+-[0-9]+$/.test(id)) {
+      console.log(id);
+    }
+  }
+} finally {
+  db.close();
+}
+NODE
+)"; then
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  return 1
+}
+
 # Extract workflow IDs (label format) from a query.
 headless_workflow_ids() {
   if [[ -n "${INVOKER_HEADLESS_WORKFLOW_IDS_FILE:-}" ]]; then
     grep -E '^wf-[0-9]+-[0-9]+$' "$INVOKER_HEADLESS_WORKFLOW_IDS_FILE" || true
+    return
+  fi
+  if headless_workflow_ids_from_db "$@"; then
     return
   fi
   headless_query "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
