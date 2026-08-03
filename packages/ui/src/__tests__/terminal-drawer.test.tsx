@@ -205,6 +205,11 @@ describe('Terminal drawer (component)', () => {
     const { rerender } = render(<TerminalDrawer state="minimized" {...props} />);
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
     expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    await waitFor(() => {
+      expect(xtermMock.fitInstances).toHaveLength(1);
+    });
+    expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
 
     rerender(<TerminalDrawer state="partial" {...props} />);
     expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'partial');
