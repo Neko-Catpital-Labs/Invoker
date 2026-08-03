@@ -96,10 +96,37 @@ headless_mutation() {
 }
 
 # Extract workflow IDs (label format) from a query.
+headless_workflow_ids_from_sqlite() {
+  local db_path="${INVOKER_DB_PATH:-${INVOKER_DB_DIR:-}/invoker.db}"
+  [[ -n "${INVOKER_DB_PATH:-}${INVOKER_DB_DIR:-}" ]] || return 1
+  [[ -f "$db_path" ]] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+
+  python3 - "$db_path" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+try:
+    for (workflow_id,) in conn.execute("SELECT id FROM workflows ORDER BY created_at DESC"):
+        print(workflow_id)
+finally:
+    conn.close()
+PY
+}
+
 headless_workflow_ids() {
   if [[ -n "${INVOKER_HEADLESS_WORKFLOW_IDS_FILE:-}" ]]; then
     grep -E '^wf-[0-9]+-[0-9]+$' "$INVOKER_HEADLESS_WORKFLOW_IDS_FILE" || true
     return
+  fi
+  if [[ "$#" -eq 4 && "$1" == "query" && "$2" == "workflows" && "$3" == "--output" && "$4" == "label" ]]; then
+    local sqlite_ids
+    if sqlite_ids="$(headless_workflow_ids_from_sqlite 2>/dev/null)"; then
+      printf '%s\n' "$sqlite_ids" | grep -E '^wf-[0-9]+-[0-9]+$' || true
+      return
+    fi
   fi
   headless_query "$@" | grep -E '^wf-[0-9]+-[0-9]+$' || true
 }

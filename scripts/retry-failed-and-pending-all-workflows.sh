@@ -72,10 +72,13 @@ fi
 # Query workflows
 # ---------------------------------------------------------------------------
 
-WORKFLOWS_JSON="$("$RUNNER" --headless query workflows --output json)"
+if [[ -z "$STATUS_FILTER" ]]; then
+  WORKFLOWS="$(headless_workflow_ids query workflows --output label)"
+else
+  WORKFLOWS_JSON="$("$RUNNER" --headless query workflows --output json)"
 
-WORKFLOWS="$(
-  WORKFLOWS_JSON_INPUT="$WORKFLOWS_JSON" python3 -c '
+  WORKFLOWS="$(
+    WORKFLOWS_JSON_INPUT="$WORKFLOWS_JSON" python3 -c '
 import json
 import os
 import sys
@@ -94,7 +97,8 @@ for workflow in json.loads(raw):
         seen.add(wf_id)
         print(wf_id)
 ' "$STATUS_FILTER"
-)"
+  )"
+fi
 
 if [[ -z "$WORKFLOWS" ]]; then
   echo "No workflows found."
