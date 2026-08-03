@@ -230,6 +230,35 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('does not fit or resize the active pane while the drawer body is minimized', async () => {
+    const session = makeTerminalSession('task-alpha');
+    const props = {
+      onCycle: vi.fn(),
+      sessions: [session],
+      activeSessionId: session.sessionId,
+      onSelectSession: vi.fn(),
+      onCloseSession: vi.fn(),
+    };
+
+    const { rerender } = render(<TerminalDrawer state="minimized" {...props} />);
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-pane-task-alpha').querySelector('.xterm')).not.toBeNull();
+      expect(xtermMock.fitInstances).toHaveLength(1);
+    });
+    expect(xtermMock.fitInstances[0].fit).not.toHaveBeenCalled();
+    expect(xtermMock.instances[0].refresh).not.toHaveBeenCalled();
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
+
+    rerender(<TerminalDrawer state="partial" {...props} />);
+    await expectPaneReady('task-alpha');
+    await waitFor(() => {
+      expect(xtermMock.fitInstances[0].fit).toHaveBeenCalled();
+      expect(xtermMock.instances[0].refresh).toHaveBeenCalledWith(0, 23);
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
+  });
+
   it('refits the newly active pane when terminal tabs switch', async () => {
     const alpha = makeTerminalSession('task-alpha');
     const beta = makeTerminalSession('task-beta');

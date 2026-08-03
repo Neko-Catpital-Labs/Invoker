@@ -135,6 +135,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
+  const lastBackendResizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   isActiveRef.current = isActive;
   drawerStateRef.current = drawerState;
@@ -157,6 +158,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -166,14 +168,23 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      const nextSize = { cols: term.cols, rows: term.rows };
+      const lastBackendResize = lastBackendResizeRef.current;
+      if (
+        !lastBackendResize ||
+        drawerStateRef.current === 'partial'
+          && (lastBackendResize.cols !== nextSize.cols || lastBackendResize.rows !== nextSize.rows)
+      ) {
+        lastBackendResizeRef.current = nextSize;
+        void window.invoker?.terminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+      }
       reportTerminalPerf('embedded_terminal_resize', {
         source,
         durationMs: roundMs(nowMs() - startedAt),
         sessionId: session.sessionId,
         taskId: session.taskId,
-        cols: term.cols,
-        rows: term.rows,
+        cols: nextSize.cols,
+        rows: nextSize.rows,
         active: isActiveRef.current,
       });
     } catch {
@@ -334,6 +345,10 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   useEffect(() => {
     if (!isActive) {
+      clearScheduledFit();
+      return;
+    }
+    if (drawerState === 'minimized') {
       clearScheduledFit();
       return;
     }
