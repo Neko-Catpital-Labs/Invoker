@@ -234,6 +234,29 @@ describe('LaunchDispatcher', () => {
       const { dispatcher } = makeDispatcher();
       expect(dispatcher.failDispatch(enqueued.id, 'too late')).toBe(false);
     });
+
+    it('fail abandons an already-accepted row instead of silently re-enqueuing it', () => {
+      seedWorkflowAndTask('attempt-fail-post-accept');
+      const enqueued = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-1/t1',
+        attemptId: 'attempt-fail-post-accept',
+        workflowId: 'wf-1',
+        generation: 0,
+      });
+      adapter.claimLaunchDispatchAtomic({ ownerId: 'owner-test' });
+      // Executor confirmed live -- acceptDispatch already fired.
+      expect(adapter.markLaunchDispatchAccepted(enqueued.id)).toBe(true);
+
+      const { dispatcher } = makeDispatcher();
+      expect(dispatcher.failDispatch(enqueued.id, new Error('metadata persist failed'))).toBe(true);
+
+      const after = adapter.loadLaunchDispatchById(enqueued.id);
+      // Must NOT look like "never launched" -- re-enqueuing here would let
+      // dispatchActive() try to relaunch a task that is already running.
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/Post-accept launch failure/);
+      expect(after?.lastError).toMatch(/metadata persist failed/);
+    });
   });
 
   describe('reapers', () => {
@@ -299,6 +322,30 @@ describe('LaunchDispatcher', () => {
       expect(dispatcher.reapExpiredLeases()).toBe(0);
     });
 
+    it('reapExpiredLeases does not reset an accepted row even past its fence (healthy long-running task)', () => {
+      seed();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-reap-accepted',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const pastIso = new Date(Date.now() - 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch SET state = 'leased', dispatch_owner = 'owner-x', fenced_until = ? WHERE id = ?`,
+        [pastIso, row.id],
+      );
+      // The executor launched successfully -- this is a healthy task that
+      // just runs longer than its fence, not a crashed dispatcher claim.
+      expect(adapter.markLaunchDispatchAccepted(row.id)).toBe(true);
+
+      const { dispatcher } = dispatcherWithOrchestrator();
+      expect(dispatcher.reapExpiredLeases()).toBe(0);
+      // Must stay 'leased' -- resetting to 'enqueued' here would let
+      // dispatchActive() re-claim and re-dispatch an already-running task.
+      expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('leased');
+    });
+
     it('abandonStuckLeases abandons leased rows past max attempts and calls prepareTaskForNewAttempt', () => {
       seed();
       const row = adapter.enqueueLaunchDispatch({
@@ -332,6 +379,33 @@ describe('LaunchDispatcher', () => {
         source: 'launch-dispatcher',
         dispatchId: row.id,
       });
+    });
+
+    it('abandonStuckLeases does not abandon an accepted row via attempts_count alone', () => {
+      seed();
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-r/t1',
+        attemptId: 'attempt-accepted-many-tries',
+        workflowId: 'wf-r',
+        generation: 0,
+      });
+      const pastIso = new Date(Date.now() - 60_000).toISOString();
+      (adapter as any).db.run(
+        `UPDATE task_launch_dispatch
+           SET state = 'leased', dispatch_owner = 'owner-x',
+               fenced_until = ?, attempts_count = 2, last_error = 'transient ssh hiccup'
+         WHERE id = ?`,
+        [pastIso, row.id],
+      );
+      // Attempt 3 (this claim) finally succeeded and the executor is live --
+      // attempts_count alone must not override that.
+      expect(adapter.markLaunchDispatchAccepted(row.id)).toBe(true);
+
+      const prepare = vi.fn();
+      const { dispatcher } = dispatcherWithOrchestrator({ prepareTaskForNewAttempt: prepare });
+      expect(dispatcher.abandonStuckLeases()).toBe(0);
+      expect(adapter.loadLaunchDispatchById(row.id)?.state).toBe('leased');
+      expect(prepare).not.toHaveBeenCalled();
     });
 
     it('CD.2: abandonStuckLeases releases execution-resource leases held by the abandoned task (Issue 14)', () => {
