@@ -11,11 +11,13 @@ import type { SQLiteAdapter, TaskLaunchDispatch } from '@invoker/data-store';
 import type { LaunchOutboxAck } from '@invoker/execution-engine';
 import type { TaskLaunchReadiness, TaskState } from '@invoker/workflow-core';
 import { DISPATCH_MAX_ATTEMPTS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
+import { resolveLaunchDispatchLeaseMsOverride } from './launch-dispatch-defaults.js';
 
 
 export type LaunchDispatcherPersistence = Pick<
   SQLiteAdapter,
   | 'loadLaunchDispatchById'
+  | 'markLaunchDispatchAccepted'
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
@@ -80,6 +82,13 @@ export interface LaunchDispatcherOptions {
   maxAttempts?: number;
   maxLeasesPerPoll?: number;
   topUpReadyLaunchesEnabled?: () => boolean;
+  /**
+   * Overrides for DISPATCH_LEASE_MS / LAUNCH_STUCK_ABANDON_MS (both default
+   * to 12 minutes in production). Test-only knob so e2e tests can exercise
+   * the stuck-launch reaper in seconds instead of real minutes.
+   */
+  leaseMs?: number;
+  maxLaunchAgeMs?: number;
 }
 
 
@@ -92,6 +101,8 @@ export class LaunchDispatcher {
   private readonly maxAttempts: number;
   private readonly maxLeasesPerPoll: number;
   private readonly topUpReadyLaunchesEnabled?: () => boolean;
+  private readonly leaseMs?: number;
+  private readonly maxLaunchAgeMs: number;
 
   constructor(options: LaunchDispatcherOptions) {
     this.persistence = options.persistence;
@@ -101,6 +112,8 @@ export class LaunchDispatcher {
     this.logger = options.logger;
     this.maxAttempts = options.maxAttempts ?? DISPATCH_MAX_ATTEMPTS;
     this.topUpReadyLaunchesEnabled = options.topUpReadyLaunchesEnabled;
+    this.leaseMs = options.leaseMs ?? resolveLaunchDispatchLeaseMsOverride();
+    this.maxLaunchAgeMs = options.maxLaunchAgeMs ?? resolveLaunchDispatchLeaseMsOverride() ?? LAUNCH_STUCK_ABANDON_MS;
     // Bound a single poll's work so the dispatcher cannot starve other
     // owner-loop ticks; the leftover rows are picked up on the next tick.
     this.maxLeasesPerPoll = options.maxLeasesPerPoll ?? 32;
@@ -242,6 +255,7 @@ export class LaunchDispatcher {
     while (dispatched < this.maxLeasesPerPoll) {
       const leased = this.persistence.claimLaunchDispatchAtomic({
         ownerId: this.ownerId,
+        ...(this.leaseMs !== undefined ? { leaseMs: this.leaseMs } : {}),
       });
       if (!leased) break;
       dispatched += 1;
@@ -396,7 +410,7 @@ export class LaunchDispatcher {
     const candidates = this.persistence.listAbandonableLaunchDispatchLeases({
       nowIso,
       maxAttempts: this.maxAttempts,
-      maxLaunchAgeMs: LAUNCH_STUCK_ABANDON_MS,
+      maxLaunchAgeMs: this.maxLaunchAgeMs,
     });
     if (candidates.length === 0) return 0;
     let abandoned = 0;
@@ -537,10 +551,29 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Transition a live dispatch row to completed. Called by the
-   * TaskRunner once {@link markTaskRunningAfterLaunch} has succeeded
-   * (the executor handle is live and the task is in the executing
-   * phase). Returns false when the row is already terminal.
+   * Record that the launch handoff succeeded. Called by the TaskRunner
+   * once {@link markTaskRunningAfterLaunch} has succeeded (the executor
+   * handle is live and the task is in the executing phase). This stops
+   * `abandonStuckLeases`'s age check from treating the row as stuck in
+   * launch -- it does NOT complete the row, since headless run/resume
+   * polls dispatch completion to mean the task's work is actually done.
+   * Returns false when the row is no longer leased (already terminal).
+   */
+  acceptDispatch(dispatchId: number): boolean {
+    const ok = this.persistence.markLaunchDispatchAccepted(dispatchId);
+    this.logger?.info?.('[launch-dispatcher] accepted', {
+      ownerId: this.ownerId,
+      dispatchId,
+      accepted: ok,
+      module: 'launch-dispatcher',
+    });
+    return ok;
+  }
+
+  /**
+   * Transition a live dispatch row to completed once the task's whole
+   * run finishes (called from TaskRunner's onComplete finalization).
+   * Returns false when the row is already terminal.
    */
   completeDispatch(dispatchId: number): boolean {
     const ok = this.persistence.markLaunchDispatchCompleted(dispatchId);
