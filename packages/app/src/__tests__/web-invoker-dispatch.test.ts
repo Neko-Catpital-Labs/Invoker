@@ -47,6 +47,7 @@ function makeTaskTerminalAdapter() {
     list: vi.fn(async () => [{ sessionId: 'session-1', taskId: 'task-1', kind: 'task', status: 'running' }]),
     write: vi.fn(async (sessionId: string, data: string) => ({ ok: true, sessionId, bytes: data.length })),
     resize: vi.fn(async (sessionId: string, cols: number, rows: number) => ({ ok: true, sessionId, cols, rows })),
+    getAppliedSize: vi.fn(async (sessionId: string) => ({ sessionId, cols: 120, rows: 40 })),
     close: vi.fn(async (sessionId: string) => ({ ok: true, sessionId })),
   };
 }
@@ -208,6 +209,11 @@ describe('buildWebInvokerDispatch', () => {
       cols: 120,
       rows: 40,
     });
+    await expect(dispatch('invoker:terminal-applied-size', ['session-1'])).resolves.toEqual({
+      sessionId: 'session-1',
+      cols: 120,
+      rows: 40,
+    });
     await expect(dispatch('invoker:terminal-close', ['session-1'])).resolves.toEqual({
       ok: true,
       sessionId: 'session-1',
@@ -217,6 +223,7 @@ describe('buildWebInvokerDispatch', () => {
     expect(taskTerminals.list).toHaveBeenCalledWith();
     expect(taskTerminals.write).toHaveBeenCalledWith('session-1', 'echo hi');
     expect(taskTerminals.resize).toHaveBeenCalledWith('session-1', 120, 40);
+    expect(taskTerminals.getAppliedSize).toHaveBeenCalledWith('session-1');
     expect(taskTerminals.close).toHaveBeenCalledWith('session-1');
   });
 

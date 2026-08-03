@@ -124,6 +124,14 @@ export function resizeTaskTerminalSession(deps: {
   );
 }
 
+export function getTaskTerminalAppliedSize(deps: {
+  embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get' | 'getAppliedSize'>;
+}, sessionId: string): { cols: number; rows: number } | null {
+  const rejected = rejectPlanningTaskTerminalSession(deps.embeddedTerminalManager, sessionId);
+  if (rejected) return null;
+  return deps.embeddedTerminalManager.getAppliedSize(sessionId);
+}
+
 export function closeTaskTerminalSession(deps: {
   embeddedTerminalManager: Pick<EmbeddedTerminalManager, 'get' | 'close'>;
   persistence?: Pick<SQLiteAdapter, 'deleteTerminalSession'>;
@@ -337,6 +345,10 @@ export function registerTerminalSessionIpcHandlers(deps: {
       cols,
       rows,
     );
+  });
+
+  ipcMain.handle('invoker:terminal-applied-size', async (_event, sessionId: string) => {
+    return getTaskTerminalAppliedSize({ embeddedTerminalManager }, sessionId);
   });
 
   ipcMain.handle('invoker:terminal-close', async (_event, sessionId: string) => {

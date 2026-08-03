@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
       list: vi.fn(async () => []),
       write: vi.fn(async () => ({ ok: true })),
       resize: vi.fn(async () => ({ ok: true })),
+      getAppliedSize: vi.fn(async () => null),
       close: vi.fn(async () => ({ ok: true })),
     })),
     createEmbeddedTerminalBackend: vi.fn(() => ({

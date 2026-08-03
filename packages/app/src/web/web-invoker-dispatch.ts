@@ -270,6 +270,11 @@ export function buildWebInvokerDispatch(deps: WebInvokerDispatchDeps): WebInvoke
           Number(args[1]),
           Number(args[2]),
         );
+      case 'invoker:terminal-applied-size':
+        if (!deps.taskTerminals) {
+          return null;
+        }
+        return deps.taskTerminals.getAppliedSize(String(args[0]));
       case 'invoker:terminal-close':
         if (!deps.taskTerminals) {
           return { ok: false, reason: 'unsupported' };

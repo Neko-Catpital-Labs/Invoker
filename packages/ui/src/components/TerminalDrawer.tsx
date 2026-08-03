@@ -14,6 +14,11 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const MIN_TASK_TERMINAL_COLS = 20;
+const MIN_TASK_TERMINAL_ROWS = 5;
+const TASK_TERMINAL_FIT_SETTLE_FRAMES = 2;
+const TASK_TERMINAL_RECONCILE_MAX_ATTEMPTS = 6;
+const TASK_TERMINAL_RECONCILE_INTERVAL_MS = 500;
 const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
 
 /**
@@ -135,6 +140,10 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
+  const reconcileTimeoutRef = useRef<number | null>(null);
+  const runReconcileCheckRef = useRef<((attempt: number) => Promise<void>) | null>(null);
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+  const disposedRef = useRef(false);
 
   isActiveRef.current = isActive;
   drawerStateRef.current = drawerState;
@@ -155,18 +164,62 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     }
   }, []);
 
-  const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
+  const clearReconcileCheck = useCallback(() => {
+    if (reconcileTimeoutRef.current === null) return;
+    window.clearTimeout(reconcileTimeoutRef.current);
+    reconcileTimeoutRef.current = null;
+  }, []);
+
+  const fitVisibleTerminal = useCallback((
+    source: 'active_session' | 'resize_observer' | 'followup_frame',
+    options: { skipReconcileSchedule?: boolean } = {},
+  ) => {
+    if (disposedRef.current) return;
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
     const term = termRef.current;
     const fit = fitRef.current;
+    const host = containerRef.current;
+    if (!host || !host.isConnected) return;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+    const rect = host.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
     if (!term || !fit) return;
     try {
+      const proposedDimensions = fit.proposeDimensions();
+      if (
+        !proposedDimensions ||
+        proposedDimensions.cols < MIN_TASK_TERMINAL_COLS ||
+        proposedDimensions.rows < MIN_TASK_TERMINAL_ROWS
+      ) {
+        return;
+      }
       const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      const nextSize = { cols: term.cols, rows: term.rows };
+      const lastSentSize = lastSentSizeRef.current;
+      if (!lastSentSize || lastSentSize.cols !== nextSize.cols || lastSentSize.rows !== nextSize.rows) {
+        const resizeCall = window.invoker?.terminalResize?.(session.sessionId, nextSize.cols, nextSize.rows);
+        void resizeCall
+          ?.then((result) => {
+            if (disposedRef.current) return;
+            if (!result?.ok) return;
+            lastSentSizeRef.current = nextSize;
+            if (!options.skipReconcileSchedule) {
+              clearReconcileCheck();
+              reconcileTimeoutRef.current = window.setTimeout(() => {
+                reconcileTimeoutRef.current = null;
+                void runReconcileCheckRef.current?.(0);
+              }, TASK_TERMINAL_RECONCILE_INTERVAL_MS);
+            }
+          })
+          .catch(() => {
+            /* leave lastSentSize unset so the next fit opportunity retries the same size */
+          });
+      }
       reportTerminalPerf('embedded_terminal_resize', {
         source,
         durationMs: roundMs(nowMs() - startedAt),
@@ -179,26 +232,56 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     } catch {
       /* host has zero size, terminal disposed, or fit unsupported */
     }
-  }, [session.sessionId, session.taskId]);
+  }, [clearReconcileCheck, session.sessionId, session.taskId]);
+
+  const runReconcileCheck = useCallback(async (attempt: number): Promise<void> => {
+    if (disposedRef.current) return;
+    if (attempt >= TASK_TERMINAL_RECONCILE_MAX_ATTEMPTS) return;
+    const lastSentSize = lastSentSizeRef.current;
+    if (!lastSentSize) return;
+    const applied = await window.invoker?.terminalAppliedSize?.(session.sessionId);
+    if (disposedRef.current) return;
+    if (!applied) return;
+    if (applied.cols === lastSentSize.cols && applied.rows === lastSentSize.rows) return;
+
+    lastSentSizeRef.current = null;
+    fitVisibleTerminal('followup_frame', { skipReconcileSchedule: true });
+    reconcileTimeoutRef.current = window.setTimeout(() => {
+      reconcileTimeoutRef.current = null;
+      void runReconcileCheck(attempt + 1);
+    }, TASK_TERMINAL_RECONCILE_INTERVAL_MS);
+  }, [fitVisibleTerminal, session.sessionId]);
+  runReconcileCheckRef.current = runReconcileCheck;
 
   const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
     clearScheduledFit();
-    fitVisibleTerminal(source);
-    if (typeof requestAnimationFrame !== 'function') return;
+    if (typeof requestAnimationFrame !== 'function') {
+      fitVisibleTerminal(source);
+      return;
+    }
 
-    fitFrameRef.current = requestAnimationFrame(() => {
-      fitFrameRef.current = null;
-      fitVisibleTerminal('followup_frame');
-      secondFitFrameRef.current = requestAnimationFrame(() => {
-        secondFitFrameRef.current = null;
-        fitVisibleTerminal('followup_frame');
+    const runAfterFrames = (remainingFrames: number) => {
+      fitFrameRef.current = requestAnimationFrame(() => {
+        fitFrameRef.current = null;
+        if (remainingFrames > 0) {
+          runAfterFrames(remainingFrames - 1);
+          return;
+        }
+        fitVisibleTerminal(source);
+        secondFitFrameRef.current = requestAnimationFrame(() => {
+          secondFitFrameRef.current = null;
+          fitVisibleTerminal('followup_frame');
+        });
       });
-    });
+    };
+
+    runAfterFrames(TASK_TERMINAL_FIT_SETTLE_FRAMES);
   }, [clearScheduledFit, fitVisibleTerminal]);
 
   useEffect(() => {
     const host = containerRef.current;
     if (!host) return;
+    disposedRef.current = false;
 
     let term: XTermTerminal;
     let fit: FitAddon;
@@ -308,7 +391,9 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
     }
 
     return () => {
+      disposedRef.current = true;
       clearScheduledFit();
+      clearReconcileCheck();
       resizeObserver?.disconnect();
       host.removeEventListener('wheel', handleWheel, true);
       inputDisposable.dispose();
@@ -324,7 +409,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
         window.__INVOKER_TEST_TASK_TERMINALS__.delete(session.sessionId);
       }
     };
-  }, [clearScheduledFit, fitVisibleTerminal, scheduleFit, session.sessionId]);
+  }, [clearReconcileCheck, clearScheduledFit, fitVisibleTerminal, scheduleFit, session.sessionId]);
 
   useEffect(() => {
     const term = termRef.current;

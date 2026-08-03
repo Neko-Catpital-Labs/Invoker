@@ -1325,6 +1325,10 @@ export const IpcChannels = {
     request: [sessionId: string, cols: number, rows: number];
     response: { ok: boolean; reason?: string };
   },
+  'invoker:terminal-applied-size': {} as {
+    request: [sessionId: string];
+    response: { cols: number; rows: number } | null;
+  },
   'invoker:terminal-close': {} as {
     request: [sessionId: string];
     response: { ok: boolean; reason?: string };

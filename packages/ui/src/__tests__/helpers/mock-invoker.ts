@@ -370,6 +370,7 @@ export function createMockInvoker(
     terminalList: vi.fn(async () => []),
     terminalWrite: vi.fn(async () => ({ ok: true })),
     terminalResize: vi.fn(async () => ({ ok: true })),
+    terminalAppliedSize: vi.fn(async () => null),
     terminalClose: vi.fn(async () => ({ ok: true })),
     onTerminalOutput: vi.fn((cb: (event: TerminalOutputEvent) => void) => {
       terminalOutputCallbacks.add(cb);

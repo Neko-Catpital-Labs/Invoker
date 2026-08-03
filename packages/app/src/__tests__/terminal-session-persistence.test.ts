@@ -259,6 +259,9 @@ describe('registerTerminalSessionPersistence coalesce', () => {
       reason: expect.stringContaining('planning terminal session'),
     });
     await expect(
+      handlers.get('invoker:terminal-applied-size')?.({}, planningSession.sessionId),
+    ).resolves.toBeNull();
+    await expect(
       handlers.get('invoker:terminal-close')?.({}, planningSession.sessionId),
     ).resolves.toEqual({
       ok: false,

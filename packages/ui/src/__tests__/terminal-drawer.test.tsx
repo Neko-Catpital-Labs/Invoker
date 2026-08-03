@@ -24,16 +24,20 @@ vi.mock('@xyflow/react', async () => {
 
 const xtermMock = vi.hoisted(() => {
   type DataHandler = (data: string) => void;
+  type TerminalDimensions = { cols: number; rows: number };
 
   const instances: MockTerminal[] = [];
   const fitInstances: MockFitAddon[] = [];
   const writeLog: string[] = [];
+  let nextProposedDimensions: TerminalDimensions | undefined = { cols: 80, rows: 24 };
 
   class MockTerminal {
     cols = 80;
     rows = 24;
     dataHandler: DataHandler | null = null;
-    loadAddon = vi.fn();
+    loadAddon = vi.fn((addon: { activate?: (terminal: MockTerminal) => void }) => {
+      addon.activate?.(this);
+    });
     open = vi.fn((host: HTMLElement) => {
       const terminalElement = document.createElement('div');
       terminalElement.className = 'xterm';
@@ -61,7 +65,17 @@ const xtermMock = vi.hoisted(() => {
   }
 
   class MockFitAddon {
-    fit = vi.fn();
+    terminal: MockTerminal | null = null;
+    proposedDimensions = nextProposedDimensions;
+    activate = vi.fn((terminal: MockTerminal) => {
+      this.terminal = terminal;
+    });
+    proposeDimensions = vi.fn(() => this.proposedDimensions);
+    fit = vi.fn(() => {
+      if (!this.terminal || !this.proposedDimensions) return;
+      this.terminal.cols = this.proposedDimensions.cols;
+      this.terminal.rows = this.proposedDimensions.rows;
+    });
 
     constructor() {
       fitInstances.push(this);
@@ -74,10 +88,14 @@ const xtermMock = vi.hoisted(() => {
     instances,
     fitInstances,
     writeLog,
+    setNextProposedDimensions: (dimensions: TerminalDimensions | undefined) => {
+      nextProposedDimensions = dimensions;
+    },
     reset: () => {
       instances.length = 0;
       fitInstances.length = 0;
       writeLog.length = 0;
+      nextProposedDimensions = { cols: 80, rows: 24 };
     },
   };
 });
@@ -130,6 +148,40 @@ async function expectPaneReady(taskId: string) {
   return pane;
 }
 
+function mockElementRect(width: number, height: number) {
+  return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    x: 0,
+    y: 0,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: height,
+    width,
+    height,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
+async function flushTaskTerminalFit(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        if (typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(() => resolve());
+          return;
+        }
+        window.setTimeout(resolve, 0);
+      });
+    });
+  }
+}
+
+async function waitRealMs(ms: number): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  });
+}
+
 async function selectWorkflow(): Promise<void> {
   await waitFor(() => {
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
@@ -145,6 +197,7 @@ describe('Terminal drawer (component)', () => {
 
   beforeEach(() => {
     xtermMock.reset();
+    mockElementRect(640, 280);
     mock = createMockInvoker();
     mock.api.terminalResize = vi.fn(async () => ({ ok: true }));
     mock.api.terminalWrite = vi.fn(async () => ({ ok: true }));
@@ -228,6 +281,74 @@ describe('Terminal drawer (component)', () => {
       expect(xtermMock.instances[0].refresh.mock.calls.length).toBeGreaterThan(partialRefreshCalls);
       expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
     });
+  });
+
+  it('does not fit or resize task terminals while the drawer body is minimized', async () => {
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const session = makeTerminalSession('task-alpha');
+
+    try {
+      render(
+        <TerminalDrawer
+          state="minimized"
+          onCycle={vi.fn()}
+          sessions={[session]}
+          activeSessionId={session.sessionId}
+          onSelectSession={vi.fn()}
+          onCloseSession={vi.fn()}
+        />,
+      );
+
+      await flushTaskTerminalFit();
+
+      expect(xtermMock.fitInstances).toHaveLength(1);
+      expect(xtermMock.fitInstances[0]?.proposeDimensions).not.toHaveBeenCalled();
+      expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+      expect(mock.api.terminalResize).not.toHaveBeenCalled();
+    } finally {
+      rectSpy.mockRestore();
+      mockElementRect(640, 280);
+    }
+  });
+
+  it('retries a task terminal resize when the main process readback has not caught up', async () => {
+    xtermMock.setNextProposedDimensions({ cols: 100, rows: 30 });
+    const session = makeTerminalSession('task-alpha');
+    let appliedSizeCalls = 0;
+    vi.mocked(mock.api.terminalAppliedSize).mockImplementation(async () => {
+      appliedSizeCalls += 1;
+      return appliedSizeCalls === 1 ? { cols: 80, rows: 24 } : { cols: 100, rows: 30 };
+    });
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+
+    await flushTaskTerminalFit();
+    expect(mock.api.terminalResize).toHaveBeenCalledTimes(1);
+    expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 100, 30);
+
+    await waitRealMs(700);
+
+    expect(mock.api.terminalAppliedSize).toHaveBeenCalledWith(session.sessionId);
+    expect(mock.api.terminalResize).toHaveBeenCalledTimes(2);
   });
 
   it('refits the newly active pane when terminal tabs switch', async () => {

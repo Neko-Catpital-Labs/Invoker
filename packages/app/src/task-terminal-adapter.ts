@@ -13,6 +13,7 @@ import {
 } from './open-terminal-for-task.js';
 import {
   closeTaskTerminalSession,
+  getTaskTerminalAppliedSize,
   listTaskTerminalSessions,
   resizeTaskTerminalSession,
   writeTaskTerminalSession,
@@ -43,6 +44,7 @@ export interface TaskTerminalAdapter {
     cols: number,
     rows: number,
   ): TaskTerminalMutationResult | Promise<TaskTerminalMutationResult>;
+  getAppliedSize(sessionId: string): { cols: number; rows: number } | null | Promise<{ cols: number; rows: number } | null>;
   close(sessionId: string): TaskTerminalMutationResult | Promise<TaskTerminalMutationResult>;
 }
 
@@ -56,7 +58,7 @@ export interface CreateTaskTerminalAdapterDeps {
   taskHandles: Pick<TaskHandleMap, 'get'>;
   embeddedTerminalManager: Pick<
     EmbeddedTerminalManager,
-    'openOrReuse' | 'list' | 'get' | 'write' | 'resize' | 'close'
+    'openOrReuse' | 'list' | 'get' | 'write' | 'resize' | 'getAppliedSize' | 'close'
   >;
   uiPerfStats: TerminalUiPerfCounters;
   terminalUiPerf: TerminalUiPerfReporter;
@@ -127,6 +129,14 @@ export function createTaskTerminalAdapter(
         sessionId,
         cols,
         rows,
+      );
+    },
+    getAppliedSize(sessionId: string) {
+      return getTaskTerminalAppliedSize(
+        {
+          embeddedTerminalManager: deps.embeddedTerminalManager,
+        },
+        sessionId,
       );
     },
     close(sessionId: string) {
