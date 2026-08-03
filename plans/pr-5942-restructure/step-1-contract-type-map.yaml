@@ -1,0 +1,86 @@
+name: "Repair PR 5942 Step 1: Contract type-map canonical name"
+description: |
+  Recreate the product slice from PR #5942 as a focused contract workflow.
+  This bottom slice drops the legacy IPC type-map key and aligns the drift
+  scenario ids that name the same IPC entry.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+featureBranch: plan/repair-pr-5942-contract-type-map
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: implement-contract-type-map-canonical-name
+    description: |
+      Implement the contract type-map canonical-name slice.
+      Review claim: The IPC type map and matching drift scenario ids use only the canonical workflow merge-mode name.
+      Review lane: behavior
+      Safety invariant: Only the legacy type-map key and directly affected drift scenario ids change; the canonical workflow merge-mode path is unchanged.
+      Slice rationale: The type-map key and matching scenario ids are one contract slice because the scenarios name the same typed IPC entry.
+      Architectural effect: The public IPC type map no longer includes the old merge-mode key.
+      Goal: Recreate only the contract and drift-id edits from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation: PR #5942 failed PR Body validation because this contract unit was bundled with docs and tooling-policy files.
+      Alternative considerations: Relabeling the mixed PR was rejected because it would hide separate review units.
+      Implementation details: Drop `invoker:set-merge-mode` from `packages/contracts/src/ipc-channels.ts` and rename the affected drift scenario ids to `set-workflow-merge-mode`.
+      Non-goals: No prose file edits, no package script edits, no handler edits, and no persistence edits.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      Acceptance criteria:
+      - `pnpm run check:types` exits 0.
+      - `rg -n "'invoker:set-merge-mode'" packages/contracts/src/ipc-channels.ts` exits 1.
+      - `rg -n "set-workflow-merge-mode" packages/app/e2e/drift` exits 0.
+    prompt: |
+      Review claim: The IPC type map and matching drift scenario ids use only the canonical workflow merge-mode name.
+      Review lane: behavior
+      Safety invariant: Only the legacy type-map key and directly affected drift scenario ids change; the canonical workflow merge-mode path is unchanged.
+      Slice rationale: The type-map key and matching scenario ids are one contract slice because the scenarios name the same typed IPC entry.
+      Architectural effect: The public IPC type map no longer includes the old merge-mode key.
+      Goal: Assume no prior context. Recreate only the contract and drift-id edits from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation: PR #5942 failed PR Body validation because this contract unit was bundled with docs and tooling-policy files.
+      Alternative considerations: Do not relabel a mixed PR body; create a focused replacement slice instead.
+      Implementation details: In `packages/contracts/src/ipc-channels.ts`, drop only the `invoker:set-merge-mode` entry. In `packages/app/e2e/drift/drift-battery.spec.ts`, `packages/app/e2e/drift/drift-thundering-herd.spec.ts`, and `packages/app/e2e/drift/scenario-catalog.ts`, rename only the affected scenario id and plan label from `set-merge-mode` to `set-workflow-merge-mode`.
+      Non-goals: No prose file edits, no package script edits, no handler edits, and no persistence edits.
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      Acceptance criteria:
+      - `pnpm run check:types` exits 0.
+      - `rg -n "'invoker:set-merge-mode'" packages/contracts/src/ipc-channels.ts` exits 1.
+      - `rg -n "set-workflow-merge-mode" packages/app/e2e/drift` exits 0.
+    dependencies: []
+
+  - id: verify-contract-type-map-canonical-name
+    description: |
+      Run the focused proof for the contract type-map canonical-name slice.
+      Review claim: The contract type-map canonical-name slice passes its focused checks.
+      Review lane: proof
+      Safety invariant: This task only runs read-only verification commands.
+      Slice rationale: The first workflow needs a local proof before downstream slices depend on it.
+      Architectural effect: None; verification only.
+      Goal: Prove the contract slice is type-safe and uses the canonical scenario id.
+      Motivation: The replacement stack should fail before review if the typed IPC entry or drift ids are wrong.
+      Alternative considerations: Waiting for CI alone was rejected because this focused proof is cheaper.
+      Implementation details: Run `pnpm run check:types` and the two `rg` checks listed in the acceptance criteria.
+      Non-goals: No source edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run check:types && ! rg -n \"'invoker:set-merge-mode'\" packages/contracts/src/ipc-channels.ts && rg -n \"set-workflow-merge-mode\" packages/app/e2e/drift"
+    dependencies:
+      - implement-contract-type-map-canonical-name

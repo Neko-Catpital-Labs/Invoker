@@ -1,0 +1,78 @@
+name: "Repair PR 5942 Step 2: Markdown table canonical IPC name"
+description: |
+  Recreate the docs slice from PR #5942 as a focused markdown-table workflow.
+  This slice depends on the step 1 merge gate and updates only the persistence
+  architecture table row.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: plan/repair-pr-5942-contract-type-map
+featureBranch: plan/repair-pr-5942-doc-table-row
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: implement-doc-table-canonical-ipc-name
+    description: |
+      Implement the markdown table canonical IPC name slice.
+      Review claim: The architecture markdown table names `invoker:set-workflow-merge-mode` for workflow merge-mode updates.
+      Review lane: docs
+      Safety invariant: Only markdown prose changes; runtime behavior is unchanged.
+      Slice rationale: This markdown-table slice follows the type-map slice so the prose can use the canonical IPC name without carrying product edits.
+      Architectural effect: The architecture table reflects the current workflow merge-mode IPC name.
+      Goal: Recreate only the markdown table row edit from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation: PR #5942 failed PR Body validation because this markdown prose was bundled with product and tooling-policy files.
+      Alternative considerations: Bundling markdown prose with the lint guard was rejected because docs review should stay separate.
+      Implementation details: In `docs/persistence-architecture-single-writer.md`, change the workflow merge-mode table row to `invoker:set-workflow-merge-mode` with `gui-mutation-handlers.ts:2276`.
+      Non-goals: No contract edits, no drift-id edits, no package script edits, and no runtime edits.
+      Layer: docs
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: docs-only
+      Acceptance criteria:
+      - `rg -n "invoker:set-workflow-merge-mode" docs/persistence-architecture-single-writer.md` exits 0.
+      - `rg -n "invoker:set-merge-mode" docs/persistence-architecture-single-writer.md` exits 1.
+    prompt: |
+      Review claim: The architecture markdown table names `invoker:set-workflow-merge-mode` for workflow merge-mode updates.
+      Review lane: docs
+      Safety invariant: Only markdown prose changes; runtime behavior is unchanged.
+      Slice rationale: This markdown-table slice follows the type-map slice so the prose can use the canonical IPC name without carrying product edits.
+      Architectural effect: The architecture table reflects the current workflow merge-mode IPC name.
+      Goal: Assume no prior context. On top of the upstream step 1 branch, recreate only the markdown table row edit from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation: PR #5942 failed PR Body validation because this markdown prose was bundled with product and tooling-policy files.
+      Alternative considerations: Do not bundle markdown prose with the lint guard; keep this replacement slice docs-only.
+      Implementation details: In `docs/persistence-architecture-single-writer.md`, change the workflow merge-mode table row to `invoker:set-workflow-merge-mode` with `gui-mutation-handlers.ts:2276`.
+      Non-goals: No contract edits, no drift-id edits, no package script edits, and no runtime edits.
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: docs-only
+      Acceptance criteria:
+      - `rg -n "invoker:set-workflow-merge-mode" docs/persistence-architecture-single-writer.md` exits 0.
+      - `rg -n "invoker:set-merge-mode" docs/persistence-architecture-single-writer.md` exits 1.
+    dependencies: []
+
+  - id: verify-doc-table-canonical-ipc-name
+    description: |
+      Run the focused proof for the markdown table canonical IPC name slice.
+      Review claim: The markdown table canonical IPC name slice passes its focused checks.
+      Review lane: proof
+      Safety invariant: This task only runs read-only verification commands.
+      Slice rationale: The second workflow needs a direct prose proof before the lint guard lands above it.
+      Architectural effect: None; verification only.
+      Goal: Prove the markdown table uses the canonical IPC name.
+      Motivation: The terminal lint guard should not fail on stale markdown prose.
+      Alternative considerations: Waiting for the terminal slice was rejected because this focused proof is cheaper.
+      Implementation details: Run the two `rg` checks listed in the acceptance criteria.
+      Non-goals: No source edits in this task.
+      Layer: docs
+      Feature state: active
+    command: "rg -n \"invoker:set-workflow-merge-mode\" docs/persistence-architecture-single-writer.md && ! rg -n \"invoker:set-merge-mode\" docs/persistence-architecture-single-writer.md"
+    dependencies:
+      - implement-doc-table-canonical-ipc-name

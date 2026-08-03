@@ -1,0 +1,101 @@
+name: "Repair PR 5942 Step 3: Canonical sweep lint guard"
+description: |
+  Recreate the tooling-policy slice from PR #5942 as a focused lint-guard
+  workflow. This terminal slice depends on the step 2 merge gate and adds only
+  the repository sweep helper plus its package entry.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: plan/repair-pr-5942-doc-table-row
+featureBranch: plan/repair-pr-5942-canonical-sweep-lint
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: implement-canonical-sweep-lint-guard
+    description: |
+      Implement the canonical sweep lint guard slice.
+      Review claim: The repository has a repeatable lint guard for legacy merge-mode, restart, and compatibility strings.
+      Review lane: policy
+      Safety invariant: The new helper and package entry are additive; product runtime behavior is unchanged.
+      Slice rationale: This lint-guard slice lands after the product and markdown names are canonical so the guard can run cleanly.
+      Architectural effect: Repository policy gains a repeatable guard for legacy merge-mode, restart, and compatibility strings.
+      Goal: Recreate only the package entry and sweep helper from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation: PR #5942 failed PR Body validation because this tooling-policy unit was bundled with product and markdown files.
+      Alternative considerations: Weakening the PR Body rule was rejected because this can land as its own tooling-policy slice.
+      Implementation details: Add `scripts/verify-empty-canonical-sweeps.sh` with scoped `rg` checks and add `verify-empty-canonical-sweeps` to `package.json`.
+      Non-goals: No contract edits, no drift-id edits, no markdown prose edits, and no runtime edits.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - package.json
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - package.json: config-only
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      Acceptance criteria:
+      - `pnpm run verify-empty-canonical-sweeps` exits 0.
+      - Output includes `PASS: repository canonical sweeps found only allowed compatibility guards`.
+    prompt: |
+      Review claim: The repository has a repeatable lint guard for legacy merge-mode, restart, and compatibility strings.
+      Review lane: policy
+      Safety invariant: The new helper and package entry are additive; product runtime behavior is unchanged.
+      Slice rationale: This lint-guard slice lands after the product and markdown names are canonical so the guard can run cleanly.
+      Architectural effect: Repository policy gains a repeatable guard for legacy merge-mode, restart, and compatibility strings.
+      Goal: Assume no prior context. On top of the upstream step 2 branch, recreate only the package entry and sweep helper from PR #5942 head fd3cab221191d8c2c7be949f2ba923fabcf91bbd.
+      Motivation: PR #5942 failed PR Body validation because this tooling-policy unit was bundled with product and markdown files.
+      Alternative considerations: Do not weaken the PR Body rule; land this as its own tooling-policy slice.
+      Implementation details: Create executable `scripts/verify-empty-canonical-sweeps.sh` with scoped `rg` checks for legacy merge-mode, restart, and compatibility strings. Preserve the intentional allowlist for the headless alias guard and the sqlite migration compatibility guard. Add `verify-empty-canonical-sweeps` to `package.json` with `bash scripts/verify-empty-canonical-sweeps.sh`.
+      Non-goals: No contract edits, no drift-id edits, no markdown prose edits, and no runtime edits.
+      Files:
+      - package.json
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - package.json: config-only
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      Acceptance criteria:
+      - `pnpm run verify-empty-canonical-sweeps` exits 0.
+      - Output includes `PASS: repository canonical sweeps found only allowed compatibility guards`.
+    dependencies: []
+
+  - id: verify-canonical-sweep-lint-guard
+    description: |
+      Run the focused proof for the canonical sweep lint guard slice.
+      Review claim: The canonical sweep lint guard slice passes its focused checks.
+      Review lane: proof
+      Safety invariant: This task only runs a read-only verification command.
+      Slice rationale: The terminal workflow needs a direct proof for the new lint guard.
+      Architectural effect: None; verification only.
+      Goal: Prove the sweep helper succeeds on the replacement stack.
+      Motivation: The replacement stack should fail before review if stale legacy strings remain.
+      Alternative considerations: Waiting for CI alone was rejected because this focused proof is cheaper.
+      Implementation details: Run `pnpm run verify-empty-canonical-sweeps`.
+      Non-goals: No source edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run verify-empty-canonical-sweeps"
+    dependencies:
+      - implement-canonical-sweep-lint-guard
+
+  - id: verify-replacement-stack
+    description: |
+      Run the final repository proof for the replacement stack.
+      Review claim: The replacement stack passes the repository-wide test gate.
+      Review lane: proof
+      Safety invariant: This task only runs a read-only verification command after the terminal implementation task.
+      Slice rationale: The final workflow carries the integrated proof for the replacement stack.
+      Architectural effect: None; verification only.
+      Goal: Prove the full replacement stack is ready for review.
+      Motivation: The split stack should preserve the behavior of PR #5942 while satisfying PR Body review-unit boundaries.
+      Alternative considerations: Focused checks alone were rejected for the final stack gate.
+      Implementation details: Run `pnpm run test:all`.
+      Non-goals: No source edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm run test:all"
+    dependencies:
+      - verify-canonical-sweep-lint-guard
