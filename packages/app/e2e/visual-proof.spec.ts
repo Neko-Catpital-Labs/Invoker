@@ -1392,6 +1392,50 @@ test.describe('Visual proof capture', () => {
     await captureScreenshot(page, 'task-graph-keyboard-controls-selected');
   });
 
+  test('dag-bg-click-noop — clicking empty background on the workflow graph keeps the mini-DAG visible', async ({ page }) => {
+    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+
+    const miniDag = page.getByTestId('selected-workflow-mini-dag');
+    const inspectorTitle = page.getByTestId('workflow-inspector-title');
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(inspectorTitle).toHaveText('Menu Proof Workflow');
+
+    await captureScreenshot(page, 'dag-bg-click-noop-before');
+
+    const graphSurface = page.getByTestId('workflow-graph-surface');
+    const pane = page.getByTestId('workflow-graph-content').locator('.react-flow__pane').first();
+    await expect(pane).toBeVisible();
+    const paneBox = await pane.boundingBox();
+    const workflowNodeBox = await graphSurface.locator('[data-testid^="workflow-node-"]').first().boundingBox();
+    const miniDagBox = await miniDag.boundingBox();
+    if (!paneBox) throw new Error('workflow graph pane has no bounding box');
+
+    const isInsideBox = (x: number, y: number, box: { x: number; y: number; width: number; height: number } | null) =>
+      !!box && x >= box.x && x <= box.x + box.width && y >= box.y && y <= box.y + box.height;
+
+    const candidates = [
+      { x: paneBox.x + 24, y: paneBox.y + paneBox.height - 24 },
+      { x: paneBox.x + paneBox.width - 24, y: paneBox.y + paneBox.height - 24 },
+      { x: paneBox.x + 24, y: paneBox.y + 24 },
+    ];
+    const clickPoint = candidates.find(
+      (point) => !isInsideBox(point.x, point.y, workflowNodeBox) && !isInsideBox(point.x, point.y, miniDagBox),
+    );
+    if (!clickPoint) throw new Error('could not find an empty background point to click');
+
+    // A real mouse click, not a locator .click() — the regression only reproduces
+    // with real click coordinates hitting the pane background.
+    await page.mouse.click(clickPoint.x, clickPoint.y);
+    await page.waitForTimeout(200);
+
+    await expect(miniDag).toBeVisible();
+    await expect(miniDag.locator('.react-flow__node[data-testid$="task-alpha"]')).toBeVisible();
+    await expect(inspectorTitle).toHaveText('Menu Proof Workflow');
+
+    await captureScreenshot(page, 'dag-bg-click-noop-after');
+  });
+
   test('graph-camera-lock-navigation — task graph remains usable after keyboard and manual camera moves', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, DAG_DETERMINISM_PLAN);
     await minimizeInspectorIfVisible(page);
