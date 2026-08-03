@@ -1,0 +1,98 @@
+name: "Repair PR 5942 split (2) canonical owner-boundary docs"
+description: |
+  Rebuild the documentation portion of PR #5942 as the second replacement slice.
+  This workflow depends on the product-contract replacement slice and changes
+  only the owner-boundary prose that names the canonical workflow merge-mode
+  label.
+
+  Safety invariant proposed for this slice: documentation text changes only
+  reflect the already-canonical label; no runtime, contract, test, or
+  tooling behavior changes in this slice.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    requiredStatus: completed
+
+tasks:
+  - id: isolate-canonical-owner-boundary-docs
+    description: |
+      Recreate only the documentation portion of PR #5942.
+      Review claim: Update the owner-boundary documentation to name the canonical workflow merge-mode label.
+      Review lane: docs
+      Safety invariant: Documentation text changes only reflect the already-canonical label; no runtime, contract, test, or tooling behavior changes in this slice.
+      Slice rationale: This prose-only slice follows the product-facing slice so reviewers can inspect documentation separately from executable surfaces.
+      Architectural effect: None; this slice updates explanatory documentation only.
+      Goal: Preserve the intended owner-boundary documentation update from PR #5942 without carrying executable file changes.
+      Motivation: The original mixed PR cannot satisfy the required review-lane validator while prose and executable changes share one diff.
+      Alternative considerations: Bundling prose with the contract cleanup was rejected because the PR Body validator requires a docs-only review unit for docs paths.
+      Implementation details: From this workflow branch, fetch PR #5942 with `git fetch origin +refs/pull/5942/head:refs/remotes/pull/5942/head`, inspect `fd3cab221191d8c2c7be949f2ba923fabcf91bbd`, and apply only the one-line owner-boundary documentation update to the named file.
+      Non-goals: No contract edits, no test edits, no script edits, no package metadata edits.
+      Layer: docs
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: docs-only
+      Acceptance criteria:
+      - The diff for this workflow changes only `docs/persistence-architecture-single-writer.md`.
+      - The document references `invoker:set-workflow-merge-mode` in the GUI IPC handler table.
+      - The document no longer references `invoker:set-merge-mode`.
+    prompt: |
+      Goal: Rebuild only the documentation portion of PR #5942 as a replacement slice.
+      Review claim: Update the owner-boundary documentation to name the canonical workflow merge-mode label.
+      Review lane: docs
+      Safety invariant: Documentation text changes only reflect the already-canonical label; no runtime, contract, test, or tooling behavior changes in this slice.
+      Slice rationale: This prose-only workflow follows the prior product slice and must remain a docs-only review unit.
+      Architectural effect: None; update explanatory documentation only.
+      Motivation: PR #5942 currently fails the PR Body check because it mixes docs with other review units.
+      Alternative considerations: Do not repair the mixed PR by changing only its body; the changed files make that invalid.
+      Implementation details: Assume no prior context. Fetch the source PR head with `git fetch origin +refs/pull/5942/head:refs/remotes/pull/5942/head`, inspect `fd3cab221191d8c2c7be949f2ba923fabcf91bbd`, and apply only the `docs/persistence-architecture-single-writer.md` update that replaces the deprecated GUI IPC handler name with `invoker:set-workflow-merge-mode`.
+      Non-goals: Do not modify package metadata, scripts, contracts, or app tests in this workflow.
+      Acceptance criteria:
+      - The final diff changes only `docs/persistence-architecture-single-writer.md`.
+      - The canonical workflow merge-mode label is present in `docs/persistence-architecture-single-writer.md`.
+      - The deprecated merge-mode label is absent from `docs/persistence-architecture-single-writer.md`.
+      - The generated PR body declares Review Lane `docs` and Review Unit `docs`.
+    dependencies: []
+
+  - id: verify-canonical-owner-boundary-label-present
+    description: |
+      Verify the canonical owner-boundary label is present.
+      Review claim: The focused grep check passes only when the owner-boundary prose names the canonical workflow merge-mode label.
+      Review lane: proof
+      Safety invariant: Verification only; this task makes no source changes.
+      Slice rationale: The proof stays attached to the docs-only replacement slice.
+      Architectural effect: None; this task only validates documentation text.
+      Goal: Prove the docs-only update is present.
+      Motivation: The replacement stack needs deterministic evidence before review.
+      Alternative considerations: Manual inspection was rejected as insufficient proof for the docs slice.
+      Implementation details: Run the focused presence check from the repo root.
+      Non-goals: No file edits in this task.
+      Layer: docs
+      Feature state: active
+    command: "rg -n \"invoker:set-workflow-merge-mode\" docs/persistence-architecture-single-writer.md"
+    dependencies:
+      - isolate-canonical-owner-boundary-docs
+
+  - id: verify-deprecated-owner-boundary-label-absent
+    description: |
+      Verify the deprecated owner-boundary label is absent.
+      Review claim: The focused grep check passes only when the owner-boundary prose no longer names the deprecated merge-mode label.
+      Review lane: proof
+      Safety invariant: Verification only; this task makes no source changes.
+      Slice rationale: The proof stays attached to the docs-only replacement slice.
+      Architectural effect: None; this task only validates documentation text.
+      Goal: Prove the deprecated label is absent from the docs-only update.
+      Motivation: The replacement stack needs deterministic evidence before review.
+      Alternative considerations: Manual inspection was rejected as insufficient proof for the docs slice.
+      Implementation details: Run the focused absence check from the repo root.
+      Non-goals: No file edits in this task.
+      Layer: docs
+      Feature state: active
+    command: "! rg -n \"invoker:set-merge-mode\" docs/persistence-architecture-single-writer.md"
+    dependencies:
+      - isolate-canonical-owner-boundary-docs

@@ -1,0 +1,122 @@
+name: "Repair PR 5942 split (1) canonical workflow IPC contract"
+description: |
+  Rebuild the product-contract portion of PR #5942 from `origin/master` as the
+  first replacement slice. The current PR head `fd3cab221191d8c2c7be949f2ba923fabcf91bbd`
+  fails the PR Body check because its diff combines contract, docs, and
+  tooling-policy paths. This workflow keeps the contract API surface and directly
+  affected drift coverage together, leaving prose and repository sweep tooling
+  for later stack slices.
+
+  Safety invariant proposed for this slice: the runtime merge-mode behavior stays
+  routed through the existing canonical workflow merge-mode API; this slice only
+  removes the deprecated IPC contract key and updates directly affected drift
+  scenario identifiers.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+tasks:
+  - id: isolate-canonical-workflow-ipc-contract
+    description: |
+      Recreate only the contract portion of PR #5942.
+      Review claim: Retire the deprecated `invoker:set-merge-mode` IPC contract entry and align directly affected drift scenario identifiers with the canonical workflow merge-mode name.
+      Review lane: behavior
+      Safety invariant: Runtime merge-mode behavior stays routed through the existing canonical workflow merge-mode API; this slice only retires the deprecated IPC contract key and updates directly affected drift scenario identifiers.
+      Slice rationale: This is the product-facing base slice; later slices handle non-product prose and repository policy checks.
+      Architectural effect: The public IPC contract stops advertising the deprecated merge-mode key while the canonical workflow merge-mode channel remains the active surface.
+      Goal: Preserve the intended product contract change from PR #5942 without carrying unrelated changed paths.
+      Motivation: The original mixed PR cannot satisfy the required review-lane validator, so the product contract change needs its own reviewable diff.
+      Alternative considerations: Editing the existing PR body was rejected because no single allowed review lane can cover the current mixed path set.
+      Implementation details: From a fresh branch based on `origin/master`, fetch PR #5942 with `git fetch origin +refs/pull/5942/head:refs/remotes/pull/5942/head`, inspect commit `fd3cab221191d8c2c7be949f2ba923fabcf91bbd`, and apply only the changes to the files listed below. Do not add the sweep script, package script entry, or prose change in this workflow.
+      Non-goals: No docs edits, no scripts edits, no package metadata edits, no unrelated runtime behavior changes.
+      Layer: transport
+      Feature state: active
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: test-only
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: test-only
+      - packages/app/e2e/drift/scenario-catalog.ts: test-only
+      Acceptance criteria:
+      - The diff for this workflow changes only the files listed above.
+      - `packages/contracts/src/ipc-channels.ts` no longer declares `invoker:set-merge-mode`.
+      - Drift scenario identifiers use `set-workflow-merge-mode` where PR #5942 currently uses that canonical name.
+      - `pnpm --filter @invoker/contracts build` exits 0.
+    prompt: |
+      Goal: Rebuild only the product-contract portion of PR #5942 as a replacement slice.
+      Review claim: Retire the deprecated `invoker:set-merge-mode` IPC contract entry and align directly affected drift scenario identifiers with the canonical workflow merge-mode name.
+      Review lane: behavior
+      Safety invariant: Runtime merge-mode behavior stays routed through the existing canonical workflow merge-mode API; this slice only retires the deprecated IPC contract key and updates directly affected drift scenario identifiers.
+      Slice rationale: This workflow must be the product-facing base slice; later workflows handle non-product prose and repository policy checks.
+      Architectural effect: The public IPC contract stops advertising the deprecated merge-mode key while the canonical workflow merge-mode channel remains active.
+      Motivation: PR #5942 currently fails the PR Body check because it spans multiple review units, so the product contract cleanup needs its own branch.
+      Alternative considerations: Do not repair PR #5942 by changing only its body; the changed files make that invalid.
+      Implementation details: Assume no prior context. Start from this workflow branch based on `origin/master`. Fetch the source PR head with `git fetch origin +refs/pull/5942/head:refs/remotes/pull/5942/head`, inspect `fd3cab221191d8c2c7be949f2ba923fabcf91bbd`, and apply only the intended edits to `packages/contracts/src/ipc-channels.ts`, `packages/app/e2e/drift/drift-battery.spec.ts`, `packages/app/e2e/drift/drift-thundering-herd.spec.ts`, and `packages/app/e2e/drift/scenario-catalog.ts`.
+      Non-goals: Do not add or modify `scripts/verify-empty-canonical-sweeps.sh`, `package.json`, or docs in this workflow.
+      Acceptance criteria:
+      - The final diff changes only the four listed files.
+      - `pnpm --filter @invoker/contracts build` exits 0.
+      - The generated PR body declares Review Lane `behavior` and Review Unit `contract`.
+    dependencies: []
+
+  - id: verify-deprecated-ipc-contract-absent
+    description: |
+      Verify the deprecated IPC contract key is absent from the contract slice.
+      Review claim: The grep check passes only when the deprecated IPC contract key is absent from the changed contract and drift files.
+      Review lane: proof
+      Safety invariant: Verification only; this task makes no source changes.
+      Slice rationale: The proof stays attached to the product-contract replacement slice.
+      Architectural effect: None; this task only validates the branch.
+      Goal: Prove the old IPC key is absent from this slice.
+      Motivation: The replacement stack needs deterministic evidence before review.
+      Alternative considerations: Manual inspection was rejected as insufficient proof for the contract surface.
+      Implementation details: Run the focused absence check from the repo root.
+      Non-goals: No file edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "! rg -n \"invoker:set-merge-mode\" packages/contracts/src/ipc-channels.ts packages/app/e2e/drift/drift-battery.spec.ts packages/app/e2e/drift/drift-thundering-herd.spec.ts packages/app/e2e/drift/scenario-catalog.ts"
+    dependencies:
+      - isolate-canonical-workflow-ipc-contract
+
+  - id: verify-canonical-drift-name-present
+    description: |
+      Verify the canonical drift scenario name is present.
+      Review claim: The grep check passes only when the changed drift coverage uses the canonical workflow merge-mode name.
+      Review lane: proof
+      Safety invariant: Verification only; this task makes no source changes.
+      Slice rationale: The proof stays attached to the product-contract replacement slice.
+      Architectural effect: None; this task only validates the branch.
+      Goal: Prove the canonical drift scenario identifier is present.
+      Motivation: The replacement stack needs deterministic evidence before review.
+      Alternative considerations: Manual inspection was rejected as insufficient proof for the drift label.
+      Implementation details: Run the focused presence check from the repo root.
+      Non-goals: No file edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "rg -n \"set-workflow-merge-mode\" packages/app/e2e/drift/drift-battery.spec.ts packages/app/e2e/drift/drift-thundering-herd.spec.ts packages/app/e2e/drift/scenario-catalog.ts"
+    dependencies:
+      - isolate-canonical-workflow-ipc-contract
+
+  - id: build-contracts-after-canonical-ipc
+    description: |
+      Build the contracts package after the canonical IPC contract change.
+      Review claim: The contracts package build passes with the canonical IPC contract surface.
+      Review lane: proof
+      Safety invariant: Verification only; this task makes no source changes.
+      Slice rationale: The build proof stays attached to the product-contract replacement slice.
+      Architectural effect: None; this task only validates package compilation.
+      Goal: Prove the contract package still compiles.
+      Motivation: The replacement stack needs deterministic evidence before review.
+      Alternative considerations: Skipping the package build was rejected because the changed contract is typed source.
+      Implementation details: Run the focused package build from the repo root.
+      Non-goals: No file edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "pnpm --filter @invoker/contracts build"
+    dependencies:
+      - isolate-canonical-workflow-ipc-contract

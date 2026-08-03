@@ -1,0 +1,80 @@
+name: "Repair PR 5942 split (3) canonical sweep verifier"
+description: |
+  Rebuild the tooling-policy portion of PR #5942 as the final replacement slice.
+  This workflow depends on the earlier canonical-name slices so the repository
+  sweep can be added after the old names are removed from source paths it scans.
+
+  Safety invariant proposed for this slice: this workflow adds only a repository
+  policy checker and package script wiring; it does not change product runtime
+  behavior.
+onFinish: pull_request
+mergeMode: external_review
+baseBranch: master
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    requiredStatus: completed
+
+tasks:
+  - id: isolate-canonical-sweep-verifier
+    description: |
+      Recreate only the tooling-policy portion of PR #5942.
+      Review claim: Add a repository sweep helper and package script that fail when deprecated merge-mode, restart, or compatibility strings are reintroduced outside allowed guards.
+      Review lane: policy
+      Safety invariant: This workflow adds only a repository policy checker and package script wiring; it does not change product runtime behavior.
+      Slice rationale: The policy checker lands after canonical-name cleanup so its enforced scan can pass without bundling executable cleanup into this review unit.
+      Architectural effect: Adds a CI-adjacent repository verification surface; no runtime control flow or public API changes.
+      Goal: Preserve the intended canonical sweep verifier from PR #5942 without carrying product or prose changes.
+      Motivation: The original mixed PR cannot satisfy the required review-lane validator while tooling-policy, product, and docs paths share one diff.
+      Alternative considerations: Relaxing the PR Body validator or changing only PR metadata was rejected because the mixed path set is genuinely cross-unit.
+      Implementation details: From this workflow branch, fetch PR #5942 with `git fetch origin +refs/pull/5942/head:refs/remotes/pull/5942/head`, inspect `fd3cab221191d8c2c7be949f2ba923fabcf91bbd`, and apply only `scripts/verify-empty-canonical-sweeps.sh` plus the `verify-empty-canonical-sweeps` package script entry.
+      Non-goals: No product edits, no docs edits, no contract edits, no app test edits.
+      Layer: app_regression
+      Feature state: active
+      Files:
+      - scripts/verify-empty-canonical-sweeps.sh
+      - package.json
+      Change types:
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      - package.json: config-only
+      Acceptance criteria:
+      - The diff for this workflow changes only `scripts/verify-empty-canonical-sweeps.sh` and `package.json`.
+      - `bash scripts/verify-empty-canonical-sweeps.sh` exits 0.
+      - `pnpm run verify-empty-canonical-sweeps` exits 0.
+    prompt: |
+      Goal: Rebuild only the tooling-policy portion of PR #5942 as the final replacement slice.
+      Review claim: Add a repository sweep helper and package script that fail when deprecated merge-mode, restart, or compatibility strings are reintroduced outside allowed guards.
+      Review lane: policy
+      Safety invariant: This workflow adds only a repository policy checker and package script wiring; it does not change product runtime behavior.
+      Slice rationale: The policy checker must land after canonical-name cleanup so its enforced scan can pass without bundling product cleanup into this review unit.
+      Architectural effect: Adds a CI-adjacent repository verification surface; no runtime control flow or public API changes.
+      Motivation: PR #5942 currently fails the PR Body check because it mixes tooling-policy files with product and docs paths.
+      Alternative considerations: Do not relax the validator and do not repair by changing only PR metadata; the changed files need separate review units.
+      Implementation details: Assume no prior context. Fetch the source PR head with `git fetch origin +refs/pull/5942/head:refs/remotes/pull/5942/head`, inspect `fd3cab221191d8c2c7be949f2ba923fabcf91bbd`, and apply only `scripts/verify-empty-canonical-sweeps.sh` plus the `verify-empty-canonical-sweeps` entry in root `package.json`. Preserve the script's final PR #5942 version, including scoped `rg` error handling.
+      Non-goals: Do not modify docs, contracts, app e2e tests, or product runtime code in this workflow.
+      Acceptance criteria:
+      - The final diff changes only `scripts/verify-empty-canonical-sweeps.sh` and `package.json`.
+      - `bash scripts/verify-empty-canonical-sweeps.sh` exits 0.
+      - `pnpm run verify-empty-canonical-sweeps` exits 0.
+      - The generated PR body declares Review Lane `policy` and Review Unit `tooling-policy`.
+    dependencies: []
+
+  - id: verify-canonical-sweep-verifier
+    description: |
+      Verify the canonical sweep helper and package script.
+      Review claim: The sweep command passes only when deprecated canonical strings are absent except for explicitly allowed guards.
+      Review lane: proof
+      Safety invariant: Verification only; this task makes no source changes.
+      Slice rationale: The proof stays attached to the tooling-policy replacement slice.
+      Architectural effect: None; this task only validates the policy checker.
+      Goal: Prove both the shell helper and package script entry run successfully.
+      Motivation: The replacement stack needs deterministic evidence before review.
+      Alternative considerations: Manual grep output was rejected because the package script wiring also needs proof.
+      Implementation details: Run the helper directly and through the package script from the repo root.
+      Non-goals: No file edits in this task.
+      Layer: app_regression
+      Feature state: active
+    command: "bash scripts/verify-empty-canonical-sweeps.sh && pnpm run verify-empty-canonical-sweeps"
+    dependencies:
+      - isolate-canonical-sweep-verifier
