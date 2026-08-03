@@ -3726,6 +3726,30 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
 
+  /**
+   * Record that the launch handoff for this row succeeded (the executor is
+   * confirmed live). Reuses the `acknowledged_at` column, which has been
+   * unused dead weight since the acknowledged-state removal in migration
+   * work (see sqlite-migrations.ts) -- no schema change needed.
+   *
+   * This is intentionally separate from markLaunchDispatchCompleted: that
+   * one only fires once the task's whole run finishes (needed by headless
+   * run/resume polling), so it cannot double as a "did launch succeed"
+   * signal. listAbandonableLaunchDispatchLeases uses acknowledged_at to
+   * stop treating a row as stuck-in-launch once it's actually launched.
+   */
+  markLaunchDispatchAccepted(id: number, nowIso?: string): boolean {
+    const now = nowIso ?? new Date().toISOString();
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET acknowledged_at = COALESCE(acknowledged_at, ?)
+       WHERE id = ?
+         AND state = 'leased'`,
+      [now, id],
+    );
+    return (this.db.getRowsModified?.() ?? 0) > 0;
+  }
+
   markLaunchDispatchFailed(
     id: number,
     errorMessage: string,
@@ -3761,7 +3785,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
            AND fenced_until < ?
            AND (
              attempts_count >= ?
-             OR (? IS NOT NULL AND enqueued_at <= ?)
+             OR (acknowledged_at IS NULL AND ? IS NOT NULL AND enqueued_at <= ?)
            )
          ORDER BY id ASC`,
       [now, options.maxAttempts, ageCutoff, ageCutoff],

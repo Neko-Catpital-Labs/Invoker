@@ -17,6 +17,7 @@ import { resolveLaunchDispatchLeaseMsOverride } from './launch-dispatch-defaults
 export type LaunchDispatcherPersistence = Pick<
   SQLiteAdapter,
   | 'loadLaunchDispatchById'
+  | 'markLaunchDispatchAccepted'
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
@@ -550,10 +551,29 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Transition a live dispatch row to completed. Called by the
-   * TaskRunner once {@link markTaskRunningAfterLaunch} has succeeded
-   * (the executor handle is live and the task is in the executing
-   * phase). Returns false when the row is already terminal.
+   * Record that the launch handoff succeeded. Called by the TaskRunner
+   * once {@link markTaskRunningAfterLaunch} has succeeded (the executor
+   * handle is live and the task is in the executing phase). This stops
+   * `abandonStuckLeases`'s age check from treating the row as stuck in
+   * launch -- it does NOT complete the row, since headless run/resume
+   * polls dispatch completion to mean the task's work is actually done.
+   * Returns false when the row is no longer leased (already terminal).
+   */
+  acceptDispatch(dispatchId: number): boolean {
+    const ok = this.persistence.markLaunchDispatchAccepted(dispatchId);
+    this.logger?.info?.('[launch-dispatcher] accepted', {
+      ownerId: this.ownerId,
+      dispatchId,
+      accepted: ok,
+      module: 'launch-dispatcher',
+    });
+    return ok;
+  }
+
+  /**
+   * Transition a live dispatch row to completed once the task's whole
+   * run finishes (called from TaskRunner's onComplete finalization).
+   * Returns false when the row is already terminal.
    */
   completeDispatch(dispatchId: number): boolean {
     const ok = this.persistence.markLaunchDispatchCompleted(dispatchId);
