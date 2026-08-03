@@ -24,16 +24,20 @@ vi.mock('@xyflow/react', async () => {
 
 const xtermMock = vi.hoisted(() => {
   type DataHandler = (data: string) => void;
+  type TerminalDimensions = { cols: number; rows: number };
 
   const instances: MockTerminal[] = [];
   const fitInstances: MockFitAddon[] = [];
   const writeLog: string[] = [];
+  let nextProposedDimensions: TerminalDimensions | undefined = { cols: 80, rows: 24 };
 
   class MockTerminal {
     cols = 80;
     rows = 24;
     dataHandler: DataHandler | null = null;
-    loadAddon = vi.fn();
+    loadAddon = vi.fn((addon: { activate?: (terminal: MockTerminal) => void }) => {
+      addon.activate?.(this);
+    });
     open = vi.fn((host: HTMLElement) => {
       const terminalElement = document.createElement('div');
       terminalElement.className = 'xterm';
@@ -61,7 +65,16 @@ const xtermMock = vi.hoisted(() => {
   }
 
   class MockFitAddon {
-    fit = vi.fn();
+    terminal: MockTerminal | null = null;
+    activate = vi.fn((terminal: MockTerminal) => {
+      this.terminal = terminal;
+    });
+    proposeDimensions = vi.fn(() => nextProposedDimensions);
+    fit = vi.fn(() => {
+      if (!this.terminal || !nextProposedDimensions) return;
+      this.terminal.cols = nextProposedDimensions.cols;
+      this.terminal.rows = nextProposedDimensions.rows;
+    });
 
     constructor() {
       fitInstances.push(this);
@@ -74,10 +87,14 @@ const xtermMock = vi.hoisted(() => {
     instances,
     fitInstances,
     writeLog,
+    setNextProposedDimensions: (dimensions: TerminalDimensions | undefined) => {
+      nextProposedDimensions = dimensions;
+    },
     reset: () => {
       instances.length = 0;
       fitInstances.length = 0;
       writeLog.length = 0;
+      nextProposedDimensions = { cols: 80, rows: 24 };
     },
   };
 });
@@ -128,6 +145,20 @@ async function expectPaneReady(taskId: string) {
     expect(pane.querySelector('.xterm')).not.toBeNull();
   });
   return pane;
+}
+
+async function flushTaskTerminalFitFrames(): Promise<void> {
+  for (let index = 0; index < 5; index += 1) {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        if (typeof window.requestAnimationFrame === 'function') {
+          window.requestAnimationFrame(() => resolve());
+          return;
+        }
+        window.setTimeout(resolve, 0);
+      });
+    });
+  }
 }
 
 async function selectWorkflow(): Promise<void> {
@@ -185,6 +216,7 @@ describe('Terminal drawer (component)', () => {
       expect(xtermMock.writeLog).toContain('restored before restart\n');
     });
     await expectPaneReady('task-alpha');
+    await flushTaskTerminalFitFrames();
     await waitFor(() => {
       expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
       expect(xtermMock.instances[0]?.refresh).toHaveBeenCalledWith(0, 23);
@@ -211,6 +243,7 @@ describe('Terminal drawer (component)', () => {
     expect(screen.getByTestId('terminal-drawer-body')).toHaveStyle({ height: '280px' });
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'true');
     await expectPaneReady('task-alpha');
+    await flushTaskTerminalFitFrames();
     await waitFor(() => {
       expect(xtermMock.fitInstances[0]?.fit).toHaveBeenCalled();
       expect(xtermMock.instances[0]?.refresh).toHaveBeenCalledWith(0, 23);
@@ -223,11 +256,62 @@ describe('Terminal drawer (component)', () => {
     expect(screen.getByTestId('terminal-drawer')).toHaveClass('fixed');
     expect(screen.getByTestId('terminal-drawer-body')).toHaveClass('min-h-0', 'flex-1', 'overflow-hidden');
     await expectPaneReady('task-alpha');
+    await flushTaskTerminalFitFrames();
     await waitFor(() => {
       expect(xtermMock.fitInstances[0].fit.mock.calls.length).toBeGreaterThan(partialFitCalls);
       expect(xtermMock.instances[0].refresh.mock.calls.length).toBeGreaterThan(partialRefreshCalls);
       expect(xtermMock.instances[0]?.focus).toHaveBeenCalled();
     });
+  });
+
+  it('skips task terminal fit and resize when proposed dimensions are tiny', async () => {
+    xtermMock.setNextProposedDimensions({ cols: 19, rows: 4 });
+    const session = makeTerminalSession('task-alpha');
+
+    render(
+      <TerminalDrawer
+        state="partial"
+        onCycle={vi.fn()}
+        sessions={[session]}
+        activeSessionId={session.sessionId}
+        onSelectSession={vi.fn()}
+        onCloseSession={vi.fn()}
+      />,
+    );
+    await expectPaneReady('task-alpha');
+    await flushTaskTerminalFitFrames();
+
+    expect(xtermMock.fitInstances[0]?.proposeDimensions).toHaveBeenCalled();
+    expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
+  });
+
+  it('does not send a transient maximized resize when the drawer is minimized before fit settles', async () => {
+    const session = makeTerminalSession('task-alpha');
+    const props = {
+      onCycle: vi.fn(),
+      sessions: [session],
+      activeSessionId: session.sessionId,
+      onSelectSession: vi.fn(),
+      onCloseSession: vi.fn(),
+    };
+
+    const { rerender } = render(<TerminalDrawer state="partial" {...props} />);
+    await expectPaneReady('task-alpha');
+    await flushTaskTerminalFitFrames();
+    await waitFor(() => {
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
+    vi.mocked(mock.api.terminalResize).mockClear();
+
+    xtermMock.setNextProposedDimensions({ cols: 120, rows: 40 });
+    rerender(<TerminalDrawer state="maximized" {...props} />);
+    rerender(<TerminalDrawer state="minimized" {...props} />);
+    xtermMock.setNextProposedDimensions({ cols: 80, rows: 24 });
+    rerender(<TerminalDrawer state="partial" {...props} />);
+    await flushTaskTerminalFitFrames();
+
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
   });
 
   it('refits the newly active pane when terminal tabs switch', async () => {
@@ -255,6 +339,7 @@ describe('Terminal drawer (component)', () => {
 
     rerender(<TerminalDrawer {...props} activeSessionId={beta.sessionId} />);
     await expectPaneReady('task-beta');
+    await flushTaskTerminalFitFrames();
     expect(screen.getByTestId('terminal-tab-task-alpha')).toHaveAttribute('data-active', 'false');
     expect(screen.getByTestId('terminal-tab-task-beta')).toHaveAttribute('data-active', 'true');
     await waitFor(() => {
@@ -754,6 +839,7 @@ describe('Terminal drawer (component)', () => {
 
     fireEvent.doubleClick(screen.getByTestId('rf__node-task-alpha'));
     await waitFor(() => expect(screen.getByTestId('terminal-tab-task-alpha')).toBeInTheDocument());
+    await flushTaskTerminalFitFrames();
     await waitFor(() => {
       expect(mock.api.terminalResize).toHaveBeenCalledWith('mock-session-task-alpha', 80, 24);
     });

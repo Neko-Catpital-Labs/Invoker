@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / terminal-garbling',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,16 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const terminalGarblingCommand = defs.get('playwright / terminal-garbling').verifyCommand;
+  if (!terminalGarblingCommand.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-terminal-garbling'")) {
+    fail('terminal-garbling shard command must use the named CI run label');
+  }
+  if (!terminalGarblingCommand.includes('task-terminal-drawer-minimize-garble-repro.spec.ts')) {
+    fail('terminal-garbling shard command must include the drawer minimize repro');
+  }
+  if (terminalGarblingCommand.includes('No local verify command is mapped')) {
+    fail('terminal-garbling shard must not render the fallback verify command');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
