@@ -33,7 +33,7 @@ const BURST_SCENARIO_IDS = [
   'edit-task-command',
   'detach-workflow',
   'delete-task',
-  'set-merge-mode',
+  'set-workflow-merge-mode',
   'set-merge-branch',
 ];
 
