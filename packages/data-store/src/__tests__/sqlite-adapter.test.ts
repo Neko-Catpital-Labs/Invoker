@@ -1842,6 +1842,60 @@ describe('SQLiteAdapter', () => {
       expect(adapter.loadLaunchDispatchById(unrelated.id)?.state).toBe('enqueued');
     });
 
+    it.fails('abandonLaunchDispatchesForTasks tags rows with abandon_reason=lifecycle-reset', () => {
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
+      saveLaunchTask('wf-launch', 'wf-launch/t1', 'attempt-reason-check');
+      const row = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1',
+        attemptId: 'attempt-reason-check',
+        workflowId: 'wf-launch',
+        generation: 0,
+      });
+      adapter.abandonLaunchDispatchesForTasks(['wf-launch/t1'], 'workflow cancelled');
+      expect(adapter.loadLaunchDispatchById(row.id)?.abandonReason).toBe('lifecycle-reset');
+      // Lifecycle-reset abandons must not erode the stuck-lease retry
+      // budget -- they are unrelated, legitimate events.
+      expect(adapter.countAbandonedLaunchDispatchesForTask('wf-launch/t1')).toBe(0);
+    });
+
+    it.fails('countAbandonedLaunchDispatchesForTask only counts stuck-lease abandons, and resetStuckLeaseAbandonCount clears them', () => {
+      adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
+      saveLaunchTask('wf-launch', 'wf-launch/t1', 'attempt-mixed-1');
+
+      const stuck1 = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1', attemptId: 'attempt-mixed-1', workflowId: 'wf-launch', generation: 0,
+      });
+      adapter.markLaunchDispatchAbandoned(stuck1.id, 'looked stuck', undefined, 'stuck-lease');
+
+      const stuck2 = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1', attemptId: 'attempt-mixed-2', workflowId: 'wf-launch', generation: 1,
+      });
+      adapter.markLaunchDispatchAbandoned(stuck2.id, 'looked stuck again', undefined, 'stuck-lease');
+
+      const cancelled = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1', attemptId: 'attempt-mixed-3', workflowId: 'wf-launch', generation: 2,
+      });
+      adapter.markLaunchDispatchAbandoned(cancelled.id, 'user cancelled', undefined, 'lifecycle-reset');
+
+      const unlabelled = adapter.enqueueLaunchDispatch({
+        taskId: 'wf-launch/t1', attemptId: 'attempt-mixed-4', workflowId: 'wf-launch', generation: 3,
+      });
+      adapter.markLaunchDispatchAbandoned(unlabelled.id, 'no reason given');
+
+      // Only the two 'stuck-lease' rows count -- cancel and unlabelled abandons don't.
+      expect(adapter.countAbandonedLaunchDispatchesForTask('wf-launch/t1')).toBe(2);
+
+      const resetCount = adapter.resetStuckLeaseAbandonCount('wf-launch/t1');
+      expect(resetCount).toBe(2);
+      expect(adapter.countAbandonedLaunchDispatchesForTask('wf-launch/t1')).toBe(0);
+      // Relabelled, not deleted -- the row stays abandoned/auditable.
+      expect(adapter.loadLaunchDispatchById(stuck1.id)?.state).toBe('abandoned');
+      expect(adapter.loadLaunchDispatchById(stuck1.id)?.abandonReason).toBe('stuck-lease-reset');
+
+      // A second reset on an already-reset task is a no-op, not an error.
+      expect(adapter.resetStuckLeaseAbandonCount('wf-launch/t1')).toBe(0);
+    });
+
     it('releaseExecutionResourceLeasesForTasks releases only leases held by the selected task set', () => {
       adapter.saveWorkflow({ ...testWorkflow, id: 'wf-launch' });
       saveLaunchTask('wf-launch', 'wf-launch/t1', 'attempt-lease-1');
