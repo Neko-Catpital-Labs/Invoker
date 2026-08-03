@@ -1,0 +1,120 @@
+name: "Repair PR 7164 by splitting review units"
+description: |
+  Reproduce the live PR Body failure on #7164, then split the existing
+  disk-hygiene branch into a lower contract PR plus the existing reaper reclaim
+  PR retargeted above it.
+
+  The current PR mixes `packages/contracts` files with app/execution-engine
+  runtime files, so `scripts/validate-pr-body.mjs` correctly rejects the PR
+  body as a multi-review-unit diff. The repair is branch/PR surgery, not a
+  single extra commit on #7164.
+onFinish: none
+mergeMode: manual
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+
+tasks:
+  - id: reproduce-pr-body-review-unit-split
+    description: |
+      Reproduce #7164's PR Body failure with the repo-local CI-equivalent validator.
+      Review claim: #7164 currently fails because the changed-file set contains both contract and routing review units.
+      Safety invariant: This task only fetches the live PR head, reads the live PR body, and expects the validator to fail with the known review-unit split error.
+      Slice rationale: Reproducing the failure before branch surgery prevents a metadata-only or unrelated repair.
+      Architectural effect: None; this is a read-only proof task.
+      Goal: Prove the current #7164 failure mode deterministically before restructuring.
+      Motivation: The repair should target the actual PR Body check failure, not an inferred CI problem.
+      Alternative considerations: Relying only on the GitHub Actions excerpt was rejected because the live PR body may have changed after the failing run.
+      Implementation details: Fetch `refs/pull/7164/head`, validate its current body against `master`, and require the expected split-unit error plus `contract,routing` review-unit classification.
+    command: |
+      set -eu
+      git fetch origin "+refs/pull/7164/head:refs/remotes/pull/7164/head"
+      git checkout --detach refs/remotes/pull/7164/head
+      pnpm install --no-frozen-lockfile --ignore-scripts
+      tmp_body="$(mktemp /tmp/pr-7164-body.XXXXXX.md)"
+      tmp_out="$(mktemp /tmp/pr-7164-validator.XXXXXX.json)"
+      cleanup() {
+        rm -f "$tmp_body" "$tmp_out"
+      }
+      trap cleanup EXIT
+      gh pr view 7164 --repo Neko-Catpital-Labs/Invoker --json body --jq .body > "$tmp_body"
+      if node scripts/validate-pr-body-local.mjs --body-file "$tmp_body" --base master --json > "$tmp_out" 2>&1; then
+        cat "$tmp_out"
+        echo "Expected PR Body validation to fail before the split."
+        exit 1
+      fi
+      cat "$tmp_out"
+      grep -F 'cannot ship with contract files' "$tmp_out"
+      grep -F '"reviewUnits":["contract","routing"]' "$tmp_out"
+    dependencies: []
+
+  - id: split-pr-7164-into-contract-and-routing-prs
+    description: |
+      Split #7164 into a contract foundation PR and the existing routing PR retargeted above it.
+      Review claim: The disk-hygiene stack should present the hourly snapshot retention contract helper separately from the reaper reclaim routing behavior.
+      Review lane: behavior
+      Safety invariant: Use `--force-with-lease` for the existing #7164 branch, stop on concurrent head changes, and validate each resulting PR body against its actual base branch before reporting success.
+      Slice rationale: The PR Body policy requires one review unit per PR; a lower contract PR lets #7164 keep the reaper reclaim behavior without shipping contract files in the same diff.
+      Architectural effect: The contract helper becomes the stack foundation; #7164 becomes a routing-only consumer/behavior slice based on that helper.
+      Goal: Repair the failing PR Body check by changing the PR stack shape, not by weakening metadata.
+      Motivation: CI is correctly enforcing review boundaries, and the code dependency fix cannot remain bundled with the runtime reclaim checks.
+      Alternative considerations: Changing #7164's Review Unit to `contract` was rejected because it would then fail on routing files. Removing the contract helper was rejected because the reaper worker needs a lower-layer home for the shared retention helper.
+      Implementation details: Create or update a lower branch from the live #7164 base containing only `packages/contracts/src/hourly-snapshot-retention.ts` and `packages/contracts/src/index.ts`; create/update a PR for that branch; rebuild the existing #7164 head branch on top of the lower branch with only the app/execution-engine files; retarget #7164 to the lower branch; update both PR bodies; validate both bodies locally.
+      Layer: app_bridge
+      Feature state: active
+      Files: packages/contracts/src/hourly-snapshot-retention.ts; packages/contracts/src/index.ts; packages/app/src/delete-all-snapshot.ts; packages/execution-engine/src/workers/disk-headroom-reclaim.ts; packages/execution-engine/src/workers/reaper-reclaim.ts; packages/execution-engine/src/__tests__/reaper-reclaim.test.ts
+      Change types:
+      - packages/contracts/src/hourly-snapshot-retention.ts: move to lower PR
+      - packages/contracts/src/index.ts: move to lower PR
+      - packages/app/src/delete-all-snapshot.ts: keep in #7164 routing PR
+      - packages/execution-engine/src/workers/disk-headroom-reclaim.ts: keep in #7164 routing PR
+      - packages/execution-engine/src/workers/reaper-reclaim.ts: keep in #7164 routing PR
+      - packages/execution-engine/src/__tests__/reaper-reclaim.test.ts: keep in #7164 routing PR
+      Acceptance criteria:
+      - A lower PR exists with base `master`, Review Unit `contract`, and changed files limited to `packages/contracts/src/hourly-snapshot-retention.ts` and `packages/contracts/src/index.ts`.
+      - Existing PR #7164 is retargeted to the lower branch, keeps head branch `stack/EdbertChan/pr/reaper-disk-hygiene/add-reaper-cleanup-checks-disk-hygiene--43178418`, and has Review Unit `routing`.
+      - `node scripts/validate-pr-body-local.mjs --body-file <lower-body> --base master --json` exits 0 on the lower branch.
+      - `node scripts/validate-pr-body-local.mjs --body-file <7164-body> --base <lower-branch> --json` exits 0 on #7164.
+      - `cd packages/execution-engine && pnpm test src/__tests__/reaper-reclaim.test.ts` exits 0 on #7164 after the split.
+      - `cd packages/app && pnpm test src/__tests__/delete-all-snapshot.test.ts` exits 0 on #7164 after the split.
+    prompt: |
+      Assume no prior chat context. You are repairing existing pull request #7164 in `Neko-Catpital-Labs/Invoker`.
+      Goal: Split #7164 so its PR Body check passes by review-unit shape rather than by weakening metadata.
+      Review claim: The hourly snapshot retention contract helper belongs in a lower contract PR, and #7164 should remain the routing-only reaper reclaim behavior PR above it.
+      Safety invariant: Do not overwrite concurrent human work. Before force-pushing the existing #7164 branch, capture the current remote head SHA and use `--force-with-lease=refs/heads/stack/EdbertChan/pr/reaper-disk-hygiene/add-reaper-cleanup-checks-disk-hygiene--43178418:<captured-sha>`. If the lease would fail or the live PR is already PR-body-valid, stop and report the exact state instead of pushing.
+      Slice rationale: `scripts/validate-pr-body.mjs` rejects a PR whose declared Review Unit is `routing` when the changed files also include `packages/contracts/*`. Splitting creates one contract review unit and one routing review unit.
+      Architectural effect: The lower PR adds the shared `@invoker/contracts` hourly snapshot retention helper; the existing #7164 branch becomes a consumer/behavior slice for reaper reclaim checks.
+      Motivation: The current failing check is a valid review-boundary failure: changed files classify as `contract` plus `routing`.
+      Alternative considerations: Do not simply change #7164's Review Unit to `contract`; it would still include routing files. Do not remove the contracts helper; that would reintroduce the lower-layer dependency problem the second commit was fixing.
+      Implementation details:
+      1. Fetch the live base and head for PR #7164:
+         - PR URL: https://github.com/Neko-Catpital-Labs/Invoker/pull/7164
+         - Current expected head branch: `stack/EdbertChan/pr/reaper-disk-hygiene/add-reaper-cleanup-checks-disk-hygiene--43178418`
+         - Current expected failing head at this repair handoff: `ed90ea2bd30428ba8c7e6038cfb53d4ad4bf3b39`
+         - Base branch: `master`
+      2. Re-run the local PR body validator on the live #7164 body. If it is already valid, make no branch changes and report that the current head is green.
+      3. Create or update a lower branch from the live base branch for the contract helper. Use a branch name like `stack/EdbertChan/pr/reaper-disk-hygiene/add-hourly-snapshot-retention-contract--7164-split`, unless that exact branch is occupied by unrelated work.
+      4. On the lower branch, include only:
+         - `packages/contracts/src/hourly-snapshot-retention.ts`
+         - `packages/contracts/src/index.ts`
+         Populate those files from the live #7164 head and commit them as a contract slice.
+      5. Create or update the lower branch PR with base `master`. Its PR body must use `Review Lane: behavior` and `Review Unit: contract`, and it must describe only the shared hourly snapshot retention helper/export. It should not claim the reaper checks are active in this lower PR.
+      6. Rebuild the existing #7164 branch on top of the lower branch with only:
+         - `packages/app/src/delete-all-snapshot.ts`
+         - `packages/execution-engine/src/workers/disk-headroom-reclaim.ts`
+         - `packages/execution-engine/src/workers/reaper-reclaim.ts`
+         - `packages/execution-engine/src/__tests__/reaper-reclaim.test.ts`
+         Preserve the current behavior from the live #7164 head, but make the lower contract branch an ancestor so the PR diff excludes `packages/contracts/*`.
+      7. Push the rebuilt #7164 branch with `--force-with-lease` against the captured live remote SHA. Do not use an unconditional force push.
+      8. Retarget #7164 to the lower contract branch. Update #7164's title to the second disk-hygiene slice if needed, and keep/update its body with `Review Lane: behavior` and `Review Unit: routing`.
+      9. Validate both PR bodies locally using the same validator that CI uses:
+         - if `node_modules/typescript` is missing in the task worktree, first run `pnpm install --no-frozen-lockfile --ignore-scripts`.
+         - lower PR: fetch its head, check it out, save the live lower PR body, then run `node scripts/validate-pr-body-local.mjs --body-file <lower-body> --base master --json` and require exit 0.
+         - #7164: fetch its head, check it out, save the live #7164 body, then run `node scripts/validate-pr-body-local.mjs --body-file <7164-body> --base <lower-branch> --json` and require exit 0.
+      10. Run the targeted tests on the rebuilt #7164 branch:
+          - `cd packages/execution-engine && pnpm test src/__tests__/reaper-reclaim.test.ts`
+          - `cd packages/app && pnpm test src/__tests__/delete-all-snapshot.test.ts`
+      11. Report the lower PR URL, #7164's new base branch, the two validator results, and the two targeted test results.
+
+      Deterministic pass/fail expectations: stop with a nonzero task result if either PR body validator exits nonzero after the split, if #7164 still lists `packages/contracts/*` in its changed files, if the lower PR includes app/execution-engine files, if `--force-with-lease` would overwrite a newer remote head, or if either targeted test command fails.
+    dependencies:
+      - reproduce-pr-body-review-unit-split
