@@ -1390,6 +1390,23 @@ function startHeadlessMode(): void {
             if (!result.ok) throw new Error(result.error.message);
             return undefined;
           }
+          case 'invoker:edit-task-pool': {
+            const taskId = String(payload.args[0]);
+            const poolId = String(payload.args[1]);
+            const executor = createStandaloneTaskExecutor();
+            const envelope = makeEnvelope('edit-task-pool', 'ui', 'task', { taskId, poolId });
+            const result = await commandService.editTaskPool(envelope);
+            if (!result.ok) throw new Error(result.error.message);
+            await dispatchStartedTasksWithGlobalTopup({
+              orchestrator,
+              taskExecutor: executor,
+              logger,
+              context: 'standalone.edit-task-pool',
+              started: result.data,
+              scopedTaskIds: [taskId],
+            });
+            return undefined;
+          }
           default:
             throw new Error(`Unsupported internal mutation for standalone owner: ${payload.channel}`);
         }

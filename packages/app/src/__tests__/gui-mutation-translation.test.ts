@@ -123,6 +123,13 @@ describe('GUI mutation translation', () => {
     );
   });
 
+  it('handles edit-task-pool in the standalone owner GUI mutation switch', () => {
+    const standaloneGuiMutationSource = getStandaloneGuiMutationSource();
+    expect(standaloneGuiMutationSource).toMatch(
+      /case 'invoker:edit-task-pool':\s*\{[\s\S]*commandService\.editTaskPool\(envelope\)[\s\S]*dispatchStartedTasksWithGlobalTopup\(/,
+    );
+  });
+
   it('publishes workflow metadata after every successful workflow delete', () => {
     const deleteSource = getPerformDeleteWorkflowSource();
     expect(deleteSource).toMatch(
