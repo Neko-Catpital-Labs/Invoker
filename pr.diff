@@ -1,0 +1,1126 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 809b8f1ce..fc9f44336 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -1,1029 +1,1001 @@
+ name: CI
+ 
+ on:
+   push:
+     branches: [master, main]
+   pull_request:
+   schedule:
+     - cron: '17 9 * * *'
+   workflow_dispatch:
+ 
+ concurrency:
+   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'mergify/merge-queue/') && format('merge-queue-{0}', github.head_ref) || github.ref }}
+   cancel-in-progress: ${{ github.ref != 'refs/heads/master' && github.ref != 'refs/heads/main' }}
+ 
+ permissions:
+   contents: read
+ 
+ env:
+   CI: true
+   NODE_VERSION: '26'
+ 
+ jobs:
+   # Full CI runs on default-branch pushes, manual/scheduled runs, and Mergify merge-queue refs.
+   # Ordinary PRs keep only cheap quality checks so stacked PR pushes do not fan out heavy jobs.
+   build-artifacts:
+     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     runs-on:
+       labels: Runner_2_4_core
+     timeout-minutes: 30
+ 
+     steps:
+       - name: Reclaim workspace
+         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+         shell: bash
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Build UI and app
+         run: |
+           pnpm --filter @invoker/ui build
+           pnpm --filter @invoker/surfaces build
+           pnpm --filter @invoker/app build
+           tar -czf app-build-dist.tgz packages/ui/dist packages/app/dist packages/surfaces/dist
+ 
+       - name: Upload build artifacts
+         uses: actions/upload-artifact@v4
+         with:
+           name: app-build-dist
+           path: app-build-dist.tgz
+           if-no-files-found: error
+ 
+   quality-required:
+     runs-on:
+       labels: ${{ matrix.runner_label }}
+     timeout-minutes: 5
+     strategy:
+       fail-fast: false
+       matrix:
+         include:
+           - name: Dependency Cruise
+             command: pnpm run check:deps
+             runner_label: Runner_2_4_core
+           - name: TypeScript Types
+             command: pnpm run check:types
+             runner_label: Github_Runner
+ 
+     name: quality / ${{ matrix.name }}
+ 
+     steps:
+       - name: Reclaim workspace
+         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+         shell: bash
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Run quality check
+         run: ${{ matrix.command }}
+ 
+   # UI component suite (@invoker/ui vitest, ~2-3m). Runs on every PR for early
+   # feedback AND on merge-queue refs, where `.mergify.yml` requires it — this is
+   # the gate that blocks behavioral UI regressions (e.g. the sidebar navigation
+   # guard) that still type-check. Scoped to @invoker/ui on purpose: the full
+   # Vitest Workspace is red on master (worker-registry + SSH executor drift).
+   ui-vitest:
+     name: UI Vitest
+     runs-on:
+       labels: Runner_Vitest
+     timeout-minutes: 10
+ 
+     steps:
+       - name: Reclaim workspace
+         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+         shell: bash
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Run UI vitest
+         run: pnpm --filter @invoker/ui test
+ 
+   quality-extra:
+     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     runs-on:
+       labels: ${{ matrix.runner_label }}
+     timeout-minutes: 5
+     strategy:
+       fail-fast: false
+       matrix:
+         include:
+           - name: Required Package Builds
+             command: pnpm run check:required-builds
+             runner_label: Runner_2_4_core
+           - name: Large File Guardrail
+             command: pnpm run check:large-files
+             runner_label: Runner_1
+           - name: Release Version Sync
+             command: pnpm run check:versions
+             runner_label: Runner_2_4_core
+ 
+     name: quality / ${{ matrix.name }}
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Run quality check
+         run: ${{ matrix.command }}
+ 
+   e2e-proof:
+     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     needs: build-artifacts
+     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
+     container:
+       image: mcr.microsoft.com/playwright:v1.58.2-noble
+     timeout-minutes: 60
+     strategy:
+       fail-fast: false
+       matrix:
+         shard: [0, 1, 2, 3]
+     name: e2e-proof / shard ${{ matrix.shard }}
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install test system packages
+         run: apt-get update && apt-get install -y unzip xvfb jq make g++ python3
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity and HTTPS auth
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+           git update-ref refs/heads/main refs/remotes/origin/master || true
+           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+ 
+       - name: Run e2e proof shard
+         env:
+           INVOKER_TEST_ALL_PROOF: '1'
+           INVOKER_TEST_ALL_SHARD_INDEX: ${{ matrix.shard }}
+           INVOKER_TEST_ALL_SHARD_TOTAL: '4'
+           INVOKER_TEST_ALL_STATE_FILE: ${{ github.workspace }}/proof-state.tsv
+           TMPDIR: /tmp/invoker-tmp
+         run: |
+           mkdir -p "$TMPDIR"
+           chmod 1777 "$TMPDIR"
+           bash scripts/run-all-tests.sh
+ 
+       - name: Upload shard proof state
+         uses: actions/upload-artifact@v4
+         with:
+           name: proof-state-${{ matrix.shard }}
+           path: ${{ github.workspace }}/proof-state.tsv
+           if-no-files-found: error
+ 
+   e2e-proof-aggregate:
+     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     needs: e2e-proof
+     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
+     container:
+       image: mcr.microsoft.com/playwright:v1.58.2-noble
+     timeout-minutes: 15
+     name: e2e-proof / aggregate
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           persist-credentials: false
+ 
+       - name: Configure git safe directory
+         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+ 
+       - name: Download shard proof state
+         uses: actions/download-artifact@v4
+         with:
+           pattern: proof-state-*
+           path: /tmp/shard-states
+ 
+       - name: Merge shard state and validate e2e proof contract
+         env:
+           INVOKER_TEST_ALL_PROOF: '1'
+           INVOKER_TEST_ALL_AGGREGATE: '1'
+           INVOKER_TEST_ALL_STATE_FILE: ${{ github.workspace }}/merged-proof-state.tsv
+         run: |
+           cat /tmp/shard-states/proof-state-*/proof-state.tsv > "$INVOKER_TEST_ALL_STATE_FILE"
+           bash scripts/run-all-tests.sh
+ 
+   required-fast:
+     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     needs: build-artifacts
+     runs-on:
+       labels: Runner_2_4_core
+     timeout-minutes: 45
+     strategy:
+       fail-fast: false
+       matrix:
+         include:
+           - name: Guardrails
+             command: |
+               bash scripts/test-suites/required/05-delete-all-prod-db-guard.sh
+               bash scripts/test-suites/required/06-large-file-guardrail.sh
+               bash scripts/test-suites/required/07-invalid-config-json.sh
+               bash scripts/test-suites/required/08-build-artifact-surfaces-guard.sh
+               bash scripts/test-suites/required/15-owner-boundary-policy.sh
+               bash scripts/test-suites/required/50-verify-executor-routing.sh
+           - name: Vitest Workspace
+             command: bash scripts/test-suites/required/10-vitest-workspace.sh
+           - name: Submit Workflow Chain
+             command: bash scripts/test-suites/required/15-submit-workflow-chain.sh
+     name: required-fast / ${{ matrix.name }}
+ 
+     steps:
+       - name: Reclaim workspace
+         run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$HOME/.invoker" "$HOME/.claude" 2>/dev/null || true
+         shell: bash
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity and HTTPS auth
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+           git update-ref refs/heads/main refs/remotes/origin/master || true
+           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+ 
+       - name: Install Playwright system dependencies
+         continue-on-error: true
+         run: pnpm --filter @invoker/app exec playwright install-deps chromium
+ 
+       - name: Run suite group
+         run: ${{ matrix.command }}
+ 
+   required-fast-extra:
+     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     needs: build-artifacts
+     runs-on:
+       labels: ${{ matrix.runner_label }}
+     timeout-minutes: 45
+     strategy:
+       fail-fast: false
+       matrix:
+         include:
+           - name: Branch Carry Forward
+             command: bash scripts/test-suites/required/16-branch-carry-forward.sh
+             runner_label: Runner_2_4_core
+           - name: Merge Gate Concurrency Repro
+             command: bash scripts/test-suites/required/17-merge-gate-concurrency-repro.sh
+             runner_label: Runner_1
+           - name: Start Running MECE Repros
+             command: bash scripts/test-suites/required/18-start-running-mece-repros.sh
+             runner_label: Runner_2_4_core
+           - name: Launch Dispatch Queue Repro
+             command: bash scripts/test-suites/required/25-launch-dispatch-queue-handoff-repro.sh
+             runner_label: Runner_2_4_core
+           - name: PR Babysit Harness
+             command: bash scripts/test-suites/required/28-pr-babysit-harness.sh
+             runner_label: Runner_2_4_core
+ 
+     name: required-fast / ${{ matrix.name }}
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity and HTTPS auth
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+           git update-ref refs/heads/main refs/remotes/origin/master || true
+           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+ 
+       - name: Run suite group with Mergify Insights
+         if: matrix.name == 'Vitest Workspace'
+         run: ${{ matrix.command }}
+         env:
+           MERGIFY_TOKEN: ${{ secrets.MERGIFY_TOKEN }}
+           MERGIFY_TEST_JOB_NAME: required-fast / Vitest Workspace
+       - name: Run suite group
+         if: matrix.name != 'Vitest Workspace'
+         run: ${{ matrix.command }}
+ 
+   reset-rulebook-repro:
+     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     needs: build-artifacts
+     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
+     container:
+       image: mcr.microsoft.com/playwright:v1.58.2-noble
+     timeout-minutes: 45
+     name: required-fast / Reset Rulebook Repro
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install test system packages
+         run: apt-get update && apt-get install -y unzip xvfb jq make g++ python3
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity and HTTPS auth
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+           git update-ref refs/heads/main refs/remotes/origin/master || true
+           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+ 
+       - name: Run Reset Rulebook proof
+         env:
+           TMPDIR: /tmp/invoker-tmp
+         run: |
+           mkdir -p "$TMPDIR"
+           chmod 1777 "$TMPDIR"
+           bash scripts/test-suites/required/26-reset-rulebook-proof.sh
+ 
+   scheduled-repros:
+     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+     needs: build-artifacts
+     runs-on:
+       labels: Runner_2_4_core
+     timeout-minutes: 45
+     name: scheduled / Fix Intent Repros
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity and HTTPS auth
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+           git update-ref refs/heads/main refs/remotes/origin/master || true
+           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+ 
+       - name: Install Playwright system dependencies
+         run: pnpm --filter @invoker/app exec playwright install-deps chromium
+ 
+       - name: Run fix-intent repro bundle
+         run: bash scripts/test-suites/required/23-fix-intent-repros.sh
+       - name: Run dispatch invariants
+         run: pnpm --filter @invoker/app test --run src/__tests__/dispatch-capacity-invariants.test.ts
+ 
+ 
+   playwright:
+     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     needs: build-artifacts
+     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
+     container:
+       image: mcr.microsoft.com/playwright:v1.58.2-noble
+     timeout-minutes: 30
+     strategy:
+       fail-fast: false
+       matrix:
+         include:
+           - name: 1-of-9
+             files: >-
+               e2e/visual-proof.spec.ts
+               e2e/edit-task-command.spec.ts
+               e2e/headless-thundering-herd.spec.ts
+               e2e/launching-stall-watchdog.spec.ts
+               e2e/embedded-terminal-pty.spec.ts
+               e2e/keyboard-navigation.spec.ts
+           - name: 2-of-9
+             files: >-
+               e2e/claude-planning-preset-visual-proof.spec.ts
+               e2e/planning-presets-load-failure.spec.ts
+               e2e/action-graph-visual-proof.spec.ts
+               e2e/invalid-merge-workspace-visual.spec.ts
+               e2e/invalid-task-workspace-visual.spec.ts
+               e2e/persistence-lifecycle.spec.ts
+           - name: 3-of-9
+             files: >-
+               e2e/task-death-logs.spec.ts
+               e2e/restart-failed-task.spec.ts
+               e2e/ui-graph-drag-performance.spec.ts
+               e2e/ui-delta-timeline.spec.ts
+               e2e/pending-review-gate-target-repo.proof.spec.ts
+               e2e/workflow-status-composition.spec.ts
+               e2e/queue-running-vs-queued.spec.ts
+           - name: 4-of-9
+             files: >-
+               e2e/startup-window-liveness.spec.ts
+               e2e/workflow-lifecycle.spec.ts
+               e2e/base-branch-normalization.proof.spec.ts
+               e2e/edit-task-prompt.spec.ts
+               e2e/fix-with-claude.spec.ts
+               e2e/fix-with-agent-transition.spec.ts
+           - name: 5-of-9
+             files: >-
+               e2e/autofix-worker-ui.spec.ts
+               e2e/orphan-relaunch.spec.ts
+               e2e/gap-recovery-bench.spec.ts
+               e2e/planning-chat-send-long-deadline.spec.ts
+               e2e/system-setup-visual-proof.spec.ts
+               e2e/startup-nonempty-responsiveness.spec.ts
+           - name: 6-of-9
+             files: >-
+               e2e/embedded-terminal-spawn-failure.spec.ts
+               e2e/embedded-terminal-restart-persistence.spec.ts
+               e2e/planning-terminal-restart-persistence.spec.ts
+               e2e/planning-terminal-open-daemon-owner-repro.spec.ts
+               e2e/planning-terminal-live-model.proof.spec.ts
+               e2e/planning-terminal-tmux-blank-repro.spec.ts
+               e2e/planning-tmux-blank-repro.spec.ts
+           - name: 7-of-9
+             files: >-
+               e2e/worker-tab-scroll.spec.ts
+               e2e/workflow-delete-latency.spec.ts
+               e2e/main-process-hitch-responsiveness.spec.ts
+               e2e/dag-click-hitch-responsiveness.spec.ts
+               e2e/terminal-upsert-hitch-responsiveness.spec.ts
+               e2e/attention-click-hitch-responsiveness.spec.ts
+           - name: 8-of-9
+             files: >-
+               e2e/focus-switch-hitch-responsiveness.spec.ts
+               e2e/planning-chat-hitch-responsiveness.spec.ts
+               e2e/command-palette-open.spec.ts
+               e2e/task-new-attempt-reset.spec.ts
+               e2e/persistence-recovery.spec.ts
+               e2e/start-ready-production-click.spec.ts
+           - name: 9-of-9
+             files: >-
+               e2e/gui-owner-auto-bootstrap.spec.ts
+               e2e/start-ready-daemon-owner.spec.ts
+               e2e/workers-surface.spec.ts
++              e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
++              e2e/planning-surface-navigation-garble-repro.spec.ts
++              e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
++              e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
+ 
+     name: playwright / ${{ matrix.name }}
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install native build tools
+         run: apt-get update && apt-get install -y unzip make g++ python3
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Verify Playwright shard inventory
+-        run: |
+-          node <<'NODE'
+-          const fs = require('node:fs');
+-          const YAML = require('yaml');
+-
+-          const workflow = YAML.parse(fs.readFileSync('.github/workflows/ci.yml', 'utf8'));
+-          const perfJob = workflow.jobs['playwright-nightly-perf'];
+-          const shards = [
+-            ...workflow.jobs.playwright.strategy.matrix.include,
+-            ...(perfJob ? perfJob.strategy.matrix.include : []),
+-          ];
+-          const listed = shards.flatMap((shard) => String(shard.files).trim().split(/\s+/).filter(Boolean));
+-          const discovered = fs.readdirSync('packages/app/e2e')
+-            .filter((file) => file.endsWith('.spec.ts'))
+-            .map((file) => `e2e/${file}`)
+-            .sort();
+-
+-          const listedSet = new Set(listed);
+-          const discoveredSet = new Set(discovered);
+-          const missing = discovered.filter((file) => !listedSet.has(file));
+-          const extra = listed.filter((file) => !discoveredSet.has(file));
+-          const duplicates = listed.filter((file, index) => listed.indexOf(file) !== index);
+-
+-          if (missing.length || extra.length || duplicates.length) {
+-            console.error('Playwright shard inventory drift detected.');
+-            if (missing.length) console.error(`Missing from shards: ${missing.join(', ')}`);
+-            if (extra.length) console.error(`Extra in shards: ${extra.join(', ')}`);
+-            if (duplicates.length) console.error(`Duplicate shard entries: ${[...new Set(duplicates)].join(', ')}`);
+-            process.exit(1);
+-          }
+-
+-          console.log(`Playwright shard inventory matches ${discovered.length} spec files.`);
+-          NODE
++        run: node scripts/repro/repro-ci-playwright-shard-inventory.mjs
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity for E2E repos
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+ 
+       - name: Run Playwright shard
+         env:
+           INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-${{ matrix.name }}
+           INVOKER_PLAYWRIGHT_WORKERS: '1'
+           INVOKER_PLAYWRIGHT_FILES: ${{ matrix.files }}
+           INVOKER_PLAYWRIGHT_ARGS: --reporter=line
+         run: bash scripts/test-suites/optional/40-playwright-app.sh
+ 
+       - name: Upload Playwright artifacts
+         if: always()
+         uses: actions/upload-artifact@v4
+         with:
+           name: playwright-artifacts-${{ matrix.name }}
+           path: |
+             .git/playwright-artifacts
+             packages/app/test-results
+           if-no-files-found: ignore
+ 
+   # Heavy UI responsiveness battery (200ms nav/click acks + refocus herd) under a
+   # fat DB. Nightly/dispatch only — too slow for the 5-min merge-queue playwright
+   # job. Its spec is unioned into the shard-inventory guard above.
+   playwright-nightly-perf:
+     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+     needs: build-artifacts
+     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
+     container:
+       image: mcr.microsoft.com/playwright:v1.58.2-noble
+     timeout-minutes: 30
+     strategy:
+       fail-fast: false
+       matrix:
+         include:
+           - name: responsiveness-battery
+             files: >-
+               e2e/ui-action-responsiveness-battery.spec.ts
+               e2e/storm-scale-responsiveness.spec.ts
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install native build tools
+         run: apt-get update && apt-get install -y unzip make g++ python3
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity for E2E repos
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+ 
+       - name: Run responsiveness battery
+         env:
+           INVOKER_PLAYWRIGHT_RUN_LABEL: ci-playwright-nightly-perf-${{ matrix.name }}
+           INVOKER_PLAYWRIGHT_WORKERS: '1'
+           INVOKER_PLAYWRIGHT_FILES: ${{ matrix.files }}
+           INVOKER_PLAYWRIGHT_ARGS: --reporter=line
+         run: bash scripts/test-suites/optional/40-playwright-app.sh
+ 
+       - name: Upload Playwright artifacts on failure
+         if: failure()
+         uses: actions/upload-artifact@v4
+         with:
+           name: playwright-artifacts-nightly-perf-${{ matrix.name }}
+           path: |
+             .git/playwright-artifacts
+             packages/app/test-results
+           if-no-files-found: ignore
+ 
+   ssh:
+     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     needs: build-artifacts
+     runs-on: [self-hosted, Linux, X64, Runner_Heavy_Ubuntu, Runner_Heavy_Docker]
+     container:
+       image: mcr.microsoft.com/playwright:v1.58.2-noble
+     timeout-minutes: 60
+     strategy:
+       fail-fast: false
+       matrix:
+         include:
+           - name: shard-30
+             suite: scripts/test-suites/optional/30-e2e-ssh.sh
+           - name: shard-31
+             suite: scripts/test-suites/optional/31-e2e-ssh-merge.sh
+     name: ssh / ${{ matrix.name }}
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install native build tools
+         run: apt-get update && apt-get install -y unzip make g++ python3
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity and HTTPS auth
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+           git update-ref refs/heads/main refs/remotes/origin/master || true
+           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+ 
+       - name: Install and start sshd
+         run: |
+           SUDO=""
+           if command -v sudo >/dev/null 2>&1; then
+             SUDO="sudo"
+           fi
+           $SUDO apt-get update
+           $SUDO apt-get install -y openssh-server
+           $SUDO mkdir -p /run/sshd
+           if command -v service >/dev/null 2>&1; then
+             $SUDO service ssh start
+           else
+             $SUDO /usr/sbin/sshd
+           fi
+ 
+       - name: Run SSH shard
+         run: bash ${{ matrix.suite }}
+ 
+   optional-other:
+     if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
+     needs: build-artifacts
+     runs-on:
+       labels: ${{ matrix.runner_label }}
+     timeout-minutes: 45
+     strategy:
+       fail-fast: false
+       matrix:
+         include:
+           - name: Worktree Provisioning
+             command: bash scripts/test-suites/optional/60-worktree-provisioning.sh
+             runner_label: Runner_2_4_core
+           - name: Visual Proof Validate
+             command: bash scripts/test-suites/optional/70-ui-visual-proof-validate.sh
+             runner_label: Runner_1
+ 
+     name: optional / ${{ matrix.name }}
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Run optional suite
+         run: ${{ matrix.command }}
+ 
+   docker:
+     if: ${{ github.event_name != 'pull_request' }}
+     needs: build-artifacts
+     runs-on:
+       labels: Runner_2_4_core
+     timeout-minutes: 60
+     name: docker / comprehensive
+ 
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+         with:
+           fetch-depth: 0
+ 
+       - name: Install pnpm
+         uses: pnpm/action-setup@v4
+ 
+       - name: Use Node.js ${{ env.NODE_VERSION }}
+         uses: actions/setup-node@v4
+         with:
+           node-version: ${{ env.NODE_VERSION }}
+           cache: pnpm
+           cache-dependency-path: |
+             pnpm-lock.yaml
+             .node-version
+ 
+       - name: Install dependencies
+         run: pnpm install --frozen-lockfile
+ 
+       - name: Download build artifacts
+         uses: actions/download-artifact@v4
+         with:
+           name: app-build-dist
+           path: /tmp/invoker-build-artifacts
+ 
+       - name: Extract build artifacts
+         run: tar -xzf /tmp/invoker-build-artifacts/app-build-dist.tgz -C .
+ 
+       - name: Configure git identity and HTTPS auth
+         run: |
+           echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/gitconfig" >> "$GITHUB_ENV"
+           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+           git config --global user.name "CI Bot"
+           git config --global user.email "ci@invoker.dev"
+           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+           git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "git@github.com:"
+           git config --global --add url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+           git update-ref refs/heads/main refs/remotes/origin/master || true
+           git update-ref refs/remotes/origin/main refs/remotes/origin/master || true
+ 
+       - name: Build invoker agent base image
+         run: bash scripts/build-agent-base-image.sh
+ 
+       - name: Build invoker-agent Docker image
+         run: docker build -t invoker-agent:latest scripts/fixtures/hello-world-agent
+ 
+       - name: Run Docker comprehensive suite
+         run: bash scripts/test-suites/dangerous/10-docker-comprehensive.sh
+diff --git a/scripts/repro/repro-ci-playwright-shard-inventory.mjs b/scripts/repro/repro-ci-playwright-shard-inventory.mjs
+index d107a71f6..58b52d983 100755
+--- a/scripts/repro/repro-ci-playwright-shard-inventory.mjs
++++ b/scripts/repro/repro-ci-playwright-shard-inventory.mjs
+@@ -1,63 +1,75 @@
+ #!/usr/bin/env node
+ // Reproduces the CI "Verify Playwright shard inventory" step locally so the
+ // playwright / N-of-9 shard regression cannot recur silently. It asserts that
+-// every packages/app/e2e spec is assigned to exactly one Playwright shard:
+-// no spec missing from the matrix, no spec listed that does not exist, and no
+-// spec assigned to more than one shard.
++// every deterministic packages/app/e2e spec is assigned to exactly one
++// Playwright shard: no spec missing from the matrix, no spec listed that does
++// not exist, and no spec assigned to more than one shard.
+ //
+ // The playwright / 8-of-9 shard first went red at
+ // d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
+ // (e2e/planning-terminal-live-model.proof.spec.ts and e2e/ui-delta-timeline.spec.ts)
+ // were listed in a second shard while already owned by 6-of-9 and 3-of-9.
+ // Duplicate assignment makes a shard run the same spec twice and fail.
+ //
++// The manual real-Claude repro intentionally stays out of CI because it
++// requires a real local `claude` binary and auth state. Keep it explicit here
++// so future unassigned deterministic specs still fail the guard.
++//
+ // Usage:
+ //   node scripts/repro/repro-ci-playwright-shard-inventory.mjs [workflow.yml] [e2eDir]
+ // Exit 0 when the inventory is consistent, 1 when drift is detected.
+ import { readFileSync, readdirSync } from 'node:fs';
+ import { fileURLToPath } from 'node:url';
+ import { dirname, resolve } from 'node:path';
+ import YAML from 'yaml';
+ 
+ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+ const workflowPath = resolve(repoRoot, process.argv[2] ?? '.github/workflows/ci.yml');
+ const e2eDir = resolve(repoRoot, process.argv[3] ?? 'packages/app/e2e');
+ 
+ function shardFiles(job) {
+   if (!job?.strategy?.matrix?.include) return [];
+   return job.strategy.matrix.include.flatMap((shard) =>
+     String(shard.files ?? '').trim().split(/\s+/).filter(Boolean),
+   );
+ }
+ 
++const manualSpecs = new Set([
++  'e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts',
++]);
++
+ function main() {
+   const workflow = YAML.parse(readFileSync(workflowPath, 'utf8'));
+   const listed = [
+     ...shardFiles(workflow.jobs?.playwright),
+     ...shardFiles(workflow.jobs?.['playwright-nightly-perf']),
+   ];
+   const discovered = readdirSync(e2eDir)
+     .filter((file) => file.endsWith('.spec.ts'))
+     .map((file) => `e2e/${file}`)
+     .sort();
+ 
+   const listedSet = new Set(listed);
+   const discoveredSet = new Set(discovered);
+-  const missing = discovered.filter((file) => !listedSet.has(file));
+-  const extra = listed.filter((file) => !discoveredSet.has(file));
++  const ciDiscovered = discovered.filter((file) => !manualSpecs.has(file));
++  const ciDiscoveredSet = new Set(ciDiscovered);
++  const manualMissing = [...manualSpecs].filter((file) => !discoveredSet.has(file));
++  const missing = ciDiscovered.filter((file) => !listedSet.has(file));
++  const extra = listed.filter((file) => !ciDiscoveredSet.has(file));
+   const duplicates = [...new Set(listed.filter((file, index) => listed.indexOf(file) !== index))];
+ 
+-  if (missing.length || extra.length || duplicates.length) {
++  if (manualMissing.length || missing.length || extra.length || duplicates.length) {
+     console.error('[repro-ci-playwright-shard-inventory] Playwright shard inventory drift detected.');
++    if (manualMissing.length) console.error(`  Manual spec allowlist entries do not exist: ${manualMissing.join(', ')}`);
+     if (missing.length) console.error(`  Missing from shards: ${missing.join(', ')}`);
+     if (extra.length) console.error(`  Extra in shards: ${extra.join(', ')}`);
+     if (duplicates.length) console.error(`  Duplicate shard entries: ${duplicates.join(', ')}`);
+     process.exit(1);
+   }
+ 
+   console.log(
+-    `[repro-ci-playwright-shard-inventory] OK: ${discovered.length} spec files each assigned to exactly one shard.`,
++    `[repro-ci-playwright-shard-inventory] OK: ${ciDiscovered.length} CI spec files each assigned to exactly one shard; ${manualSpecs.size} manual spec accounted for.`,
+   );
+ }
+ 
+ main();

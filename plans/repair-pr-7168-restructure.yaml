@@ -1,0 +1,86 @@
+name: "Repair PR 7168 by restructuring mixed PR Body diff"
+description: |
+  PR #7168 fails the PR Body check because its CI-equivalent diff mixes
+  `.github/workflows/ci.yml` tooling-policy changes with
+  `scripts/repro/repro-ci-playwright-shard-inventory.mjs` proof changes. The
+  base PR body validator rejects every lane for that combined diff, so the
+  repair cannot be made as one in-place commit on the existing PR branch.
+
+  Current `master` already appears to contain the intended shard inventory
+  outcome through newer landed work: the inventory repro script is wired into
+  CI and the four garble-repro specs are assigned to a dedicated
+  `terminal-garbling` Playwright shard. This workflow should first verify that
+  supersession fact. If it is true, retire or drop the stale PR rather than
+  recreating duplicate changes. If anything is still missing, rebuild the work
+  as review-compressed slices: proof/repro first, tooling-policy CI wiring
+  second.
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+baseBranch: "master"
+
+tasks:
+  - id: restructure-pr-7168
+    executionAgent: codex
+    description: |
+      Decide and perform the correct restructuring for PR #7168.
+      Review claim: PR #7168 is resolved without forcing proof and tooling-policy changes into one PR.
+      Review lane: cleanup
+      Safety invariant: Do not push over the existing PR head unless the live head is still 65f9c43a6688d388d33b7e559ff0d5b670f21c05 and the replacement branch is review-compressed.
+      Slice rationale: The original PR mixes proof and tooling-policy files, so a single PR cannot satisfy the trusted PR Body validator.
+      Architectural effect: None; this changes PR/stack shape only, not runtime architecture.
+      Goal: Remove the stale failing PR Body condition for #7168 by retiring the PR if superseded or replacing it with valid split PRs.
+      Motivation: The PR Body job rejects the current combined diff with "cannot ship with proof files" and "Split this into one Review Unit per PR."
+      Alternative considerations: Editing the PR body was tested and cannot pass because policy, proof, and behavior/routing lanes each reject the mixed changed-file set.
+      Implementation details: Verify current master first; if master already has the intended CI inventory state, close/drop #7168 with a short explanation. Otherwise build a two-slice stack.
+      Non-goals: No product behavior changes, no validator-policy changes, no force-push over a moved PR head, no duplicate PRs when master already contains the intended outcome.
+      Layer: docs
+      Feature state: active
+      Files:
+      - GitHub PR #7168 metadata or replacement branch stack only
+      Change types:
+      - PR #7168: close/drop if superseded, or replace with a clean split stack
+      Acceptance criteria:
+      - `gh pr view 7168 --repo Neko-Catpital-Labs/Invoker --json headRefOid,state` is checked before any GitHub mutation.
+      - Current `master` is checked for `node scripts/repro/repro-ci-playwright-shard-inventory.mjs` in `.github/workflows/ci.yml`.
+      - Current `master` is checked for all four garble-repro specs in exactly one Playwright shard.
+      - If current `master` already satisfies the intended outcome, #7168 is retired/dropped rather than rewritten.
+      - If current `master` is missing work, the replacement stack has one proof/repro PR touching only `scripts/repro/repro-ci-playwright-shard-inventory.mjs` and one tooling-policy PR touching only `.github/workflows/ci.yml`.
+      - Any replacement PR body passes `node scripts/validate-pr-body.mjs` against its own changed files.
+    prompt: |
+      Goal: Repair the stale PR Body failure on PR #7168 by verifying `.github/workflows/ci.yml` and `scripts/repro/repro-ci-playwright-shard-inventory.mjs`; acceptance criteria must prove #7168 is retired as superseded or replaced by split PRs whose PR Body validation passes.
+
+      Context:
+      - PR URL: https://github.com/Neko-Catpital-Labs/Invoker/pull/7168
+      - Head branch: stack/EdbertChan/pr/ci-regression-0f8bbf4-playwright-4-of-9/ci-regression-0f8bbf4-playwright-4-9-assign--58ad6d79
+      - Expected head at filing time: 65f9c43a6688d388d33b7e559ff0d5b670f21c05
+      - Failed check: PR Body
+      - The failed job reported:
+        - Review lane policy cannot ship with proof files in the same PR.
+        - PR body Review Unit "tooling-policy" cannot ship with proof files in the same PR.
+
+      Assume no prior conversation context. First verify the live PR and current master:
+      1. Run `gh pr view 7168 --repo Neko-Catpital-Labs/Invoker --json headRefOid,state,body,title,headRefName,baseRefName,url`.
+      2. Fetch and inspect `origin/master`.
+      3. Confirm whether current master already has:
+         - `.github/workflows/ci.yml` running `node scripts/repro/repro-ci-playwright-shard-inventory.mjs` in the "Verify Playwright shard inventory" step.
+         - exactly one Playwright shard containing each of:
+           `e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts`,
+           `e2e/planning-surface-navigation-garble-repro.spec.ts`,
+           `e2e/planning-terminal-expand-collapse-garble-repro.spec.ts`,
+           `e2e/task-terminal-drawer-minimize-garble-repro.spec.ts`.
+         - `scripts/repro/repro-ci-playwright-shard-inventory.mjs` accounting for the manual real-Claude spec while rejecting unassigned deterministic specs.
+
+      If current master already contains the intended final state, retire/drop PR #7168 as superseded. Do not create duplicate replacement PRs. Leave a concise explanation that the PR Body failure is unfixable in-place because the PR mixes tooling-policy and proof paths and newer landed work already supplies the intended shard inventory state.
+
+      If current master is missing any intended work, rebuild the work as a review-compressed stack:
+      - Slice 1, proof lane / proof unit: only `scripts/repro/repro-ci-playwright-shard-inventory.mjs`. It may add or update the repro/allowlist logic. Its PR body must say Review Lane `proof` and Review Unit `proof`.
+      - Slice 2, policy lane / tooling-policy unit: only `.github/workflows/ci.yml`. It must assign the four garble-repro specs to one Playwright shard and call the repro script from the inventory step. Its PR body must say Review Lane `policy` and Review Unit `tooling-policy`.
+      - The policy slice must depend on the proof slice. For Invoker-on-Invoker publication, use Mergify Stacks after the branch stack is ready.
+
+      Do not push over PR #7168 if its live head moved away from 65f9c43a6688d388d33b7e559ff0d5b670f21c05. Do not weaken the PR body validator. Do not bundle proof and tooling-policy files in a single replacement PR.
+
+      Acceptance criteria:
+      - If PR #7168 is retired, the explanation names the superseding master state and the mixed review-unit reason.
+      - If replacement PRs are created, each replacement PR's changed-file set and PR body pass the trusted PR Body validator for that slice.
+    dependencies: []
