@@ -7,6 +7,7 @@
 #   bash scripts/recreate-all.sh                       # all workflows
 #   bash scripts/recreate-all.sh --status running      # only running workflows
 #   bash scripts/recreate-all.sh --status failed       # only failed workflows
+#   bash scripts/recreate-all.sh --workflow wf-123-1   # one known workflow id
 #   bash scripts/recreate-all.sh --dry-run             # show what would run
 #   bash scripts/recreate-all.sh --parallel 8          # run up to 8 recreates at once
 #   bash scripts/recreate-all.sh --follow              # wait for completion (default is fire-and-forget)
@@ -21,6 +22,7 @@ source "$(dirname "$0")/headless-lib.sh"
 
 DRY_RUN=false
 STATUS_FILTER=""
+WORKFLOW_FILTER=""
 PARALLELISM=""
 FOLLOW=false
 DEFAULT_PARALLELISM=4
@@ -30,6 +32,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=true; shift ;;
     --follow) FOLLOW=true; shift ;;
     --status) STATUS_FILTER="$2"; shift 2 ;;
+    --workflow) WORKFLOW_FILTER="$2"; shift 2 ;;
     --parallel) PARALLELISM="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
@@ -39,17 +42,25 @@ if [[ -n "$PARALLELISM" ]] && ! [[ "$PARALLELISM" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --parallel value: $PARALLELISM (expected integer >= 1)" >&2
   exit 1
 fi
+if [[ -n "$WORKFLOW_FILTER" && -n "$STATUS_FILTER" ]]; then
+  echo "Cannot combine --workflow and --status" >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Query workflows
 # ---------------------------------------------------------------------------
 
-QUERY_ARGS=(query workflows --output label)
-if [[ -n "$STATUS_FILTER" ]]; then
-  QUERY_ARGS+=(--status "$STATUS_FILTER")
-fi
+if [[ -n "$WORKFLOW_FILTER" ]]; then
+  WORKFLOWS="$WORKFLOW_FILTER"
+else
+  QUERY_ARGS=(query workflows --output label)
+  if [[ -n "$STATUS_FILTER" ]]; then
+    QUERY_ARGS+=(--status "$STATUS_FILTER")
+  fi
 
-WORKFLOWS=$(headless_workflow_ids "${QUERY_ARGS[@]}")
+  WORKFLOWS=$(headless_workflow_ids "${QUERY_ARGS[@]}")
+fi
 
 if [[ -z "$WORKFLOWS" ]]; then
   echo "No workflows found."
