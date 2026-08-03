@@ -10,7 +10,12 @@
 import type { SQLiteAdapter, TaskLaunchDispatch } from '@invoker/data-store';
 import type { LaunchOutboxAck } from '@invoker/execution-engine';
 import type { TaskLaunchReadiness, TaskState } from '@invoker/workflow-core';
-import { DISPATCH_MAX_ATTEMPTS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
+import {
+  DISPATCH_MAX_ATTEMPTS,
+  LAUNCH_STUCK_ABANDON_MS,
+  MAX_STUCK_LEASE_RETRIES,
+  type Logger,
+} from '@invoker/contracts';
 import { resolveLaunchDispatchLeaseMsOverride } from './launch-dispatch-defaults.js';
 
 
@@ -26,6 +31,7 @@ export type LaunchDispatcherPersistence = Pick<
   | 'claimLaunchDispatchAtomic'
   | 'listExecutionResourceLeasesByTask'
   | 'releaseExecutionResourceLease'
+  | 'countAbandonedLaunchDispatchesForTask'
   | 'logEvent'
 > & {
   releaseExpiredExecutionResourceLeases?(nowIso?: string): number;
@@ -463,6 +469,33 @@ export class LaunchDispatcher {
       attemptsCount: row.attemptsCount,
       error: message,
     });
+
+    // Durable, per-task stopper: each prepareTaskForNewAttempt() mints a
+    // fresh task_launch_dispatch row starting at attempts_count 0, so
+    // DISPATCH_MAX_ATTEMPTS never accumulates across stuck-lease cycles on
+    // its own. Count abandons directly from the durable table (survives
+    // restarts and generation bumps) so a task whose real work legitimately
+    // outlives LAUNCH_STUCK_ABANDON_MS eventually stops being relaunched
+    // instead of retrying forever.
+    const abandonedSoFar = this.persistence.countAbandonedLaunchDispatchesForTask(row.taskId);
+    if (abandonedSoFar > MAX_STUCK_LEASE_RETRIES) {
+      this.persistence.logEvent?.(row.taskId, 'task.launch_dispatch_retry_budget_exhausted', {
+        dispatchId: row.id,
+        attemptId: row.attemptId,
+        abandonedCount: abandonedSoFar,
+        maxStuckLeaseRetries: MAX_STUCK_LEASE_RETRIES,
+      });
+      this.logger?.error?.('[launch-dispatcher] stuck-lease retry budget exhausted; not preparing another attempt', {
+        ownerId: this.ownerId,
+        taskId: row.taskId,
+        dispatchId: row.id,
+        abandonedCount: abandonedSoFar,
+        maxStuckLeaseRetries: MAX_STUCK_LEASE_RETRIES,
+        module: 'launch-dispatcher',
+      });
+      return;
+    }
+
     this.prepareTaskForNewAttempt(row.taskId, row.id);
   }
 
