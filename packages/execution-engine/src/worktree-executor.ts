@@ -118,6 +118,14 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
   }
 
   async start(request: WorkRequest): Promise<ExecutorHandle> {
+    // Test-only fault injection: hang before doing any real work, so e2e
+    // tests can exercise a launch that genuinely never completes handoff
+    // (mirrors INVOKER_E2E_BREAK_TERMINAL_SPAWN's pattern). Never set
+    // outside a controlled test process.
+    const hangMs = Number.parseInt(process.env.INVOKER_E2E_HANG_LAUNCH_STARTUP_MS ?? '', 10);
+    if (Number.isFinite(hangMs) && hangMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, hangMs));
+    }
     const repoUrl = request.inputs.repoUrl;
     if (!repoUrl) {
       throw new Error(
