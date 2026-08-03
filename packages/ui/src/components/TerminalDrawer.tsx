@@ -8,13 +8,18 @@
  * requiring a real terminal backing.
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { Terminal as XTermTerminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
 const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
+const MIN_TASK_TERMINAL_COLS = 20;
+const MIN_TASK_TERMINAL_ROWS = 5;
+const TASK_TERMINAL_FIT_SETTLE_FRAMES = 2;
+const TASK_TERMINAL_RECONCILE_MAX_ATTEMPTS = 6;
+const TASK_TERMINAL_RECONCILE_INTERVAL_MS = 500;
 
 /**
  * The drawer has one explicit state model:
@@ -55,6 +60,8 @@ type SeededOutputSnapshot = {
   sessionId: string;
   term: XTermTerminal;
 };
+
+type TerminalFitSource = 'active_session' | 'resize_observer' | 'followup_frame' | 'reconcile';
 
 function nowMs(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -133,68 +140,11 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const drawerStateRef = useRef(drawerState);
   const sessionRef = useRef(session);
   const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
-  const fitFrameRef = useRef<number | null>(null);
-  const secondFitFrameRef = useRef<number | null>(null);
+  const scheduleFitRef = useRef<((source: TerminalFitSource, opts?: { focus?: boolean }) => void) | null>(null);
 
   isActiveRef.current = isActive;
   drawerStateRef.current = drawerState;
   sessionRef.current = session;
-
-  const clearScheduledFit = useCallback(() => {
-    if (fitFrameRef.current !== null) {
-      if (typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(fitFrameRef.current);
-      }
-      fitFrameRef.current = null;
-    }
-    if (secondFitFrameRef.current !== null) {
-      if (typeof cancelAnimationFrame === 'function') {
-        cancelAnimationFrame(secondFitFrameRef.current);
-      }
-      secondFitFrameRef.current = null;
-    }
-  }, []);
-
-  const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
-    if (!isActiveRef.current) return;
-    const term = termRef.current;
-    const fit = fitRef.current;
-    if (!term || !fit) return;
-    try {
-      const startedAt = nowMs();
-      fit.fit();
-      if (term.rows > 0) {
-        term.refresh?.(0, term.rows - 1);
-      }
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
-      reportTerminalPerf('embedded_terminal_resize', {
-        source,
-        durationMs: roundMs(nowMs() - startedAt),
-        sessionId: session.sessionId,
-        taskId: session.taskId,
-        cols: term.cols,
-        rows: term.rows,
-        active: isActiveRef.current,
-      });
-    } catch {
-      /* host has zero size, terminal disposed, or fit unsupported */
-    }
-  }, [session.sessionId, session.taskId]);
-
-  const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
-    clearScheduledFit();
-    fitVisibleTerminal(source);
-    if (typeof requestAnimationFrame !== 'function') return;
-
-    fitFrameRef.current = requestAnimationFrame(() => {
-      fitFrameRef.current = null;
-      fitVisibleTerminal('followup_frame');
-      secondFitFrameRef.current = requestAnimationFrame(() => {
-        secondFitFrameRef.current = null;
-        fitVisibleTerminal('followup_frame');
-      });
-    });
-  }, [clearScheduledFit, fitVisibleTerminal]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -298,7 +248,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
         resizeObserver = null;
       }
     }
-    if (isActiveRef.current) {
+    if (isActiveRef.current && drawerStateRef.current !== 'minimized') {
       scheduleFit('active_session');
       try {
         term.focus();
@@ -333,7 +283,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
-    if (!isActive) {
+    if (!isActive || drawerState === 'minimized') {
       clearScheduledFit();
       return;
     }
