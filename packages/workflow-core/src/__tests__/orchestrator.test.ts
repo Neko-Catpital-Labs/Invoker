@@ -7305,6 +7305,13 @@ describe('Orchestrator', () => {
     });
 
     it('rejects stale attempt and generation responses after retry refreshes attempts', () => {
+      const generationlessResponse = makeResponse({});
+      delete generationlessResponse.executionGeneration;
+
+      expect(isWorkerResponseGenerationValid(makeResponse({ executionGeneration: 2 }), 2)).toBe(true);
+      expect(isWorkerResponseGenerationValid(makeResponse({ executionGeneration: 1 }), 2)).toBe(false);
+      expect(isWorkerResponseGenerationValid(generationlessResponse, 2)).toBe(true);
+
       orchestrator.loadPlan({
         name: 'retry-stale-response-rejection',
         tasks: [{ id: 't1', description: 'Task 1' }],

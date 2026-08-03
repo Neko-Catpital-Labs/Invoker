@@ -73,6 +73,10 @@ function isActiveForInvalidation(status: TaskStatus): boolean {
   );
 }
 
+export function isWorkerResponseGenerationValid(response: WorkResponse, activeGeneration: number): boolean {
+  return response.executionGeneration === undefined || response.executionGeneration === activeGeneration;
+}
+
 import { getTransitiveDependents } from '@invoker/workflow-graph';
 import { ActionGraph } from '@invoker/workflow-graph';
 import {
