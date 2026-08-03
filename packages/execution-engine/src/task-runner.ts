@@ -143,6 +143,15 @@ const NOOP_LOGGER: Logger = {
  * it as a benign race.
  */
 export interface LaunchOutboxAck {
+  /**
+   * Mark that the executor is confirmed live (markTaskRunningAfterLaunch
+   * accepted the launch). This is distinct from completeDispatch: it
+   * signals the LAUNCH HANDOFF succeeded, not that the task's work is done.
+   * Stops the stuck-launch age check (LAUNCH_STUCK_ABANDON_MS) from firing
+   * on this row -- that check exists to catch launches that never start,
+   * not tasks that legitimately run long after starting successfully.
+   */
+  acceptDispatch(dispatchId: number): boolean;
   completeDispatch(dispatchId: number): boolean;
   failDispatch(dispatchId: number, error: unknown): boolean;
 }
@@ -378,14 +387,17 @@ export class TaskRunner {
   async killActiveExecution(taskId: string): Promise<boolean> {
     const resolved = this.resolveActiveExecution(taskId);
     if (!resolved) return false;
-    this.activeExecutions.delete(resolved.attemptId);
-    if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
-      this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
-    }
+    // Kill first, release the lease only after: executor.kill() can take
+    // up to SIGKILL_TIMEOUT_MS before the process exits.
     try {
       await resolved.entry.executor.kill(resolved.entry.handle);
     } catch (killErr) {
       this.logger.warn(`[TaskRunner] killActiveExecution failed for task=${taskId}`, { err: killErr });
+    } finally {
+      this.activeExecutions.delete(resolved.attemptId);
+      if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
+        this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
+      }
     }
     return true;
   }
