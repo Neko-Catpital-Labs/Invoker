@@ -22,6 +22,7 @@ source "$(dirname "$0")/headless-lib.sh"
 DRY_RUN=false
 STATUS_FILTER=""
 PARALLELISM=""
+PARALLELISM_EXPLICIT=false
 FOLLOW=false
 DEFAULT_PARALLELISM=4
 
@@ -30,7 +31,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=true; shift ;;
     --follow) FOLLOW=true; shift ;;
     --status) STATUS_FILTER="$2"; shift 2 ;;
-    --parallel) PARALLELISM="$2"; shift 2 ;;
+    --parallel) PARALLELISM="$2"; PARALLELISM_EXPLICIT=true; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -38,6 +39,15 @@ done
 if [[ -n "$PARALLELISM" ]] && ! [[ "$PARALLELISM" =~ ^[1-9][0-9]*$ ]]; then
   echo "Invalid --parallel value: $PARALLELISM (expected integer >= 1)" >&2
   exit 1
+fi
+
+if $FOLLOW && ! $DRY_RUN && ! $PARALLELISM_EXPLICIT; then
+  BULK_ARGS=(recreate-all)
+  if [[ -n "$STATUS_FILTER" ]]; then
+    BULK_ARGS+=(--status "$STATUS_FILTER")
+  fi
+  headless_mutation "${BULK_ARGS[@]}"
+  exit $?
 fi
 
 # ---------------------------------------------------------------------------

@@ -198,6 +198,44 @@ function printStartReadyOutcomeSummary(result: StartReadyResult, request: StartR
     process.stdout.write(`  workflow outcomes: ${succeeded} succeeded, ${failed} failed\n`);
   }
 }
+
+function runningTaskKey(task: TaskState): string {
+  const attemptId = task.execution.selectedAttemptId?.trim();
+  return attemptId ? `attempt:${attemptId}` : `task:${task.id}`;
+}
+
+function uniqueRunnableTasks(tasks: readonly TaskState[]): TaskState[] {
+  const seen = new Set<string>();
+  const unique: TaskState[] = [];
+  for (const task of tasks.filter(isDispatchableLaunch)) {
+    const key = runningTaskKey(task);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(task);
+  }
+  return unique;
+}
+
+function parseRecreateAllArgs(args: string[]): { status?: string } {
+  let status: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    switch (arg) {
+      case '--status': {
+        const value = args[++i];
+        if (!value || value.startsWith('--')) {
+          throw new Error('Missing value for --status. Usage: --headless recreate-all [--status <status>]');
+        }
+        status = value;
+        break;
+      }
+      default:
+        throw new Error(`Unknown recreate-all option "${arg}". Usage: --headless recreate-all [--status <status>]`);
+    }
+  }
+  return { status };
+}
+
 function createTrackedHeadlessExecutor(
   deps: HeadlessDeps,
   taskHandles: TaskHandleMap,
@@ -889,6 +927,93 @@ export async function headlessRecreateWorkflow(workflowId: string, deps: Headles
   }
   const tasksStarted = runnable.length;
   process.stdout.write(`Recreate workflow "${workflowId}" — ${tasksStarted} task(s) to execute (pool fetch skipped)\n`);
+}
+
+export async function headlessRecreateAllWorkflows(args: string[], deps: HeadlessDeps): Promise<void> {
+  const { status } = parseRecreateAllArgs(args);
+  const workflows = deps.persistence
+    .listWorkflows()
+    .filter((workflow) => !status || workflow.status === status);
+
+  if (workflows.length === 0) {
+    process.stdout.write('No workflows found.\n');
+    return;
+  }
+
+  process.stdout.write(`Found ${workflows.length} workflow(s) to recreate.\n`);
+  if (status) {
+    process.stdout.write(`Status filter: ${status}\n`);
+  }
+  process.stdout.write('Follow mode: true\n\n');
+
+  const started: TaskState[] = [];
+  const succeeded: string[] = [];
+  const failed: Array<{ workflowId: string; error: string }> = [];
+
+  for (const workflow of workflows) {
+    const workflowId = workflow.id;
+    try {
+      await preemptWorkflowBeforeMutation(workflowId, {
+        preemptWorkflowExecution: (id) => preemptWorkflowExecution(id, deps),
+        logger: deps.logger,
+        context: 'headless.recreate-all',
+        mutationTiming: deps.mutationTiming,
+      });
+      const envelope = makeEnvelope('recreate-all', 'headless', 'workflow', { workflowId });
+      const result = deps.mutationTiming
+        ? await deps.mutationTiming.span(
+          'headless.recreate-all.commandService.recreateWorkflow',
+          { workflowId },
+          () => deps.commandService.recreateWorkflow(envelope),
+        )
+        : await deps.commandService.recreateWorkflow(envelope);
+      if (!result.ok) {
+        failed.push({ workflowId, error: result.error.message });
+        process.stdout.write(`[${workflowId}] FAILED: ${result.error.message}\n`);
+        continue;
+      }
+      succeeded.push(workflowId);
+      started.push(...result.data);
+      process.stdout.write(`[${workflowId}] OK\n`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      failed.push({ workflowId, error: message });
+      process.stdout.write(`[${workflowId}] FAILED: ${message}\n`);
+    }
+  }
+
+  const runnable = uniqueRunnableTasks(started);
+  if (runnable.length > 0) {
+    const te = createHeadlessExecutor(deps);
+    remoteFetchForPool.enabled = false;
+    try {
+      await te.executeTasks(runnable);
+      await executeGlobalTopup({
+        orchestrator: deps.orchestrator,
+        taskExecutor: te,
+        logger: deps.logger,
+        context: 'headless.recreate-all',
+        alreadyDispatched: runnable,
+        mutationTiming: deps.mutationTiming,
+      });
+    } finally {
+      remoteFetchForPool.enabled = true;
+    }
+  }
+
+  for (const workflowId of succeeded) {
+    await trackHeadlessWorkflow(workflowId, deps, {
+      printSummary: false,
+      printTaskOutput: true,
+      setExitCodeOnFailure: false,
+    });
+  }
+
+  process.stdout.write('---\n');
+  process.stdout.write(`Done. ${succeeded.length} succeeded, ${failed.length} failed out of ${workflows.length}.\n`);
+  if (failed.length > 0) {
+    throw new Error(`recreate-all failed for ${failed.length} workflow(s)`);
+  }
 }
 
 export async function headlessRecreateTask(taskId: string, deps: HeadlessDeps): Promise<void> {

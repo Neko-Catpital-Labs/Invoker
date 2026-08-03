@@ -88,6 +88,7 @@ import {
   headlessRetryWorkflow,
   headlessRetryTask,
   headlessRecreateWorkflow,
+  headlessRecreateAllWorkflows,
   headlessRecreateTask,
   headlessRecreateDownstream,
   headlessForkWorkflow,
@@ -290,6 +291,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
       break;
     case 'recreate':
       await headlessRecreateWorkflow(args[1], deps);
+      break;
+    case 'recreate-all':
+      await headlessRecreateAllWorkflows(args.slice(1), deps);
       break;
     case 'recreate-task':
       await headlessRecreateTask(args[1], deps);

@@ -37,6 +37,7 @@ ${BOLD}Execute:${RESET}
   retry <workflowId>                                  Retry workflow: rerun failed, keep completed
   retry-task <taskId>                                 Retry a single failed/stuck task
   recreate <workflowId>                                Recreate workflow: wipe all state, new generation
+  recreate-all [--status S]                            Recreate all workflows, optionally filtered by workflow status
   recreate-task <taskId>                               Recreate task + downstream (task-scoped reset)
   recreate-downstream <taskId>                         Recreate downstream of task only (target preserved)
   fork-workflow <workflowId>                          Fork a live workflow into a new branched workflow (Step 14)

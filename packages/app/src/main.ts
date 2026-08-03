@@ -1460,6 +1460,8 @@ function startHeadlessMode(): void {
             case 'recreate':
             case 'cancel-workflow':
               return { workflowId: arg0 === undefined ? undefined : String(arg0), priority: 'high' };
+            case 'recreate-all':
+              return { priority: 'high' };
             case 'rebase-retry':
             case 'rebase-recreate':
               return { workflowId: standaloneWorkflowIdForTaskArg(arg0), priority: 'high' };

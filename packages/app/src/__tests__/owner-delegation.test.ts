@@ -113,6 +113,13 @@ describe('headless→owner delegation', () => {
       expect(delegationTimeoutMs(args, targetLookup)).toBe(300_000);
       await expect(resolveDelegationTimeoutMs(args)).resolves.toBe(300_000);
     });
+
+    it('keeps the broader timeout for global recreate-all', async () => {
+      const args = ['recreate-all'];
+
+      expect(delegationTimeoutMs(args, targetLookup)).toBe(300_000);
+      await expect(resolveDelegationTimeoutMs(args)).resolves.toBe(300_000);
+    });
   });
 
   describe('successful delegation when owner is present', () => {

@@ -37,6 +37,7 @@ export const HEADLESS_COMMANDS = [
   { name: 'retry', kind: 'write' },
   { name: 'retry-task', kind: 'write' },
   { name: 'recreate', kind: 'write' },
+  { name: 'recreate-all', kind: 'write' },
   { name: 'recreate-task', kind: 'write' },
   { name: 'recreate-downstream', kind: 'write' },
   { name: 'replace-task', kind: 'special' },
