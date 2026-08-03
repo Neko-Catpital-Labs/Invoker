@@ -65,6 +65,73 @@ invoker_e2e_case_216_query_json() {
   return 75
 }
 
+invoker_e2e_case_216_task_generation() {
+  local task_id="$1"
+  invoker_e2e_case_216_query_json query tasks --workflow "$WF_ID" | python3 -c 'import json,sys
+task_id=sys.argv[1]
+data=json.load(sys.stdin)
+match=next((t for t in data if t.get("id")==task_id), None)
+if match is None:
+    print("")
+    raise SystemExit(0)
+generation=(match.get("execution") or {}).get("generation", 0)
+print(generation if isinstance(generation, int) else "")
+' "$task_id"
+}
+
+invoker_e2e_case_216_max_audit_id() {
+  local task_id="$1"
+  invoker_e2e_case_216_query_json query audit "$task_id" | python3 -c 'import json,sys
+data=json.load(sys.stdin)
+ids=[e.get("id") for e in data if isinstance(e.get("id"), int)]
+print(max(ids) if ids else 0)
+'
+}
+
+invoker_e2e_case_216_observed_generation_after() {
+  local task_id="$1"
+  local before_generation="$2"
+  python3 -c 'import json,sys
+task_id=sys.argv[1]
+before=int(sys.argv[2])
+data=json.load(sys.stdin)
+match=next((t for t in data if t.get("id")==task_id), None)
+if match is None:
+    raise SystemExit(1)
+generation=(match.get("execution") or {}).get("generation", 0)
+raise SystemExit(0 if isinstance(generation, int) and generation > before else 1)
+' "$task_id" "$before_generation"
+}
+
+invoker_e2e_case_216_pending_event_after() {
+  local task_id="$1"
+  local baseline_id="$2"
+  local before_generation="$3"
+  invoker_e2e_case_216_query_json query audit "$task_id" | python3 -c 'import json,sys
+task_id=sys.argv[1]
+baseline=int(sys.argv[2])
+before=int(sys.argv[3])
+data=json.load(sys.stdin)
+for event in data:
+    if event.get("eventType") != "task.pending":
+        continue
+    event_id=event.get("id")
+    if not isinstance(event_id, int) or event_id <= baseline:
+        continue
+    payload=event.get("payload")
+    generation=None
+    if isinstance(payload, str) and payload:
+        try:
+            generation=(json.loads(payload).get("execution") or {}).get("generation")
+        except Exception:
+            generation=None
+    if isinstance(generation, int) and generation > before:
+        print(event_id)
+        raise SystemExit(0)
+print("")
+' "$task_id" "$baseline_id" "$before_generation"
+}
+
 
 echo "==> case 2.16: submit seed workflow"
 SUBMIT_LOG="$(mktemp "${TMPDIR:-/tmp}/invoker-e2e-2.16-submit.log.XXXXXX")"
@@ -130,10 +197,20 @@ if [ "$retry_fail_left_failed" -ne 1 ]; then
 fi
 
 echo "==> case 2.16: recreate-all --follow and observe first 5s"
-RECREATE_START_EPOCH="$(date +%s)"
+KEEP_GENERATION_BEFORE_RECREATE="$(invoker_e2e_case_216_task_generation "$KEEP_TASK_ID")"
+FAIL_GENERATION_BEFORE_RECREATE="$(invoker_e2e_case_216_task_generation "$FAIL_TASK_ID")"
+if [ -z "$KEEP_GENERATION_BEFORE_RECREATE" ] || [ -z "$FAIL_GENERATION_BEFORE_RECREATE" ]; then
+  echo "FAIL case 2.16: could not resolve pre-recreate task generations"
+  invoker_e2e_dump_tasks
+  exit 1
+fi
+KEEP_AUDIT_BASELINE_ID="$(invoker_e2e_case_216_max_audit_id "$KEEP_TASK_ID")"
+FAIL_AUDIT_BASELINE_ID="$(invoker_e2e_case_216_max_audit_id "$FAIL_TASK_ID")"
 bash scripts/recreate-all.sh --follow >/tmp/e2e-2.16-recreate.log 2>&1 &
 RECREATE_PID=$!
 recreate_snapshot_has_reset_state=0
+keep_recreate_generation_observed=0
+fail_recreate_generation_observed=0
 for i in 0 1 2 3 4 5; do
   KEEP_ST="$(invoker_e2e_task_status "$KEEP_TASK_ID" 2>/dev/null || true)"
   FAIL_ST="$(invoker_e2e_task_status "$FAIL_TASK_ID" 2>/dev/null || true)"
@@ -150,7 +227,13 @@ for i in 0 1 2 3 4 5; do
   SNAP_COUNTS="$(printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; from collections import Counter; data=json.load(sys.stdin); c=Counter(t.get("status","") for t in data); print(" ".join(f"{k}:{c[k]}" for k in sorted(c)))')"
   echo "recreate t+$i keep=$KEEP_ST fail=$FAIL_ST counts=$SNAP_COUNTS"
 
-  if printf '%s' "$SNAP_JSON" | python3 -c 'import json,sys; data=json.load(sys.stdin); raise SystemExit(0 if any(t.get("status") in {"pending","queued"} for t in data) else 1)'; then
+  if printf '%s' "$SNAP_JSON" | invoker_e2e_case_216_observed_generation_after "$KEEP_TASK_ID" "$KEEP_GENERATION_BEFORE_RECREATE"; then
+    keep_recreate_generation_observed=1
+  fi
+  if printf '%s' "$SNAP_JSON" | invoker_e2e_case_216_observed_generation_after "$FAIL_TASK_ID" "$FAIL_GENERATION_BEFORE_RECREATE"; then
+    fail_recreate_generation_observed=1
+  fi
+  if [ "$keep_recreate_generation_observed" -eq 1 ] && [ "$fail_recreate_generation_observed" -eq 1 ]; then
     recreate_snapshot_has_reset_state=1
   fi
   sleep 1
@@ -158,43 +241,23 @@ done
 kill "$RECREATE_PID" 2>/dev/null || true
 wait "$RECREATE_PID" 2>/dev/null || true
 
-KEEP_PENDING_DELTA_S="$(invoker_e2e_case_216_query_json query audit "$KEEP_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
-for e in data:
-    if e.get("eventType")!="task.pending":
-        continue
-    ts=e.get("createdAt")
-    if not ts:
-        continue
-    epoch=int(dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
-    if epoch >= start:
-        deltas.append(epoch-start)
-print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
-FAIL_PENDING_DELTA_S="$(invoker_e2e_case_216_query_json query audit "$FAIL_TASK_ID" | python3 -c 'import datetime as dt, json, sys; start=int(sys.argv[1]); data=json.load(sys.stdin); deltas=[]; 
-for e in data:
-    if e.get("eventType")!="task.pending":
-        continue
-    ts=e.get("createdAt")
-    if not ts:
-        continue
-    epoch=int(dt.datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc).timestamp())
-    if epoch >= start:
-        deltas.append(epoch-start)
-print(min(deltas) if deltas else -1)' "$RECREATE_START_EPOCH")"
+KEEP_PENDING_EVENT_ID="$(invoker_e2e_case_216_pending_event_after "$KEEP_TASK_ID" "$KEEP_AUDIT_BASELINE_ID" "$KEEP_GENERATION_BEFORE_RECREATE")"
+FAIL_PENDING_EVENT_ID="$(invoker_e2e_case_216_pending_event_after "$FAIL_TASK_ID" "$FAIL_AUDIT_BASELINE_ID" "$FAIL_GENERATION_BEFORE_RECREATE")"
 
-if [ "$KEEP_PENDING_DELTA_S" -lt 0 ] || [ "$KEEP_PENDING_DELTA_S" -gt 5 ]; then
-  echo "FAIL case 2.16: recreate did not emit task.pending for previously completed task within 5s (delta=${KEEP_PENDING_DELTA_S})"
+if [ -z "$KEEP_PENDING_EVENT_ID" ]; then
+  echo "FAIL case 2.16: recreate did not emit a fresh task.pending event for previously completed task"
   invoker_e2e_run_headless query audit "$KEEP_TASK_ID" --output json 2>&1 || true
   exit 1
 fi
 
-if [ "$FAIL_PENDING_DELTA_S" -lt 0 ] || [ "$FAIL_PENDING_DELTA_S" -gt 5 ]; then
-  echo "FAIL case 2.16: recreate did not emit task.pending for previously failed task within 5s (delta=${FAIL_PENDING_DELTA_S})"
+if [ -z "$FAIL_PENDING_EVENT_ID" ]; then
+  echo "FAIL case 2.16: recreate did not emit a fresh task.pending event for previously failed task"
   invoker_e2e_run_headless query audit "$FAIL_TASK_ID" --output json 2>&1 || true
   exit 1
 fi
 
 if [ "$recreate_snapshot_has_reset_state" -ne 1 ]; then
-  echo "FAIL case 2.16: recreate did not show pending or queued state in first 5s snapshots"
+  echo "FAIL case 2.16: recreate did not show generation reset for both tasks in first 5 snapshots"
   invoker_e2e_dump_tasks
   exit 1
 fi
