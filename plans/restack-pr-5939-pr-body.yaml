@@ -1,0 +1,134 @@
+name: Restack PR 5939 after merged predecessors
+onFinish: none
+mergeMode: manual
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+featureBranch: plan/restack-pr-5939-pr-body
+description: |
+  Restack the open "Remove deprecated merge-mode and retry paths" review chain after lower PRs merged into master.
+
+  PR #5939 currently fails the PR Body check because its live diff against master includes merged lower-stack work classified as contract and activation-surface, while the slice body declares Review Unit routing. The repair is to replay #5939 and dependent open stack branches #5940-#5944 onto the current branch chain, preserving one review unit per PR.
+
+tasks:
+  - id: reproduce-pr-5939-pr-body-failure
+    description: |
+      Reproduce the current PR Body failure before changing remote branch state.
+
+      Review claim: The current #5939 diff against master spans multiple review units.
+      Safety invariant: This task is read-only and only uses the live PR body plus local diff metadata.
+      Slice rationale: Reproduction evidence anchors the branch restructuring task.
+      Architectural effect: None; validation only.
+      Goal: Confirm that #5939 fails because lower stack commits are still present in its master-based diff.
+      Motivation: Avoid treating a stack ancestry problem as a PR-body wording edit.
+      Alternative considerations: GitHub job logs already show the failure, but a local validator repro gives deterministic acceptance text.
+      Implementation details: Fetch #5939, write changed-files and diff inputs, and require the expected Review Unit error.
+    command: |
+      set -eu
+      tmpdir="$(mktemp -d)"
+      trap 'rm -rf "$tmpdir"' EXIT
+      git fetch --quiet origin master '+refs/pull/5939/head:refs/remotes/pull/5939/head'
+      gh pr view 5939 --repo Neko-Catpital-Labs/Invoker --json body -q .body > "$tmpdir/body.md"
+      git diff --name-only origin/master...refs/remotes/pull/5939/head > "$tmpdir/changed-files.txt"
+      git diff --find-renames --unified=200000 --diff-filter=ACMRTD origin/master...refs/remotes/pull/5939/head -- > "$tmpdir/pr.diff"
+      if node scripts/validate-pr-body.mjs --body-file "$tmpdir/body.md" --changed-files-file "$tmpdir/changed-files.txt" --diff-file "$tmpdir/pr.diff" > "$tmpdir/validator.out" 2>&1; then
+        echo "Expected #5939 PR Body validation to fail before restack." >&2
+        cat "$tmpdir/validator.out" >&2
+        exit 1
+      fi
+      grep -F 'Review Unit "routing" cannot ship with contract, activation-surface files in the same PR' "$tmpdir/validator.out"
+    dependencies: []
+
+  - id: restack-open-remove-deprecated-prs
+    description: |
+      Restack #5939-#5944 so each open PR contains only its own review slice.
+
+      Review claim: The open stack branches are replayed onto their already-merged predecessor chain without changing slice intent.
+      Safety invariant: Each branch is force-pushed only with --force-with-lease against the live head SHA captured before the rewrite.
+      Slice rationale: #5939 cannot pass PR Body while lower-stack contract and activation-surface commits remain in its master diff, and downstream PRs depend on the rewritten branch chain.
+      Architectural effect: Git history topology changes; product behavior should remain the same except for conflict resolutions required to replay the existing slices onto current master.
+      Goal: Repair PR #5939's PR Body check and keep dependent PRs #5940-#5944 coherent after the rewrite.
+      Motivation: Lower PR #5938 has already merged into master, so the remaining stack needs to be normalized rather than edited into a mixed review unit.
+      Alternative considerations: Changing #5939's Review Unit text would hide the real mixed-diff problem and still violate the one-review-unit rule.
+      Implementation details: Use the ordered PR list below, capture old heads, replay each old top commit onto the new base, resolve conflicts, update stale Revert Plan commit SHAs in PR bodies, validate each PR body against its actual base, then push the rewritten branches with leases.
+
+      Files:
+      Remote branch refs for PRs #5939, #5940, #5941, #5942, #5943, and #5944.
+
+      Change types:
+      Remote git history: rewrite existing stack branches with the same top-slice commits replayed onto the current base chain.
+      PR metadata: update Revert Plan commands if the head SHA changes.
+
+      Acceptance criteria:
+      #5939 validates locally with only Review Unit routing files against master.
+      #5940-#5944 validate locally against their configured base branches after restacking.
+      All remote pushes use --force-with-lease and no unrelated branches are changed.
+    prompt: |
+      You are repairing the existing open GitHub PR stack in Neko-Catpital-Labs/Invoker. Assume no prior chat context.
+      Acceptance criteria: verify #5939 and #5940-#5944 pass scripts/validate-pr-body.mjs against their live base refs after restacking, and ensure every remote branch rewrite uses --force-with-lease.
+      Review claim: Restack the open "Remove deprecated merge-mode and retry paths" review chain so each PR diff contains one review unit.
+      Safety invariant: Capture each branch's live head SHA first and use git push --force-with-lease=<branch>:<old_sha>; never force-push without a lease.
+      Slice rationale: PR #5939 fails PR Body because its diff against master includes lower-stack contract and activation-surface work after predecessor PRs merged.
+      Architectural effect: Only branch ancestry changes, plus conflict resolutions needed to replay the existing top commits onto the current chain.
+      Goal: Make PR #5939 pass the PR Body validator and keep dependent PRs #5940-#5944 stacked on the rewritten branch sequence.
+      Motivation: This is a stack normalization repair, not a product feature change.
+      Alternative considerations: Do not solve this by changing #5939's Review Unit from routing, because the top #5939 slice itself is routing and the failure is caused by extra lower-stack commits in the diff.
+      Implementation details: Fetch current master and the six open PR heads. Work in a clean worktree. For each PR in order, create a new branch by starting at the intended base and cherry-picking the old PR's single top commit, resolving conflicts to preserve both current master behavior and the slice intent.
+      Ordered stack to restack:
+      - PR #5939, old head c0b4b85ad1903c01168a3ddabaee31385e2d201f, branch stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-8-source--abd9ac89, intended base origin/master.
+      - PR #5940, old head a1c525b442ed8f6dcae174d3f99c1b8030646046, branch stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-9-update--c063c03b, intended base rewritten #5939 branch.
+      - PR #5941, old head f4ec35dfb23100b70b5bea68c3f567e9db1691bb, branch stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-10-point--46055b80, intended base rewritten #5940 branch.
+      - PR #5942, old head b4b19b6fb6635add73f22c7bceb17ef980e52233, branch stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-11-add--d1404549, intended base rewritten #5941 branch.
+      - PR #5943, old head 6fc68f9a049474c70c186e85d58c64ea2bc59e5a, branch stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-12--9bfcc7ba, intended base rewritten #5942 branch.
+      - PR #5944, old head 01d24af0990a66ee12a8deb50d3830c62e8a6b27, branch stack/EdbertChan/plan/remove-deprecated-merge-mode-and-retry-paths-review/remove-deprecated-merge-mode-retry-paths-13-drop--b15de57b, intended base rewritten #5943 branch.
+      For #5939, the known cherry-pick conflicts are in packages/execution-engine/src/ssh-executor.ts, packages/execution-engine/src/conflict-resolver.ts, and packages/execution-engine/src/__tests__/ssh-executor.test.ts. Preserve the current non-login remote shell behavior from master, keep explicit ~/.invoker/env.sh sourcing, and add the profile-loading bootstrap behavior from the #5939 slice so remote profile PATH customizations work without login shells.
+      After each branch is replayed, run the PR Body validator against that PR's actual base:
+      - write the live PR body with gh pr view <number> --repo Neko-Catpital-Labs/Invoker --json body -q .body
+      - write changed files with git diff --name-only <base_ref>...HEAD
+      - write diff with git diff --find-renames --unified=200000 --diff-filter=ACMRTD <base_ref>...HEAD --
+      - run node scripts/validate-pr-body.mjs --body-file <body> --changed-files-file <changed-files> --diff-file <diff>
+      Update each PR body's Revert Plan command if it names the old head SHA and the branch now has a different head SHA.
+      Deterministic pass/fail expectations:
+      - PR #5939 validation exits 0 and its changed-files input contains only packages/execution-engine/src/__tests__/ssh-executor.test.ts, packages/execution-engine/src/conflict-resolver.ts, and packages/execution-engine/src/ssh-executor.ts, unless conflict resolution truly requires an adjacent direct test file.
+      - PRs #5940-#5944 each validate with exit code 0 against their configured base branches.
+      - Pushes use --force-with-lease with the captured old SHA for every rewritten branch.
+      - Do not create a new PR and do not change unrelated branches.
+    dependencies:
+      - reproduce-pr-5939-pr-body-failure
+
+  - id: verify-restacked-pr-body-checks
+    description: |
+      Verify the live restacked PRs satisfy the PR Body validator after branch rewrite.
+
+      Review claim: The remote PR stack now presents one review unit per PR body.
+      Safety invariant: This task is read-only after the rewrite and validates the pushed branch refs.
+      Slice rationale: Final proof must use live PR bodies and remote branch refs, matching CI inputs.
+      Architectural effect: None; validation only.
+      Goal: Confirm #5939 no longer reproduces the failing mixed-unit PR Body condition.
+      Motivation: The failed CI check is PR Body, so the final acceptance gate is the PR Body validator over live metadata.
+      Alternative considerations: GitHub checks may still be queued; local validator success is the deterministic immediate proof.
+      Implementation details: Fetch every open PR head/base, run scripts/validate-pr-body.mjs with changed-files and diff inputs, and assert #5939's diff no longer includes contract or activation-surface files.
+    command: |
+      set -eu
+      tmpdir="$(mktemp -d)"
+      trap 'rm -rf "$tmpdir"' EXIT
+      for pr in 5939 5940 5941 5942 5943 5944; do
+        base="$(gh pr view "$pr" --repo Neko-Catpital-Labs/Invoker --json baseRefName -q .baseRefName)"
+        head="$(gh pr view "$pr" --repo Neko-Catpital-Labs/Invoker --json headRefName -q .headRefName)"
+        git fetch --quiet origin "$base" "$head"
+        base_ref="origin/$base"
+        head_ref="origin/$head"
+        body="$tmpdir/pr-$pr-body.md"
+        changed="$tmpdir/pr-$pr-changed.txt"
+        diff="$tmpdir/pr-$pr.diff"
+        gh pr view "$pr" --repo Neko-Catpital-Labs/Invoker --json body -q .body > "$body"
+        git diff --name-only "$base_ref...$head_ref" > "$changed"
+        git diff --find-renames --unified=200000 --diff-filter=ACMRTD "$base_ref...$head_ref" -- > "$diff"
+        node scripts/validate-pr-body.mjs --body-file "$body" --changed-files-file "$changed" --diff-file "$diff"
+        if [ "$pr" = "5939" ]; then
+          ! grep -q '^packages/contracts/' "$changed"
+          ! grep -q '^packages/ui/' "$changed"
+          ! grep -q '^packages/app/src/headless' "$changed"
+        fi
+      done
+    dependencies:
+      - restack-open-remove-deprecated-prs
