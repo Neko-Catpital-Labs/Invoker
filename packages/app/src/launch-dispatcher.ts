@@ -10,12 +10,19 @@
 import type { SQLiteAdapter, TaskLaunchDispatch } from '@invoker/data-store';
 import type { LaunchOutboxAck } from '@invoker/execution-engine';
 import type { TaskLaunchReadiness, TaskState } from '@invoker/workflow-core';
-import { DISPATCH_MAX_ATTEMPTS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
+import {
+  DISPATCH_MAX_ATTEMPTS,
+  LAUNCH_STUCK_ABANDON_MS,
+  MAX_STUCK_LEASE_RETRIES,
+  type Logger,
+} from '@invoker/contracts';
+import { resolveLaunchDispatchLeaseMsOverride } from './launch-dispatch-defaults.js';
 
 
 export type LaunchDispatcherPersistence = Pick<
   SQLiteAdapter,
   | 'loadLaunchDispatchById'
+  | 'markLaunchDispatchAccepted'
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
@@ -24,6 +31,7 @@ export type LaunchDispatcherPersistence = Pick<
   | 'claimLaunchDispatchAtomic'
   | 'listExecutionResourceLeasesByTask'
   | 'releaseExecutionResourceLease'
+  | 'countAbandonedLaunchDispatchesForTask'
   | 'logEvent'
 > & {
   releaseExpiredExecutionResourceLeases?(nowIso?: string): number;
@@ -80,6 +88,13 @@ export interface LaunchDispatcherOptions {
   maxAttempts?: number;
   maxLeasesPerPoll?: number;
   topUpReadyLaunchesEnabled?: () => boolean;
+  /**
+   * Overrides for DISPATCH_LEASE_MS / LAUNCH_STUCK_ABANDON_MS (both default
+   * to 12 minutes in production). Test-only knob so e2e tests can exercise
+   * the stuck-launch reaper in seconds instead of real minutes.
+   */
+  leaseMs?: number;
+  maxLaunchAgeMs?: number;
 }
 
 
@@ -92,6 +107,8 @@ export class LaunchDispatcher {
   private readonly maxAttempts: number;
   private readonly maxLeasesPerPoll: number;
   private readonly topUpReadyLaunchesEnabled?: () => boolean;
+  private readonly leaseMs?: number;
+  private readonly maxLaunchAgeMs: number;
 
   constructor(options: LaunchDispatcherOptions) {
     this.persistence = options.persistence;
@@ -101,6 +118,8 @@ export class LaunchDispatcher {
     this.logger = options.logger;
     this.maxAttempts = options.maxAttempts ?? DISPATCH_MAX_ATTEMPTS;
     this.topUpReadyLaunchesEnabled = options.topUpReadyLaunchesEnabled;
+    this.leaseMs = options.leaseMs ?? resolveLaunchDispatchLeaseMsOverride();
+    this.maxLaunchAgeMs = options.maxLaunchAgeMs ?? resolveLaunchDispatchLeaseMsOverride() ?? LAUNCH_STUCK_ABANDON_MS;
     // Bound a single poll's work so the dispatcher cannot starve other
     // owner-loop ticks; the leftover rows are picked up on the next tick.
     this.maxLeasesPerPoll = options.maxLeasesPerPoll ?? 32;
@@ -242,6 +261,7 @@ export class LaunchDispatcher {
     while (dispatched < this.maxLeasesPerPoll) {
       const leased = this.persistence.claimLaunchDispatchAtomic({
         ownerId: this.ownerId,
+        ...(this.leaseMs !== undefined ? { leaseMs: this.leaseMs } : {}),
       });
       if (!leased) break;
       dispatched += 1;
@@ -329,7 +349,7 @@ export class LaunchDispatcher {
     reason: string,
     details: Record<string, unknown> = {},
   ): void {
-    const accepted = this.persistence.markLaunchDispatchAbandoned(dispatch.id, message);
+    const accepted = this.persistence.markLaunchDispatchAbandoned(dispatch.id, message, undefined, reason);
     if (accepted) {
       this.releaseTaskResourceLeases(dispatch.taskId, dispatch.id, reason);
     }
@@ -396,7 +416,7 @@ export class LaunchDispatcher {
     const candidates = this.persistence.listAbandonableLaunchDispatchLeases({
       nowIso,
       maxAttempts: this.maxAttempts,
-      maxLaunchAgeMs: LAUNCH_STUCK_ABANDON_MS,
+      maxLaunchAgeMs: this.maxLaunchAgeMs,
     });
     if (candidates.length === 0) return 0;
     let abandoned = 0;
@@ -405,7 +425,7 @@ export class LaunchDispatcher {
         row,
         row.lastError ?? 'no concrete error recorded',
       );
-      if (!this.abandonDispatch(row, message, nowIso)) continue;
+      if (!this.abandonDispatch(row, message, nowIso, 'stuck-lease')) continue;
       abandoned += 1;
       this.recordAbandonedStuckLease(row, message);
     }
@@ -433,8 +453,13 @@ export class LaunchDispatcher {
     return `Launch dispatch abandoned after ${row.attemptsCount} attempt(s); last error: ${lastError}`;
   }
 
-  private abandonDispatch(row: TaskLaunchDispatch, message: string, nowIso?: string): boolean {
-    const accepted = this.persistence.markLaunchDispatchAbandoned(row.id, message, nowIso);
+  private abandonDispatch(
+    row: TaskLaunchDispatch,
+    message: string,
+    nowIso?: string,
+    abandonReason?: string,
+  ): boolean {
+    const accepted = this.persistence.markLaunchDispatchAbandoned(row.id, message, nowIso, abandonReason);
     if (!accepted) return false;
 
     this.releaseTaskResourceLeases(row.taskId, row.id);
@@ -449,6 +474,33 @@ export class LaunchDispatcher {
       attemptsCount: row.attemptsCount,
       error: message,
     });
+
+    // Durable, per-task stopper: each prepareTaskForNewAttempt() mints a
+    // fresh task_launch_dispatch row starting at attempts_count 0, so
+    // DISPATCH_MAX_ATTEMPTS never accumulates across stuck-lease cycles on
+    // its own. Count abandons directly from the durable table (survives
+    // restarts and generation bumps) so a task whose real work legitimately
+    // outlives LAUNCH_STUCK_ABANDON_MS eventually stops being relaunched
+    // instead of retrying forever.
+    const abandonedSoFar = this.persistence.countAbandonedLaunchDispatchesForTask(row.taskId);
+    if (abandonedSoFar > MAX_STUCK_LEASE_RETRIES) {
+      this.persistence.logEvent?.(row.taskId, 'task.launch_dispatch_retry_budget_exhausted', {
+        dispatchId: row.id,
+        attemptId: row.attemptId,
+        abandonedCount: abandonedSoFar,
+        maxStuckLeaseRetries: MAX_STUCK_LEASE_RETRIES,
+      });
+      this.logger?.error?.('[launch-dispatcher] stuck-lease retry budget exhausted; not preparing another attempt', {
+        ownerId: this.ownerId,
+        taskId: row.taskId,
+        dispatchId: row.id,
+        abandonedCount: abandonedSoFar,
+        maxStuckLeaseRetries: MAX_STUCK_LEASE_RETRIES,
+        module: 'launch-dispatcher',
+      });
+      return;
+    }
+
     this.prepareTaskForNewAttempt(row.taskId, row.id);
   }
 
@@ -537,10 +589,29 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Transition a live dispatch row to completed. Called by the
-   * TaskRunner once {@link markTaskRunningAfterLaunch} has succeeded
-   * (the executor handle is live and the task is in the executing
-   * phase). Returns false when the row is already terminal.
+   * Record that the launch handoff succeeded. Called by the TaskRunner
+   * once {@link markTaskRunningAfterLaunch} has succeeded (the executor
+   * handle is live and the task is in the executing phase). This stops
+   * `abandonStuckLeases`'s age check from treating the row as stuck in
+   * launch -- it does NOT complete the row, since headless run/resume
+   * polls dispatch completion to mean the task's work is actually done.
+   * Returns false when the row is no longer leased (already terminal).
+   */
+  acceptDispatch(dispatchId: number): boolean {
+    const ok = this.persistence.markLaunchDispatchAccepted(dispatchId);
+    this.logger?.info?.('[launch-dispatcher] accepted', {
+      ownerId: this.ownerId,
+      dispatchId,
+      accepted: ok,
+      module: 'launch-dispatcher',
+    });
+    return ok;
+  }
+
+  /**
+   * Transition a live dispatch row to completed once the task's whole
+   * run finishes (called from TaskRunner's onComplete finalization).
+   * Returns false when the row is already terminal.
    */
   completeDispatch(dispatchId: number): boolean {
     const ok = this.persistence.markLaunchDispatchCompleted(dispatchId);
@@ -554,9 +625,10 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Record a launch failure. Normal failures are retried by re-enqueuing
-   * the row. A row that has already used its retry budget is abandoned
-   * instead. The TaskRunner still owns the task failure response, so this
+   * Record a launch failure. Re-enqueues the row unless it already used its
+   * retry budget or already reached `acceptDispatch` -- an accepted row is
+   * abandoned instead, since re-enqueuing it would look like it never
+   * launched. The TaskRunner still owns the task failure response, so this
    * path must not prepare a fresh attempt here.
    */
   failDispatch(dispatchId: number, error: unknown): boolean {
@@ -564,19 +636,26 @@ export class LaunchDispatcher {
       error instanceof Error ? error.message : String(error ?? 'unknown launch error');
     const row = this.persistence.loadLaunchDispatchById(dispatchId);
 
-    if (row && this.shouldAbandonAfterFastFailure(row)) {
-      const accepted = this.abandonDispatch(
-        row,
-        this.launchDispatchAbandonedMessage(row, message),
+    if (row && (this.shouldAbandonAfterFastFailure(row) || row.acknowledgedAt)) {
+      const detail = row.acknowledgedAt
+        ? `Post-accept launch failure (dispatch already running): ${message}`
+        : this.launchDispatchAbandonedMessage(row, message);
+      const abandonReason = row.acknowledgedAt ? 'post-accept-failure' : 'fast-failure';
+      const accepted = this.abandonDispatch(row, detail, undefined, abandonReason);
+      this.logger?.warn?.(
+        row.acknowledgedAt
+          ? '[launch-dispatcher] abandoned a post-accept failure instead of re-enqueuing'
+          : '[launch-dispatcher] abandoned after fast failures',
+        {
+          ownerId: this.ownerId,
+          dispatchId,
+          attemptsCount: row.attemptsCount,
+          acknowledged: Boolean(row.acknowledgedAt),
+          error: message,
+          accepted,
+          module: 'launch-dispatcher',
+        },
       );
-      this.logger?.warn?.('[launch-dispatcher] abandoned after fast failures', {
-        ownerId: this.ownerId,
-        dispatchId,
-        attemptsCount: row.attemptsCount,
-        error: message,
-        accepted,
-        module: 'launch-dispatcher',
-      });
       return accepted;
     }
 
