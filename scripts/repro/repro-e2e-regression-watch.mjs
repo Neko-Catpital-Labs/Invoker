@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / terminal-garbling',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -140,10 +141,41 @@ function testWorkflowCommandMapping() {
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
+  const terminalGarblingCommand = defs.get('playwright / terminal-garbling').verifyCommand;
+  if (!terminalGarblingCommand.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-terminal-garbling'")) {
+    fail('terminal-garbling shard command must include the named Playwright run label');
+  }
+  if (!terminalGarblingCommand.includes('e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts')) {
+    fail('terminal-garbling shard command must include deterministic garble repro specs');
+  }
+  if (terminalGarblingCommand.includes('planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts')) {
+    fail('terminal-garbling shard command must not include the manual-only real Claude repro');
+  }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
   console.log('[repro-e2e-regression-watch] workflow command mapping: PASS');
+}
+
+function testPlanVarsRefreshesStaleDefinitions() {
+  const state = loadEmptyState();
+  reconcileCiRun(state, fakeRun(401, 'e21a96567a3fff62cf9c71befc3f0a7db15ab9c5', [
+    fakeJob('playwright / terminal-garbling', 'failure', 41),
+  ]));
+  const [failure] = getActionableFailures(state);
+  const staleDefs = new Map(buildCiJobDefinitions());
+  staleDefs.delete('playwright / terminal-garbling');
+  const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', staleDefs);
+  if (vars.verify_command.includes('No local verify command is mapped')) {
+    fail('stale definitions must refresh from the workflow before falling back');
+  }
+  if (!vars.verify_command.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-terminal-garbling'")) {
+    fail('refreshed terminal-garbling command must target the named Playwright shard');
+  }
+  if (vars.verify_command.includes('planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts')) {
+    fail('refreshed terminal-garbling command must not include the manual-only real Claude repro');
+  }
+  console.log('[repro-e2e-regression-watch] stale workflow command refresh: PASS');
 }
 
 function testPlanVarsAndDryRunRendering() {
@@ -228,6 +260,7 @@ function main() {
   testEveryFailedJobQueuesSeparately();
   testLiveDedupIsJobScoped();
   testWorkflowCommandMapping();
+  testPlanVarsRefreshesStaleDefinitions();
   testPlanVarsAndDryRunRendering();
   testLiveSubmissionUsesNoTrack();
   testLiveGithubSmokeIfRequested();

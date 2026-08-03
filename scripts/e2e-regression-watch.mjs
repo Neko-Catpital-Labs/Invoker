@@ -347,8 +347,15 @@ export function fallbackVerifyCommand(jobName) {
   return `bash -lc ${shellSingleQuote(`echo "No local verify command is mapped for CI job: ${jobName}" >&2; exit 1`)}`;
 }
 
+function findJobDefinition(jobName, jobDefinitions) {
+  const definition = jobDefinitions?.get(jobName);
+  if (definition) return definition;
+  if (!jobDefinitions) return undefined;
+  return buildCiJobDefinitions().get(jobName);
+}
+
 export function buildPlanVars(failure, repoUrl, jobDefinitions = buildCiJobDefinitions()) {
-  const definition = jobDefinitions.get(failure.jobName);
+  const definition = findJobDefinition(failure.jobName, jobDefinitions);
   const short = shortSha(failure.firstBadSha);
   const jobSlug = `${short}-${slugify(failure.jobName)}`;
   const verifyCommand = definition?.verifyCommand?.trim() || fallbackVerifyCommand(failure.jobName);
