@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / terminal-garbling',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,13 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const terminalGarblingCommand = defs.get('playwright / terminal-garbling').verifyCommand;
+  if (terminalGarblingCommand.includes('No local verify command is mapped')) {
+    fail('playwright / terminal-garbling must not use fallback verify command');
+  }
+  if (!terminalGarblingCommand.includes('e2e/task-terminal-drawer-minimize-garble-repro.spec.ts')) {
+    fail('playwright / terminal-garbling command must include drawer garble repro');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
@@ -156,6 +164,18 @@ function testPlanVarsAndDryRunRendering() {
   const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
   if (!vars.marker.includes('job=required-fast / Vitest Workspace')) fail('marker must include job name');
   if (!vars.verify_command.includes('10-vitest-workspace.sh')) fail('verify command must be job-specific');
+  const terminalGarblingVars = buildPlanVars({
+    jobName: 'playwright / terminal-garbling',
+    firstBadSha: 'e21a96567a3fff62cf9c71befc3f0a7db15ab9c5',
+    firstBadRunId: 30771302330,
+    firstJobDatabaseId: 91560715660,
+  }, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (terminalGarblingVars.verify_command.includes('No local verify command is mapped')) {
+    fail('terminal-garbling plan vars must use a mapped verify command');
+  }
+  if (!terminalGarblingVars.verify_command.includes('INVOKER_PLAYWRIGHT_RUN_LABEL=\'ci-playwright-terminal-garbling\'')) {
+    fail('terminal-garbling plan vars must use the CI Playwright shard label');
+  }
 
   const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-render-'));
   try {
