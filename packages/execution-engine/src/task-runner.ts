@@ -381,6 +381,11 @@ export class TaskRunner {
     return this.resolveExecutionAgent(task) === defaultAgent ? defaultModel : undefined;
   }
 
+  /** True when this TaskRunner instance genuinely still has a live executor for `taskId`. */
+  hasActiveExecution(taskId: string): boolean {
+    return this.resolveActiveExecution(taskId) !== undefined;
+  }
+
   /**
    * Stop the executor child for a task that is currently in-flight (after orchestrator.cancelTask).
    */
