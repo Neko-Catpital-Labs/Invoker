@@ -157,6 +157,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -183,6 +184,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
     clearScheduledFit();
+    if (drawerStateRef.current === 'minimized') return;
     fitVisibleTerminal(source);
     if (typeof requestAnimationFrame !== 'function') return;
 
@@ -298,7 +300,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
         resizeObserver = null;
       }
     }
-    if (isActiveRef.current) {
+    if (isActiveRef.current && drawerStateRef.current !== 'minimized') {
       scheduleFit('active_session');
       try {
         term.focus();
@@ -333,7 +335,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
-    if (!isActive) {
+    if (!isActive || drawerState === 'minimized') {
       clearScheduledFit();
       return;
     }

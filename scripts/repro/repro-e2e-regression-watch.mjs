@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / terminal-garbling',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -139,6 +140,19 @@ function testWorkflowCommandMapping() {
   }
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
+  }
+  const terminalGarblingCommand = defs.get('playwright / terminal-garbling').verifyCommand;
+  if (terminalGarblingCommand.includes('No local verify command is mapped')) {
+    fail('named playwright shard must not use fallback verify command');
+  }
+  if (!terminalGarblingCommand.includes("INVOKER_PLAYWRIGHT_RUN_LABEL='ci-playwright-terminal-garbling'")) {
+    fail('terminal-garbling verify command must preserve its CI run label');
+  }
+  if (!terminalGarblingCommand.includes('e2e/task-terminal-drawer-minimize-garble-repro.spec.ts')) {
+    fail('terminal-garbling verify command must include the drawer minimize repro');
+  }
+  if (terminalGarblingCommand.includes('e2e/planning-terminal-chat-tmux-toggle-real-claude-repro.spec.ts')) {
+    fail('terminal-garbling verify command must not include the manual real-claude repro');
   }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
