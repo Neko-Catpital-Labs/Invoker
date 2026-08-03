@@ -1,29 +1,55 @@
 /**
  * Same repro as planning-terminal-chat-tmux-toggle-garble-repro.spec.ts, but
- * driving the REAL `claude` CLI in the tmux pane instead of a synthetic
+ * driving a Claude-shaped CLI in the tmux pane instead of an inline synthetic
  * full-screen frame -- this is what the user actually typed and observed.
  *
- * Not part of the deterministic regression suite: a live CLI's screen can
- * legitimately differ run to run (spinners, token/cost counters, auth
- * state), so this is a manual verification script, run on demand.
+ * A deterministic fullscreen fixture is used by default so the CI assertion
+ * does not depend on host auth, warning output, or network state. Set
+ * INVOKER_E2E_USE_REAL_CLAUDE=1, or INVOKER_E2E_CLAUDE_TUI_BINARY to an
+ * explicit executable, for manual runs against a real Claude install.
  *
- * The e2e fixture normally shadows `claude` on PATH with a no-op stub
- * (electron-app.ts symlinks scripts/e2e-dry-run/fixtures/claude-marker.sh
- * as `claude` in a prepended stub dir) so other tests don't hit the real
- * network. This spec resolves and invokes the REAL binary by absolute path
- * to bypass that shadow on purpose.
+ * The e2e fixture normally shadows `claude` on the app PATH with a no-op stub
+ * (electron-app.ts symlinks scripts/e2e-dry-run/fixtures/claude-marker.sh)
+ * so other tests don't hit the real network. This spec writes an absolute CLI
+ * path into the tmux shell, bypassing that app-side PATH shadow.
  */
 
 import { execFileSync } from 'node:child_process';
+import { accessSync, constants } from 'node:fs';
+import path from 'node:path';
 import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures/electron-app.js';
 
-function resolveRealClaudeBinary(): string {
-  const resolved = execFileSync('bash', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
-  if (!resolved) {
-    throw new Error('Could not resolve a real `claude` binary on PATH outside the e2e sandbox');
+function assertExecutable(candidate: string): string {
+  accessSync(candidate, constants.X_OK);
+  return candidate;
+}
+
+function commandPath(command: string): string | null {
+  try {
+    return execFileSync('bash', ['-lc', `command -v ${command}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim() || null;
+  } catch {
+    return null;
   }
-  return resolved;
+}
+
+function resolveClaudeTuiBinary(): string {
+  const explicit = process.env.INVOKER_E2E_CLAUDE_TUI_BINARY?.trim()
+    || process.env.INVOKER_E2E_REAL_CLAUDE_BINARY?.trim();
+  if (explicit) return assertExecutable(explicit);
+
+  if (process.env.INVOKER_E2E_USE_REAL_CLAUDE === '1') {
+    const resolved = commandPath('claude');
+    if (!resolved) {
+      throw new Error('INVOKER_E2E_USE_REAL_CLAUDE=1 was set, but no `claude` binary was found on PATH');
+    }
+    return resolved;
+  }
+
+  return assertExecutable(path.resolve(__dirname, 'fixtures', 'claude-fullscreen-tui.sh'));
 }
 
 async function openHome(page: Page): Promise<void> {
@@ -132,10 +158,10 @@ async function closePlanningTerminalSessions(page: Page): Promise<void> {
   }).catch(() => undefined);
 }
 
-test.describe('Planning terminal Chat/Tmux toggle garble repro (real claude session)', () => {
-  test('tmux pane renders the real claude CLI identically before and after a Chat -> Tmux round trip', async ({ page }, testInfo) => {
+test.describe('Planning terminal Chat/Tmux toggle garble repro (Claude TUI session)', () => {
+  test('tmux pane renders the Claude CLI screen identically before and after a Chat -> Tmux round trip', async ({ page }, testInfo) => {
     test.setTimeout(90000);
-    const claudeBinary = resolveRealClaudeBinary();
+    const claudeBinary = resolveClaudeTuiBinary();
     let sessionId = '';
     try {
       await openHome(page);

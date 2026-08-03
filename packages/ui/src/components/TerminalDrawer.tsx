@@ -14,6 +14,8 @@ import { FitAddon } from 'xterm-addon-fit';
 import type { TerminalSessionDescriptor } from '@invoker/contracts';
 
 const DRAWER_BODY_HEIGHT_PX = 280;
+const MIN_TASK_TERMINAL_COLS = 20;
+const MIN_TASK_TERMINAL_ROWS = 5;
 const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
 
 /**
@@ -133,6 +135,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   const drawerStateRef = useRef(drawerState);
   const sessionRef = useRef(session);
   const lastScrollPerfAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const lastSentSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const fitFrameRef = useRef<number | null>(null);
   const secondFitFrameRef = useRef<number | null>(null);
 
@@ -157,16 +160,39 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
     try {
+      const host = containerRef.current;
+      if (!host?.isConnected) return;
+      const proposedDimensions = fit.proposeDimensions();
+      if (
+        !proposedDimensions ||
+        proposedDimensions.cols < MIN_TASK_TERMINAL_COLS ||
+        proposedDimensions.rows < MIN_TASK_TERMINAL_ROWS
+      ) {
+        return;
+      }
+
       const startedAt = nowMs();
       fit.fit();
       if (term.rows > 0) {
         term.refresh?.(0, term.rows - 1);
       }
-      void window.invoker?.terminalResize?.(session.sessionId, term.cols, term.rows);
+      const nextSize = { cols: term.cols, rows: term.rows };
+      const lastSentSize = lastSentSizeRef.current;
+      if (!lastSentSize || lastSentSize.cols !== nextSize.cols || lastSentSize.rows !== nextSize.rows) {
+        void window.invoker?.terminalResize?.(session.sessionId, nextSize.cols, nextSize.rows)
+          ?.then((result) => {
+            if (result?.ok === false) return;
+            lastSentSizeRef.current = nextSize;
+          })
+          .catch(() => {
+            /* leave lastSentSize unset so the next visible fit can retry */
+          });
+      }
       reportTerminalPerf('embedded_terminal_resize', {
         source,
         durationMs: roundMs(nowMs() - startedAt),
@@ -333,7 +359,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
   }, [session.outputSnapshot, session.sessionId]);
 
   useEffect(() => {
-    if (!isActive) {
+    if (!isActive || drawerState === 'minimized') {
       clearScheduledFit();
       return;
     }
