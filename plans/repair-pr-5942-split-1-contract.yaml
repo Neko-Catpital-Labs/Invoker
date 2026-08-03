@@ -1,0 +1,112 @@
+name: "PR 5942 split 1 contract canonical channel"
+description: |
+  Removes the deprecated `invoker:set-merge-mode` entry from the IPC channel registry and keeps the drift scenarios aligned with the canonical `set-workflow-merge-mode` surface.
+
+  This is the first slice of the PR #5942 restructuring stack. It is intentionally limited to the contract-facing channel name and directly affected drift coverage.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+featureBranch: repair/pr-5942-split-1-contract-channel
+
+tasks:
+  - id: implement-contract-channel-canonicalization
+    description: |
+      Review claim: The deprecated `invoker:set-merge-mode` IPC channel is removed from the contract registry while drift coverage names the canonical `set-workflow-merge-mode` surface.
+      Safety invariant: The runtime handler path already exists upstream, and this slice changes only the exported channel registry plus directly affected drift scenario identifiers.
+      Slice rationale: This work is isolated from the repository-level checker so the diff carries one review unit.
+      Architectural effect: The public IPC contract no longer exposes the deprecated alias; existing drift coverage now targets the canonical channel spelling.
+      Goal: Preserve the PR #5942 contract cleanup without carrying unrelated review-surface changes.
+      Motivation: The PR body gate rejected the original mixed diff, so the contract-facing cleanup must stand alone.
+      Alternative considerations: Keeping the repository-level checker here was rejected because it has a different owner and review surface.
+      Implementation details: Apply only the contract registry removal and drift scenario renames from PR #5942.
+      Layer: api
+      Feature state: active
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: modify
+      - packages/app/e2e/drift/drift-battery.spec.ts: modify
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: modify
+      - packages/app/e2e/drift/scenario-catalog.ts: modify
+      Acceptance criteria:
+      - `invoker:set-merge-mode` is absent from `packages/contracts/src/ipc-channels.ts`.
+      - Drift scenario IDs and references use `set-workflow-merge-mode`.
+      - No repository-level checker file is added in this slice.
+    prompt: |
+      Assume zero prior chat context. You are restructuring PR #5942 into reviewable slices.
+
+      Review claim: The deprecated `invoker:set-merge-mode` IPC channel is removed from the contract registry while drift coverage names the canonical `set-workflow-merge-mode` surface.
+      Safety invariant: The runtime handler path already exists upstream, and this slice changes only the exported channel registry plus directly affected drift scenario identifiers.
+      Slice rationale: This work is isolated from the repository-level checker so the diff carries one review unit.
+      Architectural effect: The public IPC contract no longer exposes the deprecated alias; existing drift coverage now targets the canonical channel spelling.
+      Goal: Preserve the PR #5942 contract cleanup without carrying unrelated review-surface changes.
+      Motivation: The PR body gate rejected the original mixed diff, so the contract-facing cleanup must stand alone.
+      Alternative considerations: Keeping the repository-level checker here was rejected because it has a different owner and review surface.
+      Implementation details:
+      - In `packages/contracts/src/ipc-channels.ts`, remove the `invoker:set-merge-mode` channel entry.
+      - In `packages/app/e2e/drift/drift-battery.spec.ts`, replace the `set-merge-mode` scenario ID with `set-workflow-merge-mode`.
+      - In `packages/app/e2e/drift/drift-thundering-herd.spec.ts`, replace the `set-merge-mode` scenario ID with `set-workflow-merge-mode`.
+      - In `packages/app/e2e/drift/scenario-catalog.ts`, rename the scenario id and loaded plan label from `set-merge-mode` to `set-workflow-merge-mode`.
+      - Do not modify `package.json`, do not create `scripts/verify-empty-canonical-sweeps.sh`, and do not change any documentation file in this slice.
+
+      Deterministic pass/fail expectations:
+      - `invoker:set-merge-mode` is absent from `packages/contracts/src/ipc-channels.ts`.
+      - `set-workflow-merge-mode` appears in the drift scenario catalog and scenario lists.
+      - `scripts/verify-empty-canonical-sweeps.sh` does not exist.
+      - `cd packages/contracts && pnpm test && pnpm build` exits 0.
+    dependencies: []
+
+  - id: verify-contract-channel-canonicalization
+    description: |
+      Review claim: The contract cleanup has only the canonical channel spelling in the touched registry and drift files.
+      Safety invariant: This command reads the touched files and fails on any remaining deprecated hyphenated scenario/channel spelling.
+      Slice rationale: Focused verification belongs with the contract slice that introduced the cleanup.
+      Architectural effect: Verification proves the exported contract surface and drift references agree on the canonical channel name.
+      Goal: Provide a deterministic repro-proof gate for the split contract slice.
+      Motivation: The original PR Body failure is structural, so this command proves the first replacement slice is self-contained.
+      Alternative considerations: A full repository sweep is deferred to the later checker slice to keep this diff focused.
+      Implementation details: Search only the files owned by this slice and assert the repository-level checker is absent.
+      Layer: api
+      Feature state: active
+      Files:
+      - packages/contracts/src/ipc-channels.ts
+      - packages/app/e2e/drift/drift-battery.spec.ts
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts
+      - packages/app/e2e/drift/scenario-catalog.ts
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - packages/contracts/src/ipc-channels.ts: none
+      - packages/app/e2e/drift/drift-battery.spec.ts: none
+      - packages/app/e2e/drift/drift-thundering-herd.spec.ts: none
+      - packages/app/e2e/drift/scenario-catalog.ts: none
+      - scripts/verify-empty-canonical-sweeps.sh: none
+      Acceptance criteria:
+      - The command exits 0.
+      - Deprecated `set-merge-mode` text is absent from the slice-owned registry and drift files.
+    command: "bash -lc 'set -euo pipefail; rg -n \"set-workflow-merge-mode\" packages/contracts/src/ipc-channels.ts packages/app/e2e/drift/drift-battery.spec.ts packages/app/e2e/drift/drift-thundering-herd.spec.ts packages/app/e2e/drift/scenario-catalog.ts; if rg -n \"set-merge-mode\" packages/contracts/src/ipc-channels.ts packages/app/e2e/drift/drift-battery.spec.ts packages/app/e2e/drift/drift-thundering-herd.spec.ts packages/app/e2e/drift/scenario-catalog.ts; then exit 1; fi; test ! -e scripts/verify-empty-canonical-sweeps.sh'"
+    dependencies: [implement-contract-channel-canonicalization]
+
+  - id: verify-contracts-package
+    description: |
+      Review claim: The contracts package still tests and builds after the channel registry cleanup.
+      Safety invariant: This command exercises the package that owns the exported IPC channel registry.
+      Slice rationale: Package-level verification is enough for the first split slice; broader checks happen in the terminal stack workflow.
+      Architectural effect: The contract registry remains typecheckable and buildable after removing the deprecated channel entry.
+      Goal: Prove the contract-facing change is locally valid.
+      Motivation: The split should not trade a PR Body fix for a contracts package regression.
+      Alternative considerations: Running the full repository suite here was rejected because the dependent terminal slice owns the final regression gate.
+      Implementation details: Run the existing contracts package test and build scripts.
+      Layer: api
+      Feature state: active
+      Files:
+      - packages/contracts/package.json
+      Change types:
+      - packages/contracts/package.json: none
+      Acceptance criteria:
+      - `cd packages/contracts && pnpm test && pnpm build` exits 0.
+    command: "cd packages/contracts && pnpm test && pnpm build"
+    dependencies: [implement-contract-channel-canonicalization]

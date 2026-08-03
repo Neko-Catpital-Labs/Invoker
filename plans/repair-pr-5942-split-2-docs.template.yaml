@@ -1,0 +1,78 @@
+name: "PR 5942 split 2 single writer documentation"
+description: |
+  Updates the single-writer command table so it names the canonical workflow merge-mode channel.
+
+  This is the documentation-only follow-up slice in the PR #5942 restructuring stack.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: placeholder-upstream-feature-branch
+featureBranch: repair/pr-5942-split-2-single-writer-doc
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: update-single-writer-command-table
+    description: |
+      Review claim: The single-writer command table names the canonical workflow merge-mode channel.
+      Safety invariant: This slice modifies only the architecture markdown table and inherits the code cleanup from the previous workflow.
+      Slice rationale: The PR body gate treats markdown as a separate review unit, so this documentation change stands alone.
+      Architectural effect: Architecture guidance now matches the canonical command surface without changing runtime code.
+      Goal: Preserve the PR #5942 documentation correction in its own review lane.
+      Motivation: The original PR mixed markdown with other review surfaces and was rejected by CI.
+      Alternative considerations: Bundling this with the registry cleanup was rejected because markdown has a distinct review unit.
+      Implementation details: Update only the single-writer table row for workflow merge-mode mutation.
+      Layer: docs
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: docs-only
+      Acceptance criteria:
+      - `docs/persistence-architecture-single-writer.md` contains `invoker:set-workflow-merge-mode`.
+      - `docs/persistence-architecture-single-writer.md` no longer contains `invoker:set-merge-mode`.
+    prompt: |
+      Assume zero prior chat context. You are working on the second workflow in a PR #5942 restructuring stack.
+
+      Review claim: The single-writer command table names the canonical workflow merge-mode channel.
+      Safety invariant: This slice modifies only the architecture markdown table and inherits the code cleanup from the previous workflow.
+      Slice rationale: The PR body gate treats markdown as a separate review unit, so this documentation change stands alone.
+      Architectural effect: Architecture guidance now matches the canonical command surface without changing runtime code.
+      Goal: Preserve the PR #5942 documentation correction in its own review lane.
+      Motivation: The original PR mixed markdown with other review surfaces and was rejected by CI.
+      Alternative considerations: Bundling this with the registry cleanup was rejected because markdown has a distinct review unit.
+      Implementation details:
+      - Modify only `docs/persistence-architecture-single-writer.md`.
+      - In the mutating command table, replace `invoker:set-merge-mode` with `invoker:set-workflow-merge-mode`.
+      - Use the owner path shown by the canonical handler in the current codebase.
+      - Do not modify `package.json`, `scripts/`, `packages/contracts/`, or drift scenario files in this slice.
+
+      Deterministic pass/fail expectations:
+      - `rg -n "invoker:set-workflow-merge-mode" docs/persistence-architecture-single-writer.md` exits 0.
+      - `rg -n "invoker:set-merge-mode" docs/persistence-architecture-single-writer.md` exits non-zero.
+    dependencies: []
+
+  - id: verify-single-writer-documentation
+    description: |
+      Review claim: The architecture table contains only the canonical workflow merge-mode channel spelling.
+      Safety invariant: This command reads one markdown file and fails on the deprecated channel spelling.
+      Slice rationale: A focused text check is sufficient for the documentation-only slice.
+      Architectural effect: Verification proves the written architecture guidance matches the canonical channel name.
+      Goal: Provide deterministic evidence for the documentation follow-up.
+      Motivation: The original mixed PR should be replaced by independently verifiable review slices.
+      Alternative considerations: A package build was rejected because this slice changes no executable source.
+      Implementation details: Search the single-writer architecture document for canonical and deprecated channel text.
+      Layer: docs
+      Feature state: active
+      Files:
+      - docs/persistence-architecture-single-writer.md
+      Change types:
+      - docs/persistence-architecture-single-writer.md: none
+      Acceptance criteria:
+      - The command exits 0.
+      - The deprecated channel spelling is absent from the markdown table.
+    command: "bash -lc 'set -euo pipefail; rg -n \"invoker:set-workflow-merge-mode\" docs/persistence-architecture-single-writer.md; if rg -n \"invoker:set-merge-mode\" docs/persistence-architecture-single-writer.md; then exit 1; fi; test ! -e scripts/verify-empty-canonical-sweeps.sh'"
+    dependencies: [update-single-writer-command-table]

@@ -1,0 +1,131 @@
+name: "PR 5942 split 3 canonical sweep verifier"
+description: |
+  Adds a repository-level canonical sweep verifier for the deprecated merge-mode alias and removed restart surfaces.
+
+  This is the tooling-policy terminal slice in the PR #5942 restructuring stack.
+onFinish: pull_request
+mergeMode: external_review
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: placeholder-upstream-feature-branch
+featureBranch: repair/pr-5942-split-3-canonical-sweep-verifier
+externalDependencies:
+  - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+    taskId: "__merge__"
+    requiredStatus: completed
+    gatePolicy: review_ready
+
+tasks:
+  - id: add-canonical-sweep-verifier
+    description: |
+      Review claim: The repository has a dedicated verifier that rejects reintroduction of deprecated merge-mode and restart surfaces.
+      Safety invariant: The verifier is additive tooling and does not alter product runtime code.
+      Slice rationale: The PR body gate requires script-level policy work to be reviewed separately from product and markdown changes.
+      Architectural effect: CI and maintainers get an explicit sweep command for canonical endpoint cleanup invariants.
+      Goal: Preserve the PR #5942 canonical sweep checker in the correct review lane.
+      Motivation: The original PR mixed the checker with other review surfaces and was rejected by CI.
+      Alternative considerations: Folding this into the contract cleanup was rejected because script-level enforcement has a distinct owner.
+      Implementation details: Add the shell verifier and wire a root package script to run it.
+      Layer: domain
+      Feature state: active
+      Files:
+      - package.json
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - package.json: config-only
+      - scripts/verify-empty-canonical-sweeps.sh: create
+      Acceptance criteria:
+      - `pnpm run verify-empty-canonical-sweeps` exits 0.
+      - `pnpm check:deps` exits 0.
+      - The verifier is executable and permits only documented compatibility guards.
+    prompt: |
+      Assume zero prior chat context. You are working on the terminal workflow in a PR #5942 restructuring stack.
+
+      Review claim: The repository has a dedicated verifier that rejects reintroduction of deprecated merge-mode and restart surfaces.
+      Safety invariant: The verifier is additive tooling and does not alter product runtime code.
+      Slice rationale: The PR body gate requires script-level policy work to be reviewed separately from product and markdown changes.
+      Architectural effect: CI and maintainers get an explicit sweep command for canonical endpoint cleanup invariants.
+      Goal: Preserve the PR #5942 canonical sweep checker in the correct review lane.
+      Motivation: The original PR mixed the checker with other review surfaces and was rejected by CI.
+      Alternative considerations: Folding this into the contract cleanup was rejected because script-level enforcement has a distinct owner.
+      Implementation details:
+      - Add `scripts/verify-empty-canonical-sweeps.sh` as an executable bash script.
+      - Add the root `package.json` script `"verify-empty-canonical-sweeps": "bash scripts/verify-empty-canonical-sweeps.sh"`.
+      - The verifier should require `rg`, scan `packages`, `docs`, and `invoker-ctl`, and exclude `**/__tests__/**`, `**/*.test.ts`, and `**/*.spec.ts`.
+      - It should fail if deprecated restart surfaces appear: `invoker:restart-task`, `restartTask(`, `/api/tasks/.*/restart`, or `/api/workflows/.*/restart`.
+      - It should fail on `set-merge-mode` except for the intentional compatibility guard line in `packages/app/src/headless-command-registry.ts` that returns true for `command === 'set-merge-mode'`.
+      - It should fail on compatibility-label text `github | external_review`, `merge_mode = 'github'`, or `Use /api/.*/restart` except for the single sqlite migration guard line containing `WHERE merge_mode = 'github'`.
+      - Print `PASS: repository canonical sweeps found only allowed compatibility guards` on success.
+      - Do not modify contract registry files, drift scenarios, or markdown architecture files in this slice.
+
+      Deterministic pass/fail expectations:
+      - `pnpm run verify-empty-canonical-sweeps` exits 0 and prints the expected PASS line.
+      - `pnpm check:deps` exits 0.
+      - The final stack workflow runs `pnpm run test:all` with exit code 0.
+    dependencies: []
+
+  - id: verify-canonical-sweep-script
+    description: |
+      Review claim: The canonical sweep verifier passes against the repository state produced by the restructuring stack.
+      Safety invariant: This command executes only the newly added verifier script.
+      Slice rationale: The checker should prove its own invariant before the broader CI-equivalent checks run.
+      Architectural effect: The repository now has an explicit command for detecting deprecated endpoint text.
+      Goal: Provide deterministic evidence for the script-level policy slice.
+      Motivation: The original failed PR body was caused by mixing this verifier with other review surfaces.
+      Alternative considerations: A grep-only check was rejected because the committed verifier should be executed directly.
+      Implementation details: Run the package script that invokes `scripts/verify-empty-canonical-sweeps.sh`.
+      Layer: domain
+      Feature state: active
+      Files:
+      - package.json
+      - scripts/verify-empty-canonical-sweeps.sh
+      Change types:
+      - package.json: none
+      - scripts/verify-empty-canonical-sweeps.sh: none
+      Acceptance criteria:
+      - `pnpm run verify-empty-canonical-sweeps` exits 0.
+    command: "pnpm run verify-empty-canonical-sweeps"
+    dependencies: [add-canonical-sweep-verifier]
+
+  - id: verify-dependency-cruise
+    description: |
+      Review claim: Adding the verifier does not introduce dependency boundary violations.
+      Safety invariant: Dependency Cruise is read-only and matches the CI check that was reported in the repair prompt.
+      Slice rationale: Dependency Cruise belongs with the script-level checker because the reported check is already green before restructuring and must remain green after it.
+      Architectural effect: The tooling-policy slice preserves the repository dependency graph.
+      Goal: Keep the originally reported CI surface green on the terminal stack state.
+      Motivation: The repair prompt named `quality / Dependency Cruise`, so the replacement stack must prove that check explicitly.
+      Alternative considerations: Relying only on the full-suite gate was rejected because this check has a specific CI identity and fast repro command.
+      Implementation details: Run the root `check:deps` script.
+      Layer: domain
+      Feature state: active
+      Files:
+      - .dependency-cruiser.js
+      - package.json
+      Change types:
+      - .dependency-cruiser.js: none
+      - package.json: none
+      Acceptance criteria:
+      - `pnpm check:deps` exits 0.
+    command: "pnpm check:deps"
+    dependencies: [add-canonical-sweep-verifier]
+
+  - id: final-regression
+    description: |
+      Review claim: The full repository test surface passes for the terminal split stack.
+      Safety invariant: This command runs after every implementation and focused verification task in the terminal workflow.
+      Slice rationale: The final stack workflow owns the broad regression gate for all three restructuring slices.
+      Architectural effect: The replacement PR stack preserves overall repository behavior while fixing the review-unit structure.
+      Goal: Provide terminal CI-equivalent confidence before PR publication.
+      Motivation: The original PR was structurally invalid even though Dependency Cruise is green; the replacement stack still needs full regression proof.
+      Alternative considerations: Per-slice focused checks alone were rejected because this is the terminal workflow for a PR stack.
+      Implementation details: Run the existing root full-suite command.
+      Layer: domain
+      Feature state: active
+      Files:
+      - package.json
+      Change types:
+      - package.json: none
+      Acceptance criteria:
+      - `pnpm run test:all` exits 0.
+    command: "pnpm run test:all"
+    dependencies: [add-canonical-sweep-verifier, verify-canonical-sweep-script, verify-dependency-cruise]
