@@ -387,14 +387,21 @@ export class TaskRunner {
   async killActiveExecution(taskId: string): Promise<boolean> {
     const resolved = this.resolveActiveExecution(taskId);
     if (!resolved) return false;
-    this.activeExecutions.delete(resolved.attemptId);
-    if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
-      this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
-    }
+    // Kill FIRST, release the resource lease and drop it from
+    // activeExecutions only after. executor.kill() can take up to
+    // SIGKILL_TIMEOUT_MS (SIGTERM grace period) before the process
+    // actually exits -- releasing the lease before that window closes
+    // would let a different task claim the same SSH/worktree slot while
+    // this process is still alive and still touching it.
     try {
       await resolved.entry.executor.kill(resolved.entry.handle);
     } catch (killErr) {
       this.logger.warn(`[TaskRunner] killActiveExecution failed for task=${taskId}`, { err: killErr });
+    } finally {
+      this.activeExecutions.delete(resolved.attemptId);
+      if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
+        this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
+      }
     }
     return true;
   }

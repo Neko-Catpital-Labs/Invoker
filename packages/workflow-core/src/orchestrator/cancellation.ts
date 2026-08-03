@@ -193,11 +193,21 @@ export function cancelActiveCandidatesImpl(
 /**
  * Cancel a task and cascade-cancel all downstream DAG dependents.
  * Returns cancelled task IDs and which were running (need process kill by caller).
+ *
+ * `deferInvalidation`: when true, skips `invalidateLaunchArtifactsForTasks`
+ * (which releases SSH/worktree resource leases and abandons launch dispatch
+ * rows) here and returns `toCancelIds` instead, so the caller can kill the
+ * real process FIRST and invalidate artifacts afterward via
+ * `finalizeCancelInvalidationImpl` -- releasing a resource lease before the
+ * process that holds it is confirmed dead lets a different task claim the
+ * same SSH/worktree slot while it's still in use. Defaults to false so
+ * every existing caller keeps today's behavior unchanged.
  */
 export function cancelTaskImpl(
   host: CancellationHost,
   taskId: string,
-): { cancelled: string[]; runningCancelled: string[] } {
+  opts?: { deferInvalidation?: boolean },
+): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
   host.refreshFromDb();
 
   const task = host.stateGetTask(taskId);
@@ -226,7 +236,9 @@ export function cancelTaskImpl(
   const toCancelIds = [rootId, ...descendantIds];
   const cancelled: string[] = [];
   const runningCancelled: string[] = [];
-  host.invalidateLaunchArtifactsForTasks(toCancelIds, 'task cancellation');
+  if (!opts?.deferInvalidation) {
+    host.invalidateLaunchArtifactsForTasks(toCancelIds, 'task cancellation');
+  }
 
   for (const id of toCancelIds) {
     const t = host.stateGetTask(id);
@@ -290,17 +302,20 @@ export function cancelTaskImpl(
   }
 
   host.checkWorkflowCompletion();
-  return { cancelled, runningCancelled };
+  return { cancelled, runningCancelled, toCancelIds };
 }
 
 /**
  * Cancel all active tasks in a workflow.
  * Terminal tasks (completed/stale) are preserved as-is.
+ *
+ * See `cancelTaskImpl` for what `deferInvalidation` does and why.
  */
 export function cancelWorkflowImpl(
   host: CancellationHost,
   workflowId: string,
-): { cancelled: string[]; runningCancelled: string[] } {
+  opts?: { deferInvalidation?: boolean },
+): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
   host.refreshWorkflowFromDb(workflowId);
 
   const allTasks = host.stateMachine.getAllTasks().filter(
@@ -323,10 +338,10 @@ export function cancelWorkflowImpl(
 
   const cancelled: string[] = [];
   const runningCancelled: string[] = [];
-  host.invalidateLaunchArtifactsForTasks(
-    allTasks.filter((task) => cancellable[task.status]).map((task) => task.id),
-    'workflow cancellation',
-  );
+  const toCancelIds = allTasks.filter((task) => cancellable[task.status]).map((task) => task.id);
+  if (!opts?.deferInvalidation) {
+    host.invalidateLaunchArtifactsForTasks(toCancelIds, 'workflow cancellation');
+  }
 
   for (const task of allTasks) {
     if (!cancellable[task.status]) continue;
@@ -359,7 +374,25 @@ export function cancelWorkflowImpl(
   }
 
   host.checkWorkflowCompletion();
-  return { cancelled, runningCancelled };
+  return { cancelled, runningCancelled, toCancelIds };
+}
+
+/**
+ * Companion to `cancelTaskImpl`/`cancelWorkflowImpl`'s `deferInvalidation`
+ * option: performs the artifact invalidation (resource lease release +
+ * launch dispatch abandon) they skipped. Call this after the caller has
+ * finished killing every id in `runningCancelled` -- idempotent even
+ * though `killActiveExecution` already released a running task's own
+ * lease, since the underlying release/abandon calls are plain
+ * `WHERE task_id IN (...)` operations.
+ */
+export function finalizeCancelInvalidationImpl(
+  host: CancellationHost,
+  toCancelIds: readonly string[],
+  reason: string,
+): void {
+  if (toCancelIds.length === 0) return;
+  host.invalidateLaunchArtifactsForTasks(toCancelIds, reason);
 }
 
 /**
