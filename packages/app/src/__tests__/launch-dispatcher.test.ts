@@ -235,7 +235,7 @@ describe('LaunchDispatcher', () => {
       expect(dispatcher.failDispatch(enqueued.id, 'too late')).toBe(false);
     });
 
-    it.fails('fail abandons an already-accepted row instead of silently re-enqueuing it', () => {
+    it('fail abandons an already-accepted row instead of silently re-enqueuing it', () => {
       seedWorkflowAndTask('attempt-fail-post-accept');
       const enqueued = adapter.enqueueLaunchDispatch({
         taskId: 'wf-1/t1',
@@ -322,7 +322,7 @@ describe('LaunchDispatcher', () => {
       expect(dispatcher.reapExpiredLeases()).toBe(0);
     });
 
-    it.fails('reapExpiredLeases does not reset an accepted row even past its fence (healthy long-running task)', () => {
+    it('reapExpiredLeases does not reset an accepted row even past its fence (healthy long-running task)', () => {
       seed();
       const row = adapter.enqueueLaunchDispatch({
         taskId: 'wf-r/t1',
@@ -381,7 +381,7 @@ describe('LaunchDispatcher', () => {
       });
     });
 
-    it.fails('abandonStuckLeases does not abandon an accepted row via attempts_count alone', () => {
+    it('abandonStuckLeases does not abandon an accepted row via attempts_count alone', () => {
       seed();
       const row = adapter.enqueueLaunchDispatch({
         taskId: 'wf-r/t1',

@@ -620,9 +620,10 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Record a launch failure. Normal failures are retried by re-enqueuing
-   * the row. A row that has already used its retry budget is abandoned
-   * instead. The TaskRunner still owns the task failure response, so this
+   * Record a launch failure. Re-enqueues the row unless it already used its
+   * retry budget or already reached `acceptDispatch` -- an accepted row is
+   * abandoned instead, since re-enqueuing it would look like it never
+   * launched. The TaskRunner still owns the task failure response, so this
    * path must not prepare a fresh attempt here.
    */
   failDispatch(dispatchId: number, error: unknown): boolean {
@@ -630,19 +631,25 @@ export class LaunchDispatcher {
       error instanceof Error ? error.message : String(error ?? 'unknown launch error');
     const row = this.persistence.loadLaunchDispatchById(dispatchId);
 
-    if (row && this.shouldAbandonAfterFastFailure(row)) {
-      const accepted = this.abandonDispatch(
-        row,
-        this.launchDispatchAbandonedMessage(row, message),
+    if (row && (this.shouldAbandonAfterFastFailure(row) || row.acknowledgedAt)) {
+      const reason = row.acknowledgedAt
+        ? `Post-accept launch failure (dispatch already running): ${message}`
+        : this.launchDispatchAbandonedMessage(row, message);
+      const accepted = this.abandonDispatch(row, reason);
+      this.logger?.warn?.(
+        row.acknowledgedAt
+          ? '[launch-dispatcher] abandoned a post-accept failure instead of re-enqueuing'
+          : '[launch-dispatcher] abandoned after fast failures',
+        {
+          ownerId: this.ownerId,
+          dispatchId,
+          attemptsCount: row.attemptsCount,
+          acknowledged: Boolean(row.acknowledgedAt),
+          error: message,
+          accepted,
+          module: 'launch-dispatcher',
+        },
       );
-      this.logger?.warn?.('[launch-dispatcher] abandoned after fast failures', {
-        ownerId: this.ownerId,
-        dispatchId,
-        attemptsCount: row.attemptsCount,
-        error: message,
-        accepted,
-        module: 'launch-dispatcher',
-      });
       return accepted;
     }
 
