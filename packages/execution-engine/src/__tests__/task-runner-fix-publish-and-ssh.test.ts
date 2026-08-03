@@ -1793,7 +1793,7 @@ describe('TaskRunner', () => {
       execSync('git init --initial-branch=master', { cwd, stdio: 'pipe' });
       execSync('git config user.email pr-body-test@example.test', { cwd, stdio: 'pipe' });
       execSync('git config user.name "PR Body Test"', { cwd, stdio: 'pipe' });
-      execSync('git add packages && git commit -m baseline', { cwd, stdio: 'pipe' });
+      execSync('git add packages scripts && git commit -m baseline', { cwd, stdio: 'pipe' });
       execSync('git remote add origin .', { cwd, stdio: 'pipe' });
       execSync('git update-ref refs/remotes/origin/master HEAD', { cwd, stdio: 'pipe' });
       execSync('git switch -c feature', { cwd, stdio: 'pipe' });
