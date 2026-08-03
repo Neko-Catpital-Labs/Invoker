@@ -1,0 +1,119 @@
+name: "Repair PR 7164 PR Body review-unit split"
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+tasks:
+  - id: reproduce-pr-body-split-failure
+    description: |
+      Review claim:
+      - PR #7164 fails because one PR body declares a routing review unit while the diff also contains contract files.
+      Review lane:
+      - proof
+      Safety invariant:
+      - This task only checks out the PR head and runs the existing PR Body validator.
+      Slice rationale:
+      - Capture the deterministic blocker before delegating stack surgery.
+      Architectural effect:
+      - No architecture change; this is read-only validation evidence.
+      Goal:
+      - Prove the PR Body failure is the review-unit split error, not a transient CI issue.
+      Motivation:
+      - The current PR cannot be repaired by editing prose because every valid review unit rejects the other unit's files.
+      Alternative considerations:
+      - Relying on the missing Actions log was rejected because the local validator reproduces the failure with exact errors.
+      Implementation details:
+      - Fetch refs/pull/7164/head, write the live PR body to a temp file, run scripts/validate-pr-body-local.mjs, and require the expected review-unit split error.
+      Non-goals:
+      - Do not modify branches or PR metadata in this proof task.
+      Layer: app_regression
+      Feature state: active
+    command: |
+      git fetch origin refs/pull/7164/head &&
+      git checkout --detach FETCH_HEAD &&
+      gh pr view 7164 --repo Neko-Catpital-Labs/Invoker --json body --jq .body > /tmp/pr-7164-body-restructure.md &&
+      ! node scripts/validate-pr-body-local.mjs --body-file /tmp/pr-7164-body-restructure.md --base master --json > /tmp/pr-7164-body-restructure-result.json 2>&1 &&
+      grep -F "PR body Review Unit \"routing\" cannot ship with contract files in the same PR. Split this into one Review Unit per PR." /tmp/pr-7164-body-restructure-result.json
+    dependencies: []
+
+  - id: split-pr-7164-into-review-unit-stack
+    description: |
+      Review claim:
+      - Restructure PR #7164 into a review-unit-compliant stack with a contract slice followed by a routing slice.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Preserve the code from PR head ed90ea2bd30428ba8c7e6038cfb53d4ad4bf3b39, but do not force mixed contract and routing files into one PR.
+      Slice rationale:
+      - The shared snapshot-retention contract must be reviewed before the app/execution-engine reaper routing that consumes it.
+      Architectural effect:
+      - The first slice introduces the contracts API; the second slice wires app and execution-engine reclaim behavior against that API.
+      Goal:
+      - Replace or rewrite #7164 so every published PR Body check validates with exactly one review unit.
+      Motivation:
+      - PR Body rejects the current branch because it spans packages/contracts and routing-owned app/execution-engine files.
+      Alternative considerations:
+      - A body-only edit was rejected because declaring contract fails on routing files and declaring routing fails on contract files.
+      Implementation details:
+      - Use PR #7164 head ed90ea2bd30428ba8c7e6038cfb53d4ad4bf3b39 as source material. Create a first contract slice from master with only packages/contracts/src/hourly-snapshot-retention.ts, packages/contracts/src/index.ts, and focused contract tests. Create a second routing slice on top with packages/app/src/delete-all-snapshot.ts, packages/execution-engine/src/workers/disk-headroom-reclaim.ts, packages/execution-engine/src/workers/reaper-reclaim.ts, and packages/execution-engine/src/__tests__/reaper-reclaim.test.ts. Publish/update the resulting Invoker stack through scripts/create-pr.mjs and mergify stack push.
+      Non-goals:
+      - Do not bypass PR Body, do not keep contract and routing files in the same PR, and do not push from the repair checkout until local validation is green.
+      Layer: app_bridge
+      Feature state: active
+      Files:
+      - packages/contracts/src/hourly-snapshot-retention.ts
+      - packages/contracts/src/index.ts
+      - packages/contracts/src/__tests__/hourly-snapshot-retention.test.ts
+      - packages/app/src/delete-all-snapshot.ts
+      - packages/execution-engine/src/workers/disk-headroom-reclaim.ts
+      - packages/execution-engine/src/workers/reaper-reclaim.ts
+      - packages/execution-engine/src/__tests__/reaper-reclaim.test.ts
+      Change types:
+      - packages/contracts/src/hourly-snapshot-retention.ts: create
+      - packages/contracts/src/index.ts: modify
+      - packages/contracts/src/__tests__/hourly-snapshot-retention.test.ts: create
+      - packages/app/src/delete-all-snapshot.ts: modify
+      - packages/execution-engine/src/workers/disk-headroom-reclaim.ts: modify
+      - packages/execution-engine/src/workers/reaper-reclaim.ts: create
+      - packages/execution-engine/src/__tests__/reaper-reclaim.test.ts: create
+      Acceptance criteria:
+      - The contract PR body validates with `node scripts/validate-pr-body-local.mjs --body-file <contract-body> --base master --json` and declares Review Unit `contract`.
+      - The routing PR body validates with `node scripts/validate-pr-body-local.mjs --body-file <routing-body> --base <contract-branch> --json` and declares Review Unit `routing`.
+      - `cd packages/contracts && pnpm test src/__tests__/hourly-snapshot-retention.test.ts` exits 0.
+      - `cd packages/execution-engine && pnpm test src/__tests__/reaper-reclaim.test.ts` exits 0.
+      - `cd packages/app && pnpm test src/__tests__/delete-all-snapshot.test.ts` exits 0.
+      - The final report includes replacement PR URLs or explains exactly how #7164 was rewritten and how the original mixed PR was closed or superseded.
+    prompt: |
+      Review claim:
+      - Restructure PR #7164 into a review-unit-compliant stack with a contract slice followed by a routing slice.
+      Review lane:
+      - behavior
+      Safety invariant:
+      - Preserve the code from PR head ed90ea2bd30428ba8c7e6038cfb53d4ad4bf3b39, but do not force mixed contract and routing files into one PR.
+      Slice rationale:
+      - The shared snapshot-retention contract must be reviewed before the app/execution-engine reaper routing that consumes it.
+      Architectural effect:
+      - The first slice introduces the contracts API; the second slice wires app and execution-engine reclaim behavior against that API.
+      Goal:
+      - Repair PR #7164's failing PR Body check by splitting the mixed review units into a publishable Invoker stack.
+      Motivation:
+      - Local reproduction shows the current PR body fails with: PR body Review Unit "routing" cannot ship with contract files in the same PR. Split this into one Review Unit per PR.
+      Alternative considerations:
+      - A body-only edit is not valid because the changed files are classified as both `contract` and `routing`.
+      Implementation details:
+      - Assume no prior context. Target repository: Neko-Catpital-Labs/Invoker. Original PR: https://github.com/Neko-Catpital-Labs/Invoker/pull/7164. Original head SHA: ed90ea2bd30428ba8c7e6038cfb53d4ad4bf3b39. Base branch: master.
+      - Fetch `origin master` and `refs/pull/7164/head`. Abort and report if PR #7164 has moved away from ed90ea2bd30428ba8c7e6038cfb53d4ad4bf3b39 unless the new head already has a green PR Body check.
+      - Create a clean first slice from `origin/master` for Review Unit `contract`. Use the PR head as source material, but include only `packages/contracts/src/hourly-snapshot-retention.ts`, `packages/contracts/src/index.ts`, and a focused `packages/contracts/src/__tests__/hourly-snapshot-retention.test.ts`. The tests should cover blank/invalid env fallback, integer flooring, retention pruning, and sidecar/manual snapshot handling.
+      - Create a clean second slice on top of the contract slice for Review Unit `routing`. Use the PR head as source material for `packages/app/src/delete-all-snapshot.ts`, `packages/execution-engine/src/workers/disk-headroom-reclaim.ts`, `packages/execution-engine/src/workers/reaper-reclaim.ts`, and `packages/execution-engine/src/__tests__/reaper-reclaim.test.ts`. Do not modify `packages/contracts/**` in this second slice.
+      - Prepare canonical PR bodies using the repository make-pr workflow. The contract body must declare Review Lane `behavior` and Review Unit `contract`. The routing body must declare Review Lane `behavior` and Review Unit `routing`. Use `scripts/create-pr.mjs` for PR body/title updates rather than `gh pr edit` when updating stack PRs.
+      - Validate before publishing: run `node scripts/validate-pr-body-local.mjs --body-file <contract-body> --base master --json` for the contract slice and `node scripts/validate-pr-body-local.mjs --body-file <routing-body> --base <contract-branch> --json` for the routing slice. Both must exit 0.
+      - Run focused tests: `cd packages/contracts && pnpm test src/__tests__/hourly-snapshot-retention.test.ts`, `cd packages/execution-engine && pnpm test src/__tests__/reaper-reclaim.test.ts`, and `cd packages/app && pnpm test src/__tests__/delete-all-snapshot.test.ts`.
+      - Publish/update the resulting Invoker stack with `mergify stack push` after local validation is green. Preserve #7164 as the first slice if it can be safely rewritten without losing review history; otherwise create replacement PRs, add a supersession comment to #7164 with the replacement URLs, and close or mark #7164 superseded according to the repo's normal stack workflow.
+      Non-goals:
+      - Do not bypass PR Body. Do not force-push over a moved PR head. Do not leave a mixed contract+routing PR. Do not introduce unrelated cleanup.
+      Acceptance criteria:
+      - Pass condition: the published stack has no PR whose changed files include both `packages/contracts/**` and app/execution-engine routing files.
+      - Pass condition: both replacement PR bodies validate locally with `validate-pr-body-local.mjs`.
+      - Pass condition: the three focused package test commands listed above exit 0.
+      - Pass condition: the final task report includes PR URLs and the exact validation/test commands run.
+    dependencies:
+      - reproduce-pr-body-split-failure
