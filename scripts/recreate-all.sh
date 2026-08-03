@@ -7,6 +7,7 @@
 #   bash scripts/recreate-all.sh                       # all workflows
 #   bash scripts/recreate-all.sh --status running      # only running workflows
 #   bash scripts/recreate-all.sh --status failed       # only failed workflows
+#   bash scripts/recreate-all.sh --workflow wf-123     # one workflow, no discovery query
 #   bash scripts/recreate-all.sh --dry-run             # show what would run
 #   bash scripts/recreate-all.sh --parallel 8          # run up to 8 recreates at once
 #   bash scripts/recreate-all.sh --follow              # wait for completion (default is fire-and-forget)
@@ -21,6 +22,7 @@ source "$(dirname "$0")/headless-lib.sh"
 
 DRY_RUN=false
 STATUS_FILTER=""
+WORKFLOW_FILTER=""
 PARALLELISM=""
 FOLLOW=false
 DEFAULT_PARALLELISM=4
@@ -30,6 +32,14 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=true; shift ;;
     --follow) FOLLOW=true; shift ;;
     --status) STATUS_FILTER="$2"; shift 2 ;;
+    --workflow)
+      WORKFLOW_FILTER="${2:-}"
+      if [[ -z "$WORKFLOW_FILTER" ]]; then
+        echo "Missing value for --workflow" >&2
+        exit 1
+      fi
+      shift 2
+      ;;
     --parallel) PARALLELISM="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
@@ -49,7 +59,15 @@ if [[ -n "$STATUS_FILTER" ]]; then
   QUERY_ARGS+=(--status "$STATUS_FILTER")
 fi
 
-WORKFLOWS=$(headless_workflow_ids "${QUERY_ARGS[@]}")
+if [[ -n "$WORKFLOW_FILTER" ]]; then
+  if [[ -n "$STATUS_FILTER" ]]; then
+    echo "--workflow cannot be combined with --status" >&2
+    exit 1
+  fi
+  WORKFLOWS="$WORKFLOW_FILTER"
+else
+  WORKFLOWS=$(headless_workflow_ids "${QUERY_ARGS[@]}")
+fi
 
 if [[ -z "$WORKFLOWS" ]]; then
   echo "No workflows found."
