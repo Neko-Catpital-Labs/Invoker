@@ -125,7 +125,6 @@ import {
   recreateTaskImpl,
   recreateWorkflowImpl,
   resetSubgraphToPendingImpl,
-  restartTaskImpl,
   retryTaskImpl,
   retryWorkflowImpl,
 } from './orchestrator/lifecycle.js';
@@ -2135,10 +2134,6 @@ export class Orchestrator {
     const started = this.autoStartReadyTasks(readyTaskIds);
     this.checkWorkflowCompletion();
     return started;
-  }
-
-  restartTask(taskId: string): TaskState[] {
-    return restartTaskImpl(this as unknown as LifecycleHost, taskId);
   }
 
   retryTask(taskId: string): TaskState[] {
