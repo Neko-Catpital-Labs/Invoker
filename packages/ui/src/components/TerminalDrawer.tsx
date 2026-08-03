@@ -157,6 +157,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -183,6 +184,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const scheduleFit = useCallback((source: 'active_session' | 'resize_observer') => {
     clearScheduledFit();
+    if (drawerStateRef.current === 'minimized') return;
     fitVisibleTerminal(source);
     if (typeof requestAnimationFrame !== 'function') return;
 
