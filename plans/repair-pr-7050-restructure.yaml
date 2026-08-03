@@ -1,0 +1,105 @@
+name: "Repair PR 7050 structure"
+onFinish: none
+mergeMode: manual
+repoUrl: https://github.com/Neko-Catpital-Labs/Invoker.git
+baseBranch: master
+
+tasks:
+  - id: reproduce-pr-body-failure
+    description: |
+      Reproduce the live PR Body failure for PR #7050, or pass early if the PR
+      has already been repaired by another workflow.
+    command: |
+      set -eu
+      pr=7050
+      tmp="$(mktemp -d)"
+      cleanup() {
+        rm -rf "$tmp"
+        rm -f changed-files.txt pr.diff
+      }
+      trap cleanup EXIT
+
+      state="$(gh pr view "$pr" --json state --jq .state)"
+      if [ "$state" != "OPEN" ]; then
+        echo "PR #$pr is $state; no open PR body failure remains."
+        exit 0
+      fi
+
+      head_sha="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
+      gh pr view "$pr" --json body --jq .body > "$tmp/pr-body.md"
+      git fetch --no-tags --depth=1000 origin master "+refs/pull/${pr}/head:refs/remotes/pull/${pr}/head"
+      fetched_head="$(git rev-parse "refs/remotes/pull/${pr}/head^{commit}")"
+      if [ "$fetched_head" != "$head_sha" ]; then
+        echo "Fetched PR head $fetched_head did not match live head $head_sha." >&2
+        exit 1
+      fi
+
+      BASE_REF=master HEAD_SHA="$head_sha" bash scripts/fetch-pr-diff-metadata.sh
+      if node scripts/validate-pr-body.mjs --body-file "$tmp/pr-body.md" --changed-files-file changed-files.txt --diff-file pr.diff >"$tmp/validator.out" 2>"$tmp/validator.err"; then
+        cat "$tmp/validator.out"
+        echo "PR #$pr body already validates against the live diff."
+        exit 0
+      fi
+
+      cat "$tmp/validator.err"
+      grep -F 'Review lane docs cannot ship with policy files' "$tmp/validator.err"
+      grep -F 'PR body Review Unit "docs" cannot ship with tooling-policy files' "$tmp/validator.err"
+    dependencies: []
+
+  - id: restructure-pr-7050
+    description: |
+      Repair the structure of PR #7050 instead of weakening the PR Body policy.
+      The branch currently exposes old admin-bypass tooling-policy commits plus
+      the CI-regression formula docs/skill slice against `master`, so no single
+      Review Lane/Review Unit value can make the live PR body valid.
+    prompt: |
+      Assume no prior context. Repair GitHub PR #7050 in Neko-Catpital-Labs/Invoker and verify that `scripts/validate-pr-body.mjs`, `scripts/review-unit-rules.mjs`, `scripts/fetch-pr-diff-metadata.sh`, and `skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml` are not being shipped as one invalid mixed Review Unit; acceptance criteria must be that PR #7050 is closed as superseded or the live PR body validator exits 0.
+      PR URL: https://github.com/Neko-Catpital-Labs/Invoker/pull/7050
+      Current head branch: stack/EdbertChan/route-ci-regression-codex/route-ci-regression-fix-tasks-codex-claude--72b88f03
+      Current failing check: PR Body
+      Observed failure: Review lane docs cannot ship with policy files in the same PR; PR body Review Unit "docs" cannot ship with tooling-policy files in the same PR.
+      Local repro: fetch the live PR head and `master`, run `BASE_REF=master HEAD_SHA=<live-head> bash scripts/fetch-pr-diff-metadata.sh`, then run `node scripts/validate-pr-body.mjs --body-file <live-body> --changed-files-file changed-files.txt --diff-file pr.diff`.
+      Required repair: do not edit `scripts/validate-pr-body.mjs` or `scripts/review-unit-rules.mjs` to permit a mixed-unit PR.
+      Required repair: do not add a local commit in the original repair checkout.
+      Required repair: fix the PR structure/metadata so #7050 no longer ships `scripts/*` tooling-policy changes together with `skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml` as one docs/skill slice.
+      First check whether the intended #7050 change is already on `master`. Current evidence says it is present through later merged PRs: `ed20d8d2a Route CI-regression fix tasks through codex, not claude (#7086)` and `039a2a4a6 Add repro proving the CI-regression fix task requests codex (#7105)`.
+      If #7050 is fully superseded by `master`, close PR #7050 with a concise comment explaining that the intended formula change and repro already landed, and that keeping this stale stack open leaves an invalid mixed Review Unit diff.
+      If #7050 is not superseded, preserve only the intended CI-regression formula slice on the PR branch, or retarget the PR onto the correct already-reviewed upstream stack branch. Use the least disruptive option that makes the live PR diff contain one review unit. Use `--force-with-lease` only if rewriting the stale branch is necessary.
+      Acceptance criteria: either PR #7050 is closed as superseded, or it remains open with a live diff whose PR body passes `node scripts/validate-pr-body.mjs --body-file <live-body> --changed-files-file changed-files.txt --diff-file pr.diff`.
+      Acceptance criteria: the repair must not weaken PR Body policy and must not combine docs/skill formula changes with `scripts/*` tooling-policy changes in #7050.
+      Acceptance criteria: report the exact GitHub action taken and the final verification command/output.
+    executionAgent: codex
+    dependencies: [reproduce-pr-body-failure]
+
+  - id: verify-pr-body-after-restructure
+    description: |
+      Verify the post-restructure PR state. Closed-as-superseded is accepted;
+      otherwise the live PR body must validate against the live PR diff.
+    command: |
+      set -eu
+      pr=7050
+      tmp="$(mktemp -d)"
+      cleanup() {
+        rm -rf "$tmp"
+        rm -f changed-files.txt pr.diff
+      }
+      trap cleanup EXIT
+
+      state="$(gh pr view "$pr" --json state --jq .state)"
+      if [ "$state" != "OPEN" ]; then
+        echo "PR #$pr is $state after restructuring; accepted as superseded cleanup."
+        exit 0
+      fi
+
+      head_sha="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
+      gh pr view "$pr" --json body --jq .body > "$tmp/pr-body.md"
+      git fetch --no-tags --depth=1000 origin master "+refs/pull/${pr}/head:refs/remotes/pull/${pr}/head"
+      fetched_head="$(git rev-parse "refs/remotes/pull/${pr}/head^{commit}")"
+      if [ "$fetched_head" != "$head_sha" ]; then
+        echo "Fetched PR head $fetched_head did not match live head $head_sha." >&2
+        exit 1
+      fi
+
+      BASE_REF=master HEAD_SHA="$head_sha" bash scripts/fetch-pr-diff-metadata.sh
+      node scripts/validate-pr-body.mjs --body-file "$tmp/pr-body.md" --changed-files-file changed-files.txt --diff-file pr.diff
+    dependencies: [restructure-pr-7050]
