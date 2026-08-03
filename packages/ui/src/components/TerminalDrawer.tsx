@@ -18,7 +18,7 @@ const TERMINAL_SCROLL_PERF_SAMPLE_INTERVAL_MS = 100;
 
 /**
  * The drawer has one explicit state model:
- *   - `minimized`: only the header/tab strip; no terminal body.
+ *   - `minimized`: only the header/tab strip; terminal body stays mounted but hidden.
  *   - `partial`: today's expanded drawer with a fixed 280px body.
  *   - `maximized`: the drawer covers all app content (graph + side panels)
  *     from under the title bar to the bottom of the window.
@@ -157,6 +157,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   const fitVisibleTerminal = useCallback((source: 'active_session' | 'resize_observer' | 'followup_frame') => {
     if (!isActiveRef.current) return;
+    if (drawerStateRef.current === 'minimized') return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit) return;
@@ -334,6 +335,10 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
 
   useEffect(() => {
     if (!isActive) {
+      clearScheduledFit();
+      return;
+    }
+    if (drawerState === 'minimized') {
       clearScheduledFit();
       return;
     }

@@ -128,6 +128,7 @@ function testWorkflowCommandMapping() {
   const expected = [
     'playwright / 1-of-9',
     'playwright / 9-of-9',
+    'playwright / terminal-garbling',
     'required-fast / Vitest Workspace',
     'e2e-proof / shard 0',
     'docker / comprehensive',
@@ -140,6 +141,13 @@ function testWorkflowCommandMapping() {
   if (!defs.get('playwright / 1-of-9').verifyCommand.includes('INVOKER_PLAYWRIGHT_FILES=')) {
     fail('playwright shard command must include shard file list');
   }
+  const terminalGarblingCommand = defs.get('playwright / terminal-garbling').verifyCommand;
+  if (!terminalGarblingCommand.includes('e2e/task-terminal-drawer-minimize-garble-repro.spec.ts')) {
+    fail('terminal-garbling shard command must include the drawer garble repro');
+  }
+  if (terminalGarblingCommand.includes('No local verify command is mapped')) {
+    fail('terminal-garbling shard must not fall back to an unmapped verify command');
+  }
   if (defs.get('required-fast / Vitest Workspace').verifyCommand !== 'pnpm --filter @invoker/ui build && pnpm --filter @invoker/surfaces build && pnpm --filter @invoker/app build && bash scripts/test-suites/required/10-vitest-workspace.sh') {
     fail('required-fast / Vitest Workspace command changed unexpectedly');
   }
@@ -150,12 +158,24 @@ function testPlanVarsAndDryRunRendering() {
   const state = loadEmptyState();
   reconcileCiRun(state, fakeRun(400, 'abc123def456abc123def456abc123def456ab1', [
     fakeJob('required-fast / Vitest Workspace', 'failure', 40),
+    fakeJob('playwright / terminal-garbling', 'failure', 41),
   ]));
-  const [failure] = getActionableFailures(state);
+  const failures = getActionableFailures(state);
+  const failure = failures.find((item) => item.jobName === 'required-fast / Vitest Workspace');
+  const terminalGarblingFailure = failures.find((item) => item.jobName === 'playwright / terminal-garbling');
+  if (!failure) fail('required-fast failure missing from actionable failures');
+  if (!terminalGarblingFailure) fail('terminal-garbling failure missing from actionable failures');
   const defs = buildCiJobDefinitions();
   const vars = buildPlanVars(failure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
   if (!vars.marker.includes('job=required-fast / Vitest Workspace')) fail('marker must include job name');
   if (!vars.verify_command.includes('10-vitest-workspace.sh')) fail('verify command must be job-specific');
+  const terminalGarblingVars = buildPlanVars(terminalGarblingFailure, 'git@github.com:Neko-Catpital-Labs/Invoker.git', defs);
+  if (!terminalGarblingVars.verify_command.includes('ci-playwright-terminal-garbling')) {
+    fail('terminal-garbling plan must use the named Playwright shard verifier');
+  }
+  if (terminalGarblingVars.verify_command.includes('No local verify command is mapped')) {
+    fail('terminal-garbling plan must not use the unmapped-job fallback verifier');
+  }
 
   const outRoot = mkdtempSync(join(tmpdir(), 'invoker-ci-watch-render-'));
   try {

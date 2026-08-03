@@ -230,6 +230,52 @@ describe('Terminal drawer (component)', () => {
     });
   });
 
+  it('does not resize the backend PTY while the drawer body is hidden', async () => {
+    const session = makeTerminalSession('task-alpha');
+
+    function Harness(): JSX.Element {
+      const [state, setState] = useState<'partial' | 'minimized'>('partial');
+      return (
+        <>
+          <button type="button" onClick={() => setState('minimized')}>
+            Minimize
+          </button>
+          <TerminalDrawer
+            state={state}
+            onCycle={vi.fn()}
+            sessions={[session]}
+            activeSessionId={session.sessionId}
+            onSelectSession={vi.fn()}
+            onCloseSession={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    render(<Harness />);
+    await expectPaneReady('task-alpha');
+    await waitFor(() => {
+      expect(mock.api.terminalResize).toHaveBeenCalledWith(session.sessionId, 80, 24);
+    });
+
+    vi.mocked(mock.api.terminalResize).mockClear();
+    xtermMock.fitInstances[0]?.fit.mockClear();
+    xtermMock.instances[0]?.refresh.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-drawer')).toHaveAttribute('data-state', 'minimized');
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(screen.getByTestId('terminal-drawer-body')).not.toBeVisible();
+    expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+    expect(xtermMock.instances[0]?.refresh).not.toHaveBeenCalled();
+    expect(mock.api.terminalResize).not.toHaveBeenCalled();
+  });
+
   it('refits the newly active pane when terminal tabs switch', async () => {
     const alpha = makeTerminalSession('task-alpha');
     const beta = makeTerminalSession('task-beta');
