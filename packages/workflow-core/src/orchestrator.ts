@@ -211,10 +211,6 @@ function nextLeaseExpiry(from: Date): Date {
   return new Date(from.getTime() + ATTEMPT_LEASE_MS);
 }
 
-export function isWorkerResponseGenerationValid(response: WorkResponse, activeGeneration: number): boolean {
-  return response.executionGeneration === undefined || response.executionGeneration === activeGeneration;
-}
-
 // ── Errors ──────────────────────────────────────────────────
 
 export class PlanConflictError extends Error {
