@@ -1,0 +1,86 @@
+name: "Repair PR 7051 stack boundaries"
+description: |
+  Repair the existing PR #7051 stack shape instead of changing validator policy.
+  The trusted PR Body validator currently rejects the PR because the live body
+  declares Review Lane/Unit `proof`, while the diff against `master` includes
+  docs, tooling-policy, and proof files. No single valid PR body lane can ship
+  those scopes together.
+
+  This workflow should restore review-unit boundaries for the existing stack:
+  the ci-regression formula YAML change belongs in its docs/template predecessor,
+  and PR #7051 should remain the proof-only repro assertion that validates that
+  predecessor.
+onFinish: none
+mergeMode: manual
+repoUrl: "https://github.com/Neko-Catpital-Labs/Invoker.git"
+baseBranch: "master"
+
+tasks:
+  - id: restructure-pr-7051
+    description: "Restructure existing PR #7051 so its live PR Body diff is proof-only instead of mixing docs, tooling-policy, and proof scopes."
+    executionAgent: codex
+    prompt: |
+      Repair existing pull request #7051 on Neko-Catpital-Labs/Invoker.
+      Current evidence:
+      - PR #7051 title: [Admin-bypass infra resilience](4) Add repro for CI-regression codex routing
+      - Head branch: stack/EdbertChan/add-ci-regression-codex-repro/add-repro-proving-ci-regression-fix-task-reqs--ed8da93e
+      - Current failing head observed by CI: c55eaeed1b9ece48e272e8603ec2663eae963cba
+      - Current base branch: master
+      - Failed check: PR Body
+      - Local repro command:
+        node scripts/validate-pr-body-local.mjs --body-file <live-pr-body-file> --json
+      - Repro result on the failing head:
+        valid=false
+        errors include "Review lane proof cannot ship with docs, policy files in the same PR" and "PR body Review Unit \"proof\" cannot ship with tooling-policy, docs files in the same PR"
+        scopeKinds=["docs","policy","proof"]
+        reviewUnits=["tooling-policy","proof","docs"]
+      - The top proof commit `42d6d1639 Add repro proving the CI-regression fix task requests codex` changes only `scripts/repro/repro-e2e-regression-watch.mjs`.
+      - The intended predecessor commit `e08bbe4b6 Route CI-regression fix tasks through codex, not claude` changes only `skills/plan-to-invoker/formulas/ci-regression-watch/ci-regression-watch.workflow.yaml`.
+      - PR #7050 was the predecessor docs/template PR, but GitHub currently reports it closed while PR #7051 still targets `master`.
+      Goal:
+      Restore the stack boundaries so PR #7051 can pass PR Body as a proof-only PR.
+      Required end state:
+      - PR #7051's effective changed-file set, compared to its live PR base, is proof-only. The expected top-slice file is `scripts/repro/repro-e2e-regression-watch.mjs`.
+      - The ci-regression formula YAML change is owned by a predecessor docs/template PR or an already-accepted base branch, not by PR #7051's proof slice.
+      - Broader admin-bypass tooling-policy files such as `battle-loop.sh` and `scripts/mergify_admin_requeue_*` are not part of PR #7051's effective diff unless they are already in PR #7051's selected base.
+      - Do not edit `scripts/validate-pr-body.mjs`, `scripts/review-unit-rules.mjs`, or PR body policy to permit the mixed diff.
+      Implementation guidance:
+      - Refresh live metadata with `gh pr view 7051 --repo Neko-Catpital-Labs/Invoker --json body,baseRefName,headRefName,headRefOid,state,isDraft,mergeable,mergeStateStatus`.
+      - If PR #7051 already has a green PR Body check on its current head, stop without changing anything.
+      - Prefer fixing PR metadata/stack topology over rewriting content: retarget PR #7051 to the predecessor branch containing the ci-regression formula YAML change if that gives a proof-only diff.
+      - If the predecessor PR/branch is closed or unusable, recreate or reopen the predecessor slice for the YAML change, then retarget PR #7051 to that predecessor branch.
+      - If branch rewriting is required, preserve the existing proof change and use safe, explicit branch operations. Do not force-push over a head that has moved without re-reading live head metadata and documenting the new head.
+      - Update the PR body only if the final effective diff is intentionally different from proof-only. Do not make a mixed-scope PR body; split instead.
+      - Since this is Invoker-on-Invoker PR stack repair, use Mergify stack conventions for any PR publication/update step that becomes necessary.
+      Acceptance criteria:
+      - `node scripts/validate-pr-body-local.mjs --body-file <live-pr-body-file> --base <live-pr-base> --json` reports `valid: true` from the repaired PR #7051 head branch.
+      - `node scripts/repro/repro-e2e-regression-watch.mjs` exits 0 from the repaired PR #7051 head branch.
+      - The final report names the live PR #7051 base branch, head SHA, changed files against that base, and the proof commands run.
+    dependencies: []
+
+  - id: verify-pr-7051-pr-body
+    description: "Run the live PR Body validator and repro command after the PR #7051 stack-boundary repair."
+    command: |
+      set -eu
+      repo="Neko-Catpital-Labs/Invoker"
+      pr="7051"
+      body_file="$(mktemp)"
+      cleanup() {
+        rm -f "$body_file"
+      }
+      trap cleanup EXIT
+      gh pr view "$pr" --repo "$repo" --json body -q .body > "$body_file"
+      base_ref="$(gh pr view "$pr" --repo "$repo" --json baseRefName -q .baseRefName)"
+      head_ref="$(gh pr view "$pr" --repo "$repo" --json headRefName -q .headRefName)"
+      head_oid="$(gh pr view "$pr" --repo "$repo" --json headRefOid -q .headRefOid)"
+      git fetch --no-tags origin "+refs/heads/${base_ref}:refs/remotes/origin/${base_ref}" "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}"
+      fetched_head="$(git rev-parse "refs/remotes/origin/${head_ref}^{commit}")"
+      if [ "$fetched_head" != "$head_oid" ]; then
+        echo "Fetched head $fetched_head did not match live PR head $head_oid." >&2
+        exit 1
+      fi
+      git checkout -B verify-pr-7051 "refs/remotes/origin/${head_ref}"
+      node scripts/validate-pr-body-local.mjs --body-file "$body_file" --base "$base_ref" --base-remote origin --json
+      node scripts/repro/repro-e2e-regression-watch.mjs
+    dependencies:
+      - restructure-pr-7051
