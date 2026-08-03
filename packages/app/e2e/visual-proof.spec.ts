@@ -232,6 +232,16 @@ const TASK_STATUS_PROOF_PLAN = {
   ],
 };
 
+const FIXING_APPROVAL_COLOR_PLAN = {
+  name: 'Fix approval color proof',
+  repoUrl: E2E_REPO_URL,
+  onFinish: 'none' as const,
+  tasks: [
+    { id: 'color-fixing', description: 'AI fix in progress', command: 'echo fixing', dependencies: [] as string[] },
+    { id: 'color-approval', description: 'Awaiting approval', command: 'echo approval', dependencies: [] as string[] },
+  ],
+};
+
 /** Plan for queue-action-surface hardening: combines canonical states, dependency relationships, and destructive actions. */
 const QUEUE_HARDENING_PLAN = {
   name: 'Queue Hardening Visual Proof',
@@ -1583,13 +1593,17 @@ test.describe('Visual proof capture', () => {
     });
   });
 
-  test('task panel', async ({ page }) => {
-    await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
-    await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
-    await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
-    await expect(page.getByText('sleep 5 && echo hello-alpha')).toBeVisible();
-    await captureScreenshot(page, 'task-panel');
-    await assertPageScreenshot(page, 'task-panel');
+  test.describe('task panel visual proof', () => {
+    test.use({ repoConfig: { autoFixRetries: 0, disableAutoRunOnStartup: true } });
+
+    test('task panel', async ({ page }) => {
+      await loadPlanAndSelectWorkflow(page, MENU_PROOF_PLAN);
+      await page.locator('.react-flow__node[data-testid$="task-alpha"]').click();
+      await expect(page.getByTestId('workflow-inspector-title')).toBeVisible();
+      await expect(page.getByText('sleep 5 && echo hello-alpha')).toBeVisible();
+      await captureScreenshot(page, 'task-panel');
+      await assertPageScreenshot(page, 'task-panel');
+    });
   });
 
   test('embedded-tabbed-terminal — drawer opens partial with active task tab', async ({ page, testDir }) => {
@@ -1614,7 +1628,7 @@ test.describe('Visual proof capture', () => {
 
     // Drawer starts minimized.
     await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
-    await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
+    await expect(page.getByTestId('terminal-drawer-body')).toBeHidden();
 
     const taskCard = page.locator('[title$="task-alpha"]').first();
     await expect(taskCard).toBeVisible({ timeout: 10000 });
@@ -1708,28 +1722,38 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'status-bar-no-system-log');
   });
 
-  test('fixing-with-ai vs fix-approval colors', async ({ page }) => {
-    await loadPlan(page, TEST_PLAN);
-    await selectWorkflowNode(page, 'wf-test-1');
-    await waitForStableViewportTransform(page, page.getByTestId('workflow-graph-surface').locator('.react-flow__viewport').first());
-    await injectTaskStates(page, [
-      {
-        taskId: 'task-alpha',
-        changes: {
-          status: 'running',
-          execution: { isFixingWithAI: true, startedAt: new Date() },
+  test.describe('fixing and approval color visual proof', () => {
+    test.use({ repoConfig: { autoFixRetries: 0, disableAutoRunOnStartup: true } });
+
+    test('fixing-with-ai vs fix-approval colors', async ({ page }) => {
+      await loadPlan(page, FIXING_APPROVAL_COLOR_PLAN);
+      await selectWorkflowNode(page, 'wf-test-1');
+      await waitForStableViewportTransform(page, page.getByTestId('workflow-graph-surface').locator('.react-flow__viewport').first());
+      const proofStartedAt = new Date('2025-01-01T00:00:00.000Z');
+      await injectTaskStates(page, [
+        {
+          taskId: 'color-fixing',
+          changes: {
+            status: 'running',
+            execution: { isFixingWithAI: true, startedAt: proofStartedAt },
+          },
         },
-      },
-      {
-        taskId: 'task-beta',
-        changes: {
-          status: 'awaiting_approval',
-          execution: { pendingFixError: 'Test error for color comparison' },
+        {
+          taskId: 'color-approval',
+          changes: {
+            status: 'awaiting_approval',
+            execution: { startedAt: proofStartedAt },
+          },
         },
-      },
-    ]);
-    await captureScreenshot(page, 'fixing-vs-fix-approval-colors');
-    await assertPageScreenshot(page, 'fixing-vs-fix-approval-colors');
+      ]);
+      await expect.poll(async () => {
+        const tasks = await getTasks(page);
+        const statuses = new Map(tasks.map((task: any) => [String(task.id).split('/').pop(), task.status]));
+        return [statuses.get('color-fixing'), statuses.get('color-approval')];
+      }, { timeout: 10000 }).toEqual(['running', 'awaiting_approval']);
+      await captureScreenshot(page, 'fixing-vs-fix-approval-colors');
+      await assertPageScreenshot(page, 'fixing-vs-fix-approval-colors');
+    });
   });
 
   test('merge-gate-node-text-black — merge gate visible', async ({ page }) => {
@@ -2747,7 +2771,10 @@ test.describe('Visual proof capture', () => {
     await assertPageScreenshot(page, 'queue-action-surface-hardening');
   });
 
-  test('completed SSH task double-click expands terminal drawer with working SSH resume terminal', async ({ page }) => {
+  test.describe('SSH terminal resume visual proof', () => {
+    test.use({ repoConfig: { autoFixRetries: 0, disableAutoRunOnStartup: true } });
+
+    test('completed SSH task double-click expands terminal drawer with working SSH resume terminal', async ({ page }) => {
     await loadPlanAndSelectWorkflow(page, SSH_TERMINAL_RESUME_PLAN);
     const workspacePath = '/home/invoker/.invoker/worktrees/wf-ssh/experiment-ssh-resume';
     const sessionId = 'codex-session-ssh-123';
@@ -2859,6 +2886,7 @@ test.describe('Visual proof capture', () => {
 
     await captureScreenshot(page, 'completed-ssh-terminal-resume');
     await assertPageScreenshot(page, 'completed-ssh-terminal-resume');
+    });
   });
 
   test('task-graph-keyboard-controls - selected workflow task graph visible', async ({ page }) => {

@@ -66,6 +66,21 @@ export async function deleteAllWorkflowsFast(page: Page): Promise<void> {
   });
 }
 
+async function deleteAllWorkflowsBestEffort(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const invoker = window.invoker as typeof window.invoker & {
+      deleteAllWorkflowsBulk?: () => Promise<unknown>;
+    };
+    const cleanup = (typeof invoker.deleteAllWorkflowsBulk === 'function'
+      ? invoker.deleteAllWorkflowsBulk()
+      : invoker.deleteAllWorkflows()).catch(() => undefined);
+    await Promise.race([
+      cleanup,
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ]);
+  });
+}
+
 export async function waitForInvokerBridge(page: Page, timeoutMs = 15_000): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: timeoutMs });
@@ -97,11 +112,17 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
     child.once('close', markChildExited);
   });
   const closePromise = app.close().catch(() => undefined);
-  const timedOut = await Promise.race([
-    closePromise.then(() => false),
-    delay(5_000).then(() => true),
+  const closeCompleted = await Promise.race([
+    closePromise.then(() => true),
+    delay(5_000).then(() => false),
   ]);
-  if (!timedOut) return;
+  if (closeCompleted) {
+    const exitedAfterClose = await Promise.race([
+      childExitPromise.then(() => true),
+      delay(2_000).then(() => false),
+    ]);
+    if (exitedAfterClose) return;
+  }
 
   if (!childExited) {
     child.kill('SIGTERM');
@@ -114,6 +135,7 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
     }
     await Promise.race([closePromise, childExitPromise, delay(2_000)]);
     if (!childExited) child.kill('SIGKILL');
+    await Promise.race([childExitPromise, delay(1_000)]);
   }
 }
 
@@ -292,7 +314,7 @@ exit 64
 
     await use(page);
     try {
-      await deleteAllWorkflowsFast(page);
+      await deleteAllWorkflowsBestEffort(page);
     } catch {
       // Best-effort cleanup; the test failure itself should remain the signal.
     }

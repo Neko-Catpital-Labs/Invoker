@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
-import { E2E_REPO_URL, injectTaskStates } from './fixtures/electron-app.js';
+import { closeElectronApp, E2E_REPO_URL, injectTaskStates } from './fixtures/electron-app.js';
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 
 const MAIN_JS = path.resolve(__dirname, '..', 'dist', 'main.js');
@@ -143,7 +143,7 @@ base.describe('Launch stall watchdog', () => {
       expect(sawExecutingStallLog).toBe(true);
 
     } finally {
-      await app?.close().catch(() => undefined);
+      if (app) await closeElectronApp(app);
       if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
         rmSync(testDir, { recursive: true, force: true });
       }
@@ -246,7 +246,7 @@ base.describe('Launch stall watchdog', () => {
       );
 
     } finally {
-      await app?.close().catch(() => undefined);
+      if (app) await closeElectronApp(app);
       if (process.env.INVOKER_E2E_KEEP_TMP !== '1') {
         rmSync(testDir, { recursive: true, force: true });
       }

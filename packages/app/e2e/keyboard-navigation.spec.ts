@@ -8,6 +8,7 @@ test.describe('keyboard-first navigation', () => {
     await expect(page.getByRole('menu')).toContainText('Open Workflow');
     await captureScreenshot(page, 'keyboard-workflow-context-menu');
     await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
 
     await page.keyboard.press('Shift');
     await page.keyboard.press('Shift');

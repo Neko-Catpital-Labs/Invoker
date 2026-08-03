@@ -2,10 +2,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { _electron as electron, type Page } from '@playwright/test';
 import { resolveRepoRoot } from '@invoker/contracts';
+import { IpcBus } from '@invoker/transport';
 import { stringify as yamlStringify } from 'yaml';
 
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import {
+  closeElectronApp,
+  deleteAllWorkflowsFast,
   E2E_REPO_URL,
   expect,
   loadPlan,
@@ -27,7 +30,12 @@ import {
   runHeadlessClient,
 } from './fixtures/headless-client.js';
 
-test.use({ guiOwnerMode: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon' });
+const HEADLESS_HERD_STANDALONE_OWNER_IDLE_TIMEOUT_MS = 5000;
+
+test.use({
+  guiOwnerMode: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'daemon',
+  standaloneOwnerIdleTimeoutMs: String(HEADLESS_HERD_STANDALONE_OWNER_IDLE_TIMEOUT_MS),
+});
 
 const repoRoot = resolveRepoRoot(__dirname);
 const RESPONSIVE_INTERACTION_TIMEOUT_MS = 15000;
@@ -91,6 +99,62 @@ async function measureInspectorToggleResponsive(page: Page, timeoutMs: number, l
 
 async function settleHeadlessHerdWorkflows(page: Page): Promise<void> {
   await page.waitForTimeout(STANDALONE_OWNER_IDLE_GRACE_MS);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!processIsAlive(pid)) return true;
+    await sleep(100);
+  }
+  return !processIsAlive(pid);
+}
+
+async function terminateStandaloneOwnerForTest(testDir: string): Promise<void> {
+  const bus = new IpcBus(path.join(testDir, 'ipc-transport.sock'), { allowServe: false });
+  try {
+    await Promise.race([bus.ready(), sleep(2_000)]);
+    const ping = bus.request('headless.owner-ping', {}).catch(() => null);
+    const owner = await Promise.race([ping, sleep(1_000).then(() => null)]) as {
+      ownerId?: string;
+      mode?: string;
+    } | null;
+    if (owner?.mode !== 'standalone') return;
+    const pidText = owner?.ownerId.match(/^owner-(\d+)-/)?.[1];
+    const pid = pidText ? Number.parseInt(pidText, 10) : NaN;
+    if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return;
+
+    try {
+      process.kill(pid, 'SIGTERM');
+      if (process.platform !== 'win32') process.kill(-pid, 'SIGTERM');
+    } catch {
+      // The owner may already have exited after the last delegated request.
+    }
+    if (await waitForProcessExit(pid, 5_000)) return;
+
+    try {
+      process.kill(pid, 'SIGKILL');
+      if (process.platform !== 'win32') process.kill(-pid, 'SIGKILL');
+    } catch {
+      // Nothing else to do if the process disappeared between checks.
+    }
+    await waitForProcessExit(pid, 1_000);
+  } finally {
+    bus.disconnect();
+  }
 }
 
 test.describe('Headless thundering herd', () => {
@@ -193,6 +257,9 @@ test.describe('Headless thundering herd', () => {
     expect(delegatedPerf.ownerMode, evidenceMessage).toBe('standalone');
 
     await settleHeadlessHerdWorkflows(page);
+    await deleteAllWorkflowsFast(page);
+    await runHeadlessClient(testDir, ['delete-all']);
+    await terminateStandaloneOwnerForTest(testDir);
   });
 
   test('standalone owner serves delegated headless commands from isolated test paths', async ({ testDir }) => {
@@ -251,7 +318,8 @@ test.describe('Headless thundering herd', () => {
       expect(Array.isArray(queueStatus.running)).toBe(true);
       expect(Array.isArray(queueStatus.queued)).toBe(true);
     } finally {
-      await ownerApp.close().catch(() => undefined);
+      await closeElectronApp(ownerApp);
+      await terminateStandaloneOwnerForTest(testDir);
     }
   });
 });
