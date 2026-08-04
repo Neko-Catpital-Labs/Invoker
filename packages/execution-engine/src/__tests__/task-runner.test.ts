@@ -1814,6 +1814,7 @@ describe('TaskRunner', () => {
       const completeCalls: number[] = [];
       const failCalls: Array<[number, unknown]> = [];
       const launchOutbox = {
+        acceptDispatch(_id: number) { return true; },
         completeDispatch(id: number) { completeCalls.push(id); return true; },
         failDispatch(id: number, err: unknown) { failCalls.push([id, err]); return true; },
       };
