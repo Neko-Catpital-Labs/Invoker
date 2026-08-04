@@ -544,7 +544,7 @@ async function discoverStandaloneOwnerForGui(waitMs: number): Promise<boolean> {
     await ownerBus.ready();
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
-      const owner = await discoverOwner(ownerBus, 500);
+      const owner = await discoverOwner(ownerBus, 1500);
       if (isStandaloneCapable(owner)) {
         logger.info(`daemon owner ready ownerId=${owner.ownerId}`, { module: 'init' });
         return true;
