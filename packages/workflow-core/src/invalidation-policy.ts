@@ -447,6 +447,11 @@ export async function applyInvalidation(
 export interface InvalidationDepsOrchestrator {
   cancelTask(taskId: string): { runningCancelled: string[] };
   cancelWorkflow(workflowId: string): { runningCancelled: string[] };
+  /** Deferred-invalidation variant of cancelTask: skips releasing resource leases/abandoning dispatch rows so the caller can kill the real process first. */
+  cancelTaskAwaitingKill?(taskId: string): { runningCancelled: string[]; toCancelIds: string[] };
+  cancelWorkflowAwaitingKill?(workflowId: string): { runningCancelled: string[]; toCancelIds: string[] };
+  /** Performs the deferred invalidation skipped above, once every running task has been killed. */
+  finalizeCancelInvalidation?(toCancelIds: readonly string[], reason: string): void | Promise<void>;
   retryTask(taskId: string): TaskState[];
   recreateTask(taskId: string): TaskState[];
   recreateDownstream(taskId: string): TaskState[];
@@ -469,7 +474,10 @@ const TERMINAL_CANCEL_ERROR_CODES = new Set([
 ]);
 
 export interface BuildCancelInFlightDeps {
-  orchestrator: Pick<InvalidationDepsOrchestrator, 'cancelTask' | 'cancelWorkflow'>;
+  orchestrator: Pick<
+    InvalidationDepsOrchestrator,
+    'cancelTask' | 'cancelWorkflow' | 'cancelTaskAwaitingKill' | 'cancelWorkflowAwaitingKill' | 'finalizeCancelInvalidation'
+  >;
   /**
    * Optional hook to kill the active executor handle for each running
    * task that was cancelled. Production callers wire this to
