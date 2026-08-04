@@ -662,10 +662,12 @@ jobs:
               e2e/gui-owner-auto-bootstrap.spec.ts
               e2e/start-ready-daemon-owner.spec.ts
               e2e/ui-delta-timeline.spec.ts
-              e2e/planning-terminal-live-model.proof.spec.ts
+              e2e/launch-dispatch-stuck-lease-cap.spec.ts
+              e2e/launch-dispatch-stuck-lease-storm.spec.ts
               e2e/workers-surface.spec.ts
           - name: terminal-garbling
             files: >-
+              e2e/planning-terminal-live-model.proof.spec.ts
               e2e/planning-surface-navigation-garble-repro.spec.ts
               e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
               e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
