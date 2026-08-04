@@ -126,14 +126,21 @@ function buildRunnerEnv(task: TaskState, options: {
 }
 
 function makeLaunchOutbox(): LaunchOutboxAck & {
+  acceptCalls: number[];
   completeCalls: number[];
   failCalls: Array<[number, unknown]>;
 } {
+  const acceptCalls: number[] = [];
   const completeCalls: number[] = [];
   const failCalls: Array<[number, unknown]> = [];
   return {
+    acceptCalls,
     completeCalls,
     failCalls,
+    acceptDispatch(id) {
+      acceptCalls.push(id);
+      return true;
+    },
     completeDispatch(id) {
       completeCalls.push(id);
       return true;
