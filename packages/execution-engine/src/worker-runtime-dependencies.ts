@@ -16,6 +16,7 @@ import type {
 import type { PrMaintenanceWorkerConfig } from './workers/pr-maintenance-workers.js';
 import type { E2eAutoFixWorkerConfig } from './workers/e2e-autofix-worker.js';
 import type { DiskHeadroomWorkerConfig } from './workers/disk-headroom-worker.js';
+import type { DiskHeadroomWorkerStore } from './workers/disk-headroom-reclaim.js';
 import type {
   InfraRepairWorkerConfig,
   InfraRepairWorkerStore,
@@ -36,7 +37,8 @@ export interface WorkerRuntimeDependencies {
     & ReviewGateCiRepairStore
     & AutoApproveWorkerStore
     & InfraRepairWorkerStore
-    & WorkflowResumeWorkerStore;
+    & WorkflowResumeWorkerStore
+    & DiskHeadroomWorkerStore;
   /** Action-output channel used to submit follow-up mutation intents. */
   submitter: AutoFixRecoverySubmitter
     & ReviewGateCiRepairSubmitter

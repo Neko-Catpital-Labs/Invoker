@@ -3,11 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { TaskState } from '@invoker/workflow-core';
+
 import {
   buildInvokerHomeCleanupScript,
   cleanupLocalInvokerHome,
+  computeProtectedLocalPaths,
   DISK_RECLAIMABLE_DIRS,
   DiskCleanupCooldownTracker,
+  type DiskHeadroomWorkerStore,
   isSafeInvokerHome,
   isSafeRemoteInvokerHomePath,
   resolveDiskCleanupCooldownMs,
@@ -24,6 +28,35 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function makeTask(overrides: Partial<TaskState> = {}): TaskState {
+  const { config, execution, ...rest } = overrides;
+  return {
+    id: 'wf-1/task-1',
+    description: 'test task',
+    status: 'running',
+    dependencies: [],
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    config: {
+      workflowId: 'wf-1',
+      command: 'pnpm test',
+      ...(config ?? {}),
+    },
+    execution: {
+      generation: 1,
+      ...(execution ?? {}),
+    },
+    taskStateVersion: 1,
+    ...rest,
+  } as TaskState;
+}
+
+function makeStore(workflows: Array<{ id: string; tasks: TaskState[] }>): DiskHeadroomWorkerStore {
+  return {
+    listWorkflows: () => workflows.map((w) => ({ id: w.id })),
+    loadTasks: (workflowId: string) => workflows.find((w) => w.id === workflowId)?.tasks ?? [],
+  };
+}
 
 describe('disk-headroom cleanup guards', () => {
   it('rejects unsafe invoker homes', () => {
@@ -199,5 +232,150 @@ describe('cleanupLocalInvokerHome', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('path-guard');
+  });
+});
+
+describe('computeProtectedLocalPaths', () => {
+  it('protects workspacePaths of non-terminal tasks only', () => {
+    const store = makeStore([
+      {
+        id: 'wf-1',
+        tasks: [
+          makeTask({ id: 'wf-1/running', status: 'running', execution: { workspacePath: '/home/u/.invoker/worktrees/running' } }),
+          makeTask({ id: 'wf-1/completed', status: 'completed', execution: { workspacePath: '/home/u/.invoker/worktrees/completed' } }),
+          makeTask({ id: 'wf-1/closed', status: 'closed', execution: { workspacePath: '/home/u/.invoker/worktrees/closed' } }),
+          makeTask({ id: 'wf-1/stale', status: 'stale', execution: { workspacePath: '/home/u/.invoker/worktrees/stale' } }),
+          makeTask({ id: 'wf-1/no-path', status: 'pending', execution: {} }),
+        ],
+      },
+    ]);
+
+    const protectedPaths = computeProtectedLocalPaths(store);
+    expect(protectedPaths.has('/home/u/.invoker/worktrees/running')).toBe(true);
+    expect(protectedPaths.has('/home/u/.invoker/worktrees/completed')).toBe(false);
+    expect(protectedPaths.has('/home/u/.invoker/worktrees/closed')).toBe(false);
+    expect(protectedPaths.has('/home/u/.invoker/worktrees/stale')).toBe(false);
+    expect(protectedPaths.size).toBe(1);
+  });
+
+  it('fails safe to an empty set when the store throws', () => {
+    const store: DiskHeadroomWorkerStore = {
+      listWorkflows: () => {
+        throw new Error('db unavailable');
+      },
+      loadTasks: () => [],
+    };
+    expect(computeProtectedLocalPaths(store)).toEqual(new Set());
+  });
+});
+
+describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
+  it('protects only the in-use subpath under a reclaimable dir; sibling subpaths are still cleared', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-liveness-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const userHome = root;
+    const activeDir = join(home, 'worktrees', 'active-task');
+    const staleDir = join(home, 'worktrees', 'stale-task');
+    mkdirSync(activeDir, { recursive: true });
+    writeFileSync(join(activeDir, 'file.txt'), 'x');
+    mkdirSync(staleDir, { recursive: true });
+    writeFileSync(join(staleDir, 'file.txt'), 'x');
+
+    const store = makeStore([
+      {
+        id: 'wf-1',
+        tasks: [
+          makeTask({ id: 'wf-1/active', status: 'running', execution: { workspacePath: activeDir } }),
+        ],
+      },
+    ]);
+
+    const result = await cleanupLocalInvokerHome({
+      invokerHome: home,
+      userHome,
+      store,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('protected-path-in-use');
+    expect(existsSync(activeDir)).toBe(true);
+    expect(existsSync(join(activeDir, 'file.txt'))).toBe(true);
+    expect(existsSync(staleDir)).toBe(false);
+  });
+
+  it('does not protect a task workspacePath once the task reaches a terminal status', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-liveness-terminal-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const userHome = root;
+    const completedDir = join(home, 'worktrees', 'completed-task');
+    mkdirSync(completedDir, { recursive: true });
+    writeFileSync(join(completedDir, 'file.txt'), 'x');
+
+    const store = makeStore([
+      {
+        id: 'wf-1',
+        tasks: [
+          makeTask({ id: 'wf-1/done', status: 'completed', execution: { workspacePath: completedDir } }),
+        ],
+      },
+    ]);
+
+    const result = await cleanupLocalInvokerHome({
+      invokerHome: home,
+      userHome,
+      store,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('critical-cleanup');
+    expect(existsSync(completedDir)).toBe(false);
+  });
+
+  it('fails safe by clearing normally (protects nothing) when the store errors', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-liveness-error-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const userHome = root;
+    const someDir = join(home, 'worktrees', 'some-task');
+    mkdirSync(someDir, { recursive: true });
+    writeFileSync(join(someDir, 'file.txt'), 'x');
+
+    const throwingStore: DiskHeadroomWorkerStore = {
+      listWorkflows: () => {
+        throw new Error('db unavailable');
+      },
+      loadTasks: () => [],
+    };
+
+    const result = await cleanupLocalInvokerHome({
+      invokerHome: home,
+      userHome,
+      store: throwingStore,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('critical-cleanup');
+    expect(existsSync(someDir)).toBe(false);
+  });
+
+  it('behaves exactly as before (clears everything) when no store is provided', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-liveness-no-store-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const userHome = root;
+    const someDir = join(home, 'worktrees', 'some-task');
+    mkdirSync(someDir, { recursive: true });
+    writeFileSync(join(someDir, 'file.txt'), 'x');
+
+    const result = await cleanupLocalInvokerHome({ invokerHome: home, userHome });
+
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('critical-cleanup');
+    expect(existsSync(someDir)).toBe(false);
   });
 });

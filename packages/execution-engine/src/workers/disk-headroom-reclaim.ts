@@ -7,9 +7,10 @@
 
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 import type { Logger } from '@invoker/contracts';
+import type { TaskState } from '@invoker/workflow-core';
 
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
 import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
@@ -212,10 +213,83 @@ exit 0
 `;
 }
 
-function removeLocalDir(path: string, errors: string[]): void {
-  if (!existsSync(path)) return;
+const LOCAL_RM_MAX_RETRIES = 5;
+const LOCAL_RM_RETRY_DELAY_MS = 100;
+
+/**
+ * Read-only accessor for Invoker's own workflow/task state, used to derive
+ * which local paths are still in active use before the disk-headroom
+ * cleaner deletes anything. Mirrors WorkflowResumeWorkerStore's shape.
+ */
+export interface DiskHeadroomWorkerStore {
+  listWorkflows(): ReadonlyArray<{ id: string }>;
+  loadTasks(workflowId: string): TaskState[];
+}
+
+export const DISK_HEADROOM_TERMINAL_TASK_STATUSES = ['completed', 'closed', 'stale'] as const;
+
+const TERMINAL_TASK_STATUS_SET = new Set<string>(DISK_HEADROOM_TERMINAL_TASK_STATUSES);
+
+/**
+ * Resolved workspacePaths for every non-terminal task across all workflows.
+ * These are "in use" regardless of whether any OS process currently touches
+ * them, so the cleaner must never delete them. Fails safe to an empty set
+ * (protects nothing) on any store error -- see cleanupLocalInvokerHome for
+ * why that is the safer failure mode for this worker.
+ */
+export function computeProtectedLocalPaths(store: DiskHeadroomWorkerStore): Set<string> {
   try {
-    rmSync(path, { recursive: true, force: true });
+    const protectedPaths = new Set<string>();
+    for (const workflow of store.listWorkflows()) {
+      for (const task of store.loadTasks(workflow.id)) {
+        if (TERMINAL_TASK_STATUS_SET.has(task.status)) continue;
+        if (task.execution?.workspacePath) {
+          protectedPaths.add(resolve(task.execution.workspacePath));
+        }
+      }
+    }
+    return protectedPaths;
+  } catch {
+    return new Set();
+  }
+}
+
+function pathIsProtected(candidate: string, protectedPaths: ReadonlySet<string>): boolean {
+  if (protectedPaths.size === 0) return false;
+  const resolved = resolve(candidate);
+  for (const protectedPath of protectedPaths) {
+    if (resolved === protectedPath) return true;
+    if (resolved.startsWith(`${protectedPath}${sep}`)) return true;
+    if (protectedPath.startsWith(`${resolved}${sep}`)) return true;
+  }
+  return false;
+}
+
+async function removeLocalDir(
+  path: string,
+  errors: string[],
+  protectedSkips: string[],
+  protectedPaths: ReadonlySet<string>,
+  logger?: Logger,
+  targetKey?: string,
+): Promise<void> {
+  if (!existsSync(path)) return;
+  if (pathIsProtected(path, protectedPaths)) {
+    protectedSkips.push(path);
+    logger?.warn?.(`[disk-headroom-cleanup] skip ${path}: protected-path-in-use`, {
+      module: 'disk-headroom',
+      targetKey,
+      path,
+    });
+    return;
+  }
+  try {
+    rmSync(path, {
+      recursive: true,
+      force: true,
+      maxRetries: LOCAL_RM_MAX_RETRIES,
+      retryDelay: LOCAL_RM_RETRY_DELAY_MS,
+    });
   } catch (err) {
     errors.push(`${path}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -229,7 +303,14 @@ function ensureLocalDir(path: string, errors: string[]): void {
   }
 }
 
-function sweepLocalDeletingOrphans(home: string, errors: string[]): void {
+async function sweepLocalDeletingOrphans(
+  home: string,
+  errors: string[],
+  protectedSkips: string[],
+  protectedPaths: ReadonlySet<string>,
+  logger?: Logger,
+  targetKey?: string,
+): Promise<void> {
   if (!existsSync(home)) return;
   let entries: string[];
   try {
@@ -240,7 +321,32 @@ function sweepLocalDeletingOrphans(home: string, errors: string[]): void {
   }
   for (const name of entries) {
     if (!isDeletingOrphanName(name)) continue;
-    removeLocalDir(join(home, name), errors);
+    await removeLocalDir(join(home, name), errors, protectedSkips, protectedPaths, logger, targetKey);
+  }
+}
+
+/**
+ * Sweeps a reclaimable top-level dir (e.g. `worktrees`) one child at a time
+ * so a single in-use subdirectory only protects itself, not its siblings.
+ */
+async function sweepReclaimableChildren(
+  dirPath: string,
+  errors: string[],
+  protectedSkips: string[],
+  protectedPaths: ReadonlySet<string>,
+  logger?: Logger,
+  targetKey?: string,
+): Promise<void> {
+  if (!existsSync(dirPath)) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(dirPath);
+  } catch (err) {
+    errors.push(`readdir ${dirPath}: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  for (const name of entries) {
+    await removeLocalDir(join(dirPath, name), errors, protectedSkips, protectedPaths, logger, targetKey);
   }
 }
 
@@ -249,6 +355,7 @@ export async function cleanupLocalInvokerHome(opts: {
   targetKey?: string;
   logger?: Logger;
   userHome?: string;
+  store?: DiskHeadroomWorkerStore;
 }): Promise<DiskCleanupResult> {
   const targetKey = opts.targetKey ?? `local ${opts.invokerHome}`;
   const userHome = opts.userHome ?? homedir();
@@ -262,10 +369,12 @@ export async function cleanupLocalInvokerHome(opts: {
     targetKey,
   });
 
+  const protectedPaths = opts.store ? computeProtectedLocalPaths(opts.store) : new Set<string>();
   const errors: string[] = [];
-  sweepLocalDeletingOrphans(home, errors);
+  const protectedSkips: string[] = [];
+  await sweepLocalDeletingOrphans(home, errors, protectedSkips, protectedPaths, opts.logger, targetKey);
   for (const name of DISK_RECLAIMABLE_DIRS) {
-    removeLocalDir(join(home, name), errors);
+    await sweepReclaimableChildren(join(home, name), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
   }
   for (const name of DISK_RECLAIMABLE_DIRS) {
     ensureLocalDir(join(home, name), errors);
@@ -282,6 +391,20 @@ export async function cleanupLocalInvokerHome(opts: {
       ok: false,
       reason: 'cleanup-error',
       detail: errors.slice(0, 5).join('; '),
+    };
+  }
+
+  if (protectedSkips.length > 0) {
+    opts.logger?.warn?.(`[disk-headroom-cleanup] local skipped in-use paths`, {
+      module: 'disk-headroom',
+      targetKey,
+      protectedSkips,
+    });
+    return {
+      targetKey,
+      ok: true,
+      reason: 'protected-path-in-use',
+      detail: protectedSkips.slice(0, 5).join('; '),
     };
   }
 
