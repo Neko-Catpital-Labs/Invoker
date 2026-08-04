@@ -1,15 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createWatchdog } from '../watchdog.js';
+import type { LaunchResult } from '../invoker-client.js';
 
 interface HealthLaunch {
   isHealthy: () => Promise<boolean>;
-  launch: () => Promise<boolean>;
+  launch: () => Promise<LaunchResult>;
 }
 
 describe('createWatchdog', () => {
   it('relaunches after the failure threshold and not more than once per backoff window', async () => {
     let nowMs = 1_000_000;
-    const launch = vi.fn(async () => false); // Invoker stays down
+    const launch = vi.fn(async (): Promise<LaunchResult> => ({ healthy: false, cause: 'unhealthy' })); // Invoker stays down
     const client: HealthLaunch = { isHealthy: vi.fn(async () => false), launch };
     const wd = createWatchdog({
       client, log: () => {}, alert: vi.fn(),
@@ -33,7 +34,7 @@ describe('createWatchdog', () => {
 
   it('gives up and alerts after maxAttempts, then stops auto-restarting', async () => {
     let nowMs = 0;
-    const launch = vi.fn(async () => false);
+    const launch = vi.fn(async (): Promise<LaunchResult> => ({ healthy: false, cause: 'unhealthy' }));
     const alert = vi.fn();
     const wd = createWatchdog({
       client: { isHealthy: vi.fn(async () => false), launch },
@@ -57,9 +58,9 @@ describe('createWatchdog', () => {
   it('keeps attempt state after a successful relaunch until health is stable', async () => {
     let nowMs = 0;
     let healthy = false;
-    const launch = vi.fn(async () => {
+    const launch = vi.fn(async (): Promise<LaunchResult> => {
       healthy = true;
-      return true;
+      return { healthy: true };
     });
     const wd = createWatchdog({
       client: { isHealthy: vi.fn(async () => healthy), launch },
@@ -80,7 +81,7 @@ describe('createWatchdog', () => {
   it('resets only after enough consecutive healthy polls', async () => {
     let nowMs = 0;
     let healthy = false;
-    const launch = vi.fn(async () => false);
+    const launch = vi.fn(async (): Promise<LaunchResult> => ({ healthy: false, cause: 'unhealthy' }));
     const wd = createWatchdog({
       client: { isHealthy: vi.fn(async () => healthy), launch },
       log: () => {}, alert: vi.fn(),
@@ -105,9 +106,27 @@ describe('createWatchdog', () => {
     expect(launch).toHaveBeenCalledTimes(3);
   });
 
+  it('names the unreachable lock holder in the give-up alert on split-brain', async () => {
+    let nowMs = 0;
+    const launch = vi.fn(async (): Promise<LaunchResult> => ({ healthy: false, cause: 'split-brain', holderPid: 4242 }));
+    const alert = vi.fn();
+    const wd = createWatchdog({
+      client: { isHealthy: vi.fn(async () => false), launch },
+      log: () => {}, alert,
+      failuresBeforeRelaunch: 1, maxAttempts: 1, baseBackoffMs: 1_000, maxBackoffMs: 1_000,
+      now: () => nowMs,
+    });
+
+    await wd.tick();
+    expect(alert).toHaveBeenCalledTimes(1);
+    const message = (alert.mock.calls[0] as string[])[0];
+    expect(message).toContain('PID 4242');
+    expect(message).toContain('`@Invoker restart`');
+  });
+
   it('rate-limits repeated give-up alerts while Invoker stays down', async () => {
     let nowMs = 0;
-    const launch = vi.fn(async () => false);
+    const launch = vi.fn(async (): Promise<LaunchResult> => ({ healthy: false, cause: 'unhealthy' }));
     const alert = vi.fn();
     const wd = createWatchdog({
       client: { isHealthy: vi.fn(async () => false), launch },

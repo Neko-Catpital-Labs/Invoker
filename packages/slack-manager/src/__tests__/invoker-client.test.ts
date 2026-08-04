@@ -52,8 +52,8 @@ describe('IpcInvokerClient', () => {
 
     const [a, b] = await Promise.all([client.launch(), client.launch()]);
     expect(spawnInvoker).toHaveBeenCalledTimes(1);
-    expect(a).toBe(true);
-    expect(b).toBe(true);
+    expect(a.healthy).toBe(true);
+    expect(b.healthy).toBe(true);
   });
 
   it('throttles a second (non-forced) launch within the min interval', async () => {
@@ -67,13 +67,14 @@ describe('IpcInvokerClient', () => {
       sleep: async (ms) => { nowMs += ms; },
       healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       minLaunchIntervalMs: 60_000, httpHealthCheck: async () => false,
+      readLockHolderPid: () => null,
     });
 
-    expect(await client.launch()).toBe(false);
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
     expect(spawnInvoker).toHaveBeenCalledTimes(1);
 
     nowMs += 1_000; // inside the window
-    expect(await client.launch()).toBe(false);
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'throttled' });
     expect(spawnInvoker).toHaveBeenCalledTimes(1);
 
     nowMs += 60_000; // past the window
@@ -97,6 +98,91 @@ describe('IpcInvokerClient', () => {
     expect(reconnect).toHaveBeenCalledTimes(1);
     expect(buses).toHaveLength(1);
     expect(buses[0].subscribe).toHaveBeenCalledWith('surface.event', expect.any(Function));
+  });
+
+  it('reports split-brain when relaunch fails and a live pid holds the writer lock', async () => {
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => 4242,
+      isPidAlive: () => true,
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'split-brain', holderPid: 4242 });
+  });
+
+  it('does not report split-brain when the lock holder pid is dead', async () => {
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => 4242,
+      isPidAlive: () => false,
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+  });
+
+  it('withRecovery propagates the launch failure cause on the thrown InvokerDownError', async () => {
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => 4242,
+      isPidAlive: () => true,
+    });
+
+    const err = await client.withRecovery(async () => { throw new InvokerDownError('down'); }).catch((e) => e);
+    expect(err).toBeInstanceOf(InvokerDownError);
+    expect((err as InvokerDownError).failureCause).toBe('split-brain');
+    expect((err as InvokerDownError).holderPid).toBe(4242);
+  });
+
+  it('force launch SIGTERMs a re-confirmed unreachable lock holder before respawning', async () => {
+    let ownerUp = false;
+    let holderAlive = true;
+    const terminatePid = vi.fn((pid: number) => {
+      expect(pid).toBe(4242);
+      holderAlive = false;
+    });
+    const spawnInvoker = vi.fn(() => { ownerUp = true; });
+    const client = new IpcInvokerClient({
+      spawnInvoker, log: () => {},
+      busFactory: () => makeFakeBus(() => ownerUp),
+      sleep: async () => {}, healthPollIntervalMs: 1, launchHealthTimeoutMs: 1_000,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => 4242,
+      isPidAlive: () => holderAlive,
+      terminatePid,
+    });
+
+    const result = await client.launch({ force: true });
+    expect(terminatePid).toHaveBeenCalledTimes(1);
+    expect(spawnInvoker).toHaveBeenCalledTimes(1);
+    expect(result.healthy).toBe(true);
+  });
+
+  it('force launch never kills the holder while an owner still answers IPC', async () => {
+    const terminatePid = vi.fn();
+    let ownerUp = true;
+    const spawnInvoker = vi.fn(() => { ownerUp = true; });
+    const client = new IpcInvokerClient({
+      spawnInvoker, log: () => {},
+      busFactory: () => makeFakeBus(() => ownerUp),
+      sleep: async () => {}, healthPollIntervalMs: 1, launchHealthTimeoutMs: 1_000,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => 4242,
+      isPidAlive: () => true,
+      terminatePid,
+    });
+
+    const result = await client.launch({ force: true });
+    expect(terminatePid).not.toHaveBeenCalled();
+    expect(result.healthy).toBe(true);
   });
 
   it('re-subscribes on a fresh bus after the owner dies and returns', async () => {
