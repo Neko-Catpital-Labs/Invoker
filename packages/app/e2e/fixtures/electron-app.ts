@@ -66,6 +66,17 @@ export async function deleteAllWorkflowsFast(page: Page): Promise<void> {
   });
 }
 
+async function deleteAllWorkflowsBestEffort(page: Page): Promise<void> {
+  try {
+    await Promise.race([
+      deleteAllWorkflowsFast(page),
+      delay(5_000).then(() => undefined),
+    ]);
+  } catch {
+    // Best-effort cleanup; the test failure itself should remain the signal.
+  }
+}
+
 export async function waitForInvokerBridge(page: Page, timeoutMs = 15_000): Promise<void> {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: timeoutMs });
@@ -291,11 +302,7 @@ exit 64
     }
 
     await use(page);
-    try {
-      await deleteAllWorkflowsFast(page);
-    } catch {
-      // Best-effort cleanup; the test failure itself should remain the signal.
-    }
+    await deleteAllWorkflowsBestEffort(page);
   },
 });
 
