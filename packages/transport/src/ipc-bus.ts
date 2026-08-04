@@ -243,6 +243,7 @@ const LONG_REQUEST_DEADLINE_CHANNELS = new Set([
   'invoker:plan-from-goal',
   'invoker:planning-chat-send',
   // start-ready --recreate-all and other bulk mutations run inline on the owner.
+  'invoker:start-ready',
   'headless.exec',
 ]);
 export const LONG_REQUEST_DEADLINE_MS = 2 * 60 * 60 * 1000;
