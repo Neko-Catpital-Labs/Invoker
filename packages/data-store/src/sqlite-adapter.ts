@@ -3459,6 +3459,32 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (this.db.getRowsModified?.() ?? 0) as number;
   }
 
+  /**
+   * Read-only variant of `releaseExpiredExecutionResourceLeases`: returns
+   * the rows that have expired instead of deleting them, so a caller can
+   * check whether the holder is actually still alive (a stalled heartbeat
+   * on a genuinely live process is not the same as an orphaned lease)
+   * before deciding to release vs. renew.
+   */
+  listExpiredExecutionResourceLeases(nowIso?: string): ExecutionResourceLease[] {
+    const cutoff = nowIso ?? new Date().toISOString();
+    return this.queryAll(
+      'SELECT * FROM execution_resource_leases WHERE lease_expires_at <= ? ORDER BY resource_key ASC, acquired_at ASC',
+      [cutoff],
+    ).map((row) => ({
+      resourceKey: String(row.resource_key),
+      resourceType: String(row.resource_type),
+      holderId: String(row.holder_id),
+      taskId: row.task_id ? String(row.task_id) : undefined,
+      poolId: row.pool_id ? String(row.pool_id) : undefined,
+      poolMemberId: row.pool_member_id ? String(row.pool_member_id) : undefined,
+      acquiredAt: String(row.acquired_at),
+      lastHeartbeatAt: String(row.last_heartbeat_at),
+      leaseExpiresAt: String(row.lease_expires_at),
+      metadata: row.metadata_json ? JSON.parse(String(row.metadata_json)) : undefined,
+    }));
+  }
+
   listExecutionResourceLeases(): ExecutionResourceLease[] {
     return this.queryAll(
       'SELECT * FROM execution_resource_leases ORDER BY resource_key ASC, acquired_at ASC',
@@ -3590,14 +3616,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   /**
-   * Durable, generation-independent count of how many times a task's launch
-   * dispatch has been abandoned (any reason). Each `prepareTaskForNewAttempt`
-   * call creates a new row, so this is the only place the total survives
-   * across attempts -- used to cap `abandonStuckLeases` retries per task.
+   * Durable count of stuck-lease abandons for a task, used to cap
+   * `abandonStuckLeases` retries. Scoped to `abandon_reason = 'stuck-lease'`
+   * so cancel/retry/recreate abandons don't erode this budget.
    */
   countAbandonedLaunchDispatchesForTask(taskId: string): number {
     const row = this.queryOne(
-      `SELECT COUNT(*) as count FROM task_launch_dispatch WHERE task_id = ? AND state = 'abandoned'`,
+      `SELECT COUNT(*) as count FROM task_launch_dispatch WHERE task_id = ? AND state = 'abandoned' AND abandon_reason = 'stuck-lease'`,
       [taskId],
     );
     return row ? Number(row.count) : 0;

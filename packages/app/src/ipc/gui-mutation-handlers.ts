@@ -1516,6 +1516,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       deferRunningUntilLaunch: true,
       onRecreateTasksReset: (taskIds) => {
         resetAutoFixBudgetForTasks(persistence, taskIds);
+        // A deliberate recreate is a fresh start -- past stuck-lease
+        // abandons for these tasks should not count against the new
+        // attempt's retry budget either.
+        for (const taskId of new Set(taskIds)) {
+          persistence.resetStuckLeaseAbandonCount(taskId);
+        }
       },
     });
     commandService = new CommandService(
