@@ -10,13 +10,19 @@
 import type { SQLiteAdapter, TaskLaunchDispatch } from '@invoker/data-store';
 import type { LaunchOutboxAck } from '@invoker/execution-engine';
 import type { TaskLaunchReadiness, TaskState } from '@invoker/workflow-core';
-import { DISPATCH_MAX_ATTEMPTS, LAUNCH_STUCK_ABANDON_MS, type Logger } from '@invoker/contracts';
+import {
+  DISPATCH_MAX_ATTEMPTS,
+  LAUNCH_STUCK_ABANDON_MS,
+  MAX_STUCK_LEASE_RETRIES,
+  type Logger,
+} from '@invoker/contracts';
 import { resolveLaunchDispatchLeaseMsOverride } from './launch-dispatch-defaults.js';
 
 
 export type LaunchDispatcherPersistence = Pick<
   SQLiteAdapter,
   | 'loadLaunchDispatchById'
+  | 'markLaunchDispatchAccepted'
   | 'markLaunchDispatchCompleted'
   | 'markLaunchDispatchFailed'
   | 'markLaunchDispatchAbandoned'
@@ -25,6 +31,7 @@ export type LaunchDispatcherPersistence = Pick<
   | 'claimLaunchDispatchAtomic'
   | 'listExecutionResourceLeasesByTask'
   | 'releaseExecutionResourceLease'
+  | 'countAbandonedLaunchDispatchesForTask'
   | 'logEvent'
 > & {
   releaseExpiredExecutionResourceLeases?(nowIso?: string): number;
@@ -462,6 +469,33 @@ export class LaunchDispatcher {
       attemptsCount: row.attemptsCount,
       error: message,
     });
+
+    // Durable, per-task stopper: each prepareTaskForNewAttempt() mints a
+    // fresh task_launch_dispatch row starting at attempts_count 0, so
+    // DISPATCH_MAX_ATTEMPTS never accumulates across stuck-lease cycles on
+    // its own. Count abandons directly from the durable table (survives
+    // restarts and generation bumps) so a task whose real work legitimately
+    // outlives LAUNCH_STUCK_ABANDON_MS eventually stops being relaunched
+    // instead of retrying forever.
+    const abandonedSoFar = this.persistence.countAbandonedLaunchDispatchesForTask(row.taskId);
+    if (abandonedSoFar > MAX_STUCK_LEASE_RETRIES) {
+      this.persistence.logEvent?.(row.taskId, 'task.launch_dispatch_retry_budget_exhausted', {
+        dispatchId: row.id,
+        attemptId: row.attemptId,
+        abandonedCount: abandonedSoFar,
+        maxStuckLeaseRetries: MAX_STUCK_LEASE_RETRIES,
+      });
+      this.logger?.error?.('[launch-dispatcher] stuck-lease retry budget exhausted; not preparing another attempt', {
+        ownerId: this.ownerId,
+        taskId: row.taskId,
+        dispatchId: row.id,
+        abandonedCount: abandonedSoFar,
+        maxStuckLeaseRetries: MAX_STUCK_LEASE_RETRIES,
+        module: 'launch-dispatcher',
+      });
+      return;
+    }
+
     this.prepareTaskForNewAttempt(row.taskId, row.id);
   }
 
@@ -550,10 +584,29 @@ export class LaunchDispatcher {
   }
 
   /**
-   * Transition a live dispatch row to completed. Called by the
-   * TaskRunner once {@link markTaskRunningAfterLaunch} has succeeded
-   * (the executor handle is live and the task is in the executing
-   * phase). Returns false when the row is already terminal.
+   * Record that the launch handoff succeeded. Called by the TaskRunner
+   * once {@link markTaskRunningAfterLaunch} has succeeded (the executor
+   * handle is live and the task is in the executing phase). This stops
+   * `abandonStuckLeases`'s age check from treating the row as stuck in
+   * launch -- it does NOT complete the row, since headless run/resume
+   * polls dispatch completion to mean the task's work is actually done.
+   * Returns false when the row is no longer leased (already terminal).
+   */
+  acceptDispatch(dispatchId: number): boolean {
+    const ok = this.persistence.markLaunchDispatchAccepted(dispatchId);
+    this.logger?.info?.('[launch-dispatcher] accepted', {
+      ownerId: this.ownerId,
+      dispatchId,
+      accepted: ok,
+      module: 'launch-dispatcher',
+    });
+    return ok;
+  }
+
+  /**
+   * Transition a live dispatch row to completed once the task's whole
+   * run finishes (called from TaskRunner's onComplete finalization).
+   * Returns false when the row is already terminal.
    */
   completeDispatch(dispatchId: number): boolean {
     const ok = this.persistence.markLaunchDispatchCompleted(dispatchId);
