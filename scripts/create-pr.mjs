@@ -788,15 +788,17 @@ function findMergifyPublishedRef(branch, headSha, headChangeId) {
     const tips = listRemoteTrackingRefTips(prefix);
 
     const shaMatch = tips.find((tip) => tip.sha === headSha);
-    if (shaMatch) return shaMatch.refname;
+    if (shaMatch) return { refname: shaMatch.refname, matchType: 'sha' };
 
     if (headChangeId) {
-      const changeIdMatch = tips.find((tip) => refCommitHasChangeId(tip.sha, headChangeId));
-      if (changeIdMatch) return changeIdMatch.refname;
+      const changeIdMatches = tips.filter((tip) => refCommitHasChangeId(tip.sha, headChangeId));
+      if (changeIdMatches.length === 1) {
+        return { refname: changeIdMatches[0].refname, matchType: 'change-id' };
+      }
     }
   }
 
-  return '';
+  return null;
 }
 
 
@@ -836,9 +838,12 @@ function assertPublishedMergifyBranch(branch, trackedBaseRef) {
   if (!publishedRef || publishedRef === trackedBaseRef) {
     const headSha = resolveRev('HEAD');
     const headChangeId = getHeadChangeId();
-    const matchedRef = findMergifyPublishedRef(branch, headSha, headChangeId);
-    if (matchedRef) {
-      publishedRef = matchedRef;
+    const publishedMatch = findMergifyPublishedRef(branch, headSha, headChangeId);
+    if (publishedMatch?.matchType === 'change-id') {
+      return;
+    }
+    if (publishedMatch) {
+      publishedRef = publishedMatch.refname;
     }
   }
 

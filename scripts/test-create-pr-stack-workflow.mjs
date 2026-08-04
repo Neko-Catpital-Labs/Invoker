@@ -938,6 +938,68 @@ function testNestedMergifyPublishedBranchRecognizedBySha() {
   }
 }
 
+function testNestedMergifyPublishedBranchRecognizedByChangeId() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/EdbertChan/owner-shutdown-signals/catch-sigterm-sigint-in-owner-serve';
+    const changeId = 'Ishutdown0003';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\nlocal rewrite\n', `catch sigterm and sigint\n\nChange-Id: ${changeId}`);
+    const localSha = git(work, 'rev-parse', 'HEAD').trim();
+    setManagedBranchConfig(work, branch);
+
+    gitQuiet(work, 'switch', '-c', 'published-rewrite', 'origin/master');
+    commitFile(work, 'stack.txt', 'stack\npublished rewrite\n', `published rewrite\n\nChange-Id: ${changeId}`);
+    const publishedSha = git(work, 'rev-parse', 'HEAD').trim();
+    assert(localSha !== publishedSha, 'test setup should publish a different SHA for the same Change-Id');
+
+    const nestedRemoteBranch =
+      'stack/EdbertChan/stack/EdbertChan/owner-shutdown-signals/catch-sigterm-sigint-in-owner-serve/catch-sigterm-sigint-owner-serve-process-instead--72172374';
+    gitQuiet(work, 'push', 'origin', `HEAD:refs/heads/${nestedRemoteBranch}`);
+    gitQuiet(work, 'switch', branch);
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing'], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 78,
+          html_url: 'https://example.com/pull/78',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/78' }),
+    });
+
+    assert(
+      result.status === 0,
+      `nested mergify-published branch should be recognized by Change-Id match\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      !result.stderr.includes('unpublished local commits'),
+      `Change-Id matched publication should not report unpublished commits\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stdout.trim() === 'https://example.com/pull/78',
+      `Change-Id matched update should print the PR URL\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'nested mergify-published Change-Id update');
+
+    commitFile(work, 'stack.txt', 'stack\nlocal rewrite\nfollow-up\n', 'truly unpublished follow-up\n\nChange-Id: Ishutdown0004');
+    const secondResult = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing']);
+    assert(secondResult.status === 1, 'a follow-up commit with a new Change-Id should still be rejected');
+    assert(
+      secondResult.stderr.includes('unpublished local commits'),
+      `new Change-Id follow-up should still be reported\nstderr:\n${secondResult.stderr}`,
+    );
+    assert(
+      secondResult.stderr.includes('Run `mergify stack push` first'),
+      'new Change-Id follow-up should still require mergify stack push',
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testCurrentBranchPrLookupFailure() {
   const harness = createHarness();
   try {
@@ -1367,6 +1429,7 @@ const tests = [
   testNonRefactorLanePlainTitleStillAccepted,
   testUnpublishedStackCommitsBlockUpdate,
   testNestedMergifyPublishedBranchRecognizedBySha,
+  testNestedMergifyPublishedBranchRecognizedByChangeId,
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,
