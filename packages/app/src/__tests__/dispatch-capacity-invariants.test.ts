@@ -72,7 +72,7 @@ async function makeHarness(maxConcurrency = 4) {
     orchestrator: {
       prepareTaskForNewAttempt: (taskId, reason) => orchestrator.prepareTaskForNewAttempt(taskId, reason),
       getTask: (taskId) => orchestrator.getTask(taskId),
-      startExecution: () => orchestrator.startExecution(),
+      startExecution: (opts) => orchestrator.startExecution(opts),
       syncFromDb: (workflowId) => orchestrator.syncFromDb(workflowId),
       getTaskLaunchReadiness: (taskId) => orchestrator.getTaskLaunchReadiness(taskId),
     },
