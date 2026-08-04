@@ -688,7 +688,7 @@ export function InvokerTerminal({
           </div>
         );
       })}
-      {busy ? (
+      {busy || planningStream ? (
         <div
           data-testid="invoker-terminal-planner-stream"
           data-state={planningStream?.status ?? 'working'}
