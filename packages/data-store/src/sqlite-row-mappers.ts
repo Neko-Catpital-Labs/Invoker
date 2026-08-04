@@ -187,6 +187,7 @@ export function mapRowToTaskLaunchDispatch(row: Record<string, unknown>): TaskLa
     attemptsCount: Number(row.attempts_count ?? 0),
     lastError: row.last_error ? String(row.last_error) : undefined,
     generation: Number(row.generation ?? 0),
+    acknowledgedAt: row.acknowledged_at ? String(row.acknowledged_at) : undefined,
   };
 }
 
