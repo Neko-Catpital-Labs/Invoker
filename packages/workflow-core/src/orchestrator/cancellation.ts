@@ -193,11 +193,17 @@ export function cancelActiveCandidatesImpl(
 /**
  * Cancel a task and cascade-cancel all downstream DAG dependents.
  * Returns cancelled task IDs and which were running (need process kill by caller).
+ *
+ * `deferInvalidation`: when true, skips `invalidateLaunchArtifactsForTasks`
+ * and returns `toCancelIds` instead, so the caller can kill the real
+ * process first and invalidate via `finalizeCancelInvalidationImpl`
+ * afterward. Defaults to false so existing callers are unaffected.
  */
 export function cancelTaskImpl(
   host: CancellationHost,
   taskId: string,
-): { cancelled: string[]; runningCancelled: string[] } {
+  opts?: { deferInvalidation?: boolean },
+): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
   host.refreshFromDb();
 
   const task = host.stateGetTask(taskId);
@@ -226,7 +232,9 @@ export function cancelTaskImpl(
   const toCancelIds = [rootId, ...descendantIds];
   const cancelled: string[] = [];
   const runningCancelled: string[] = [];
-  host.invalidateLaunchArtifactsForTasks(toCancelIds, 'task cancellation');
+  if (!opts?.deferInvalidation) {
+    host.invalidateLaunchArtifactsForTasks(toCancelIds, 'task cancellation');
+  }
 
   for (const id of toCancelIds) {
     const t = host.stateGetTask(id);
@@ -290,17 +298,20 @@ export function cancelTaskImpl(
   }
 
   host.checkWorkflowCompletion();
-  return { cancelled, runningCancelled };
+  return { cancelled, runningCancelled, toCancelIds };
 }
 
 /**
  * Cancel all active tasks in a workflow.
  * Terminal tasks (completed/stale) are preserved as-is.
+ *
+ * See `cancelTaskImpl` for what `deferInvalidation` does and why.
  */
 export function cancelWorkflowImpl(
   host: CancellationHost,
   workflowId: string,
-): { cancelled: string[]; runningCancelled: string[] } {
+  opts?: { deferInvalidation?: boolean },
+): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
   host.refreshWorkflowFromDb(workflowId);
 
   const allTasks = host.stateMachine.getAllTasks().filter(
@@ -323,10 +334,10 @@ export function cancelWorkflowImpl(
 
   const cancelled: string[] = [];
   const runningCancelled: string[] = [];
-  host.invalidateLaunchArtifactsForTasks(
-    allTasks.filter((task) => cancellable[task.status]).map((task) => task.id),
-    'workflow cancellation',
-  );
+  const toCancelIds = allTasks.filter((task) => cancellable[task.status]).map((task) => task.id);
+  if (!opts?.deferInvalidation) {
+    host.invalidateLaunchArtifactsForTasks(toCancelIds, 'workflow cancellation');
+  }
 
   for (const task of allTasks) {
     if (!cancellable[task.status]) continue;
@@ -359,7 +370,21 @@ export function cancelWorkflowImpl(
   }
 
   host.checkWorkflowCompletion();
-  return { cancelled, runningCancelled };
+  return { cancelled, runningCancelled, toCancelIds };
+}
+
+/**
+ * Companion to `cancelTaskImpl`/`cancelWorkflowImpl`'s `deferInvalidation`
+ * option: performs the artifact invalidation they skipped, after the
+ * caller has finished killing every id in `runningCancelled`.
+ */
+export function finalizeCancelInvalidationImpl(
+  host: CancellationHost,
+  toCancelIds: readonly string[],
+  reason: string,
+): void {
+  if (toCancelIds.length === 0) return;
+  host.invalidateLaunchArtifactsForTasks(toCancelIds, reason);
 }
 
 /**
