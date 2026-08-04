@@ -1620,6 +1620,9 @@ test.describe('Visual proof capture', () => {
       await expect(page.getByTestId('worker-timeline-row-alpha-repair-launched')).toContainText('Autofix');
       await expect(page.getByTestId('worker-timeline-row-alpha-inspect-launched')).toContainText('Autofix');
       await expect(page.getByTestId('worker-timeline-action-alpha-review-launched')).toHaveCount(0);
+      await page.getByTestId('worker-timeline-action-alpha-inspect-launched').click();
+      await expect(page.getByTestId('workflow-inspector-title')).toContainText('First test task');
+      await expect(page.getByText('Selected task still has open execution output.')).toBeVisible();
       await captureScreenshot(page, 'timeline-worker-events-search');
       await assertPageScreenshot(page, 'timeline-worker-events-search');
 
@@ -1660,9 +1663,9 @@ test.describe('Visual proof capture', () => {
       },
     ]);
 
-    // Drawer starts minimized.
+    // Drawer starts minimized with the terminal body mounted but hidden.
     await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
-    await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
+    await expect(page.getByTestId('terminal-drawer-body')).not.toBeVisible();
 
     const taskCard = page.locator('[title$="task-alpha"]').first();
     await expect(taskCard).toBeVisible({ timeout: 10000 });

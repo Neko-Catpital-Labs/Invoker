@@ -101,7 +101,11 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
     closePromise.then(() => false),
     delay(5_000).then(() => true),
   ]);
-  if (!timedOut) return;
+  if (!timedOut) {
+    if (childExited) return;
+    await Promise.race([childExitPromise, delay(2_000)]);
+    if (childExited) return;
+  }
 
   if (!childExited) {
     child.kill('SIGTERM');
@@ -113,7 +117,10 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
       }
     }
     await Promise.race([closePromise, childExitPromise, delay(2_000)]);
-    if (!childExited) child.kill('SIGKILL');
+    if (!childExited) {
+      child.kill('SIGKILL');
+      await Promise.race([childExitPromise, delay(2_000)]);
+    }
   }
 }
 
