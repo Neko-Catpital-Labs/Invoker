@@ -173,13 +173,13 @@ function hasAnimatedVisualProofMedia(body) {
     || /\bhttps?:\/\/\S+\.(?:gif|webm|mp4)\b/i.test(visualProof);
 }
 
-function visualProofNeedsAnimation(body) {
+export function visualProofNeedsAnimation(body) {
   const visualProof = getVisualProofBody(body);
   if (!visualProof) return false;
 
   return (
-    /\brestart|relaunch|reload\b/i.test(visualProof)
-    || /\btransition|state change\b/i.test(visualProof)
+    /\b(?:restart|relaunch|reload)\b/i.test(visualProof)
+    || /\b(?:transition|state change)\b/i.test(visualProof)
     || (/\bbefore\b/i.test(visualProof) && /\bafter\b/i.test(visualProof))
   );
 }
