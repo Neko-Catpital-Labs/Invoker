@@ -1173,18 +1173,37 @@ export class SlackSurface implements Surface {
       return;
     }
     const plannerOutput = await conversation.runPlanConversion();
+    await this.stageDraftReviewFromPlannerOutput(plannerOutput, conversation, channel, threadTs, userId, say, { silentWhenNotReady: false });
+  }
+
+  private async stageDraftReviewFromPlannerOutput(
+    plannerOutput: string,
+    conversation: ConversationLike,
+    channel: string,
+    threadTs: string,
+    userId: string,
+    say: SayFn,
+    opts: { silentWhenNotReady: boolean },
+  ): Promise<void> {
+    if (!this.slackPlanDraftRepo) return;
     const review = preparePlanningReview({
       plannerOutput,
       extractDraftPlanText: () => conversation.lastTurnDraftPlanText,
       confirmationMode: this.loadPlanningContext(threadTs)?.confirmationMode ?? this.defaultPlanningConfirmationMode,
     });
     if ('kind' in review) {
-      await this.sayWithRateLimitRetry(say, { text: review.reply, thread_ts: threadTs });
+      if (!opts.silentWhenNotReady) {
+        await this.sayWithRateLimitRetry(say, { text: review.reply, thread_ts: threadTs });
+      }
       return;
     }
     const draftReview = review;
     const context = this.loadPlanningContext(threadTs);
     if (!context?.repoUrl || !context.workingDir) {
+      if (opts.silentWhenNotReady) {
+        this.log('slack', 'warn', `[DRAFT_STAGE] Skipped staging draft for thread ${threadTs}: no pinned repository context.`);
+        return;
+      }
       await this.sayWithRateLimitRetry(say, {
         text: 'This thread has no pinned repository context. Start a new thread with the repository selected.',
         thread_ts: threadTs,
@@ -2726,6 +2745,15 @@ ${text}`;
           }, say);
         } catch (err) {
           this.log('slack', 'error', `[PLAN_INTENT_CONFIRM] failed to stage from auto-detect thread_ts=${threadTs}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+        }
+      }
+
+      if (this.conversationalPlanning && conversation.conversationMode === 'plan' && conversation.lastTurnDraftPlanText) {
+        try {
+          await this.stageDraftReviewFromPlannerOutput(reply, conversation, channel, threadTs,
+            planIntentContext?.userId ?? 'unknown', say, { silentWhenNotReady: true });
+        } catch (err) {
+          this.log('slack', 'error', `[DRAFT_STAGE] failed to stage conversational draft thread_ts=${threadTs}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
         }
       }
 
