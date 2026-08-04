@@ -19,6 +19,7 @@ import {
   resolveDiskCleanupCooldownMs,
   resolveDiskCleanupEnabled,
   type DiskCleanupResult,
+  type DiskHeadroomWorkerStore,
 } from './disk-headroom-reclaim.js';
 import {
   runDiskHeadroomCheck,
@@ -46,6 +47,8 @@ export interface DiskHeadroomWorkerConfig {
 
   /** Optional decision ledger for cleanup act/skip rows. */
   store?: WorkerDecisionStore;
+  /** Optional workflow/task state reader used to protect in-use local paths from cleanup. */
+  workflowStore?: DiskHeadroomWorkerStore;
   /** Optional activity-log sink (wired from owner persistence). */
   writeActivityLog?: (level: ActivityLogLevel, message: string) => void;
 
@@ -69,6 +72,7 @@ export interface DiskHeadroomWorkerOptions {
   cleanupEnabled?: boolean;
   cleanupCooldownMs?: number;
   store?: WorkerDecisionStore;
+  workflowStore?: DiskHeadroomWorkerStore;
   writeActivityLog?: (level: ActivityLogLevel, message: string) => void;
   runCheck?: (deps: DiskHeadroomMonitorDeps) => Promise<DiskHeadroomEvaluation[] | unknown>;
   cleanupLocal?: typeof cleanupLocalInvokerHome;
@@ -175,6 +179,7 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
             invokerHome: options.localPath,
             targetKey,
             logger: options.logger,
+            store: options.workflowStore,
           });
         }
 
@@ -214,6 +219,7 @@ export function registerDiskHeadroomWorker(
         cleanupEnabled: config?.cleanupEnabled,
         cleanupCooldownMs: config?.cleanupCooldownMs,
         store: config?.store ?? deps.store,
+        workflowStore: config?.workflowStore ?? deps.store,
         writeActivityLog: config?.writeActivityLog,
         runCheck: config?.runCheck as DiskHeadroomWorkerOptions['runCheck'],
         cleanupLocal: config?.cleanupLocal,
