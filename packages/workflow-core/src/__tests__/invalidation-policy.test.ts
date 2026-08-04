@@ -4,6 +4,7 @@ import {
   applyInvalidation,
   ACTION_SPECS,
   MUTATION_POLICIES,
+  buildCancelInFlight,
   type InvalidationAction,
   type InvalidationDeps,
 } from '../invalidation-policy.js';
@@ -161,6 +162,59 @@ describe('applyInvalidation: cancel-first ordering (Hard Invariant)', () => {
     expect(deps.cancelInFlight.mock.invocationCallOrder[0]).toBeLessThan(
       recreateWorkflowFromFreshBase.mock.invocationCallOrder[0],
     );
+  });
+});
+
+describe('buildCancelInFlight: kill before release ordering', () => {
+  it.fails('kills every running task before invalidating (releasing resource leases/abandoning dispatch rows)', async () => {
+    const order: string[] = [];
+    const cancelTaskAwaitingKill = vi.fn(() => {
+      order.push('cancelTaskAwaitingKill');
+      return { runningCancelled: ['task-a', 'task-b'], toCancelIds: ['task-a', 'task-b', 'task-c'] };
+    });
+    const killActiveExecution = vi.fn(async (taskId: string) => {
+      order.push(`kill:${taskId}`);
+    });
+    const finalizeCancelInvalidation = vi.fn((toCancelIds: readonly string[]) => {
+      order.push(`finalize:${toCancelIds.join(',')}`);
+    });
+    const cancelInFlight = buildCancelInFlight({
+      orchestrator: {
+        cancelTask: vi.fn(() => { throw new Error('should not use the immediate path'); }),
+        cancelWorkflow: vi.fn(() => { throw new Error('should not use the immediate path'); }),
+        cancelTaskAwaitingKill,
+        cancelWorkflowAwaitingKill: vi.fn(),
+        finalizeCancelInvalidation,
+      },
+      killActiveExecution,
+    });
+
+    await cancelInFlight('task', 'task-a');
+
+    expect(order).toEqual([
+      'cancelTaskAwaitingKill',
+      'kill:task-a',
+      'kill:task-b',
+      'finalize:task-a,task-b,task-c',
+    ]);
+    expect(finalizeCancelInvalidation).toHaveBeenCalledWith(
+      ['task-a', 'task-b', 'task-c'],
+      'task cancellation',
+    );
+  });
+
+  it('falls back to the immediate (non-deferred) cancel when the deferred methods are not wired', async () => {
+    const cancelTask = vi.fn(() => ({ runningCancelled: ['task-a'] }));
+    const killActiveExecution = vi.fn(async () => undefined);
+    const cancelInFlight = buildCancelInFlight({
+      orchestrator: { cancelTask, cancelWorkflow: vi.fn() },
+      killActiveExecution,
+    });
+
+    await cancelInFlight('task', 'task-a');
+
+    expect(cancelTask).toHaveBeenCalledWith('task-a');
+    expect(killActiveExecution).toHaveBeenCalledWith('task-a');
   });
 });
 
