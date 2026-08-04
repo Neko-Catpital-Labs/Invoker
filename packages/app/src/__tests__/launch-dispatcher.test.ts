@@ -644,6 +644,22 @@ describe('LaunchDispatcher', () => {
       expect(executeTask).toHaveBeenCalledTimes(2);
     });
 
+    it('caps topUpReadyLaunches via startExecution({ limit: maxLeasesPerPoll })', () => {
+      const startExecution = vi.fn().mockReturnValue([]);
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-topup-cap',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          startExecution,
+        },
+        taskRunnerProvider: () => ({ executeTask: vi.fn().mockResolvedValue(undefined) }),
+        maxLeasesPerPoll: 7,
+      });
+      dispatcher.poll();
+      expect(startExecution).toHaveBeenCalledWith({ limit: 7 });
+    });
+
     it('hydrates the workflow before treating a dispatch row as missing', () => {
       const writer = new Orchestrator({
         persistence: adapter as any,
@@ -1174,6 +1190,8 @@ describe('LaunchDispatcher', () => {
       dispatcher.poll();
       expect(prepare).toHaveBeenCalledWith('wf/ready', 'launch-dispatcher-ready-topup');
       expect(startExecution).toHaveBeenCalledTimes(2);
+      expect(startExecution).toHaveBeenNthCalledWith(1, { limit: 32 });
+      expect(startExecution).toHaveBeenNthCalledWith(2, { limit: 32 });
     });
 
     it('does not thrash parked ready tasks when slots are free', () => {
@@ -1199,6 +1217,7 @@ describe('LaunchDispatcher', () => {
       dispatcher.poll();
       expect(prepare).not.toHaveBeenCalled();
       expect(startExecution).toHaveBeenCalledTimes(1);
+      expect(startExecution).toHaveBeenCalledWith({ limit: 32 });
     });
   });
 });
