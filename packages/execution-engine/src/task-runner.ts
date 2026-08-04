@@ -382,6 +382,19 @@ export class TaskRunner {
   }
 
   /**
+   * True when some active execution's resource lease holder id matches
+   * `holderId`. Scoped by lease holder (not task id alone) so a stale
+   * lease from an abandoned attempt isn't mistaken for still-alive just
+   * because the task has since started a new attempt with a new lease.
+   */
+  hasActiveExecutionForLeaseHolder(holderId: string): boolean {
+    for (const entry of this.activeExecutions.values()) {
+      if (entry.leaseHolderId === holderId) return true;
+    }
+    return false;
+  }
+
+  /**
    * Stop the executor child for a task that is currently in-flight (after orchestrator.cancelTask).
    */
   async killActiveExecution(taskId: string): Promise<boolean> {
