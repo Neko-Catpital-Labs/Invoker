@@ -108,9 +108,10 @@ describe('invoker-cli', () => {
   it('--help lists the planner setup command', async () => {
     const result = await runCli(['--help']);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('invoker-cli setup [planner|slack]');
+    expect(result.stdout).toContain('invoker-cli setup [planner|slack|machines]');
     expect(result.stdout).toContain('--planner-url <url>');
     expect(result.stdout).toContain('Defaults to ~/.invoker/mcp.json');
+    expect(result.stdout).toContain('setup machines --json reads a JSON array');
   });
 
   it('lists worker kinds from the registry', async () => {

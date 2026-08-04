@@ -233,6 +233,230 @@ describe('runSetup', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it('adds one remote machine interactively after a passing connectivity check', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-machines-'));
+    const saved = {
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const responses = [
+      'build-a.example.com',
+      'deploy',
+      '/home/deploy/.ssh/id_ed25519',
+      '2222',
+      '2',
+      'pnpm install --frozen-lockfile',
+      'y',
+      'n',
+    ];
+    const lines: string[] = [];
+    const connectivity = vi.fn().mockResolvedValue({ reachable: true, detail: 'ssh ok' });
+    try {
+      process.env.INVOKER_REPO_CONFIG_PATH = join(home, 'config.json');
+      process.env.INVOKER_MCP_CONFIG_PATH = join(home, 'mcp.json');
+
+      const code = await runSetup(['machines'], {
+        print: (line) => lines.push(line),
+        prompt: async () => responses.shift() ?? '',
+      }, readySetupDeps({ remoteTargetConnectivity: connectivity }));
+
+      expect(code).toBe(0);
+      expect(connectivity).toHaveBeenCalledWith({
+        host: 'build-a.example.com',
+        user: 'deploy',
+        sshKeyPath: '/home/deploy/.ssh/id_ed25519',
+        port: 2222,
+        maxConcurrentTasks: 2,
+        provisionCommand: 'pnpm install --frozen-lockfile',
+      });
+      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
+      expect(config.remoteTargets['build-a.example.com']).toEqual({
+        host: 'build-a.example.com',
+        user: 'deploy',
+        sshKeyPath: '/home/deploy/.ssh/id_ed25519',
+        port: 2222,
+        maxConcurrentTasks: 2,
+        provisionCommand: 'pnpm install --frozen-lockfile',
+      });
+      expect(lines.join('\n')).toContain('Connectivity check: passed - ssh ok');
+      expect(lines.join('\n')).toContain('Wrote machine build-a.example.com');
+    } finally {
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves config unchanged when the user declines keeping a reachable machine', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-machines-decline-'));
+    const saved = {
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const configPath = join(home, 'config.json');
+    const originalConfig = { maxConcurrency: 3 };
+    const responses = [
+      'build-b.example.com',
+      'deploy',
+      '/home/deploy/.ssh/id_ed25519',
+      '22',
+      '1',
+      '',
+      'n',
+      'n',
+    ];
+    try {
+      writeFileSync(configPath, JSON.stringify(originalConfig, null, 2));
+      process.env.INVOKER_REPO_CONFIG_PATH = configPath;
+      process.env.INVOKER_MCP_CONFIG_PATH = join(home, 'mcp.json');
+
+      const code = await runSetup(['machines'], {
+        print: () => {},
+        prompt: async () => responses.shift() ?? '',
+      }, readySetupDeps({
+        remoteTargetConnectivity: async () => ({ reachable: true, detail: 'ssh ok' }),
+      }));
+
+      expect(code).toBe(0);
+      expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual(originalConfig);
+    } finally {
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('loops when the user adds another machine and writes both entries', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-machines-loop-'));
+    const saved = {
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const responses = [
+      'build-a.example.com',
+      'deploy',
+      '/keys/a',
+      '22',
+      '1',
+      '',
+      'y',
+      'y',
+      'build-b.example.com',
+      'ubuntu',
+      '/keys/b',
+      '2222',
+      '3',
+      'bash provision.sh',
+      'y',
+      'n',
+    ];
+    try {
+      process.env.INVOKER_REPO_CONFIG_PATH = join(home, 'config.json');
+      process.env.INVOKER_MCP_CONFIG_PATH = join(home, 'mcp.json');
+
+      const code = await runSetup(['machines'], {
+        print: () => {},
+        prompt: async () => responses.shift() ?? '',
+      }, readySetupDeps({
+        remoteTargetConnectivity: async () => ({ reachable: true, detail: 'ssh ok' }),
+      }));
+
+      expect(code).toBe(0);
+      const targets = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).remoteTargets;
+      expect(Object.keys(targets)).toEqual(['build-a.example.com', 'build-b.example.com']);
+      expect(targets['build-a.example.com']).toEqual({
+        host: 'build-a.example.com',
+        user: 'deploy',
+        sshKeyPath: '/keys/a',
+        port: 22,
+        maxConcurrentTasks: 1,
+      });
+      expect(targets['build-b.example.com']).toEqual({
+        host: 'build-b.example.com',
+        user: 'ubuntu',
+        sshKeyPath: '/keys/b',
+        port: 2222,
+        maxConcurrentTasks: 3,
+        provisionCommand: 'bash provision.sh',
+      });
+    } finally {
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('reads machines from stdin under --json and prints one result per input', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-machines-json-'));
+    const saved = {
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    const lines: string[] = [];
+    try {
+      process.env.INVOKER_REPO_CONFIG_PATH = join(home, 'config.json');
+      process.env.INVOKER_MCP_CONFIG_PATH = join(home, 'mcp.json');
+
+      const code = await runSetup(['machines', '--json'], {
+        interactive: false,
+        print: (line) => lines.push(line),
+        prompt: async () => {
+          throw new Error('should not prompt in machines --json');
+        },
+        readStdin: async () => JSON.stringify([
+          {
+            id: 'builder-a',
+            host: 'build-a.example.com',
+            user: 'deploy',
+            sshKeyPath: '/keys/a',
+            port: 22,
+            maxConcurrentTasks: 2,
+            provisionCommand: 'pnpm install --frozen-lockfile',
+          },
+          {
+            id: 'builder-b',
+            host: 'build-b.example.com',
+            user: 'deploy',
+            sshKeyPath: '/keys/b',
+            port: 22,
+            maxConcurrentTasks: 1,
+          },
+        ]),
+      }, readySetupDeps({
+        remoteTargetConnectivity: async (target) => (
+          target.host === 'build-a.example.com'
+            ? { reachable: true, detail: 'ssh ok' }
+            : { reachable: false, detail: 'connection refused' }
+        ),
+      }));
+
+      expect(code).toBe(1);
+      const results = JSON.parse(lines[0]);
+      expect(results).toEqual([
+        {
+          id: 'builder-a',
+          host: 'build-a.example.com',
+          reachable: true,
+          detail: 'ssh ok',
+          written: true,
+        },
+        {
+          id: 'builder-b',
+          host: 'build-b.example.com',
+          reachable: false,
+          detail: 'connection refused',
+          written: false,
+        },
+      ]);
+      const targets = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).remoteTargets;
+      expect(Object.keys(targets)).toEqual(['builder-a']);
+    } finally {
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 
