@@ -350,9 +350,15 @@ function buildConversationalPlanSystemPrompt(
   options: BuildPlanSystemPromptOptions,
 ): string {
   const draftingAuthorized = options.draftingAuthorized ?? false;
+  const handoffInstructions = buildPlanningHandoffInstructions({
+    planFilePath: options.planFilePath,
+    reviewInstruction: 'After the YAML exists, the hosting surface reads that exact YAML, renders the ordered steps in its review flow, and owns the approval step.',
+    shortReplyInstruction: 'Then reply in chat with only a one-or-two-sentence summary. Never paste the YAML into chat.',
+    submissionInstruction: 'Only the hosting surface (the Slack orchestrator or the in-app planner) may submit the plan after your draft is approved in its review flow. Never run `invoker-cli`, `invoker_submit_plan`, `scripts/headless-ipc.js`, or any other submission command yourself. This rule overrides the plan-to-invoker skill\'s Harness handoff mode in this session.',
+  });
   const draftingInstructions = draftingAuthorized
     ? `
-The user has explicitly approved drafting. Follow the plan-to-invoker skill's Harness handoff mode now: first produce a Markdown planning artifact, then convert the approved Markdown plan into a full Invoker YAML task plan, and proceed through the skill's review/submission steps (\`skill-doctor.sh\` when inside an Invoker source checkout, the MCP review/submit flow as the canonical path otherwise). Read \`skills/plan-to-invoker/SKILL.md\` for the exact steps if you need them.`
+The user has explicitly approved drafting. Produce the full Invoker YAML task plan now, using the plan shape from \`skills/plan-to-invoker/SKILL.md\` if you need the exact schema. ${handoffInstructions}`
     : `
 Drafting is not authorized yet. Do NOT output a \`\`\`yaml code block, do NOT write a draft plan file, and do NOT tell the user the plan can be executed.
 
