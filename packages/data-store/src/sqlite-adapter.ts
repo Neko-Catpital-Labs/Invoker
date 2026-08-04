@@ -1110,6 +1110,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return this.taskAttemptRepo.loadTasks(workflowId);
   }
 
+  loadTasksForWorkflows(workflowIds: string[]): TaskState[] {
+    return this.taskAttemptRepo.loadTasksForWorkflows(workflowIds);
+  }
+
   loadTask(taskId: string): TaskState | undefined {
     return this.taskAttemptRepo.loadTask(taskId);
   }
