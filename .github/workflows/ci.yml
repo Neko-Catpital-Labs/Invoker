@@ -606,6 +606,8 @@ jobs:
               e2e/action-graph-visual-proof.spec.ts
               e2e/invalid-merge-workspace-visual.spec.ts
               e2e/invalid-task-workspace-visual.spec.ts
+              e2e/launch-dispatch-stuck-lease-cap.spec.ts
+              e2e/launch-dispatch-stuck-lease-storm.spec.ts
               e2e/persistence-lifecycle.spec.ts
           - name: 3-of-9
             files: >-
