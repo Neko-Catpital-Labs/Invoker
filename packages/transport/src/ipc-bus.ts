@@ -331,33 +331,36 @@ export class IpcBus implements MessageBus {
     });
 
     sock.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'ECONNREFUSED' || err.code === 'ENOENT') {
-        if (!this.allowServe) {
-          this.resolveReady();
-          return;
-        }
-        // No server yet — try to become the server.
-        this.tryServe();
+      if (!this.allowServe) {
+        this.resolveReady();
+        return;
+      }
+      if (err.code === 'ECONNREFUSED') {
+        // A socket file exists but nothing accepts on it — confirmed stale,
+        // safe to reclaim.
+        this.tryServe(true);
+      } else if (err.code === 'ENOENT') {
+        // No socket file at all — serve fresh.
+        this.tryServe(false);
       } else {
-        if (!this.allowServe) {
-          this.resolveReady();
-          return;
-        }
-        // Unexpected error — still try to serve.
-        this.tryServe();
+        // Unexpected error (EACCES, EAGAIN, …): the server may be alive, so
+        // never unlink its socket out from under it — retry connecting instead.
+        this.resolveReady();
+        this.scheduleRecovery();
       }
     });
   }
 
-  private tryServe(): void {
+  private tryServe(reclaimStale: boolean): void {
     // Ensure directory exists.
     mkdirSync(dirname(this.socketPath), { recursive: true });
 
-    // Clean stale socket file before binding.
-    try {
-      unlinkSync(this.socketPath);
-    } catch {
-      // File may not exist — fine.
+    if (reclaimStale) {
+      try {
+        unlinkSync(this.socketPath);
+      } catch {
+        // File may not exist — fine.
+      }
     }
 
     const srv = createServer((client) => {
@@ -387,14 +390,19 @@ export class IpcBus implements MessageBus {
 
     sock.on('error', () => {
       if (this.allowServe) {
-        this.scheduleServeRecovery();
+        this.scheduleRecovery();
       }
       // Nothing else we can do synchronously — resolve ready so callers don't hang forever.
       this.resolveReady();
     });
   }
 
-  private scheduleServeRecovery(): void {
+  /**
+   * Recover by reconnecting first: only a connect that fails ECONNREFUSED
+   * proves the socket file is dead, so takeover can never unlink a live
+   * server's socket.
+   */
+  private scheduleRecovery(): void {
     if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0 || this.serveRetryScheduled) {
       return;
     }
@@ -404,7 +412,7 @@ export class IpcBus implements MessageBus {
       if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0) {
         return;
       }
-      this.tryServe();
+      this.tryConnect();
     }, 25).unref?.();
   }
 
@@ -425,12 +433,12 @@ export class IpcBus implements MessageBus {
     sock.on('data', (chunk: Buffer) => decoder.push(chunk));
     sock.on('close', () => {
       this.peers.delete(sock);
-      this.scheduleServeRecovery();
+      this.scheduleRecovery();
     });
     sock.on('error', () => {
       sock.destroy();
       this.peers.delete(sock);
-      this.scheduleServeRecovery();
+      this.scheduleRecovery();
     });
   }
 
@@ -718,7 +726,7 @@ export class IpcBus implements MessageBus {
       this.server.close();
       this.server = null;
     }
-    this.tryServe();
+    this.tryServe(true);
   }
 
   disconnect(): void {
