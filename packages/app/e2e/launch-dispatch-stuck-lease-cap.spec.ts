@@ -43,11 +43,7 @@ function findTask(tasks: Array<{ id: string; status: string }>, taskId: string) 
 }
 
 base.describe('Launch-dispatch stuck-lease retry cap', () => {
-  // Expected to fail until the next slice in this stack lands the durable
-  // per-task retry cap: abandonStuckLeases has no stopper today, so a
-  // launch that never completes handoff retries forever instead of
-  // eventually giving up.
-  base.fail('eventually gives up on a launch that never completes handoff', async () => {
+  base('eventually gives up on a launch that never completes handoff', async () => {
     const LEASE_MS = 1500;
     // Long enough to outlast MAX_STUCK_LEASE_RETRIES (5) reap cycles at
     // ~LEASE_MS + one 2s poll tick each (worst case ~5 * 3.5s = 17.5s),
