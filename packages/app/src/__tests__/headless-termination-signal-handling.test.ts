@@ -53,4 +53,13 @@ describe('headless owner-serve SIGTERM/SIGINT handling', () => {
     );
     expect(finallyBlock).toContain("await runHeadlessShutdownCleanup('Application quit');");
   });
+
+  it('skips the normal-quit cleanup and exit when a signal handler already owns shutdown', () => {
+    const finallyBlock = mainTsSource.slice(
+      mainTsSource.indexOf('await runHeadless(cliArgs, headlessDeps);'),
+      mainTsSource.indexOf('process.exit(exitCode);'),
+    );
+    expect(finallyBlock).toContain('if (!headlessSignalShutdownInProgress) {');
+    expect(finallyBlock).toContain("headlessSignalShutdownInProgress = true;\n        await runHeadlessShutdownCleanup('Application quit');");
+  });
 });

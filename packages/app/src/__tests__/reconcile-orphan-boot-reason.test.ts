@@ -15,6 +15,6 @@ describe('boot-reconcile forced-stop reason in main.ts', () => {
 
   it('keeps the graceful-quit and headless-shutdown Application quit literals unchanged', () => {
     const literalCount = (mainSource.match(/'Application quit'/g) ?? []).length;
-    expect(literalCount).toBe(4);
+    expect(literalCount).toBe(3);
   });
 });

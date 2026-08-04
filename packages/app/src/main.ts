@@ -1979,10 +1979,12 @@ function startHeadlessMode(): void {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
-      headlessSignalShutdownInProgress = true;
-      await runHeadlessShutdownCleanup('Application quit');
+      if (!headlessSignalShutdownInProgress) {
+        headlessSignalShutdownInProgress = true;
+        await runHeadlessShutdownCleanup('Application quit');
+        process.exit(exitCode);
+      }
     }
-    process.exit(exitCode);
   };
 
   runElectronReadyBootstrap({
