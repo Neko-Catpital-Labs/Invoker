@@ -690,7 +690,9 @@ describe('Invoker terminal (component)', () => {
         presetKey: 'codex',
         confirmationMode: 'require',
       });
-      expect(screen.queryByTestId('invoker-terminal-planner-stream')).not.toBeInTheDocument();
+      const panel = screen.getByTestId('invoker-terminal-planner-stream');
+      expect(panel).toHaveAttribute('data-state', 'working');
+      expect(panel).toHaveTextContent('Working…');
     });
 
     await act(async () => {
@@ -863,7 +865,7 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
-  it('shows the wait cursor only while a planning request is busy', async () => {
+  it('never shows the wait cursor while a planning request is busy', async () => {
     let resolveSend: ((value: any) => void) | null = null;
     mock.api.planningChatSend = vi.fn(() => {
       return new Promise((resolve) => {
@@ -878,8 +880,8 @@ describe('Invoker terminal (component)', () => {
 
     const input = screen.getByTestId('invoker-terminal-input');
     await waitFor(() => expect(input).toBeDisabled());
-    expect(input).toHaveClass('disabled:cursor-wait');
-    expect(input).not.toHaveClass('disabled:cursor-not-allowed');
+    expect(input).toHaveClass('disabled:cursor-not-allowed');
+    expect(input).not.toHaveClass('disabled:cursor-wait');
 
     await act(async () => {
       resolveSend?.({ ok: true, sessionId: 'session-1', reply: 'Done.', draftPlanAvailable: false });
