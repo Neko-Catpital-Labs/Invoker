@@ -121,6 +121,27 @@ describe('process-utils shell environment resolution', () => {
     expect(mockedSpawn).toHaveBeenCalledTimes(1);
   });
 
+  it('strips INVOKER_HEADLESS_STANDALONE from the cleaned child env', async () => {
+    const originalHeadlessStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+    const originalMarker = process.env.INVOKER_TEST_UNRELATED_MARKER;
+    try {
+      process.env.INVOKER_HEADLESS_STANDALONE = '1';
+      process.env.INVOKER_TEST_UNRELATED_MARKER = 'keep-me';
+
+      const { processUtils } = await loadProcessUtils();
+      const clean = processUtils.cleanElectronEnv();
+
+      expect(clean).not.toHaveProperty('INVOKER_HEADLESS_STANDALONE');
+      expect(clean.INVOKER_TEST_UNRELATED_MARKER).toBe('keep-me');
+      expect(process.env.INVOKER_HEADLESS_STANDALONE).toBe('1');
+    } finally {
+      if (originalHeadlessStandalone === undefined) delete process.env.INVOKER_HEADLESS_STANDALONE;
+      else process.env.INVOKER_HEADLESS_STANDALONE = originalHeadlessStandalone;
+      if (originalMarker === undefined) delete process.env.INVOKER_TEST_UNRELATED_MARKER;
+      else process.env.INVOKER_TEST_UNRELATED_MARKER = originalMarker;
+    }
+  });
+
   it('removes Git repository-scoping variables while preserving transport env', async () => {
     const { processUtils } = await loadProcessUtils();
 
