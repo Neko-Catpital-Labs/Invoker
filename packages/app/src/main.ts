@@ -194,6 +194,7 @@ import {
 import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
+import { isWriterLockHeldError, resolveOwnerServeLockFailure } from './owner-split-brain.js';
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -2000,8 +2001,18 @@ function startHeadlessMode(): void {
 
       await runHeadless(cliArgs, headlessDeps);
     } catch (err) {
-      process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
-      exitCode = 1;
+      if (command === 'owner-serve' && isWriterLockHeldError(err)) {
+        const resolution = await resolveOwnerServeLockFailure(err, resolveInvokerIpcSocketPath());
+        process.stderr.write(
+          resolution.exitCode === 0
+            ? `${resolution.message}\n`
+            : `${RED}Error:${RESET} ${resolution.message}\n`,
+        );
+        exitCode = resolution.exitCode;
+      } else {
+        process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
+        exitCode = 1;
+      }
     } finally {
       if (!headlessSignalShutdownInProgress) {
         headlessSignalShutdownInProgress = true;
