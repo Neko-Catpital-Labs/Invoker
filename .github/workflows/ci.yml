@@ -672,6 +672,10 @@ jobs:
               e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
               e2e/planning-terminal-expand-collapse-garble-repro.spec.ts
               e2e/task-terminal-drawer-minimize-garble-repro.spec.ts
+          - name: launch-dispatch
+            files: >-
+              e2e/launch-dispatch-stuck-lease-cap.spec.ts
+              e2e/launch-dispatch-stuck-lease-storm.spec.ts
 
     name: playwright / ${{ matrix.name }}
 
