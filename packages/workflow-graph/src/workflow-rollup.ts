@@ -99,7 +99,7 @@ export function hasFailedDependencyPath(
   return false;
 }
 
-function computeWorkflowStatusFromTaskGraph(
+export function computeWorkflowStatusFromTaskGraph(
   tasks: readonly WorkflowRollupTaskSummary[],
   counts: WorkflowTaskStatusCounts,
 ): WorkflowDerivedStatus {
