@@ -4261,10 +4261,10 @@ export function App() {
   );
 
   const renderWorkerActionEntry = (action: WorkerActionSummary): JSX.Element => (
-    <div key={action.id} className="rounded-lg border border-gray-800 bg-gray-850/60 p-3">
+    <div key={action.id} className="rounded-lg border border-[#ff69b4]/40 bg-gray-850/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium text-gray-100">{formatWorkerValue(action.actionType)}</div>
-        <span className="rounded-full border border-gray-700 bg-gray-800 px-2 py-0.5 text-[11px] text-gray-200">
+        <span className="rounded-full border border-gray-700 bg-[#9c0f5c] px-2 py-0.5 text-[11px] text-gray-200">
           {formatWorkerValue(action.status)}
         </span>
       </div>
@@ -4275,11 +4275,11 @@ export function App() {
   );
 
   const renderWorkerLogEntry = (log: WorkerLogEntry): JSX.Element => (
-    <div key={log.id} className="rounded-lg border border-gray-800 bg-gray-850/60 p-3">
+    <div key={log.id} className="rounded-lg border border-[#ff69b4]/40 bg-gray-850/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm font-medium text-gray-100">{workerLogTitle(log)}</div>
         {log.status ? (
-          <span className="rounded-full border border-gray-700 bg-gray-800 px-2 py-0.5 text-[11px] text-gray-200">
+          <span className="rounded-full border border-gray-700 bg-[#9c0f5c] px-2 py-0.5 text-[11px] text-gray-200">
             {formatWorkerValue(log.status)}
           </span>
         ) : null}
@@ -4320,16 +4320,16 @@ export function App() {
 
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="border-b border-gray-800 bg-gray-950/50 px-4 py-4">
+        <div className="border-b border-[#ff69b4]/40 bg-[#7a0a49]/50 px-4 py-4">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-lg font-semibold text-gray-100">{copy.name}</h2>
               <p className="mt-1 text-sm text-gray-400">{selectedWorker.note || 'Worker registry entry'}</p>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-gray-700 bg-gray-800 px-2.5 py-1 text-[11px] font-medium text-gray-200">
+                <span className="rounded-full border border-gray-700 bg-[#9c0f5c] px-2.5 py-1 text-[11px] font-medium text-gray-200">
                   Kind: {selectedWorker.kind}
                 </span>
-                <span className="rounded-full border border-gray-700 bg-gray-800 px-2.5 py-1 text-[11px] font-medium text-gray-200">
+                <span className="rounded-full border border-gray-700 bg-[#9c0f5c] px-2.5 py-1 text-[11px] font-medium text-gray-200">
                   Source: {formatWorkerValue(selectedWorker.source)}
                 </span>
                 <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-medium text-cyan-100">
@@ -4349,7 +4349,7 @@ export function App() {
                 aria-label="Return home"
                 data-testid="workers-return-home"
                 onClick={handleDismissBrowserSurface}
-                className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+                className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:bg-[#9c0f5c]"
               >
                 Home
               </button>
@@ -4358,7 +4358,7 @@ export function App() {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-            <section className="rounded-xl border border-gray-800 bg-gray-900/80 p-4">
+            <section className="rounded-xl border border-[#ff69b4]/40 bg-[#9c0f5c]/80 p-4">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Registry</h3>
               <dl className="mt-3 grid grid-cols-[7rem_1fr] gap-x-3 gap-y-2 text-sm">
                 <dt className="text-gray-500">Kind</dt>
@@ -4375,7 +4375,7 @@ export function App() {
                 <dd className="text-gray-200">{selectedWorker.runtimeKind ?? 'Not running'}</dd>
               </dl>
             </section>
-            <section className="rounded-xl border border-gray-800 bg-gray-900/80 p-4">
+            <section className="rounded-xl border border-[#ff69b4]/40 bg-[#9c0f5c]/80 p-4">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Current state</h3>
               <div className="mt-3 text-sm text-gray-300">
                 Process is {formatWorkerValue(selectedWorker.lifecycle)}.
@@ -4386,26 +4386,26 @@ export function App() {
           </div>
 
           <div className="mt-4 grid gap-4 xl:grid-cols-2">
-            <section className="rounded-xl border border-gray-800 bg-gray-900/80 p-4">
+            <section className="rounded-xl border border-[#ff69b4]/40 bg-[#9c0f5c]/80 p-4">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Latest responses</h3>
               <div className="mt-3 space-y-2">
                 {selectedWorker.recentActions.length > 0
                   ? selectedWorker.recentActions.slice(0, 5).map(renderWorkerActionEntry)
-                  : <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-3 text-sm text-gray-400">No worker responses have been logged yet.</div>}
+                  : <div className="rounded-lg border border-[#ff69b4]/40 bg-[#7a0a49]/60 p-3 text-sm text-gray-400">No worker responses have been logged yet.</div>}
               </div>
             </section>
-            <section className="rounded-xl border border-gray-800 bg-gray-900/80 p-4">
+            <section className="rounded-xl border border-[#ff69b4]/40 bg-[#9c0f5c]/80 p-4">
               <h3 className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Latest logs</h3>
               <div className="mt-3 space-y-2">
                 {recentLogs.length > 0
                   ? recentLogs.slice(0, 5).map(renderWorkerLogEntry)
-                  : <div className="rounded-lg border border-gray-800 bg-gray-950/60 p-3 text-sm text-gray-400">No worker responses have been logged yet.</div>}
+                  : <div className="rounded-lg border border-[#ff69b4]/40 bg-[#7a0a49]/60 p-3 text-sm text-gray-400">No worker responses have been logged yet.</div>}
               </div>
             </section>
           </div>
 
           {!hasResponseHistory ? (
-            <div className="mt-4 rounded-xl border border-gray-800 bg-gray-950/60 p-4 text-sm text-gray-400">
+            <div className="mt-4 rounded-xl border border-[#ff69b4]/40 bg-[#7a0a49]/60 p-4 text-sm text-gray-400">
               No worker responses have been logged yet.
             </div>
           ) : null}
@@ -4420,8 +4420,8 @@ export function App() {
 
   const renderWorkersSurface = (): JSX.Element => (
     <div className="flex-1 flex overflow-hidden">
-      <div data-testid="workers-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-gray-800 bg-gray-950/45">
-        <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-4 py-4">
+      <div data-testid="workers-rail" className="flex h-full w-80 shrink-0 flex-col border-r border-[#ff69b4]/40 bg-[#7a0a49]/45">
+        <div className="flex items-start justify-between gap-3 border-b border-[#ff69b4]/40 px-4 py-4">
           <div>
             <h2 className="text-sm font-semibold text-gray-100">Workers</h2>
             <p className="mt-1 text-xs text-gray-500">{workersSubtitle}</p>
@@ -4431,7 +4431,7 @@ export function App() {
             aria-label="Close workers panel"
             data-testid="workers-rail-dismiss"
             onClick={handleDismissBrowserSurface}
-            className="rounded-lg border border-gray-700 px-2 py-1.5 text-xs text-gray-300 hover:bg-gray-800"
+            className="rounded-lg border border-gray-700 px-2 py-1.5 text-xs text-gray-300 hover:bg-[#9c0f5c]"
           >
             Close
           </button>
@@ -5146,7 +5146,7 @@ export function App() {
           aria-modal="true"
           aria-label="Search workflows and tasks"
           data-testid="keyboard-search-overlay"
-          className="fixed inset-0 z-40 flex items-start justify-center bg-black/45 px-4 pt-[12vh]"
+          className="fixed inset-0 z-40 flex items-start justify-center bg-[#e0218a]/45 px-4 pt-[12vh]"
           onClick={() => setSearchOpen(false)}
         >
           <div
@@ -5198,7 +5198,7 @@ export function App() {
           aria-modal="true"
           aria-labelledby="start-ready-preview-title"
           data-testid="start-ready-preview-dialog"
-          className="fixed inset-0 z-40 flex items-start justify-center bg-black/45 px-4 pt-[16vh]"
+          className="fixed inset-0 z-40 flex items-start justify-center bg-[#e0218a]/45 px-4 pt-[16vh]"
           onClick={() => setStartReadyPreview(null)}
         >
           <div
