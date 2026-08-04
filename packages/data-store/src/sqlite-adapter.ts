@@ -504,6 +504,10 @@ export interface TaskLaunchDispatch {
   attemptsCount: number;
   lastError?: string;
   generation: number;
+  /** Set once the executor is confirmed live (markLaunchDispatchAccepted). */
+  acknowledgedAt?: string;
+  /** Category label for why an 'abandoned' row was abandoned. */
+  abandonReason?: string;
 }
 
 type TerminalSessionRow = {
@@ -3586,17 +3590,27 @@ export class SQLiteAdapter implements PersistenceAdapter {
   }
 
   /**
-   * Durable, generation-independent count of how many times a task's launch
-   * dispatch has been abandoned (any reason). Each `prepareTaskForNewAttempt`
-   * call creates a new row, so this is the only place the total survives
-   * across attempts -- used to cap `abandonStuckLeases` retries per task.
+   * Durable count of stuck-lease abandons for a task, used to cap
+   * `abandonStuckLeases` retries. Scoped to `abandon_reason = 'stuck-lease'`
+   * so cancel/retry/recreate abandons don't erode this budget.
    */
   countAbandonedLaunchDispatchesForTask(taskId: string): number {
     const row = this.queryOne(
-      `SELECT COUNT(*) as count FROM task_launch_dispatch WHERE task_id = ? AND state = 'abandoned'`,
+      `SELECT COUNT(*) as count FROM task_launch_dispatch WHERE task_id = ? AND state = 'abandoned' AND abandon_reason = 'stuck-lease'`,
       [taskId],
     );
     return row ? Number(row.count) : 0;
+  }
+
+  /** Relabels a task's stuck-lease abandons. Prep for a later slice that scopes the retry count to `abandon_reason`; has no effect on the current unscoped count. */
+  resetStuckLeaseAbandonCount(taskId: string): number {
+    this.execRun(
+      `UPDATE task_launch_dispatch
+         SET abandon_reason = 'stuck-lease-reset'
+       WHERE task_id = ? AND state = 'abandoned' AND abandon_reason = 'stuck-lease'`,
+      [taskId],
+    );
+    return this.db.getRowsModified?.() ?? 0;
   }
 
   loadLaunchDispatchByAttempt(attemptId: string): TaskLaunchDispatch | undefined {
@@ -3691,7 +3705,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
                    completed_at = ?,
                    last_error = ?,
                    dispatch_owner = NULL,
-                   fenced_until = NULL
+                   fenced_until = NULL,
+                   abandon_reason = 'stale-claim'
              WHERE id = ?
                AND state = 'enqueued'`,
             [now, staleReason, candidateId],
@@ -3768,6 +3783,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
 
+  /** Guarded by `acknowledged_at IS NULL`: an accepted row must not be silently re-enqueued after a failure. */
   markLaunchDispatchFailed(
     id: number,
     errorMessage: string,
@@ -3780,7 +3796,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
              dispatch_owner = NULL,
              fenced_until = NULL
        WHERE id = ?
-         AND state NOT IN ('completed', 'abandoned')`,
+         AND state NOT IN ('completed', 'abandoned')
+         AND acknowledged_at IS NULL`,
       [errorMessage, id],
     );
     return (this.db.getRowsModified?.() ?? 0) > 0;
@@ -3801,9 +3818,10 @@ export class SQLiteAdapter implements PersistenceAdapter {
          WHERE state = 'leased'
            AND fenced_until IS NOT NULL
            AND fenced_until < ?
+           AND acknowledged_at IS NULL
            AND (
              attempts_count >= ?
-             OR (acknowledged_at IS NULL AND ? IS NOT NULL AND enqueued_at <= ?)
+             OR (? IS NOT NULL AND enqueued_at <= ?)
            )
          ORDER BY id ASC`,
       [now, options.maxAttempts, ageCutoff, ageCutoff],
@@ -3814,11 +3832,13 @@ export class SQLiteAdapter implements PersistenceAdapter {
   /**
    * Terminal abandon: row leaves the live set. Returns false when the row
    * is already terminal so callers can treat a race as a no-op.
+   * `abandonReason` is a stable category label, separate from `errorMessage`.
    */
   markLaunchDispatchAbandoned(
     id: number,
     errorMessage: string,
     nowIso?: string,
+    abandonReason?: string,
   ): boolean {
     const now = nowIso ?? new Date().toISOString();
     this.execRun(
@@ -3827,10 +3847,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
              completed_at = ?,
              last_error = ?,
              dispatch_owner = NULL,
-             fenced_until = NULL
+             fenced_until = NULL,
+             abandon_reason = COALESCE(?, abandon_reason)
        WHERE id = ?
          AND state NOT IN ('completed', 'abandoned')`,
-      [now, errorMessage, id],
+      [now, errorMessage, abandonReason ?? null, id],
     );
     return (this.db.getRowsModified?.() ?? 0) > 0;
   }
@@ -3864,7 +3885,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
                 completed_at = ?,
                 last_error = ?,
                 dispatch_owner = NULL,
-                fenced_until = NULL
+                fenced_until = NULL,
+                abandon_reason = 'lifecycle-reset'
           WHERE id IN (${idPlaceholders})
             AND state IN ('enqueued', 'leased')`,
         [now, reason, ...rowIds],
@@ -3881,6 +3903,11 @@ export class SQLiteAdapter implements PersistenceAdapter {
     });
   }
 
+  /**
+   * Crash-recovery: a claim whose fence expired before launching is reset to
+   * 'enqueued'. Guarded by `acknowledged_at IS NULL` so a healthy task that
+   * just runs longer than its fence is never mistaken for a crashed claim.
+   */
   reapExpiredLaunchDispatchLeases(options: {
     nowIso?: string;
     maxAttempts?: number;
@@ -3893,7 +3920,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
            WHERE state = 'leased'
              AND fenced_until IS NOT NULL
              AND fenced_until < ?
-             AND attempts_count < ?`,
+             AND attempts_count < ?
+             AND acknowledged_at IS NULL`,
         [now, maxAttempts],
       );
       if (expired.length === 0) return [];
@@ -3905,7 +3933,8 @@ export class SQLiteAdapter implements PersistenceAdapter {
          WHERE state = 'leased'
            AND fenced_until IS NOT NULL
            AND fenced_until < ?
-           AND attempts_count < ?`,
+           AND attempts_count < ?
+           AND acknowledged_at IS NULL`,
         [now, maxAttempts],
       );
       return expired.map((row) => {
