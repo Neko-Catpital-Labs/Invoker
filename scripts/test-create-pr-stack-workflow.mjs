@@ -938,6 +938,40 @@ function testNestedMergifyPublishedBranchRecognizedBySha() {
   }
 }
 
+function testDeletedNestedMergifyPublishedBranchIsPrunedBeforeMatching() {
+  const harness = createHarness();
+  try {
+    const { originBare, work } = createRepo(harness);
+    const branch = 'stack/EdbertChan/owner-shutdown-signals/prune-deleted-published-ref';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'prune deleted published ref\n\nChange-Id: Iprunestale0001');
+    setManagedBranchConfig(work, branch);
+
+    const nestedRemoteBranch =
+      'stack/EdbertChan/stack/EdbertChan/owner-shutdown-signals/prune-deleted-published-ref/prune-deleted-published-ref--b8adf00d';
+    gitQuiet(work, 'push', 'origin', `HEAD:refs/heads/${nestedRemoteBranch}`);
+    gitQuiet(work, 'fetch', 'origin', `+refs/heads/${nestedRemoteBranch}:refs/remotes/origin/${nestedRemoteBranch}`);
+    gitQuiet(work, 'rev-parse', '--verify', `origin/${nestedRemoteBranch}`);
+    gitQuiet(originBare, 'update-ref', '-d', `refs/heads/${nestedRemoteBranch}`);
+    gitQuiet(work, 'rev-parse', '--verify', `origin/${nestedRemoteBranch}`);
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing']);
+    assert(
+      result.status === 1,
+      `deleted nested mergify-published branch should be pruned before matching\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stderr.includes(`Current branch "${branch}" has unpublished local commits ahead of origin/master.`),
+      `deleted published ref should be rejected as unpublished after pruning\nstderr:\n${result.stderr}`,
+    );
+    assert(result.stderr.includes('Run `mergify stack push` first'), 'deleted published ref should require mergify stack push');
+    expectNoPush(harness, 'deleted nested mergify-published branch');
+    assert(readGhCalls(harness.ghLog).length === 0, 'deleted published ref rejection should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testCurrentBranchPrLookupFailure() {
   const harness = createHarness();
   try {
@@ -1367,6 +1401,7 @@ const tests = [
   testNonRefactorLanePlainTitleStillAccepted,
   testUnpublishedStackCommitsBlockUpdate,
   testNestedMergifyPublishedBranchRecognizedBySha,
+  testDeletedNestedMergifyPublishedBranchIsPrunedBeforeMatching,
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,

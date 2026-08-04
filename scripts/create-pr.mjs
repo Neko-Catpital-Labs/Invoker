@@ -760,7 +760,7 @@ function stackAuthorSegment(branch) {
 }
 
 function fetchStackHeadsPrefix(prefix) {
-  gitTextOrEmpty(['fetch', '--quiet', 'origin', `+refs/heads/${prefix}/*:refs/remotes/origin/${prefix}/*`]);
+  gitTextOrEmpty(['fetch', '--quiet', '--prune', 'origin', `+refs/heads/${prefix}/*:refs/remotes/origin/${prefix}/*`]);
 }
 
 function listRemoteTrackingRefTips(prefix) {
