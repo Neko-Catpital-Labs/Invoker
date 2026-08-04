@@ -1132,11 +1132,12 @@ export class SlackSurface implements Surface {
         }
       }
 
+      const explicitLocalAgent = localRequest?.kind === 'agent' || localRequest?.kind === 'change';
       const opts = {
         tool: contextPreset.tool,
         model: contextPreset.model,
         workingDir,
-        mode: 'agent' as ConversationMode,
+        mode: (explicitLocalAgent || !this.conversationalPlanning ? 'agent' : 'plan') as ConversationMode,
         repoUrl: context.repoUrl,
         ...this.harnessDriverSessionOpts(contextPreset, context),
       };
