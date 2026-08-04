@@ -196,6 +196,7 @@ import { resolveBundledCliPath } from './cli-helper.js';
 import { buildAppMenuTemplate } from './app-menu.js';
 import { acquireDbWriterLock, type DbWriterLockResult } from './db-writer-lock.js';
 import { isWriterLockHeldError, resolveOwnerServeLockFailure } from './owner-split-brain.js';
+import { createOwnerSocketSentinel, type OwnerSocketSentinel } from './owner-socket-sentinel.js';
 import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalidation.js';
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
@@ -497,7 +498,23 @@ const workflowMutationDispatcher = new Map<string, (...args: unknown[]) => Promi
 let activeMutationContext: WorkflowMutationContext | undefined;
 let hourlyBackupInterval: ReturnType<typeof setInterval> | null = null;
 let writerLock: DbWriterLockResult | null = null;
+let ownerSocketSentinel: OwnerSocketSentinel | null = null;
 const workflowMutationOwnerId = `owner-${process.pid}-${Date.now()}`;
+
+function startOwnerSocketSentinelForBus(bus: MessageBus | undefined): void {
+  ownerSocketSentinel?.stop();
+  ownerSocketSentinel = null;
+  if (!(bus instanceof IpcBus)) return;
+  ownerSocketSentinel = createOwnerSocketSentinel({
+    reserve: () => bus.serveAsOwner(),
+    expectedOwnerId: workflowMutationOwnerId,
+    log: (level, message) => {
+      if (level === 'warn') logger.warn(message, { module: 'owner-socket-sentinel' });
+      else logger.info(message, { module: 'owner-socket-sentinel' });
+    },
+  });
+  ownerSocketSentinel.start();
+}
 const appProcessStartedAt = Date.now();
 
 let logger: Logger = new FileAndDbLogger({ module: 'main' });
@@ -1007,6 +1024,7 @@ function startHeadlessMode(): void {
     let headlessWebBridge: WebBridge | null = null;
 
     const runHeadlessShutdownCleanup = async (forcedStopReason: string): Promise<void> => {
+      ownerSocketSentinel?.stop();
       await headlessWebBridge?.close();
       standaloneLaunchDispatcherController?.stop();
       lifecycleEventBridge?.stop();
@@ -1990,6 +2008,7 @@ function startHeadlessMode(): void {
             },
             apiServerDeps,
           );
+          startOwnerSocketSentinelForBus(messageBus);
         }
 
         void recoverWorkflowMutationsOnStartup({
@@ -3025,6 +3044,7 @@ startMainProcessBootstrap({
       });
       logger.info(`owner-ipc-ready ownerId=${workflowMutationOwnerId}`, { module: 'ipc-delegate' });
       recordStartupMark('owner-ipc-ready');
+      startOwnerSocketSentinelForBus(messageBus);
     }
 
     if (ownerMode) {
@@ -3402,6 +3422,7 @@ startMainProcessBootstrap({
         }
         guiInstanceLock?.release();
         guiInstanceLock = null;
+        ownerSocketSentinel?.stop();
         if (writerLock) writerLock.release();
         if (messageBus) messageBus.disconnect();
       } finally {
