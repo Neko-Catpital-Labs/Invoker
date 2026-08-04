@@ -12,6 +12,11 @@
 // were listed in a second shard while already owned by 6-of-9 and 3-of-9.
 // Duplicate assignment makes a shard run the same spec twice and fail.
 //
+// The playwright / 3-of-9 shard first went red at
+// a4a77700abe7fdd4f5743b92b3e2795de7d4277c because two launch-dispatch
+// stuck-lease specs existed but were not assigned to any Playwright shard.
+// Missing assignment makes every shard fail the inventory guard before tests run.
+//
 // The manual real-Claude repro intentionally stays out of CI because it
 // requires a real local `claude` binary and auth state. Keep it explicit here
 // so future unassigned deterministic specs still fail the guard.
