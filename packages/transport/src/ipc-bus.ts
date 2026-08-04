@@ -331,33 +331,35 @@ export class IpcBus implements MessageBus {
     });
 
     sock.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'ECONNREFUSED' || err.code === 'ENOENT') {
-        if (!this.allowServe) {
-          this.resolveReady();
-          return;
-        }
-        // No server yet — try to become the server.
-        this.tryServe();
+      if (!this.allowServe) {
+        this.resolveReady();
+        return;
+      }
+      if (err.code === 'ECONNREFUSED') {
+        // Safety invariant: only a refused connect proves the socket file is
+        // dead, so this is the sole path allowed to reclaim (unlink) it.
+        this.tryServe(true);
+      } else if (err.code === 'ENOENT') {
+        this.tryServe(false);
       } else {
-        if (!this.allowServe) {
-          this.resolveReady();
-          return;
-        }
-        // Unexpected error — still try to serve.
-        this.tryServe();
+        // Safety invariant: on any other error the server may be alive —
+        // never unlink its socket; retry connecting instead.
+        this.resolveReady();
+        this.scheduleRecovery();
       }
     });
   }
 
-  private tryServe(): void {
+  private tryServe(reclaimStale: boolean): void {
     // Ensure directory exists.
     mkdirSync(dirname(this.socketPath), { recursive: true });
 
-    // Clean stale socket file before binding.
-    try {
-      unlinkSync(this.socketPath);
-    } catch {
-      // File may not exist — fine.
+    if (reclaimStale) {
+      try {
+        unlinkSync(this.socketPath);
+      } catch {
+        // File may not exist — fine.
+      }
     }
 
     const srv = createServer((client) => {
@@ -387,14 +389,14 @@ export class IpcBus implements MessageBus {
 
     sock.on('error', () => {
       if (this.allowServe) {
-        this.scheduleServeRecovery();
+        this.scheduleRecovery();
       }
       // Nothing else we can do synchronously — resolve ready so callers don't hang forever.
       this.resolveReady();
     });
   }
 
-  private scheduleServeRecovery(): void {
+  private scheduleRecovery(): void {
     if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0 || this.serveRetryScheduled) {
       return;
     }
@@ -404,7 +406,7 @@ export class IpcBus implements MessageBus {
       if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0) {
         return;
       }
-      this.tryServe();
+      this.tryConnect();
     }, 25).unref?.();
   }
 
@@ -425,12 +427,12 @@ export class IpcBus implements MessageBus {
     sock.on('data', (chunk: Buffer) => decoder.push(chunk));
     sock.on('close', () => {
       this.peers.delete(sock);
-      this.scheduleServeRecovery();
+      this.scheduleRecovery();
     });
     sock.on('error', () => {
       sock.destroy();
       this.peers.delete(sock);
-      this.scheduleServeRecovery();
+      this.scheduleRecovery();
     });
   }
 
@@ -718,7 +720,7 @@ export class IpcBus implements MessageBus {
       this.server.close();
       this.server = null;
     }
-    this.tryServe();
+    this.tryServe(true);
   }
 
   disconnect(): void {

@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { join, dirname } from 'node:path';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -522,6 +522,60 @@ describe('IpcBus', () => {
     busA.subscribe('ch', (msg: string) => received.push(msg));
     busA.publish('ch', 'ok');
     expect(received).toEqual(['ok']);
+  });
+
+  it('never unlinks a live server socket when connect fails with an unexpected error', async () => {
+    const sock = tempSocketPath();
+
+    const server = createBus(sock);
+    await server.ready();
+    server.onRequest<string, string>('echo', (value) => `owner:${value}`);
+
+    chmodSync(sock, 0o000);
+    const blocked = createBus(sock);
+    await blocked.ready();
+    await sleep(100);
+
+    expect(existsSync(sock)).toBe(true);
+    expect(server.isServing()).toBe(true);
+
+    chmodSync(sock, 0o777);
+    await waitFor(() => !blocked.isServing(), 2000);
+    await sleep(200);
+
+    expect(server.isServing()).toBe(true);
+    expect(blocked.isServing()).toBe(false);
+    const result = await blocked.request<string, string>('echo', 'ok');
+    expect(result).toBe('owner:ok');
+  });
+
+  it('still reclaims a stale socket file left behind by a crashed server', async () => {
+    const sock = tempSocketPath();
+
+    const crashed = spawn(process.execPath, [
+      '-e',
+      "const s = require('node:net').createServer(() => {}); s.listen(process.argv[1], () => process.stdout.write('ready'));",
+      sock,
+    ]);
+    await new Promise<void>((resolve) => {
+      crashed.stdout.on('data', (chunk: Buffer) => {
+        if (chunk.toString().includes('ready')) resolve();
+      });
+    });
+    crashed.kill('SIGKILL');
+    await new Promise<void>((resolve) => crashed.on('exit', () => resolve()));
+    expect(existsSync(sock)).toBe(true);
+
+    const owner = createBus(sock);
+    await owner.ready();
+    await waitFor(() => owner.isServing(), 2000);
+    owner.onRequest<string, string>('echo', (value) => `owner:${value}`);
+
+    const client = new IpcBus(sock, { allowServe: false });
+    buses.push(client);
+    await client.ready();
+    const result = await client.request<string, string>('echo', 'ok');
+    expect(result).toBe('owner:ok');
   });
 
   it('surviving client reclaims the socket after the original server disappears', async () => {
