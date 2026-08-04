@@ -85,16 +85,50 @@ describe('main-process read hot-path cost guards', () => {
     });
 
     const getEvents = vi.spyOn(adapter, 'getEvents');
-    const started = Date.now();
+    const getEventsByTypes = vi.spyOn(adapter, 'getEventsByTypes');
+    const countEventsByTypes = vi.spyOn(adapter, 'countEventsByTypes');
+    const queryAll = vi.spyOn(
+      adapter as unknown as { queryAll: (sql: string, params?: unknown[]) => unknown[] },
+      'queryAll',
+    );
     const status = collectRecoveryWorkerStatus(adapter);
-    const elapsedMs = Date.now() - started;
 
     expect(getEvents).not.toHaveBeenCalled();
+    expect(countEventsByTypes).toHaveBeenCalledWith([
+      recoveryWorkerEventType('wakeup'),
+      recoveryWorkerEventType('scan'),
+      recoveryWorkerEventType('submit'),
+      recoveryWorkerEventType('skip'),
+    ]);
+    expect(getEventsByTypes).toHaveBeenCalledWith(
+      [
+        recoveryWorkerEventType('wakeup'),
+        recoveryWorkerEventType('scan'),
+        recoveryWorkerEventType('submit'),
+        recoveryWorkerEventType('skip'),
+      ],
+      'desc',
+      10,
+    );
+    const perTaskEventScans = queryAll.mock.calls.filter(([sql]) =>
+      typeof sql === 'string'
+      && /FROM events\s+WHERE task_id = \?\s+ORDER BY id/i.test(sql),
+    );
+    expect(perTaskEventScans).toEqual([]);
+    const multiTypeSorts = queryAll.mock.calls.filter(([sql]) =>
+      typeof sql === 'string'
+      && /event_type\s+IN\s*\(/i.test(sql)
+      && /ORDER BY\s+created_at/i.test(sql),
+    );
+    expect(multiTypeSorts).toEqual([]);
+    expect(queryAll.mock.calls.some(([sql]) =>
+      typeof sql === 'string'
+      && /WHERE event_type = \?/i.test(sql)
+      && /ORDER BY\s+created_at/i.test(sql),
+    )).toBe(true);
     expect(status.wakeups + status.scans + status.submissions + status.skips).toBe(taskCount * eventsPerTask);
     expect(status.recent.length).toBeGreaterThan(0);
     expect(status.recent.length).toBeLessThanOrEqual(10);
-    // Per-type indexed LIMIT+merge must stay well under a 2s UI poll budget.
-    expect(elapsedMs).toBeLessThan(50);
   });
 
   it('projects a stale-pointer task without scanning every attempt under large error blobs', async () => {

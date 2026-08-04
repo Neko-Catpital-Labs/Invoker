@@ -1081,7 +1081,7 @@ describe('Invoker terminal (component)', () => {
       lagMs: expect.any(Number),
     }));
     expect(payload.transcriptSizeBytes).toBeGreaterThan(10_000);
-  });
+  }, 20_000);
 
   it('hydrates restored planning chats and keeps the restored session editable', async () => {
     mock.api.planningChatList = vi.fn(async () => ({

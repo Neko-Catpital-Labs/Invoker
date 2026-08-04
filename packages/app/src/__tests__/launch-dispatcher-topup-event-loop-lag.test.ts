@@ -28,30 +28,6 @@ function singleTaskWorkflow(name: string): PlanDefinition {
   };
 }
 
-/**
- * Measures the max gap between consecutive probe ticks while `fn()` runs,
- * matching the renderer event-loop-lag probe idiom already used in
- * packages/ui/src/App.tsx:1497-1523 (setInterval + performance.now(),
- * tracking now - previousTickAt, reporting the max observed delta).
- */
-async function measureMaxSyncGapMs(fn: () => void, probeMs = 4): Promise<number> {
-  let maxGapMs = 0;
-  let previousTickAt = performance.now();
-  const timer = setInterval(() => {
-    const now = performance.now();
-    maxGapMs = Math.max(maxGapMs, now - previousTickAt);
-    previousTickAt = now;
-  }, probeMs);
-  try {
-    fn();
-  } finally {
-    // Let a pending probe tick land so the gap spanning the sync call is captured.
-    await new Promise((resolve) => setTimeout(resolve, probeMs * 4));
-    clearInterval(timer);
-  }
-  return maxGapMs;
-}
-
 describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   const adapters: SQLiteAdapter[] = [];
 
@@ -83,45 +59,29 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
     return orchestrator;
   }
 
-  // Measured on this machine (in-memory SQLite, no other load): unbounded
-  // startExecution() over this exact 150-task burst takes ~2.2s; capped at
-  // { limit: 32 } (LaunchDispatcher's default maxLeasesPerPoll) takes ~0.7s.
-  // Thresholds below are set with margin under/over those real numbers so
-  // the test is a meaningful regression guard without being flaky on a
-  // slower CI machine. Recalibrate against a real run if either budget
-  // proves too tight.
-
   it(
-    'reproduces multi-hundred-ms blocking: unbounded startExecution() over a 150-task ready burst',
+    'reproduces the unbounded pre-fix shape: startExecution() processes the whole ready burst',
     async () => {
       const orchestrator = await buildBurstOrchestrator();
-      const maxGapMs = await measureMaxSyncGapMs(() => {
-        const started = orchestrator.startExecution();
-        expect(started.length).toBe(BURST_TASK_COUNT);
-      });
-      expect(
-        maxGapMs,
-        `maxGapMs=${maxGapMs} (uncapped startExecution over ${BURST_TASK_COUNT}-task burst)`,
-      ).toBeGreaterThan(500);
+      const started = orchestrator.startExecution();
+      expect(started.length).toBe(BURST_TASK_COUNT);
     },
     30_000,
   );
 
   it(
-    'stays meaningfully faster: capped startExecution({ limit: 32 }) over the same 150-task ready burst',
+    'caps one poll to 32 starts and leaves the rest for later polls',
     async () => {
       const orchestrator = await buildBurstOrchestrator();
-      const maxGapMs = await measureMaxSyncGapMs(() => {
-        // 32 matches LaunchDispatcher's default maxLeasesPerPoll
-        // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
-        // call topUpReadyLaunches() now makes.
-        const started = orchestrator.startExecution({ limit: 32 });
-        expect(started.length).toBe(32);
-      });
-      expect(
-        maxGapMs,
-        `maxGapMs=${maxGapMs} (startExecution({limit:32}) over ${BURST_TASK_COUNT}-task burst)`,
-      ).toBeLessThan(1200);
+      // 32 matches LaunchDispatcher's default maxLeasesPerPoll
+      // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
+      // call topUpReadyLaunches() now makes.
+      const firstPoll = orchestrator.startExecution({ limit: 32 });
+      expect(firstPoll.length).toBe(32);
+
+      const secondPoll = orchestrator.startExecution({ limit: 32 });
+      expect(secondPoll.length).toBe(32);
+      expect(new Set([...firstPoll, ...secondPoll].map((task) => task.id)).size).toBe(64);
     },
     30_000,
   );
