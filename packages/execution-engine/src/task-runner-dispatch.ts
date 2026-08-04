@@ -283,6 +283,9 @@ export async function dispatchExecutor(
     return undefined;
   }
   bench('markTaskRunningAfterLaunch.accepted');
+  if (dispatchOpts) {
+    dispatchOpts.launchOutbox.acceptDispatch(dispatchOpts.dispatchId);
+  }
 
   // Persist execution metadata immediately at task start — all fields explicit
   {
