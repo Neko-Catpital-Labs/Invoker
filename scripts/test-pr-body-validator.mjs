@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
-import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validatePrBody, validatePrScope } from './validate-pr-body.mjs';
+import { getPrAtomicityBlockers, getPrBodyWarnings, getReviewMetadata, scopeKindsForChangedFiles, validatePrBody, validatePrScope, visualProofNeedsAnimation } from './validate-pr-body.mjs';
 
 function assert(condition, message) {
   if (!condition) {
@@ -1267,5 +1267,48 @@ try {
 } finally {
   rmSync(localWrapperTmp, { recursive: true, force: true });
 }
+
+assert(
+  !visualProofNeedsAnimation('## Visual Proof\n\nThe preload script is unaffected.\n'),
+  'the word "preload" alone should not trigger the animation requirement (word-boundary regression)',
+);
+assert(
+  visualProofNeedsAnimation('## Visual Proof\n\nThe app will restart after this change.\n'),
+  'a standalone "restart" should still trigger the animation requirement',
+);
+assert(
+  visualProofNeedsAnimation('## Visual Proof\n\nSaved state survives after a reload.\n'),
+  'a standalone "reload" should still trigger the animation requirement',
+);
+assert(
+  visualProofNeedsAnimation('## Visual Proof\n\nUsers relaunch the app to see the fix.\n'),
+  'a standalone "relaunch" should still trigger the animation requirement',
+);
+assert(
+  visualProofNeedsAnimation('## Visual Proof\n\nThis view has a smooth transition between panels.\n'),
+  'a standalone "transition" should still trigger the animation requirement',
+);
+assert(
+  visualProofNeedsAnimation('## Visual Proof\n\nThere is a visible state change after saving.\n'),
+  'the phrase "state change" should still trigger the animation requirement',
+);
+assert(
+  !visualProofNeedsAnimation('## Visual Proof\n\nWe describe an understate change in copy only.\n'),
+  '"understate change" should not trigger the animation requirement (word-boundary regression)',
+);
+
+const preloadRegressionBody = `${validMinimal}
+
+## Visual Proof
+
+The preload script is unaffected.
+
+![screenshot](proof.png)
+`;
+const preloadRegressionErrors = await validatePrBody(preloadRegressionBody, { requiresVisualProof: true });
+assert(
+  preloadRegressionErrors.length === 0,
+  `a PR body whose Visual Proof section merely mentions "preload" should pass with a static screenshot: ${preloadRegressionErrors.join('; ')}`,
+);
 
 console.log('OK: PR body validator checks passed');
