@@ -32,6 +32,9 @@ describe('complaint scout bridge', () => {
     vi.clearAllMocks();
     process.env = { ...savedEnv };
     managerDir = mkdtempSync(path.join(tmpdir(), 'invoker-slack-scout-'));
+    process.env.HOME = managerDir;
+    delete process.env.INVOKER_SLACK_DEFAULT_PRESET;
+    process.env.INVOKER_REPO_CONFIG_PATH = path.join(managerDir, '.invoker', 'config.json');
     process.env.INVOKER_SLACK_MANAGER_DIR = managerDir;
     process.env.INVOKER_REPO_ROOT = managerDir;
     process.env.INVOKER_REPO_URL = 'https://github.com/acme/repo.git';

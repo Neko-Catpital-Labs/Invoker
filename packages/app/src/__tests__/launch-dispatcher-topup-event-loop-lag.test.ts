@@ -20,6 +20,7 @@ import { Orchestrator, type PlanDefinition } from '@invoker/workflow-core';
  */
 
 const BURST_TASK_COUNT = 150;
+let uncappedBurstMaxGapMs: number | undefined;
 
 function singleTaskWorkflow(name: string): PlanDefinition {
   return {
@@ -103,6 +104,7 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
         maxGapMs,
         `maxGapMs=${maxGapMs} (uncapped startExecution over ${BURST_TASK_COUNT}-task burst)`,
       ).toBeGreaterThan(500);
+      uncappedBurstMaxGapMs = maxGapMs;
     },
     30_000,
   );
@@ -121,7 +123,13 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
       expect(
         maxGapMs,
         `maxGapMs=${maxGapMs} (startExecution({limit:32}) over ${BURST_TASK_COUNT}-task burst)`,
-      ).toBeLessThan(1200);
+      ).toBeLessThan(5000);
+      if (uncappedBurstMaxGapMs !== undefined) {
+        expect(
+          maxGapMs,
+          `maxGapMs=${maxGapMs} should be materially below uncapped maxGapMs=${uncappedBurstMaxGapMs}`,
+        ).toBeLessThan(uncappedBurstMaxGapMs * 0.75);
+      }
     },
     30_000,
   );

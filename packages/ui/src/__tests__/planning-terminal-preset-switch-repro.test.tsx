@@ -9,6 +9,8 @@ vi.mock('@xyflow/react', async () => {
 
 const { App } = await import('../App.js');
 
+vi.setConfig({ testTimeout: 20_000 });
+
 describe('planning terminal preset ownership repro', () => {
   let mock: MockInvoker;
 

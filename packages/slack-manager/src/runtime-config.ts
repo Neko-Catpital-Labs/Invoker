@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import path from 'node:path';
+import { resolveInvokerConfigPath as resolveSharedInvokerConfigPath } from '@invoker/contracts';
 
 export function resolveInvokerConfigPath(): string {
-  return path.join(homedir(), '.invoker', 'config.json');
+  return resolveSharedInvokerConfigPath(process.env, homedir());
 }
 
 export function readDefaultSlackHarnessPreset(configPath = resolveInvokerConfigPath()): string | undefined {
