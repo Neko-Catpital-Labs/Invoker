@@ -33,7 +33,7 @@ const HEADLESS_CLIENT = path.resolve(__dirname, '..', 'headless-client.ts');
  * 1500ms and flips these to plain `it`.
  */
 describe('owner-ping timeout race', () => {
-  it.fails('discoverStandaloneOwnerForGui in main.ts does not use the 500ms outlier budget', () => {
+  it('discoverStandaloneOwnerForGui in main.ts does not use the 500ms outlier budget', () => {
     const source = readFileSync(MAIN, 'utf8');
     const match = source.match(/discoverOwner\(ownerBus,\s*(\d+)\)/);
     expect(match, 'discoverOwner(ownerBus, ...) call site not found in main.ts').not.toBeNull();
