@@ -1002,6 +1002,68 @@ function startHeadlessMode(): void {
     let lifecycleEventBridge: LifecycleEventBridge | null = null;
     let standaloneLaunchDispatcherController: StandaloneLaunchDispatcherController | null = null;
     let headlessWebBridge: WebBridge | null = null;
+
+    const runHeadlessShutdownCleanup = async (forcedStopReason: string): Promise<void> => {
+      await headlessWebBridge?.close();
+      standaloneLaunchDispatcherController?.stop();
+      lifecycleEventBridge?.stop();
+      await workerRuntimeController?.stopAll();
+      if (ownsHeadlessShutdown && executorRegistry) {
+        await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
+      }
+      if (ownsHeadlessShutdown && orchestrator) {
+        for (const task of orchestrator.getAllTasks()) {
+          if (isTaskInFlightForForcedStop(task)) {
+            if (persistence) {
+              persistShutdownDiagnostic(task, persistence, { forcedStopReason });
+            }
+            orchestrator.handleWorkerResponse({
+              requestId: `quit-${task.id}`,
+              actionId: task.id,
+              attemptId: task.execution.selectedAttemptId,
+              executionGeneration: task.execution.generation ?? 0,
+              status: 'failed',
+              outputs: { exitCode: 1, error: forcedStopReason },
+            });
+          }
+        }
+      }
+      if (ownsHeadlessShutdown && persistence) {
+        persistence.requeueRunningWorkflowMutationIntents();
+      }
+      if (persistence) persistence.close();
+      if (writerLock) writerLock.release();
+      if (messageBus) messageBus.disconnect();
+    };
+
+    // Unhandled SIGTERM/SIGINT terminate the process immediately with no
+    // cleanup and no log line -- registering a handler is what lets us run
+    // the same in-flight task diagnostics as a normal quit instead of
+    // leaving tasks to be silently discovered as orphaned on the next boot.
+    // Only registered for the long-lived owner-serve process: one-shot
+    // delegate CLI invocations keep their existing default signal behavior.
+    let headlessSignalShutdownInProgress = false;
+    if (ownsHeadlessShutdown) {
+      const handleHeadlessTerminationSignal = (signal: NodeJS.Signals): void => {
+        if (headlessSignalShutdownInProgress) return;
+        headlessSignalShutdownInProgress = true;
+        logger.info(`received ${signal}, shutting down gracefully`, { module: 'process', signal });
+        void runHeadlessShutdownCleanup(`Received ${signal}`)
+          .catch((err) => {
+            logger.error(`shutdown cleanup after ${signal} failed`, {
+              module: 'process',
+              signal,
+              err: err instanceof Error ? err.stack ?? err.message : String(err),
+            });
+          })
+          .finally(() => {
+            process.exit(signal === 'SIGINT' ? 130 : 143);
+          });
+      };
+      process.on('SIGTERM', handleHeadlessTerminationSignal);
+      process.on('SIGINT', handleHeadlessTerminationSignal);
+    }
+
     try {
       // Standalone mode: initialize services and run headless
       await initServices({
@@ -1941,38 +2003,12 @@ function startHeadlessMode(): void {
       process.stderr.write(`${RED}Error:${RESET} ${err instanceof Error ? err.message : String(err)}\n`);
       exitCode = 1;
     } finally {
-      await headlessWebBridge?.close();
-      standaloneLaunchDispatcherController?.stop();
-      lifecycleEventBridge?.stop();
-      await workerRuntimeController?.stopAll();
-      if (ownsHeadlessShutdown && executorRegistry) {
-        await Promise.all(executorRegistry.getAll().map(f => f.destroyAll().catch(() => undefined)));
+      if (!headlessSignalShutdownInProgress) {
+        headlessSignalShutdownInProgress = true;
+        await runHeadlessShutdownCleanup('Application quit');
+        process.exit(exitCode);
       }
-      if (ownsHeadlessShutdown && orchestrator) {
-        for (const task of orchestrator.getAllTasks()) {
-          if (isTaskInFlightForForcedStop(task)) {
-            if (persistence) {
-              persistShutdownDiagnostic(task, persistence, { forcedStopReason: 'Application quit' });
-            }
-            orchestrator.handleWorkerResponse({
-              requestId: `quit-${task.id}`,
-              actionId: task.id,
-              attemptId: task.execution.selectedAttemptId,
-              executionGeneration: task.execution.generation ?? 0,
-              status: 'failed',
-              outputs: { exitCode: 1, error: 'Application quit' },
-            });
-          }
-        }
-      }
-      if (ownsHeadlessShutdown && persistence) {
-        persistence.requeueRunningWorkflowMutationIntents();
-      }
-      if (persistence) persistence.close();
-      if (writerLock) writerLock.release();
-      if (messageBus) messageBus.disconnect();
     }
-    process.exit(exitCode);
   };
 
   runElectronReadyBootstrap({
