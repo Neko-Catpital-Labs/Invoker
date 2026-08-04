@@ -548,7 +548,7 @@ async function ensureStandaloneOwnerViaBootstrap(bus: MessageBus): Promise<void>
     let attempts = 0;
     while (Date.now() < deadline) {
       attempts += 1;
-      const owner = await discoverOwner(bus, 500);
+      const owner = await discoverOwner(bus, 1500);
       if (isStandaloneCapable(owner)) {
         delegationClientLog(
           `bootstrap owner ready attempts=${attempts} elapsedMs=${Date.now() - startedAt} ownerId=${owner.ownerId}`,
@@ -749,7 +749,7 @@ export async function runHeadlessClientCommand(
   }
 
   if (canAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
-    const owner = await discoverOwner(deps.messageBus, 500);
+    const owner = await discoverOwner(deps.messageBus, 1500);
     if (owner === null && tryAcknowledgeNoTrackTaskMutationWithoutDb(args, noTrack)) {
       return 0;
     }
