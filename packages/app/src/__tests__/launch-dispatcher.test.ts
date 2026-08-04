@@ -1239,7 +1239,7 @@ describe('LaunchDispatcher', () => {
       expect(leases[0]?.resourceKey).toBe('ssh:live');
     });
 
-    it.fails('poll heals a stalled-heartbeat lease on a genuinely live process instead of releasing it', () => {
+    it('poll heals a stalled-heartbeat lease on a genuinely live process instead of releasing it', () => {
       // Same runner instance, task still actively executing -- a stalled
       // heartbeat here is not the same as an orphaned lease. Releasing it
       // would let a different task claim the same SSH slot while this one
