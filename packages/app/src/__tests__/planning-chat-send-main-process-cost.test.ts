@@ -152,4 +152,45 @@ describe('planning chat send main-process cost', () => {
       countQueries: 1,
     });
   });
+
+  it('yields after marking the send pending so queued reads are not trapped behind the whole turn', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    sessions.set(SESSION_ID, planningSession({
+      id: SESSION_ID,
+      title: 'Planning send responsiveness',
+      messages: buildTranscript(TRANSCRIPT_SIZE),
+      nextMessageId: TRANSCRIPT_SIZE + 1,
+    }));
+
+    const planningSessionStore: InAppPlanningSessionStore = {
+      upsertInAppPlanningSession: vi.fn(),
+      updateInAppPlanningSession: vi.fn(),
+      deleteInAppPlanningSession: vi.fn(),
+    };
+    let queuedReadTurnRan = false;
+    const sendPromise = sendPlanningChatMessage({
+      sessionId: SESSION_ID,
+      message: 'capture the planning-send benchmark baseline',
+      presetKey: 'codex',
+    }, {
+      config: {},
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder: vi.fn(() => ({ command: 'planner', args: ['prompt'] })),
+      planningSessionStore,
+      plannerReplyOverride: async () => {
+        expect(queuedReadTurnRan).toBe(true);
+        return 'Captured the planning-send baseline without drafting a plan.';
+      },
+    });
+
+    setImmediate(() => {
+      queuedReadTurnRan = true;
+    });
+
+    const result = await sendPromise;
+
+    expect(result.ok).toBe(true);
+    expect(planningSessionStore.upsertInAppPlanningSession).toHaveBeenCalledTimes(2);
+  });
 });

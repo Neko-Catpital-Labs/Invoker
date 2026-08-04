@@ -560,6 +560,10 @@ function persistPlanningSession(
   syncPlanDraftSidecar(session);
 }
 
+function yieldToQueuedMainProcessWork(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 function saveOverrideConversation(
   repo: ConversationRepository | undefined,
   sessionId: string,
@@ -879,6 +883,7 @@ export async function sendPlanningChatMessage(
         activeSession.title = titleFromMessage(message);
       }
       persistPlanningSession(activeSession, deps.planningSessionStore, true);
+      await yieldToQueuedMainProcessWork();
 
       try {
         const { extractYamlPlan } = await loadPlannerSurfaces();
