@@ -697,6 +697,30 @@ export class IpcBus implements MessageBus {
     return this.readyPromise;
   }
 
+  /** True when this bus currently owns the listening socket. */
+  isServing(): boolean {
+    return this.server !== null;
+  }
+
+  /**
+   * Authoritatively (re)bind the socket. Only for a process that holds the DB
+   * writer lock: it drops any client peers, closes a stale server, and serves
+   * fresh — reclaiming a socket path that was deleted or taken while this
+   * process remained the rightful owner.
+   */
+  serveAsOwner(): void {
+    if (this.disconnected || !this.allowServe) return;
+    for (const peer of this.peers) {
+      peer.destroy();
+    }
+    this.peers.clear();
+    if (this.server) {
+      this.server.close();
+      this.server = null;
+    }
+    this.tryServe();
+  }
+
   disconnect(): void {
     this.disconnected = true;
     this.subscribers.clear();
