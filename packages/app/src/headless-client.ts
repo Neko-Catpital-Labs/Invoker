@@ -30,6 +30,7 @@ import {
 } from './headless-owner-bootstrap.js';
 import { loadConfig, type InvokerConfig } from './config.js';
 import { BOLD, RESET } from './headless-shared.js';
+import { flushOutputStream } from './headless-stdio.js';
 import { registerExternalWorkersFromConfig } from './external-worker-loader.js';
 import {
   discoverOwner,
@@ -78,12 +79,6 @@ async function runElectronHeadless(args: string[]): Promise<number> {
       }
       resolveExit(code ?? 0);
     });
-  });
-}
-
-async function flushOutputStream(stream: NodeJS.WriteStream): Promise<void> {
-  await new Promise<void>((resolve) => {
-    stream.write('', () => resolve());
   });
 }
 
