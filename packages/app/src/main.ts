@@ -2793,7 +2793,7 @@ startMainProcessBootstrap({
           getExecutableReadyTasks: () => orchestrator.getExecutableReadyTasks(),
           getQueueStatus: () => orchestrator.getQueueStatus({ refresh: false }),
           isLaunchParked: (taskId, now) => orchestrator.isLaunchParked(taskId, now),
-          startExecution: () => orchestrator.startExecution(),
+          startExecution: (opts) => orchestrator.startExecution(opts),
         },
         // taskExecutor is re-built by rebuildTaskRunner(); read via
         // a provider so the dispatcher always picks up the current
