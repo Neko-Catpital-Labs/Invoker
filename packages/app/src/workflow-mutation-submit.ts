@@ -51,6 +51,9 @@ function isMissingWorkflowIdempotentMutation(channel: string, workflowId: string
   ) {
     return args[0] === workflowId;
   }
+  if (channel === 'invoker:start-ready') {
+    return true;
+  }
   if (channel !== 'headless.exec') {
     return false;
   }
