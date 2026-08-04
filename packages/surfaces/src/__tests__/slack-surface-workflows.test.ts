@@ -1032,6 +1032,27 @@ describe('lobby verb routing', () => {
     expect(runWorkflowOp).not.toHaveBeenCalled();
   });
 
+  it('routes a build request into conversational planning when conversationalPlanning is enabled', async () => {
+    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git', conversationalPlanning: true });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> lets change the theme of the app from black to pink', ts: 't1', user: 'U1' }, say });
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('plan');
+    expect(planConversationConfigs[0].conversationalPlanning).toBe(true);
+    expect(runWorkflowOp).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit local: request in agent mode even when conversationalPlanning is enabled', async () => {
+    const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git', conversationalPlanning: true });
+    await surface.start(async () => {});
+    const say = vi.fn().mockResolvedValue({ ts: 'a' });
+    await mentionHandler(surface)({ event: { text: '<@BOT> local: reproduce the flaky test', ts: 't1', user: 'U1' }, say });
+    expect(planConversationConfigs).toHaveLength(1);
+    expect(planConversationConfigs[0].mode).toBe('agent');
+    expect(runWorkflowOp).not.toHaveBeenCalled();
+  });
+
   it('treats a `plan:`-prefixed message as literal agent text, not a mode switch', async () => {
     const surface = lobbySurface(true, { defaultRepoUrl: 'git@github.com:default/repo.git' });
     await surface.start(async () => {});

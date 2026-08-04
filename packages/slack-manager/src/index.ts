@@ -144,6 +144,7 @@ async function main(): Promise<void> {
     harnessSessionDriverFactory: createHarnessSessionDriverFactory(planningCommandBuilder),
     prepareRepoCheckout: createPrepareRepoCheckout(path.join(managerHome, 'planning-clones')),
     defaultBranch: process.env.INVOKER_DEFAULT_BRANCH ?? 'master',
+    conversationalPlanning: process.env.INVOKER_SLACK_CONVERSATIONAL_PLANNING !== '0',
     repoUrl,
     defaultRepoUrl: repoUrl,
     repoAliases: runtimeConfig.repoAliases,
