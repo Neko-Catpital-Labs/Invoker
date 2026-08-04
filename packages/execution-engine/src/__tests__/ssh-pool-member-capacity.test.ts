@@ -343,7 +343,7 @@ describe('SSH pool member capacity', () => {
     );
   });
 
-  it.fails('killActiveExecution releases the resource lease only after executor.kill resolves', async () => {
+  it('killActiveExecution releases the resource lease only after executor.kill resolves', async () => {
     const task = makeTask('wf-1/task-lease-order');
     const order: string[] = [];
     let resolveKill: (() => void) | undefined;
