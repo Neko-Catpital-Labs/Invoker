@@ -3346,7 +3346,9 @@ startMainProcessBootstrap({
           }
         }
         if (persistence) {
-          persistence.requeueRunningWorkflowMutationIntents();
+          if (ownerMode) {
+            persistence.requeueRunningWorkflowMutationIntents();
+          }
           persistence.close();
         }
         guiInstanceLock?.release();
