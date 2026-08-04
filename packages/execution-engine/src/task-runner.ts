@@ -387,14 +387,17 @@ export class TaskRunner {
   async killActiveExecution(taskId: string): Promise<boolean> {
     const resolved = this.resolveActiveExecution(taskId);
     if (!resolved) return false;
-    this.activeExecutions.delete(resolved.attemptId);
-    if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
-      this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
-    }
+    // Kill first, release the lease only after: executor.kill() can take
+    // up to SIGKILL_TIMEOUT_MS before the process exits.
     try {
       await resolved.entry.executor.kill(resolved.entry.handle);
     } catch (killErr) {
       this.logger.warn(`[TaskRunner] killActiveExecution failed for task=${taskId}`, { err: killErr });
+    } finally {
+      this.activeExecutions.delete(resolved.attemptId);
+      if (resolved.entry.leaseResourceKey && resolved.entry.leaseHolderId) {
+        this.persistence.releaseExecutionResourceLease?.(resolved.entry.leaseResourceKey, resolved.entry.leaseHolderId);
+      }
     }
     return true;
   }
