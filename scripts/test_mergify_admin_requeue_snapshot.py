@@ -55,6 +55,40 @@ on draft #4242
 }
 
 
+# A real Mergify "waiting" status comment, posted after an `@mergifyio queue`
+# command while its queue conditions are still being evaluated. Note the
+# payload carries `"state": "waiting"` with a null queue_rule_name.
+MERGIFY_WAITING_COMMENT = {
+    "user": {"login": "mergify[bot]"},
+    "id": "c-9002",
+    "created_at": "2026-07-07T05:10:00Z",
+    "updated_at": "2026-07-07T05:10:00Z",
+    "html_url": "https://github.com/o/r/pull/4242#issuecomment-9002",
+    "body": """\
+<!---
+DO NOT EDIT
+-*- Mergify Payload -*-
+{"version": 1, "state": "waiting", "queue_rule_name": null, "queued_at": null}
+-*- Mergify Payload End -*-
+-->
+
+# Merge Queue Status
+
+- \U0001f7e0 **Waiting for queue conditions**
+- ⏳ Enter queue
+- ⏳ Run checks
+- ⏳ Merge
+
+<details>
+<summary><strong>Waiting for</strong></summary>
+
+- [ ] `-conflict` [\U0001f4cc queue requirement]
+
+</details>
+""",
+}
+
+
 class ParseMergifyQueueEvent(unittest.TestCase):
     def test_ignores_comments_not_from_mergify(self):
         # Only Mergify's own comments describe the queue; a human/bot comment
@@ -80,6 +114,30 @@ class ParseMergifyQueueEvent(unittest.TestCase):
         self.assertEqual(event.failing_checks, ("build (ubuntu-latest)",))
         self.assertEqual(event.comment_id, "c-9001")
         self.assertEqual(event.queued_at, "2026-07-07T05:00:00Z")
+
+    def test_parses_waiting_command_comment_into_event(self):
+        # Incident 2026-08-04 (PR #7420): a pending `queue` command reports
+        # `state: "waiting"` with no queue rule; it must not parse as
+        # "unknown" or the planner cannot tell a command is in flight.
+        event = s.parse_mergify_queue_event(MERGIFY_WAITING_COMMENT)
+        assert event is not None
+        self.assertEqual(event.state, "waiting")
+        self.assertEqual(event.queue_rule_name, "")
+        self.assertEqual(event.head_sha, "")
+
+    def test_edited_stale_dequeue_comment_does_not_outrank_newer_waiting_comment(self):
+        # Incident 2026-08-04 (PR #7420): Mergify edited the old "dequeued"
+        # status comment one second after posting the new "waiting" comment,
+        # so ordering by updated_at resurfaced the stale dequeue event and the
+        # planner kept requeueing into the retry cap. Creation order is the
+        # command order; in-place edits must not promote an old event.
+        stale_dequeue = dict(MERGIFY_DEQUEUE_COMMENT)
+        stale_dequeue["created_at"] = "2026-07-07T05:00:00Z"
+        stale_dequeue["updated_at"] = "2026-07-07T05:10:01Z"
+        detail = {"number": 4242, "headRefOid": HEAD, "state": "OPEN"}
+        snap = s.snapshot_from_detail(detail, [stale_dequeue, MERGIFY_WAITING_COMMENT], required_checks=[])
+        assert snap.latest_mergify is not None
+        self.assertEqual(snap.latest_mergify.state, "waiting")
 
 
 class GhCommandFailures(unittest.TestCase):

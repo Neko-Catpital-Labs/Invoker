@@ -489,6 +489,17 @@ class PlanStackActions(PlannerTestCase):
         self.assertEqual(plan.actions, ())
         self.assertEqual(plan.wait_reason, "bottom-already-queued")
 
+    def test_pending_queue_command_suppresses_requeue(self):
+        # Incident 2026-08-04 (PR #7420): a `queue` command still evaluating
+        # its conditions reports state "waiting" with no queue rule. Firing
+        # another requeue is a duplicate Mergify ignores, but it still burns
+        # retry-cap budget, so the planner must wait instead.
+        snapshot = pr(
+            labels=frozenset({"admin-bypass"}),
+            latest_mergify=event(state="waiting", head="", queue_rule_name=""),
+        )
+        self.assertEqual(self._plan(snapshot), ())
+
     def test_stale_active_queue_event_without_queued_label_requeues_current_head(self):
         snapshot = pr(labels=frozenset({"admin-bypass"}), latest_mergify=event(state="queued", head="b" * 40))
         actions = self._plan(snapshot)
