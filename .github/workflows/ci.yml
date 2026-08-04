@@ -599,6 +599,10 @@ jobs:
               e2e/launching-stall-watchdog.spec.ts
               e2e/embedded-terminal-pty.spec.ts
               e2e/keyboard-navigation.spec.ts
+          - name: launch-dispatch-stuck-lease
+            files: >-
+              e2e/launch-dispatch-stuck-lease-storm.spec.ts
+              e2e/launch-dispatch-stuck-lease-cap.spec.ts
           - name: 2-of-9
             files: >-
               e2e/claude-planning-preset-visual-proof.spec.ts
