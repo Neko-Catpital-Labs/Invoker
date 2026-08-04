@@ -68,11 +68,15 @@ function isMissingWorkflowIdempotentMutation(channel: string, workflowId: string
   return false;
 }
 
+export function isForeignKeyConstraintMessage(message: string): boolean {
+  return message.includes('FOREIGN KEY constraint failed');
+}
+
 function isForeignKeyConstraintError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const sqliteError = error as Error & { code?: unknown; errcode?: unknown; errstr?: unknown };
   return sqliteError.errcode === 787
-    || sqliteError.message.includes('FOREIGN KEY constraint failed');
+    || isForeignKeyConstraintMessage(sqliteError.message);
 }
 
 function acceptedMissingWorkflow(

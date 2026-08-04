@@ -27,6 +27,7 @@ import {
 import { loadConfig, resolveAutoFixExecutionModel, resolveSecretsFilePath, type InvokerConfig } from './config.js';
 import { resolveAutoFixRetries } from './autofix-defaults.js';
 import { WorkflowMutationFacade } from './workflow-mutation-facade.js';
+import { isForeignKeyConstraintMessage } from './workflow-mutation-submit.js';
 import { trackWorkflow } from './headless-watch.js';
 import {
   publishReviewGateCiFailedLifecycleEvent,
@@ -451,6 +452,10 @@ export async function preemptWorkflowExecution(workflowId: string, deps: Headles
   const result = await deps.commandService.cancelWorkflow(envelope);
   if (!result.ok) {
     if (preemptSkipCodes.has(result.error.code)) return { cancelled: [], runningCancelled: [] };
+    // Stale cached tasks from a racing owner can trip an FK error on cancel; treat as WORKFLOW_NOT_FOUND.
+    if (isForeignKeyConstraintMessage(result.error.message) && !deps.persistence.loadWorkflow(workflowId)) {
+      return { cancelled: [], runningCancelled: [] };
+    }
     throw new Error(result.error.message);
   }
   return result.data;
