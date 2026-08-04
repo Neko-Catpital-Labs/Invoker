@@ -15,6 +15,25 @@ Capture before/after UI screenshots and video for Invoker plans that modify the 
 - User asks for visual proof, before/after screenshots, or UI regression screenshots
 - Reviewing a UI change and wanting to see what changed visually
 
+## Never reuse an unrelated or stale asset as proof
+
+Every image/video/gif in a `## Visual Proof` section must come from a capture run **against the
+change being proved**, in the same PR. Do not paste in a screenshot or gif from a different PR,
+a different bugfix, or an earlier state of the UI just because it happens to show the same general
+screen — a stale asset asserts something that was never verified and actively misleads reviewers,
+since it can predate the fix by many commits and no longer match what the app looks like today.
+
+If part of the behavior genuinely cannot be shown in a screenshot (OS/browser cursor icons, an
+animation's motion in a single still frame, a race that only exists for milliseconds):
+
+1. Capture whatever partial signal actually IS visible — e.g. a spinner/indicator element that is
+   now present where it wasn't before, even if the frame can't show it moving. Use `delayMs` (see
+   `setTestPlanningChatResponse` and similar test-only overrides) to hold a state open long enough
+   to screenshot it, rather than skipping the capture because the real thing resolves too fast.
+2. For the part that truly cannot be captured, say so plainly in the PR body and point to a
+   concrete non-visual proof instead (a DOM/class assertion, a grep check, a test name) — never
+   substitute an image that doesn't actually demonstrate the claim.
+
 ## Subcommands
 
 The script `scripts/ui-visual-proof.sh` provides four explicit subcommands:
