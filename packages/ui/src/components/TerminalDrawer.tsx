@@ -210,7 +210,7 @@ function TerminalSessionPane({ session, isActive, drawerState, hasHeader }: Term
         cursorBlink: true,
         convertEol: false,
         scrollback: 5000,
-        theme: { background: '#0b0f1a', foreground: '#e5e7eb' },
+        theme: { background: '#7a0a49', foreground: '#e5e7eb' },
       });
       fit = new FitAddon();
       term.loadAddon(fit);
@@ -447,7 +447,7 @@ export function TerminalDrawer({
       </div>
       <div
           data-testid="terminal-drawer-body"
-          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-black' : 'relative shrink-0 overflow-hidden bg-black'}
+          className={isMaximized ? 'relative min-h-0 flex-1 overflow-hidden bg-[#7a0a49]' : 'relative shrink-0 overflow-hidden bg-[#7a0a49]'}
           style={{
             ...(isMaximized ? {} : { height: DRAWER_BODY_HEIGHT_PX }),
             display: showBody ? undefined : 'none',
