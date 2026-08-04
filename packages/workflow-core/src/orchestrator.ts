@@ -112,6 +112,7 @@ import {
   cancelTaskImpl,
   cancelWorkflowImpl,
   deferTaskImpl,
+  finalizeCancelInvalidationImpl,
 } from './orchestrator/cancellation.js';
 import type { CancellationHost } from './orchestrator/cancellation.js';
 import {
@@ -3173,6 +3174,33 @@ export class Orchestrator {
    */
   cancelWorkflow(workflowId: string): { cancelled: string[]; runningCancelled: string[] } {
     return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId);
+  }
+
+  /**
+   * Same as `cancelTask`, but does not release resource leases or abandon
+   * launch dispatch rows yet -- the caller must kill every id in
+   * `runningCancelled` first, then call `finalizeCancelInvalidation`.
+   */
+  cancelTaskAwaitingKill(
+    taskId: string,
+  ): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
+    return cancelTaskImpl(this as unknown as CancellationHost, taskId, { deferInvalidation: true });
+  }
+
+  /** Deferred-invalidation counterpart to `cancelWorkflow` -- see `cancelTaskAwaitingKill`. */
+  cancelWorkflowAwaitingKill(
+    workflowId: string,
+  ): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
+    return cancelWorkflowImpl(this as unknown as CancellationHost, workflowId, { deferInvalidation: true });
+  }
+
+  /**
+   * Releases resource leases and abandons launch dispatch rows for a set of
+   * cancelled tasks. Call after killing every `runningCancelled` id from
+   * `cancelTaskAwaitingKill`/`cancelWorkflowAwaitingKill`.
+   */
+  finalizeCancelInvalidation(toCancelIds: readonly string[], reason: string): void {
+    finalizeCancelInvalidationImpl(this as unknown as CancellationHost, toCancelIds, reason);
   }
 
   /**
