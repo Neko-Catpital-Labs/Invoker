@@ -246,6 +246,7 @@ export type TaskLaunchReadiness =
   | { ready: true; task: TaskState }
   | { ready: false; reason: string; task?: TaskState };
 export type LaunchReadinessOptions = { bypassLocalDependencyReadiness?: boolean };
+export type StartExecutionOptions = { limit?: number };
 
 export interface OrchestratorPersistence {
   saveWorkflow(workflow: {
@@ -285,6 +286,14 @@ export interface OrchestratorPersistence {
     generation?: number;
   }>;
   loadTasks(workflowId: string): TaskState[];
+  /**
+   * Optional batched form of loadTasks: one query for many workflows instead
+   * of one query per workflow. refreshFromDb() uses this when available to
+   * avoid an N+1 query per tracked workflow on every startExecution()/
+   * handleWorkerResponse() call; falls back to per-workflow loadTasks() when
+   * a persistence implementation doesn't provide it.
+   */
+  loadTasksForWorkflows?(workflowIds: string[]): TaskState[];
   loadWorkflowTaskSnapshot?(): {
     workflows: Array<{
       id: string;
@@ -753,6 +762,13 @@ export class Orchestrator {
   private refreshFromDb(): void {
     if (this.activeWorkflowIds.size === 0) return;
     this.stateMachine.clear();
+    if (this.persistence.loadTasksForWorkflows) {
+      const tasks = this.persistence.loadTasksForWorkflows([...this.activeWorkflowIds]);
+      for (const task of tasks) {
+        this.stateMachine.restoreTask(task);
+      }
+      return;
+    }
     for (const wfId of this.activeWorkflowIds) {
       const tasks = this.persistence.loadTasks(wfId);
       for (const task of tasks) {
@@ -1464,8 +1480,17 @@ export class Orchestrator {
   /**
    * Start ready tasks up to the concurrency limit.
    * Returns the tasks that were started.
+   *
+   * `opts.limit`, when given, caps how many ready tasks this single call
+   * processes — both the per-task unblock-write loop in
+   * autoStartReadyTasksImpl and the final drain. Leftover ready tasks are
+   * simply left untouched this call; the caller is expected to invoke
+   * startExecution() again on its own cadence to pick them up. Mirrors the
+   * maxLeasesPerPoll bound LaunchDispatcher.dispatchActive() already uses.
+   * Omitting opts (or opts.limit) preserves the unbounded default for all
+   * existing callers.
    */
-  startExecution(): TaskState[] {
+  startExecution(opts?: StartExecutionOptions): TaskState[] {
     this.refreshFromDb();
     this.pruneLaunchDeferrals();
 
@@ -1475,11 +1500,12 @@ export class Orchestrator {
       ready: readyTasks.length,
       active: activeAttempts,
       maxConcurrency: this.maxConcurrency,
+      limit: opts?.limit,
       readyIds: readyTasks.map((task) => task.id),
     });
 
     const launchPollNow = Date.now();
-    const readyTaskIds = readyTasks
+    let readyTaskIds = readyTasks
       .filter((task) => {
         // A task deferred for execution-pool capacity waits in line with a
         // heartbeat instead of being re-dispatched (and re-deferred) every poll.
@@ -1490,6 +1516,10 @@ export class Orchestrator {
         return true;
       })
       .map((task) => task.id);
+
+    if (typeof opts?.limit === 'number' && opts.limit >= 0) {
+      readyTaskIds = readyTaskIds.slice(0, opts.limit);
+    }
 
     return this.autoStartReadyTasks(readyTaskIds);
   }
