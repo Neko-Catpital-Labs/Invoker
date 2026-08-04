@@ -1058,6 +1058,54 @@ test.describe('Visual proof capture', () => {
     });
   });
 
+  test('planning chat busy state — indicator visible and wait cursor gone before reply arrives', async ({ page }) => {
+    // Regression proof for the chat-input-beachball bugfix (InvokerTerminal.tsx):
+    // the composer must not carry disabled:cursor-wait while busy, and a busy
+    // indicator must render immediately on send, before any streamed text
+    // arrives. delayMs holds the planner reply back so this window is
+    // screenshot-able instead of resolving before Playwright can observe it.
+    const busyStatePlanYaml = yamlStringify({
+      name: 'Busy State Visual Proof',
+      repoUrl: E2E_REPO_URL,
+      onFinish: 'none' as const,
+      tasks: [
+        { id: 'busy-state-proof', description: 'Busy state proof task', command: 'echo ok', dependencies: [] as string[] },
+      ],
+    });
+    await page.evaluate(async (planYaml) => {
+      await window.invoker.setTestPlanningChatResponse({
+        planYaml,
+        planName: 'Busy State Visual Proof',
+        reply: 'Busy state response.',
+        delayMs: 4000,
+      });
+    }, busyStatePlanYaml);
+
+    await page.getByTestId('sidebar-home').click();
+    await expect(page.getByRole('heading', { name: 'Planning chat' })).toBeVisible();
+    const input = page.getByTestId('invoker-terminal-input');
+    const sendButton = page.getByRole('button', { name: 'Send' });
+    await input.fill('Draft me an Invoker plan');
+    await sendButton.click();
+
+    const streamStatus = page.getByTestId('invoker-terminal-planner-stream');
+    await expect(streamStatus).toBeVisible();
+    await expect(streamStatus).toHaveAttribute('data-state', 'working');
+    await expect(streamStatus).toContainText('Working…');
+    await expect(input).toHaveClass(/disabled:cursor-not-allowed/);
+    await expect(input).not.toHaveClass(/cursor-wait/);
+    await expect(sendButton).toHaveClass(/disabled:cursor-not-allowed/);
+    await expect(sendButton).not.toHaveClass(/cursor-wait/);
+
+    await captureScreenshot(page, 'planning-chat-busy-state-immediate-indicator');
+
+    await expect(page.getByTestId('invoker-terminal-transcript')).toContainText('Busy state response.', { timeout: 8000 });
+
+    await page.evaluate(async () => {
+      await window.invoker.setTestPlanningChatResponse(null);
+    });
+  });
+
   test('planning chat long transcript — scrollable surface with follow pinned to bottom', async ({ page }) => {
     // Render a long planning transcript by sending several user messages and
     // returning a long assistant reply for each turn. This exercises the same
