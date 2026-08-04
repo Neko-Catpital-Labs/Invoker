@@ -65,7 +65,7 @@ function makeDispatcher(orchestrator: Orchestrator, persistence: SQLiteAdapter) 
       getExecutableReadyTasks: () => orchestrator.getExecutableReadyTasks(),
       getQueueStatus: () => orchestrator.getQueueStatus({ refresh: false }),
       isLaunchParked: (taskId, now) => orchestrator.isLaunchParked(taskId, now),
-      startExecution: () => orchestrator.startExecution(),
+      startExecution: (opts) => orchestrator.startExecution(opts),
     },
     ownerId: 'capacity-fill-owner',
     maxLeasesPerPoll: EXPECTED_CAP,
