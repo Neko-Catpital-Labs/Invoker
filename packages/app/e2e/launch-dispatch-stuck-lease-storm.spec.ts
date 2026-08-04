@@ -99,11 +99,7 @@ async function waitForTask(
 }
 
 base.describe('Launch-dispatch stuck-lease reaper', () => {
-  // Expected to fail until the next slice in this stack lands
-  // acceptDispatch(): completeDispatch() currently only fires once a
-  // task's WHOLE run finishes, so LAUNCH_STUCK_ABANDON_MS (shrunk here)
-  // wrongly treats a still-running, still-healthy task as stuck in launch.
-  base.fail('does not tear down a healthy task that outlives the stuck-launch window', async () => {
+  base('does not tear down a healthy task that outlives the stuck-launch window', async () => {
     // Shrunk to 3s (production default is 12 minutes) so the reaper's
     // 2s poll tick gets at least one real chance to misfire within the
     // test's window if the bug is present.
