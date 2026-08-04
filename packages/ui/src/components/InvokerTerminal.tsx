@@ -213,7 +213,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
         cursorBlink: true,
         convertEol: false,
         scrollback: 5000,
-        theme: { background: '#0b0f1a', foreground: '#e5e7eb' },
+        theme: { background: '#7a0a49', foreground: '#e5e7eb' },
       });
       fit = new FitAddon();
       term.loadAddon(fit);
@@ -433,7 +433,7 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
   }, [session?.outputSnapshot, session?.sessionId, terminalActive]);
 
   return (
-    <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+    <div className="relative min-h-0 flex-1 overflow-hidden bg-[#7a0a49]">
       {!session && (
         <div
           data-testid="invoker-terminal-tmux-placeholder"
