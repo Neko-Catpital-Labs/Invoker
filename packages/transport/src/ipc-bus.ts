@@ -336,15 +336,14 @@ export class IpcBus implements MessageBus {
         return;
       }
       if (err.code === 'ECONNREFUSED') {
-        // A socket file exists but nothing accepts on it — confirmed stale,
-        // safe to reclaim.
+        // Safety invariant: only a refused connect proves the socket file is
+        // dead, so this is the sole path allowed to reclaim (unlink) it.
         this.tryServe(true);
       } else if (err.code === 'ENOENT') {
-        // No socket file at all — serve fresh.
         this.tryServe(false);
       } else {
-        // Unexpected error (EACCES, EAGAIN, …): the server may be alive, so
-        // never unlink its socket out from under it — retry connecting instead.
+        // Safety invariant: on any other error the server may be alive —
+        // never unlink its socket; retry connecting instead.
         this.resolveReady();
         this.scheduleRecovery();
       }
@@ -397,11 +396,6 @@ export class IpcBus implements MessageBus {
     });
   }
 
-  /**
-   * Recover by reconnecting first: only a connect that fails ECONNREFUSED
-   * proves the socket file is dead, so takeover can never unlink a live
-   * server's socket.
-   */
   private scheduleRecovery(): void {
     if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0 || this.serveRetryScheduled) {
       return;

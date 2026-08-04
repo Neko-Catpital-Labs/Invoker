@@ -354,11 +354,6 @@ export class IpcInvokerClient implements InvokerClient {
     return { healthy: false, cause: 'unhealthy' };
   }
 
-  /**
-   * Split-brain: the writer-lock pidfile names a live process, yet nobody
-   * answers owner-ping. Only meaningful right after a failed health wait —
-   * during a healthy boot the lock is legitimately held.
-   */
   private detectUnreachableLockHolder(): number | null {
     const holderPid = this.readLockHolderPid();
     if (holderPid === null || holderPid === process.pid) return null;
@@ -366,9 +361,9 @@ export class IpcInvokerClient implements InvokerClient {
   }
 
   /**
-   * Force restarts only (explicit `@Invoker restart`): stop a lock holder that
-   * is re-confirmed unreachable at kill time, so the respawn can take the DB.
-   * SIGTERM (not SIGKILL) — the holder's release() and shutdown cleanup run.
+   * Safety invariant: only explicit force restarts reach here, the holder is
+   * re-confirmed unreachable after a fresh ping, and the signal is SIGTERM so
+   * the holder's lock release() and shutdown cleanup still run.
    */
   private async forceReclaimSplitBrainHolder(): Promise<void> {
     if (await this.ping()) return;

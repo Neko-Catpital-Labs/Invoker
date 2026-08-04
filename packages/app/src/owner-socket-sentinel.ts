@@ -22,12 +22,9 @@ export interface OwnerSocketSentinel {
 }
 
 export interface OwnerSocketSentinelDeps {
-  /** Re-bind the socket as the rightful owner (IpcBus.serveAsOwner). */
   reserve: () => void;
   log: (level: string, message: string) => void;
-  /** Owner id the socket must answer with; a foreign id counts as unreachable. */
   expectedOwnerId?: string;
-  /** Returns true when the socket answers as the expected owner. Injectable for tests. */
   probe?: () => Promise<boolean>;
   intervalMs?: number;
   failuresBeforeReserve?: number;
