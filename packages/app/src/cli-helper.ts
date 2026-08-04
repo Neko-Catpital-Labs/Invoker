@@ -29,6 +29,7 @@ export function spawnBundledCli(
     dbDir?: string;
     configPath?: string;
     cwd?: string;
+    input?: string;
   } = {},
 ): ChildProcess {
   assertBundledCliAvailable(cliPath);
@@ -39,9 +40,11 @@ export function spawnBundledCli(
     ...(options.dbDir ? ['--db-dir', options.dbDir] : []),
     ...(options.configPath ? ['--config', options.configPath] : []),
   ];
-  return spawn(runtime, cliArgs, {
+  const child = spawn(runtime, cliArgs, {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
   });
+  if (options.input !== undefined) child.stdin?.end(options.input);
+  return child;
 }
