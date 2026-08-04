@@ -938,6 +938,50 @@ function testNestedMergifyPublishedBranchRecognizedBySha() {
   }
 }
 
+function testStaleMergifyPublishedBranchRefIsPruned() {
+  const harness = createHarness();
+  try {
+    const { originBare, work } = createRepo(harness);
+    const branch = 'stack/test-stale-published-ref';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stale published ref\n\nChange-Id: Istaleref0001');
+    setManagedBranchConfig(work, branch);
+
+    const publishedBranch =
+      'stack/EdbertChan/stack/test-stale-published-ref/stale-published-ref--12345678';
+    gitQuiet(work, 'push', 'origin', `HEAD:refs/heads/${publishedBranch}`);
+    gitQuiet(work, 'fetch', 'origin', '+refs/heads/stack/*:refs/remotes/origin/stack/*');
+    assert(
+      git(work, 'rev-parse', '--verify', `origin/${publishedBranch}`).trim().length > 0,
+      'test setup should create a stale remote-tracking stack ref',
+    );
+    gitQuiet(originBare, 'update-ref', '-d', `refs/heads/${publishedBranch}`);
+    assert(
+      git(work, 'rev-parse', '--verify', `origin/${publishedBranch}`).trim().length > 0,
+      'test setup should leave the deleted origin branch as a stale remote-tracking ref',
+    );
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing']);
+
+    assert(
+      result.status === 1,
+      `deleted mergify-published branch should not be accepted through a stale remote-tracking ref\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stderr.includes('unpublished local commits'),
+      `stale remote-tracking ref rejection should report unpublished commits\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stderr.includes('Run `mergify stack push` first'),
+      'stale remote-tracking ref rejection should require mergify stack push',
+    );
+    expectNoPush(harness, 'stale mergify published branch ref');
+    assert(readGhCalls(harness.ghLog).length === 0, 'stale ref rejection should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testCurrentBranchPrLookupFailure() {
   const harness = createHarness();
   try {
@@ -1367,6 +1411,7 @@ const tests = [
   testNonRefactorLanePlainTitleStillAccepted,
   testUnpublishedStackCommitsBlockUpdate,
   testNestedMergifyPublishedBranchRecognizedBySha,
+  testStaleMergifyPublishedBranchRefIsPruned,
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,
