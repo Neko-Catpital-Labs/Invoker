@@ -2860,7 +2860,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
     for (const message of messages.slice(persistedState.count)) {
       this.insertInAppPlanningMessage(sessionId, message, fallbackCreatedAt);
     }
-    const state = this.stateForInAppPlanningMessages(messages);
+    const state = this.appendedStateForInAppPlanningMessages(messages, persistedState);
     this.inAppPlanningMessagePersistStates.set(sessionId, state);
     if (state.signature !== undefined) {
       this.inAppPlanningMessagePersistSignatures.set(sessionId, state.signature);
@@ -2907,20 +2907,44 @@ export class SQLiteAdapter implements PersistenceAdapter {
     if (persistedState.signature === undefined) {
       return messages.length > persistedState.count;
     }
-    return this.signatureForInAppPlanningMessages(messages, persistedState.count) === persistedState.signature;
+    return this.signatureForInAppPlanningMessages(messages, 0, persistedState.count) === persistedState.signature;
   }
 
   private stateForInAppPlanningMessages(messages: InAppPlanningChatLine[]): InAppPlanningMessagePersistState {
     return {
       count: messages.length,
       maxMessageId: messages.reduce((maxMessageId, message) => Math.max(maxMessageId, message.id), 0),
-      signature: this.signatureForInAppPlanningMessages(messages),
+      signature: this.signatureForInAppPlanningMessages(messages, 0, messages.length),
     };
   }
 
-  private signatureForInAppPlanningMessages(messages: InAppPlanningChatLine[], count = messages.length): string {
+  private appendedStateForInAppPlanningMessages(
+    messages: InAppPlanningChatLine[],
+    persistedState: InAppPlanningMessagePersistState,
+  ): InAppPlanningMessagePersistState {
+    if (persistedState.signature === undefined) {
+      return this.stateForInAppPlanningMessages(messages);
+    }
+    const appendedSignature = this.signatureForInAppPlanningMessages(
+      messages,
+      persistedState.count,
+      messages.length,
+    );
+    const lastMessage = messages[messages.length - 1];
+    return {
+      count: messages.length,
+      maxMessageId: lastMessage ? lastMessage.id : 0,
+      signature: `${persistedState.signature}${appendedSignature}`,
+    };
+  }
+
+  private signatureForInAppPlanningMessages(
+    messages: InAppPlanningChatLine[],
+    start = 0,
+    end = messages.length,
+  ): string {
     let signature = '';
-    for (let index = 0; index < count; index += 1) {
+    for (let index = start; index < end; index += 1) {
       const message = messages[index];
       if (!message) break;
       signature += `${message.id}\x1f${message.role}\x1f${message.tone ?? ''}\x1f${message.createdAt ?? ''}\x1f${message.text.length}\x1f${message.text}\x1e`;

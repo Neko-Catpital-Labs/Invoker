@@ -7,6 +7,7 @@ import type { TaskDelta, TaskReplacementDef, TaskState, TaskStateChanges } from 
 import { CommandError, IpcChannels, makeEnvelope } from '@invoker/contracts';
 import type {
   BundledSkillsInstallMode,
+  ActionGraphResponse,
   InAppPlanRequest,
   InAppPlanningChatRequest,
   InAppPlanningCreateSessionRequest,
@@ -21,6 +22,7 @@ import type {
   StartReadyRequest,
   StartReadyResult,
   TaskGraphEvent,
+  WorkerStatusSnapshot,
   WorkflowMutationAcceptedResult,
 } from '@invoker/contracts';
 import { ConversationRepository, SqliteTaskRepository } from '@invoker/data-store';
@@ -113,6 +115,8 @@ import { runStartReady } from '../start-ready.js';
 import type { WorkerRuntimeController } from '../worker-control.js';
 import { buildTaskGraphSnapshot } from '../web/task-graph-snapshot.js';
 import { collectSystemDiagnostics } from '../system-diagnostics.js';
+
+const STATUS_SNAPSHOT_BURST_CACHE_MS = 1000;
 import { resolveConfigFileState } from '../config.js';
 import { installBundledSkills, resolveBundledSkillsStatus } from '../bundled-skills.js';
 import { resolveCliInstallerStatus, updateInvokerCli, type CliInstallerContext } from '../cli-installer.js';
@@ -1163,6 +1167,12 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
   const ownerMode = getOwnerMode();
   const workerRuntimeController = getWorkerRuntimeController();
   const workflowIdForTaskArg = actions.workflowIdForTaskArg;
+  let actionGraphSnapshotCache:
+    | { expiresAtMs: number; snapshot: ActionGraphResponse }
+    | undefined;
+  let workerStatusSnapshotCache:
+    | { expiresAtMs: number; snapshot: WorkerStatusSnapshot }
+    | undefined;
   const workflowIdForTargetArg = actions.workflowIdForTargetArg;
   const performDeleteTask = actions.performDeleteTask;
   const performCancelTask = actions.performCancelTask;
@@ -1808,6 +1818,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     if (!workerRuntimeController) {
       throw new Error('Worker runtime controller is unavailable');
     }
+    workerStatusSnapshotCache = undefined;
     return workerRuntimeController.start(String(kindArg));
   });
 
@@ -1815,6 +1826,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     if (!workerRuntimeController) {
       throw new Error('Worker runtime controller is unavailable');
     }
+    workerStatusSnapshotCache = undefined;
     return workerRuntimeController.stop(String(kindArg));
   });
 
@@ -1850,11 +1862,20 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
       });
     }
-    return workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
+    const now = Date.now();
+    if (workerStatusSnapshotCache && workerStatusSnapshotCache.expiresAtMs > now) {
+      return workerStatusSnapshotCache.snapshot;
+    }
+    const snapshot = workerRuntimeController?.snapshot() ?? createLocalWorkerStatusSnapshot({
       registry: createRegisteredWorkerRegistry(),
       persistence,
       autoStartKinds: autoStartedOwnerWorkerKindsForConfig(invokerConfig),
     });
+    workerStatusSnapshotCache = {
+      expiresAtMs: now + STATUS_SNAPSHOT_BURST_CACHE_MS,
+      snapshot,
+    };
+    return snapshot;
   });
 
 
@@ -1872,7 +1893,16 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
         );
       }
     }
-    return buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
+    const now = Date.now();
+    if (actionGraphSnapshotCache && actionGraphSnapshotCache.expiresAtMs > now) {
+      return actionGraphSnapshotCache.snapshot;
+    }
+    const snapshot = buildCurrentActionGraphSnapshot({ orchestrator, persistence, invokerConfig });
+    actionGraphSnapshotCache = {
+      expiresAtMs: now + STATUS_SNAPSHOT_BURST_CACHE_MS,
+      snapshot,
+    };
+    return snapshot;
   });
 
   ipcMain.handle('invoker:report-ui-perf', (_event, metric: string, data?: Record<string, unknown>) => {

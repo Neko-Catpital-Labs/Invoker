@@ -7,7 +7,7 @@ export function resolveGuiOwnerPreference(env: NodeJS.ProcessEnv = process.env):
   const raw = (env.INVOKER_GUI_OWNER_MODE ?? '').trim().toLowerCase();
   if (raw === 'daemon' || raw === 'client' || raw === 'follower') return 'daemon';
   if (raw === 'auto') return 'auto';
-  if (raw === 'gui' || raw === 'owner' || raw === 'local') return 'gui';
+  if (raw === 'gui' || raw === 'owner' || raw === 'local' || raw === 'standalone') return 'gui';
   if (env.INVOKER_GUI_DAEMON_OWNER === '1') return 'daemon';
   return 'auto';
 }

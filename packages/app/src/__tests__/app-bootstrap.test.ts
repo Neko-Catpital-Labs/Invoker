@@ -247,6 +247,7 @@ describe('app-bootstrap', () => {
     expect(resolveGuiOwnerPreference({})).toBe('auto');
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'daemon' })).toBe('daemon');
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'local' })).toBe('gui');
+    expect(resolveGuiOwnerPreference({ INVOKER_GUI_OWNER_MODE: 'standalone' })).toBe('gui');
     expect(resolveGuiOwnerPreference({ INVOKER_GUI_DAEMON_OWNER: '1' })).toBe('daemon');
     expect(shouldBootstrapDaemonOwner('auto')).toBe(true);
     expect(shouldBootstrapDaemonOwner('daemon')).toBe(true);
