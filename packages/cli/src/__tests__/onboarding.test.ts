@@ -233,6 +233,201 @@ describe('runSetup', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  function withSetupConfigPath<T>(callback: (paths: { dir: string; configPath: string; mcpPath: string }) => Promise<T>): Promise<T> {
+    const dir = mkdtempSync(join(tmpdir(), 'invoker-machines-setup-'));
+    const configPath = join(dir, 'config.json');
+    const mcpPath = join(dir, 'mcp.json');
+    const saved = {
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    process.env.INVOKER_REPO_CONFIG_PATH = configPath;
+    process.env.INVOKER_MCP_CONFIG_PATH = mcpPath;
+    return callback({ dir, configPath, mcpPath }).finally(() => {
+      restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+      restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+      rmSync(dir, { recursive: true, force: true });
+    });
+  }
+
+  function scriptedSetupIO(answers: string[]) {
+    const lines: string[] = [];
+    const prompts: string[] = [];
+    let next = 0;
+    return {
+      lines,
+      prompts,
+      io: {
+        print: (line: string) => { lines.push(line); },
+        prompt: async (question: string) => {
+          prompts.push(question);
+          return answers[next++] ?? '';
+        },
+      },
+    };
+  }
+
+  function machineSetupDeps(overrides: SetupDeps = {}): SetupDeps {
+    return readySetupDeps({
+      remoteTargetConnectivity: async (target) => ({
+        reachable: !target.host.startsWith('fail'),
+        detail: `${target.user}@${target.host} ok`,
+      }),
+      ...overrides,
+    });
+  }
+
+  it('adds one machine through the interactive setup loop', async () => {
+    await withSetupConfigPath(async ({ configPath }) => {
+      const { lines, io } = scriptedSetupIO([
+        'builder.test',
+        'deploy',
+        '/home/deploy/.ssh/id_builder',
+        '2222',
+        '3',
+        'pnpm install --frozen-lockfile',
+        'y',
+        'n',
+      ]);
+
+      const code = await runSetup(['machines'], io, machineSetupDeps());
+
+      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      expect(code).toBe(0);
+      expect(config.remoteTargets['builder-test']).toEqual({
+        host: 'builder.test',
+        user: 'deploy',
+        sshKeyPath: '/home/deploy/.ssh/id_builder',
+        port: 2222,
+        maxConcurrentTasks: 3,
+        provisionCommand: 'pnpm install --frozen-lockfile',
+      });
+      expect(lines.join('\n')).toContain('Connectivity: ok');
+      expect(lines.join('\n')).toContain('Wrote machine builder-test');
+    });
+  });
+
+  it('leaves config unchanged when a passing machine write is declined', async () => {
+    await withSetupConfigPath(async ({ configPath }) => {
+      writeFileSync(configPath, `${JSON.stringify({ maxConcurrency: 2 }, null, 2)}\n`);
+      const before = readFileSync(configPath, 'utf8');
+      const { lines, io } = scriptedSetupIO([
+        'builder.test',
+        'deploy',
+        '/home/deploy/.ssh/id_builder',
+        '22',
+        '1',
+        '',
+        'n',
+        'n',
+        'n',
+      ]);
+
+      const code = await runSetup(['machines'], io, machineSetupDeps());
+
+      expect(code).toBe(0);
+      expect(readFileSync(configPath, 'utf8')).toBe(before);
+      expect(lines.join('\n')).toContain('Nothing written for this machine.');
+    });
+  });
+
+  it('adds two machines when the person chooses add another', async () => {
+    await withSetupConfigPath(async ({ configPath }) => {
+      const { io } = scriptedSetupIO([
+        'builder-a.test',
+        'deploy',
+        '/keys/a',
+        '22',
+        '2',
+        '',
+        'y',
+        'y',
+        'builder-b.test',
+        'deploy',
+        '/keys/b',
+        '2222',
+        '4',
+        'pnpm install',
+        'y',
+        'n',
+      ]);
+
+      const code = await runSetup(['machines'], io, machineSetupDeps());
+
+      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      expect(code).toBe(0);
+      expect(Object.keys(config.remoteTargets)).toEqual(['builder-a-test', 'builder-b-test']);
+      expect(config.remoteTargets['builder-a-test']).toEqual({
+        host: 'builder-a.test',
+        user: 'deploy',
+        sshKeyPath: '/keys/a',
+        port: 22,
+        maxConcurrentTasks: 2,
+      });
+      expect(config.remoteTargets['builder-b-test']).toEqual({
+        host: 'builder-b.test',
+        user: 'deploy',
+        sshKeyPath: '/keys/b',
+        port: 2222,
+        maxConcurrentTasks: 4,
+        provisionCommand: 'pnpm install',
+      });
+    });
+  });
+
+  it('reads machines from stdin and prints one JSON result per input machine', async () => {
+    await withSetupConfigPath(async ({ configPath }) => {
+      const lines: string[] = [];
+      const machines = [
+        {
+          host: 'json-a.test',
+          user: 'deploy',
+          sshKeyPath: '/keys/json-a',
+          port: 22,
+          maxConcurrentTasks: 2,
+          provisionCommand: 'pnpm install',
+        },
+        {
+          host: 'json-b.test',
+          user: 'deploy',
+          sshKeyPath: '/keys/json-b',
+          port: 2222,
+          maxConcurrentTasks: 3,
+        },
+      ];
+
+      const code = await runSetup(['machines', '--json'], {
+        print: (line) => { lines.push(line); },
+        prompt: async () => { throw new Error('should not prompt in machines --json mode'); },
+        readStdin: async () => JSON.stringify(machines),
+        interactive: false,
+      }, machineSetupDeps());
+
+      const results = JSON.parse(lines.join('\n'));
+      const config = JSON.parse(readFileSync(configPath, 'utf8'));
+      expect(code).toBe(0);
+      expect(results).toEqual([
+        {
+          index: 0,
+          id: 'json-a-test',
+          host: 'json-a.test',
+          reachable: true,
+          detail: 'deploy@json-a.test ok',
+          written: true,
+        },
+        {
+          index: 1,
+          id: 'json-b-test',
+          host: 'json-b.test',
+          reachable: true,
+          detail: 'deploy@json-b.test ok',
+          written: true,
+        },
+      ]);
+      expect(Object.keys(config.remoteTargets)).toEqual(['json-a-test', 'json-b-test']);
+    });
+  });
 });
 
 
