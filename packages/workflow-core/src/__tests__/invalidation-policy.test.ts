@@ -166,7 +166,7 @@ describe('applyInvalidation: cancel-first ordering (Hard Invariant)', () => {
 });
 
 describe('buildCancelInFlight: kill before release ordering', () => {
-  it.fails('kills every running task before invalidating (releasing resource leases/abandoning dispatch rows)', async () => {
+  it('kills every running task before invalidating (releasing resource leases/abandoning dispatch rows)', async () => {
     const order: string[] = [];
     const cancelTaskAwaitingKill = vi.fn(() => {
       order.push('cancelTaskAwaitingKill');
