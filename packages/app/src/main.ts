@@ -198,6 +198,7 @@ import { CoalescedWorkflowMetadataPublisher } from './workflow-metadata-invalida
 import type { WorkflowMutationPriority } from './workflow-mutation-coordinator.js';
 import { PersistedWorkflowMutationCoordinator } from './persisted-workflow-mutation-coordinator.js';
 import type { WorkflowMutationContext } from './persisted-workflow-mutation-coordinator.js';
+import { submitWorkflowMutationOrAcknowledgeDeleted } from './workflow-mutation-submit.js';
 import { LaunchDispatcher } from './launch-dispatcher.js';
 import {
   isTaskInFlightForForcedStop,
@@ -318,7 +319,13 @@ function submitRegisteredOwnerWorkerMutation(
   if (!workflowMutationDispatcher.has(channel)) {
     throw new Error(`No workflow mutation dispatcher registered for ${channel}`);
   }
-  return workflowMutationCoordinator.submit(workflowId, priority, channel, mutationArgs, options);
+  const result = submitWorkflowMutationOrAcknowledgeDeleted(workflowId, priority, channel, mutationArgs, {
+    coordinator: workflowMutationCoordinator,
+    workflowExists: (id) => Boolean(persistence.loadWorkflow(id)),
+    logger,
+    deferDrain: options?.deferDrain,
+  });
+  return result.intentId;
 }
 const autoFixAttemptLedger = createAutoFixAttemptLedger();
 
