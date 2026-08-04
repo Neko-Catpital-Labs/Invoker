@@ -150,8 +150,10 @@ async function main(): Promise<void> {
     runWorkflowOp,
     gatherWorkflowContext,
     onRestartInvoker: async () => {
-      const healthy = await client.launch({ force: true });
-      if (!healthy) throw new Error('Invoker did not become healthy after relaunch');
+      const result = await client.launch({ force: true });
+      if (!result.healthy) {
+        throw new Error(`Invoker did not become healthy after relaunch (${result.cause ?? 'unhealthy'})`);
+      }
     },
     log: logFn,
   };

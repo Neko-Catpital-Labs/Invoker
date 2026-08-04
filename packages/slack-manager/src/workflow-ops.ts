@@ -9,15 +9,13 @@
  */
 
 import type { WorkflowOp, WorkflowOpName, WorkflowOpProgress, WorkflowOpResult } from '@invoker/surfaces';
-import { InvokerDownError, type InvokerClient } from './invoker-client.js';
+import { InvokerDownError, describeInvokerDown, type InvokerClient } from './invoker-client.js';
 import { errMessage } from './util.js';
 
 export type RunWorkflowOp = (
   op: WorkflowOp,
   onProgress?: (p: WorkflowOpProgress) => void,
 ) => Promise<WorkflowOpResult>;
-
-const DOWN_SUMMARY = 'Invoker is down and I could not bring it back. Reply `@Invoker restart` to retry.';
 
 /** Workflow-op verb → delegated headless `exec` command (workflow id appended). `cancel` is workflow-scoped. */
 const MUTATION_COMMAND: Partial<Record<WorkflowOpName, string>> = {
@@ -36,7 +34,7 @@ export function createRunWorkflowOp(
     try {
       return await client.withRecovery(() => runOnce(client, op, onProgress));
     } catch (err) {
-      if (err instanceof InvokerDownError) return { ok: false, summary: DOWN_SUMMARY };
+      if (err instanceof InvokerDownError) return { ok: false, summary: describeInvokerDown(err) };
       log('error', `workflow op ${op.operation} failed: ${errMessage(err)}`);
       return { ok: false, summary: `Operation failed: ${errMessage(err)}` };
     }

@@ -15,6 +15,8 @@
  * connects to a live owner.
  */
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   IpcBus,
   TransportError,
@@ -23,7 +25,7 @@ import {
   type MessageHandler,
   type Unsubscribe,
 } from '@invoker/transport';
-import { resolveInvokerIpcSocketPath } from '@invoker/contracts';
+import { resolveInvokerHomeRoot, resolveInvokerIpcSocketPath } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 import type { WorkflowStatus } from '@invoker/surfaces';
 
@@ -32,11 +34,40 @@ export interface ConnectableBus extends MessageBus {
   ready(): Promise<void>;
 }
 
+/** Why a (re)launch did not produce a healthy owner. */
+export type LaunchFailureCause = 'throttled' | 'unhealthy' | 'split-brain';
+
+export interface LaunchResult {
+  healthy: boolean;
+  cause?: LaunchFailureCause;
+  /** PID holding the DB writer lock while unreachable over IPC (split-brain only). */
+  holderPid?: number;
+}
+
 /** Thrown when an operation cannot reach the Invoker owner (transport-level down). */
 export class InvokerDownError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly failureCause?: LaunchFailureCause,
+    readonly holderPid?: number,
+  ) {
     super(message);
     this.name = 'InvokerDownError';
+  }
+}
+
+/** Operator-facing description of a down state, specific to the launch failure cause. */
+export function describeInvokerDown(err: InvokerDownError): string {
+  switch (err.failureCause) {
+    case 'throttled':
+      return 'Invoker is down. A relaunch was attempted less than a minute ago and the watchdog is still '
+        + 'retrying, so I did not start another one. Try again shortly, or reply `@Invoker restart` to force a relaunch now.';
+    case 'split-brain':
+      return `Invoker cannot be relaunched: its database is locked by PID ${err.holderPid ?? '<unknown>'}, `
+        + 'which is alive but not answering IPC (often a stray Invoker GUI). Reply `@Invoker restart` to force '
+        + `recovery (this stops PID ${err.holderPid ?? '<unknown>'}), or stop that process manually.`;
+    default:
+      return 'Invoker is down and I could not bring it back. Reply `@Invoker restart` to retry.';
   }
 }
 
@@ -65,8 +96,8 @@ export interface InvokerClient {
   exec(args: string[]): Promise<void>;
   /** Submit a plan file; resolves to the created workflow id(s). `workflowIds` covers stacked plans in submission order. */
   run(planPath: string): Promise<{ workflowId: string; workflowIds: string[] }>;
-  /** (Re)launch Invoker. Resolves true once healthy over IPC, false on timeout/throttle. */
-  launch(opts?: { force?: boolean }): Promise<boolean>;
+  /** (Re)launch Invoker. `healthy: false` results carry the failure cause (throttle, timeout, split-brain). */
+  launch(opts?: { force?: boolean }): Promise<LaunchResult>;
   /** Runs `fn`; on `InvokerDownError`, launches Invoker and retries once. Rethrows if still down. */
   withRecovery<T>(fn: () => Promise<T>): Promise<T>;
   /** Subscribe to a broadcast channel; survives reconnects (re-applied on a fresh bus). */
@@ -96,6 +127,9 @@ export interface InvokerClientOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   httpHealthCheck?: () => Promise<boolean>;
+  readLockHolderPid?: () => number | null;
+  isPidAlive?: (pid: number) => boolean;
+  terminatePid?: (pid: number) => void;
 }
 
 interface SubscriptionEntry {
@@ -141,6 +175,25 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function defaultReadLockHolderPid(): number | null {
+  try {
+    const raw = readFileSync(join(resolveInvokerHomeRoot(), 'invoker.db.lock', 'pid'), 'utf8').trim();
+    const pid = Number.parseInt(raw, 10);
+    return Number.isFinite(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function defaultIsPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
 export class IpcInvokerClient implements InvokerClient {
   private readonly socketPath: string;
   private readonly healthUrl: string;
@@ -154,11 +207,14 @@ export class IpcInvokerClient implements InvokerClient {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly httpHealthCheck: () => Promise<boolean>;
+  private readonly readLockHolderPid: () => number | null;
+  private readonly isPidAlive: (pid: number) => boolean;
+  private readonly terminatePid: (pid: number) => void;
 
   private bus: ConnectableBus | null = null;
   private healthy = false;
   private lastLaunchAt = 0;
-  private launchInFlight: Promise<boolean> | null = null;
+  private launchInFlight: Promise<LaunchResult> | null = null;
   private readonly subs = new Set<SubscriptionEntry>();
   private readonly reconnectHandlers = new Set<() => void>();
 
@@ -176,6 +232,9 @@ export class IpcInvokerClient implements InvokerClient {
     this.now = options.now ?? (() => Date.now());
     this.sleep = options.sleep ?? defaultSleep;
     this.httpHealthCheck = options.httpHealthCheck ?? (() => this.defaultHttpHealth());
+    this.readLockHolderPid = options.readLockHolderPid ?? defaultReadLockHolderPid;
+    this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
+    this.terminatePid = options.terminatePid ?? ((pid) => process.kill(pid, 'SIGTERM'));
   }
 
   async ping(): Promise<boolean> {
@@ -252,13 +311,19 @@ export class IpcInvokerClient implements InvokerClient {
     } catch (err) {
       if (!(err instanceof InvokerDownError)) throw err;
       this.log('warn', `Invoker appears down (${err.message}); attempting relaunch`);
-      const healthy = await this.launch();
-      if (!healthy) throw new InvokerDownError('Invoker is down and could not be relaunched');
+      const result = await this.launch();
+      if (!result.healthy) {
+        throw new InvokerDownError(
+          `Invoker is down and could not be relaunched (${result.cause ?? 'unhealthy'})`,
+          result.cause,
+          result.holderPid,
+        );
+      }
       return fn();
     }
   }
 
-  async launch(opts?: { force?: boolean }): Promise<boolean> {
+  async launch(opts?: { force?: boolean }): Promise<LaunchResult> {
     // Coalesce concurrent callers (watchdog + command recovery) onto one launch.
     if (this.launchInFlight) return this.launchInFlight;
     this.launchInFlight = this.runLaunch(opts?.force ?? false);
@@ -269,16 +334,54 @@ export class IpcInvokerClient implements InvokerClient {
     }
   }
 
-  private async runLaunch(force: boolean): Promise<boolean> {
+  private async runLaunch(force: boolean): Promise<LaunchResult> {
     if (!force) {
-      if (await this.ping()) return true;
+      if (await this.ping()) return { healthy: true };
       const sinceLast = this.now() - this.lastLaunchAt;
       if (sinceLast < this.minLaunchIntervalMs) {
         this.log('warn', `launch throttled — only ${Math.round(sinceLast / 1000)}s since last launch`);
-        return false;
+        return { healthy: false, cause: 'throttled' };
       }
+    } else {
+      await this.forceReclaimSplitBrainHolder();
     }
-    return this.doLaunch();
+    if (await this.doLaunch()) return { healthy: true };
+    const holderPid = this.detectUnreachableLockHolder();
+    if (holderPid !== null) {
+      this.log('error', `relaunch failed: DB writer lock held by live, IPC-unreachable PID ${holderPid} (split-brain)`);
+      return { healthy: false, cause: 'split-brain', holderPid };
+    }
+    return { healthy: false, cause: 'unhealthy' };
+  }
+
+  private detectUnreachableLockHolder(): number | null {
+    const holderPid = this.readLockHolderPid();
+    if (holderPid === null || holderPid === process.pid) return null;
+    return this.isPidAlive(holderPid) ? holderPid : null;
+  }
+
+  /**
+   * Safety invariant: only explicit force restarts reach here, the holder is
+   * re-confirmed unreachable after a fresh ping, and the signal is SIGTERM so
+   * the holder's lock release() and shutdown cleanup still run.
+   */
+  private async forceReclaimSplitBrainHolder(): Promise<void> {
+    if (await this.ping()) return;
+    const holderPid = this.detectUnreachableLockHolder();
+    if (holderPid === null) return;
+    this.log('warn', `force restart: writer lock held by unreachable PID ${holderPid} — sending SIGTERM`);
+    try {
+      this.terminatePid(holderPid);
+    } catch {
+      return;
+    }
+    const deadline = this.now() + 10_000;
+    while (this.now() < deadline && this.isPidAlive(holderPid)) {
+      await this.sleep(200);
+    }
+    if (this.isPidAlive(holderPid)) {
+      this.log('error', `force restart: PID ${holderPid} did not exit within 10s of SIGTERM`);
+    }
   }
 
   subscribe(channel: string, handler: (message: unknown) => void): () => void {
