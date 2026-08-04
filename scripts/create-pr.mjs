@@ -788,15 +788,17 @@ function findMergifyPublishedRef(branch, headSha, headChangeId) {
     const tips = listRemoteTrackingRefTips(prefix);
 
     const shaMatch = tips.find((tip) => tip.sha === headSha);
-    if (shaMatch) return shaMatch.refname;
+    if (shaMatch) return { refname: shaMatch.refname, matchType: 'sha' };
 
     if (headChangeId) {
-      const changeIdMatch = tips.find((tip) => refCommitHasChangeId(tip.sha, headChangeId));
-      if (changeIdMatch) return changeIdMatch.refname;
+      const changeIdMatches = tips.filter((tip) => refCommitHasChangeId(tip.sha, headChangeId));
+      if (changeIdMatches.length === 1) {
+        return { refname: changeIdMatches[0].refname, matchType: 'change-id' };
+      }
     }
   }
 
-  return '';
+  return null;
 }
 
 
@@ -828,6 +830,7 @@ function getCurrentUpstream() {
 
 function assertPublishedMergifyBranch(branch, trackedBaseRef) {
   let publishedRef = getCurrentUpstream();
+  let publishedMatchType = '';
   const originBranchRef = `origin/${branch}`;
   if ((!publishedRef || publishedRef === trackedBaseRef) && gitTextOrEmpty(['rev-parse', '--verify', originBranchRef])) {
     publishedRef = originBranchRef;
@@ -838,7 +841,8 @@ function assertPublishedMergifyBranch(branch, trackedBaseRef) {
     const headChangeId = getHeadChangeId();
     const matchedRef = findMergifyPublishedRef(branch, headSha, headChangeId);
     if (matchedRef) {
-      publishedRef = matchedRef;
+      publishedRef = matchedRef.refname;
+      publishedMatchType = matchedRef.matchType;
     }
   }
 
@@ -850,6 +854,8 @@ function assertPublishedMergifyBranch(branch, trackedBaseRef) {
       ].join('\n'),
     );
   }
+
+  if (publishedMatchType === 'change-id') return;
 
   const unpublished = revList(`${publishedRef}..HEAD`);
   if (unpublished.length === 0) return;
