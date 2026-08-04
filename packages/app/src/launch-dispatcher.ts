@@ -49,7 +49,7 @@ export interface LaunchDispatcherOrchestrator {
   getExecutableReadyTasks?(): TaskState[];
   getQueueStatus?(): { runningCount: number; maxConcurrency: number };
   isLaunchParked?(taskId: string, now?: number): boolean;
-  startExecution?(): TaskState[];
+  startExecution?(opts?: { limit?: number }): TaskState[];
 }
 
 /**
@@ -180,7 +180,7 @@ export class LaunchDispatcher {
 
   private topUpReadyLaunches(): void {
     try {
-      let started = this.orchestrator?.startExecution?.() ?? [];
+      let started = this.orchestrator?.startExecution?.({ limit: this.maxLeasesPerPoll }) ?? [];
       // Ready pending roots can lose their outbox row after cancel/recreate while
       // free scheduler slots remain. Mint a fresh attempt only for non-parked
       // ready work, then drain again.
@@ -205,7 +205,7 @@ export class LaunchDispatcher {
             this.orchestrator.prepareTaskForNewAttempt(task.id, 'launch-dispatcher-ready-topup');
           }
           if (toRecover.length > 0) {
-            started = this.orchestrator.startExecution?.() ?? [];
+            started = this.orchestrator.startExecution?.({ limit: this.maxLeasesPerPoll }) ?? [];
             this.logger?.info?.('[launch-dispatcher] re-topped ready launches after stranded pending', {
               ownerId: this.ownerId,
               stranded: toRecover.length,
