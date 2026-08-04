@@ -662,6 +662,8 @@ jobs:
               e2e/ui-delta-timeline.spec.ts
               e2e/planning-terminal-live-model.proof.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/launch-dispatch-stuck-lease-storm.spec.ts
+              e2e/launch-dispatch-stuck-lease-cap.spec.ts
           - name: terminal-garbling
             files: >-
               e2e/planning-surface-navigation-garble-repro.spec.ts
