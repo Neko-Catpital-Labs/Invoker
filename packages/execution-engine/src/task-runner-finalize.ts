@@ -98,6 +98,20 @@ export function wireCompletion(
             return;
           }
 
+          if (normalizedResponse.status === 'failed' && activeExecution?.poolMemberKey) {
+            try {
+              const finalized = host.orchestrator.getTask(task.id);
+              if (finalized?.execution.failureClass === 'ssh-oauth-session-expired') {
+                host.recordPoolMemberTransportFailure(
+                  activeExecution.poolMemberKey,
+                  new Error(normalizedResponse.outputs.error ?? 'ssh-oauth-session-expired'),
+                );
+              }
+            } catch (err) {
+              host.logger.error(`[TaskRunner] oauth-expiry pool member quarantine failed for task=${task.id}`, { err });
+            }
+          }
+
           try {
             host.callbacks.onComplete?.(task.id, normalizedResponse);
           } catch (err) {
