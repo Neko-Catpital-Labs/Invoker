@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { computeWorkflowRollupFromSummaries, hasFailedDependencyPath } from '../workflow-rollup.js';
+import {
+  computeWorkflowStatusFromTaskGraph,
+  computeWorkflowRollupFromSummaries,
+  createEmptyWorkflowTaskStatusCounts,
+  hasFailedDependencyPath,
+} from '../workflow-rollup.js';
 import type { TaskStatus } from '../types.js';
 
 function task(id: string, status: TaskStatus, dependencies: string[] = []) {
@@ -9,6 +14,12 @@ function task(id: string, status: TaskStatus, dependencies: string[] = []) {
     status,
     dependencies,
   };
+}
+
+function countsOf(...tasks: ReturnType<typeof task>[]) {
+  const counts = createEmptyWorkflowTaskStatusCounts();
+  for (const t of tasks) counts[t.status] += 1;
+  return counts;
 }
 
 describe('workflow rollup', () => {
@@ -146,5 +157,15 @@ describe('hasFailedDependencyPath', () => {
 
   it('is false when there are no dependencies', () => {
     expect(hasFailedDependencyPath(task('solo', 'blocked'), mapOf())).toBe(false);
+  });
+});
+
+describe('computeWorkflowStatusFromTaskGraph', () => {
+  it('clears a stale failed status once the failed task is restarted', () => {
+    const failedTasks = [task('t1', 'failed')];
+    expect(computeWorkflowStatusFromTaskGraph(failedTasks, countsOf(...failedTasks))).toBe('failed');
+
+    const restartedTasks = [task('t1', 'running')];
+    expect(computeWorkflowStatusFromTaskGraph(restartedTasks, countsOf(...restartedTasks))).toBe('running');
   });
 });
