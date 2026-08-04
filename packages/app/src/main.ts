@@ -167,6 +167,7 @@ import {
 } from './headless.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
+import { flushOutputStream } from './headless-stdio.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
@@ -986,6 +987,7 @@ function startHeadlessMode(): void {
         delegationBus.disconnect();
         if (delegated && typeof delegated.output === 'string') {
           process.stdout.write(delegated.output);
+          await flushOutputStream(process.stdout);
           process.exit(0);
           return;
         }
