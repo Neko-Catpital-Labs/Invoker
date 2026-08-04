@@ -311,7 +311,7 @@ function HistoryRow({
 }) {
   const rowClass = selected
     ? 'bg-indigo-900/60 border-indigo-600'
-    : 'bg-gray-800 border-gray-800 hover:border-gray-600';
+    : 'bg-[#ff69b4]/40 border-[#ff69b4]/40 hover:border-gray-600';
   return (
     <li
       className={`border rounded-md ${rowClass} transition-colors`}
@@ -406,14 +406,14 @@ function FilterBar({
     filter.dateTo !== '';
 
   return (
-    <div className="border-b border-gray-800 p-3 space-y-3 bg-gray-900/40">
+    <div className="border-b border-[#ff69b4]/40 p-3 space-y-3 bg-[#9c0f5c]/40">
       <div className="flex items-center gap-2">
         <input
           type="search"
           value={filter.search}
           onChange={(e) => onChange({ ...filter, search: e.target.value })}
           placeholder="Search description, workflow, event, error…"
-          className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+          className="flex-1 bg-[#9c0f5c] border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
           aria-label="Search history"
         />
         <span className="text-xs text-gray-500 shrink-0">
@@ -479,7 +479,7 @@ function FilterBar({
             type="date"
             value={filter.dateFrom}
             onChange={(e) => onChange({ ...filter, dateFrom: e.target.value })}
-            className="bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-gray-100"
+            className="bg-[#9c0f5c] border border-gray-700 rounded px-1.5 py-0.5 text-xs text-gray-100"
             aria-label="From date"
           />
         </label>
@@ -489,7 +489,7 @@ function FilterBar({
             type="date"
             value={filter.dateTo}
             onChange={(e) => onChange({ ...filter, dateTo: e.target.value })}
-            className="bg-gray-900 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-gray-100"
+            className="bg-[#9c0f5c] border border-gray-700 rounded px-1.5 py-0.5 text-xs text-gray-100"
             aria-label="To date"
           />
         </label>
