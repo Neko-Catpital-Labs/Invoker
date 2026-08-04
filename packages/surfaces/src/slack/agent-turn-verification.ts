@@ -57,3 +57,7 @@ export function looksLikeCompletionClaim(replyText: string): boolean {
 export function buildUnverifiedNotice(): string {
   return 'Note: no working-tree changes or new commits were detected in this session checkout, so this completion summary could not be verified.';
 }
+
+export function buildTrackedChangesRevertedNotice(): string {
+  return 'Note: tracked-file edits from this pre-approval session were reverted. New repro artifacts were kept. To execute changes through review, ask for a plan with `/plan`.';
+}

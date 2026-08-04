@@ -52,26 +52,30 @@ describe('Slack agent-mode pre-approval edit guard (repro for the pink-theme inc
     mockSpawn.mockReset();
   });
 
-  it('a mention turn that edits a tracked file leaves the edit in the working tree with no revert and no warning', async () => {
+  it('a mention turn that edits a tracked file has the edit reverted, keeps new repro artifacts, and says so in the reply', async () => {
     const workingDir = initSandboxRepo();
     const conversation = new PlanConversation({ mode: 'agent', workingDir, threadTs: 'thread-pink' });
     try {
       plannerTurn(
         'Done. Changed: index.css retheme to pink.',
-        () => writeFileSync(join(workingDir, 'index.css'), ':root { --background: 40 14 28; }\n'),
+        () => {
+          writeFileSync(join(workingDir, 'index.css'), ':root { --background: 40 14 28; }\n');
+          writeFileSync(join(workingDir, 'repro.txt'), 'repro artifact\n');
+        },
       );
 
       const reply = await conversation.sendMessage('lets change the theme of the app from black to pink');
 
-      expect(porcelain(workingDir)).toBe('M index.css');
-      expect(readFileSync(join(workingDir, 'index.css'), 'utf8')).toContain('40 14 28');
-      expect(reply).toBe('Done. Changed: index.css retheme to pink.');
+      expect(porcelain(workingDir)).toBe('?? repro.txt');
+      expect(readFileSync(join(workingDir, 'index.css'), 'utf8')).toContain('10 10 10');
+      expect(reply).toContain('Done. Changed: index.css retheme to pink.');
+      expect(reply).toContain('tracked-file edits from this pre-approval session were reverted');
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }
   });
 
-  it('the agent-mode system prompt authorizes tracked-file edits and never requires a plan for them', async () => {
+  it('the agent-mode system prompt no longer authorizes tracked-file edits', async () => {
     const workingDir = initSandboxRepo();
     const conversation = new PlanConversation({ mode: 'agent', workingDir, threadTs: 'thread-pink' });
     try {
@@ -79,10 +83,9 @@ describe('Slack agent-mode pre-approval edit guard (repro for the pink-theme inc
       await conversation.sendMessage('lets change the theme of the app from black to pink');
 
       const prompt = mockSpawn.mock.calls[0][1]!.filter((a): a is string => typeof a === 'string').join('\n');
-      expect(prompt).toContain('edit code, and run focused verification when useful');
-      expect(prompt).toContain('Inside your worktree you are unrestricted');
-      expect(prompt).not.toMatch(/require[sd]? an? (Invoker )?plan/i);
-      expect(prompt).not.toContain('cannot modify tracked files');
+      expect(prompt).toContain('cannot modify tracked files');
+      expect(prompt).toContain('route code changes through a plan');
+      expect(prompt).not.toContain('edit code, and run focused verification when useful');
     } finally {
       rmSync(workingDir, { recursive: true, force: true });
     }

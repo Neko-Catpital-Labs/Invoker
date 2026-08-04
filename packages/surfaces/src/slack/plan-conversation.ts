@@ -20,10 +20,13 @@ import type { HarnessSessionDriver } from '@invoker/execution-engine';
 import { buildPlanningHandoffInstructions, isDraftingAuthorized, summarizePlanText } from '@invoker/planning-core';
 import type { LogFn } from '../surface.js';
 import {
+  buildTrackedChangesRevertedNotice,
   buildUnverifiedNotice,
   captureRepoState,
   looksLikeCompletionClaim,
   repoStateUnchanged,
+  restoreTrackedChanges,
+  trackedFilesChanged,
 } from './agent-turn-verification.js';
 
 // ── Types ───────────────────────────────────────────────────
@@ -204,7 +207,7 @@ function isDraftingAuthorizedForPrompt(messages: ConversationMessage[]): boolean
 // ── System Prompt ───────────────────────────────────────────
 
 export const SLACK_LOCAL_REPRO_POLICY = `Execution boundary:
-- Inside your worktree you are unrestricted. Read, grep, edit, build, and run tests freely. Reproducing a bug locally is always allowed and never needs permission.
+- Inside your worktree you are unrestricted for exploration: read, grep, build, run tests, and write new repro artifacts freely. Reproducing a bug locally is always allowed and never needs permission. Tracked-file edits are not kept in pre-approval sessions.
 - Never run anything that changes state outside your worktree: \`git push\`, \`gh pr create\`/\`edit\`/\`merge\`, \`gh\` label writes, \`mergify stack push\`, \`scripts/safe-stack-push.mjs\`, or \`scripts/land-stack.mjs --execute\`.
 - If the request needs any of those, stop and hand off: describe the change, post the plan, and ask the user to confirm. Do not perform it yourself and do not offer a manual workaround for it.`;
 
@@ -217,7 +220,8 @@ function buildAgentSystemPrompt(intentSignalFilePath?: string): string {
 
 Default behavior:
 - Treat the thread like an ordinary OMP/Codex coding session.
-- Answer questions, run local commands, inspect files, edit code, and run focused verification when useful.
+- Answer questions, run local commands, inspect files, and run focused verification when useful.
+- This pre-approval session cannot modify tracked files: any tracked-file edit is reverted after the turn. Write repro artifacts as new files instead, and route code changes through a plan.
 ${planIntentGuidance}
 - Keep Slack replies short and concrete: changed files, verification, and any remaining risk. Return only the final user-facing message; never include chain-of-thought, reasoning traces, tool output, or raw planner JSONL.
 - To share a generated file (screenshot, diagram, report), write it inside your worktree and link it by absolute path as a markdown link, e.g. \`[chart](/abs/path/in/worktree/chart.png)\`. Files linked that way are uploaded to the thread. Files written outside your worktree cannot be shared, so do not put artifacts in /tmp.
@@ -583,7 +587,10 @@ export class PlanConversation {
     const repoStateAfter = this.mode === 'agent'
       ? await captureRepoState(this.workingDir)
       : null;
-    if (looksLikeCompletionClaim(message) && repoStateUnchanged(repoStateBefore, repoStateAfter)) {
+    if (this.mode === 'agent' && trackedFilesChanged(repoStateBefore, repoStateAfter)) {
+      restoreTrackedChanges(this.workingDir);
+      message = `${message}\n\n${buildTrackedChangesRevertedNotice()}`;
+    } else if (looksLikeCompletionClaim(message) && repoStateUnchanged(repoStateBefore, repoStateAfter)) {
       message = `${message}\n\n${buildUnverifiedNotice()}`;
     }
     const fileDraft = this.readPlanDraftFile();
