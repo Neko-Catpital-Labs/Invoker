@@ -7,7 +7,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { CommandHandler, SurfaceCommand, SurfaceEvent } from '@invoker/surfaces';
-import { InvokerDownError, type InvokerClient } from './invoker-client.js';
+import { InvokerDownError, describeInvokerDown, type InvokerClient } from './invoker-client.js';
 import { errMessage } from './util.js';
 
 export interface CommandHandlerDeps {
@@ -17,8 +17,6 @@ export interface CommandHandlerDeps {
   plansDir: string;
   log: (level: string, message: string) => void;
 }
-
-const DOWN_MESSAGE = 'Invoker is down and I could not bring it back. Reply `@Invoker restart` to retry.';
 
 export class SlackCommandError extends Error {
   constructor(message: string) {
@@ -34,7 +32,7 @@ export function createCommandHandler(deps: CommandHandlerDeps): CommandHandler {
       return await deps.client.withRecovery(() => dispatch(deps, command, startedPlans));
     } catch (err) {
       const message = err instanceof InvokerDownError
-        ? DOWN_MESSAGE
+        ? describeInvokerDown(err)
         : `Command \`${command.type}\` failed: ${errMessage(err)}`;
       deps.log('error', message);
       throw err instanceof SlackCommandError ? err : new SlackCommandError(message);
