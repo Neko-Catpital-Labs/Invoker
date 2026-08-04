@@ -14,7 +14,7 @@
  * host does not spam the Slack lobby.
  */
 
-import type { InvokerClient } from './invoker-client.js';
+import type { InvokerClient, LaunchResult } from './invoker-client.js';
 import { errMessage } from './util.js';
 
 export interface WatchdogDeps {
@@ -58,8 +58,16 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   let nextAttemptAt = 0;
   let gaveUp = false;
   let lastAlertAt: number | null = null;
+  let lastLaunchFailure: LaunchResult | null = null;
   let busy = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+
+  const splitBrainDetail = (): string =>
+    lastLaunchFailure?.cause === 'split-brain'
+      ? ` The database is locked by PID ${lastLaunchFailure.holderPid ?? '<unknown>'}, which is alive but not `
+        + 'answering IPC (often a stray Invoker GUI) — auto-relaunch cannot succeed while it runs. '
+        + 'Replying `@Invoker restart` will stop that process and take over.'
+      : '';
 
   const reset = (): void => {
     consecutiveFailures = 0;
@@ -109,7 +117,7 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
         if (canAlert()) {
           lastAlertAt = now();
           await deps.alert(
-            `:rotating_light: Invoker is still down after ${maxAttempts} relaunch attempts. Reply \`@Invoker restart\` to retry.`,
+            `:rotating_light: Invoker is still down after ${maxAttempts} relaunch attempts.${splitBrainDetail()} Reply \`@Invoker restart\` to retry.`,
           );
         }
         return;
@@ -119,21 +127,23 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
 
       attempts++;
       deps.log('warn', `Invoker is down — relaunch attempt ${attempts}/${maxAttempts}`);
-      const ok = await deps.client.launch();
-      if (ok) {
+      const result = await deps.client.launch();
+      if (result.healthy) {
         // Launch claimed success, but keep attempt state until health is stable.
         consecutiveFailures = 0;
         consecutiveHealthy = 0;
         nextAttemptAt = 0;
+        lastLaunchFailure = null;
         deps.log('info', 'watchdog relaunch succeeded — confirming stable health');
         return;
       }
+      lastLaunchFailure = result;
       if (attempts >= maxAttempts) {
         gaveUp = true;
         if (canAlert()) {
           lastAlertAt = now();
           await deps.alert(
-            `:rotating_light: Invoker is down and I could not bring it back after ${maxAttempts} attempts. Reply \`@Invoker restart\` to retry.`,
+            `:rotating_light: Invoker is down and I could not bring it back after ${maxAttempts} attempts.${splitBrainDetail()} Reply \`@Invoker restart\` to retry.`,
           );
         } else {
           deps.log('warn', 'Invoker still down after max relaunch attempts — alert suppressed by cooldown');

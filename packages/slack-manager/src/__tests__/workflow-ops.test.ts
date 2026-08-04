@@ -89,4 +89,28 @@ describe('createRunWorkflowOp', () => {
     expect(res.summary).toContain('@Invoker restart');
     expect(res.summary).not.toMatch(/Reply `restart`/);
   });
+
+  it('reports the split-brain holder pid when relaunch is impossible', async () => {
+    const client = makeClient({
+      withRecovery: vi.fn(async () => {
+        throw new InvokerDownError('down', 'split-brain', 4242);
+      }) as InvokerClient['withRecovery'],
+    });
+    const res = await createRunWorkflowOp(client, noop)({ operation: 'recreate', target: { all: true } });
+    expect(res.ok).toBe(false);
+    expect(res.summary).toContain('PID 4242');
+    expect(res.summary).toContain('@Invoker restart');
+  });
+
+  it('says a throttled relaunch was not attempted instead of claiming failure', async () => {
+    const client = makeClient({
+      withRecovery: vi.fn(async () => {
+        throw new InvokerDownError('down', 'throttled');
+      }) as InvokerClient['withRecovery'],
+    });
+    const res = await createRunWorkflowOp(client, noop)({ operation: 'recreate', target: { all: true } });
+    expect(res.ok).toBe(false);
+    expect(res.summary).toContain('did not start another one');
+    expect(res.summary).not.toContain('could not bring it back');
+  });
 });
