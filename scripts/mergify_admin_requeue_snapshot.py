@@ -241,7 +241,7 @@ def parse_mergify_queue_event(comment: Mapping[str, object]) -> MergifyQueueEven
         comment_id=str(comment.get("id") or comment.get("databaseId") or ""),
         state=payload_state(payload, body),
         queue_rule_name=payload_rule(payload, body),
-        queued_at=str(comment.get("updated_at") or comment.get("created_at") or ""),
+        queued_at=str(comment.get("created_at") or comment.get("updated_at") or ""),
         head_sha=head_sha,
         waiting_for=section_items(body, "Waiting for"),
         failing_checks=failing_checks or reason_failed_checks(body),

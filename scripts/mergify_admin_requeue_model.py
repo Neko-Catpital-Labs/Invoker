@@ -332,9 +332,13 @@ def payload_state(payload: Mapping[str, object], body: str) -> str:
             return "dequeued"
         if "queue" in value:
             return "queued"
+        if value == "waiting":
+            return "waiting"
     low = body.lower()
     if "left the queue" in low or "dequeued" in low:
         return "dequeued"
+    if "waiting for queue conditions" in low:
+        return "waiting"
     if "queued" in low or "entered the queue" in low:
         return "queued"
     return "unknown"

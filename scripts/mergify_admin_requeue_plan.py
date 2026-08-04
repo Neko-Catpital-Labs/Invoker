@@ -105,7 +105,16 @@ def is_queue_only_required_check(name: str) -> bool:
 
 def has_active_queue_event(pr: PrSnapshot) -> bool:
     latest = pr.latest_mergify
-    if not latest or latest.queue_rule_name != "admin-bypass" or latest.state not in ACTIVE_QUEUE_STATES:
+    if not latest:
+        return False
+    # A pending `queue` command reports state "waiting" with a null queue
+    # rule while Mergify evaluates its conditions; requeueing on top of it is
+    # a duplicate Mergify ignores but the retry-cap ledger still counts.
+    if latest.state == "waiting":
+        if latest.head_sha and latest.head_sha != pr.head_ref_oid:
+            return "queued" in pr.labels
+        return True
+    if latest.queue_rule_name != "admin-bypass" or latest.state not in ACTIVE_QUEUE_STATES:
         return False
     if latest.head_sha == pr.head_ref_oid:
         return True
