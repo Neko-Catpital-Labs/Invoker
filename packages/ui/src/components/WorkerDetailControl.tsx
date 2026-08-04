@@ -44,7 +44,7 @@ export function WorkerDetailControl({
       data-action={showStart ? 'start' : 'stop'}
       title={disabledReason}
       disabled={disabled}
-      className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-200 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-gray-800"
+      className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-200 disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[#ff69b4]/40"
       onClick={() => {
         if (disabled) return;
         setOptimistic(showStart ? 'running' : 'stopped');

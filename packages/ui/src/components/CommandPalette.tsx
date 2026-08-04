@@ -231,7 +231,7 @@ export function CommandPalette({
       data-testid="command-palette"
       data-state={open ? 'open' : 'closed'}
       className={[
-        'fixed inset-0 z-50 flex items-start justify-center bg-black/70 px-4 pt-[18vh]',
+        'fixed inset-0 z-50 flex items-start justify-center bg-[#e0218a]/70 px-4 pt-[18vh]',
         open ? '' : 'hidden',
       ].join(' ')}
       onMouseDown={(event) => {

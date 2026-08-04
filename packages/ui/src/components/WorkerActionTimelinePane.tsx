@@ -170,7 +170,7 @@ export function WorkerActionTimelinePane({
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="worker-timeline-view">
-      <div className="space-y-3 border-b border-gray-800 bg-gray-900/40 p-3">
+      <div className="space-y-3 border-b border-[#ff69b4]/40 bg-[#9c0f5c]/40 p-3">
         <div className="flex flex-wrap items-center gap-2">
           {workflows.size > 1 ? (
             <select
@@ -193,7 +193,7 @@ export function WorkerActionTimelinePane({
             value={taskFilter}
             onChange={(event) => setTaskFilter(event.target.value)}
             placeholder="Search tasks"
-            className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
+            className="flex-1 bg-[#9c0f5c] border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
             aria-label="Search tasks"
           />
           <span className="shrink-0 text-xs text-gray-500">{timelineRows.length} / {totalRowCount}</span>
@@ -268,7 +268,7 @@ export function WorkerActionTimelinePane({
                   <li
                     key={`${row.action.id}-${row.eventKind}`}
                     data-testid={`worker-timeline-row-${row.action.id}-${row.eventKind}`}
-                    className={`border rounded-md ${selected ? 'bg-indigo-900/60 border-indigo-600' : 'bg-gray-800 border-gray-800 hover:border-gray-600'} transition-colors ${interactive ? '' : 'opacity-90'}`}
+                    className={`border rounded-md ${selected ? 'bg-indigo-900/60 border-indigo-600' : 'bg-[#ff69b4]/40 border-[#ff69b4]/40 hover:border-gray-600'} transition-colors ${interactive ? '' : 'opacity-90'}`}
                   >
                     <button
                       type="button"

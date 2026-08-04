@@ -165,7 +165,7 @@ function TaskTimelinePane({
                 }
               }}
               className={`w-full rounded text-left transition-all ${
-                isSelected ? 'ring-2 ring-indigo-400 ring-offset-1 ring-offset-gray-900' : ''
+                isSelected ? 'ring-2 ring-indigo-400 ring-offset-1 ring-offset-[#9c0f5c]' : ''
               }`}
               style={{ background: 'transparent' }}
             >
@@ -214,7 +214,7 @@ export function TimelineView({
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="timeline-view">
-      <div className="border-b border-gray-800 bg-gray-900/40 px-4 py-3">
+      <div className="border-b border-[#ff69b4]/40 bg-[#9c0f5c]/40 px-4 py-3">
         <div className="inline-flex overflow-hidden rounded-sm border border-border" role="group" aria-label="Timeline mode">
           <button
             type="button"
