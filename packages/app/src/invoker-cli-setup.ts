@@ -118,3 +118,114 @@ export async function runInvokerCliSetup(request: InvokerSetupRequest, deps: Inv
 
   return { ok: steps.every((step) => step.ok), steps };
 }
+
+// ── Machines ─────────────────────────────────────────────────
+
+export interface MachineSetupInput {
+  id?: string;
+  host: string;
+  user: string;
+  sshKeyPath: string;
+  port?: number;
+  maxConcurrentTasks?: number;
+  provisionCommand?: string;
+}
+
+export interface MachineSetupResult {
+  host: string;
+  ok: boolean;
+  reachable?: boolean;
+  written?: boolean;
+  detail?: string;
+  error?: string;
+}
+
+interface RawMachineSetupResult {
+  id: string;
+  host: string;
+  reachable: boolean;
+  detail: string;
+  written: boolean;
+  error?: { code: string; message: string; conflictingTargetId?: string };
+}
+
+interface CliCaptureResult {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  spawnError?: string;
+}
+
+function runCliCapture(cliPath: string, args: string[], stdin: string): Promise<CliCaptureResult> {
+  const { promise, resolve } = Promise.withResolvers<CliCaptureResult>();
+  let stdout = '';
+  let stderr = '';
+  let settled = false;
+  const settle = (result: CliCaptureResult): void => {
+    if (settled) return;
+    settled = true;
+    resolve(result);
+  };
+
+  try {
+    const child = spawnBundledCli(cliPath, args, { stdin: 'pipe' });
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      stdout = appendOutput(stdout, chunk);
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      stderr = appendOutput(stderr, chunk);
+    });
+    child.on('error', (err) => {
+      settle({ exitCode: null, stdout, stderr, spawnError: err instanceof Error ? err.message : String(err) });
+    });
+    child.on('close', (exitCode) => {
+      settle({ exitCode, stdout, stderr });
+    });
+    child.stdin?.on('error', () => {
+      // Writing after the child has already exited (e.g. it failed before reading stdin) is not fatal.
+    });
+    child.stdin?.write(stdin);
+    child.stdin?.end();
+  } catch (err) {
+    settle({ exitCode: null, stdout: '', stderr: '', spawnError: err instanceof Error ? err.message : String(err) });
+  }
+
+  return promise;
+}
+
+function failedMachineResults(machines: readonly MachineSetupInput[], error: string): MachineSetupResult[] {
+  return machines.map((machine) => ({ host: machine.host, ok: false, error }));
+}
+
+/** Runs `invoker-cli setup machines --json`, feeding machine fields over stdin so they never appear in process args. */
+export async function runMachinesSetup(
+  machines: MachineSetupInput[],
+  deps: InvokerCliSetupDeps,
+): Promise<MachineSetupResult[]> {
+  const capture = await runCliCapture(deps.cliPath, ['setup', 'machines', '--json'], JSON.stringify(machines));
+  if (capture.spawnError) return failedMachineResults(machines, capture.spawnError);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(capture.stdout);
+  } catch {
+    return failedMachineResults(
+      machines,
+      capture.exitCode === 0
+        ? 'invoker-cli returned unparsable machine setup output'
+        : `invoker-cli exited with ${capture.exitCode}`,
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    return failedMachineResults(machines, 'invoker-cli did not return a machine setup result array');
+  }
+
+  return (parsed as RawMachineSetupResult[]).map((result) => ({
+    host: result.host,
+    ok: result.written === true,
+    reachable: result.reachable,
+    written: result.written,
+    detail: result.detail,
+    error: result.error?.message,
+  }));
+}
