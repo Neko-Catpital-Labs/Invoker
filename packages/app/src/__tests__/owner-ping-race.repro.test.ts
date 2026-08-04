@@ -44,7 +44,7 @@ describe('owner-ping timeout race', () => {
     ).toBeGreaterThanOrEqual(1000);
   });
 
-  it.fails('the two discoverOwner call sites in headless-client.ts do not use the 500ms outlier budget', () => {
+  it('the two discoverOwner call sites in headless-client.ts do not use the 500ms outlier budget', () => {
     const source = readFileSync(HEADLESS_CLIENT, 'utf8');
     const matches = [...source.matchAll(/discoverOwner\([^,]+,\s*(\d+)\)/g)];
     expect(matches.length, 'expected 2 discoverOwner(...) call sites in headless-client.ts').toBe(2);
