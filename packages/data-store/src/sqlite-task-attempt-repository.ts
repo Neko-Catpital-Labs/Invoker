@@ -430,6 +430,26 @@ export class SqliteTaskAttemptRepository {
     return rows.map((row) => this.reconcileTaskFromSelectedAttempt(mapRowToTask(row)));
   }
 
+  /**
+   * Batched form of loadTasks: one query for many workflows instead of one
+   * query per workflow. Same row shape/reconciliation as loadTasks; callers
+   * that previously looped `workflowIds.map(loadTasks)` (e.g.
+   * Orchestrator.refreshFromDb, which does this once per activeWorkflowIds
+   * entry on every startExecution()/handleWorkerResponse() call) get
+   * identical results in one round trip instead of N.
+   */
+  loadTasksForWorkflows(workflowIds: string[]): TaskState[] {
+    if (workflowIds.length === 0) return [];
+    const placeholders = workflowIds.map(() => '?').join(', ');
+    const rows = this.exec.queryAll(
+      `SELECT ${this.taskSelectColumns('t')}
+       FROM tasks t${this.taskSelectJoin('t')}
+       WHERE t.workflow_id IN (${placeholders})`,
+      workflowIds,
+    );
+    return rows.map((row) => this.reconcileTaskFromSelectedAttempt(mapRowToTask(row)));
+  }
+
   loadTask(taskId: string): TaskState | undefined {
     const row = this.exec.queryOne(
       `SELECT ${this.taskSelectColumns('t')}
