@@ -57,7 +57,7 @@ const sharedSlack = vi.hoisted(() => ({
       update: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue({}),
     },
-    files: { uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F-proof' }] }) },
+    files: { uploadV2: vi.fn().mockResolvedValue({ ok: true, files: [{ ok: true, files: [{ id: 'F-proof' }] }] }) },
     reactions: { add: vi.fn().mockResolvedValue({}), remove: vi.fn().mockResolvedValue({}) },
     conversations: { replies: vi.fn().mockResolvedValue({ messages: [] }) },
   },
