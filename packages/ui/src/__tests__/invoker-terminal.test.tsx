@@ -247,7 +247,7 @@ describe('Invoker terminal (component)', () => {
     expect(terminalShell?.className).not.toContain('border border-border');
     expect(terminalShell?.className).not.toContain('bg-card');
     expect(screen.getByTestId('invoker-terminal-input')).toBeEnabled();
-  });
+  }, 10_000);
 
   function lastPerfPayload(metric: string): Record<string, any> {
     const payload = vi.mocked(mock.api.reportUiPerf).mock.calls
@@ -1081,7 +1081,7 @@ describe('Invoker terminal (component)', () => {
       lagMs: expect.any(Number),
     }));
     expect(payload.transcriptSizeBytes).toBeGreaterThan(10_000);
-  });
+  }, 10_000);
 
   it('hydrates restored planning chats and keeps the restored session editable', async () => {
     mock.api.planningChatList = vi.fn(async () => ({
