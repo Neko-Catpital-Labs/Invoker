@@ -28,10 +28,16 @@ describe('complaint scout bridge', () => {
   const savedEnv = { ...process.env };
   let managerDir: string;
 
+  function restoreEnv(): void {
+    for (const key of Object.keys(process.env)) delete process.env[key];
+    Object.assign(process.env, savedEnv);
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env = { ...savedEnv };
+    restoreEnv();
     managerDir = mkdtempSync(path.join(tmpdir(), 'invoker-slack-scout-'));
+    process.env.HOME = managerDir;
     process.env.INVOKER_SLACK_MANAGER_DIR = managerDir;
     process.env.INVOKER_REPO_ROOT = managerDir;
     process.env.INVOKER_REPO_URL = 'https://github.com/acme/repo.git';
@@ -42,7 +48,7 @@ describe('complaint scout bridge', () => {
   });
 
   afterEach(() => {
-    process.env = savedEnv;
+    restoreEnv();
     rmSync(managerDir, { recursive: true, force: true });
   });
 

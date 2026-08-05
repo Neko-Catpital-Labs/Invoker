@@ -109,13 +109,13 @@ describe('REPRO Issue 1: orphan-reconcile clobbers the real infra failure with "
   });
 });
 
-describe('REPRO Issue 2: the boot call sites pass no `reason`, so the default always wins', () => {
-  it('every reconcileOrphanedInFlightTasksOnBoot(...) call in main.ts omits `reason`', () => {
+describe('REPRO Issue 2: the boot call sites pass the owner-restart reason', () => {
+  it('every reconcileOrphanedInFlightTasksOnBoot(...) call in main.ts passes OWNER_RESTART_REASON', () => {
     const calls = [...mainSrc.matchAll(/reconcileOrphanedInFlightTasksOnBoot\(\{([\s\S]*?)\}\)/g)];
     // Both known boot paths (headless owner + GUI owner) call it.
     expect(calls.length).toBeGreaterThanOrEqual(2);
     for (const m of calls) {
-      expect(m[1]).not.toMatch(/\breason\b\s*:/);
+      expect(m[1]).toMatch(/\breason\b\s*:\s*OWNER_RESTART_REASON\b/);
     }
   });
 
