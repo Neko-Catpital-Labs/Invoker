@@ -11,7 +11,7 @@
 # Usage:
 #   bash scripts/bench-workflow-submission-storm.sh [--count N]
 #
-# Exit 0 always (this is a benchmark, not a pass/fail gate); prints a
+# Exit nonzero for setup or submission failures; prints a
 # per-submission timing table and summary stats (min/p50/p95/max/mean).
 set -euo pipefail
 
