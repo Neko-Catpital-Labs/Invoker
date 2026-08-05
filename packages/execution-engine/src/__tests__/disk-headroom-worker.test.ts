@@ -47,6 +47,10 @@ function warnEval(label: string): DiskHeadroomEvaluation {
   };
 }
 
+function unknownEval(label: string, error = 'df failed'): DiskHeadroomEvaluation {
+  return { label, level: 'unknown', thresholds: { warnPercent: 85, criticalPercent: 95 }, error };
+}
+
 describe('disk-headroom worker', () => {
   it('registers and runs a disk check on tick', async () => {
     const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
@@ -212,5 +216,110 @@ describe('disk-headroom worker', () => {
 
     await runtime.tick('manual');
     expect(cleanupLocal).not.toHaveBeenCalled();
+  });
+
+  it('does not alert on a single unknown check for a target', async () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registerDiskHeadroomWorker(registry);
+
+    const localLabel = 'local /tmp/invoker-home';
+    const logger = makeLogger();
+    const writeActivityLog = vi.fn();
+    const upsertWorkerAction = vi.fn((row: unknown) => row);
+    const definition = registry.get(DISK_HEADROOM_WORKER_KIND)!;
+    const runtime = definition.factory({
+      store: { upsertWorkerAction } as any,
+      submitter: { submit: vi.fn() } as any,
+      logger,
+      diskHeadroom: {
+        localPath: '/tmp/invoker-home',
+        remoteTargets: [],
+        intervalMs: 0,
+        tickOnStart: false,
+        cleanupEnabled: false,
+        runCheck: async () => [unknownEval(localLabel)],
+        writeActivityLog,
+      },
+    });
+
+    await runtime.tick('manual');
+
+    expect(upsertWorkerAction).not.toHaveBeenCalled();
+    expect(writeActivityLog).not.toHaveBeenCalled();
+  });
+
+  it('alerts once a target has repeated unknown checks in a row', async () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registerDiskHeadroomWorker(registry);
+
+    const localLabel = 'local /tmp/invoker-home';
+    const logger = makeLogger();
+    const writeActivityLog = vi.fn();
+    const upsertWorkerAction = vi.fn((row: unknown) => row);
+    const definition = registry.get(DISK_HEADROOM_WORKER_KIND)!;
+    const runtime = definition.factory({
+      store: { upsertWorkerAction } as any,
+      submitter: { submit: vi.fn() } as any,
+      logger,
+      diskHeadroom: {
+        localPath: '/tmp/invoker-home',
+        remoteTargets: [],
+        intervalMs: 0,
+        tickOnStart: false,
+        cleanupEnabled: false,
+        runCheck: async () => [unknownEval(localLabel, 'ssh timeout')],
+        writeActivityLog,
+      },
+    });
+
+    await runtime.tick('manual');
+    expect(upsertWorkerAction).not.toHaveBeenCalled();
+
+    await runtime.tick('manual');
+    expect(upsertWorkerAction).toHaveBeenCalledTimes(1);
+    expect(upsertWorkerAction.mock.calls[0]?.[0]).toMatchObject({
+      workerKind: DISK_HEADROOM_WORKER_KIND,
+      actionType: 'disk-check-unknown',
+      subjectId: localLabel,
+      status: 'skipped',
+      payload: { reason: 'ssh timeout' },
+    });
+    expect(writeActivityLog).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalled();
+
+    await runtime.tick('manual');
+    expect(upsertWorkerAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the unknown streak once a check for that target succeeds again', async () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registerDiskHeadroomWorker(registry);
+
+    const localLabel = 'local /tmp/invoker-home';
+    const upsertWorkerAction = vi.fn((row: unknown) => row);
+    let tick = 0;
+    const definition = registry.get(DISK_HEADROOM_WORKER_KIND)!;
+    const runtime = definition.factory({
+      store: { upsertWorkerAction } as any,
+      submitter: { submit: vi.fn() } as any,
+      logger: makeLogger(),
+      diskHeadroom: {
+        localPath: '/tmp/invoker-home',
+        remoteTargets: [],
+        intervalMs: 0,
+        tickOnStart: false,
+        cleanupEnabled: false,
+        runCheck: async () => {
+          tick += 1;
+          return [tick === 2 ? warnEval(localLabel) : unknownEval(localLabel)];
+        },
+      },
+    });
+
+    await runtime.tick('manual');
+    await runtime.tick('manual');
+    await runtime.tick('manual');
+
+    expect(upsertWorkerAction).not.toHaveBeenCalled();
   });
 });
