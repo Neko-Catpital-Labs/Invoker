@@ -94,6 +94,8 @@ export interface PrMaintenanceWorkerOptions extends PrMaintenanceWorkerConfig {
   logger: Logger;
   instanceId?: string;
   installSignalHandlers?: boolean;
+  /** See WorkerRuntimeOptions.restartAfterSurvivedSignalMs. Default 30s for PR-maintenance workers. */
+  restartAfterSurvivedSignalMs?: number;
   tickOnStart?: boolean;
   onTick?: WorkerTick;
   spawnProcess?: typeof spawn;
@@ -229,6 +231,7 @@ function createPrMaintenanceWorker(
     startDelayMs: options.startDelayMs,
     tickOnStart: options.tickOnStart ?? false,
     installSignalHandlers: options.installSignalHandlers,
+    restartAfterSurvivedSignalMs: options.restartAfterSurvivedSignalMs ?? 30_000,
     onTick: options.onTick ?? createPrMaintenanceTick({
       entrypoint,
       logger: options.logger,
