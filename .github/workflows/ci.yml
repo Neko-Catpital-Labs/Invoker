@@ -119,7 +119,7 @@ jobs:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Reclaim workspace

@@ -24,6 +24,14 @@ vi.mock('@invoker/surfaces', () => {
   return { SlackSurface: surfacesMock.SlackSurface };
 }, { virtual: true });
 
+vi.mock('../runtime-config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../runtime-config.js')>();
+  return {
+    ...actual,
+    readSlackRuntimeConfig: vi.fn(() => ({ repoAliases: {} })),
+  };
+});
+
 describe('complaint scout bridge', () => {
   const savedEnv = { ...process.env };
   let managerDir: string;
@@ -39,6 +47,7 @@ describe('complaint scout bridge', () => {
     process.env.SLACK_APP_TOKEN = 'xapp-test';
     process.env.SLACK_SIGNING_SECRET = 'secret';
     process.env.SLACK_CHANNEL_ID = 'C_DEFAULT';
+    process.env.INVOKER_SLACK_DEFAULT_PRESET = 'codex';
   });
 
   afterEach(() => {
