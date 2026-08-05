@@ -86,6 +86,8 @@ export async function cleanupStandaloneOwnersForTestDir(testDir: string): Promis
     }
   }
 
+  if (pids.size === 0) return;
+
   await delay(1000);
 
   for (const pid of pids) {
