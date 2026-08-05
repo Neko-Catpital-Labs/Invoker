@@ -8,6 +8,12 @@ import { resolveRepoRoot } from '@invoker/contracts';
 const execFileAsync = promisify(execFile);
 const repoRoot = resolveRepoRoot(__dirname);
 
+type StandaloneOwnerProcess = {
+  pid: number;
+  cmdline: string;
+  envMarker: string;
+};
+
 export async function ensureHeadlessTestConfig(testDir: string): Promise<void> {
   await writeFile(path.join(testDir, 'e2e-config.json'), JSON.stringify({ autoFixRetries: 0 }), 'utf8');
 }
@@ -38,11 +44,41 @@ export async function runHeadlessClient(testDir: string, args: string[]): Promis
   });
 }
 
+async function readStandaloneOwnerProcess(pid: number, testDir: string, ipcSocketPath: string): Promise<StandaloneOwnerProcess | null> {
+  let cmdline: string;
+  let environ: string;
+  try {
+    cmdline = (await readFile(`/proc/${pid}/cmdline`, 'utf8')).replace(/\0/g, ' ');
+    if (
+      !cmdline.includes('packages/app/dist/main.js') ||
+      !cmdline.includes('--headless') ||
+      !cmdline.includes('owner-serve')
+    ) {
+      return null;
+    }
+    environ = await readFile(`/proc/${pid}/environ`, 'utf8');
+  } catch {
+    return null;
+  }
+
+  const dbMarker = `INVOKER_DB_DIR=${testDir}\0`;
+  if (environ.includes(dbMarker)) {
+    return { pid, cmdline, envMarker: dbMarker };
+  }
+
+  const ipcMarker = `INVOKER_IPC_SOCKET=${ipcSocketPath}\0`;
+  if (environ.includes(ipcMarker)) {
+    return { pid, cmdline, envMarker: ipcMarker };
+  }
+
+  return null;
+}
+
 export async function cleanupStandaloneOwnersForTestDir(testDir: string): Promise<void> {
   if (process.platform !== 'linux') return;
 
   const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
-  const pids = new Set<number>();
+  const owners = new Map<number, StandaloneOwnerProcess>();
   let procEntries: string[];
   try {
     procEntries = await readdir('/proc');
@@ -54,31 +90,11 @@ export async function cleanupStandaloneOwnersForTestDir(testDir: string): Promis
     if (!/^\d+$/.test(entry)) continue;
 
     const pid = Number(entry);
-    let cmdline: string;
-    let environ: string;
-    try {
-      cmdline = (await readFile(`/proc/${pid}/cmdline`, 'utf8')).replace(/\0/g, ' ');
-      if (
-        !cmdline.includes('packages/app/dist/main.js') ||
-        !cmdline.includes('--headless') ||
-        !cmdline.includes('owner-serve')
-      ) {
-        continue;
-      }
-      environ = await readFile(`/proc/${pid}/environ`, 'utf8');
-    } catch {
-      continue;
-    }
-
-    if (
-      environ.includes(`INVOKER_DB_DIR=${testDir}\0`) ||
-      environ.includes(`INVOKER_IPC_SOCKET=${ipcSocketPath}\0`)
-    ) {
-      pids.add(pid);
-    }
+    const owner = await readStandaloneOwnerProcess(pid, testDir, ipcSocketPath);
+    if (owner) owners.set(pid, owner);
   }
 
-  for (const pid of pids) {
+  for (const pid of owners.keys()) {
     try {
       process.kill(pid, 'SIGTERM');
     } catch {
@@ -86,11 +102,16 @@ export async function cleanupStandaloneOwnersForTestDir(testDir: string): Promis
     }
   }
 
-  if (pids.size === 0) return;
+  if (owners.size === 0) return;
 
   await delay(1000);
 
-  for (const pid of pids) {
+  for (const [pid, owner] of owners) {
+    const currentOwner = await readStandaloneOwnerProcess(pid, testDir, ipcSocketPath);
+    if (!currentOwner || currentOwner.cmdline !== owner.cmdline || currentOwner.envMarker !== owner.envMarker) {
+      continue;
+    }
+
     try {
       process.kill(pid, 0);
       process.kill(pid, 'SIGKILL');
