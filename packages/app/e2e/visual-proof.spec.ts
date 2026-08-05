@@ -1662,7 +1662,7 @@ test.describe('Visual proof capture', () => {
 
     // Drawer starts minimized.
     await expect(page.getByRole('button', { name: 'Partial terminal drawer' })).toBeVisible();
-    await expect(page.getByTestId('terminal-drawer-body')).toHaveCount(0);
+    await expect(page.getByTestId('terminal-drawer-body')).toBeHidden();
 
     const taskCard = page.locator('[title$="task-alpha"]').first();
     await expect(taskCard).toBeVisible({ timeout: 10000 });
