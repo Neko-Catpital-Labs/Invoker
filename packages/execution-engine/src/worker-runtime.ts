@@ -66,6 +66,10 @@ export interface WorkerRuntimeOptions {
   startDelayMs?: number;
   /** Run a tick immediately when `start()` is called. Default `true`. */
   tickOnStart?: boolean;
+  /** Initial delay before a queued follow-up tick after a failed tick. Default 250ms. */
+  backoffBaseMs?: number;
+  /** Maximum delay before a queued follow-up tick after repeated failures. Default 30s. */
+  backoffMaxMs?: number;
   /** OS signals that trigger deterministic shutdown. Default `SIGINT`/`SIGTERM`. */
   shutdownSignals?: NodeJS.Signals[];
   /** Install process signal handlers on `start()`. Default `true`. */
@@ -144,7 +148,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const signalHandlers = new Map<NodeJS.Signals, () => void>();
   let abortController = new AbortController();
 
-  const runOnce = async (reason: WorkerTickReason): Promise<void> => {
+  const runOnce = async (reason: WorkerTickReason): Promise<boolean> => {
     tickNumber += 1;
     const ctx: WorkerTickContext = {
       identity,
@@ -154,12 +158,14 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     };
     try {
       await options.onTick(ctx);
+      return true;
     } catch (err) {
       if (abortController.signal.aborted) {
         options.logger.info(`[worker:${identity.kind}] tick aborted`, { ...logFields, reason });
-        return;
+        return true;
       }
       options.logger.error(`[worker:${identity.kind}] tick failed`, { ...logFields, reason, err });
+      return false;
     }
   };
 
@@ -174,11 +180,20 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     }
     const drain = async (firstReason: WorkerTickReason): Promise<void> => {
       let nextReason: WorkerTickReason | null = firstReason;
+      let consecutiveFailures = 0;
       while (nextReason !== null && !stopped) {
         const current = nextReason;
         pendingReason = null;
-        await runOnce(current);
+        const succeeded = await runOnce(current);
+        consecutiveFailures = succeeded ? 0 : consecutiveFailures + 1;
         nextReason = pendingReason;
+        if (nextReason !== null && !succeeded && !stopped) {
+          const backoffMs = Math.min(
+            (options.backoffBaseMs ?? 250) * 2 ** (consecutiveFailures - 1),
+            options.backoffMaxMs ?? 30_000,
+          );
+          await delay(backoffMs);
+        }
       }
     };
     inFlight = drain(reason).finally(() => {
