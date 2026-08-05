@@ -1736,6 +1736,7 @@ describe('SshExecutor remote finalize retry/timeout', () => {
     if (previousTimeoutEnv === undefined) delete process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS;
     else process.env.INVOKER_REMOTE_FINALIZE_TIMEOUT_MS = previousTimeoutEnv;
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('execRemoteCapture escalates a timed-out hung child from SIGTERM to SIGKILL', async () => {
@@ -1744,7 +1745,6 @@ describe('SshExecutor remote finalize retry/timeout', () => {
     const assertion = expect(pending).rejects.toMatchObject({ timedOut: true });
 
     await vi.advanceTimersByTimeAsync(20);
-    await assertion;
 
     const sshProcess = spawnedProcesses[spawnedProcesses.length - 1];
     expect(sshProcess.kill).toHaveBeenCalledWith('SIGTERM');
@@ -1752,6 +1752,8 @@ describe('SshExecutor remote finalize retry/timeout', () => {
     await vi.advanceTimersByTimeAsync(SIGKILL_TIMEOUT_MS);
 
     expect(sshProcess.kill).toHaveBeenCalledWith('SIGKILL');
+    sshProcess.emit('close', null, 'SIGKILL');
+    await assertion;
   });
 
   it('logs any remote command failure (non-zero exit), not just the finalize step', async () => {
@@ -1805,10 +1807,23 @@ describe('SshExecutor remote finalize retry/timeout', () => {
       0,
     );
 
-    // 3 sequential attempts, each bounded by the 20ms finalize timeout.
+    // 3 sequential attempts, each bounded by the 20ms finalize timeout and
+    // followed by process close before the next attempt starts.
     await vi.advanceTimersByTimeAsync(20);
+    expect(spawnedProcesses.length).toBe(1);
+    await vi.advanceTimersByTimeAsync(SIGKILL_TIMEOUT_MS);
+    spawnedProcesses[0]!.emit('close', null, 'SIGKILL');
+
     await vi.advanceTimersByTimeAsync(20);
+    expect(spawnedProcesses.length).toBe(2);
+    await vi.advanceTimersByTimeAsync(SIGKILL_TIMEOUT_MS);
+    spawnedProcesses[1]!.emit('close', null, 'SIGKILL');
+
     await vi.advanceTimersByTimeAsync(20);
+    expect(spawnedProcesses.length).toBe(3);
+    await vi.advanceTimersByTimeAsync(SIGKILL_TIMEOUT_MS);
+    spawnedProcesses[2]!.emit('close', null, 'SIGKILL');
+
     const result = await resultPromise;
 
     expect(result.error).toContain('timed out after 20ms');
