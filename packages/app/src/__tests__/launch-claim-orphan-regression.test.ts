@@ -130,6 +130,7 @@ describe('launch-claim orphan regression (2026-05-22 storm)', () => {
           prepareTaskForNewAttempt: (taskId, reason) =>
             orchestrator.prepareTaskForNewAttempt(taskId, reason),
           getTask: (taskId) => orchestrator.getTask(taskId),
+          getTaskLaunchReadiness: (taskId) => orchestrator.getTaskLaunchReadiness(taskId),
         },
         taskRunnerProvider: () => fakeTaskRunner,
         ownerId: 'cb5-test-owner',
