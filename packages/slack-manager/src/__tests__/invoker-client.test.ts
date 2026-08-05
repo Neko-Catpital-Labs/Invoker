@@ -67,7 +67,7 @@ describe('IpcInvokerClient', () => {
       sleep: async (ms) => { nowMs += ms; },
       healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       minLaunchIntervalMs: 60_000, httpHealthCheck: async () => false,
-      readLockHolderPid: () => null,
+      readLockHolderPid: () => ({ kind: 'absent' }),
     });
 
     expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
@@ -106,7 +106,7 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => false),
       sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => true,
     });
 
@@ -119,11 +119,71 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => false),
       sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => false,
     });
 
     expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+  });
+
+  it('a single ambiguous lock read stays quiet (unhealthy, not lock-unknown)', async () => {
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      minLaunchIntervalMs: 0,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => ({ kind: 'error', detail: 'EACCES' }),
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+  });
+
+  it('escalates to lock-unknown after a repeated ambiguous lock read across launches', async () => {
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      minLaunchIntervalMs: 0,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => ({ kind: 'error', detail: 'EACCES' }),
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'lock-unknown', lockReadError: 'EACCES' });
+  });
+
+  it('resets the ambiguous-read streak once a launch succeeds or gets a definite answer', async () => {
+    let mode: 'error' | 'absent' = 'error';
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      minLaunchIntervalMs: 0,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => (mode === 'error' ? { kind: 'error', detail: 'EACCES' } : { kind: 'absent' }),
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+    mode = 'absent';
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+    mode = 'error';
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+  });
+
+  it('force launch never signals when the lock read is ambiguous', async () => {
+    const terminatePid = vi.fn();
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 1, launchHealthTimeoutMs: 10,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => ({ kind: 'error', detail: 'EACCES' }),
+      terminatePid,
+    });
+
+    await client.launch({ force: true });
+    expect(terminatePid).not.toHaveBeenCalled();
   });
 
   it('withRecovery propagates the launch failure cause on the thrown InvokerDownError', async () => {
@@ -132,7 +192,7 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => false),
       sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => true,
     });
 
@@ -155,7 +215,7 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => ownerUp),
       sleep: async () => {}, healthPollIntervalMs: 1, launchHealthTimeoutMs: 1_000,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => holderAlive,
       terminatePid,
     });
@@ -175,7 +235,7 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => ownerUp),
       sleep: async () => {}, healthPollIntervalMs: 1, launchHealthTimeoutMs: 1_000,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => true,
       terminatePid,
     });

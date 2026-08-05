@@ -84,6 +84,22 @@ function isEvaluationList(value: unknown): value is DiskHeadroomEvaluation[] {
   return Array.isArray(value);
 }
 
+const UNKNOWN_ALERT_STREAK = 2;
+
+class DiskUnknownStreakTracker {
+  private readonly streaks = new Map<string, number>();
+
+  recordAndShouldAlert(targetKey: string, isUnknown: boolean): boolean {
+    if (!isUnknown) {
+      this.streaks.delete(targetKey);
+      return false;
+    }
+    const next = (this.streaks.get(targetKey) ?? 0) + 1;
+    this.streaks.set(targetKey, next);
+    return next === UNKNOWN_ALERT_STREAK;
+  }
+}
+
 function recordCleanupDecision(
   store: WorkerDecisionStore | undefined,
   result: DiskCleanupResult,
@@ -115,6 +131,7 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
   const cooldown = new DiskCleanupCooldownTracker(
     options.cleanupCooldownMs ?? resolveDiskCleanupCooldownMs(),
   );
+  const unknownStreaks = new DiskUnknownStreakTracker();
 
   return createWorkerRuntime({
     kind: DISK_HEADROOM_WORKER_KIND,
@@ -135,8 +152,32 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
         writeActivityLog: options.writeActivityLog,
       });
       if (ctx.signal?.aborted) return;
-      if (!cleanupEnabled) return;
       if (!isEvaluationList(evaluationsRaw)) return;
+
+      for (const evaluation of evaluationsRaw) {
+        const shouldAlert = unknownStreaks.recordAndShouldAlert(
+          evaluation.label,
+          evaluation.level === 'unknown',
+        );
+        if (!shouldAlert) continue;
+        const message = `[disk-headroom] ${evaluation.label} has failed its last ${UNKNOWN_ALERT_STREAK} disk checks — usage can no longer be verified`;
+        options.logger.error(message, { module: 'disk-headroom', targetKey: evaluation.label });
+        options.writeActivityLog?.('error', message);
+        if (options.store) {
+          recordWorkerDecisionRow(options.store, {
+            workerKind: DISK_HEADROOM_WORKER_KIND,
+            actionType: 'disk-check-unknown',
+            externalKey: `unknown:${evaluation.label}`,
+            subjectType: 'disk-target',
+            subjectId: evaluation.label,
+            status: 'skipped',
+            summary: message,
+            reason: evaluation.level === 'unknown' ? evaluation.error : undefined,
+          });
+        }
+      }
+
+      if (!cleanupEnabled) return;
 
       const critical = evaluationsRaw.filter((e) => e.level === 'critical');
       for (const evaluation of critical) {

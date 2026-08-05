@@ -35,13 +35,14 @@ export interface ConnectableBus extends MessageBus {
 }
 
 /** Why a (re)launch did not produce a healthy owner. */
-export type LaunchFailureCause = 'throttled' | 'unhealthy' | 'split-brain';
+export type LaunchFailureCause = 'throttled' | 'unhealthy' | 'split-brain' | 'lock-unknown';
 
 export interface LaunchResult {
   healthy: boolean;
   cause?: LaunchFailureCause;
   /** PID holding the DB writer lock while unreachable over IPC (split-brain only). */
   holderPid?: number;
+  lockReadError?: string;
 }
 
 /** Thrown when an operation cannot reach the Invoker owner (transport-level down). */
@@ -50,6 +51,7 @@ export class InvokerDownError extends Error {
     message: string,
     readonly failureCause?: LaunchFailureCause,
     readonly holderPid?: number,
+    readonly lockReadError?: string,
   ) {
     super(message);
     this.name = 'InvokerDownError';
@@ -66,6 +68,10 @@ export function describeInvokerDown(err: InvokerDownError): string {
       return `Invoker cannot be relaunched: its database is locked by PID ${err.holderPid ?? '<unknown>'}, `
         + 'which is alive but not answering IPC (often a stray Invoker GUI). Reply `@Invoker restart` to force '
         + `recovery (this stops PID ${err.holderPid ?? '<unknown>'}), or stop that process manually.`;
+    case 'lock-unknown':
+      return 'Invoker cannot be relaunched: I could not confirm whether another process is holding the '
+        + `database lock (${err.lockReadError ?? 'unreadable lock file'}). Reply \`@Invoker restart\` to force `
+        + 'recovery, or check `~/.invoker/invoker.db.lock/pid` manually.';
     default:
       return 'Invoker is down and I could not bring it back. Reply `@Invoker restart` to retry.';
   }
@@ -127,7 +133,7 @@ export interface InvokerClientOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   httpHealthCheck?: () => Promise<boolean>;
-  readLockHolderPid?: () => number | null;
+  readLockHolderPid?: () => LockHolderReadResult;
   isPidAlive?: (pid: number) => boolean;
   terminatePid?: (pid: number) => void;
 }
@@ -141,6 +147,7 @@ interface SubscriptionEntry {
 const QUERY_TIMEOUT_MS = 5_000;
 const OUTPUT_QUERY_TIMEOUT_MS = 10_000;
 const EXEC_TIMEOUT_MS = 60_000;
+const LOCK_READ_UNKNOWN_ALERT_STREAK = 2;
 
 function defaultSleep(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -175,14 +182,22 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function defaultReadLockHolderPid(): number | null {
+export type LockHolderReadResult =
+  | { kind: 'absent' }
+  | { kind: 'found'; pid: number }
+  | { kind: 'error'; detail: string };
+
+function defaultReadLockHolderPid(): LockHolderReadResult {
+  let raw: string;
   try {
-    const raw = readFileSync(join(resolveInvokerHomeRoot(), 'invoker.db.lock', 'pid'), 'utf8').trim();
-    const pid = Number.parseInt(raw, 10);
-    return Number.isFinite(pid) ? pid : null;
-  } catch {
-    return null;
+    raw = readFileSync(join(resolveInvokerHomeRoot(), 'invoker.db.lock', 'pid'), 'utf8').trim();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
+    return { kind: 'error', detail: errMessage(err) };
   }
+  const pid = Number.parseInt(raw, 10);
+  if (!Number.isFinite(pid)) return { kind: 'error', detail: `unparseable lock pid: ${JSON.stringify(raw)}` };
+  return { kind: 'found', pid };
 }
 
 function defaultIsPidAlive(pid: number): boolean {
@@ -207,7 +222,7 @@ export class IpcInvokerClient implements InvokerClient {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly httpHealthCheck: () => Promise<boolean>;
-  private readonly readLockHolderPid: () => number | null;
+  private readonly readLockHolderPid: () => LockHolderReadResult;
   private readonly isPidAlive: (pid: number) => boolean;
   private readonly terminatePid: (pid: number) => void;
 
@@ -215,6 +230,7 @@ export class IpcInvokerClient implements InvokerClient {
   private healthy = false;
   private lastLaunchAt = 0;
   private launchInFlight: Promise<LaunchResult> | null = null;
+  private lockReadUnknownStreak = 0;
   private readonly subs = new Set<SubscriptionEntry>();
   private readonly reconnectHandlers = new Set<() => void>();
 
@@ -317,6 +333,7 @@ export class IpcInvokerClient implements InvokerClient {
           `Invoker is down and could not be relaunched (${result.cause ?? 'unhealthy'})`,
           result.cause,
           result.holderPid,
+          result.lockReadError,
         );
       }
       return fn();
@@ -346,18 +363,33 @@ export class IpcInvokerClient implements InvokerClient {
       await this.forceReclaimSplitBrainHolder();
     }
     if (await this.doLaunch()) return { healthy: true };
-    const holderPid = this.detectUnreachableLockHolder();
-    if (holderPid !== null) {
-      this.log('error', `relaunch failed: DB writer lock held by live, IPC-unreachable PID ${holderPid} (split-brain)`);
-      return { healthy: false, cause: 'split-brain', holderPid };
+    const holder = this.detectUnreachableLockHolder();
+    if (holder.status === 'unreachable') {
+      this.lockReadUnknownStreak = 0;
+      this.log('error', `relaunch failed: DB writer lock held by live, IPC-unreachable PID ${holder.pid} (split-brain)`);
+      return { healthy: false, cause: 'split-brain', holderPid: holder.pid };
     }
+    if (holder.status === 'unknown') {
+      this.lockReadUnknownStreak += 1;
+      this.log('warn', `relaunch failed: could not confirm the DB writer lock holder (${holder.detail}), streak=${this.lockReadUnknownStreak}`);
+      if (this.lockReadUnknownStreak >= LOCK_READ_UNKNOWN_ALERT_STREAK) {
+        this.log('error', `relaunch failed: lock holder unconfirmable for ${this.lockReadUnknownStreak} consecutive attempts (${holder.detail})`);
+        return { healthy: false, cause: 'lock-unknown', lockReadError: holder.detail };
+      }
+      return { healthy: false, cause: 'unhealthy' };
+    }
+    this.lockReadUnknownStreak = 0;
     return { healthy: false, cause: 'unhealthy' };
   }
 
-  private detectUnreachableLockHolder(): number | null {
-    const holderPid = this.readLockHolderPid();
-    if (holderPid === null || holderPid === process.pid) return null;
-    return this.isPidAlive(holderPid) ? holderPid : null;
+  private detectUnreachableLockHolder():
+    | { status: 'none' }
+    | { status: 'unreachable'; pid: number }
+    | { status: 'unknown'; detail: string } {
+    const read = this.readLockHolderPid();
+    if (read.kind === 'error') return { status: 'unknown', detail: read.detail };
+    if (read.kind === 'absent' || read.pid === process.pid) return { status: 'none' };
+    return this.isPidAlive(read.pid) ? { status: 'unreachable', pid: read.pid } : { status: 'none' };
   }
 
   /**
@@ -367,8 +399,9 @@ export class IpcInvokerClient implements InvokerClient {
    */
   private async forceReclaimSplitBrainHolder(): Promise<void> {
     if (await this.ping()) return;
-    const holderPid = this.detectUnreachableLockHolder();
-    if (holderPid === null) return;
+    const holder = this.detectUnreachableLockHolder();
+    if (holder.status !== 'unreachable') return;
+    const holderPid = holder.pid;
     this.log('warn', `force restart: writer lock held by unreachable PID ${holderPid} — sending SIGTERM`);
     try {
       this.terminatePid(holderPid);
