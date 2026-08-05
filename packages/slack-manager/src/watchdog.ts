@@ -62,12 +62,20 @@ export function createWatchdog(deps: WatchdogDeps): Watchdog {
   let busy = false;
   let timer: ReturnType<typeof setInterval> | undefined;
 
-  const splitBrainDetail = (): string =>
-    lastLaunchFailure?.cause === 'split-brain'
-      ? ` The database is locked by PID ${lastLaunchFailure.holderPid ?? '<unknown>'}, which is alive but not `
+  const splitBrainDetail = (): string => {
+    if (lastLaunchFailure?.cause === 'split-brain') {
+      return ` The database is locked by PID ${lastLaunchFailure.holderPid ?? '<unknown>'}, which is alive but not `
         + 'answering IPC (often a stray Invoker GUI) — auto-relaunch cannot succeed while it runs. '
-        + 'Replying `@Invoker restart` will stop that process and take over.'
-      : '';
+        + 'Replying `@Invoker restart` will stop that process and take over.';
+    }
+    if (lastLaunchFailure?.cause === 'lock-unknown') {
+      return ' I could not confirm whether another process is holding the database lock '
+        + `(${lastLaunchFailure.lockReadError ?? 'unreadable lock file'}) — I do not know if this is a stray `
+        + 'process or a transient read error. Replying `@Invoker restart` will force recovery, '
+        + 'or check `~/.invoker/invoker.db.lock/pid` manually.';
+    }
+    return '';
+  };
 
   const reset = (): void => {
     consecutiveFailures = 0;

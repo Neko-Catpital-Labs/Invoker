@@ -1,6 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { TransportError, TransportErrorCode } from '@invoker/transport';
-import { IpcInvokerClient, InvokerDownError, type ConnectableBus } from '../invoker-client.js';
+import { IpcInvokerClient, InvokerDownError, defaultReadLockHolderPid, type ConnectableBus } from '../invoker-client.js';
 
 /** A fake IpcBus whose owner-ping succeeds only while `ownerUp()` is true. */
 function makeFakeBus(ownerUp: () => boolean): ConnectableBus & { subscribe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> } {
@@ -67,7 +70,7 @@ describe('IpcInvokerClient', () => {
       sleep: async (ms) => { nowMs += ms; },
       healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       minLaunchIntervalMs: 60_000, httpHealthCheck: async () => false,
-      readLockHolderPid: () => null,
+      readLockHolderPid: () => ({ kind: 'absent' }),
     });
 
     expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
@@ -106,7 +109,7 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => false),
       sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => true,
     });
 
@@ -119,11 +122,92 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => false),
       sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => false,
     });
 
     expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+  });
+
+  it('a single ambiguous lock read stays quiet (unhealthy, not lock-unknown)', async () => {
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      minLaunchIntervalMs: 0,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => ({ kind: 'error', detail: 'EACCES' }),
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+  });
+
+  it('escalates to lock-unknown after a repeated ambiguous lock read across launches', async () => {
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      minLaunchIntervalMs: 0,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => ({ kind: 'error', detail: 'EACCES' }),
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'lock-unknown', lockReadError: 'EACCES' });
+  });
+
+  it('resets the ambiguous-read streak once a launch succeeds or gets a definite answer', async () => {
+    let mode: 'error' | 'absent' = 'error';
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      minLaunchIntervalMs: 0,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => (mode === 'error' ? { kind: 'error', detail: 'EACCES' } : { kind: 'absent' }),
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+    mode = 'absent';
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+    mode = 'error';
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+  });
+
+  it('a healthy launch resets the ambiguous-read streak', async () => {
+    let ownerUp = false;
+    let spawnSucceeds = false;
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(() => { if (spawnSucceeds) ownerUp = true; }),
+      log: () => {},
+      busFactory: () => makeFakeBus(() => ownerUp),
+      sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
+      minLaunchIntervalMs: 0,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => ({ kind: 'error', detail: 'EACCES' }),
+    });
+
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+    spawnSucceeds = true;
+    expect(await client.launch()).toEqual({ healthy: true });
+    ownerUp = false;
+    spawnSucceeds = false;
+    expect(await client.launch()).toEqual({ healthy: false, cause: 'unhealthy' });
+  });
+
+  it('force launch never signals when the lock read is ambiguous', async () => {
+    const terminatePid = vi.fn();
+    const client = new IpcInvokerClient({
+      spawnInvoker: vi.fn(), log: () => {},
+      busFactory: () => makeFakeBus(() => false),
+      sleep: async () => {}, healthPollIntervalMs: 1, launchHealthTimeoutMs: 10,
+      httpHealthCheck: async () => false,
+      readLockHolderPid: () => ({ kind: 'error', detail: 'EACCES' }),
+      terminatePid,
+    });
+
+    await client.launch({ force: true });
+    expect(terminatePid).not.toHaveBeenCalled();
   });
 
   it('withRecovery propagates the launch failure cause on the thrown InvokerDownError', async () => {
@@ -132,7 +216,7 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => false),
       sleep: async () => {}, healthPollIntervalMs: 2, launchHealthTimeoutMs: 10,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => true,
     });
 
@@ -155,7 +239,7 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => ownerUp),
       sleep: async () => {}, healthPollIntervalMs: 1, launchHealthTimeoutMs: 1_000,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => holderAlive,
       terminatePid,
     });
@@ -175,7 +259,7 @@ describe('IpcInvokerClient', () => {
       busFactory: () => makeFakeBus(() => ownerUp),
       sleep: async () => {}, healthPollIntervalMs: 1, launchHealthTimeoutMs: 1_000,
       httpHealthCheck: async () => false,
-      readLockHolderPid: () => 4242,
+      readLockHolderPid: () => ({ kind: 'found', pid: 4242 }),
       isPidAlive: () => true,
       terminatePid,
     });
@@ -206,5 +290,35 @@ describe('IpcInvokerClient', () => {
     expect(await client.ping()).toBe(true);          // fresh probe connects + re-subscribes
     expect(buses).toHaveLength(2);
     expect(buses[1].subscribe).toHaveBeenCalledWith('task.delta', expect.any(Function));
+  });
+});
+
+describe('defaultReadLockHolderPid', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  function withPidFile(raw: string): string {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-lock-'));
+    mkdirSync(join(root, 'invoker.db.lock'), { recursive: true });
+    writeFileSync(join(root, 'invoker.db.lock', 'pid'), raw);
+    vi.stubEnv('INVOKER_DB_DIR', root);
+    return root;
+  }
+
+  it('accepts a plain positive integer token', () => {
+    const root = withPidFile('4242');
+    try {
+      expect(defaultReadLockHolderPid()).toEqual({ kind: 'found', pid: 4242 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['4242.tmp', '-5', '0', '99007199254740993', 'abc', ''])('rejects %j as an error, not a pid', (raw) => {
+    const root = withPidFile(raw);
+    try {
+      expect(defaultReadLockHolderPid().kind).toBe('error');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
