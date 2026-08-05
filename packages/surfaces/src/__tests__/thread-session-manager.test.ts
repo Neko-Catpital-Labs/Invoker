@@ -486,6 +486,22 @@ describe('SessionManager channel isolation with real persistence', () => {
     // a brand-new, empty session is created instead. No bleed.
     expect(handle!.history).toEqual([]);
   });
+
+  it('never writes channelId="" — PlanConversation.saveState() persists the real channelId on every turn', async () => {
+    const THREAD_TS = '1785890000.000003';
+    manager.start();
+    const id = new SessionIdentifier('C-REAL-CHANNEL', THREAD_TS);
+    const handle = await manager.getOrCreateSession(id, 'U001');
+    expect(handle).not.toBeNull();
+
+    // sendMessage triggers PlanConversation.saveState() internally (child_process.spawn
+    // is mocked at module level in this file — see the top of this file).
+    await handle!.sendMessage('hello');
+
+    const persisted = repo.loadConversation(THREAD_TS);
+    expect(persisted?.channelId).toBe('C-REAL-CHANNEL');
+    expect(persisted?.channelId).not.toBe('');
+  });
 });
 
 // SessionHandle.lastTurnPlanIntentSignal / lastTurnDraftPlanText are pure

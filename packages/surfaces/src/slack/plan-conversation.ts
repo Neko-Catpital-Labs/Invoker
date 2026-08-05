@@ -116,6 +116,9 @@ export interface PlanConversationConfig {
   timeoutMs?: number;
   /** Slack thread timestamp. Required for persistence. */
   threadTs?: string;
+  /** Slack channel id this thread belongs to. Persisted alongside threadTs so a
+   * restored conversation can never be recovered into the wrong channel. */
+  channelId?: string;
   /** Repository for persisting conversation state across restarts. */
   conversationRepo?: ConversationRepository;
   /** Default branch name (e.g. "master"). Used when plan YAML omits baseBranch. */
@@ -445,6 +448,7 @@ export class PlanConversation {
   readonly workingDir?: string;
   private timeoutMs: number;
   private threadTs?: string;
+  private channelId?: string;
   private conversationRepo?: ConversationRepository;
   private defaultBranch?: string;
   private repoUrl?: string;
@@ -481,6 +485,7 @@ export class PlanConversation {
     this.workingDir = config.workingDir;
     this.timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.threadTs = config.threadTs;
+    this.channelId = config.channelId;
     this.conversationRepo = config.conversationRepo;
     this.defaultBranch = config.defaultBranch;
     this.repoUrl = config.repoUrl;
@@ -1003,7 +1008,7 @@ export class PlanConversation {
         messages,
         null,
         this._planSubmitted,
-        undefined,
+        this.channelId,
         undefined,
         this.mode,
       );
