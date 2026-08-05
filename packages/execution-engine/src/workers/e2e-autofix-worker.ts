@@ -97,9 +97,11 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions): Promise<
 
   let child: ChildProcess;
   try {
+    const childEnv = { ...process.env, ...options.env };
+    delete childEnv.INVOKER_HEADLESS_STANDALONE;
     child = spawnProcess(shell, [scriptPath], {
       cwd: repoRoot,
-      env: { ...process.env, ...options.env },
+      env: childEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {

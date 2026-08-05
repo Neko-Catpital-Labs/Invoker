@@ -127,6 +127,53 @@ describe('e2e auto-fix worker', () => {
     );
   });
 
+  it('does not leak standalone headless mode into the spawned child env', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const harness = makeSpawnHarness();
+    const originalStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+    const originalUnrelated = process.env.INVOKER_E2E_AUTOFIX_TEST_UNRELATED;
+    const originalOverride = process.env.INVOKER_E2E_AUTOFIX_TEST_OVERRIDE;
+
+    process.env.INVOKER_HEADLESS_STANDALONE = '1';
+    process.env.INVOKER_E2E_AUTOFIX_TEST_UNRELATED = 'from-process-env';
+    process.env.INVOKER_E2E_AUTOFIX_TEST_OVERRIDE = 'from-process-env';
+
+    try {
+      const tick = createE2eAutoFixTick({
+        logger,
+        repoRoot,
+        env: { INVOKER_E2E_AUTOFIX_TEST_OVERRIDE: 'from-options-env' },
+        spawnProcess: harness.spawnProcess,
+      });
+
+      await tick(makeCtx());
+
+      expect(harness.calls).toHaveLength(1);
+      expect(harness.calls[0]?.options.env).not.toHaveProperty('INVOKER_HEADLESS_STANDALONE');
+      expect(harness.calls[0]?.options.env).toEqual(expect.objectContaining({
+        INVOKER_E2E_AUTOFIX_TEST_UNRELATED: 'from-process-env',
+        INVOKER_E2E_AUTOFIX_TEST_OVERRIDE: 'from-options-env',
+      }));
+    } finally {
+      if (originalStandalone === undefined) {
+        delete process.env.INVOKER_HEADLESS_STANDALONE;
+      } else {
+        process.env.INVOKER_HEADLESS_STANDALONE = originalStandalone;
+      }
+      if (originalUnrelated === undefined) {
+        delete process.env.INVOKER_E2E_AUTOFIX_TEST_UNRELATED;
+      } else {
+        process.env.INVOKER_E2E_AUTOFIX_TEST_UNRELATED = originalUnrelated;
+      }
+      if (originalOverride === undefined) {
+        delete process.env.INVOKER_E2E_AUTOFIX_TEST_OVERRIDE;
+      } else {
+        process.env.INVOKER_E2E_AUTOFIX_TEST_OVERRIDE = originalOverride;
+      }
+    }
+  });
+
   it('resolves when the script exits with code 0', async () => {
     const repoRoot = makeRepoRoot();
     const tick = createE2eAutoFixTick({
