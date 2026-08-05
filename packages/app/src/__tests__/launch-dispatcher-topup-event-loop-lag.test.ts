@@ -20,6 +20,8 @@ import { Orchestrator, type PlanDefinition } from '@invoker/workflow-core';
  */
 
 const BURST_TASK_COUNT = 150;
+const CAPPED_START_LIMIT = 32;
+const PAIRED_SAMPLE_COUNT = 3;
 
 function singleTaskWorkflow(name: string): PlanDefinition {
   return {
@@ -50,6 +52,11 @@ async function measureMaxSyncGapMs(fn: () => void, probeMs = 4): Promise<number>
     clearInterval(timer);
   }
   return maxGapMs;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
 }
 
 describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
@@ -83,6 +90,25 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
     return orchestrator;
   }
 
+  async function measureUncappedBurstGapMs(): Promise<number> {
+    const orchestrator = await buildBurstOrchestrator();
+    return measureMaxSyncGapMs(() => {
+      const started = orchestrator.startExecution();
+      expect(started.length).toBe(BURST_TASK_COUNT);
+    });
+  }
+
+  async function measureCappedBurstGapMs(): Promise<number> {
+    const orchestrator = await buildBurstOrchestrator();
+    return measureMaxSyncGapMs(() => {
+      // 32 matches LaunchDispatcher's default maxLeasesPerPoll
+      // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
+      // call topUpReadyLaunches() now makes.
+      const started = orchestrator.startExecution({ limit: CAPPED_START_LIMIT });
+      expect(started.length).toBe(CAPPED_START_LIMIT);
+    });
+  }
+
   // Measured on this machine (in-memory SQLite, no other load): unbounded
   // startExecution() over this exact 150-task burst takes ~2.2s; capped at
   // { limit: 32 } (LaunchDispatcher's default maxLeasesPerPoll) takes ~0.7s.
@@ -108,25 +134,32 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   it(
     'stays meaningfully faster: capped startExecution({ limit: 32 }) over the same 150-task ready burst',
     async () => {
-      const uncappedOrchestrator = await buildBurstOrchestrator();
-      const uncappedMaxGapMs = await measureMaxSyncGapMs(() => {
-        const started = uncappedOrchestrator.startExecution();
-        expect(started.length).toBe(BURST_TASK_COUNT);
-      });
+      const uncappedSamples: number[] = [];
+      const cappedSamples: number[] = [];
 
-      const cappedOrchestrator = await buildBurstOrchestrator();
-      const cappedMaxGapMs = await measureMaxSyncGapMs(() => {
-        // 32 matches LaunchDispatcher's default maxLeasesPerPoll
-        // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
-        // call topUpReadyLaunches() now makes.
-        const started = cappedOrchestrator.startExecution({ limit: 32 });
-        expect(started.length).toBe(32);
-      });
+      for (let i = 0; i < PAIRED_SAMPLE_COUNT; i += 1) {
+        if (i % 2 === 0) {
+          uncappedSamples.push(await measureUncappedBurstGapMs());
+          cappedSamples.push(await measureCappedBurstGapMs());
+        } else {
+          cappedSamples.push(await measureCappedBurstGapMs());
+          uncappedSamples.push(await measureUncappedBurstGapMs());
+        }
+      }
+
+      const uncappedMedianGapMs = median(uncappedSamples);
+      const cappedMedianGapMs = median(cappedSamples);
+
       expect(
-        cappedMaxGapMs,
-        `cappedMaxGapMs=${cappedMaxGapMs}, uncappedMaxGapMs=${uncappedMaxGapMs} (${BURST_TASK_COUNT}-task burst)`,
-      ).toBeLessThan(uncappedMaxGapMs);
+        cappedMedianGapMs,
+        [
+          `cappedMedianGapMs=${cappedMedianGapMs}, uncappedMedianGapMs=${uncappedMedianGapMs}`,
+          `cappedSamples=[${cappedSamples.join(', ')}]`,
+          `uncappedSamples=[${uncappedSamples.join(', ')}]`,
+          `burst=${BURST_TASK_COUNT}, cappedLimit=${CAPPED_START_LIMIT}`,
+        ].join('; '),
+      ).toBeLessThan(uncappedMedianGapMs);
     },
-    30_000,
+    60_000,
   );
 });
