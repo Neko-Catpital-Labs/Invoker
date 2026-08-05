@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import * as path from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { resolveRepoRoot } from '@invoker/contracts';
 
@@ -22,6 +23,8 @@ export function headlessTestEnv(testDir: string): NodeJS.ProcessEnv {
     INVOKER_DB_DIR: testDir,
     INVOKER_IPC_SOCKET: ipcSocketPath,
     INVOKER_REPO_CONFIG_PATH: configPath,
+    INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS:
+      process.env.INVOKER_E2E_STANDALONE_OWNER_IDLE_TIMEOUT_MS ?? '5000',
   };
 }
 
@@ -33,6 +36,66 @@ export async function runHeadlessClient(testDir: string, args: string[]): Promis
     env: headlessTestEnv(testDir),
     maxBuffer: 10 * 1024 * 1024,
   });
+}
+
+export async function cleanupStandaloneOwnersForTestDir(testDir: string): Promise<void> {
+  if (process.platform !== 'linux') return;
+
+  const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
+  const pids = new Set<number>();
+  let procEntries: string[];
+  try {
+    procEntries = await readdir('/proc');
+  } catch {
+    return;
+  }
+
+  for (const entry of procEntries) {
+    if (!/^\d+$/.test(entry)) continue;
+
+    const pid = Number(entry);
+    let cmdline: string;
+    let environ: string;
+    try {
+      cmdline = (await readFile(`/proc/${pid}/cmdline`, 'utf8')).replace(/\0/g, ' ');
+      if (
+        !cmdline.includes('packages/app/dist/main.js') ||
+        !cmdline.includes('--headless') ||
+        !cmdline.includes('owner-serve')
+      ) {
+        continue;
+      }
+      environ = await readFile(`/proc/${pid}/environ`, 'utf8');
+    } catch {
+      continue;
+    }
+
+    if (
+      environ.includes(`INVOKER_DB_DIR=${testDir}\0`) ||
+      environ.includes(`INVOKER_IPC_SOCKET=${ipcSocketPath}\0`)
+    ) {
+      pids.add(pid);
+    }
+  }
+
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // Process already exited.
+    }
+  }
+
+  await delay(1000);
+
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 0);
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Process already exited.
+    }
+  }
 }
 
 export function parseWorkflowId(stdout: string): string {
