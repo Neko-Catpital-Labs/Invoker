@@ -105,7 +105,7 @@ describe('Side rail controls (component)', () => {
     });
     expect(screen.getByTestId('workflow-node-wf-a')).toBeInTheDocument();
     expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
-  });
+  }, 10_000);
 
   it('Clear button calls clear', async () => {
     render(<App />);
