@@ -1,0 +1,8 @@
+---
+description: Product source must not silently swallow caught errors
+alwaysApply: true
+---
+
+# No silent catch
+
+Product source must not silently swallow caught errors; follow the canonical policy in `CLAUDE.md`.

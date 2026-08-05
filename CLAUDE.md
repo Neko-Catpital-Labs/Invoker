@@ -89,6 +89,18 @@ Allowed comments only:
 
 Before finishing a PR, remove any comment you added unless it matches one of the allowed cases.
 
+## Error Handling
+
+In product source, every `try`/`catch` block and every promise `.catch()` handler must handle failures visibly. A handler must do at least one of:
+
+- log through the project logger
+- rethrow the error
+- return a typed error result
+
+Never silently swallow caught errors. There is no per-line escape hatch for this policy.
+
+This applies to product source under `packages/*/src`. Tests and test support are excluded by category: `__tests__/`, `*.test.*`, `*.spec.*`, `e2e/`, and `fixtures/`.
+
 ## Code Navigation
 
 Use LSP tools (`goToDefinition`, `findReferences`, `documentSymbol`, `workspaceSymbol`, `incomingCalls`, `outgoingCalls`, `hover`) for any task involving symbols, types, or cross-file relationships. Use Grep and Glob for literal text searches and file discovery.

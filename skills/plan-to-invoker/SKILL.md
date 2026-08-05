@@ -15,6 +15,8 @@ description: >
 
 Minimal controller skill. Keep policy short here; use deterministic scripts and references for execution details.
 
+For product-source error handling, follow the canonical no-silent-catch policy in `CLAUDE.md`.
+
 ## Benchmark/direct-output mode
 
 Use this early-exit mode before the full interactive flow when the request is a headless benchmark or direct-output prompt. Trigger signals include `For this benchmark`, `Do not submit the plan`, `Required output path: <absolute path>`, or `Write the final YAML plan to ...`.
