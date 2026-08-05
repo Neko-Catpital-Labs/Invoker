@@ -95,13 +95,17 @@ COMMON_ENV=(
   INVOKER_REPO_CONFIG_PATH="$CONFIG_PATH"
 )
 
+monotonic_ns() {
+  python3 -c 'import time; print(time.monotonic_ns())'
+}
+
 echo "==> Submission 0 (bootstrap): spawns + waits for a REAL persistent owner process, excluded from stats"
 echo "    (NOT using INVOKER_HEADLESS_STANDALONE=1 — that runs in-process with no owner at all,"
 echo "     which under-measures every later submission's real IPC-delegation cost)"
-BOOTSTRAP_START=$(date +%s%N)
+BOOTSTRAP_START=$(monotonic_ns)
 env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PLAN_PATH" \
   >"$TMP_DIR/bootstrap.stdout.log" 2>"$TMP_DIR/bootstrap.stderr.log"
-BOOTSTRAP_END=$(date +%s%N)
+BOOTSTRAP_END=$(monotonic_ns)
 BOOTSTRAP_MS=$(( (BOOTSTRAP_END - BOOTSTRAP_START) / 1000000 ))
 echo "    bootstrap submission: ${BOOTSTRAP_MS}ms (real owner boot + first submit, not counted below)"
 
@@ -115,10 +119,10 @@ fi
 echo "==> Submitting $COUNT workflows sequentially against the warm owner"
 : > "$TIMINGS_FILE"
 for i in $(seq 1 "$COUNT"); do
-  START=$(date +%s%N)
+  START=$(monotonic_ns)
   env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PLAN_PATH" \
     >"$TMP_DIR/run-$i.stdout.log" 2>"$TMP_DIR/run-$i.stderr.log"
-  END=$(date +%s%N)
+  END=$(monotonic_ns)
   MS=$(( (END - START) / 1000000 ))
   echo "$MS" >> "$TIMINGS_FILE"
   printf 'submission %3d: %5dms\n' "$i" "$MS"
