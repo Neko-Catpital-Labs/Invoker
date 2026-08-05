@@ -411,6 +411,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       let closed = false;
       let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
       let killTimer: ReturnType<typeof setTimeout> | undefined;
+      let timeoutError: (Error & { timedOut?: boolean }) | undefined;
       const finish = (fn: () => void): void => {
         if (settled) return;
         settled = true;
@@ -435,7 +436,9 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
             stdoutBytes: out.length,
             stderrBytes: err.length,
           });
-          if (code === 0) resolve(out);
+          if (timeoutError) {
+            reject(timeoutError);
+          } else if (code === 0) resolve(out);
           else {
             logRemoteCommandFailure(this.host, this.user, phase, `exited with code ${code ?? 'null'}`, err, out);
             reject(createSshRemoteScriptError(code, out, err, phase));
@@ -452,13 +455,10 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
             if (!closed) killProcessGroup(child, 'SIGKILL');
           }, SIGKILL_TIMEOUT_MS);
           killTimer.unref?.();
-          finish(() => {
-            const timeoutError = createSshRemoteScriptError(null, out, err, phase) as Error & { timedOut?: boolean };
-            const prefix = `SSH remote command timed out after ${opts.timeoutMs}ms${phase ? ` (phase=${phase})` : ''}`;
-            timeoutError.message = `${prefix}\n${timeoutError.message}`;
-            timeoutError.timedOut = true;
-            reject(timeoutError);
-          });
+          timeoutError = createSshRemoteScriptError(null, out, err, phase) as Error & { timedOut?: boolean };
+          const prefix = `SSH remote command timed out after ${opts.timeoutMs}ms${phase ? ` (phase=${phase})` : ''}`;
+          timeoutError.message = `${prefix}\n${timeoutError.message}`;
+          timeoutError.timedOut = true;
         }, opts.timeoutMs);
         timeoutTimer.unref?.();
       }
@@ -1024,6 +1024,7 @@ ${managedWorkspaceBootstrap}${runPayloadSection}stop_bootstrap_heartbeat
       gitUserName,
       gitUserEmail,
       pushRemoteUrl: request.inputs.branchRepoUrl?.trim() || undefined,
+      idempotencyKey: executionId,
     });
 
     const timeoutMs = remoteFinalizeTimeoutMs();
