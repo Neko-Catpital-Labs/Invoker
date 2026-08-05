@@ -340,6 +340,14 @@ export class LaunchDispatcher {
         );
         continue;
       }
+      if (this.orchestrator && typeof this.orchestrator.getTaskLaunchReadiness !== 'function') {
+        this.abandonInvalidDispatch(
+          leased,
+          `Task ${leased.taskId} launch readiness could not be verified: orchestrator does not implement getTaskLaunchReadiness`,
+          'readiness_unverifiable',
+        );
+        continue;
+      }
       const readiness = this.orchestrator?.getTaskLaunchReadiness?.(leased.taskId);
       if (readiness) {
         if (!readiness.ready) {
