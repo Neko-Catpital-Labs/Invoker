@@ -31,22 +31,73 @@ jobs:
           ref: ${{ github.event.pull_request.base.ref }}
           persist-credentials: false
 
-      - name: Decide selective rollout
-        id: rollout
+      - name: Resolve PR Body targets
+        # On an ordinary PR run this just resolves back to the PR itself.
+        # On a Mergify merge-queue run (author mergify[bot], head ref
+        # mergify/merge-queue/...) the event's own PR is a synthetic
+        # wrapper Mergify opens to batch-test real PRs; this fetches the
+        # real underlying PR(s) it names so the rollout decision and the
+        # validation below run against them, not against mergify[bot]'s
+        # identity or the wrapper's boilerplate body. See
+        # scripts/test-resolve-pr-body-targets.mjs.
+        id: targets
         env:
-          PR_BODY_AUTHOR: ${{ github.event.pull_request.user.login }}
-        run: node scripts/pr-body-rollout.mjs
+          PR_BODY_ENFORCE_ALL: ${{ env.PR_BODY_ENFORCE_ALL }}
+          PR_BODY_ENFORCED_AUTHORS: ${{ env.PR_BODY_ENFORCED_AUTHORS }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { resolveTargetPrNumbers, shouldEnforcePrBodyForTargets } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/resolve-pr-body-targets.mjs`);
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+
+            const numbers = resolveTargetPrNumbers({
+              author: pr.user.login,
+              headRef: pr.head.ref,
+              prNumber: pr.number,
+              body: pr.body,
+            });
+
+            if (numbers.length === 0) {
+              core.setFailed(`PR Body: could not resolve an underlying PR to validate for head ref "${pr.head.ref}" (reported author ${pr.user.login}). Failing closed instead of skipping validation.`);
+              return;
+            }
+
+            const targets = [];
+            for (const number of numbers) {
+              const { data: target } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+              targets.push({
+                number,
+                author: target.user.login,
+                body: target.body || '',
+                baseRef: target.base.ref,
+                headSha: target.head.sha,
+              });
+            }
+
+            const enabled = shouldEnforcePrBodyForTargets({
+              targets,
+              enforceAll: process.env.PR_BODY_ENFORCE_ALL,
+              enforcedAuthors: process.env.PR_BODY_ENFORCED_AUTHORS,
+            });
+
+            fs.writeFileSync('pr-body-targets.json', JSON.stringify(targets));
+            core.setOutput('enabled', String(enabled));
+            core.setOutput('authors', targets.map((target) => target.author).join(', '));
 
       - name: Skip unenforced author
-        if: steps.rollout.outputs.enabled != 'true'
-        run: echo "PR body validation is not enforced for ${{ github.event.pull_request.user.login }} yet."
+        if: steps.targets.outputs.enabled != 'true'
+        env:
+          TARGET_AUTHORS: ${{ steps.targets.outputs.authors }}
+        run: echo "PR body validation is not enforced for ${TARGET_AUTHORS} yet."
 
       - name: Install pnpm
-        if: steps.rollout.outputs.enabled == 'true'
+        if: steps.targets.outputs.enabled == 'true'
         uses: pnpm/action-setup@v4
 
       - name: Use Node.js ${{ env.NODE_VERSION }}
-        if: steps.rollout.outputs.enabled == 'true'
+        if: steps.targets.outputs.enabled == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -56,37 +107,9 @@ jobs:
             .node-version
 
       - name: Install validator dependencies
-        if: steps.rollout.outputs.enabled == 'true'
+        if: steps.targets.outputs.enabled == 'true'
         run: pnpm install --no-frozen-lockfile --ignore-scripts
 
-      - name: Fetch live PR body
-        if: steps.rollout.outputs.enabled == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('node:fs');
-            const { owner, repo } = context.repo;
-            const pull_number = context.payload.pull_request.number;
-            const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number });
-            fs.writeFileSync('pr-body.md', pull.body || '', 'utf8');
-
-      - name: Fetch PR diff metadata
-        if: steps.rollout.outputs.enabled == 'true'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=1 origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
-          fetched_head_sha="$(git rev-parse "refs/remotes/pull/${PR_NUMBER}/head^{commit}")"
-          if [ "$fetched_head_sha" != "$HEAD_SHA" ]; then
-            echo "Fetched PR head ${fetched_head_sha} did not match event head ${HEAD_SHA}." >&2
-            exit 1
-          fi
-          bash scripts/fetch-pr-diff-metadata.sh
-
-      - name: Validate PR body
-        if: steps.rollout.outputs.enabled == 'true'
-        run: node scripts/validate-pr-body.mjs --body-file pr-body.md --changed-files-file changed-files.txt --diff-file pr.diff
+      - name: Validate each target PR body
+        if: steps.targets.outputs.enabled == 'true'
+        run: node scripts/validate-pr-body-targets.mjs --targets-file pr-body-targets.json
