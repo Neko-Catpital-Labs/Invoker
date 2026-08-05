@@ -187,7 +187,7 @@ export type LockHolderReadResult =
   | { kind: 'found'; pid: number }
   | { kind: 'error'; detail: string };
 
-function defaultReadLockHolderPid(): LockHolderReadResult {
+export function defaultReadLockHolderPid(): LockHolderReadResult {
   let raw: string;
   try {
     raw = readFileSync(join(resolveInvokerHomeRoot(), 'invoker.db.lock', 'pid'), 'utf8').trim();
@@ -195,8 +195,9 @@ function defaultReadLockHolderPid(): LockHolderReadResult {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
     return { kind: 'error', detail: errMessage(err) };
   }
+  if (!/^\d+$/.test(raw)) return { kind: 'error', detail: `unparseable lock pid: ${JSON.stringify(raw)}` };
   const pid = Number.parseInt(raw, 10);
-  if (!Number.isFinite(pid)) return { kind: 'error', detail: `unparseable lock pid: ${JSON.stringify(raw)}` };
+  if (!Number.isSafeInteger(pid) || pid <= 0) return { kind: 'error', detail: `unparseable lock pid: ${JSON.stringify(raw)}` };
   return { kind: 'found', pid };
 }
 
@@ -353,7 +354,10 @@ export class IpcInvokerClient implements InvokerClient {
 
   private async runLaunch(force: boolean): Promise<LaunchResult> {
     if (!force) {
-      if (await this.ping()) return { healthy: true };
+      if (await this.ping()) {
+        this.lockReadUnknownStreak = 0;
+        return { healthy: true };
+      }
       const sinceLast = this.now() - this.lastLaunchAt;
       if (sinceLast < this.minLaunchIntervalMs) {
         this.log('warn', `launch throttled — only ${Math.round(sinceLast / 1000)}s since last launch`);
@@ -362,7 +366,10 @@ export class IpcInvokerClient implements InvokerClient {
     } else {
       await this.forceReclaimSplitBrainHolder();
     }
-    if (await this.doLaunch()) return { healthy: true };
+    if (await this.doLaunch()) {
+      this.lockReadUnknownStreak = 0;
+      return { healthy: true };
+    }
     const holder = this.detectUnreachableLockHolder();
     if (holder.status === 'unreachable') {
       this.lockReadUnknownStreak = 0;
