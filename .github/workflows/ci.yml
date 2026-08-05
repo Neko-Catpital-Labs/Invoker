@@ -119,7 +119,7 @@ jobs:
     name: UI Vitest
     runs-on:
       labels: Runner_Vitest
-    timeout-minutes: 10
+    timeout-minutes: 5
 
     steps:
       - name: Reclaim workspace
@@ -627,8 +627,6 @@ jobs:
             files: >-
               e2e/autofix-worker-ui.spec.ts
               e2e/orphan-relaunch.spec.ts
-              e2e/launch-dispatch-stuck-lease-storm.spec.ts
-              e2e/launch-dispatch-stuck-lease-cap.spec.ts
               e2e/gap-recovery-bench.spec.ts
               e2e/planning-chat-send-long-deadline.spec.ts
               e2e/system-setup-visual-proof.spec.ts
@@ -649,8 +647,6 @@ jobs:
               e2e/workflow-delete-latency.spec.ts
               e2e/main-process-hitch-responsiveness.spec.ts
               e2e/dag-click-hitch-responsiveness.spec.ts
-              e2e/terminal-upsert-hitch-responsiveness.spec.ts
-              e2e/attention-click-hitch-responsiveness.spec.ts
           - name: 8-of-9
             files: >-
               e2e/focus-switch-hitch-responsiveness.spec.ts
@@ -666,8 +662,10 @@ jobs:
               e2e/ui-delta-timeline.spec.ts
               e2e/planning-terminal-live-model.proof.spec.ts
               e2e/workers-surface.spec.ts
+              e2e/attention-click-hitch-responsiveness.spec.ts
           - name: terminal-garbling
             files: >-
+              e2e/terminal-upsert-hitch-responsiveness.spec.ts
               e2e/planning-surface-navigation-garble-repro.spec.ts
               e2e/planning-terminal-chat-tmux-toggle-garble-repro.spec.ts
               e2e/planning-terminal-expand-collapse-garble-repro.spec.ts

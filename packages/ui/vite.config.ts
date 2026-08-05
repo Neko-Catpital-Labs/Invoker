@@ -1,6 +1,6 @@
-import { defineConfig } from 'vite';
+import { defineConfig, mergeConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
-import MergifyReporter from '@mergifyio/vitest';
+import sharedConfig from '../../vitest.shared.ts';
 
 // Match a node_modules path segment for a given package name (handles both
 // flat `node_modules/<pkg>` and pnpm's `node_modules/.pnpm/<pkg>@.../node_modules/<pkg>`).
@@ -8,7 +8,7 @@ function isFromPackage(id: string, pkg: string): boolean {
   return id.includes(`/node_modules/${pkg}/`);
 }
 
-export default defineConfig({
+export default mergeConfig(sharedConfig, defineConfig({
   plugins: [react()],
   base: './', // relative paths for Electron
   build: {
@@ -60,9 +60,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 1500,
   },
   test: {
-    globals: true,
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
-    reporters: ['default', new MergifyReporter()],
   },
-});
+}));

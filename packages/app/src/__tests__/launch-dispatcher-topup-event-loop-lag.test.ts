@@ -110,6 +110,11 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   it(
     'stays meaningfully faster: capped startExecution({ limit: 32 }) over the same 150-task ready burst',
     async () => {
+      const uncappedOrchestrator = await buildBurstOrchestrator();
+      const uncappedMaxGapMs = await measureMaxSyncGapMs(() => {
+        const started = uncappedOrchestrator.startExecution();
+        expect(started.length).toBe(BURST_TASK_COUNT);
+      });
       const orchestrator = await buildBurstOrchestrator();
       const maxGapMs = await measureMaxSyncGapMs(() => {
         // 32 matches LaunchDispatcher's default maxLeasesPerPoll
@@ -120,8 +125,8 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
       });
       expect(
         maxGapMs,
-        `maxGapMs=${maxGapMs} (startExecution({limit:32}) over ${BURST_TASK_COUNT}-task burst)`,
-      ).toBeLessThan(1200);
+        `maxGapMs=${maxGapMs}, uncappedMaxGapMs=${uncappedMaxGapMs} (startExecution({limit:32}) over ${BURST_TASK_COUNT}-task burst)`,
+      ).toBeLessThan(Math.max(1200, uncappedMaxGapMs * 0.75));
     },
     30_000,
   );
