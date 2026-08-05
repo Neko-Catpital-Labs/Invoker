@@ -141,6 +141,9 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let inFlight: Promise<void> | null = null;
   let pendingReason: WorkerTickReason | null = null;
   let tickNumber = 0;
+  let lastTickActivityAt = Date.now();
+  let watchdogTimer: NodeJS.Timeout | null = null;
+  let stallLogged = false;
   const signalHandlers = new Map<NodeJS.Signals, () => void>();
   let abortController = new AbortController();
 
@@ -152,6 +155,7 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       tickNumber,
       signal: abortController.signal,
     };
+    lastTickActivityAt = Date.now();
     try {
       await options.onTick(ctx);
     } catch (err) {
@@ -160,6 +164,9 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
         return;
       }
       options.logger.error(`[worker:${identity.kind}] tick failed`, { ...logFields, reason, err });
+    } finally {
+      lastTickActivityAt = Date.now();
+      stallLogged = false;
     }
   };
 
@@ -213,6 +220,10 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     if (interval) {
       clearInterval(interval);
       interval = null;
+    }
+    if (watchdogTimer) {
+      clearInterval(watchdogTimer);
+      watchdogTimer = null;
     }
     if (startDelayTimer) {
       clearTimeout(startDelayTimer);
@@ -283,6 +294,19 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       if (intervalMs > 0) {
         interval = setInterval(() => wake('poll'), intervalMs);
         interval.unref?.();
+        lastTickActivityAt = Date.now();
+        stallLogged = false;
+        watchdogTimer = setInterval(() => {
+          const idleMs = Date.now() - lastTickActivityAt;
+          if (idleMs > intervalMs * 2 && !stallLogged) {
+            stallLogged = true;
+            options.logger.error(
+              `[worker:${identity.kind}] no tick activity for ${idleMs}ms (interval ${intervalMs}ms) — worker looks stalled`,
+              { ...logFields, tickNumber },
+            );
+          }
+        }, intervalMs);
+        watchdogTimer.unref?.();
       }
       if (tickOnStart) wake('startup');
     };
