@@ -20,6 +20,7 @@ import { Orchestrator, type PlanDefinition } from '@invoker/workflow-core';
  */
 
 const BURST_TASK_COUNT = 150;
+const PAIRED_SAMPLE_COUNT = 3;
 
 function singleTaskWorkflow(name: string): PlanDefinition {
   return {
@@ -50,6 +51,15 @@ async function measureMaxSyncGapMs(fn: () => void, probeMs = 4): Promise<number>
     clearInterval(timer);
   }
   return maxGapMs;
+}
+
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)]!;
+}
+
+function formatSamples(values: number[]): string {
+  return values.map((ms) => ms.toFixed(1)).join(',');
 }
 
 describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
@@ -86,10 +96,9 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   // Measured on this machine (in-memory SQLite, no other load): unbounded
   // startExecution() over this exact 150-task burst takes ~2.2s; capped at
   // { limit: 32 } (LaunchDispatcher's default maxLeasesPerPoll) takes ~0.7s.
-  // Thresholds below are set with margin under/over those real numbers so
-  // the test is a meaningful regression guard without being flaky on a
-  // slower CI machine. Recalibrate against a real run if either budget
-  // proves too tight.
+  // The capped-path assertion below uses paired medians rather than one
+  // absolute wall-clock threshold so slower CI hardware can still prove the
+  // capped call remains materially cheaper than the uncapped call.
 
   it(
     'reproduces multi-hundred-ms blocking: unbounded startExecution() over a 150-task ready burst',
@@ -110,19 +119,49 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   it(
     'stays meaningfully faster: capped startExecution({ limit: 32 }) over the same 150-task ready burst',
     async () => {
-      const orchestrator = await buildBurstOrchestrator();
-      const maxGapMs = await measureMaxSyncGapMs(() => {
-        // 32 matches LaunchDispatcher's default maxLeasesPerPoll
-        // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
-        // call topUpReadyLaunches() now makes.
-        const started = orchestrator.startExecution({ limit: 32 });
-        expect(started.length).toBe(32);
-      });
+      const uncappedMaxGapSamplesMs: number[] = [];
+      const cappedMaxGapSamplesMs: number[] = [];
+
+      for (let i = 0; i < PAIRED_SAMPLE_COUNT; i += 1) {
+        const runUncappedSample = async () => {
+          const orchestrator = await buildBurstOrchestrator();
+          uncappedMaxGapSamplesMs.push(await measureMaxSyncGapMs(() => {
+            const started = orchestrator.startExecution();
+            expect(started.length).toBe(BURST_TASK_COUNT);
+          }));
+        };
+        const runCappedSample = async () => {
+          const orchestrator = await buildBurstOrchestrator();
+          cappedMaxGapSamplesMs.push(await measureMaxSyncGapMs(() => {
+            // 32 matches LaunchDispatcher's default maxLeasesPerPoll
+            // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
+            // call topUpReadyLaunches() now makes.
+            const started = orchestrator.startExecution({ limit: 32 });
+            expect(started.length).toBe(32);
+          }));
+        };
+
+        if (i % 2 === 0) {
+          await runUncappedSample();
+          await runCappedSample();
+        } else {
+          await runCappedSample();
+          await runUncappedSample();
+        }
+      }
+
+      const uncappedMedianMaxGapMs = median(uncappedMaxGapSamplesMs);
+      const cappedMedianMaxGapMs = median(cappedMaxGapSamplesMs);
+
       expect(
-        maxGapMs,
-        `maxGapMs=${maxGapMs} (startExecution({limit:32}) over ${BURST_TASK_COUNT}-task burst)`,
-      ).toBeLessThan(1200);
+        cappedMedianMaxGapMs,
+        [
+          `capped median ${cappedMedianMaxGapMs.toFixed(1)}ms must stay below 75% of uncapped median ${uncappedMedianMaxGapMs.toFixed(1)}ms`,
+          `capped samples=${formatSamples(cappedMaxGapSamplesMs)}`,
+          `uncapped samples=${formatSamples(uncappedMaxGapSamplesMs)}`,
+        ].join('; '),
+      ).toBeLessThan(uncappedMedianMaxGapMs * 0.75);
     },
-    30_000,
+    60_000,
   );
 });
