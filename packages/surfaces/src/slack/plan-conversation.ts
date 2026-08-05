@@ -528,6 +528,11 @@ export class PlanConversation {
     try {
       const saved = this.conversationRepo.loadConversation(this.threadTs);
       if (!saved) return;
+      if (this.channelId !== undefined && saved.channelId !== this.channelId) {
+        this.log('plan-conversation', 'warn',
+          `[TRACE] init() refusing to load mismatched channel (threadTs=${this.threadTs}, expected=${this.channelId}, found=${saved.channelId || '(empty)'})`);
+        return;
+      }
 
       this.messages = saved.messages.map((m) => ({
         role: m.role as 'user' | 'assistant',
