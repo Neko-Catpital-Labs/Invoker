@@ -52,6 +52,11 @@ async function measureMaxSyncGapMs(fn: () => void, probeMs = 4): Promise<number>
   return maxGapMs;
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
 describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   const adapters: SQLiteAdapter[] = [];
 
@@ -108,25 +113,54 @@ describe('launch-dispatcher topUpReadyLaunches event-loop lag', () => {
   it(
     'stays meaningfully faster: capped startExecution({ limit: 32 }) over the same 150-task ready burst',
     async () => {
-      const uncappedOrchestrator = await buildBurstOrchestrator();
-      const uncappedMaxGapMs = await measureMaxSyncGapMs(() => {
-        const started = uncappedOrchestrator.startExecution();
-        expect(started.length).toBe(BURST_TASK_COUNT);
-      });
+      const samplePairs = 3;
+      const cappedMaxGapSamplesMs: number[] = [];
+      const uncappedMaxGapSamplesMs: number[] = [];
 
-      const cappedOrchestrator = await buildBurstOrchestrator();
-      const cappedMaxGapMs = await measureMaxSyncGapMs(() => {
-        // 32 matches LaunchDispatcher's default maxLeasesPerPoll
-        // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
-        // call topUpReadyLaunches() now makes.
-        const started = cappedOrchestrator.startExecution({ limit: 32 });
-        expect(started.length).toBe(32);
-      });
+      async function measureUncappedMaxGapMs(): Promise<number> {
+        const orchestrator = await buildBurstOrchestrator();
+        return measureMaxSyncGapMs(() => {
+          const started = orchestrator.startExecution();
+          expect(started.length).toBe(BURST_TASK_COUNT);
+        });
+      }
+
+      async function measureCappedMaxGapMs(): Promise<number> {
+        const orchestrator = await buildBurstOrchestrator();
+        return measureMaxSyncGapMs(() => {
+          // 32 matches LaunchDispatcher's default maxLeasesPerPoll
+          // (packages/app/src/launch-dispatcher.ts:106) — this is the exact
+          // call topUpReadyLaunches() now makes.
+          const started = orchestrator.startExecution({ limit: 32 });
+          expect(started.length).toBe(32);
+        });
+      }
+
+      for (let i = 0; i < samplePairs; i += 1) {
+        if (i % 2 === 0) {
+          uncappedMaxGapSamplesMs.push(await measureUncappedMaxGapMs());
+          cappedMaxGapSamplesMs.push(await measureCappedMaxGapMs());
+          continue;
+        }
+
+        cappedMaxGapSamplesMs.push(await measureCappedMaxGapMs());
+        uncappedMaxGapSamplesMs.push(await measureUncappedMaxGapMs());
+      }
+
+      const uncappedMedianMaxGapMs = median(uncappedMaxGapSamplesMs);
+      const cappedMedianMaxGapMs = median(cappedMaxGapSamplesMs);
+      const sampleSummary = [
+        `cappedMedianMaxGapMs=${cappedMedianMaxGapMs}`,
+        `uncappedMedianMaxGapMs=${uncappedMedianMaxGapMs}`,
+        `cappedSamples=${cappedMaxGapSamplesMs.join(',')}`,
+        `uncappedSamples=${uncappedMaxGapSamplesMs.join(',')}`,
+        `${BURST_TASK_COUNT}-task burst`,
+      ].join(', ');
       expect(
-        cappedMaxGapMs,
-        `cappedMaxGapMs=${cappedMaxGapMs}, uncappedMaxGapMs=${uncappedMaxGapMs} (${BURST_TASK_COUNT}-task burst)`,
-      ).toBeLessThan(uncappedMaxGapMs);
+        cappedMedianMaxGapMs,
+        sampleSummary,
+      ).toBeLessThan(uncappedMedianMaxGapMs);
     },
-    30_000,
+    60_000,
   );
 });
