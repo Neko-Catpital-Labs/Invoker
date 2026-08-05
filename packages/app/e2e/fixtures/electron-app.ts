@@ -18,6 +18,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
+import { killOwnedProcessGroup } from './process-group.js';
 
 export type ElectronFixtures = {
   electronApp: ElectronApplication;
@@ -106,10 +107,9 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
   if (!childExited) {
     child.kill('SIGTERM');
     if (child.pid && process.platform !== 'win32') {
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        // Process group may already be gone.
+      const groupKill = killOwnedProcessGroup(child.pid, 'SIGTERM');
+      if (groupKill !== 'group-killed') {
+        console.warn(`[electron-app fixture] group kill for pid ${child.pid} not sent (${groupKill}); killed the child alone`);
       }
     }
     await Promise.race([closePromise, childExitPromise, delay(2_000)]);
