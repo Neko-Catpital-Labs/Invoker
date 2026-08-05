@@ -124,6 +124,29 @@ describe('createWatchdog', () => {
     expect(message).toContain('`@Invoker restart`');
   });
 
+  it('gives an honest "could not confirm" alert on lock-unknown, never claiming a specific PID is alive', async () => {
+    let nowMs = 0;
+    const launch = vi.fn(async (): Promise<LaunchResult> => (
+      { healthy: false, cause: 'lock-unknown', lockReadError: 'EACCES' }
+    ));
+    const alert = vi.fn();
+    const wd = createWatchdog({
+      client: { isHealthy: vi.fn(async () => false), launch },
+      log: () => {}, alert,
+      failuresBeforeRelaunch: 1, maxAttempts: 1, baseBackoffMs: 1_000, maxBackoffMs: 1_000,
+      now: () => nowMs,
+    });
+
+    await wd.tick();
+    expect(alert).toHaveBeenCalledTimes(1);
+    const message = (alert.mock.calls[0] as string[])[0];
+    expect(message).toContain('EACCES');
+    expect(message).toContain('could not confirm');
+    expect(message).toContain('`@Invoker restart`');
+    expect(message).not.toContain('is alive but not');
+    expect(message).not.toContain('PID undefined');
+  });
+
   it('rate-limits repeated give-up alerts while Invoker stays down', async () => {
     let nowMs = 0;
     const launch = vi.fn(async (): Promise<LaunchResult> => ({ healthy: false, cause: 'unhealthy' }));
