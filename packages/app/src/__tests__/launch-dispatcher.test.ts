@@ -655,6 +655,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask,
+          getTaskLaunchReadiness: (id: string) => ({ ready: true, task: getTask(id) }),
         },
         taskRunnerProvider: () => ({ executeTask }),
       });
@@ -710,6 +711,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask,
+          getTaskLaunchReadiness: (id: string) => ({ ready: true, task: getTask(id) }),
         },
         taskRunnerProvider: () => ({ executeTask }),
         maxLeasesPerPoll: 2,
@@ -771,6 +773,7 @@ describe('LaunchDispatcher', () => {
             cold.prepareTaskForNewAttempt(taskId, reason),
           syncFromDb: (workflowId) => cold.syncFromDb(workflowId),
           getTask: (taskId) => cold.getTask(taskId),
+          getTaskLaunchReadiness: (taskId) => cold.getTaskLaunchReadiness(taskId),
         },
         taskRunnerProvider: () => ({ executeTask }),
       });
@@ -839,6 +842,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask: () => task as any,
+          getTaskLaunchReadiness: () => ({ ready: true, task: task as any }),
           startExecution,
         },
         taskRunnerProvider: () => ({ executeTask }),
@@ -877,6 +881,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask: () => task as any,
+          getTaskLaunchReadiness: () => ({ ready: true, task: task as any }),
           startExecution,
         },
         taskRunnerProvider: () => ({ executeTask }),
@@ -926,6 +931,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask: vi.fn().mockReturnValue(currentTask as any),
+          getTaskLaunchReadiness: () => ({ ready: true, task: currentTask as any }),
         },
         taskRunnerProvider: () => ({ executeTask }),
       });
@@ -967,6 +973,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask: vi.fn().mockReturnValue(currentTask as any),
+          getTaskLaunchReadiness: () => ({ ready: true, task: currentTask as any }),
         },
         taskRunnerProvider: () => ({ executeTask }),
       });
@@ -1017,6 +1024,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask: vi.fn().mockReturnValue(currentTask as any),
+          getTaskLaunchReadiness: () => ({ ready: true, task: currentTask as any }),
         },
         taskRunnerProvider: () => ({ executeTask }),
       });
@@ -1067,6 +1075,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask: vi.fn().mockReturnValue(currentTask as any),
+          getTaskLaunchReadiness: () => ({ ready: true, task: currentTask as any }),
         },
         taskRunnerProvider: () => ({ executeTask }),
       });
@@ -1139,6 +1148,43 @@ describe('LaunchDispatcher', () => {
       });
     });
 
+    it('abandons the dispatch when the orchestrator cannot verify launch readiness', () => {
+      const task = seedWorkflowAndTask('wf-a/t-unverifiable', 'wf-a', {
+        selectedAttemptId: 'attempt-unverifiable',
+        generation: 0,
+      });
+      const enq = adapter.enqueueLaunchDispatch({
+        taskId: task.id,
+        attemptId: 'attempt-unverifiable',
+        workflowId: 'wf-a',
+        generation: 0,
+      });
+      const executeTask = vi.fn();
+      const dispatcher = new LaunchDispatcher({
+        persistence: adapter,
+        ownerId: 'owner-a',
+        orchestrator: {
+          prepareTaskForNewAttempt: vi.fn(),
+          getTask: vi.fn().mockReturnValue(task as any),
+        },
+        taskRunnerProvider: () => ({ executeTask }),
+      });
+
+      dispatcher.poll();
+
+      expect(executeTask).not.toHaveBeenCalled();
+      const after = adapter.loadLaunchDispatchById(enq.id);
+      expect(after?.state).toBe('abandoned');
+      expect(after?.lastError).toMatch(/readiness could not be verified/);
+      const events = adapter.getEvents(task.id);
+      const invalidated = events.find((event) => event.eventType === 'task.launch_dispatch_invalidated');
+      expect(invalidated).toBeDefined();
+      expect(JSON.parse(invalidated!.payload!)).toMatchObject({
+        dispatchId: enq.id,
+        reason: 'readiness_unverifiable',
+      });
+    });
+
     it('abandons the dispatch when the orchestrator has no matching task', () => {
       seedWorkflowAndTask('wf-a/t-missing', 'wf-a', {
         selectedAttemptId: 'attempt-missing',
@@ -1201,6 +1247,7 @@ describe('LaunchDispatcher', () => {
         orchestrator: {
           prepareTaskForNewAttempt: vi.fn(),
           getTask: vi.fn().mockReturnValue(task as any),
+          getTaskLaunchReadiness: () => ({ ready: true, task: task as any }),
         },
         taskRunnerProvider: () => ({ executeTask }),
       });
