@@ -1687,6 +1687,26 @@ describe('planning chat worktree provisioning', () => {
     expect(hydrated.baseCommit).toBe('fake-head-sha');
   });
 
+  it('preserves a terminalSessionId-present/terminalStatus-absent divergence verbatim across hydration', async () => {
+    const sessions = createInAppPlanningChatSessions();
+    const created = await createPlanningChatSession({}, {
+      config: { defaultRepoUrl: 'https://example.com/repo.git', defaultBranch: 'main' },
+      loadGeneratedPlan: vi.fn(),
+      sessions,
+      planningCommandBuilder,
+    });
+    if (!created.ok) throw new Error(created.error);
+
+    const ambiguousSummary = {
+      ...created.session,
+      terminalSessionId: 'term-ambiguous',
+      terminalStatus: undefined,
+    };
+    const hydrated = hydrateRemotePlanningTerminalSession(ambiguousSummary);
+    expect(hydrated.terminalSessionId).toBe('term-ambiguous');
+    expect(hydrated.terminalStatus).toBeUndefined();
+  });
+
   it('falls back to deps.workingDir exactly as before when no repoPool is supplied', async () => {
     const workingDir = mkdtempSync(join(tmpdir(), 'in-app-no-repo-pool-'));
     try {

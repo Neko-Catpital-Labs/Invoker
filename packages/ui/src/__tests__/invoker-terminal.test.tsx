@@ -805,6 +805,40 @@ describe('Invoker terminal (component)', () => {
     });
   });
 
+  it('does not trust an unconfirmed terminal status as live, and reattaches for real when asked', async () => {
+    mock.api.planningChatList = vi.fn(async () => ({
+      ok: true,
+      sessions: [
+        makePlanningSessionSummary({
+          id: 'plan-ambiguous',
+          title: 'Ambiguous tmux session',
+          status: 'still_discussing',
+          draftPlanAvailable: false,
+          terminalMode: 'tmux',
+          terminalSessionId: 'term-ambiguous',
+          terminalOutputSnapshot: 'stale snapshot from before restart',
+        }),
+      ],
+    })) as any;
+
+    render(<App />);
+    fireEvent.click(await screen.findByTestId('sidebar-home'));
+
+    expect(await screen.findByTestId('invoker-terminal-tmux-placeholder')).toBeInTheDocument();
+    expect(screen.queryByTestId('invoker-terminal-tmux-pane')).not.toBeInTheDocument();
+    expect(mock.api.planningTerminalOpen).not.toHaveBeenCalled();
+
+    fireEvent.click(within(screen.getByTestId('invoker-terminal-mode-toggle')).getByRole('tab', { name: 'Tmux' }));
+
+    await waitFor(() => expect(mock.api.planningTerminalOpen).toHaveBeenCalledWith('plan-ambiguous'));
+    await waitFor(() => {
+      expect(screen.getByTestId('invoker-terminal-tmux-pane')).toHaveAttribute(
+        'data-session-id',
+        'mock-planning-terminal-plan-ambiguous',
+      );
+    });
+  });
+
   it('renders chat role labels and fenced YAML in a mono code panel', async () => {
     mock.api.planningChatSend = vi.fn(async () => ({
       ok: true,

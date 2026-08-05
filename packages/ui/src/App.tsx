@@ -339,12 +339,13 @@ function planningSessionFromSummary(
   overrides: Partial<PlanningSessionView> = {},
 ): PlanningSessionView {
   const restoredTerminalSession = summary.terminalSessionId
+    && (summary.terminalStatus === 'running' || summary.terminalStatus === 'exited')
     ? {
         sessionId: summary.terminalSessionId,
         taskId: `planning:${summary.id}`,
         kind: 'planning' as const,
         planningSessionId: summary.id,
-        status: summary.terminalStatus ?? ('running' as const),
+        status: summary.terminalStatus,
         exitCode: summary.terminalExitCode,
         cwd: undefined,
         mode: 'spawn' as const,
