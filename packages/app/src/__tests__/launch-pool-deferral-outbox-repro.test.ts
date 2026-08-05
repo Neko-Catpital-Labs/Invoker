@@ -88,6 +88,7 @@ async function runPoolDeferralScenario(options: { completeDeferredDispatch: bool
     orchestrator: {
       prepareTaskForNewAttempt: (id, reason) => orchestrator.prepareTaskForNewAttempt(id, reason),
       getTask: (id) => orchestrator.getTask(id),
+      getTaskLaunchReadiness: (id) => orchestrator.getTaskLaunchReadiness(id),
     },
     taskRunnerProvider: () => ({
       async executeTask(task, opts) {
