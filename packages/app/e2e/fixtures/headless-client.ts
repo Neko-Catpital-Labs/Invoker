@@ -14,6 +14,26 @@ type StandaloneOwnerProcess = {
   envMarker: string;
 };
 
+function teardownErrorCode(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+function isExpectedTeardownRace(error: unknown): boolean {
+  const code = teardownErrorCode(error);
+  return code === 'ENOENT' || code === 'ESRCH';
+}
+
+function teardownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function warnUnexpectedTeardownError(operation: string, error: unknown): void {
+  if (isExpectedTeardownRace(error)) return;
+  console.warn(`[headless-client fixture] ${operation} failed during teardown: ${teardownErrorMessage(error)}`);
+}
+
 export async function ensureHeadlessTestConfig(testDir: string): Promise<void> {
   await writeFile(path.join(testDir, 'e2e-config.json'), JSON.stringify({ autoFixRetries: 0 }), 'utf8');
 }
@@ -57,7 +77,8 @@ async function readStandaloneOwnerProcess(pid: number, testDir: string, ipcSocke
       return null;
     }
     environ = await readFile(`/proc/${pid}/environ`, 'utf8');
-  } catch {
+  } catch (error) {
+    warnUnexpectedTeardownError(`inspect standalone owner process ${pid}`, error);
     return null;
   }
 
@@ -82,7 +103,8 @@ export async function cleanupStandaloneOwnersForTestDir(testDir: string): Promis
   let procEntries: string[];
   try {
     procEntries = await readdir('/proc');
-  } catch {
+  } catch (error) {
+    warnUnexpectedTeardownError('scan /proc for standalone owners', error);
     return;
   }
 
@@ -97,8 +119,8 @@ export async function cleanupStandaloneOwnersForTestDir(testDir: string): Promis
   for (const pid of owners.keys()) {
     try {
       process.kill(pid, 'SIGTERM');
-    } catch {
-      // Process already exited.
+    } catch (error) {
+      warnUnexpectedTeardownError(`send SIGTERM to standalone owner ${pid}`, error);
     }
   }
 
@@ -115,8 +137,8 @@ export async function cleanupStandaloneOwnersForTestDir(testDir: string): Promis
     try {
       process.kill(pid, 0);
       process.kill(pid, 'SIGKILL');
-    } catch {
-      // Process already exited.
+    } catch (error) {
+      warnUnexpectedTeardownError(`escalate standalone owner ${pid} to SIGKILL`, error);
     }
   }
 }

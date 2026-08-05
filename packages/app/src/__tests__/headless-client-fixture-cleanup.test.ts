@@ -71,4 +71,55 @@ describe('cleanupStandaloneOwnersForTestDir', () => {
     expect(kill).not.toHaveBeenCalledWith(123, 0);
     expect(kill).not.toHaveBeenCalledWith(123, 'SIGKILL');
   });
+
+  linuxIt('keeps expected process races silent during teardown', async () => {
+    const testDir = '/tmp/invoker-expected-race-test-dir';
+    const cmdline = 'node packages/app/dist/main.js --headless owner-serve';
+    const gone = Object.assign(new Error('process already gone'), { code: 'ENOENT' });
+    const noSuchProcess = Object.assign(new Error('no such process'), { code: 'ESRCH' });
+    vi.mocked(readdir).mockResolvedValue(['123', '456']);
+    vi.mocked(readFile)
+      .mockRejectedValueOnce(gone)
+      .mockResolvedValueOnce(cmdline)
+      .mockResolvedValueOnce(`INVOKER_DB_DIR=${testDir}\0`)
+      .mockResolvedValueOnce(cmdline)
+      .mockResolvedValueOnce(`INVOKER_DB_DIR=${testDir}\0`);
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw noSuchProcess;
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(cleanupStandaloneOwnersForTestDir(testDir)).resolves.toBeUndefined();
+
+    expect(kill).toHaveBeenCalledWith(456, 'SIGTERM');
+    expect(kill).toHaveBeenCalledWith(456, 0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  linuxIt('warns once for an unexpected teardown error without throwing', async () => {
+    const testDir = '/tmp/invoker-unexpected-error-test-dir';
+    const cmdline = 'node packages/app/dist/main.js --headless owner-serve';
+    const unexpected = Object.assign(new Error('permission denied'), { code: 'EPERM' });
+    vi.mocked(readdir).mockResolvedValue(['123']);
+    vi.mocked(readFile)
+      .mockResolvedValueOnce(cmdline)
+      .mockResolvedValueOnce(`INVOKER_DB_DIR=${testDir}\0`)
+      .mockResolvedValueOnce(cmdline)
+      .mockResolvedValueOnce(`INVOKER_DB_DIR=${testDir}\0`);
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid === 123 && signal === 'SIGTERM') throw unexpected;
+      return true;
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(cleanupStandaloneOwnersForTestDir(testDir)).resolves.toBeUndefined();
+
+    expect(kill).toHaveBeenCalledWith(123, 'SIGTERM');
+    expect(kill).toHaveBeenCalledWith(123, 0);
+    expect(kill).toHaveBeenCalledWith(123, 'SIGKILL');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      '[headless-client fixture] send SIGTERM to standalone owner 123 failed during teardown: permission denied',
+    );
+  });
 });
