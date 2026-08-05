@@ -15,6 +15,14 @@ const LOG_PATH = path.join(homedir(), '.invoker', 'invoker.log');
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 
+function errorAwareReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Error) {
+    const { name, message, stack, ...rest } = value;
+    return { ...rest, name, message, stack };
+  }
+  return value;
+}
+
 export interface FileAndDbLoggerOptions {
   /** SQLiteAdapter instance for activity_log writes. Omit to skip DB writes. */
   persistence?: SQLiteAdapter;
@@ -85,7 +93,10 @@ export class FileAndDbLogger implements Logger {
         mkdirSync(path.dirname(this.filePath), { recursive: true });
         this.dirEnsured = true;
       }
-      appendFileSync(this.filePath, JSON.stringify(record) + '\n');
+      appendFileSync(
+        this.filePath,
+        JSON.stringify(record, errorAwareReplacer) + '\n',
+      );
     } catch {
       /* Logging must never crash the app. */
     }
