@@ -26,6 +26,7 @@ _INVOKER_E2E_SSH_TAG="invoker-e2e-ssh-$$"
 # Temp directory for SSH key pair, config, and remote invoker home.
 _INVOKER_E2E_SSH_TMPDIR=""
 _INVOKER_E2E_SSH_REMOTE_HOME=""
+_INVOKER_E2E_SSH_KNOWN_HOSTS=""
 
 # SSH login user and passwd-backed home directory used by sshd.
 _INVOKER_E2E_SSH_USER=""
@@ -59,7 +60,7 @@ invoker_e2e_ssh_setup_keys() {
   _INVOKER_E2E_SSH_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/invoker-e2e-ssh.XXXXXX")"
   _INVOKER_E2E_SSH_REMOTE_HOME="$_INVOKER_E2E_SSH_TMPDIR/remote-invoker-home"
   local keyfile="$_INVOKER_E2E_SSH_TMPDIR/id_ed25519"
-  local known_hosts_file="$_INVOKER_E2E_SSH_TMPDIR/known_hosts"
+  _INVOKER_E2E_SSH_KNOWN_HOSTS="$_INVOKER_E2E_SSH_TMPDIR/known_hosts"
   _INVOKER_E2E_SSH_USER="$(whoami)"
   _INVOKER_E2E_SSH_HOME="$(invoker_e2e_ssh_resolve_home "$_INVOKER_E2E_SSH_USER")"
 
@@ -70,8 +71,6 @@ invoker_e2e_ssh_setup_keys() {
 
   # -C sets the comment field to our PID-tagged identifier for cleanup.
   ssh-keygen -t ed25519 -f "$keyfile" -N "" -C "$_INVOKER_E2E_SSH_TAG" -q
-  touch "$known_hosts_file"
-  chmod 600 "$known_hosts_file"
 
   # sshd reads authorized_keys from the account's passwd home, which may differ
   # from $HOME inside CI containers.
@@ -83,8 +82,45 @@ invoker_e2e_ssh_setup_keys() {
   # Append public key (comment already contains tag).
   cat "${keyfile}.pub" >> "$_INVOKER_E2E_SSH_HOME/.ssh/authorized_keys"
 
+  touch "$_INVOKER_E2E_SSH_KNOWN_HOSTS"
+  chmod 600 "$_INVOKER_E2E_SSH_KNOWN_HOSTS"
+
   export INVOKER_E2E_SSH_KEY="$keyfile"
-  export INVOKER_SSH_USER_KNOWN_HOSTS_FILE="$known_hosts_file"
+  export INVOKER_SSH_USER_KNOWN_HOSTS_FILE="$_INVOKER_E2E_SSH_KNOWN_HOSTS"
+}
+
+invoker_e2e_ssh_run() {
+  ssh -o BatchMode=yes \
+      -o ConnectTimeout=5 \
+      -o StrictHostKeyChecking=accept-new \
+      -o "UserKnownHostsFile=$INVOKER_SSH_USER_KNOWN_HOSTS_FILE" \
+      -i "$INVOKER_E2E_SSH_KEY" \
+      "$_INVOKER_E2E_SSH_USER@localhost" \
+      "$@"
+}
+
+invoker_e2e_ssh_prune_login_path_file() {
+  local env_path="$1"
+  [ -f "$env_path" ] || return 0
+  awk '
+    /# invoker-e2e-ssh-pnpm-path / {
+      prefix = $0
+      sub(/[[:space:]]*# invoker-e2e-ssh-pnpm-path .*/, "", prefix)
+      if (prefix != "") print prefix
+      skip_path = 1
+      next
+    }
+    skip_path && /^export PATH=/ {
+      skip_path = 0
+      next
+    }
+    {
+      skip_path = 0
+      print
+    }
+  ' "$env_path" > "${env_path}.tmp" || true
+  mv "${env_path}.tmp" "$env_path"
+  chmod 600 "$env_path"
 }
 
 # --------------------------------------------------------------------------- #
@@ -99,13 +135,7 @@ invoker_e2e_ssh_cleanup_keys() {
     chmod 600 "$authorized_keys"
   fi
   if [ -n "${_INVOKER_E2E_SSH_TAG:-}" ] && [ -f "$env_path" ]; then
-    # Remove the marker line and the following PATH export we appended.
-    awk -v marker="# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" '
-      $0 == marker { skip=1; next }
-      skip && /^export PATH=/ { skip=0; next }
-      { skip=0; print }
-    ' "$env_path" > "${env_path}.tmp" || true
-    mv "${env_path}.tmp" "$env_path"
+    invoker_e2e_ssh_prune_login_path_file "$env_path"
   fi
   rm -rf "${_INVOKER_E2E_SSH_TMPDIR:-}" 2>/dev/null || true
   unset INVOKER_SSH_USER_KNOWN_HOSTS_FILE
@@ -172,11 +202,7 @@ invoker_e2e_ssh_init() {
   invoker_e2e_ssh_write_config
 
   # Verify SSH works with the generated key.
-  if ! ssh -o BatchMode=yes \
-           -o ConnectTimeout=5 \
-           -o StrictHostKeyChecking=no \
-           -i "$INVOKER_E2E_SSH_KEY" \
-           "$_INVOKER_E2E_SSH_USER@localhost" true 2>/dev/null; then
+  if ! invoker_e2e_ssh_run true 2>/dev/null; then
     echo "ERROR: SSH to localhost with generated key failed. Aborting." >&2
     invoker_e2e_ssh_cleanup_keys
     return 1
@@ -206,6 +232,7 @@ invoker_e2e_ssh_install_login_path() {
   mkdir -p "$_INVOKER_E2E_SSH_REMOTE_HOME"
   touch "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   chmod 600 "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
+  invoker_e2e_ssh_prune_login_path_file "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
   if ! grep -Fq "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}" "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh" 2>/dev/null; then
     {
       printf '%s\n' "# invoker-e2e-ssh-pnpm-path ${_INVOKER_E2E_SSH_TAG}"
@@ -214,12 +241,7 @@ invoker_e2e_ssh_install_login_path() {
   fi
 
   # Verify via non-login bash — matches the executor sourcing remoteInvokerHome/env.sh explicitly.
-  if ! ssh -o BatchMode=yes \
-           -o ConnectTimeout=5 \
-           -o StrictHostKeyChecking=no \
-           -i "$INVOKER_E2E_SSH_KEY" \
-           "$_INVOKER_E2E_SSH_USER@localhost" \
-           "bash -s" <<EOF >/dev/null 2>&1; then
+  if ! invoker_e2e_ssh_run "bash -s" <<EOF >/dev/null 2>&1; then
 . "$_INVOKER_E2E_SSH_REMOTE_HOME/env.sh"
 command -v pnpm >/dev/null
 pnpm --version
