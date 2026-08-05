@@ -25,13 +25,18 @@ export function headlessTestEnv(testDir: string): NodeJS.ProcessEnv {
   };
 }
 
-export async function runHeadlessClient(testDir: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+export async function runHeadlessClient(
+  testDir: string,
+  args: string[],
+  options?: { timeoutMs?: number },
+): Promise<{ stdout: string; stderr: string }> {
   await ensureHeadlessTestConfig(testDir);
   const clientPath = path.join(repoRoot, 'packages', 'app', 'dist', 'headless-client.js');
   return await execFileAsync('node', [clientPath, ...args], {
     cwd: repoRoot,
     env: headlessTestEnv(testDir),
     maxBuffer: 10 * 1024 * 1024,
+    ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
   });
 }
 

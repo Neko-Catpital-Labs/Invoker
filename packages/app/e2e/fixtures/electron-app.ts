@@ -16,6 +16,7 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { stringify as yamlStringify } from 'yaml';
 import { registerTrackedBrowserUserDataDir } from './browser-process-registry.js';
 
@@ -53,6 +54,15 @@ async function removeTestDir(dir: string): Promise<void> {
   throw lastError;
 }
 
+async function withCleanupTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  return await Promise.race([
+    work,
+    delay(timeoutMs).then(() => {
+      throw new Error(`cleanup timed out after ${timeoutMs}ms`);
+    }),
+  ]);
+}
+
 export async function deleteAllWorkflowsFast(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const invoker = window.invoker as typeof window.invoker & {
@@ -81,6 +91,40 @@ export async function waitForRuntimeMode(page: Page, mode: RuntimeMode, timeoutM
     .toBe(mode);
 }
 
+function collectDescendantPids(pid: number): number[] {
+  if (process.platform === 'win32') return [];
+  const descendants: number[] = [];
+  const queue = [pid];
+  for (let index = 0; index < queue.length; index += 1) {
+    const parentPid = queue[index];
+    let output = '';
+    try {
+      output = execFileSync('ps', ['-o', 'pid=', '--ppid', String(parentPid)], {
+        encoding: 'utf8',
+      });
+    } catch {
+      continue;
+    }
+    for (const line of output.split(/\r?\n/)) {
+      const childPid = Number(line.trim());
+      if (!Number.isInteger(childPid) || childPid <= 0 || descendants.includes(childPid)) continue;
+      descendants.push(childPid);
+      queue.push(childPid);
+    }
+  }
+  return descendants;
+}
+
+function killPids(pids: readonly number[], signal: NodeJS.Signals): void {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // Process may already be gone.
+    }
+  }
+}
+
 export async function closeElectronApp(app: ElectronApplication): Promise<void> {
   const child = app.process();
   let childExited = child.exitCode !== null || child.signalCode !== null;
@@ -104,7 +148,9 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
   if (!timedOut) return;
 
   if (!childExited) {
+    const childTree = child.pid && process.platform !== 'win32' ? collectDescendantPids(child.pid) : [];
     child.kill('SIGTERM');
+    killPids(childTree, 'SIGTERM');
     if (child.pid && process.platform !== 'win32') {
       try {
         process.kill(-child.pid, 'SIGTERM');
@@ -114,6 +160,7 @@ export async function closeElectronApp(app: ElectronApplication): Promise<void> 
     }
     await Promise.race([closePromise, childExitPromise, delay(2_000)]);
     if (!childExited) child.kill('SIGKILL');
+    killPids(childTree, 'SIGKILL');
   }
 }
 
@@ -292,7 +339,7 @@ exit 64
 
     await use(page);
     try {
-      await deleteAllWorkflowsFast(page);
+      await withCleanupTimeout(deleteAllWorkflowsFast(page), 5_000);
     } catch {
       // Best-effort cleanup; the test failure itself should remain the signal.
     }

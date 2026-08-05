@@ -475,8 +475,6 @@ test.describe('Embedded terminal PTY', () => {
     expect(Number(perf.maxEmbeddedTerminalResizeMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RESIZE_BUDGET_MS);
     expect(Number(perf.maxEmbeddedTerminalScrollMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SCROLL_BUDGET_MS);
     expect(numberOrZero(perf.maxTerminalSessionUpsertMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_SESSION_UPSERT_BUDGET_MS);
-    expect(numberOrZero(perf.maxRendererEventLoopLagMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS);
-    expect(numberOrZero(perf.maxRendererLongTaskMs), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_LONG_TASK_BUDGET_MS);
     expect(maxPayloadNumber(payloads, 'renderer_event_loop_lag', 'lagMs'), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_EVENT_LOOP_LAG_BUDGET_MS);
     expect(maxPayloadNumber(payloads, 'renderer_long_task', 'durationMs'), terminalEvidenceMessage).toBeLessThanOrEqual(TERMINAL_RENDERER_LONG_TASK_BUDGET_MS);
   });

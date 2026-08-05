@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
-import { _electron as electron, type Page } from '@playwright/test';
+import { setTimeout as delay } from 'node:timers/promises';
+import type { Page } from '@playwright/test';
 import { resolveRepoRoot } from '@invoker/contracts';
 import { stringify as yamlStringify } from 'yaml';
 
@@ -37,6 +39,7 @@ const MAX_RETRY_BURST_WALL_MS = 120000;
 const MAX_RENDERER_EVENT_LOOP_LAG_MS = 1000;
 const MAX_RENDERER_LONG_TASK_MS = 1500;
 const STANDALONE_OWNER_IDLE_GRACE_MS = 15000;
+const STANDALONE_HEADLESS_CLIENT_TIMEOUT_MS = 10000;
 
 const HEADLESS_HERD_BUDGETS = {
   maxInspectorToggleMs: MAX_INSPECTOR_TOGGLE_MS,
@@ -46,6 +49,72 @@ const HEADLESS_HERD_BUDGETS = {
   maxRendererEventLoopLagMs: MAX_RENDERER_EVENT_LOOP_LAG_MS,
   maxRendererLongTaskMs: MAX_RENDERER_LONG_TASK_MS,
 };
+
+async function stopProcessTree(child: ChildProcess): Promise<void> {
+  let exited = child.exitCode !== null || child.signalCode !== null;
+  const exitPromise = new Promise<void>((resolve) => {
+    if (exited) {
+      resolve();
+      return;
+    }
+    child.once('exit', () => {
+      exited = true;
+      resolve();
+    });
+    child.once('close', () => {
+      exited = true;
+      resolve();
+    });
+  });
+  const send = (signal: NodeJS.Signals) => {
+    if (exited) return;
+    if (child.pid && process.platform !== 'win32') {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch {
+        // Fall back to the direct child when no process group exists.
+      }
+    }
+    child.kill(signal);
+  };
+
+  send('SIGTERM');
+  await Promise.race([exitPromise, delay(5_000)]);
+  send('SIGKILL');
+  await Promise.race([exitPromise, delay(1_000)]);
+}
+
+function launchStandaloneOwner(testDir: string, userDataDir: string): ChildProcess {
+  return spawn(
+    'pnpm',
+    [
+      '--dir',
+      path.join(repoRoot, 'packages', 'app'),
+      'exec',
+      'electron',
+      path.join(repoRoot, 'scripts', 'electron.cjs'),
+      ...(process.platform === 'linux'
+        ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
+        : []),
+      `--user-data-dir=${userDataDir}`,
+      path.join(repoRoot, 'packages', 'app', 'dist', 'main.js'),
+      '--headless',
+      'owner-serve',
+    ],
+    {
+      cwd: repoRoot,
+      detached: process.platform !== 'win32',
+      env: {
+        ...headlessTestEnv(testDir),
+        INVOKER_HEADLESS_STANDALONE: '1',
+        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: '60000',
+        INVOKER_USER_DATA_DIR: userDataDir,
+      },
+      stdio: 'ignore',
+    },
+  );
+}
 
 const HEADLESS_HERD_UI_PLAN = {
   name: 'Headless Herd UI Seed',
@@ -200,28 +269,16 @@ test.describe('Headless thundering herd', () => {
     const userDataDir = path.join(testDir, 'owner-electron-user-data');
     await mkdir(userDataDir, { recursive: true });
     registerTrackedBrowserUserDataDir(userDataDir);
-
-    const ownerApp = await electron.launch({
-      args: [
-        ...(process.platform === 'linux'
-          ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
-          : []),
-        `--user-data-dir=${userDataDir}`,
-        path.join(repoRoot, 'packages', 'app', 'dist', 'main.js'),
-        '--headless',
-        'owner-serve',
-      ],
-      env: {
-        ...headlessTestEnv(testDir),
-        INVOKER_HEADLESS_STANDALONE: '1',
-        INVOKER_STANDALONE_OWNER_IDLE_TIMEOUT_MS: '60000',
-        INVOKER_USER_DATA_DIR: userDataDir,
-      },
-    });
+    const ownerApp = launchStandaloneOwner(testDir, userDataDir);
 
     try {
       await expect(async () => {
-        const result = await runHeadlessClient(testDir, ['query', 'ui-perf', '--output', 'json']);
+        if (ownerApp.exitCode !== null || ownerApp.signalCode !== null) {
+          throw new Error(`standalone owner exited early: code=${ownerApp.exitCode ?? 'null'} signal=${ownerApp.signalCode ?? 'null'}`);
+        }
+        const result = await runHeadlessClient(testDir, ['query', 'ui-perf', '--output', 'json'], {
+          timeoutMs: STANDALONE_HEADLESS_CLIENT_TIMEOUT_MS,
+        });
         const stats = parseJsonStdout(result.stdout);
         expect(stats.ownerMode).toBe('standalone');
       }).toPass({ timeout: 20000 });
@@ -242,16 +299,20 @@ test.describe('Headless thundering herd', () => {
       const planPath = path.join(testDir, 'standalone-owner-plan.yaml');
       await writeFile(planPath, yamlStringify(daemonPlan), 'utf8');
 
-      const runResult = await runHeadlessClient(testDir, ['run', planPath, '--no-track']);
+      const runResult = await runHeadlessClient(testDir, ['run', planPath, '--no-track'], {
+        timeoutMs: STANDALONE_HEADLESS_CLIENT_TIMEOUT_MS,
+      });
       expectDelegated(runResult.stdout);
       expect(parseWorkflowId(runResult.stdout)).toMatch(/^wf-/);
 
-      const queue = await runHeadlessClient(testDir, ['query', 'queue', '--output', 'json']);
+      const queue = await runHeadlessClient(testDir, ['query', 'queue', '--output', 'json'], {
+        timeoutMs: STANDALONE_HEADLESS_CLIENT_TIMEOUT_MS,
+      });
       const queueStatus = parseJsonStdout(queue.stdout);
       expect(Array.isArray(queueStatus.running)).toBe(true);
       expect(Array.isArray(queueStatus.queued)).toBe(true);
     } finally {
-      await ownerApp.close().catch(() => undefined);
+      await stopProcessTree(ownerApp);
     }
   });
 });
