@@ -87,7 +87,7 @@ stop_owner() {
 original_owner_is_live() {
   local current_pid
   current_pid="$(read_owner_pid 2>/dev/null)" || return 1
-  [[ "$current_pid" == "$OWNER_PID" ]]
+  [[ "$current_pid" == "$OWNER_PID" ]] && owner_pid_is_live "$OWNER_PID"
 }
 
 skip_submission() {
