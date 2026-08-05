@@ -188,20 +188,29 @@ echo "==> Submitting $COUNT workflows sequentially against the warm owner"
 : > "$TIMINGS_FILE"
 SKIPPED=0
 for i in $(seq 1 "$COUNT"); do
+  RUN_STDOUT="$TMP_DIR/run-$i.stdout.log"
+  RUN_STDERR="$TMP_DIR/run-$i.stderr.log"
   if ! original_owner_is_live; then
     skip_submission "$i" "original owner is no longer the live marker before run"
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
   START=$(date +%s%N)
+  RUN_STATUS=0
   env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PLAN_PATH" \
-    >"$TMP_DIR/run-$i.stdout.log" 2>"$TMP_DIR/run-$i.stderr.log"
+    >"$RUN_STDOUT" 2>"$RUN_STDERR" || RUN_STATUS=$?
   END=$(date +%s%N)
   MS=$(( (END - START) / 1000000 ))
   if ! original_owner_is_live; then
     skip_submission "$i" "original owner was replaced or stopped during run" "$MS"
     SKIPPED=$((SKIPPED + 1))
     continue
+  fi
+  if [[ "$RUN_STATUS" -ne 0 ]]; then
+    echo "bench: submission $i failed with exit status $RUN_STATUS while original owner remained live" >&2
+    cat "$RUN_STDOUT" >&2 || true
+    cat "$RUN_STDERR" >&2 || true
+    exit "$RUN_STATUS"
   fi
   echo "$MS" >> "$TIMINGS_FILE"
   printf 'submission %3d: %5dms\n' "$i" "$MS"
