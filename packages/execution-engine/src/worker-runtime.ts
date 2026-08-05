@@ -70,6 +70,15 @@ export interface WorkerRuntimeOptions {
   shutdownSignals?: NodeJS.Signals[];
   /** Install process signal handlers on `start()`. Default `true`. */
   installSignalHandlers?: boolean;
+  /**
+   * When > 0 and a shutdown signal stopped this runtime but the process is
+   * still alive this many ms later, log an error and restart the runtime.
+   * A signal a long-lived owner survives must not permanently strip its
+   * workers (2026-08-05: a SIGTERM the owner outlived silently killed all
+   * PR-maintenance workers for over an hour). Default 0 (signal stop is
+   * final), preserving shutdown semantics for processes that exit.
+   */
+  restartAfterSurvivedSignalMs?: number;
 }
 
 export interface WorkerRuntime {
@@ -248,7 +257,22 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
       for (const signal of shutdownSignals) {
         const handler = (): void => {
           options.logger.info(`[worker:${identity.kind}] received ${signal}; shutting down`, logFields);
-          void stop({ settleTimeoutMs: 5_000 });
+          const stopping = stop({ settleTimeoutMs: 5_000 });
+          const restartMs = options.restartAfterSurvivedSignalMs ?? 0;
+          if (restartMs <= 0) return;
+          void stopping.then(() => {
+            const timer = setTimeout(() => {
+              options.logger.error(
+                `[worker:${identity.kind}] process survived ${signal} for ${restartMs}ms after worker stop; restarting worker`,
+                logFields,
+              );
+              stopped = false;
+              started = false;
+              abortController = new AbortController();
+              start();
+            }, restartMs);
+            timer.unref?.();
+          });
         };
         signalHandlers.set(signal, handler);
         process.once(signal, handler);
