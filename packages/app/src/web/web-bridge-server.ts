@@ -356,7 +356,24 @@ export function startWebBridge(deps: WebBridgeDeps): WebBridge {
   }, SSE_PING_INTERVAL_MS);
   pingTimer.unref?.();
 
-  const { promise: whenReady, resolve: resolveReady } = Promise.withResolvers<number>();
+  const { promise: whenReady, resolve: resolveReady, reject: rejectReady } = Promise.withResolvers<number>();
+  // Production callers fire-and-forget the bridge; a settled failure must not
+  // become an unhandledRejection while still being observable via whenReady.
+  whenReady.catch(() => {});
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (server.listening) {
+      logger?.error(`Web surface server error: ${err.stack ?? err.message}`, { module: 'web-bridge' });
+      return;
+    }
+    clearInterval(activityTimer);
+    clearInterval(workflowsTimer);
+    clearInterval(pingTimer);
+    logger?.error(
+      `Web surface failed to bind http://${host}:${port} (${err.code ?? err.message}) — continuing without the web surface`,
+      { module: 'web-bridge' },
+    );
+    rejectReady(err);
+  });
   server.listen(port, host, () => {
     const address = server.address();
     const boundPort = typeof address === 'object' && address ? address.port : port;
