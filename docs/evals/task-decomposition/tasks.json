@@ -1,0 +1,32 @@
+[
+  {
+    "id": "crash-not-graceful-quit",
+    "repro_script_path": "repro/03-crash-not-graceful-quit.mjs",
+    "description": "Diagnose that the incident was caused by owner crash and relaunch handoffs, not graceful application quit handling.",
+    "deterministic_pass_command": "node repro/03-crash-not-graceful-quit.mjs"
+  },
+  {
+    "id": "ssh-oauth-root-cause",
+    "repro_script_path": "repro/04-root-cause-ssh-oauth-infra.mjs",
+    "description": "Identify SSH/OAuth execution-pool infrastructure and remote disk pressure as the root cause rather than application logic.",
+    "deterministic_pass_command": "node repro/04-root-cause-ssh-oauth-infra.mjs"
+  },
+  {
+    "id": "real-ssh-error-overwritten",
+    "repro_script_path": "repro/05-real-ssh-error-overwritten.mjs",
+    "description": "Preserve diagnosable SSH executor errors instead of flattening orphaned tasks to a generic Application quit label.",
+    "deterministic_pass_command": "node repro/05-real-ssh-error-overwritten.mjs"
+  },
+  {
+    "id": "merge-gate-stopped-on-shutdown",
+    "repro_script_path": "repro/06-merge-gate-stopped-on-shutdown.mjs",
+    "description": "Show that merge-gate stopped-before-completion failures are shutdown teardown symptoms, not gate evaluation failures.",
+    "deterministic_pass_command": "node repro/06-merge-gate-stopped-on-shutdown.mjs"
+  },
+  {
+    "id": "executing-failures-are-oauth",
+    "repro_script_path": "repro/07-executing-failures-are-oauth-not-task.mjs",
+    "description": "Distinguish SSH/OAuth executing-phase infrastructure failures from misleading task-local package-manager warnings.",
+    "deterministic_pass_command": "node repro/07-executing-failures-are-oauth-not-task.mjs"
+  }
+]
