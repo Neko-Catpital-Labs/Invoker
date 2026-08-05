@@ -41,7 +41,7 @@ test('GUI renderer becomes ready while the test window stays invisible', async (
       env: {
         ...process.env,
         NODE_ENV: 'test',
-          INVOKER_TEST_WORKFLOW_IDS: '1',
+        INVOKER_TEST_WORKFLOW_IDS: '1',
         INVOKER_GUI_OWNER_MODE: process.env.INVOKER_E2E_GUI_OWNER_MODE ?? 'gui',
         INVOKER_DB_DIR: testDir,
         INVOKER_IPC_SOCKET: ipcSocketPath,
@@ -64,7 +64,9 @@ test('GUI renderer becomes ready while the test window stays invisible', async (
         const win = BrowserWindow.getAllWindows()[0];
         if (!win) throw new Error('no BrowserWindow found');
       });
-      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 5000 });
+      const readinessTimeoutMs = Math.max(1, STARTUP_BUDGET_MS - elapsedMs);
+      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: readinessTimeoutMs });
+      expect(Date.now() - startedAt).toBeLessThan(STARTUP_BUDGET_MS);
     } finally {
       await electronApp.close();
     }
