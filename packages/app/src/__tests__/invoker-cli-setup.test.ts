@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { runInvokerCliSetup } from '../invoker-cli-setup.js';
+import { runInvokerCliSetup, runMachinesSetup } from '../invoker-cli-setup.js';
 
 const tempRoots: string[] = [];
 
@@ -79,5 +79,84 @@ if (args === 'setup slack --from-env') process.stdout.write('slack still ran');
     expect(result.steps.map((step) => step.id)).toEqual(['tools', 'slack']);
     expect(result.steps[0]).toMatchObject({ ok: false });
     expect(result.steps[1]).toMatchObject({ ok: true });
+  });
+});
+
+describe('runMachinesSetup', () => {
+  const SECRET_SSH_KEY_PATH = '/home/example/.ssh/super-secret-key';
+
+  const readMachinesFromStdin = `
+const chunks = [];
+process.stdin.on('data', (c) => chunks.push(c));
+process.stdin.on('end', () => {
+  const machines = JSON.parse(Buffer.concat(chunks).toString());
+`;
+
+  it('spawns the CLI machines mode over stdin and returns one result per machine', async () => {
+    const cliPath = makeCli(`${readMachinesFromStdin}
+  const results = machines.map((m) => ({
+    id: m.host.replace(/[^a-z0-9]/gi, '-'),
+    host: m.host,
+    reachable: true,
+    detail: 'ssh probe ok',
+    written: true,
+  }));
+  process.stdout.write(JSON.stringify(results));
+});
+`);
+
+    const machines = [
+      { host: 'box-a.example.com', user: 'deploy', sshKeyPath: SECRET_SSH_KEY_PATH, port: 2222, maxConcurrentTasks: 2, provisionCommand: 'echo hi' },
+      { host: 'box-b.example.com', user: 'deploy', sshKeyPath: SECRET_SSH_KEY_PATH },
+    ];
+
+    const result = await runMachinesSetup(machines, { cliPath });
+
+    expect(result.ok).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.results).toHaveLength(2);
+    expect(result.results.map((r) => r.host)).toEqual(['box-a.example.com', 'box-b.example.com']);
+    expect(result.results.every((r) => r.written)).toBe(true);
+  });
+
+  it('returns an error result instead of throwing when the child process fails', async () => {
+    const cliPath = makeCli(`${readMachinesFromStdin}
+  process.stderr.write('connectivity check crashed');
+  process.exit(9);
+});
+`);
+
+    const machines = [{ host: 'box-a.example.com', user: 'deploy', sshKeyPath: SECRET_SSH_KEY_PATH }];
+
+    await expect(runMachinesSetup(machines, { cliPath })).resolves.toMatchObject({
+      ok: false,
+      results: [],
+    });
+    const result = await runMachinesSetup(machines, { cliPath });
+    expect(result.error).toContain('9');
+  });
+
+  it('never writes machine field values to console output', async () => {
+    const cliPath = makeCli(`${readMachinesFromStdin}
+  const results = machines.map((m) => ({ id: m.host, host: m.host, reachable: true, detail: 'ok', written: true }));
+  process.stdout.write(JSON.stringify(results));
+});
+`);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const machines = [{ host: 'box-a.example.com', user: 'deploy', sshKeyPath: SECRET_SSH_KEY_PATH }];
+      await runMachinesSetup(machines, { cliPath });
+
+      const allLoggedArgs = [...logSpy.mock.calls, ...errorSpy.mock.calls].flat();
+      for (const arg of allLoggedArgs) {
+        expect(String(arg)).not.toContain(SECRET_SSH_KEY_PATH);
+      }
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 });
