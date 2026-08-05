@@ -3239,7 +3239,7 @@ startMainProcessBootstrap({
         logger,
       });
     });
-    if (ownerMode) {
+    if (ownerMode && process.env.INVOKER_E2E_SKIP_PLANNING_TERMINAL_RESTORE !== '1') {
       planningTerminalState.restorePersistedPlanningTerminals();
     }
 
