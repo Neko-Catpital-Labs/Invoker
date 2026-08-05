@@ -42,7 +42,7 @@ vi.mock('@slack/bolt', () => {
         remove: vi.fn().mockResolvedValue({}),
       },
       files: {
-        uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F_TEST' }] }),
+        uploadV2: vi.fn().mockResolvedValue({ ok: true, files: [{ ok: true, files: [{ id: 'F_TEST' }] }] }),
       },
     };
   }

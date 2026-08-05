@@ -33,7 +33,7 @@ vi.mock('@slack/bolt', () => {
         test: vi.fn().mockResolvedValue({ user_id: 'UBOT' }),
       },
       files: {
-        uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F1' }] }),
+        uploadV2: vi.fn().mockResolvedValue({ ok: true, files: [{ ok: true, files: [{ id: 'F1' }] }] }),
       },
       reactions: {
         add: vi.fn().mockResolvedValue({}),

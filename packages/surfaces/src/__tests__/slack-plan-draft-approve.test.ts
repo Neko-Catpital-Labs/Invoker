@@ -19,7 +19,7 @@ vi.mock('@slack/bolt', () => {
     client = {
       auth: { test: vi.fn().mockResolvedValue({ user_id: 'U_BOT' }) },
       chat: { postMessage: vi.fn().mockResolvedValue({ ts: '1.1' }), update: vi.fn().mockResolvedValue({}) },
-      files: { uploadV2: vi.fn().mockResolvedValue({ files: [{ id: 'F1' }] }) },
+      files: { uploadV2: vi.fn().mockResolvedValue({ ok: true, files: [{ ok: true, files: [{ id: 'F1' }] }] }) },
     };
   }
   return { App: MockApp };

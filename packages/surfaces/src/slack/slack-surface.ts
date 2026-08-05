@@ -1585,8 +1585,8 @@ export class SlackSurface implements Surface {
           filename: `${draft.draftId}.yaml`,
           title: `${summary.name}.yaml`,
         }],
-      }) as unknown as { files?: Array<{ id?: string }> };
-      const fileId = upload.files?.[0]?.id;
+      }) as unknown as { files?: Array<{ files?: Array<{ id?: string }> }> };
+      const fileId = upload.files?.[0]?.files?.[0]?.id;
       if (!fileId) throw new Error('Slack did not return an uploaded YAML file id.');
       this.slackPlanDraftRepo.bindAttachment(draft, fileId);
       this.slackPlanDraftRepo.markReady(draft);
