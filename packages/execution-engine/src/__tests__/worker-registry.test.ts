@@ -19,6 +19,7 @@ import {
 import { PR_STATUS_WORKER_KIND } from '../workers/pr-status-worker.js';
 import { DISK_HEADROOM_WORKER_KIND } from '../workers/disk-headroom-worker.js';
 import { INFRA_REPAIR_WORKER_KIND } from '../workers/infra-repair-worker.js';
+import { REAPER_WORKER_KIND } from '../workers/reaper-worker.js';
 import { REQUEUE_WORKER_KIND } from '../workers/requeue-worker.js';
 import { WORKFLOW_RESUME_WORKER_KIND } from '../workers/workflow-resume-worker.js';
 import { E2E_AUTOFIX_WORKER_KIND } from '../workers/e2e-autofix-worker.js';
@@ -74,6 +75,7 @@ describe('worker registry', () => {
       PR_STATUS_WORKER_KIND,
       INFRA_REPAIR_WORKER_KIND,
       DISK_HEADROOM_WORKER_KIND,
+      REAPER_WORKER_KIND,
       AUTO_APPROVE_WORKER_KIND,
       PR_ADMIN_BYPASS_LAND_WORKER_KIND,
       PR_ORPHAN_REPAIR_WORKER_KIND,
@@ -86,6 +88,7 @@ describe('worker registry', () => {
     expect(registry.get(PR_STATUS_WORKER_KIND)).toBeDefined();
     expect(registry.get(INFRA_REPAIR_WORKER_KIND)).toBeDefined();
     expect(registry.get(DISK_HEADROOM_WORKER_KIND)).toBeDefined();
+    expect(registry.get(REAPER_WORKER_KIND)).toBeDefined();
     expect(registry.get(AUTO_APPROVE_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_ADMIN_BYPASS_LAND_WORKER_KIND)).toBeDefined();
     expect(registry.get(PR_ORPHAN_REPAIR_WORKER_KIND)).toBeDefined();
