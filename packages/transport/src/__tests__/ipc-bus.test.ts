@@ -328,6 +328,44 @@ describe('IpcBus', () => {
     expect(result).toBe('owner:ok');
   });
 
+  // Regression: a headless CLI constructs its bus with allowServe: false at
+  // process startup, often before any owner process exists yet (socket file
+  // ENOENT). ensureStandaloneOwnerViaBootstrap (packages/app/src/headless-
+  // client.ts) then spawns an owner and polls discoverOwner() on that SAME
+  // bus for up to 60s waiting for it to come up. Before this fix, a pure
+  // client bus that failed its very first connect attempt gave up
+  // permanently — it never retried — so every poll iteration failed
+  // immediately (no peers), and only a fresh bus (via refreshMessageBus())
+  // could ever succeed. That wasted the full 60s timeout on every cold
+  // owner bootstrap, even though the owner was ready in well under a
+  // second. This proves a client-only bus now keeps retrying in the
+  // background and connects once a server appears, without recreating it.
+  it('a client-only bus created before any server exists still connects once one appears later', async () => {
+    const sock = tempSocketPath();
+
+    // No server exists yet at this socket path — this connect attempt must
+    // fail (ENOENT). With the bug, this bus would be permanently unable to
+    // reach any server for the rest of its lifetime.
+    const earlyClient = new IpcBus(sock, { allowServe: false });
+    buses.push(earlyClient);
+    await earlyClient.ready();
+
+    // The server only comes up afterward — simulating the owner process
+    // still booting when the CLI's bus made its first connection attempt.
+    const owner = createBus(sock);
+    await owner.ready();
+    owner.onRequest<string, string>('echo', (value) => `owner:${value}`);
+
+    // Give the background reconnect (25ms interval) a chance to land a peer
+    // before asserting — request() checks live peers synchronously and does
+    // not itself wait for a reconnect in flight.
+    await sleep(150);
+
+    // No new bus is constructed here — the SAME earlyClient must recover.
+    const result = await earlyClient.request<string, string>('echo', 'still-works');
+    expect(result).toBe('owner:still-works');
+  });
+
   it('ignores no-handler responses from other peers when one peer can satisfy the request', async () => {
     const sock = tempSocketPath();
 
