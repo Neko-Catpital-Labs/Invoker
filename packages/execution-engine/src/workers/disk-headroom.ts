@@ -14,19 +14,28 @@ export interface DiskUsage {
   mountedOn: string;
 }
 
-export type DiskHeadroomLevel = 'ok' | 'warn' | 'critical';
+export type DiskHeadroomLevel = 'ok' | 'warn' | 'critical' | 'unknown';
 
 export interface DiskHeadroomThresholds {
   warnPercent: number;
   criticalPercent: number;
 }
 
-export interface DiskHeadroomEvaluation {
+export interface DiskHeadroomEvaluationVerified {
   label: string;
-  level: DiskHeadroomLevel;
+  level: 'ok' | 'warn' | 'critical';
   usage: DiskUsage;
   thresholds: DiskHeadroomThresholds;
 }
+
+export interface DiskHeadroomEvaluationUnknown {
+  label: string;
+  level: 'unknown';
+  thresholds: DiskHeadroomThresholds;
+  error: string;
+}
+
+export type DiskHeadroomEvaluation = DiskHeadroomEvaluationVerified | DiskHeadroomEvaluationUnknown;
 
 function parsePositiveInt(raw: string): number | null {
   if (!raw) return null;

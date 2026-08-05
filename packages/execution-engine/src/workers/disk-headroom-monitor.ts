@@ -97,6 +97,15 @@ function auditLog(
 }
 
 function emit(deps: DiskHeadroomMonitorDeps, result: DiskHeadroomEvaluation): void {
+  if (result.level === 'unknown') {
+    deps.logger.warn(`[disk-headroom] unknown: ${result.label} (${result.error ?? 'check failed'})`, {
+      module: MODULE,
+      label: result.label,
+      error: result.error,
+    });
+    return;
+  }
+
   const fields = {
     module: MODULE,
     label: result.label,
@@ -127,20 +136,25 @@ async function checkOne(
   deps: DiskHeadroomMonitorDeps,
   label: string,
   runDf: () => Promise<string>,
-): Promise<DiskHeadroomEvaluation | null> {
+): Promise<DiskHeadroomEvaluation> {
   let stdout = '';
   try {
     stdout = await runDf();
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     deps.logger.error(`[disk-headroom] df failed for ${label}: ${reason}`, { module: MODULE, label });
-    return null;
+    const result: DiskHeadroomEvaluation = { label, level: 'unknown', thresholds: deps.thresholds, error: reason };
+    emit(deps, result);
+    return result;
   }
 
   const usage = parseDfOutput(stdout);
   if (!usage) {
-    deps.logger.error(`[disk-headroom] unparseable df output for ${label}`, { module: MODULE, label });
-    return null;
+    const reason = 'unparseable df output';
+    deps.logger.error(`[disk-headroom] ${reason} for ${label}`, { module: MODULE, label });
+    const result: DiskHeadroomEvaluation = { label, level: 'unknown', thresholds: deps.thresholds, error: reason };
+    emit(deps, result);
+    return result;
   }
 
   const result = evaluateDiskHeadroom(usage, deps.thresholds, label);
@@ -150,8 +164,10 @@ async function checkOne(
 
 /**
  * Run one disk-headroom pass: the local disk, then every remote target in
- * parallel. Returns the evaluations that succeeded (parse/df failures are
- * logged and omitted). Never throws.
+ * parallel. Every target always contributes exactly one entry — a target
+ * whose check couldn't complete (df failed, unparseable output) is included
+ * with level 'unknown' rather than being silently omitted, so a target that
+ * can't be verified never goes unnoticed. Never throws.
  */
 export async function runDiskHeadroomCheck(
   deps: DiskHeadroomMonitorDeps,
@@ -159,11 +175,8 @@ export async function runDiskHeadroomCheck(
   const runLocal = deps.runLocalDf ?? defaultRunLocalDf;
   const runRemote = deps.runRemoteDf ?? defaultRunRemoteDf;
 
-  const results: DiskHeadroomEvaluation[] = [];
-
   const localLabel = `local ${deps.localPath}`;
   const local = await checkOne(deps, localLabel, () => runLocal(deps.localPath));
-  if (local) results.push(local);
 
   const remotes = await Promise.all(
     deps.remoteTargets.map(async (target) => {
@@ -171,11 +184,8 @@ export async function runDiskHeadroomCheck(
       return checkOne(deps, label, () => runRemote(target));
     }),
   );
-  for (const r of remotes) {
-    if (r) results.push(r);
-  }
 
-  return results;
+  return [local, ...remotes];
 }
 
 export interface DiskHeadroomMonitorHandle {
