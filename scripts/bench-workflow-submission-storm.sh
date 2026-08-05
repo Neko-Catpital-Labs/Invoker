@@ -26,6 +26,7 @@ REMOTE_REPO="$TMP_DIR/remote.git"
 TIMINGS_FILE="$TMP_DIR/timings.txt"
 COUNT=50
 KEEP_TMP=0
+OWNER_PID=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -35,8 +36,45 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+owner_pid_is_live() {
+  local pid="$1"
+  local command
+  kill -0 "$pid" 2>/dev/null || return 1
+  command="$(ps -p "$pid" -ww -o command= 2>/dev/null || true)"
+  [[ "$command" == *"packages/app/dist/main.js"* && "$command" == *"--headless owner-serve"* ]]
+}
+
+read_owner_pid() {
+  local marker="$DB_DIR/invoker.db.owner"
+  local pid
+  [[ -f "$marker" ]] || return 1
+  pid="$(<"$marker")"
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  owner_pid_is_live "$pid" || return 1
+  printf '%s\n' "$pid"
+}
+
+wait_for_owner_exit() {
+  local pid="$1"
+  for _ in {1..50}; do
+    owner_pid_is_live "$pid" || return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+stop_owner() {
+  [[ -n "${OWNER_PID:-}" ]] || return 0
+  owner_pid_is_live "$OWNER_PID" || return 0
+  kill "$OWNER_PID" 2>/dev/null || true
+  if ! wait_for_owner_exit "$OWNER_PID"; then
+    kill -KILL "$OWNER_PID" 2>/dev/null || true
+    wait_for_owner_exit "$OWNER_PID" || true
+  fi
+}
+
 cleanup() {
-  pkill -f "electron.*packages/app/dist/main.js.*--headless owner-serve" 2>/dev/null || true
+  stop_owner
   if [[ "$KEEP_TMP" -eq 1 ]]; then
     echo "==> Kept tmp dir: $TMP_DIR" >&2
   else
@@ -107,6 +145,12 @@ echo "    bootstrap submission: ${BOOTSTRAP_MS}ms (real owner boot + first submi
 
 if ! grep -q 'Delegated to owner — workflow: wf-' "$TMP_DIR/bootstrap.stdout.log"; then
   echo "bench: bootstrap submission failed to produce a workflow id" >&2
+  cat "$TMP_DIR/bootstrap.stdout.log" >&2 || true
+  cat "$TMP_DIR/bootstrap.stderr.log" >&2 || true
+  exit 1
+fi
+if ! OWNER_PID="$(read_owner_pid)"; then
+  echo "bench: bootstrap did not leave a live standalone owner marker at $DB_DIR/invoker.db.owner" >&2
   cat "$TMP_DIR/bootstrap.stdout.log" >&2 || true
   cat "$TMP_DIR/bootstrap.stderr.log" >&2 || true
   exit 1
