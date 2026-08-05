@@ -12,3 +12,4 @@ required/50-verify-executor-routing.sh
 required/23b-fix-intent-cancellation-stale-ssh-metadata.sh
 required/08-electron-preprovision-repro.sh
 required/23a-recreate-task-queue-authority.sh
+required/29-bench-workflow-submission-storm.sh

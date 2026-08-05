@@ -9,10 +9,15 @@
 # submission cost, not one-time Electron bootstrap.
 #
 # Usage:
-#   bash scripts/bench-workflow-submission-storm.sh [--count N]
+#   bash scripts/bench-workflow-submission-storm.sh [--count N] [--gate] [--budget-ms N]
 #
-# Exit nonzero for setup or submission failures; prints a
-# per-submission timing table and summary stats (min/p50/p95/max/mean).
+# Exit nonzero for setup failures or when no valid samples are collected;
+# prints a per-submission timing table and summary stats (min/p50/p95/max/mean).
+#
+# --gate: exit 1 when p95 latency exceeds --budget-ms (default 1000). Gates
+# on p95 rather than max/every-sample so one noisy-CI-runner outlier can't
+# flake the check while a real regression (e.g. the cold-owner-connection
+# stall this script originally caught) still fails it reliably.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,11 +32,19 @@ TIMINGS_FILE="$TMP_DIR/timings.txt"
 COUNT=50
 KEEP_TMP=0
 OWNER_PID=""
+GATE=0
+BUDGET_MS=1000
+# Real Electron boot legitimately takes a few seconds — this is a generous
+# ceiling to catch the "cold connection stalls for the full 60s bootstrap
+# timeout" regression class, not a tight steady-state budget like BUDGET_MS.
+BOOTSTRAP_BUDGET_MS=15000
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --count) COUNT="$2"; shift 2 ;;
     --keep-tmp) KEEP_TMP=1; shift ;;
+    --gate) GATE=1; shift ;;
+    --budget-ms) BUDGET_MS="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -161,7 +174,7 @@ COMMON_ENV=(
   INVOKER_REPO_CONFIG_PATH="$CONFIG_PATH"
 )
 
-echo "==> Submission 0 (bootstrap): spawns + waits for a REAL persistent owner process, excluded from stats"
+echo "==> Submission 0 (bootstrap): spawns + waits for a REAL persistent owner process, excluded from the p95 stats below"
 echo "    (NOT using INVOKER_HEADLESS_STANDALONE=1 — that runs in-process with no owner at all,"
 echo "     which under-measures every later submission's real IPC-delegation cost)"
 BOOTSTRAP_START=$(date +%s%N)
@@ -169,7 +182,13 @@ env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PLAN_PATH" \
   >"$TMP_DIR/bootstrap.stdout.log" 2>"$TMP_DIR/bootstrap.stderr.log"
 BOOTSTRAP_END=$(date +%s%N)
 BOOTSTRAP_MS=$(( (BOOTSTRAP_END - BOOTSTRAP_START) / 1000000 ))
-echo "    bootstrap submission: ${BOOTSTRAP_MS}ms (real owner boot + first submit, not counted below)"
+echo "    bootstrap submission: ${BOOTSTRAP_MS}ms (real owner boot + first submit, excluded from p95 — checked separately below)"
+
+if [[ "$GATE" -eq 1 && "$BOOTSTRAP_MS" -gt "$BOOTSTRAP_BUDGET_MS" ]]; then
+  echo "  GATE FAIL: bootstrap submission took ${BOOTSTRAP_MS}ms, exceeds bootstrap budget=${BOOTSTRAP_BUDGET_MS}ms" >&2
+  echo "  (this is the exact failure mode of a client connection that never retries after its first failed attempt)" >&2
+  exit 1
+fi
 
 if ! grep -q 'Delegated to owner — workflow: wf-' "$TMP_DIR/bootstrap.stdout.log"; then
   echo "bench: bootstrap submission failed to produce a workflow id" >&2
@@ -214,21 +233,29 @@ fi
 
 echo
 echo "==> Summary (ms, sequential, warm owner, N=$(wc -l < "$TIMINGS_FILE" | tr -d ' '), skipped=$SKIPPED)"
-python3 - "$TIMINGS_FILE" <<'PY'
+python3 - "$TIMINGS_FILE" "$GATE" "$BUDGET_MS" <<'PY'
 import sys
 vals = sorted(int(l.strip()) for l in open(sys.argv[1]) if l.strip())
+gate = sys.argv[2] == "1"
+budget_ms = int(sys.argv[3])
 n = len(vals)
 def pct(p):
     idx = min(n - 1, int(round(p * (n - 1))))
     return vals[idx]
+p95 = pct(0.95)
 print(f"  count={n}")
 print(f"  min={vals[0]}ms")
 print(f"  p50={pct(0.50)}ms")
-print(f"  p95={pct(0.95)}ms")
+print(f"  p95={p95}ms")
 print(f"  max={vals[-1]}ms")
 print(f"  mean={sum(vals)/n:.1f}ms")
-over_budget = sum(1 for v in vals if v > 1000)
-print(f"  over 1000ms budget: {over_budget}/{n}")
+over_budget = sum(1 for v in vals if v > budget_ms)
+print(f"  over {budget_ms}ms budget: {over_budget}/{n}")
+if gate:
+    if p95 > budget_ms:
+        print(f"  GATE FAIL: p95={p95}ms exceeds budget={budget_ms}ms")
+        sys.exit(1)
+    print(f"  GATE PASS: p95={p95}ms within budget={budget_ms}ms")
 PY
 
 popd >/dev/null
