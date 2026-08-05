@@ -4,6 +4,9 @@ import * as child_process from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SQLiteAdapter, ConversationRepository } from '@invoker/data-store';
+
+const silentLogger = { info: () => {}, warn: () => {}, error: () => {} };
 
 // ── Mock child_process.spawn ────────────────────────────────
 
@@ -186,13 +189,15 @@ describe('SessionManager', () => {
     expect(mockRepo.loadConversation).toHaveBeenCalledWith('1234.5678');
   });
 
-  it('recovers session from database when channelId is empty (backward compat)', async () => {
+  it('never trusts an empty stored channelId as a match — starts a fresh session instead of inheriting the orphaned row\'s history', async () => {
     manager.start();
     mockRepo.loadConversation.mockReturnValueOnce({
       threadTs: '1234.5678',
       channelId: '',
       userId: 'U001',
-      messages: [],
+      messages: [
+        { role: 'user', content: 'message from some other, unrelated conversation' },
+      ],
       extractedPlan: null,
       planSubmitted: false,
       createdAt: new Date().toISOString(),
@@ -202,6 +207,18 @@ describe('SessionManager', () => {
     const id = new SessionIdentifier('C123', '1234.5678');
     const handle = await manager.getOrCreateSession(id, 'U001');
     expect(handle).not.toBeNull();
+    // A fresh, empty session — never the orphaned row's history.
+    expect(handle!.history).toEqual([]);
+    // The creation path re-persists this thread with a real, non-empty channelId.
+    expect(mockRepo.saveConversation).toHaveBeenCalledWith(
+      '1234.5678',
+      [],
+      null,
+      false,
+      'C123',
+      'U001',
+      'agent',
+    );
   });
 
   it('persists channelId and userId when creating a new session', async () => {
@@ -373,6 +390,101 @@ describe('SessionManager', () => {
 
     // Sending a message after dispose should throw
     await expect(handle!.sendMessage('test')).rejects.toThrow('disposed');
+  });
+});
+
+// Repro: does the channelId='' "backward compat" bypass (thread-session-manager.ts:355)
+// let an unrelated channel inherit another conversation's full message history?
+//
+// production-realistic writer of channelId='': PlanConversation.saveState()
+// (plan-conversation.ts:994-1002) always calls conversationRepo.saveConversation()
+// with channelId=undefined. SlackSurface.getSession()'s no-sessionManager fallback
+// (slack-surface.ts:3001-3027) constructs PlanConversation directly, with no
+// upfront channel-bearing save — so saveState() is that thread's *first* DB write,
+// leaving channelId='' on the row. This test reproduces that write shape with the
+// real (unmocked) ConversationRepository + SQLiteAdapter, then proves a totally
+// different channel asking for the same thread_ts is handed the first channel's
+// full conversation instead of a fresh session.
+describe('SessionManager channel isolation with real persistence', () => {
+  let adapter: SQLiteAdapter;
+  let repo: ConversationRepository;
+  let manager: SessionManager;
+
+  beforeEach(async () => {
+    adapter = await SQLiteAdapter.create(':memory:');
+    repo = new ConversationRepository(adapter, silentLogger);
+    manager = new SessionManager({
+      cursorCommand: 'cursor',
+      workingDir: '/fake',
+      conversationRepo: repo,
+      evictionIntervalMs: 60_000,
+    });
+  });
+
+  afterEach(() => {
+    manager.stop();
+    adapter.close();
+  });
+
+  it('does not hand an unrelated channel another conversation\'s history when the row was first written with channelId=""', async () => {
+    const SHARED_THREAD_TS = '1785890000.000001';
+
+    // Step 1: reproduce PlanConversation.saveState()'s exact call shape — the
+    // real production signature when it is the first writer for a thread
+    // (channelId and userId both omitted, i.e. undefined).
+    repo.saveConversation(
+      SHARED_THREAD_TS,
+      [
+        { role: 'user', content: 'Add real enforcement for silent catch blocks — no ESLint here, so it has to be a custom check:no-silent-catch script.' },
+        { role: 'assistant', content: 'Enumeration shows 57 silent .catch() handlers and an unreliable 697 try/catch count. Pick granularity: 1 workflow per violation or per file?' },
+      ],
+      null,
+      false,
+      // channelId, userId, mode all omitted — matches plan-conversation.ts:994-1002
+    );
+
+    const persistedAsWritten = repo.loadConversation(SHARED_THREAD_TS);
+    expect(persistedAsWritten?.channelId).toBe('');
+
+    // Step 2: a completely unrelated channel — a different Slack conversation
+    // about closing empty PRs — happens to ask for the exact same thread_ts
+    // (this is what SlackSurface.recoverActiveConversations() does on restart:
+    // `entry.channelId || this.channelId`, slack-surface.ts:3079-3082, silently
+    // substitutes the bot's default channel whenever the stored channelId is '').
+    manager.start();
+    const unrelatedChannelId = new SessionIdentifier('C-CLOSE-EMPTY-PRS', SHARED_THREAD_TS);
+    const handle = await manager.getOrCreateSession(unrelatedChannelId, 'U-CHIEF-CAT-OFFICER');
+
+    expect(handle).not.toBeNull();
+    // FIXED BEHAVIOR: an empty stored channelId is never trusted as a match, so
+    // the "close empty PRs" channel gets a fresh, empty session — never the
+    // unrelated silent-catch/lint-policy conversation's history.
+    expect(handle!.history).toEqual([]);
+  });
+
+  it('does NOT bleed when the row was first written with a real channelId (control case)', async () => {
+    const SHARED_THREAD_TS = '1785890000.000002';
+
+    // Same shape as above, but simulating the normal getOrCreateSession path,
+    // which always supplies a real channelId on first write.
+    repo.saveConversation(
+      SHARED_THREAD_TS,
+      [{ role: 'user', content: 'unrelated content that belongs to channel C-ORIGINAL' }],
+      null,
+      false,
+      'C-ORIGINAL',
+      'U-SOMEONE',
+      'agent',
+    );
+
+    manager.start();
+    const otherChannelId = new SessionIdentifier('C-DIFFERENT', SHARED_THREAD_TS);
+    const handle = await manager.getOrCreateSession(otherChannelId, 'U-OTHER');
+
+    expect(handle).not.toBeNull();
+    // A real, non-empty stored channelId that doesn't match is NOT trusted —
+    // a brand-new, empty session is created instead. No bleed.
+    expect(handle!.history).toEqual([]);
   });
 });
 
