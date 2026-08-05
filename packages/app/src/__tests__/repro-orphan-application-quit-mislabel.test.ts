@@ -2,13 +2,14 @@
  * REPRO — "Application quit" mislabels infra crashes (Issues 1 & 2)
  *
  * Claim being proven:
- *   Tasks orphaned by an owner crash are force-failed with the hard-coded
- *   reason "Application quit", clobbering any real (e.g. SSH/OAuth infra)
- *   failure context, because the boot call site passes no `reason`.
+ *   Tasks orphaned by an owner crash must not be force-failed with the
+ *   graceful-shutdown reason "Application quit". The boot call sites pass an
+ *   explicit owner-restart reason, while the helper's historical default still
+ *   documents the original failure mode.
  *
  * This exercises the REAL production code:
  *   - reconcileOrphanedInFlightTasksOnBoot / isTaskInFlightForForcedStop
- *   - the two call sites in main.ts (read as source, asserted to pass no reason)
+ *   - the two call sites in main.ts (read as source, asserted to pass a reason)
  *
  * Run: packages/app/node_modules/.bin/vitest run src/__tests__/repro-orphan-application-quit-mislabel.test.ts
  */
@@ -109,13 +110,13 @@ describe('REPRO Issue 1: orphan-reconcile clobbers the real infra failure with "
   });
 });
 
-describe('REPRO Issue 2: the boot call sites pass no `reason`, so the default always wins', () => {
-  it('every reconcileOrphanedInFlightTasksOnBoot(...) call in main.ts omits `reason`', () => {
+describe('REPRO Issue 2: boot call sites pass an owner-restart `reason`', () => {
+  it('every reconcileOrphanedInFlightTasksOnBoot(...) call in main.ts passes `reason`', () => {
     const calls = [...mainSrc.matchAll(/reconcileOrphanedInFlightTasksOnBoot\(\{([\s\S]*?)\}\)/g)];
     // Both known boot paths (headless owner + GUI owner) call it.
     expect(calls.length).toBeGreaterThanOrEqual(2);
     for (const m of calls) {
-      expect(m[1]).not.toMatch(/\breason\b\s*:/);
+      expect(m[1]).toMatch(/\breason\b\s*:\s*OWNER_RESTART_REASON\b/);
     }
   });
 
