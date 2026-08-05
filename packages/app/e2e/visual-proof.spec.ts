@@ -21,11 +21,14 @@ import {
   openPlanGraph,
   E2E_REPO_URL,
 } from './fixtures/electron-app.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { stringify as yamlStringify } from 'yaml';
-import type { Locator, Page } from '@playwright/test';
-import { SQLiteAdapter, type WorkerActionWrite } from '@invoker/data-store';
+import { _electron as electron, type Locator, type Page } from '@playwright/test';
+import { SQLiteAdapter, type WorkerActionWrite, type InAppPlanningSessionRecord } from '@invoker/data-store';
+import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 /** Plan for queue-semantics visual proof: enough tasks to fill Action Queue and Backlog. */
 const QUEUE_SEMANTICS_PLAN = {
   name: 'Queue Semantics Visual Proof',
@@ -2948,5 +2951,88 @@ test.describe('Visual proof capture', () => {
     await expect(dialog.getByText('Start and recreate failed, pending, and running')).toBeVisible();
     await expect(dialog.getByText('Running workflows')).toBeVisible();
     await captureScreenshot(page, 'start-ready-recreate-failed-pending-and-running-dialog');
+  });
+});
+
+test.describe('Unknown terminal status visual proof', () => {
+  test('hydrated session with unconfirmed terminal status shows the reattach placeholder, then reattaches for real', async () => {
+    const testDir = mkdtempSync(path.join(tmpdir(), 'invoker-e2e-unknown-terminal-status-'));
+    const userDataDir = path.join(testDir, 'electron-user-data');
+    const ipcSocketPath = path.join(testDir, 'ipc-transport.sock');
+    const configPath = path.join(testDir, 'e2e-config.json');
+    await fs.mkdir(userDataDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ autoFixRetries: 0 }), 'utf8');
+    registerTrackedBrowserUserDataDir(userDataDir);
+
+    const record: InAppPlanningSessionRecord = {
+      id: 'plan-unknown-terminal-status',
+      title: 'Unknown terminal status session',
+      presetKey: 'codex',
+      status: 'still_discussing',
+      confirmationMode: 'require',
+      messages: [
+        { id: 1, role: 'user', text: 'Keep going on this plan.', createdAt: '2026-07-28T00:00:00.000Z' },
+        { id: 2, role: 'assistant', text: 'Picking back up where we left off.', createdAt: '2026-07-28T00:00:05.000Z' },
+      ],
+      terminalMode: 'tmux',
+      terminalSessionId: 'term-unknown-status-fixture',
+      terminalOutputSnapshot: 'stale snapshot captured before the last restart',
+      pendingResponse: false,
+      createdAt: '2026-07-28T00:00:00.000Z',
+      updatedAt: '2026-07-28T00:00:05.000Z',
+    };
+    const seedAdapter = await SQLiteAdapter.create(path.join(testDir, 'invoker.db'), { ownerCapability: true });
+    try {
+      seedAdapter.upsertInAppPlanningSession(record);
+    } finally {
+      seedAdapter.close();
+    }
+
+    const app = await electron.launch({
+      args: [
+        ...(process.platform === 'linux'
+          ? ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--disable-gpu-compositing', '--disable-gpu-sandbox', '--disable-software-rasterizer']
+          : []),
+        `--user-data-dir=${userDataDir}`,
+        path.resolve(__dirname, '..', 'dist', 'main.js'),
+      ],
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        INVOKER_TEST_WORKFLOW_IDS: '1',
+        INVOKER_DISABLE_SLACK: '1',
+        TZ: 'UTC',
+        INVOKER_GUI_OWNER_MODE: 'gui',
+        INVOKER_DB_DIR: testDir,
+        INVOKER_IPC_SOCKET: ipcSocketPath,
+        INVOKER_ALLOW_DELETE_ALL: '1',
+        INVOKER_E2E_ENABLE_COMPOSITOR: '1',
+        INVOKER_REPO_CONFIG_PATH: configPath,
+        INVOKER_E2E_SKIP_PLANNING_TERMINAL_RESTORE: '1',
+      },
+    });
+
+    try {
+      const page = await app.firstWindow();
+      await page.waitForLoadState('domcontentloaded');
+      await page.waitForFunction(() => typeof window.invoker !== 'undefined', null, { timeout: 15000 });
+
+      await page.getByTestId('sidebar-home').click();
+
+      await expect(page.getByTestId('invoker-terminal-tmux-placeholder')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByTestId('invoker-terminal-tmux-pane')).toHaveCount(0);
+      await captureScreenshot(page, 'unknown-terminal-status-placeholder');
+
+      await page.locator('[data-testid="invoker-terminal-mode-toggle"]').getByRole('tab', { name: 'Tmux' }).click();
+
+      await expect(page.getByTestId('invoker-terminal-tmux-pane')).toBeVisible({ timeout: 15000 });
+      const reattachedSessionId = await page.getByTestId('invoker-terminal-tmux-pane').getAttribute('data-session-id');
+      expect(reattachedSessionId).toBeTruthy();
+      expect(reattachedSessionId).not.toBe('term-unknown-status-fixture');
+      await captureScreenshot(page, 'unknown-terminal-status-reattached');
+    } finally {
+      await app.close().catch(() => undefined);
+      rmSync(testDir, { recursive: true, force: true });
+    }
   });
 });
