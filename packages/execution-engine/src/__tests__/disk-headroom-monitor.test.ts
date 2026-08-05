@@ -74,23 +74,28 @@ describe('runDiskHeadroomCheck — local disk', () => {
     expect((deps.logger as any).debug).toHaveBeenCalled();
   });
 
-  it('logs and swallows a df failure without throwing', async () => {
+  it('surfaces a df failure as an unknown-level evaluation instead of dropping it', async () => {
     const deps = baseDeps({
       runLocalDf: async () => {
         throw new Error('df down');
       },
     });
 
-    await expect(runDiskHeadroomCheck(deps)).resolves.toEqual([]);
+    const results = await runDiskHeadroomCheck(deps);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ label: 'local /tmp', level: 'unknown', error: 'df down' });
+    expect((results[0] as any).usage).toBeUndefined();
     expect((deps.logger as any).error).toHaveBeenCalled();
   });
 
-  it('logs unparseable df output', async () => {
+  it('surfaces unparseable df output as an unknown-level evaluation instead of dropping it', async () => {
     const deps = baseDeps({
       runLocalDf: async () => 'garbage',
     });
 
-    await expect(runDiskHeadroomCheck(deps)).resolves.toEqual([]);
+    const results = await runDiskHeadroomCheck(deps);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ label: 'local /tmp', level: 'unknown' });
     expect((deps.logger as any).error).toHaveBeenCalled();
   });
 
@@ -126,7 +131,7 @@ describe('runDiskHeadroomCheck — remote targets', () => {
     expect((deps.logger as any).warn).toHaveBeenCalled();
   });
 
-  it('logs and swallows a remote df failure', async () => {
+  it('surfaces a remote df failure as unknown instead of dropping the target', async () => {
     const deps = baseDeps({
       remoteTargets: [{ name: 'a', connection: CONN, remotePath: '~/.invoker' }],
       runLocalDf: async () => dfAt(10),
@@ -136,7 +141,9 @@ describe('runDiskHeadroomCheck — remote targets', () => {
     });
 
     const results = await runDiskHeadroomCheck(deps);
-    expect(results).toHaveLength(1);
+    expect(results).toHaveLength(2);
+    const remote = results.find((r) => r.label.startsWith('ssh:'));
+    expect(remote).toMatchObject({ level: 'unknown', error: 'remote down' });
     expect((deps.logger as any).error).toHaveBeenCalled();
   });
 });
