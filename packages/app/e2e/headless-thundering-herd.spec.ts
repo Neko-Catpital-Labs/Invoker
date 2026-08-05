@@ -6,6 +6,7 @@ import { stringify as yamlStringify } from 'yaml';
 
 import { registerTrackedBrowserUserDataDir } from './fixtures/browser-process-registry.js';
 import {
+  closeElectronApp,
   E2E_REPO_URL,
   expect,
   loadPlan,
@@ -19,6 +20,7 @@ import {
   uiPerfPayloadsSince,
 } from './fixtures/ui-perf.js';
 import {
+  cleanupStandaloneOwnersForTestDir,
   ensureHeadlessTestConfig,
   expectDelegated,
   headlessTestEnv,
@@ -94,6 +96,10 @@ async function settleHeadlessHerdWorkflows(page: Page): Promise<void> {
 }
 
 test.describe('Headless thundering herd', () => {
+  test.afterEach(async ({ testDir }) => {
+    await cleanupStandaloneOwnersForTestDir(testDir);
+  });
+
   test('burst headless restarts do not spawn headless electron herds or freeze the UI', async ({ page, testDir }) => {
     await loadPlan(page, HEADLESS_HERD_UI_PLAN);
     await startPlan(page);
@@ -251,7 +257,7 @@ test.describe('Headless thundering herd', () => {
       expect(Array.isArray(queueStatus.running)).toBe(true);
       expect(Array.isArray(queueStatus.queued)).toBe(true);
     } finally {
-      await ownerApp.close().catch(() => undefined);
+      await closeElectronApp(ownerApp);
     }
   });
 });
