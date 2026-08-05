@@ -454,6 +454,7 @@ describe('buildRecordAndPushScript', () => {
       commitMessageEmpty: 'invoker: task-123\n\nExit code: 0',
       gitUserName: 'Invoker Bot',
       gitUserEmail: 'invoker@local',
+      idempotencyKey: 'exec-1',
     });
 
     expect(script).toContain('set -euo pipefail');
@@ -469,6 +470,8 @@ describe('buildRecordAndPushScript', () => {
     expect(script).toContain('HASH=$(git rev-parse HEAD)');
     expect(script).toContain('REMOTE_EXPECTED=$(git ls-remote "$PUSH_REMOTE" "refs/heads/$BR"');
     expect(script).toContain('git push --force-with-lease="refs/heads/$BR:$REMOTE_EXPECTED" "$PUSH_REMOTE" "$HASH:refs/heads/$BR"');
+    expect(script).toContain('IDEMPOTENCY_KEY=$(printf');
+    expect(script).toContain('MARKER="$STATE_DIR/$SAFE_IDEMPOTENCY_KEY.hash"');
     expect(script).toContain('printf "%s" "$HASH"');
   });
 
@@ -548,6 +551,70 @@ describe('buildRecordAndPushScript', () => {
     expect(authorName).toBe('Remote CI Bot');
     expect(authorEmail).toBe('remote-ci@example.com');
     expect(pushedHead).toBe(localHead);
+  });
+
+  it('reuses the recorded commit when retried with the same idempotency key', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ssh-record-push-idempotent-'));
+    try {
+      const source = join(root, 'source');
+      const bare = join(root, 'remote.git');
+      const clone = join(root, 'clone');
+      const branch = 'experiment/test-branch';
+
+      mkdirSync(source, { recursive: true });
+      execSync('git init -b master', { cwd: source, stdio: 'ignore' });
+      writeFileSync(join(source, 'README.md'), 'seed\n');
+      execSync('git add README.md', { cwd: source, stdio: 'ignore' });
+      execSync('git -c user.name="Seed User" -c user.email="seed@example.com" commit -m "seed"', {
+        cwd: source,
+        stdio: 'ignore',
+      });
+      execSync(`git clone --bare ${JSON.stringify(source)} ${JSON.stringify(bare)}`, { stdio: 'ignore' });
+      execSync(`git clone ${JSON.stringify(bare)} ${JSON.stringify(clone)}`, { stdio: 'ignore' });
+      execSync(`git checkout -b ${branch}`, { cwd: clone, stdio: 'ignore' });
+      writeFileSync(join(clone, 'result.txt'), 'ok\n');
+
+      const script = buildRecordAndPushScript({
+        worktreePath: clone,
+        branch,
+        commitMessageChanges: 'invoker: record remote result',
+        commitMessageEmpty: 'invoker: record remote empty result',
+        gitUserName: 'Remote CI Bot',
+        gitUserEmail: 'remote-ci@example.com',
+        idempotencyKey: 'exec-1',
+      });
+
+      const firstOutput = execFileSync('bash', ['-lc', script], {
+        env: {
+          ...process.env,
+          HOME: mkdtempSync(join(tmpdir(), 'ssh-record-push-home-')),
+        },
+      }).toString().trim();
+      const firstHash = firstOutput.split(/\s+/).pop();
+
+      const markerDir = execSync('git rev-parse --git-path invoker-record-and-push', { cwd: clone }).toString().trim();
+      rmSync(markerDir, { recursive: true, force: true });
+
+      const secondOutput = execFileSync('bash', ['-lc', script], {
+        env: {
+          ...process.env,
+          HOME: mkdtempSync(join(tmpdir(), 'ssh-record-push-home-')),
+        },
+      }).toString().trim();
+      const secondHash = secondOutput.split(/\s+/).pop();
+      const commitCount = execSync('git rev-list --count HEAD', { cwd: clone }).toString().trim();
+      const commitMessage = execSync('git log -1 --format=%B', { cwd: clone }).toString();
+      const pushedHead = execSync(`git --git-dir=${JSON.stringify(bare)} rev-parse refs/heads/${branch}`)
+        .toString()
+        .trim();
+
+      expect(secondHash).toBe(firstHash);
+      expect(commitCount).toBe('2');
+      expect(commitMessage).toContain('Invoker-Finalize-Id: exec-1');
+      expect(pushedHead).toBe(firstHash);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('pushes the recorded HEAD when the checkout branch differs from the target branch', () => {

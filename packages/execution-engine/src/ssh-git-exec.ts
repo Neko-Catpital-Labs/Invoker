@@ -349,6 +349,7 @@ export interface GitRecordAndPushOpts {
   gitUserName: string;
   gitUserEmail: string;
   pushRemoteUrl?: string;
+  idempotencyKey?: string;
 }
 
 /**
@@ -366,25 +367,31 @@ export function buildRecordAndPushScript(opts: GitRecordAndPushOpts): string {
   const userNameB = base64Encode(opts.gitUserName);
   const userEmailB = base64Encode(opts.gitUserEmail);
   const pushRemoteUrlB = base64Encode(opts.pushRemoteUrl ?? '');
+  const idempotencyKeyB = base64Encode(opts.idempotencyKey ?? '');
 
   return `set -euo pipefail
 ${buildPortableBase64DecodeFunction()}
 WT=$(printf '%s' ${shellPosixSingleQuote(wtB)} | invoker_base64_decode)
 ${bashNormalizeTildePath()}
 cd "$WT"
-git add -A
-M=$(mktemp)
-trap 'rm -f "$M"' EXIT
+IDEMPOTENCY_KEY=$(printf '%s' ${shellPosixSingleQuote(idempotencyKeyB)} | invoker_base64_decode)
+MARKER=''
+IDEMPOTENCY_FOOTER=''
+if [ -n "$IDEMPOTENCY_KEY" ]; then
+  IDEMPOTENCY_FOOTER="Invoker-Finalize-Id: $IDEMPOTENCY_KEY"
+  SAFE_IDEMPOTENCY_KEY=$(printf '%s' "$IDEMPOTENCY_KEY" | tr -c 'A-Za-z0-9_.-' '_')
+  STATE_DIR=$(git rev-parse --git-path invoker-record-and-push)
+  MARKER="$STATE_DIR/$SAFE_IDEMPOTENCY_KEY.hash"
+  if [ -s "$MARKER" ]; then
+    RECORDED_HASH=$(cat "$MARKER")
+    if git rev-parse --verify --quiet "$RECORDED_HASH^{commit}" >/dev/null; then
+      printf "%s" "$RECORDED_HASH"
+      exit 0
+    fi
+  fi
+fi
 GIT_NAME=$(printf '%s' ${shellPosixSingleQuote(userNameB)} | invoker_base64_decode)
 GIT_EMAIL=$(printf '%s' ${shellPosixSingleQuote(userEmailB)} | invoker_base64_decode)
-if git diff --cached --quiet; then
-  printf '%s' ${shellPosixSingleQuote(emB)} | invoker_base64_decode > "$M"
-  GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit --allow-empty -F "$M"
-else
-  printf '%s' ${shellPosixSingleQuote(chB)} | invoker_base64_decode > "$M"
-  GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit -F "$M"
-fi
-HASH=$(git rev-parse HEAD)
 BR=$(printf '%s' ${shellPosixSingleQuote(brB)} | invoker_base64_decode)
 PUSH_URL=$(printf '%s' ${shellPosixSingleQuote(pushRemoteUrlB)} | invoker_base64_decode)
 if [ -n "$PUSH_URL" ]; then
@@ -392,13 +399,38 @@ if [ -n "$PUSH_URL" ]; then
 else
   PUSH_REMOTE=origin
 fi
-REMOTE_EXPECTED=$(git ls-remote "$PUSH_REMOTE" "refs/heads/$BR" | awk 'NR == 1 { print $1 }')
-if [ -n "$REMOTE_EXPECTED" ]; then
-  git push --force-with-lease="refs/heads/$BR:$REMOTE_EXPECTED" "$PUSH_REMOTE" "$HASH:refs/heads/$BR"
-else
-  git push "$PUSH_REMOTE" "$HASH:refs/heads/$BR"
+push_recorded_head() {
+  HASH=$(git rev-parse HEAD)
+  REMOTE_EXPECTED=$(git ls-remote "$PUSH_REMOTE" "refs/heads/$BR" | awk 'NR == 1 { print $1 }')
+  if [ -n "$REMOTE_EXPECTED" ]; then
+    git push --force-with-lease="refs/heads/$BR:$REMOTE_EXPECTED" "$PUSH_REMOTE" "$HASH:refs/heads/$BR"
+  else
+    git push "$PUSH_REMOTE" "$HASH:refs/heads/$BR"
+  fi
+  if [ -n "$MARKER" ]; then
+    mkdir -p "$(dirname "$MARKER")"
+    printf "%s" "$HASH" > "$MARKER.tmp"
+    mv "$MARKER.tmp" "$MARKER"
+  fi
+  printf "%s" "$HASH"
+}
+if [ -n "$IDEMPOTENCY_FOOTER" ] && git log -1 --format=%B | grep -Fqx "$IDEMPOTENCY_FOOTER"; then
+  push_recorded_head
+  exit 0
 fi
-printf "%s" "$HASH"
+git add -A
+M=$(mktemp)
+trap 'rm -f "$M"' EXIT
+if git diff --cached --quiet; then
+  printf '%s' ${shellPosixSingleQuote(emB)} | invoker_base64_decode > "$M"
+  if [ -n "$IDEMPOTENCY_FOOTER" ]; then printf '\\n%s\\n' "$IDEMPOTENCY_FOOTER" >> "$M"; fi
+  GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit --allow-empty -F "$M"
+else
+  printf '%s' ${shellPosixSingleQuote(chB)} | invoker_base64_decode > "$M"
+  if [ -n "$IDEMPOTENCY_FOOTER" ]; then printf '\\n%s\\n' "$IDEMPOTENCY_FOOTER" >> "$M"; fi
+  GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL" git commit -F "$M"
+fi
+push_recorded_head
 `;
 }
 
