@@ -78,7 +78,7 @@ function hasLocallyReadyPendingTask(store: WorkflowResumeWorkerStore, workflowId
     const dependencies = task.dependencies ?? [];
     const localDependenciesSatisfied = dependencies.every((dependencyId) => {
       const dependency = tasksById.get(dependencyId);
-      return dependency === undefined || dependency.status === 'completed';
+      return dependency !== undefined && dependency.status === 'completed';
     });
     if (localDependenciesSatisfied) return true;
   }
