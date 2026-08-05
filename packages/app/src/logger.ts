@@ -17,12 +17,8 @@ type Level = 'debug' | 'info' | 'warn' | 'error';
 
 function errorAwareReplacer(_key: string, value: unknown): unknown {
   if (value instanceof Error) {
-    return {
-      ...value,
-      name: value.name,
-      message: value.message,
-      stack: value.stack,
-    };
+    const { name, message, stack, ...rest } = value;
+    return { ...rest, name, message, stack };
   }
   return value;
 }
