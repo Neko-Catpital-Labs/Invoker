@@ -17,6 +17,7 @@ try:
     from .mergify_admin_requeue_snapshot import GhClient
     from .mergify_admin_requeue_workflow_fastpath import (
         resolve_workflow_for_pr,
+        settle_workflow_fastpath_rows,
         submit_rebase_recreate,
         submit_repair_review_gate_ci,
     )
@@ -30,6 +31,7 @@ except ImportError:
     from mergify_admin_requeue_snapshot import GhClient
     from mergify_admin_requeue_workflow_fastpath import (
         resolve_workflow_for_pr,
+        settle_workflow_fastpath_rows,
         submit_rebase_recreate,
         submit_repair_review_gate_ci,
     )
@@ -90,6 +92,12 @@ def run_cycle(args: argparse.Namespace) -> bool:
     loaded = loader.load(args.repo, args.author, args.pr, required_checks, trunk)
     stacks = loaded.stacks
     now = int(time.time())
+    try:
+        fastpath_settled = settle_workflow_fastpath_rows(ledger, now)
+        if fastpath_settled:
+            logger.trace("admin-bypass-fastpath-settled", count=fastpath_settled)
+    except Exception as exc:
+        logger.trace("admin-bypass-fastpath-settle-failed", error=str(exc))
     pr_by_number = {pr.number: pr for stack in stacks for pr in stack.prs}
     logger.trace(
         "admin-bypass-scan-loaded",
@@ -145,7 +153,10 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         workflow_id = resolve_workflow_for_pr(action.pr_number)
                         if workflow_id:
                             submit_repair_review_gate_ci(action.pr_number)
-                            ledger.record("repair-check", action.pr_number, pr.head_ref_oid, check_name, now)
+                            ledger.record(
+                                "repair-check", action.pr_number, pr.head_ref_oid, check_name, now,
+                                meta={"workflowId": workflow_id, "via": "fastpath"},
+                            )
                             progressed = True
                         else:
                             outcome = repairer.repair_check(pr, check_name, now)
@@ -171,7 +182,10 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     workflow_id = resolve_workflow_for_pr(action.pr_number)
                     if workflow_id:
                         submit_rebase_recreate(workflow_id)
-                        ledger.record("conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now)
+                        ledger.record(
+                            "conflict-repair", action.pr_number, pr.head_ref_oid, action.key, now,
+                            meta={"workflowId": workflow_id, "via": "fastpath"},
+                        )
                         progressed = True
                     else:
                         outcome = repairer.repair_conflict(pr, action.detail, now)

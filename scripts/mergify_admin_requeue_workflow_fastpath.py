@@ -48,6 +48,83 @@ def submit_rebase_recreate(workflow_id: str) -> None:
         )
 
 
+# Fast-path submissions are fire-and-forget: `--no-track` exit 0 means the
+# owner ACCEPTED the mutation, not that the repair ran. Unlike repairer.py's
+# ad-hoc repair plans (whose normalize task writes the `-settled` ledger row),
+# a rebase-recreate of an existing workflow has no task that settles the
+# ledger, so the planner could only infer the outcome by letting the 90-minute
+# repair_in_flight TTL expire. These helpers close that gap by observing the
+# workflow's actual terminal status and writing the settle row the plan
+# machinery already understands (PR #7484, 2026-08-05: an accepted-but-starved
+# recreate looked "handled" while its three predecessors had already failed).
+
+_FASTPATH_SETTLE_KINDS = ("conflict-repair", "repair-check")
+_TERMINAL_WORKFLOW_STATUSES = frozenset({"completed", "failed", "cancelled", "review_ready", "merged"})
+
+
+def _parse_last_json_object(stdout: str) -> dict | None:
+    text = stdout.strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def workflow_status(workflow_id: str) -> str | None:
+    completed = _run_headless('headless_query query workflow "$2" --output json', workflow_id)
+    if completed.returncode != 0:
+        return None
+    record = _parse_last_json_object(completed.stdout)
+    if record is None:
+        return None
+    status = record.get("status")
+    return str(status) if status else None
+
+
+def settle_workflow_fastpath_rows(ledger, now: int) -> int:
+    """Write `<kind>-settled` rows for fast-path submissions whose workflow
+    reached a terminal status. Returns how many rows were settled. Rows whose
+    workflow is still pending/running (or whose status cannot be read) are
+    left alone; the existing repair_in_flight TTL stays as the backstop."""
+    settled = 0
+    for row in list(ledger.rows):
+        kind = row.get("kind")
+        if kind not in _FASTPATH_SETTLE_KINDS:
+            continue
+        meta = row.get("meta") or {}
+        workflow_id = meta.get("workflowId")
+        if not workflow_id:
+            continue
+        pr = int(row.get("pr", -1))
+        head = str(row.get("headSha") or "")
+        key = str(row.get("key") or "")
+        existing = ledger.latest(f"{kind}-settled", pr, head, key)
+        if existing is not None and int(existing.get("epoch", 0) or 0) >= int(row.get("epoch", 0) or 0):
+            continue
+        status = workflow_status(str(workflow_id))
+        if status in _TERMINAL_WORKFLOW_STATUSES:
+            ledger.record(
+                f"{kind}-settled", pr, head, key, now,
+                meta={"workflowId": str(workflow_id), "workflowStatus": status, "settledBy": "fastpath-observer"},
+            )
+            settled += 1
+    return settled
+
+
 def submit_repair_review_gate_ci(pr_number: int) -> None:
     completed = _run_headless('headless_mutation --no-track repair-review-gate-ci "$2"', str(pr_number))
     if completed.returncode != 0:

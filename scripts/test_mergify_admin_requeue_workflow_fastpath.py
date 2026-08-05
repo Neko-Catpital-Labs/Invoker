@@ -110,3 +110,67 @@ class SubmitClosePr(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FastpathSettleObserver(unittest.TestCase):
+    def _ledger(self, tmpdir):
+        from mergify_admin_requeue_model import Ledger
+        return Ledger(Path(tmpdir) / "state.jsonl")
+
+    def test_settles_submitted_row_when_workflow_terminal(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            ledger.record("conflict-repair", 7484, "head1", "conflict:7484", 100,
+                          meta={"workflowId": "wf-1", "via": "fastpath"})
+            with mock.patch.object(f, "workflow_status", return_value="failed"):
+                settled = f.settle_workflow_fastpath_rows(ledger, 200)
+            self.assertEqual(settled, 1)
+            row = ledger.latest("conflict-repair-settled", 7484, "head1", "conflict:7484")
+            self.assertIsNotNone(row)
+            self.assertEqual(row["meta"]["workflowStatus"], "failed")
+            self.assertEqual(row["meta"]["workflowId"], "wf-1")
+
+    def test_leaves_running_workflow_unsettled(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            ledger.record("conflict-repair", 7484, "head1", "conflict:7484", 100,
+                          meta={"workflowId": "wf-1", "via": "fastpath"})
+            with mock.patch.object(f, "workflow_status", return_value="running"):
+                self.assertEqual(f.settle_workflow_fastpath_rows(ledger, 200), 0)
+            self.assertIsNone(ledger.latest("conflict-repair-settled", 7484, "head1", "conflict:7484"))
+
+    def test_skips_rows_without_workflow_handle(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            ledger.record("conflict-repair", 7484, "head1", "conflict:7484", 100)
+            with mock.patch.object(f, "workflow_status") as status:
+                self.assertEqual(f.settle_workflow_fastpath_rows(ledger, 200), 0)
+                status.assert_not_called()
+
+    def test_does_not_resettle_already_settled_row(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            ledger.record("repair-check", 7055, "head2", "pr-body", 100,
+                          meta={"workflowId": "wf-2", "via": "fastpath"})
+            ledger.record("repair-check-settled", 7055, "head2", "pr-body", 150,
+                          meta={"workflowId": "wf-2"})
+            with mock.patch.object(f, "workflow_status") as status:
+                self.assertEqual(f.settle_workflow_fastpath_rows(ledger, 200), 0)
+                status.assert_not_called()
+
+    def test_unreadable_status_leaves_row_for_ttl_backstop(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ledger = self._ledger(tmpdir)
+            ledger.record("conflict-repair", 7484, "head1", "conflict:7484", 100,
+                          meta={"workflowId": "wf-1", "via": "fastpath"})
+            with mock.patch.object(f, "workflow_status", return_value=None):
+                self.assertEqual(f.settle_workflow_fastpath_rows(ledger, 200), 0)
+
+    def test_parse_last_json_object_skips_noise_lines(self):
+        stdout = '[invoker] maxConcurrency=13 exceeds pool capacity\n{"id": "wf-1", "status": "failed"}\n'
+        self.assertEqual(f._parse_last_json_object(stdout), {"id": "wf-1", "status": "failed"})
