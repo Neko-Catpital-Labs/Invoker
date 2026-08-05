@@ -63,13 +63,41 @@ wait_for_owner_exit() {
   return 1
 }
 
+stop_owner_pid() {
+  local pid="$1"
+  owner_pid_is_live "$pid" || return 0
+  kill "$pid" 2>/dev/null || true
+  if ! wait_for_owner_exit "$pid"; then
+    kill -KILL "$pid" 2>/dev/null || true
+    wait_for_owner_exit "$pid" || true
+  fi
+}
+
 stop_owner() {
-  [[ -n "${OWNER_PID:-}" ]] || return 0
-  owner_pid_is_live "$OWNER_PID" || return 0
-  kill "$OWNER_PID" 2>/dev/null || true
-  if ! wait_for_owner_exit "$OWNER_PID"; then
-    kill -KILL "$OWNER_PID" 2>/dev/null || true
-    wait_for_owner_exit "$OWNER_PID" || true
+  local marker_pid=""
+  if [[ -n "${OWNER_PID:-}" ]]; then
+    stop_owner_pid "$OWNER_PID"
+  fi
+  marker_pid="$(read_owner_pid 2>/dev/null || true)"
+  if [[ -n "$marker_pid" && "$marker_pid" != "${OWNER_PID:-}" ]]; then
+    stop_owner_pid "$marker_pid"
+  fi
+}
+
+original_owner_is_live() {
+  local current_pid
+  current_pid="$(read_owner_pid 2>/dev/null)" || return 1
+  [[ "$current_pid" == "$OWNER_PID" ]]
+}
+
+skip_submission() {
+  local i="$1"
+  local reason="$2"
+  local ms="${3:-}"
+  if [[ -n "$ms" ]]; then
+    printf 'submission %3d: skipped (%s after %dms)\n' "$i" "$reason" "$ms"
+  else
+    printf 'submission %3d: skipped (%s)\n' "$i" "$reason"
   fi
 }
 
@@ -158,18 +186,34 @@ fi
 
 echo "==> Submitting $COUNT workflows sequentially against the warm owner"
 : > "$TIMINGS_FILE"
+SKIPPED=0
 for i in $(seq 1 "$COUNT"); do
+  if ! original_owner_is_live; then
+    skip_submission "$i" "original owner is no longer the live marker before run"
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
   START=$(date +%s%N)
   env "${COMMON_ENV[@]}" ./run.sh --headless --no-track run "$PLAN_PATH" \
     >"$TMP_DIR/run-$i.stdout.log" 2>"$TMP_DIR/run-$i.stderr.log"
   END=$(date +%s%N)
   MS=$(( (END - START) / 1000000 ))
+  if ! original_owner_is_live; then
+    skip_submission "$i" "original owner was replaced or stopped during run" "$MS"
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
   echo "$MS" >> "$TIMINGS_FILE"
   printf 'submission %3d: %5dms\n' "$i" "$MS"
 done
 
+if [[ ! -s "$TIMINGS_FILE" ]]; then
+  echo "bench: no valid warm-owner samples collected; skipped=$SKIPPED" >&2
+  exit 1
+fi
+
 echo
-echo "==> Summary (ms, sequential, warm owner, N=$COUNT)"
+echo "==> Summary (ms, sequential, warm owner, N=$(wc -l < "$TIMINGS_FILE" | tr -d ' '), skipped=$SKIPPED)"
 python3 - "$TIMINGS_FILE" <<'PY'
 import sys
 vals = sorted(int(l.strip()) for l in open(sys.argv[1]) if l.strip())
