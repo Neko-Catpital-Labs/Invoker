@@ -165,6 +165,25 @@ describe('workflow resume worker tick', () => {
     expect(h.submit).toHaveBeenCalledTimes(1);
   });
 
+  it('does not submit pending work whose dependency id is missing from the locally loaded task set', async () => {
+    const h = harness({
+      workflows: [
+        {
+          id: 'wf-1',
+          tasks: [
+            makeTask({
+              id: 'wf-1/b',
+              status: 'pending' as TaskState['status'],
+              dependencies: ['wf-1/ghost'],
+            }),
+          ],
+        },
+      ],
+    });
+    await h.tick(POLL_CTX);
+    expect(h.submit).not.toHaveBeenCalled();
+  });
+
   it('skips workflows whose tasks are all terminal', async () => {
     const h = harness({
       workflows: [
