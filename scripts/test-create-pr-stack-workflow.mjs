@@ -627,6 +627,86 @@ function testMergifyManagedUpdateSkipsPush() {
     rmSync(harness.root, { recursive: true, force: true });
   }
 }
+
+function testMergifyManagedUpdateRejectsDeletedPublishedBranch() {
+  const harness = createHarness();
+  try {
+    const { originBare, work } = createRepo(harness);
+    const branch = 'stack/test-deleted-published';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack update\n\nChange-Id: Ideleted0001');
+    gitQuiet(work, 'push', '-u', 'origin', branch);
+    run('git', [`--git-dir=${originBare}`, 'update-ref', '-d', `refs/heads/${branch}`]);
+    setManagedBranchConfig(work, branch);
+
+    const staleRef = git(work, 'rev-parse', `origin/${branch}`).trim();
+    assert(staleRef.length > 0, 'test fixture should retain the stale remote-tracking ref before create-pr runs');
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing'], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 42,
+          html_url: 'https://example.com/pull/42',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/42' }),
+    });
+
+    assert(
+      result.status === 1,
+      `managed stack update should reject a deleted published branch even when a stale tracking ref remains\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stderr.includes(`Current branch "${branch}" has no published remote branch.`),
+      `deleted published branch error should explain the missing remote publication\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'deleted published branch');
+    assert(readGhCalls(harness.ghLog).length === 0, 'deleted published branch should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testMergifyManagedUpdateAcceptsPublishedChangeIdRewrite() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/test-change-id-rewrite';
+    const publishedBranch = 'stack/TestOwner/stack/test-change-id-rewrite/generated--1234';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'stack published\n\nChange-Id: Irewrite0001');
+    gitQuiet(work, 'push', 'origin', `HEAD:${publishedBranch}`);
+    gitQuiet(work, 'commit', '--amend', '-m', 'stack rewritten locally\n\nChange-Id: Irewrite0001');
+    setManagedBranchConfig(work, branch);
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update', '42'], {
+      GH_API_OPEN_PULLS_JSON: JSON.stringify([
+        {
+          number: 42,
+          title: '[Graph Blanking](1) Preserve graph blanking',
+          html_url: 'https://example.com/pull/42',
+          base: { ref: 'master' },
+          head: { ref: publishedBranch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/42' }),
+    });
+
+    assert(
+      result.status === 0,
+      `managed stack update should accept a published remote tip rewritten to a different SHA with the same Change-Id\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stdout.trim() === 'https://example.com/pull/42',
+      `Change-Id rewrite update should print the PR URL\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'published Change-Id rewrite');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testMergifyManagedUpdateAcceptsLetteredTitle() {
   const harness = createHarness();
   try {
@@ -1308,6 +1388,8 @@ const tests = [
   testEmptyCommitMixedWithRealChangeBlocksPrCreation,
   testMergifyManagedCreateRefusal,
   testMergifyManagedUpdateSkipsPush,
+  testMergifyManagedUpdateRejectsDeletedPublishedBranch,
+  testMergifyManagedUpdateAcceptsPublishedChangeIdRewrite,
   testMergifyManagedUpdateAcceptsLetteredTitle,
   testMergifyManagedUpdateRejectsPlainTitle,
   testMergifyManagedUpdateRejectsNestedTitle,

@@ -771,11 +771,109 @@ function getCurrentUpstream() {
   return gitTextOrEmpty(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']);
 }
 
+function getScopedRemoteRefspec(remote, branch) {
+  const slashIndex = branch.indexOf('/');
+  const scope = slashIndex === -1 ? `${branch}*` : `${branch.slice(0, slashIndex + 1)}*`;
+  return `+refs/heads/${scope}:refs/remotes/${remote}/${scope}`;
+}
+
+function fetchPrunedScopedRemoteRefs(remote, branch) {
+  try {
+    runGit(['fetch', '--quiet', '--prune', remote, getScopedRemoteRefspec(remote, branch)], { stdio: 'ignore' });
+  } catch (error) {
+    throw new Error(
+      [
+        `Unable to refresh ${remote}/${branch} before checking Mergify publication state.`,
+        'Run `mergify stack push` or fetch the stack refs, then rerun this command.',
+        error.message,
+      ].join('\n'),
+    );
+  }
+}
+
+function remoteTrackingRefExists(ref) {
+  return Boolean(gitTextOrEmpty(['rev-parse', '--verify', ref]));
+}
+
+function listScopedRemoteTrackingRefs(remote, branch) {
+  const slashIndex = branch.indexOf('/');
+  const scope = slashIndex === -1 ? branch : branch.slice(0, slashIndex + 1);
+  const prefix = `refs/remotes/${remote}/${scope}`;
+  const out = gitTextOrEmpty(['for-each-ref', '--format=%(refname:short)', prefix]);
+  return out ? out.split('\n').filter(Boolean) : [];
+}
+
+function parseChangeIds(logText) {
+  return Array.from(logText.matchAll(/^Change-Id:\s*(\S+)/gm), (match) => match[1]);
+}
+
+function changeIdsInCommit(ref) {
+  try {
+    return parseChangeIds(runGit(['show', '--no-patch', '--format=%B', ref]));
+  } catch {
+    return [];
+  }
+}
+
+function changeIdsInRange(baseRef, tipRef) {
+  if (!baseRef || !tipRef) return [];
+  const commits = revList(`${baseRef}..${tipRef}`);
+  const ids = [];
+  for (const commit of commits) {
+    const commitIds = changeIdsInCommit(commit);
+    if (commitIds.length !== 1) {
+      return [];
+    }
+    ids.push(commitIds[0]);
+  }
+  return ids;
+}
+
+function findUniquePublishedRefByHeadChangeId(remote, branch) {
+  const headIds = changeIdsInCommit('HEAD');
+  if (headIds.length !== 1) return '';
+  const [headChangeId] = headIds;
+  const matches = listScopedRemoteTrackingRefs(remote, branch).filter((ref) => {
+    const refIds = changeIdsInCommit(ref);
+    return refIds.length === 1 && refIds[0] === headChangeId;
+  });
+  return matches.length === 1 ? matches[0] : '';
+}
+
+function sameChangeIdSet(left, right) {
+  if (left.length === 0 || left.length !== right.length) return false;
+  const rightCounts = new Map();
+  for (const id of right) {
+    rightCounts.set(id, (rightCounts.get(id) || 0) + 1);
+  }
+  for (const id of left) {
+    const count = rightCounts.get(id) || 0;
+    if (count === 0) return false;
+    if (count === 1) {
+      rightCounts.delete(id);
+    } else {
+      rightCounts.set(id, count - 1);
+    }
+  }
+  return rightCounts.size === 0;
+}
+
 function assertPublishedMergifyBranch(branch, trackedBaseRef) {
+  fetchPrunedScopedRemoteRefs('origin', branch);
+
+  const changeIdPublishedRef = findUniquePublishedRefByHeadChangeId('origin', branch);
   let publishedRef = getCurrentUpstream();
   const originBranchRef = `origin/${branch}`;
-  if ((!publishedRef || publishedRef === trackedBaseRef) && gitTextOrEmpty(['rev-parse', '--verify', originBranchRef])) {
+  if (publishedRef && !remoteTrackingRefExists(publishedRef)) {
+    publishedRef = '';
+  }
+  if ((!publishedRef || publishedRef === trackedBaseRef) && remoteTrackingRefExists(originBranchRef)) {
     publishedRef = originBranchRef;
+  } else if (publishedRef === trackedBaseRef) {
+    publishedRef = '';
+  }
+  if (!publishedRef && changeIdPublishedRef) {
+    publishedRef = changeIdPublishedRef;
   }
 
   if (!publishedRef) {
@@ -789,6 +887,10 @@ function assertPublishedMergifyBranch(branch, trackedBaseRef) {
 
   const unpublished = revList(`${publishedRef}..HEAD`);
   if (unpublished.length === 0) return;
+  const changeIdRefs = [publishedRef, changeIdPublishedRef].filter((ref, index, refs) => ref && refs.indexOf(ref) === index);
+  if (changeIdRefs.some((ref) => sameChangeIdSet(changeIdsInRange(trackedBaseRef, 'HEAD'), changeIdsInRange(trackedBaseRef, ref)))) {
+    return;
+  }
 
   throw new Error(
     [
