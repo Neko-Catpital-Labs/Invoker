@@ -127,6 +127,54 @@ describe('e2e auto-fix worker', () => {
     );
   });
 
+  it('does not leak standalone headless mode into the spawned watcher env', async () => {
+    const repoRoot = makeRepoRoot();
+    const harness = makeSpawnHarness();
+    const originalStandalone = process.env.INVOKER_HEADLESS_STANDALONE;
+    const originalUnrelated = process.env.E2E_AUTOFIX_WORKER_TEST_UNRELATED;
+    const originalOverride = process.env.E2E_AUTOFIX_WORKER_TEST_OVERRIDE;
+
+    try {
+      process.env.INVOKER_HEADLESS_STANDALONE = '1';
+      process.env.E2E_AUTOFIX_WORKER_TEST_UNRELATED = 'owner-value';
+      process.env.E2E_AUTOFIX_WORKER_TEST_OVERRIDE = 'owner-value';
+
+      const tick = createE2eAutoFixTick({
+        logger: makeLogger(),
+        repoRoot,
+        env: {
+          E2E_AUTOFIX_WORKER_TEST_OVERRIDE: 'override-value',
+        },
+        spawnProcess: harness.spawnProcess,
+      });
+
+      await tick(makeCtx());
+
+      expect(harness.calls).toHaveLength(1);
+      expect(harness.calls[0].options.env).not.toHaveProperty('INVOKER_HEADLESS_STANDALONE');
+      expect(harness.calls[0].options.env).toEqual(expect.objectContaining({
+        E2E_AUTOFIX_WORKER_TEST_UNRELATED: 'owner-value',
+        E2E_AUTOFIX_WORKER_TEST_OVERRIDE: 'override-value',
+      }));
+    } finally {
+      if (originalStandalone === undefined) {
+        delete process.env.INVOKER_HEADLESS_STANDALONE;
+      } else {
+        process.env.INVOKER_HEADLESS_STANDALONE = originalStandalone;
+      }
+      if (originalUnrelated === undefined) {
+        delete process.env.E2E_AUTOFIX_WORKER_TEST_UNRELATED;
+      } else {
+        process.env.E2E_AUTOFIX_WORKER_TEST_UNRELATED = originalUnrelated;
+      }
+      if (originalOverride === undefined) {
+        delete process.env.E2E_AUTOFIX_WORKER_TEST_OVERRIDE;
+      } else {
+        process.env.E2E_AUTOFIX_WORKER_TEST_OVERRIDE = originalOverride;
+      }
+    }
+  });
+
   it('resolves when the script exits with code 0', async () => {
     const repoRoot = makeRepoRoot();
     const tick = createE2eAutoFixTick({
