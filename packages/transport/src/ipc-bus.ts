@@ -332,7 +332,15 @@ export class IpcBus implements MessageBus {
 
     sock.on('error', (err: NodeJS.ErrnoException) => {
       if (!this.allowServe) {
+        // A pure client (allowServe: false, e.g. a headless CLI) must never
+        // become the server, but the server it's waiting for may simply not
+        // exist yet (ENOENT while an owner is still booting) or be mid
+        // restart (ECONNREFUSED) — keep retrying in the background so a
+        // caller polling via request()/discoverOwner() eventually succeeds
+        // once a server appears, instead of this bus being permanently
+        // unable to connect for its entire lifetime.
         this.resolveReady();
+        this.scheduleRecovery();
         return;
       }
       if (err.code === 'ECONNREFUSED') {
@@ -396,14 +404,17 @@ export class IpcBus implements MessageBus {
     });
   }
 
+  // Reconnection is valid for both server-capable and pure-client buses —
+  // only *becoming* the server (tryServe) is exclusively gated on
+  // allowServe, and that gate lives in tryConnect()'s error handler above.
   private scheduleRecovery(): void {
-    if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0 || this.serveRetryScheduled) {
+    if (this.disconnected || this.server || this.peers.size > 0 || this.serveRetryScheduled) {
       return;
     }
     this.serveRetryScheduled = true;
     setTimeout(() => {
       this.serveRetryScheduled = false;
-      if (this.disconnected || !this.allowServe || this.server || this.peers.size > 0) {
+      if (this.disconnected || this.server || this.peers.size > 0) {
         return;
       }
       this.tryConnect();
