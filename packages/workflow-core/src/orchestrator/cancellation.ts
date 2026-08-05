@@ -314,6 +314,14 @@ export function cancelWorkflowImpl(
 ): { cancelled: string[]; runningCancelled: string[]; toCancelIds: string[] } {
   host.refreshWorkflowFromDb(workflowId);
 
+  // refreshWorkflowFromDb() only overlays fresh rows; it never evicts tasks
+  // whose DB rows are already gone, so a stale cache from a racing delete
+  // must be caught here or it writes cancellation state for rows that no
+  // longer exist and trips an FK violation.
+  if (host.persistence.loadWorkflow && !host.persistence.loadWorkflow(workflowId)) {
+    throw new OrchestratorError('WORKFLOW_NOT_FOUND', `No tasks found for workflow ${workflowId}`);
+  }
+
   const allTasks = host.stateMachine.getAllTasks().filter(
     (t) => t.config.workflowId === workflowId,
   );
