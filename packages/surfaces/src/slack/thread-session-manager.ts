@@ -346,13 +346,13 @@ export class SessionManager {
 
     if (!loaded) {
       this.log('session-manager', 'info', `No persisted conversation for ${id.threadTs}`);
-    } else if (loaded.channelId !== id.channelId && loaded.channelId !== '') {
-      this.log('session-manager', 'warn', `Channel mismatch for ${id.threadTs}: expected=${id.channelId}, found=${loaded.channelId}`);
+    } else if (loaded.channelId !== id.channelId) {
+      this.log('session-manager', 'warn', `Channel mismatch for ${id.threadTs}: expected=${id.channelId}, found=${loaded.channelId || '(empty)'}`);
     }
 
     let handle: SessionHandle;
 
-    if (loaded && (loaded.channelId === id.channelId || loaded.channelId === '')) {
+    if (loaded && loaded.channelId === id.channelId) {
       // Recover existing session
       this.log('session-manager', 'info', `Recovering session ${key} from database`);
 
@@ -517,7 +517,7 @@ export class SessionManager {
     const existing = this.sessions.get(id.toString());
     if (existing) return existing;
     const persisted = this.conversationRepo.loadConversation(id.threadTs);
-    if (!persisted || persisted.planSubmitted || (persisted.channelId && persisted.channelId !== id.channelId)) {
+    if (!persisted || persisted.planSubmitted || persisted.channelId !== id.channelId) {
       return null;
     }
     return this.getOrCreateSession(id, userId, opts);
