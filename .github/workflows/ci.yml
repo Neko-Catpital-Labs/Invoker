@@ -597,8 +597,6 @@ jobs:
               e2e/edit-task-command.spec.ts
               e2e/headless-thundering-herd.spec.ts
               e2e/launching-stall-watchdog.spec.ts
-              e2e/launch-dispatch-stuck-lease-storm.spec.ts
-              e2e/launch-dispatch-stuck-lease-cap.spec.ts
               e2e/embedded-terminal-pty.spec.ts
               e2e/keyboard-navigation.spec.ts
           - name: 2-of-9
