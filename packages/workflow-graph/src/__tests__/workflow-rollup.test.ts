@@ -147,4 +147,12 @@ describe('hasFailedDependencyPath', () => {
   it('is false when there are no dependencies', () => {
     expect(hasFailedDependencyPath(task('solo', 'blocked'), mapOf())).toBe(false);
   });
+
+  it('is false for a target with a satisfied chain even when an unrelated sibling has a failed dependency', () => {
+    const siblingRoot = task('sibling-root', 'failed');
+    const sibling = task('sibling', 'blocked', ['sibling-root']);
+    const root = task('root', 'completed');
+    const target = task('target', 'blocked', ['root']);
+    expect(hasFailedDependencyPath(target, mapOf(siblingRoot, sibling, root, target))).toBe(false);
+  });
 });
