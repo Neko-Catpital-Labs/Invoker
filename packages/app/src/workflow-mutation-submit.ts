@@ -71,7 +71,7 @@ function isMissingWorkflowIdempotentMutation(channel: string, workflowId: string
   return false;
 }
 
-function isForeignKeyConstraintError(error: unknown): boolean {
+export function isForeignKeyConstraintError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const sqliteError = error as Error & { code?: unknown; errcode?: unknown; errstr?: unknown };
   return sqliteError.errcode === 787

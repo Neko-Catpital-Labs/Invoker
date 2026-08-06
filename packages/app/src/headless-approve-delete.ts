@@ -24,6 +24,7 @@ import {
   withRestoredTaskUnlessDeleteAllWon,
   preemptWorkflowExecution,
 } from './headless-shared.js';
+import { isForeignKeyConstraintError } from './workflow-mutation-submit.js';
 
 function buildHeadlessApproveAction(
   deps: Pick<HeadlessDeps, 'orchestrator' | 'commandService'>,
@@ -308,14 +309,23 @@ export async function headlessDeleteTask(taskId: string, deps: HeadlessDeps): Pr
 
 export async function headlessDeleteWorkflow(workflowId: string, deps: HeadlessDeps): Promise<void> {
   if (!workflowId) throw new Error('Missing workflowId. Usage: --headless delete-workflow <workflowId>');
-  // Preempt running tasks (kill processes + cancel) — matches owner-mode bridge contract
-  await preemptWorkflowExecution(workflowId, deps);
-  const taskExecutor = createHeadlessExecutor(deps);
-  await taskExecutor.closeWorkflowReview(workflowId);
-  // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
-  const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
-  const result = await deps.commandService.deleteWorkflow(envelope);
-  if (!result.ok) throw new Error(result.error.message);
+  try {
+    // Preempt running tasks (kill processes + cancel) — matches owner-mode bridge contract
+    await preemptWorkflowExecution(workflowId, deps);
+    const taskExecutor = createHeadlessExecutor(deps);
+    await taskExecutor.closeWorkflowReview(workflowId);
+    // Serialized via CommandService: DB delete + memory clear + scheduler cleanup + removal deltas
+    const envelope = makeEnvelope('delete-workflow', 'headless', 'workflow', { workflowId });
+    const result = await deps.commandService.deleteWorkflow(envelope);
+    if (!result.ok) throw new Error(result.error.message);
+  } catch (error) {
+    // A racing duplicate delete (e.g. a second competing owner) can hit a stale-cache FK error here; treat it as already deleted.
+    if (isForeignKeyConstraintError(error) && !deps.persistence.loadWorkflow?.(workflowId)) {
+      process.stdout.write(`Workflow already deleted: ${workflowId}\n`);
+      return;
+    }
+    throw error;
+  }
   process.stdout.write(`Deleted workflow: ${workflowId}\n`);
 }
 
