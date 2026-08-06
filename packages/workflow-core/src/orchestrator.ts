@@ -3016,6 +3016,7 @@ export class Orchestrator {
     // 4. Clear memory
     this.activeWorkflowIds.clear();
     this.stateMachine.clear();
+    this.queueStatusUiCache = null;
 
     // 5. Publish removal deltas (skipped when publishRemovalDeltas is false)
     for (const task of allTasks) {
