@@ -20,6 +20,9 @@
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNNER="$REPO_ROOT/run.sh"
 ELECTRON="$REPO_ROOT/scripts/electron.cjs"
+if [[ -n "${INVOKER_HEADLESS_ELECTRON_BIN:-}" ]]; then
+  ELECTRON="$INVOKER_HEADLESS_ELECTRON_BIN"
+fi
 MAIN="$REPO_ROOT/packages/app/dist/main.js"
 IPC_HELPER="$REPO_ROOT/scripts/headless-ipc.js"
 if [[ -n "${INVOKER_HEADLESS_IPC_HELPER:-}" ]]; then
