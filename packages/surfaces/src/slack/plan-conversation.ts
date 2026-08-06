@@ -102,6 +102,14 @@ export class PlannerAbortedError extends Error {
   }
 }
 
+export interface TurnAbortSnapshot {
+  abortId: number;
+  droppedQueuedMessages: number;
+  elapsedMs: number;
+  reason?: string;
+  startedAt: number;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -206,6 +214,17 @@ const NEGATION_PATTERNS = [
 export function isNegation(text: string): boolean {
   const trimmed = text.trim().replace(/[.?!]+$/, '');
   return NEGATION_PATTERNS.some((re) => re.test(trimmed));
+}
+
+export const STOP_TURN_PATTERNS = [
+  /^stop$/i,
+  /^cancel$/i,
+  /^abort$/i,
+];
+
+export function isStopRequest(text: string): boolean {
+  const trimmed = text.trim().replace(/[.?!]+$/, '');
+  return STOP_TURN_PATTERNS.some((re) => re.test(trimmed));
 }
 
 function isDraftingAuthorizedForPrompt(messages: ConversationMessage[]): boolean {
@@ -490,6 +509,9 @@ export class PlanConversation {
   private onHarnessSessionId?: (sessionId: string) => void;
   private activeChild?: ReturnType<typeof spawn>;
   private activeAttemptSettle?: (result: { type: 'resolve'; value: string } | { type: 'reject'; error: Error }) => void;
+  private activeTurnStartedAt?: number;
+  private abortSequence = 0;
+  private lastAbortSnapshot: TurnAbortSnapshot | null = null;
   private pendingAbortError: PlannerAbortedError | null = null;
 
   constructor(config: PlanConversationConfig) {
@@ -576,6 +598,7 @@ export class PlanConversation {
       await new Promise<void>((resolve, reject) => this.turnQueue.push({ resolve, reject }));
     }
     this.turnInFlight = true;
+    this.activeTurnStartedAt = Date.now();
     // No `await` here on purpose: chaining via .finally() keeps this call's
     // returned promise settling in lockstep with sendMessageLocked's own
     // promise, with no added microtask tick before the planner subprocess is
@@ -584,12 +607,21 @@ export class PlanConversation {
     return this.sendMessageLocked(userMessage).finally(() => {
       this.pendingAbortError = null;
       this.turnInFlight = false;
+      this.activeTurnStartedAt = undefined;
       this.turnQueue.shift()?.resolve();
     });
   }
 
   abortTurn(reason?: string): boolean {
     if (!this.turnInFlight) return false;
+    const startedAt = this.activeTurnStartedAt ?? Date.now();
+    this.lastAbortSnapshot = {
+      abortId: ++this.abortSequence,
+      droppedQueuedMessages: this.turnQueue.length,
+      elapsedMs: Math.max(0, Date.now() - startedAt),
+      reason,
+      startedAt,
+    };
     const error = new PlannerAbortedError(reason);
     if (!this.activeAttemptSettle) {
       this.pendingAbortError = error;
@@ -602,6 +634,14 @@ export class PlanConversation {
 
   isTurnInFlight(): boolean {
     return this.turnInFlight;
+  }
+
+  getQueuedTurnCount(): number {
+    return this.turnQueue.length;
+  }
+
+  getLastAbortSnapshot(): TurnAbortSnapshot | null {
+    return this.lastAbortSnapshot;
   }
 
   private async sendMessageLocked(userMessage: string): Promise<string> {
