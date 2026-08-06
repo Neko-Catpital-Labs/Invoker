@@ -11,6 +11,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -92,6 +93,13 @@ class RetryableEmptyPlannerOutputError extends Error {
   constructor(public readonly stderrTail: string) {
     super('planner exited 0 with no output');
     this.name = 'RetryableEmptyPlannerOutputError';
+  }
+}
+
+export class PlannerAbortedError extends Error {
+  constructor(public readonly reason?: string) {
+    super(reason ? `Planner turn aborted: ${reason}` : 'Planner turn aborted');
+    this.name = 'PlannerAbortedError';
   }
 }
 
@@ -472,7 +480,7 @@ export class PlanConversation {
   // resetPlanIntentSignalFile can wipe a file the other turn already wrote
   // but hasn't read back yet.
   private turnInFlight = false;
-  private turnQueue: Array<() => void> = [];
+  private turnQueue: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   private _initialized = false;
   private _lastTurnReasoning: string[] = [];
   private _lastTurnDraftPlanText: string | null = null;
@@ -481,6 +489,8 @@ export class PlanConversation {
   private harnessSessionDriver?: HarnessSessionDriver;
   private _harnessSessionId?: string;
   private onHarnessSessionId?: (sessionId: string) => void;
+  private activeChild: ChildProcessWithoutNullStreams | null = null;
+  private activeAttemptReject: ((error: Error) => void) | null = null;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -563,7 +573,7 @@ export class PlanConversation {
    */
   async sendMessage(userMessage: string): Promise<string> {
     if (this.turnInFlight) {
-      await new Promise<void>((resolve) => this.turnQueue.push(resolve));
+      await new Promise<void>((resolve, reject) => this.turnQueue.push({ resolve, reject }));
     }
     this.turnInFlight = true;
     // No `await` here on purpose: chaining via .finally() keeps this call's
@@ -573,8 +583,29 @@ export class PlanConversation {
     // via a single microtask wait stay correct.
     return this.sendMessageLocked(userMessage).finally(() => {
       this.turnInFlight = false;
-      this.turnQueue.shift()?.();
+      this.turnQueue.shift()?.resolve();
     });
+  }
+
+  abortTurn(reason?: string): boolean {
+    if (!this.turnInFlight) return false;
+
+    const error = new PlannerAbortedError(reason);
+    const queuedTurns = this.turnQueue.splice(0);
+    for (const queuedTurn of queuedTurns) {
+      queuedTurn.reject(error);
+    }
+
+    try {
+      this.activeChild?.kill('SIGTERM');
+    } catch {
+    }
+    this.activeAttemptReject?.(error);
+    return true;
+  }
+
+  isTurnInFlight(): boolean {
+    return this.turnInFlight;
   }
 
   private async sendMessageLocked(userMessage: string): Promise<string> {
@@ -904,6 +935,9 @@ export class PlanConversation {
       try {
         return await this.spawnPlannerAttempt(prompt, command, args, plannerLabel, attempt + 1, totalAttempts);
       } catch (err) {
+        if (err instanceof PlannerAbortedError) {
+          throw err;
+        }
         if (err instanceof RetryableEmptyPlannerOutputError) {
           lastStderrTail = err.stderrTail;
           const isLast = attempt >= totalAttempts - 1;
@@ -934,11 +968,37 @@ export class PlanConversation {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
       });
+      this.activeChild = child;
+      this.activeAttemptReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
 
       let stdout = '';
       let stderr = '';
       let stdoutChunks = 0;
       let stderrChunks = 0;
+      let settled = false;
+
+      const clearActiveAttempt = () => {
+        if (this.activeChild === child) {
+          this.activeChild = null;
+          this.activeAttemptReject = null;
+        }
+      };
+
+      const settleResolve = (value: string) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+
+      const settleReject = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(error);
+      };
 
       this.log('plan-conversation', 'info', `[PERF] cursor_spawn: pid=${child.pid ?? 'none'}, tool=${plannerLabel}, model=${this.model ?? 'default'}, cmd="${command} ${args.slice(0, -1).join(' ')} <prompt>", promptLen=${prompt.length}, cwd=${this.workingDir ?? process.cwd()}, attempt=${attemptNumber}/${totalAttempts}`);
 
@@ -966,28 +1026,30 @@ export class PlanConversation {
       const timer = setTimeout(() => {
         this.log('plan-conversation', 'error', `[PERF] cursor_timeout: pid=${child.pid ?? 'none'}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, stderrTail="${stderr.slice(-500).replace(/\n/g, '\\n')}"`);
         try { child.kill('SIGTERM'); } catch { /* already dead */ }
-        reject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`));
+        settleReject(new Error(`${plannerLabel} timed out after ${this.timeoutMs}ms`));
       }, this.timeoutMs);
 
       child.on('close', (code) => {
         clearTimeout(timer);
+        clearActiveAttempt();
         this.log('plan-conversation', 'info', `[PERF] cursor_exit: code=${code}, stdoutBytes=${stdout.length}, stderrBytes=${stderr.length}, stdoutChunks=${stdoutChunks}, stderrChunks=${stderrChunks}, elapsed=${Date.now() - spawnStart}ms, attempt=${attemptNumber}/${totalAttempts}`);
         if (code === 0) {
           const trimmed = stdout.trim();
           if (trimmed) {
-            resolve(trimmed);
+            settleResolve(trimmed);
           } else {
-            reject(new RetryableEmptyPlannerOutputError(stderr));
+            settleReject(new RetryableEmptyPlannerOutputError(stderr));
           }
         } else {
           const errMsg = stderr.trim() || stdout.trim() || 'Unknown error';
-          reject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
+          settleReject(new Error(`${plannerLabel} exited with code ${code}: ${errMsg}`));
         }
       });
 
       child.on('error', (err) => {
         clearTimeout(timer);
-        reject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`));
+        clearActiveAttempt();
+        settleReject(new Error(`Failed to spawn ${plannerLabel}: ${err.message}`));
       });
     });
   }
