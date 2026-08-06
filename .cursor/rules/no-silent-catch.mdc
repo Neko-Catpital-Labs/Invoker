@@ -1,0 +1,8 @@
+---
+description: Product source must not silently swallow try/catch or promise .catch failures
+alwaysApply: true
+---
+
+# No Silent Catches
+
+Product source must not silently swallow `try`/`catch` or promise `.catch()` failures; see the Error Handling section in `CLAUDE.md` for scope, allowed outcomes, and exclusions.

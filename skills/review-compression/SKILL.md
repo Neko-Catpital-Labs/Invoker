@@ -11,6 +11,8 @@ description: >
 Use this skill before authoring implementation workflows, PR stacks, or any
 multi-diff plan. Optimize for reviewer cognition, not smallest total patch.
 
+For product source error handling policy, follow the canonical Error Handling section in `CLAUDE.md`; this skill only points to that rule.
+
 ## Core Rule
 
 Each diff or workflow should make one locally reviewable claim. A tired senior
