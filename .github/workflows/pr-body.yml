@@ -33,12 +33,12 @@ jobs:
 
       - name: Resolve PR Body targets
         # On an ordinary PR run this just resolves back to the PR itself.
-        # On a Mergify merge-queue run (author mergify[bot], head ref
-        # mergify/merge-queue/...) the event's own PR is a synthetic
-        # wrapper Mergify opens to batch-test real PRs; this fetches the
-        # real underlying PR(s) it names so the rollout decision and the
-        # validation below run against them, not against mergify[bot]'s
-        # identity or the wrapper's boilerplate body. See
+        # On a Mergify merge-queue run (author mergify[bot], mergify, or
+        # app/mergify; head ref mergify/merge-queue/...) the event's own PR
+        # is a synthetic wrapper Mergify opens to batch-test real PRs; this
+        # fetches the real underlying PR(s) it names so the rollout decision
+        # and the validation below run against them, not against the queue
+        # bot's identity or the wrapper's boilerplate body. See
         # scripts/test-resolve-pr-body-targets.mjs.
         id: targets
         env:

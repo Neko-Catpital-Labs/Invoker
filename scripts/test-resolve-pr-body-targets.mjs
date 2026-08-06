@@ -35,6 +35,7 @@ scopes: []
 // --- isMergeQueueRun -------------------------------------------------------
 
 assert.equal(isMergeQueueRun({ author: 'mergify[bot]', headRef: 'mergify/merge-queue/abc123' }), true);
+assert.equal(isMergeQueueRun({ author: 'app/mergify', headRef: 'mergify/merge-queue/abc123' }), true);
 assert.equal(isMergeQueueRun({ author: 'mergify[bot]', headRef: 'some-branch' }), false);
 // A regular PR author fully controls their own branch name and PR body.
 // Trusting headRef alone would let them name a branch
@@ -43,6 +44,7 @@ assert.equal(isMergeQueueRun({ author: 'mergify[bot]', headRef: 'some-branch' })
 // green check by validating that PR's content instead of their own. The
 // bot author can't be spoofed by a regular contributor, so it's required.
 assert.equal(isMergeQueueRun({ author: 'EdbertChan', headRef: 'mergify/merge-queue/abc123' }), false);
+assert.equal(isMergeQueueRun({ author: 'app/mergify', headRef: 'some-branch' }), false);
 assert.equal(isMergeQueueRun({ author: 'EdbertChan', headRef: 'stack/foo/bar' }), false);
 assert.equal(isMergeQueueRun({}), false);
 
@@ -101,6 +103,18 @@ assert.deepEqual(
   resolveTargetPrNumbers({
     author: 'mergify[bot]',
     headRef: 'mergify/merge-queue/0aaddf1196',
+    prNumber: 7541,
+    body: REAL_QUEUE_PR_BODY,
+  }),
+  [7534],
+);
+
+// GitHub can report Mergify-created queue wrappers with the app-scoped
+// login "app/mergify"; that must still resolve through to the real PR.
+assert.deepEqual(
+  resolveTargetPrNumbers({
+    author: 'app/mergify',
+    headRef: 'mergify/merge-queue/abc123',
     prNumber: 7541,
     body: REAL_QUEUE_PR_BODY,
   }),

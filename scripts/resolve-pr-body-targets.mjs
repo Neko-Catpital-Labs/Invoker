@@ -4,9 +4,10 @@
 //
 // Mergify's merge queue re-runs pull_request_target workflows against a
 // synthetic PR it opens itself (head ref mergify/merge-queue/<id>, author
-// mergify[bot]). scripts/pr-body-rollout.mjs's selective-rollout gate keys
+// mergify[bot], mergify, or app/mergify). scripts/pr-body-rollout.mjs's
+// selective-rollout gate keys
 // off the reported author, so on that synthetic PR it always resolves to
-// "not enforced" -- author mergify[bot] is never in PR_BODY_ENFORCED_AUTHORS
+// "not enforced" -- queue bot authors are never in PR_BODY_ENFORCED_AUTHORS
 // -- even when the real PR underneath is by an enforced author and has a
 // body that would fail validation. Confirmed live: PR Body validation
 // failed on Neko-Catpital-Labs/Invoker#7534's own branch (missing required
@@ -34,7 +35,7 @@
 import { shouldEnforcePrBody } from './pr-body-rollout.mjs';
 
 const MERGE_QUEUE_HEAD_PREFIX = 'mergify/merge-queue/';
-const MERGE_QUEUE_BOT_LOGINS = new Set(['mergify[bot]', 'mergify']);
+const MERGE_QUEUE_BOT_LOGINS = new Set(['mergify[bot]', 'mergify', 'app/mergify']);
 const YAML_FENCE_PATTERN = /```ya?ml\r?\n([\s\S]*?)```/i;
 // Mergify's own generated block: a flat "pull_requests:" list of
 // "- number: <int>" entries. This is intentionally a narrow, dependency-free
@@ -45,8 +46,9 @@ const NUMBER_ENTRY_PATTERN = /^[ \t]+-\s*number:\s*(\d+)\s*\r?$/gm;
 
 // The reported author is the actual authenticated GitHub actor who opened
 // the PR -- a regular contributor cannot make GitHub report it as
-// mergify[bot]. The head ref, in contrast, is whatever branch name the PR's
-// own author chose, so it is NOT trustworthy on its own: a PR author could
+// mergify[bot], mergify, or app/mergify. The head ref, in contrast, is
+// whatever branch name the PR's own author chose, so it is NOT trustworthy
+// on its own: a PR author could
 // name their branch "mergify/merge-queue/anything" and, if headRef alone
 // were sufficient here, get resolveTargetPrNumbers() to parse THEIR OWN
 // PR body for a forged pull_requests: block pointing at a different,
