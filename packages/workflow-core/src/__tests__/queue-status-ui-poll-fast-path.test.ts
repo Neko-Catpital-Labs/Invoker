@@ -35,4 +35,34 @@ describe('getQueueStatus UI poll fast path', () => {
     expect(second).toBe(first);
     expect(loadAttempt).not.toHaveBeenCalled();
   });
+
+  it('deleteAllWorkflows invalidates a warmed UI-poll cache', () => {
+    const orchestrator = new Orchestrator({
+      persistence: new InMemoryPersistence(),
+      messageBus: new InMemoryBus(),
+      maxConcurrency: 2,
+    });
+
+    orchestrator.loadPlan({
+      name: 'ui-poll-delete-all',
+      baseBranch: 'master',
+      featureBranch: 'feature/ui-poll-delete-all',
+      tasks: [
+        { id: 'a', description: 'A' },
+        { id: 'b', description: 'B', dependencies: ['a'] },
+      ],
+    });
+    orchestrator.startExecution();
+
+    const beforeDelete = orchestrator.getQueueStatus({ refresh: false });
+    expect(beforeDelete.runningCount).toBeGreaterThan(0);
+
+    orchestrator.deleteAllWorkflows();
+
+    const afterDelete = orchestrator.getQueueStatus({ refresh: false });
+    expect(afterDelete).not.toBe(beforeDelete);
+    expect(afterDelete.running).toEqual([]);
+    expect(afterDelete.queued).toEqual([]);
+    expect(afterDelete.runningCount).toBe(0);
+  });
 });
