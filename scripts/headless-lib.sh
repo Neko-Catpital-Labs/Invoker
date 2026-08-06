@@ -51,9 +51,26 @@ fi
 # ---------------------------------------------------------------------------
 
 # Read-only Electron query (stderr suppressed for clean parsing).
+#
+# Bounded by INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS (default 60; 0 disables).
+# Safe to kill on timeout: this only runs `query` subcommands, which never
+# write to the DB, so there is no stuck-row risk the way there is for
+# headless_mutation (see run_with_optional_timeout's use in rebase-retry-all.sh
+# for that different, deliberately-timeout-free case).
 headless_query() {
+  local seconds="${INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS:-60}"
+  local status=0
   # shellcheck disable=SC2086
-  "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null
+  run_with_optional_timeout "$seconds" "$ELECTRON" "$MAIN" $SANDBOX_FLAG --headless "$@" 2>/dev/null || status=$?
+  case "$status" in
+    124)
+      echo "ERROR: headless_query timed out after ${seconds}s (query subprocess killed; owner may be crashed/unresponsive). Override with INVOKER_HEADLESS_QUERY_TIMEOUT_SECONDS=<seconds>, or =0 to disable. args: $*" >&2
+      ;;
+    127)
+      echo "ERROR: headless_query could not enforce a timeout (timeout/gtimeout/python3 all unavailable); query ran without a bound." >&2
+      ;;
+  esac
+  return "$status"
 }
 
 # Mutating command — delegates to the owner (standalone or IPC).
@@ -124,26 +141,36 @@ run_with_optional_timeout() {
     return $?
   fi
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$seconds" "$@"
+    timeout -k 5 "$seconds" "$@"
     return $?
   fi
   if command -v gtimeout >/dev/null 2>&1; then
-    gtimeout "$seconds" "$@"
+    gtimeout -k 5 "$seconds" "$@"
     return $?
   fi
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$seconds" "$@" <<'PY'
+import os
+import signal
 import subprocess
 import sys
 
 timeout = int(sys.argv[1])
 cmd = sys.argv[2:]
 
+proc = subprocess.Popen(cmd, start_new_session=True)
 try:
-    completed = subprocess.run(cmd, timeout=timeout, check=False)
-    sys.exit(completed.returncode)
+    sys.exit(proc.wait(timeout=timeout))
 except subprocess.TimeoutExpired:
     print(f"Timed out after {timeout}s: {' '.join(cmd)}", file=sys.stderr)
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+    except ProcessLookupError:
+        pass
     sys.exit(124)
 PY
     return $?
