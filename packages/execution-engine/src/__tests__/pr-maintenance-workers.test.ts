@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '@invoker/contracts';
 import type { WorkerActionRecord, WorkerActionWrite } from '@invoker/data-store';
 
+import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
 import {
   DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS,
   PR_ADMIN_BYPASS_LAND_WORKER_KIND,
@@ -71,6 +72,35 @@ function makeSpawnHarness(options: {
       child.emit('close', options.exitCode ?? 0, null);
     });
 
+    return child;
+  });
+
+  return { calls, spawnProcess: spawnProcess as unknown as typeof spawn };
+}
+
+function makeHungSpawnHarness(options: {
+  cooperativeKill?: boolean;
+} = {}): { calls: SpawnCall[]; spawnProcess: typeof spawn } {
+  const calls: SpawnCall[] = [];
+  const spawnProcess = vi.fn((command: string, args: string[], spawnOptions: SpawnOptions) => {
+    calls.push({ command, args, options: spawnOptions });
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stderr,
+      stdin: null,
+      killed: false,
+      pid: 12345,
+      // Never emits 'close' or 'error' on its own — simulates a wedged
+      // child (e.g. blocked on a dead owner's IPC handshake).
+      kill: vi.fn(() => {
+        if (options.cooperativeKill) {
+          queueMicrotask(() => child.emit('close', null, 'SIGTERM'));
+        }
+        return true;
+      }),
+    }) as unknown as ChildProcess;
     return child;
   });
 
@@ -356,5 +386,107 @@ describe('PR maintenance workers', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(spawnHarness.calls).toHaveLength(1);
     await worker.stop();
+  });
+
+  it('reproduces the pre-fix hang: a hung child with the tick timeout disabled wedges the scheduler forever', async () => {
+    vi.useFakeTimers();
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeHungSpawnHarness();
+    const worker = createPrAdminBypassLandWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      tickTimeoutMs: 0,
+      intervalMs: 60_000,
+    });
+
+    worker.start();
+    await vi.advanceTimersByTimeAsync(60_000 * 5);
+
+    expect(spawnHarness.calls).toHaveLength(1);
+    await worker.stop({ settleTimeoutMs: 0 });
+  });
+
+  it('kills a hung child after the tick timeout and lets the next scheduled tick proceed', async () => {
+    vi.useFakeTimers();
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeHungSpawnHarness();
+    const worker = createPrAdminBypassLandWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      tickTimeoutMs: 1_000,
+      intervalMs: 10_000,
+    });
+
+    worker.start();
+    await vi.advanceTimersByTimeAsync(10_000 + 999);
+    expect(spawnHarness.calls).toHaveLength(1);
+    expect(logger.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('killing spawned child'),
+      expect.anything(),
+    );
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('killing spawned child'),
+      expect.anything(),
+    );
+
+    await vi.advanceTimersByTimeAsync(SIGKILL_TIMEOUT_MS + 1_000);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('force-abandoning'),
+      expect.anything(),
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(spawnHarness.calls).toHaveLength(2);
+
+    await worker.stop({ settleTimeoutMs: 0 });
+  });
+
+  it('fails the tick as tick-timeout (not force-abandoned) when the child cooperates with SIGTERM/SIGKILL, and pins detached:true on the spawn call', async () => {
+    vi.useFakeTimers();
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const spawnHarness = makeHungSpawnHarness({ cooperativeKill: true });
+    const store = {
+      getWorkerAction: vi.fn(() => undefined),
+      upsertWorkerAction: vi.fn((write: WorkerActionWrite) => write as WorkerActionRecord),
+    };
+    const worker = createPrAdminBypassLandWorker({
+      logger,
+      repoRoot,
+      spawnProcess: spawnHarness.spawnProcess,
+      lockProbe: () => ({ held: false }),
+      installSignalHandlers: false,
+      tickTimeoutMs: 1_000,
+      intervalMs: 10_000,
+      store,
+    });
+
+    worker.start();
+    await vi.advanceTimersByTimeAsync(10_000 + 1_000);
+
+    const failedCall = store.upsertWorkerAction.mock.calls
+      .map((call) => call[0] as WorkerActionWrite)
+      .find((write) => write.status === 'failed');
+    expect(failedCall?.payload).toMatchObject({ reason: 'tick-timeout' });
+    expect(logger.error).not.toHaveBeenCalledWith(
+      expect.stringContaining('force-abandoning'),
+      expect.anything(),
+    );
+    expect(spawnHarness.calls[0]?.options.detached).toBe(process.platform !== 'win32');
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(spawnHarness.calls).toHaveLength(2);
+
+    await worker.stop({ settleTimeoutMs: 0 });
   });
 });

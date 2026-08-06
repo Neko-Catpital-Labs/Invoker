@@ -7,6 +7,7 @@ import { resolveRepoRoot, type Logger } from '@invoker/contracts';
 import type { WorkerActionStatus } from '@invoker/data-store';
 
 import { recordWorkerDecisionRow, type WorkerDecisionStore } from '../worker-decision-ledger.js';
+import { terminateChildProcessGroup, SIGKILL_TIMEOUT_MS } from '../process-utils.js';
 
 import type { WorkerRuntimeDependencies } from '../worker-runtime-dependencies.js';
 import type { WorkerRegistry } from '../worker-registry.js';
@@ -22,6 +23,17 @@ export const DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS = 5 * 60_000;
  * the same intervalMs boundary and race for it every cycle.
  */
 export const PR_MAINTENANCE_WORKER_STAGGER_STEP_MS = DEFAULT_PR_MAINTENANCE_WORKER_INTERVAL_MS / 3;
+/**
+ * Wall-clock cap on a single tick's spawned child before it is killed and the
+ * tick fails. Default four minutes: comfortably under the five-minute poll
+ * interval (with margin for the SIGTERM->SIGKILL escalation below) so a hung
+ * child never survives into -- or steals -- the next scheduled tick.
+ * worker-runtime.ts's scheduler coalesces ticks (a tick that never settles
+ * blocks every future tick of that worker kind forever), so this bound is
+ * what keeps a wedged child from permanently killing the worker. `0` disables
+ * it. Override via INVOKER_PR_MAINTENANCE_TICK_TIMEOUT_MS.
+ */
+export const DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS = 4 * 60_000;
 
 export type PrMaintenanceWorkerKind =
   | typeof PR_ADMIN_BYPASS_LAND_WORKER_KIND
@@ -70,6 +82,8 @@ export interface PrMaintenanceWorkerConfig {
   startDelayMs?: number;
   /** Shared cron lock path. Defaults to the shell script's `INVOKER_PR_CRON_LOCK` behavior. */
   lockPath?: string;
+  /** Per-tick wall-clock cap for the spawned child. See DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS. */
+  tickTimeoutMs?: number;
   /** Shell executable used to run the existing entrypoint. Defaults to `bash`. */
   shell?: string;
   store?: WorkerDecisionStore;
@@ -239,6 +253,7 @@ function createPrMaintenanceWorker(
       env: options.env,
       intervalMs: options.intervalMs,
       lockPath: options.lockPath,
+      tickTimeoutMs: options.tickTimeoutMs,
       shell: options.shell,
       spawnProcess: options.spawnProcess,
       lockProbe: options.lockProbe,
@@ -296,6 +311,7 @@ async function runPrMaintenanceEntrypoint(
       cwd: repoRoot,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     });
   } catch (err) {
     options.logger.error(`[worker:${options.entrypoint.kind}] spawn failed`, {
@@ -314,32 +330,67 @@ async function runPrMaintenanceEntrypoint(
   attachChildStreamLogger(options, child.stderr, 'stderr');
   recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'running', `Started ${options.entrypoint.scriptRelativePath}`);
 
+  const tickTimeoutMs = resolvePrMaintenanceTickTimeoutMs(options.tickTimeoutMs);
+
   await new Promise<void>((resolvePromise, rejectPromise) => {
     let settled = false;
+    let timedOut = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+    let forceAbandonTimer: ReturnType<typeof setTimeout> | null = null;
+
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
+      if (timeoutTimer) { clearTimeout(timeoutTimer); timeoutTimer = null; }
+      if (forceAbandonTimer) { clearTimeout(forceAbandonTimer); forceAbandonTimer = null; }
       fn();
     };
 
     const onAbort = (): void => {
-      if (!child.killed) {
-        child.kill('SIGTERM');
-      }
-      settle(() => {
-        recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', 'PR maintenance aborted by stop', {
-          reason: 'aborted',
-        });
-        resolvePromise();
-      });
+      void terminateChildProcessGroup(child, () => settled);
     };
 
     if (signal) {
       if (signal.aborted) {
         onAbort();
-        return;
+      } else {
+        signal.addEventListener('abort', onAbort, { once: true });
       }
-      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    const onTickTimeout = (): void => {
+      timedOut = true;
+      options.logger.error(
+        `[worker:${options.entrypoint.kind}] tick exceeded ${tickTimeoutMs}ms; killing spawned child`,
+        { module: 'pr-maintenance-worker', worker: options.entrypoint.kind, tickTimeoutMs },
+      );
+      void terminateChildProcessGroup(child, () => settled);
+      // Belt-and-suspenders: terminateChildProcessGroup already escalates
+      // SIGTERM -> SIGKILL within SIGKILL_TIMEOUT_MS and the close handler
+      // below settles this promise once the OS confirms exit. If 'close' is
+      // somehow never delivered, force-settle anyway so worker-runtime.ts's
+      // coalescing scheduler can never be wedged by this child no matter what.
+      forceAbandonTimer = setTimeout(() => {
+        settle(() => {
+          const message = `PR maintenance worker ${options.entrypoint.kind} child did not exit within `
+            + `${SIGKILL_TIMEOUT_MS}ms of SIGKILL after a ${tickTimeoutMs}ms tick timeout; abandoning`;
+          options.logger.error(`[worker:${options.entrypoint.kind}] force-abandoning unresponsive child`, {
+            module: 'pr-maintenance-worker',
+            worker: options.entrypoint.kind,
+          });
+          recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', message, {
+            reason: 'tick-timeout-force-abandoned',
+            tickTimeoutMs,
+          });
+          rejectPromise(new Error(message));
+        });
+      }, SIGKILL_TIMEOUT_MS + 1_000);
+      forceAbandonTimer.unref?.();
+    };
+
+    if (tickTimeoutMs > 0) {
+      timeoutTimer = setTimeout(onTickTimeout, tickTimeoutMs);
+      timeoutTimer.unref?.();
     }
 
     child.once('error', (err) => {
@@ -367,6 +418,18 @@ async function runPrMaintenanceEntrypoint(
           code,
           signal: closeSignal,
         };
+        if (timedOut) {
+          const message = `PR maintenance worker ${options.entrypoint.kind} exceeded its ${tickTimeoutMs}ms tick timeout and was killed`;
+          options.logger.error(`[worker:${options.entrypoint.kind}] shell entrypoint killed after tick timeout`, fields);
+          recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', message, {
+            reason: 'tick-timeout',
+            tickTimeoutMs,
+            code,
+            signal: closeSignal,
+          });
+          rejectPromise(new Error(message));
+          return;
+        }
         if (code === 0) {
           options.logger.info(`[worker:${options.entrypoint.kind}] shell entrypoint completed`, fields);
           recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'completed', 'PR maintenance run completed');
@@ -374,6 +437,9 @@ async function runPrMaintenanceEntrypoint(
           return;
         }
         if (signal?.aborted) {
+          recordPrMaintenanceRun(options, runExternalKey, repoRoot, 'failed', 'PR maintenance aborted by stop', {
+            reason: 'aborted',
+          });
           resolvePromise();
           return;
         }
@@ -482,6 +548,15 @@ function parsePositiveInteger(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function resolvePrMaintenanceTickTimeoutMs(explicit: number | undefined): number {
+  if (explicit !== undefined) return explicit;
+  const raw = process.env.INVOKER_PR_MAINTENANCE_TICK_TIMEOUT_MS?.trim();
+  if (raw === '0') return 0;
+  if (!raw || !/^(0|[1-9]\d*)$/.test(raw)) return DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_PR_MAINTENANCE_WORKER_TICK_TIMEOUT_MS;
 }
 
 function readMkdirLockHolder(lockDir: string): number | undefined {
