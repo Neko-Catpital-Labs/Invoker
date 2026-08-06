@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Repro: a hidden/zero-sized planning tmux host must not resize the live PTY
+# down to tiny geometry. In before mode, this proves the pre-fix defect by
+# requiring both resize IPC and `stty size` evidence of tiny geometry.
 set -euo pipefail
 
 MODE="${1:-after}"
