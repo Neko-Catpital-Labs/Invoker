@@ -56,6 +56,10 @@ export type WorkflowMetadataChanges = Partial<
   >
 >;
 
+export function isExternalDependenciesKeyPresent(changes: Partial<WorkflowMetadataChanges>): boolean {
+  return 'externalDependencies' in changes;
+}
+
 /** Row shape for the columns loaded by the workflow rollup query. */
 interface WorkflowRollupTaskRow {
   id: string;
@@ -148,7 +152,7 @@ export class SqliteWorkflowRepository {
     // detachWorkflowInternal clears a dependent's last dependency by passing
     // `externalDependencies: undefined` — a skip-if-undefined check here left
     // dangling dependencies behind after upstream workflow deletion.
-    if ('externalDependencies' in changes) {
+    if (isExternalDependenciesKeyPresent(changes)) {
       setClauses.push('external_dependencies = ?');
       values.push(changes.externalDependencies ? JSON.stringify(changes.externalDependencies) : null);
     }
