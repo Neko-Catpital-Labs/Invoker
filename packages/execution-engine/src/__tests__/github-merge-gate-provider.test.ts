@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { GitHubMergeGateProvider } from '../github-merge-gate-provider.js';
+import { GitHubMergeGateProvider, resolveMergeGatePrLifecycle } from '../github-merge-gate-provider.js';
 
 vi.mock('node:child_process');
 
@@ -575,6 +575,12 @@ describe('GitHubMergeGateProvider', () => {
       expect(result.lifecycle).toBe('open');
       expect(result.rejected).toBe(false);
       expect(result.statusText).toBe('Approved, awaiting merge');
+    });
+
+    it('resolveMergeGatePrLifecycle maps PR states to lifecycle values', () => {
+      expect(resolveMergeGatePrLifecycle('MERGED')).toBe('merged');
+      expect(resolveMergeGatePrLifecycle('CLOSED')).toBe('closed');
+      expect(resolveMergeGatePrLifecycle('OPEN')).toBe('open');
     });
 
     it('treats a closed non-merged PR as terminal with statusText "Closed"', async () => {

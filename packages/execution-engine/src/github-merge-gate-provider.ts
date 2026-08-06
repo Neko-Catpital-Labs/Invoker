@@ -19,6 +19,10 @@ type ExistingPullRequest = { url: string; number: number };
 const DEFAULT_GITHUB_CLI_TIMEOUT_MS = 60_000;
 const GITHUB_CLI_TIMEOUT_ENV = 'INVOKER_GITHUB_CLI_TIMEOUT_MS';
 
+export function resolveMergeGatePrLifecycle(state: string): MergeGatePrLifecycle {
+  return state === 'MERGED' ? 'merged' : state === 'CLOSED' ? 'closed' : 'open';
+}
+
 function getGitHubCliTimeoutMs(): number {
   const raw = process.env[GITHUB_CLI_TIMEOUT_ENV]?.trim();
   if (!raw) return DEFAULT_GITHUB_CLI_TIMEOUT_MS;
@@ -168,8 +172,7 @@ export class GitHubMergeGateProvider implements MergeGateProvider {
       statusCheckRollup?: unknown[];
     };
 
-    const lifecycle: MergeGatePrLifecycle =
-      data.state === 'MERGED' ? 'merged' : data.state === 'CLOSED' ? 'closed' : 'open';
+    const lifecycle: MergeGatePrLifecycle = resolveMergeGatePrLifecycle(data.state);
     const rejected = data.reviewDecision === 'CHANGES_REQUESTED';
 
     let statusText: string;
