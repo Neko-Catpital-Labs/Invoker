@@ -24,6 +24,35 @@ interface CliCommandResult {
   error?: string;
 }
 
+export interface MachineSetupInput {
+  id?: string;
+  host: string;
+  user: string;
+  sshKeyPath: string;
+  port?: number;
+  maxConcurrentTasks?: number;
+  provisionCommand?: string;
+}
+
+export interface MachineSetupResult {
+  id: string;
+  host: string;
+  reachable: boolean;
+  detail: string;
+  written: boolean;
+  error?: {
+    code: string;
+    message: string;
+    conflictingTargetId?: string;
+  };
+}
+
+export interface MachinesSetupResult {
+  ok: boolean;
+  results: MachineSetupResult[];
+  error?: string;
+}
+
 function appendOutput(current: string, chunk: Buffer | string): string {
   const next = current + chunk.toString();
   if (Buffer.byteLength(next, 'utf8') <= MAX_SETUP_OUTPUT_BYTES) return next;
@@ -60,6 +89,55 @@ function runCli(cliPath: string, args: string[], env?: NodeJS.ProcessEnv): Promi
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     settle({ ok: false, exitCode: null, output: '', error: message });
+  }
+
+  return promise;
+}
+
+export function runMachinesSetup(cliPath: string, machines: MachineSetupInput[]): Promise<MachinesSetupResult> {
+  const { promise, resolve } = Promise.withResolvers<MachinesSetupResult>();
+  let stdout = '';
+  let stderr = '';
+  let settled = false;
+  const settle = (result: MachinesSetupResult): void => {
+    if (settled) return;
+    settled = true;
+    resolve(result);
+  };
+
+  try {
+    const child = spawnBundledCli(cliPath, ['setup', 'machines', '--json'], { stdin: 'pipe' });
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      stdout = appendOutput(stdout, chunk);
+    });
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      stderr = appendOutput(stderr, chunk);
+    });
+    child.on('error', (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      settle({ ok: false, results: [], error: message });
+    });
+    child.on('close', (exitCode) => {
+      if (exitCode !== 0) {
+        settle({ ok: false, results: [], error: stderr.trim() || `invoker-cli exited with ${exitCode}` });
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout) as unknown;
+        if (!Array.isArray(parsed)) throw new Error('Expected a JSON array of machine results');
+        settle({ ok: true, results: parsed as MachineSetupResult[] });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        settle({ ok: false, results: [], error: `Failed to parse invoker-cli machines output: ${message}` });
+      }
+    });
+    child.stdin?.on('error', () => {
+      // Writing to a child that has already exited surfaces here; the 'close' handler settles the result.
+    });
+    child.stdin?.end(JSON.stringify(machines));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    settle({ ok: false, results: [], error: message });
   }
 
   return promise;
