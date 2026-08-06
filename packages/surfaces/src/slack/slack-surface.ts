@@ -34,10 +34,12 @@ import {
   DEFAULT_PLANNER_RETRY_BASE_DELAY_MS,
   DEFAULT_PLANNER_RETRY_LIMIT,
   PlanConversation,
+  PlannerAbortedError,
   buildEmptyPlannerOutputError,
   defaultPlanningCommand,
   isConfirmation,
   isNegation,
+  isStopRequest,
 } from './plan-conversation.js';
 import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
@@ -446,6 +448,10 @@ export function parseLocalRequest(text: string): LocalRequest | null {
 /** Shared interface between SessionHandle and PlanConversation for handler code. */
 interface ConversationLike {
   sendMessage(message: string): Promise<string>;
+  abortTurn(reason?: string): boolean;
+  isTurnInFlight(): boolean;
+  getTurnStartedAt(): number | null;
+  getQueuedTurnCount(): number;
   runPlanConversion(): Promise<string>;
   getDraftedPlan(): string | null;
   readonly history: readonly { role: 'user' | 'assistant'; content: string }[];
@@ -453,7 +459,14 @@ interface ConversationLike {
   readonly lastTurnPlanIntentSignal: PlanIntentSignal | null;
   readonly conversationMode: ConversationMode;
   readonly planSubmitted: boolean;
-  readonly submittedPlanText: string | null;  readonly workingDir?: string;
+  readonly submittedPlanText: string | null;
+  readonly workingDir?: string;
+}
+
+interface StoppedTurnNotice {
+  text: string;
+  posted: boolean;
+  remainingConsumers: number;
 }
 
 /** An action staged for a thread, awaiting a yes/no (text or button) confirmation. */
@@ -532,6 +545,8 @@ export class SlackSurface implements Surface {
   };
   /** Maps thread_ts → acknowledgment message timestamp */
   private ackMessages = new Map<string, string>();
+  /** Maps thread_ts → de-duplicated stop notices for aborted in-flight turns. */
+  private stoppedTurnNotices = new Map<string, StoppedTurnNotice>();
   /** Maps thread_ts → planning context carried into start_plan. */
   private planningContexts = new Map<string, PlanningContext>();
   /** Maps thread_ts → an action awaiting yes/no (or button) confirmation. */
@@ -859,6 +874,24 @@ export class SlackSurface implements Surface {
       await this.cancelSlackPlanDraft(action.value, body, respond);
     });
 
+    this.app.action(/^stop_turn:/, async ({ action, body, ack, respond }) => {
+      await ack();
+      if (action.type !== 'button') return;
+      const threadTs = action.action_id.replace(/^stop_turn:/, '');
+      const channel = (body as { channel?: { id?: string } })?.channel?.id ?? this.lobbyChannelId;
+      const userId = (body as { user?: { id?: string } })?.user?.id ?? 'unknown';
+      if (!threadTs) {
+        await respond?.({ text: 'This Stop button is missing its thread context.', replace_original: false });
+        return;
+      }
+      const conversation = await this.getSession(channel, threadTs, userId, false);
+      if (!conversation || !conversation.isTurnInFlight()) {
+        await respond?.({ text: 'There is nothing to stop in this thread.', replace_original: false });
+        return;
+      }
+      await this.stopConversationTurn(conversation, threadTs, this.lobbyButtonSay(body, respond), 'user requested stop from Slack');
+    });
+
     this.app.action('lobby_confirm', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
@@ -1147,6 +1180,11 @@ export class SlackSurface implements Surface {
         return;
       }
 
+      if (isStopRequest(requestText) && conversation.isTurnInFlight()) {
+        await this.stopConversationTurn(conversation, threadTs, say, 'user requested stop from Slack');
+        return;
+      }
+
       this.persistLaunchContext(threadTs, { ...context, workingDir });
 
       await this.handleConversationMessage(conversation, requestText, threadTs, say, channel, event.ts,
@@ -1299,6 +1337,64 @@ export class SlackSurface implements Surface {
     if (!ts) return;
     this.ackMessages.delete(threadTs);
     await this.deleteMessage(channel, ts);
+  }
+
+  private buildStoppedTurnNotice(conversation: ConversationLike): StoppedTurnNotice {
+    const turnStartedAt = conversation.getTurnStartedAt();
+    const elapsedSeconds = turnStartedAt === null ? 0 : Math.max(0, Math.round((Date.now() - turnStartedAt) / 1_000));
+    const droppedQueuedMessages = conversation.getQueuedTurnCount();
+    const elapsedLabel = elapsedSeconds === 1 ? 'second' : 'seconds';
+    const queuedLabel = droppedQueuedMessages === 1 ? 'message' : 'messages';
+    return {
+      text: `Stopped the in-flight turn after ${elapsedSeconds} ${elapsedLabel}. Dropped ${droppedQueuedMessages} queued ${queuedLabel}. Work the agent already executed was not rolled back.`,
+      posted: false,
+      remainingConsumers: Math.max(1, droppedQueuedMessages + 1),
+    };
+  }
+
+  private async postStoppedTurnNoticeOnce(
+    conversation: ConversationLike,
+    threadTs: string,
+    say: SayFn,
+  ): Promise<void> {
+    const existing = this.stoppedTurnNotices.get(threadTs);
+    const notice = existing ?? this.buildStoppedTurnNotice(conversation);
+    if (!existing) {
+      this.stoppedTurnNotices.set(threadTs, notice);
+    }
+    if (notice.posted) return;
+    notice.posted = true;
+    await this.sayWithRateLimitRetry(say, {
+      text: notice.text,
+      thread_ts: threadTs,
+    });
+  }
+
+  private releaseStoppedTurnNotice(threadTs: string): void {
+    const notice = this.stoppedTurnNotices.get(threadTs);
+    if (!notice) return;
+    notice.remainingConsumers -= 1;
+    if (notice.remainingConsumers <= 0) {
+      this.stoppedTurnNotices.delete(threadTs);
+    }
+  }
+
+  private async stopConversationTurn(
+    conversation: ConversationLike,
+    threadTs: string,
+    say: SayFn,
+    reason: string,
+  ): Promise<boolean> {
+    if (!conversation.isTurnInFlight()) return false;
+    const notice = this.buildStoppedTurnNotice(conversation);
+    this.stoppedTurnNotices.set(threadTs, notice);
+    const stopped = conversation.abortTurn(reason);
+    if (!stopped) {
+      this.stoppedTurnNotices.delete(threadTs);
+      return false;
+    }
+    await this.postStoppedTurnNoticeOnce(conversation, threadTs, say);
+    return true;
   }
 
   private async handleLobbyOp(
@@ -2671,6 +2767,30 @@ ${text}`;
           const result = await this.sayWithRateLimitRetry(say, {
             text: ':hourglass_flowing_sand: Still thinking...',
             thread_ts: threadTs,
+            blocks: [
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: ':hourglass_flowing_sand: Still thinking...',
+                },
+              },
+              {
+                type: 'actions',
+                elements: [
+                  {
+                    type: 'button',
+                    text: {
+                      type: 'plain_text',
+                      text: 'Stop',
+                    },
+                    action_id: `stop_turn:${threadTs}`,
+                    value: threadTs,
+                    style: 'danger',
+                  },
+                ],
+              },
+            ],
           });
           if (result?.ts) heartbeatTimestamps.push(result.ts);
           this.log('slack', 'info', `[HEARTBEAT] Sent planning heartbeat (thread_ts=${threadTs})`);
@@ -2771,6 +2891,16 @@ ${text}`;
       }
       if (typingStarted) {
         await this.stopTypingIndicator(channel, threadTs);
+      }
+
+      if (err instanceof PlannerAbortedError) {
+        try {
+          await this.postStoppedTurnNoticeOnce(conversation, threadTs, say);
+        } finally {
+          this.releaseStoppedTurnNotice(threadTs);
+          await cleanupHeartbeats();
+        }
+        return;
       }
 
       const tErr = Date.now();

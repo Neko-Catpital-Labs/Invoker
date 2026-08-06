@@ -211,6 +211,17 @@ export function isNegation(text: string): boolean {
   return NEGATION_PATTERNS.some((re) => re.test(trimmed));
 }
 
+export const STOP_TURN_PATTERNS = [
+  /^stop$/i,
+  /^cancel$/i,
+  /^abort$/i,
+];
+
+export function isStopRequest(text: string): boolean {
+  const trimmed = text.trim().replace(/[.?!]+$/, '');
+  return STOP_TURN_PATTERNS.some((re) => re.test(trimmed));
+}
+
 function isDraftingAuthorizedForPrompt(messages: ConversationMessage[]): boolean {
   const latest = messages[messages.length - 1];
   if (!latest || latest.role !== 'user') return false;
@@ -485,6 +496,7 @@ export class PlanConversation {
   private turnQueue: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   private turnTokenCounter = 0;
   private activeTurnToken = 0;
+  private activeTurnStartedAt: number | null = null;
   private activeTurnReject: ((error: Error) => void) | null = null;
   private abortedTurnErrors = new Map<number, PlannerAbortedError>();
   private activeChild: ChildProcessWithoutNullStreams | null = null;
@@ -602,6 +614,7 @@ export class PlanConversation {
 
     this.turnInFlight = false;
     this.activeTurnToken = 0;
+    this.activeTurnStartedAt = null;
 
     const queue = this.turnQueue.splice(0);
     for (const waiter of queue) {
@@ -631,10 +644,19 @@ export class PlanConversation {
     return this.turnInFlight;
   }
 
+  getTurnStartedAt(): number | null {
+    return this.activeTurnStartedAt;
+  }
+
+  getQueuedTurnCount(): number {
+    return this.turnQueue.length;
+  }
+
   private sendMessageWithTurn(userMessage: string): Promise<string> {
     this.turnInFlight = true;
     const turnToken = ++this.turnTokenCounter;
     this.activeTurnToken = turnToken;
+    this.activeTurnStartedAt = Date.now();
 
     return new Promise<string>((resolve, reject) => {
       const rejectTurn = (error: Error) => reject(error);
@@ -655,11 +677,13 @@ export class PlanConversation {
     if (!this.turnInFlight || turnToken !== this.activeTurnToken) return;
     const next = this.turnQueue.shift();
     if (next) {
+      this.activeTurnStartedAt = null;
       next.resolve();
       return;
     }
     this.turnInFlight = false;
     this.activeTurnToken = 0;
+    this.activeTurnStartedAt = null;
   }
 
   private throwIfTurnAborted(turnToken: number): void {

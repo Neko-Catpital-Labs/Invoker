@@ -102,6 +102,26 @@ export class SessionHandle {
     return this.conversation.sendMessage(message);
   }
 
+  abortTurn(reason?: string): boolean {
+    if (this.disposed) {
+      throw new Error(`Session ${this.id} has been disposed`);
+    }
+    this.metadata.lastAccessedAt = new Date();
+    return this.conversation.abortTurn(reason);
+  }
+
+  isTurnInFlight(): boolean {
+    return this.conversation.isTurnInFlight();
+  }
+
+  getTurnStartedAt(): number | null {
+    return this.conversation.getTurnStartedAt();
+  }
+
+  getQueuedTurnCount(): number {
+    return this.conversation.getQueuedTurnCount();
+  }
+
   async runPlanConversion(): Promise<string> {
     if (this.disposed) {
       throw new Error(`Session ${this.id} has been disposed`);
