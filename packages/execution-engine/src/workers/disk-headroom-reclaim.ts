@@ -5,13 +5,14 @@
  * Never touches invoker.db / config.json / the home root / paths outside the home.
  */
 
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
 import type { Logger } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
 
+import { computeRepoCacheHash } from '../git-utils.js';
 import { buildSshConnectionArgs } from '../ssh-transport-options.js';
 import { bashNormalizeTildePath, execRemoteCapture, shellPosixSingleQuote } from '../ssh-git-exec.js';
 
@@ -222,7 +223,7 @@ const LOCAL_RM_RETRY_DELAY_MS = 100;
  * cleaner deletes anything. Mirrors WorkflowResumeWorkerStore's shape.
  */
 export interface DiskHeadroomWorkerStore {
-  listWorkflows(): ReadonlyArray<{ id: string }>;
+  listWorkflows(): ReadonlyArray<{ id: string; repoUrl?: string }>;
   loadTasks(workflowId: string): TaskState[];
 }
 
@@ -254,6 +255,29 @@ export function computeProtectedLocalPaths(store: DiskHeadroomWorkerStore): Set<
   }
 }
 
+/**
+ * Repo-cache hashes (`repos/<hash>` dir names) for non-terminal tasks' workflows.
+ * A shared git mirror is named by hash, not by workspacePath, so it needs its
+ * own liveness check alongside computeProtectedLocalPaths. Fails safe to an
+ * empty set (protects nothing) on any store error, same rationale as above.
+ */
+export function computeProtectedRepoHashes(store: DiskHeadroomWorkerStore): Set<string> {
+  try {
+    const protectedHashes = new Set<string>();
+    for (const workflow of store.listWorkflows()) {
+      if (!workflow.repoUrl) continue;
+      const tasks = store.loadTasks(workflow.id);
+      const hasNonTerminalTask = tasks.some((task) => !TERMINAL_TASK_STATUS_SET.has(task.status));
+      if (hasNonTerminalTask) {
+        protectedHashes.add(computeRepoCacheHash(workflow.repoUrl));
+      }
+    }
+    return protectedHashes;
+  } catch {
+    return new Set();
+  }
+}
+
 function pathIsProtected(candidate: string, protectedPaths: ReadonlySet<string>): boolean {
   if (protectedPaths.size === 0) return false;
   const resolved = resolve(candidate);
@@ -263,6 +287,34 @@ function pathIsProtected(candidate: string, protectedPaths: ReadonlySet<string>)
     if (protectedPath.startsWith(`${resolved}${sep}`)) return true;
   }
   return false;
+}
+
+/**
+ * Renames `path` aside before erasing the renamed copy, mirroring
+ * remove_path() in buildInvokerHomeCleanupScript above. A partial failure
+ * mid-erase then leaves a `.deleting.<pid>` orphan (swept up by
+ * sweepLocalDeletingOrphans next pass) instead of a half-gone directory
+ * still sitting under the name other code looks up.
+ */
+async function eraseLocalPath(path: string, errors: string[]): Promise<void> {
+  const staged = `${path}.deleting.${process.pid}`;
+  let target = path;
+  try {
+    renameSync(path, staged);
+    target = staged;
+  } catch {
+    // Rename failed (e.g. cross-device); erase the original path directly below.
+  }
+  try {
+    rmSync(target, {
+      recursive: true,
+      force: true,
+      maxRetries: LOCAL_RM_MAX_RETRIES,
+      retryDelay: LOCAL_RM_RETRY_DELAY_MS,
+    });
+  } catch (err) {
+    errors.push(`${target}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 async function removeLocalDir(
@@ -283,16 +335,7 @@ async function removeLocalDir(
     });
     return;
   }
-  try {
-    rmSync(path, {
-      recursive: true,
-      force: true,
-      maxRetries: LOCAL_RM_MAX_RETRIES,
-      retryDelay: LOCAL_RM_RETRY_DELAY_MS,
-    });
-  } catch (err) {
-    errors.push(`${path}: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  await eraseLocalPath(path, errors);
 }
 
 function ensureLocalDir(path: string, errors: string[]): void {
@@ -350,6 +393,44 @@ async function sweepReclaimableChildren(
   }
 }
 
+/**
+ * Sweeps `repos/` one shared git mirror at a time. Mirrors are named by
+ * repo-cache hash, not by task workspacePath, so a child is left alone when
+ * either its own hash is protected or its resolved path matches/sits above a
+ * protected workspacePath.
+ */
+async function sweepRepoChildren(
+  dirPath: string,
+  errors: string[],
+  protectedSkips: string[],
+  protectedRepoHashes: ReadonlySet<string>,
+  protectedPaths: ReadonlySet<string>,
+  logger?: Logger,
+  targetKey?: string,
+): Promise<void> {
+  if (!existsSync(dirPath)) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(dirPath);
+  } catch (err) {
+    errors.push(`readdir ${dirPath}: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+  for (const name of entries) {
+    const childPath = join(dirPath, name);
+    if (protectedRepoHashes.has(name) || pathIsProtected(childPath, protectedPaths)) {
+      protectedSkips.push(childPath);
+      logger?.warn?.(`[disk-headroom-cleanup] skip ${childPath}: protected-path-in-use`, {
+        module: 'disk-headroom',
+        targetKey,
+        path: childPath,
+      });
+      continue;
+    }
+    await eraseLocalPath(childPath, errors);
+  }
+}
+
 export async function cleanupLocalInvokerHome(opts: {
   invokerHome: string;
   targetKey?: string;
@@ -370,12 +451,24 @@ export async function cleanupLocalInvokerHome(opts: {
   });
 
   const protectedPaths = opts.store ? computeProtectedLocalPaths(opts.store) : new Set<string>();
+  const protectedRepoHashes = opts.store ? computeProtectedRepoHashes(opts.store) : new Set<string>();
   const errors: string[] = [];
   const protectedSkips: string[] = [];
   await sweepLocalDeletingOrphans(home, errors, protectedSkips, protectedPaths, opts.logger, targetKey);
-  for (const name of DISK_RECLAIMABLE_DIRS) {
+  await sweepRepoChildren(
+    join(home, 'repos'),
+    errors,
+    protectedSkips,
+    protectedRepoHashes,
+    protectedPaths,
+    opts.logger,
+    targetKey,
+  );
+  for (const name of ['runtime', 'worktrees', 'merge-clones', 'merge-launches'] as const) {
     await sweepReclaimableChildren(join(home, name), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
   }
+  // pr-cron-work: PR #6632 retired its only producer, so there is nothing there to preserve.
+  await removeLocalDir(join(home, 'pr-cron-work'), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
   for (const name of DISK_RECLAIMABLE_DIRS) {
     ensureLocalDir(join(home, name), errors);
   }
