@@ -2242,7 +2242,6 @@ startMainProcessBootstrap({
     getMainWindow: () => mainWindow,
     isUiInteractive: () => uiInteractive,
     stampDelta: (delta) => taskDeltaStream.stamp(delta),
-    getStreamSequence: getTaskDeltaStreamSequence,
     onLargeBatch: ({ batchSize, remaining }) => {
       uiPerfStats.largeTaskDeltaBatches += 1;
       uiPerfStats.maxTaskDeltaBatchSize = Math.max(uiPerfStats.maxTaskDeltaBatchSize, batchSize);
@@ -2576,8 +2575,14 @@ startMainProcessBootstrap({
               orchestrator,
               persistence,
               logger,
+              getStreamSequence: getTaskDeltaStreamSequence,
             });
-            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+            taskGraphEventPublisher.publishSnapshot(
+              'refresh-task-graph',
+              snapshot.tasks,
+              snapshot.workflows,
+              snapshot.streamSequence,
+            );
           },
           deleteWorkflow: (workflowId) => requireGuiMutationTaskActions().performDeleteWorkflow(workflowId),
           detachWorkflow: (workflowId, upstreamWorkflowId) =>

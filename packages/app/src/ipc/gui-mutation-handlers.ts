@@ -1547,6 +1547,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
       orchestrator,
       persistence,
       logger,
+      getStreamSequence: getTaskDeltaStreamSequence,
     });
 
     publishForcedRefreshTaskGraphSnapshot(
@@ -1557,7 +1558,7 @@ export async function registerGuiMutationIpcHandlers(context: RegisterGuiMutatio
     recordStartupDuration('refresh-task-graph.return', startedAtMs, {
       taskCount: snapshot.tasks.length,
       workflowCount: snapshot.workflows.length,
-      streamSequence: getTaskDeltaStreamSequence(),
+      streamSequence: snapshot.streamSequence,
     });
   });
   registerReadOnlyIpcHandlers({
