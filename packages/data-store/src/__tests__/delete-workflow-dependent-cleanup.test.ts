@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Orchestrator } from '@invoker/workflow-core';
 import type { OrchestratorMessageBus } from '@invoker/workflow-core';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { isExternalDependenciesKeyPresent } from '../sqlite-workflow-repository.js';
 
 class NoopBus implements OrchestratorMessageBus {
   publish(): void {}
@@ -95,6 +96,9 @@ describe('delete/detach upstream workflow clears dependent externalDependencies'
     // With no dangling gate the dependent's root task must dispatch.
     const started = orchestrator.startExecution();
     expect(started.map((t) => t.id)).toContain(downstreamRootId);
+
+    expect(isExternalDependenciesKeyPresent({ externalDependencies: undefined })).toBe(true);
+    expect(isExternalDependenciesKeyPresent({})).toBe(false);
   });
 
   it('detachWorkflow with a single dependency clears it and unblocks the dependent', async () => {
