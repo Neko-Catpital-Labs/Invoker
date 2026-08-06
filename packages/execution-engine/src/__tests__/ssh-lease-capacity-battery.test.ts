@@ -317,4 +317,46 @@ describe('SSH lease capacity battery', () => {
     await Promise.all(runs);
     expect(liveLeases(adapter)).toHaveLength(0);
   });
+
+  it('killActiveExecution releases the SSH pool lease when it kills an active execution', async () => {
+    const taskId = 'wf-kill/task';
+    const attemptId = 'wf-kill/task-attempt';
+    const task = makeTask(taskId, 'pnpm-ssh', attemptId);
+    const releaseExecutionResourceLease = vi.fn();
+    const executor = { ...makeSshExecutor(), kill: vi.fn().mockResolvedValue(undefined) };
+
+    const runner = new TaskRunner({
+      orchestrator: {
+        getTask: (id: string) => (id === taskId ? task : null),
+        getAllTasks: () => [task],
+        deferTask: vi.fn(),
+        markTaskRunningAfterLaunch: () => true,
+        handleWorkerResponse: () => [],
+      },
+      persistence: { releaseExecutionResourceLease },
+      executorRegistry: {
+        getDefault: () => executor,
+        get: () => executor,
+        getAll: () => [executor],
+        register: vi.fn(),
+      },
+      cwd: '/tmp',
+    } as never);
+
+    const handle = { attemptId, taskId };
+    (runner as unknown as { activeExecutions: Map<string, unknown> }).activeExecutions.set(attemptId, {
+      handle,
+      executor,
+      taskId,
+      poolId: 'pnpm-ssh',
+      poolMemberKey: 'ssh:remote-a',
+      leaseResourceKey: 'ssh:invoker@a.example.com:22',
+      leaseHolderId: attemptId,
+    });
+
+    expect(await runner.killActiveExecution(taskId)).toBe(true);
+
+    expect(executor.kill).toHaveBeenCalledWith(handle);
+    expect(releaseExecutionResourceLease).toHaveBeenCalledWith('ssh:invoker@a.example.com:22', attemptId);
+  });
 });
