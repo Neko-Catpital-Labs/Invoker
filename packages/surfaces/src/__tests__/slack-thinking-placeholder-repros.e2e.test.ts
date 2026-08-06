@@ -87,6 +87,10 @@ const conversationMock = vi.hoisted(() => ({
   planSubmitted: false,
   conversationMode: 'plan' as const,
   init: vi.fn(async (): Promise<void> => {}),
+  abortTurn: vi.fn(() => false),
+  isTurnInFlight: vi.fn(() => false),
+  getQueuedTurnCount: vi.fn(() => 0),
+  getTurnStartedAt: vi.fn(() => null),
   lastTurnReasoning: [] as string[],
 }));
 

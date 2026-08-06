@@ -151,6 +151,27 @@ export class SessionHandle {
     return this.conversation.getDraftedPlan();
   }
 
+  abortTurn(reason?: string): boolean {
+    if (this.disposed) return false;
+    this.metadata.lastAccessedAt = new Date();
+    return this.conversation.abortTurn(reason);
+  }
+
+  isTurnInFlight(): boolean {
+    if (this.disposed) return false;
+    return this.conversation.isTurnInFlight();
+  }
+
+  getQueuedTurnCount(): number {
+    if (this.disposed) return 0;
+    return this.conversation.getQueuedTurnCount();
+  }
+
+  getTurnStartedAt(): number | null {
+    if (this.disposed) return null;
+    return this.conversation.getTurnStartedAt();
+  }
+
   /**
    * Mark the plan as submitted (terminal state).
    */

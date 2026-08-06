@@ -72,6 +72,10 @@ vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
       init: vi.fn().mockResolvedValue(undefined),
       getDraftedPlan: () => instance.lastTurnDraftPlanText,
       runPlanConversion: vi.fn().mockResolvedValue(''),
+      abortTurn: vi.fn(() => false),
+      isTurnInFlight: vi.fn(() => false),
+      getQueuedTurnCount: vi.fn(() => 0),
+      getTurnStartedAt: vi.fn(() => null),
       sendMessage: vi.fn().mockImplementation(async () => {
         instance.lastTurnDraftPlanText = nextDraftPlanText;
         return nextReply;

@@ -57,6 +57,10 @@ const mockPlanConversation = {
   planSubmitted: false,
   conversationMode: 'agent' as const,
   init: vi.fn().mockResolvedValue(undefined),
+  abortTurn: vi.fn(() => false),
+  isTurnInFlight: vi.fn(() => false),
+  getQueuedTurnCount: vi.fn(() => 0),
+  getTurnStartedAt: vi.fn(() => null),
   get workingDir() {
     return workingDir;
   },

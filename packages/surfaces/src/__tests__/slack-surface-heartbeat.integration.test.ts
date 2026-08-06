@@ -72,6 +72,10 @@ const mockPlanConversation = {
   planSubmitted: false,
   conversationMode: 'plan' as const,
   init: vi.fn().mockResolvedValue(undefined),
+  abortTurn: vi.fn(() => false),
+  isTurnInFlight: vi.fn(() => false),
+  getQueuedTurnCount: vi.fn(() => 0),
+  getTurnStartedAt: vi.fn(() => null),
 };
 
 vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({

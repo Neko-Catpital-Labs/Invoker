@@ -63,6 +63,10 @@ vi.mock('../slack/plan-conversation.js', async (importOriginal) => ({
       lastTurnDraftPlanText: null as string | null,
       runPlanConversion: vi.fn().mockImplementation(async () => instance.lastTurnDraftPlanText ?? ''),
       init: vi.fn().mockResolvedValue(undefined),
+      abortTurn: vi.fn(() => false),
+      isTurnInFlight: vi.fn(() => false),
+      getQueuedTurnCount: vi.fn(() => 0),
+      getTurnStartedAt: vi.fn(() => null),
       sendMessage: vi.fn().mockImplementation(async (text: string) => {
         instance._messages.push({ role: 'user', content: text });
         const reply = `Reply to: ${text}`;

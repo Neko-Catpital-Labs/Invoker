@@ -193,6 +193,10 @@ export function isConfirmation(text: string): boolean {
   return CONFIRMATION_PATTERNS.some((re) => re.test(trimmed));
 }
 
+function normalizeDecisionText(text: string): string {
+  return text.trim().replace(/[.?!]+$/, '');
+}
+
 const NEGATION_PATTERNS = [
   /^no$/i,
   /^n$/i,
@@ -205,8 +209,17 @@ const NEGATION_PATTERNS = [
 ];
 
 export function isNegation(text: string): boolean {
-  const trimmed = text.trim().replace(/[.?!]+$/, '');
-  return NEGATION_PATTERNS.some((re) => re.test(trimmed));
+  return NEGATION_PATTERNS.some((re) => re.test(normalizeDecisionText(text)));
+}
+
+export const STOP_TURN_PATTERNS = [
+  /^stop$/i,
+  /^cancel$/i,
+  /^abort$/i,
+];
+
+export function isStopRequest(text: string): boolean {
+  return STOP_TURN_PATTERNS.some((re) => re.test(normalizeDecisionText(text)));
 }
 
 function isDraftingAuthorizedForPrompt(messages: ConversationMessage[]): boolean {
@@ -491,6 +504,7 @@ export class PlanConversation {
   private onHarnessSessionId?: (sessionId: string) => void;
   private activeChild: ChildProcessWithoutNullStreams | null = null;
   private activeAttemptReject: ((error: Error) => void) | null = null;
+  private turnStartedAt: number | null = null;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -576,6 +590,7 @@ export class PlanConversation {
       await new Promise<void>((resolve, reject) => this.turnQueue.push({ resolve, reject }));
     }
     this.turnInFlight = true;
+    this.turnStartedAt = Date.now();
     // No `await` here on purpose: chaining via .finally() keeps this call's
     // returned promise settling in lockstep with sendMessageLocked's own
     // promise, with no added microtask tick before the planner subprocess is
@@ -583,6 +598,7 @@ export class PlanConversation {
     // via a single microtask wait stay correct.
     return this.sendMessageLocked(userMessage).finally(() => {
       this.turnInFlight = false;
+      this.turnStartedAt = null;
       this.turnQueue.shift()?.resolve();
     });
   }
@@ -606,6 +622,14 @@ export class PlanConversation {
 
   isTurnInFlight(): boolean {
     return this.turnInFlight;
+  }
+
+  getQueuedTurnCount(): number {
+    return this.turnQueue.length;
+  }
+
+  getTurnStartedAt(): number | null {
+    return this.turnStartedAt;
   }
 
   private async sendMessageLocked(userMessage: string): Promise<string> {
