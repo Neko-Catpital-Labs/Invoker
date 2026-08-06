@@ -20,6 +20,9 @@ import type { CostAttributionAttempt } from './attempt-read-models.js';
 
 const ACTION_GRAPH_RECENT_ATTEMPT_LIMIT = 3;
 
+export const CLAIMABLE_ATTEMPT_WHERE_CLAUSE =
+  "status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)";
+
 /**
  * Adapter-side task/attempt mutators that {@link SqliteTaskAttemptRepository.failTaskAndAttempt}
  * dispatches through inside its shared transaction. The adapter supplies its own
@@ -755,16 +758,7 @@ export class SqliteTaskAttemptRepository {
       throw new Error('SQLiteAdapter is read-only in this process');
     }
     this.exec.run(
-      `UPDATE attempts SET ${setClauses.join(', ')}
-       WHERE id = ?
-         AND (
-           status = 'pending'
-           OR (
-             status IN ('claimed', 'running')
-             AND lease_expires_at IS NOT NULL
-             AND lease_expires_at <= ?
-           )
-         )`,
+      `UPDATE attempts SET ${setClauses.join(', ')} WHERE id = ? AND (${CLAIMABLE_ATTEMPT_WHERE_CLAUSE})`,
       values,
     );
     const claimed = this.exec.getRowsModified() > 0;
