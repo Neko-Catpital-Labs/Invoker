@@ -415,7 +415,13 @@ export function getCiRun(runId) {
 function headlessQueryWorkflowsJson() {
   return execSync(
     `source "${join(REPO_ROOT, 'scripts', 'headless-lib.sh')}" && headless_query query workflows --output json`,
-    { shell: '/bin/bash', encoding: 'utf8', cwd: REPO_ROOT },
+    {
+      shell: '/bin/bash',
+      encoding: 'utf8',
+      cwd: REPO_ROOT,
+      timeout: 90_000,
+      killSignal: 'SIGKILL',
+    },
   );
 }
 
