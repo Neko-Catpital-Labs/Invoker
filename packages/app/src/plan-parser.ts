@@ -295,6 +295,16 @@ function assertNoLegacyRoutingKeys(ownerLabel: string, value: object): void {
   }
 }
 
+export function assertNoDuplicateTaskIds(tasks: { id: string }[]): void {
+  const seenTaskIds = new Set<string>();
+  for (const task of tasks) {
+    if (seenTaskIds.has(task.id)) {
+      throw new PlanParseError(`Duplicate task id "${task.id}". Task ids must be unique within a plan.`);
+    }
+    seenTaskIds.add(task.id);
+  }
+}
+
 /**
  * Parse a YAML string into a validated PlanDefinition.
  * Throws PlanParseError if validation fails.
@@ -370,7 +380,6 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
 
   const topLevelExternalDependencies = parseExternalDependencies(ownerLabel, raw.externalDependencies);
 
-  const seenTaskIds = new Set<string>();
   const tasks = raw.tasks.map((task, index) => {
     if (!task || typeof task !== 'object' || Array.isArray(task)) {
       throw new PlanParseError(`Task at index ${index} must be an object with an "id" field`);
@@ -378,10 +387,7 @@ function parseRawPlan(raw: RawPlan, ownerLabel = 'Plan'): PlanDefinition {
     if (!task.id || typeof task.id !== 'string') {
       throw new PlanParseError(`Task at index ${index} must have an "id" field`);
     }
-    if (seenTaskIds.has(task.id)) {
-      throw new PlanParseError(`Duplicate task id "${task.id}". Task ids must be unique within a plan.`);
-    }
-    seenTaskIds.add(task.id);
+    assertNoDuplicateTaskIds(raw.tasks.slice(0, index + 1) as { id: string }[]);
 
     if (!task.description || typeof task.description !== 'string') {
       throw new PlanParseError(`Task "${task.id}" must have a "description" field`);

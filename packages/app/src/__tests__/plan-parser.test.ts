@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults } from '../plan-parser.js';
+import { parsePlan, parsePlanFile, parsePlanSubmissionBundle, parsePlanSubmissionBundleFile, PlanParseError, detectDefaultBranch, applyPlanDefinitionDefaults, applyConfiguredPlanDefaults, assertNoDuplicateTaskIds } from '../plan-parser.js';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -622,6 +622,15 @@ tasks:
 `;
     expect(() => parsePlan(yaml)).toThrow(PlanParseError);
     expect(() => parsePlan(yaml)).toThrow('Duplicate task id "build"');
+  });
+
+  it('assertNoDuplicateTaskIds throws for a duplicate task id', () => {
+    expect(() => assertNoDuplicateTaskIds([{ id: 'build' }, { id: 'build' }])).toThrow(PlanParseError);
+    expect(() => assertNoDuplicateTaskIds([{ id: 'build' }, { id: 'build' }])).toThrow('Duplicate task id "build"');
+  });
+
+  it('assertNoDuplicateTaskIds does not throw for unique task ids', () => {
+    expect(() => assertNoDuplicateTaskIds([{ id: 'build' }, { id: 'test' }])).not.toThrow();
   });
 
   it('rejects non-object task entries with a parse error', () => {
