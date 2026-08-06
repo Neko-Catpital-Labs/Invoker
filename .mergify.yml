@@ -24,6 +24,14 @@ queue_rules:
     # worker-registry + SSH executor drift). "UI Vitest" runs only @invoker/ui
     # and IS required: it holds the UI component guards, so a UI regression
     # cannot merge even when the diff still type-checks.
+    # required-fast / Merge Gate Concurrency Repro, Launch Dispatch Queue
+    # Repro, Start Running MECE Repros, and Branch Carry Forward guard core
+    # task/workflow state-machine and dispatch behavior, run in parallel with
+    # the checks above (~1 min each), and have been green for 5+ consecutive
+    # master runs — promoted to required at effectively no queue-wait cost.
+    # required-fast / Reset Rulebook Repro was deliberately left non-required:
+    # same core-behavior class, but 6-13 min per run would materially slow
+    # every merge.
     merge_conditions: &required_checks
       - check-success = build-artifacts
       - check-success = quality / Dependency Cruise
@@ -31,6 +39,10 @@ queue_rules:
       - check-success = quality / TypeScript Types
       - check-success = required-fast / Guardrails
       - check-success = required-fast / Submit Workflow Chain
+      - check-success = required-fast / Merge Gate Concurrency Repro
+      - check-success = required-fast / Launch Dispatch Queue Repro
+      - check-success = required-fast / Start Running MECE Repros
+      - check-success = required-fast / Branch Carry Forward
       - check-success = UI Vitest
       - "#review-threads-unresolved = 0"
 
