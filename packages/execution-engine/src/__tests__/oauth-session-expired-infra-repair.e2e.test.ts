@@ -51,6 +51,7 @@ class MemoryPersistence {
   tasks = new Map<string, { workflowId: string; task: TaskState }>();
   attempts = new Map<string, unknown[]>();
   events = new Map<string, TaskEventRecord[]>();
+  actions = new Map<string, WorkerActionRecord>();
 
   saveWorkflow(workflow: WorkflowRecord): void {
     const now = new Date().toISOString();
@@ -115,6 +116,25 @@ class MemoryPersistence {
 
   getEvents(taskId: string): TaskEventRecord[] {
     return this.events.get(taskId) ?? [];
+  }
+
+  getWorkerAction(workerKind: string, externalKey: string): WorkerActionRecord | undefined {
+    return this.actions.get(`${workerKind}:${externalKey}`);
+  }
+
+  upsertWorkerAction(write: WorkerActionWrite): WorkerActionRecord {
+    const key = `${write.workerKind}:${write.externalKey}`;
+    const existing = this.actions.get(key);
+    const now = new Date().toISOString();
+    const saved: WorkerActionRecord = {
+      ...write,
+      id: existing?.id ?? write.id ?? key,
+      attemptCount: write.attemptCount ?? 0,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: write.updatedAt ?? now,
+    };
+    this.actions.set(key, saved);
+    return saved;
   }
 
   saveAttempt(attempt: { nodeId: string }): void {
@@ -240,29 +260,20 @@ describe('oauth-session-expired infra repair with a dummy repo', () => {
     expect(failed?.status).toBe('failed');
     expect(failed?.execution.failureClass).toBe('ssh-oauth-session-expired');
 
-    const actions = new Map<string, WorkerActionRecord>();
     const submit = vi.fn(() => 1);
+    const runRemoteProvisionRepairFn = vi.fn(async () => {
+      throw new Error('unexpected remote provision repair');
+    });
+    const runRepoMirrorRepairFn = vi.fn(async () => {
+      throw new Error('unexpected repo mirror repair');
+    });
     const tick = createInfraRepairTick({
       store: {
         listWorkflows: () => persistence.listWorkflows(),
         loadTasks: (workflowId: string) => persistence.loadTasks(workflowId),
         getEvents: (taskId: string) => persistence.getEvents(taskId) as never,
-        getWorkerAction: (workerKind: string, externalKey: string) =>
-          actions.get(`${workerKind}:${externalKey}`),
-        upsertWorkerAction: (write: WorkerActionWrite) => {
-          const key = `${write.workerKind}:${write.externalKey}`;
-          const existing = actions.get(key);
-          const now = new Date().toISOString();
-          const saved: WorkerActionRecord = {
-            ...write,
-            id: existing?.id ?? write.id ?? key,
-            attemptCount: write.attemptCount ?? 0,
-            createdAt: existing?.createdAt ?? now,
-            updatedAt: write.updatedAt ?? now,
-          };
-          actions.set(key, saved);
-          return saved;
-        },
+        getWorkerAction: (workerKind: string, externalKey: string) => persistence.getWorkerAction(workerKind, externalKey),
+        upsertWorkerAction: (write: WorkerActionWrite) => persistence.upsertWorkerAction(write),
       },
       submitter: { submit },
       logger,
@@ -275,6 +286,8 @@ describe('oauth-session-expired infra repair with a dummy repo', () => {
           sshKeyPath: join(tempRoot, 'key'),
         },
       },
+      runRemoteProvisionRepairFn,
+      runRepoMirrorRepairFn,
     });
 
     await tick({
@@ -285,8 +298,11 @@ describe('oauth-session-expired infra repair with a dummy repo', () => {
     });
 
     expect(submit).not.toHaveBeenCalled();
+    expect(runRemoteProvisionRepairFn).not.toHaveBeenCalled();
+    expect(runRepoMirrorRepairFn).not.toHaveBeenCalled();
 
-    const recorded = [...actions.values()];
+    const recorded = [...persistence.actions.values()];
+    expect(recorded).toHaveLength(2);
     const targetActions = recorded.filter((action) => action.actionType === 'repair-target');
     expect(targetActions).toHaveLength(1);
     expect(targetActions[0]).toEqual(expect.objectContaining({
