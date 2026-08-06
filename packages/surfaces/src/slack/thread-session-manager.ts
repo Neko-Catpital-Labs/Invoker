@@ -151,6 +151,36 @@ export class SessionHandle {
     return this.conversation.getDraftedPlan();
   }
 
+  isTurnInFlight(): boolean {
+    return typeof this.conversation.isTurnInFlight === 'function'
+      ? this.conversation.isTurnInFlight()
+      : false;
+  }
+
+  getTurnStartedAt(): number | null {
+    return typeof this.conversation.getTurnStartedAt === 'function'
+      ? this.conversation.getTurnStartedAt()
+      : null;
+  }
+
+  getQueuedTurnCount(): number {
+    return typeof this.conversation.getQueuedTurnCount === 'function'
+      ? this.conversation.getQueuedTurnCount()
+      : 0;
+  }
+
+  getLastAbortError() {
+    return typeof this.conversation.getLastAbortError === 'function'
+      ? this.conversation.getLastAbortError()
+      : null;
+  }
+
+  abortTurn(reason?: string): boolean {
+    return typeof this.conversation.abortTurn === 'function'
+      ? this.conversation.abortTurn(reason)
+      : false;
+  }
+
   /**
    * Mark the plan as submitted (terminal state).
    */

@@ -211,6 +211,17 @@ export function isNegation(text: string): boolean {
   return NEGATION_PATTERNS.some((re) => re.test(trimmed));
 }
 
+export const STOP_TURN_PATTERNS = [
+  /^stop$/i,
+  /^cancel$/i,
+  /^abort$/i,
+];
+
+export function isStopRequest(text: string): boolean {
+  const trimmed = text.trim().replace(/[.?!]+$/, '');
+  return STOP_TURN_PATTERNS.some((re) => re.test(trimmed));
+}
+
 function isDraftingAuthorizedForPrompt(messages: ConversationMessage[]): boolean {
   const latest = messages[messages.length - 1];
   if (!latest || latest.role !== 'user') return false;
@@ -493,6 +504,8 @@ export class PlanConversation {
   private onHarnessSessionId?: (sessionId: string) => void;
   private activeChild?: ReturnType<typeof spawn>;
   private activeAttemptReject?: (error: Error) => void;
+  private activeTurnStartedAt: number | null = null;
+  private lastAbortError: PlannerAbortedError | null = null;
 
   constructor(config: PlanConversationConfig) {
     this.cursorCommand = config.cursorCommand ?? 'agent';
@@ -578,6 +591,8 @@ export class PlanConversation {
       await new Promise<void>((resolve, reject) => this.turnQueue.push({ resolve, reject }));
     }
     this.turnInFlight = true;
+    this.activeTurnStartedAt = Date.now();
+    this.lastAbortError = null;
     // No `await` here on purpose: chaining via .finally() keeps this call's
     // returned promise settling in lockstep with sendMessageLocked's own
     // promise, with no added microtask tick before the planner subprocess is
@@ -585,6 +600,7 @@ export class PlanConversation {
     // via a single microtask wait stay correct.
     return this.sendMessageLocked(userMessage).finally(() => {
       this.turnInFlight = false;
+      this.activeTurnStartedAt = null;
       this.turnQueue.shift()?.resolve();
     });
   }
@@ -697,10 +713,23 @@ export class PlanConversation {
     return this.turnInFlight;
   }
 
+  getTurnStartedAt(): number | null {
+    return this.activeTurnStartedAt;
+  }
+
+  getQueuedTurnCount(): number {
+    return this.turnQueue.length;
+  }
+
+  getLastAbortError(): PlannerAbortedError | null {
+    return this.lastAbortError;
+  }
+
   abortTurn(reason?: string): boolean {
     if (!this.turnInFlight) return false;
 
     const error = new PlannerAbortedError(reason);
+    this.lastAbortError = error;
     this.terminateActiveChild();
     this.rejectActiveAttempt(error);
 

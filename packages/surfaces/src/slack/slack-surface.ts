@@ -34,10 +34,12 @@ import {
   DEFAULT_PLANNER_RETRY_BASE_DELAY_MS,
   DEFAULT_PLANNER_RETRY_LIMIT,
   PlanConversation,
+  PlannerAbortedError,
   buildEmptyPlannerOutputError,
   defaultPlanningCommand,
   isConfirmation,
   isNegation,
+  isStopRequest,
 } from './plan-conversation.js';
 import type { ConversationMode, PlanIntentSignal, PlanningCommandBuilder } from './plan-conversation.js';
 import { parseLobbyControl } from './lobby-control.js';
@@ -448,6 +450,11 @@ interface ConversationLike {
   sendMessage(message: string): Promise<string>;
   runPlanConversion(): Promise<string>;
   getDraftedPlan(): string | null;
+  isTurnInFlight(): boolean;
+  getTurnStartedAt(): number | null;
+  getQueuedTurnCount(): number;
+  getLastAbortError(): PlannerAbortedError | null;
+  abortTurn(reason?: string): boolean;
   readonly history: readonly { role: 'user' | 'assistant'; content: string }[];
   readonly lastTurnDraftPlanText: string | null;
   readonly lastTurnPlanIntentSignal: PlanIntentSignal | null;
@@ -536,6 +543,7 @@ export class SlackSurface implements Surface {
   private planningContexts = new Map<string, PlanningContext>();
   /** Maps thread_ts → an action awaiting yes/no (or button) confirmation. */
   private pendingConfirms = new Map<string, PendingConfirm>();
+  private handledPlannerAbortErrors = new WeakSet<PlannerAbortedError>();
   private defaultPlanningConfirmationMode: PlanningConfirmationMode;
 
   // ── Slack-native workflow extensions ──────────────────────
@@ -842,6 +850,37 @@ export class SlackSurface implements Surface {
       });
     });
 
+    this.app.action(/^stop_turn:/, async ({ action, body, ack, respond }) => {
+      await ack();
+      if (action.type !== 'button') return;
+      const context = this.draftActionContext(body);
+      const threadTs = context.threadTs ?? action.action_id.slice('stop_turn:'.length);
+      if (!context.channel || !threadTs) {
+        await respond?.({ text: 'Could not determine which thread to stop.', response_type: 'ephemeral' });
+        return;
+      }
+      const conversation = await this.getSession(context.channel, threadTs, context.userId ?? 'unknown', false);
+      if (!conversation) {
+        await respond?.({ text: 'There is nothing to stop.', response_type: 'ephemeral' });
+        return;
+      }
+      const stopped = await this.stopInFlightConversationTurn(
+        conversation,
+        context.channel,
+        threadTs,
+        async (noticeText) => {
+          await this.app.client.chat.postMessage({
+            channel: context.channel!,
+            text: noticeText,
+            thread_ts: threadTs,
+          });
+        },
+      );
+      if (!stopped) {
+        await respond?.({ text: 'There is nothing to stop.', response_type: 'ephemeral' });
+      }
+    });
+
     this.app.action('plan_draft_approve', async ({ action, body, ack, respond }) => {
       await ack();
       if (action.type !== 'button' || !action.value) return;
@@ -1089,6 +1128,18 @@ export class SlackSurface implements Surface {
     }
 
     const requestText = localRequest?.kind === 'agent' || localRequest?.kind === 'change' ? localRequest.text : parsed.text;
+    const existingConversation = await this.getSession(channel, threadTs, event.user ?? 'unknown', false);
+    if (existingConversation && this.supportsTurnStop(existingConversation) && existingConversation.isTurnInFlight() && isStopRequest(requestText)) {
+      await this.stopInFlightConversationTurn(
+        existingConversation,
+        channel,
+        threadTs,
+        async (noticeText) => {
+          await this.sayWithRateLimitRetry(say, { text: noticeText, thread_ts: threadTs });
+        },
+      );
+      return;
+    }
 
     if (this.enableImmediateAck) {
       await this.sendImmediateAck(threadTs, say);
@@ -1736,6 +1787,51 @@ export class SlackSurface implements Surface {
       text: 'I can plan here, but restart/submit/workflow controls only work in the lobby channel or DMs.',
       thread_ts: threadTs,
     });
+  }
+
+  private buildStoppedNotice(startedAt: number | null, droppedQueuedMessages: number): string {
+    const elapsedSeconds = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1_000)) : 0;
+    return `Stopped the in-flight planning turn after ${elapsedSeconds}s. Dropped ${droppedQueuedMessages} queued message(s). Work the agent already executed was not rolled back.`;
+  }
+
+  private supportsTurnStop(conversation: ConversationLike): conversation is ConversationLike & {
+    isTurnInFlight: () => boolean;
+    getTurnStartedAt: () => number | null;
+    getQueuedTurnCount: () => number;
+    getLastAbortError: () => PlannerAbortedError | null;
+    abortTurn: (reason?: string) => boolean;
+  } {
+    const candidate = conversation as Partial<ConversationLike>;
+    return typeof candidate.isTurnInFlight === 'function'
+      && typeof candidate.getTurnStartedAt === 'function'
+      && typeof candidate.getQueuedTurnCount === 'function'
+      && typeof candidate.getLastAbortError === 'function'
+      && typeof candidate.abortTurn === 'function';
+  }
+
+  private async stopInFlightConversationTurn(
+    conversation: ConversationLike,
+    channel: string,
+    threadTs: string,
+    postNotice: (noticeText: string) => Promise<void>,
+  ): Promise<boolean> {
+    if (!this.supportsTurnStop(conversation)) return false;
+    if (!conversation.isTurnInFlight()) return false;
+
+    const startedAt = conversation.getTurnStartedAt();
+    const droppedQueuedMessages = conversation.getQueuedTurnCount();
+    const stopped = conversation.abortTurn('user requested stop from Slack');
+    if (!stopped) return false;
+
+    const abortError = conversation.getLastAbortError();
+    const noticeText = this.buildStoppedNotice(startedAt, droppedQueuedMessages);
+    if (abortError) this.handledPlannerAbortErrors.add(abortError);
+    try {
+      await postNotice(noticeText);
+    } catch (err) {
+      this.log('slack', 'error', `[STOP_TURN] Failed to post stop notice (channel=${channel}, thread_ts=${threadTs}): ${err}`);
+    }
+    return true;
   }
 
   /** Resolve a staged action from a plain-text reply. Returns true if the reply was consumed. */
@@ -2671,6 +2767,27 @@ ${text}`;
           const result = await this.sayWithRateLimitRetry(say, {
             text: ':hourglass_flowing_sand: Still thinking...',
             thread_ts: threadTs,
+            blocks: [
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: ':hourglass_flowing_sand: Still thinking...',
+                },
+              },
+              {
+                type: 'actions',
+                elements: [
+                  {
+                    type: 'button',
+                    text: { type: 'plain_text', text: 'Stop' },
+                    style: 'danger',
+                    action_id: `stop_turn:${threadTs}`,
+                    value: threadTs,
+                  },
+                ],
+              },
+            ],
           });
           if (result?.ts) heartbeatTimestamps.push(result.ts);
           this.log('slack', 'info', `[HEARTBEAT] Sent planning heartbeat (thread_ts=${threadTs})`);
@@ -2682,6 +2799,7 @@ ${text}`;
       }, heartbeatMs);
     }
 
+    const turnStartedAt = Date.now();
     try {
       const reply = await conversation.sendMessage(text);
       const tCursor = Date.now();
@@ -2775,6 +2893,17 @@ ${text}`;
 
       const tErr = Date.now();
       this.log('slack', 'error', `[SESSION_ERROR] Plan conversation error (thread_ts=${threadTs}, elapsed=${tErr - tEntry}ms): ${err}`);
+      if (err instanceof PlannerAbortedError) {
+        if (!this.handledPlannerAbortErrors.has(err)) {
+          this.handledPlannerAbortErrors.add(err);
+          await this.sayWithRateLimitRetry(say, {
+            text: this.buildStoppedNotice(turnStartedAt, 0),
+            thread_ts: threadTs,
+          });
+        }
+        await cleanupHeartbeats();
+        return;
+      }
       if (this.isCursorCliMissingError(err)) {
         this.log(
           'slack',
