@@ -10,29 +10,18 @@
 # For every plan after the first, include "__UPSTREAM_WORKFLOW_ID__" where the
 # previous workflow ID should be injected.
 #
-# Example snippet in each template:
+# Example snippet in each template (matches skills/plan-to-invoker):
 #   externalDependencies:
 #     - workflowId: "__UPSTREAM_WORKFLOW_ID__"
+#       taskId: "__merge__"
 #       requiredStatus: completed
-#       gatePolicy: completed
+#       gatePolicy: review_ready
+#
+# A gatePolicy already present in the template is preserved unless
+# --gate-policy is passed explicitly; missing dependency fields are injected
+# (gatePolicy defaults to completed).
 #
 set -euo pipefail
-
-GATE_POLICY="completed"
-if [[ "${1:-}" == "--gate-policy" ]]; then
-  GATE_POLICY="${2:-}"
-  shift 2
-fi
-
-if [[ "$GATE_POLICY" != "completed" && "$GATE_POLICY" != "review_ready" ]]; then
-  echo "Invalid --gate-policy '$GATE_POLICY' (expected completed|review_ready)" >&2
-  exit 1
-fi
-
-if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 [--gate-policy completed|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
-  exit 1
-fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if ! command -v jq >/dev/null 2>&1; then
@@ -120,6 +109,7 @@ validate_upstream_dependency_fields() {
       dep_taskId=""
       dep_requiredStatus=""
       dep_gatePolicy=""
+      dep_gp_count=0
       found_upstream=0
       invalid_upstream=0
     }
@@ -145,6 +135,7 @@ validate_upstream_dependency_fields() {
         dep_taskId=""
         dep_requiredStatus=""
         dep_gatePolicy=""
+        dep_gp_count=0
         split(line, parts, "workflowId:")
         dep_is_upstream=(normalize(parts[2]) == upid)
         next
@@ -160,6 +151,8 @@ validate_upstream_dependency_fields() {
         next
       }
       if (in_ext && in_dep && dep_is_upstream && line ~ /^[[:space:]]*gatePolicy:[[:space:]]*/) {
+        dep_gp_count++
+        if (dep_gp_count > 1) invalid_upstream=1
         split(line, parts, "gatePolicy:")
         dep_gatePolicy=parts[2]
         next
@@ -239,6 +232,196 @@ wait_for_external_merge_gate() {
   return 1
 }
 
+# Extract the gatePolicy value the template itself provides for the upstream
+# dependency block (empty when the template has none).
+extract_upstream_gate_policy() {
+  local file="$1"
+  local upstream_id="$2"
+  awk -v upid="$upstream_id" '
+    function normalize(v) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+      gsub(/^"|"$/, "", v)
+      return v
+    }
+    BEGIN {
+      in_ext=0
+      dep_is_upstream=0
+    }
+    {
+      line=$0
+      if (line ~ /^[^[:space:]]/ && line !~ /^externalDependencies:[[:space:]]*$/) {
+        in_ext=0
+        dep_is_upstream=0
+        next
+      }
+      if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
+        in_ext=1
+        dep_is_upstream=0
+        next
+      }
+      if (in_ext && line ~ /^[[:space:]]*-[[:space:]]*workflowId:[[:space:]]*/) {
+        split(line, parts, "workflowId:")
+        dep_is_upstream=(normalize(parts[2]) == upid)
+        next
+      }
+      if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*gatePolicy:[[:space:]]*/) {
+        split(line, parts, "gatePolicy:")
+        print normalize(parts[2])
+        exit
+      }
+    }
+  ' "$file"
+}
+
+# Render one chain-step template: substitute the upstream workflow id, enforce
+# merge-gate dependency fields, validate them, and rewrite baseBranch to the
+# upstream feature branch. A gatePolicy already present in the template is
+# preserved unless --gate-policy was passed explicitly; missing fields are
+# injected (gatePolicy falls back to GATE_POLICY).
+render_chain_step_template() {
+  local template="$1"
+  local upstream_id="$2"
+  local upstream_feature_branch="$3"
+  local out="$4"
+
+  sed "s/__UPSTREAM_WORKFLOW_ID__/$upstream_id/g" "$template" > "$out"
+  if ! matches_pattern "$upstream_id" "$out"; then
+    echo "Rendered plan did not include upstream id '$upstream_id': $out" >&2
+    return 1
+  fi
+
+  local expected_gate="$GATE_POLICY"
+  if [[ "$GATE_POLICY_EXPLICIT" -ne 1 ]]; then
+    local template_gate
+    template_gate="$(extract_upstream_gate_policy "$out" "$upstream_id")"
+    if [[ -n "$template_gate" ]]; then
+      if [[ "$template_gate" != "completed" && "$template_gate" != "review_ready" ]]; then
+        echo "Template gatePolicy '$template_gate' is invalid (expected completed|review_ready): $template" >&2
+        return 1
+      fi
+      expected_gate="$template_gate"
+    fi
+  fi
+
+  # Enforce merge-gate dependency and policy for the upstream workflow entry.
+  awk -v upid="$upstream_id" -v gate_policy="$GATE_POLICY" -v gate_explicit="$GATE_POLICY_EXPLICIT" '
+    BEGIN {
+      in_ext=0
+      dep_is_upstream=0
+      dep_had_taskid=0
+      dep_had_required=0
+      dep_had_gatepolicy=0
+      dep_indent=""
+    }
+    function flush_dep() {
+      if (!in_ext || !dep_is_upstream) return
+      if (!dep_had_taskid) print dep_indent "  taskId: \"__merge__\""
+      if (!dep_had_required) print dep_indent "  requiredStatus: completed"
+      if (!dep_had_gatepolicy) print dep_indent "  gatePolicy: " gate_policy
+    }
+    {
+      line=$0
+      if (line ~ /^[^[:space:]]/ && line !~ /^externalDependencies:[[:space:]]*$/) {
+        flush_dep()
+        in_ext=0
+        dep_is_upstream=0
+        dep_had_taskid=0
+        dep_had_required=0
+        dep_had_gatepolicy=0
+        dep_indent=""
+        print line
+        next
+      }
+      if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
+        flush_dep()
+        in_ext=1
+        dep_is_upstream=0
+        dep_had_taskid=0
+        dep_had_required=0
+        dep_had_gatepolicy=0
+        dep_indent=""
+        print line
+        next
+      }
+      if (in_ext && line ~ /^[[:space:]]*-[[:space:]]*workflowId:[[:space:]]*/) {
+        flush_dep()
+        dep_indent=substr(line, 1, index(line, "-")-1)
+        dep_is_upstream=(line ~ ("workflowId:[[:space:]]*\"" upid "\"([[:space:]]|$)"))
+        dep_had_taskid=0
+        dep_had_required=0
+        dep_had_gatepolicy=0
+        print line
+        next
+      }
+      if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*taskId:[[:space:]]*/) {
+        print dep_indent "  taskId: \"__merge__\""
+        dep_had_taskid=1
+        next
+      }
+      if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*requiredStatus:[[:space:]]*/) {
+        print dep_indent "  requiredStatus: completed"
+        dep_had_required=1
+        next
+      }
+      if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*gatePolicy:[[:space:]]*/) {
+        if (gate_explicit == 1) {
+          print dep_indent "  gatePolicy: " gate_policy
+        } else {
+          print line
+        }
+        dep_had_gatepolicy=1
+        next
+      }
+      print line
+    }
+    END {
+      flush_dep()
+    }
+  ' "$out" > "${out}.tmp"
+  mv "${out}.tmp" "$out"
+
+  if ! matches_pattern "workflowId:[[:space:]]*\"${upstream_id}\"([[:space:]]|$)" "$out"; then
+    echo "Rendered plan missing upstream workflow dependency '${upstream_id}': $out" >&2
+    return 1
+  fi
+  if ! validate_upstream_dependency_fields "$out" "$upstream_id" "$expected_gate"; then
+    echo "Rendered plan did not enforce strict upstream merge dependency fields for '${upstream_id}' (taskId=__merge__, requiredStatus=completed, gatePolicy=${expected_gate}, no duplicates): $out" >&2
+    return 1
+  fi
+
+  # Avoid sed -i (BSD vs GNU differs); write via temp file.
+  sed -E "s|^baseBranch:.*$|baseBranch: ${upstream_feature_branch}|" "$out" > "${out}.tmp"
+  mv "${out}.tmp" "$out"
+  if ! matches_pattern "^baseBranch:[[:space:]]*${upstream_feature_branch}$" "$out"; then
+    echo "Rendered plan baseBranch did not update to upstream feature branch '${upstream_feature_branch}': $out" >&2
+    return 1
+  fi
+}
+
+# When sourced (e.g. by render tests), expose the functions above without
+# running the submission flow below.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
+GATE_POLICY="completed"
+GATE_POLICY_EXPLICIT=0
+if [[ "${1:-}" == "--gate-policy" ]]; then
+  GATE_POLICY="${2:-}"
+  GATE_POLICY_EXPLICIT=1
+  shift 2
+fi
+
+if [[ "$GATE_POLICY" != "completed" && "$GATE_POLICY" != "review_ready" ]]; then
+  echo "Invalid --gate-policy '$GATE_POLICY' (expected completed|review_ready)" >&2
+  exit 1
+fi
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 [--gate-policy completed|review_ready] <workflow1.yaml> <workflow2.template.yaml> [workflow3.template.yaml ...]" >&2
+  exit 1
+fi
+
 cd "$REPO_ROOT"
 
 declare -a INPUT_PLANS=()
@@ -293,92 +476,7 @@ for i in "${!INPUT_PLANS[@]}"; do
     _chain_tmp="$(mktemp "${TMPDIR:-/tmp}/invoker-chain-step$((i+1)).XXXXXX")"
     submit_plan="${_chain_tmp}.yaml"
     rm -f "$_chain_tmp"
-    sed "s/__UPSTREAM_WORKFLOW_ID__/$prev_wf_id/g" "$plan" > "$submit_plan"
-    if ! matches_pattern "$prev_wf_id" "$submit_plan"; then
-      echo "Rendered plan did not include upstream id '$prev_wf_id': $submit_plan" >&2
-      exit 1
-    fi
-
-    # Enforce merge-gate dependency and policy for the upstream workflow entry.
-    awk -v upid="$prev_wf_id" -v gate_policy="$GATE_POLICY" '
-      BEGIN {
-        in_ext=0
-        dep_is_upstream=0
-        dep_had_taskid=0
-        dep_had_required=0
-        dep_indent=""
-      }
-      function flush_dep() {
-        if (!in_ext || !dep_is_upstream) return
-        if (!dep_had_taskid) print dep_indent "  taskId: \"__merge__\""
-        if (!dep_had_required) print dep_indent "  requiredStatus: completed"
-      }
-      {
-        line=$0
-        if (line ~ /^[^[:space:]]/ && line !~ /^externalDependencies:[[:space:]]*$/) {
-          flush_dep()
-          in_ext=0
-          dep_is_upstream=0
-          dep_had_taskid=0
-          dep_had_required=0
-          dep_indent=""
-          print line
-          next
-        }
-        if (line ~ /^[[:space:]]*externalDependencies:[[:space:]]*$/) {
-          flush_dep()
-          in_ext=1
-          dep_is_upstream=0
-          dep_had_taskid=0
-          dep_had_required=0
-          dep_indent=""
-          print line
-          next
-        }
-        if (in_ext && line ~ /^[[:space:]]*-[[:space:]]*workflowId:[[:space:]]*/) {
-          flush_dep()
-          dep_indent=substr(line, 1, index(line, "-")-1)
-          dep_is_upstream=(line ~ ("workflowId:[[:space:]]*\"" upid "\"([[:space:]]|$)"))
-          dep_had_taskid=0
-          dep_had_required=0
-          print line
-          next
-        }
-        if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*taskId:[[:space:]]*/) {
-          print dep_indent "  taskId: \"__merge__\""
-          dep_had_taskid=1
-          next
-        }
-        if (in_ext && dep_is_upstream && line ~ /^[[:space:]]*requiredStatus:[[:space:]]*/) {
-          print dep_indent "  requiredStatus: completed"
-          print dep_indent "  gatePolicy: " gate_policy
-          dep_had_required=1
-          next
-        }
-        print line
-      }
-      END {
-        flush_dep()
-      }
-    ' "$submit_plan" > "${submit_plan}.tmp"
-    mv "${submit_plan}.tmp" "$submit_plan"
-
-    if ! matches_pattern "workflowId:[[:space:]]*\"${prev_wf_id}\"([[:space:]]|$)" "$submit_plan"; then
-      echo "Rendered plan missing upstream workflow dependency '${prev_wf_id}': $submit_plan" >&2
-      exit 1
-    fi
-    if ! validate_upstream_dependency_fields "$submit_plan" "$prev_wf_id" "$GATE_POLICY"; then
-      echo "Rendered plan did not enforce strict upstream merge dependency fields for '${prev_wf_id}' (taskId=__merge__, requiredStatus=completed, gatePolicy=${GATE_POLICY}): $submit_plan" >&2
-      exit 1
-    fi
-
-    # Avoid sed -i (BSD vs GNU differs); write via temp file.
-    sed -E "s|^baseBranch:.*$|baseBranch: ${prev_wf_feature_branch}|" "$submit_plan" > "${submit_plan}.tmp"
-    mv "${submit_plan}.tmp" "$submit_plan"
-    if ! matches_pattern "^baseBranch:[[:space:]]*${prev_wf_feature_branch}$" "$submit_plan"; then
-      echo "Rendered plan baseBranch did not update to upstream feature branch '${prev_wf_feature_branch}': $submit_plan" >&2
-      exit 1
-    fi
+    render_chain_step_template "$plan" "$prev_wf_id" "$prev_wf_feature_branch" "$submit_plan"
     RENDERED_PLANS+=("$submit_plan")
   fi
 
