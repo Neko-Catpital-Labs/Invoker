@@ -213,6 +213,8 @@ describe('cleanupLocalInvokerHome', () => {
 
     expect(result.ok).toBe(true);
     expect(result.reason).toBe('critical-cleanup');
+    expect(result.protectedSkipCount).toBe(0);
+    expect(result.protectedSkipBytes).toBe(0);
     for (const name of DISK_RECLAIMABLE_DIRS) {
       expect(existsSync(join(home, name))).toBe(true);
       expect(readdirSync(join(home, name))).toEqual([]);
@@ -252,6 +254,8 @@ describe('cleanupLocalInvokerHome', () => {
 
     expect(result.ok).toBe(true);
     expect(result.reason).toBe('protected-path-in-use');
+    expect(result.protectedSkipCount).toBe(1);
+    expect(result.protectedSkipBytes).toBeGreaterThan(0);
     expect(existsSync(activeDir)).toBe(true);
     expect(existsSync(join(activeDir, 'file.txt'))).toBe(true);
     expect(readdirSync(join(home, 'worktrees'))).toEqual(['active-task']);
@@ -279,6 +283,8 @@ describe('cleanupLocalInvokerHome', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('path-guard');
+    expect(result.protectedSkipCount).toBe(0);
+    expect(result.protectedSkipBytes).toBe(0);
   });
 });
 
@@ -347,6 +353,8 @@ describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
 
     expect(result.ok).toBe(true);
     expect(result.reason).toBe('protected-path-in-use');
+    expect(result.protectedSkipCount).toBe(1);
+    expect(result.protectedSkipBytes).toBeGreaterThan(0);
     expect(existsSync(activeDir)).toBe(true);
     expect(existsSync(join(activeDir, 'file.txt'))).toBe(true);
     expect(existsSync(staleDir)).toBe(false);
@@ -423,6 +431,36 @@ describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
 
     expect(result.ok).toBe(true);
     expect(result.reason).toBe('critical-cleanup');
+    expect(result.protectedSkipCount).toBe(0);
+    expect(result.protectedSkipBytes).toBe(0);
     expect(existsSync(someDir)).toBe(false);
+  });
+
+  it('restores process.noAsar when the local pass returns cleanup errors', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-noasar-error-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const userHome = root;
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, 'worktrees'), 'not-a-directory');
+
+    const processWithNoAsar = process as NodeJS.Process & { noAsar?: boolean };
+    const hadNoAsar = Object.prototype.hasOwnProperty.call(processWithNoAsar, 'noAsar');
+    const previousNoAsar = processWithNoAsar.noAsar;
+    processWithNoAsar.noAsar = false;
+
+    try {
+      const result = await cleanupLocalInvokerHome({ invokerHome: home, userHome });
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toBe('cleanup-error');
+      expect(processWithNoAsar.noAsar).toBe(false);
+    } finally {
+      if (hadNoAsar) {
+        processWithNoAsar.noAsar = previousNoAsar;
+      } else {
+        delete processWithNoAsar.noAsar;
+      }
+    }
   });
 });

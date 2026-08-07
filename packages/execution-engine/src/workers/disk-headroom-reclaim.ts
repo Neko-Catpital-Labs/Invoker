@@ -67,6 +67,9 @@ export interface DiskCleanupResult {
   ok: boolean;
   reason: string;
   detail?: string;
+  protectedSkipCount: number;
+  protectedSkipBytes: number;
+  protectedSkipBytesTruncated?: boolean;
 }
 
 export type LocalDiskCleanupMode = 'critical' | 'stale-only';
@@ -231,7 +234,22 @@ exit 0
 
 const LOCAL_RM_MAX_RETRIES = 5;
 const LOCAL_RM_RETRY_DELAY_MS = 100;
+const PROTECTED_SKIP_BYTE_WALK_ENTRY_CAP = 10_000;
 const execFileAsync = promisify(execFile);
+
+type ProcessWithNoAsar = NodeJS.Process & { noAsar?: boolean };
+
+interface ProtectedSkipAccounting {
+  paths: string[];
+  count: number;
+  bytes: number;
+  truncated: boolean;
+}
+
+interface ApproximateTreeBytesResult {
+  bytes: number;
+  truncated: boolean;
+}
 
 /**
  * Read-only accessor for Invoker's own workflow/task state, used to derive
@@ -282,21 +300,66 @@ function pathIsProtected(candidate: string, protectedPaths: ReadonlySet<string>)
   return false;
 }
 
+function approximateTreeBytes(path: string, capEntries: number): ApproximateTreeBytesResult {
+  const stack = [path];
+  let visited = 0;
+  let bytes = 0;
+  let truncated = false;
+
+  while (stack.length > 0) {
+    if (visited >= capEntries) {
+      truncated = true;
+      break;
+    }
+
+    const current = stack.pop()!;
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      truncated = true;
+      continue;
+    }
+    visited += 1;
+    bytes += stat.size;
+
+    if (!stat.isDirectory()) continue;
+    let children: string[];
+    try {
+      children = readdirSync(current);
+    } catch {
+      truncated = true;
+      continue;
+    }
+    for (const child of children) {
+      stack.push(join(current, child));
+    }
+  }
+
+  return { bytes, truncated };
+}
+
 async function removeLocalDir(
   path: string,
   errors: string[],
-  protectedSkips: string[],
+  protectedSkips: ProtectedSkipAccounting,
   protectedPaths: ReadonlySet<string>,
   logger?: Logger,
   targetKey?: string,
 ): Promise<void> {
   if (!existsSync(path)) return;
   if (pathIsProtected(path, protectedPaths)) {
-    protectedSkips.push(path);
+    const approximateBytes = approximateTreeBytes(path, PROTECTED_SKIP_BYTE_WALK_ENTRY_CAP);
+    protectedSkips.paths.push(path);
+    protectedSkips.count += 1;
+    protectedSkips.bytes += approximateBytes.bytes;
+    protectedSkips.truncated ||= approximateBytes.truncated;
     logger?.warn?.(`[disk-headroom-cleanup] skip ${path}: protected-path-in-use`, {
       module: 'disk-headroom',
       targetKey,
       path,
+      protectedSkipBytes: approximateBytes.bytes,
+      protectedSkipBytesTruncated: approximateBytes.truncated,
     });
     return;
   }
@@ -342,10 +405,35 @@ function ensureLocalDir(path: string, errors: string[]): void {
   }
 }
 
+function logLocalCleanupDone(opts: {
+  logger?: Logger;
+  mode: LocalDiskCleanupMode;
+  home: string;
+  targetKey: string;
+  ok: boolean;
+  reason: string;
+  protectedSkips: ProtectedSkipAccounting;
+}): void {
+  const stalePrefix = opts.mode === 'stale-only' ? 'stale-only ' : '';
+  const truncated = opts.protectedSkips.truncated
+    ? ' protectedSkipBytesTruncated=true'
+    : '';
+  opts.logger?.info?.(
+    `[disk-headroom-cleanup] local ${stalePrefix}done home=${opts.home} ok=${opts.ok ? 'true' : 'false'} reason=${opts.reason} protectedSkipCount=${opts.protectedSkips.count} protectedSkipBytes=${opts.protectedSkips.bytes}${truncated}`,
+    {
+      module: 'disk-headroom',
+      targetKey: opts.targetKey,
+      protectedSkipCount: opts.protectedSkips.count,
+      protectedSkipBytes: opts.protectedSkips.bytes,
+      protectedSkipBytesTruncated: opts.protectedSkips.truncated,
+    },
+  );
+}
+
 async function sweepLocalDeletingOrphans(
   home: string,
   errors: string[],
-  protectedSkips: string[],
+  protectedSkips: ProtectedSkipAccounting,
   protectedPaths: ReadonlySet<string>,
   logger?: Logger,
   targetKey?: string,
@@ -371,7 +459,7 @@ async function sweepLocalDeletingOrphans(
 async function sweepReclaimableChildren(
   dirPath: string,
   errors: string[],
-  protectedSkips: string[],
+  protectedSkips: ProtectedSkipAccounting,
   protectedPaths: ReadonlySet<string>,
   logger?: Logger,
   targetKey?: string,
@@ -393,7 +481,7 @@ async function sweepStaleReclaimableChildren(
   dirPath: string,
   minAgeMinutes: number,
   errors: string[],
-  protectedSkips: string[],
+  protectedSkips: ProtectedSkipAccounting,
   protectedPaths: ReadonlySet<string>,
   logger?: Logger,
   targetKey?: string,
@@ -428,76 +516,138 @@ export async function cleanupLocalInvokerHome(
   const home = expandTildeHome(opts.invokerHome, userHome);
   const mode = opts.mode ?? 'critical';
   if (!isSafeInvokerHome(home, userHome)) {
-    return { targetKey, ok: false, reason: 'path-guard', detail: home };
-  }
-
-  opts.logger?.info?.(`[disk-headroom-cleanup] local ${mode === 'stale-only' ? 'stale-only ' : ''}begin home=${home}`, {
-    module: 'disk-headroom',
-    targetKey,
-  });
-
-  const protectedPaths = opts.store ? computeProtectedLocalPaths(opts.store) : new Set<string>();
-  const errors: string[] = [];
-  const protectedSkips: string[] = [];
-  if (mode === 'stale-only') {
-    const minAgeMinutes = Math.max(
-      opts.minAgeMinutes ?? TMP_SCRATCH_MIN_AGE_MINUTES,
-      TMP_SCRATCH_MIN_AGE_MINUTES,
-    );
-    for (const name of DISK_RECLAIMABLE_DIRS) {
-      await sweepStaleReclaimableChildren(
-        join(home, name),
-        minAgeMinutes,
-        errors,
-        protectedSkips,
-        protectedPaths,
-        opts.logger,
-        targetKey,
-      );
-    }
-  } else {
-    await sweepLocalDeletingOrphans(home, errors, protectedSkips, protectedPaths, opts.logger, targetKey);
-    for (const name of DISK_RECLAIMABLE_DIRS) {
-      await sweepReclaimableChildren(join(home, name), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
-    }
-    for (const name of DISK_RECLAIMABLE_DIRS) {
-      ensureLocalDir(join(home, name), errors);
-    }
-  }
-
-  if (errors.length > 0) {
-    opts.logger?.warn?.(`[disk-headroom-cleanup] local partial failures`, {
-      module: 'disk-headroom',
-      targetKey,
-      errors,
-    });
     return {
       targetKey,
       ok: false,
-      reason: 'cleanup-error',
-      detail: errors.slice(0, 5).join('; '),
+      reason: 'path-guard',
+      detail: home,
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
     };
   }
 
-  if (protectedSkips.length > 0) {
-    opts.logger?.warn?.(`[disk-headroom-cleanup] local skipped in-use paths`, {
+  const processWithNoAsar = process as ProcessWithNoAsar;
+  const hadNoAsar = Object.prototype.hasOwnProperty.call(processWithNoAsar, 'noAsar');
+  const previousNoAsar = processWithNoAsar.noAsar;
+  processWithNoAsar.noAsar = true;
+
+  try {
+    opts.logger?.info?.(`[disk-headroom-cleanup] local ${mode === 'stale-only' ? 'stale-only ' : ''}begin home=${home}`, {
       module: 'disk-headroom',
       targetKey,
+    });
+
+    const protectedPaths = opts.store ? computeProtectedLocalPaths(opts.store) : new Set<string>();
+    const errors: string[] = [];
+    const protectedSkips: ProtectedSkipAccounting = {
+      paths: [],
+      count: 0,
+      bytes: 0,
+      truncated: false,
+    };
+    if (mode === 'stale-only') {
+      const minAgeMinutes = Math.max(
+        opts.minAgeMinutes ?? TMP_SCRATCH_MIN_AGE_MINUTES,
+        TMP_SCRATCH_MIN_AGE_MINUTES,
+      );
+      for (const name of DISK_RECLAIMABLE_DIRS) {
+        await sweepStaleReclaimableChildren(
+          join(home, name),
+          minAgeMinutes,
+          errors,
+          protectedSkips,
+          protectedPaths,
+          opts.logger,
+          targetKey,
+        );
+      }
+    } else {
+      await sweepLocalDeletingOrphans(home, errors, protectedSkips, protectedPaths, opts.logger, targetKey);
+      for (const name of DISK_RECLAIMABLE_DIRS) {
+        await sweepReclaimableChildren(join(home, name), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
+      }
+      for (const name of DISK_RECLAIMABLE_DIRS) {
+        ensureLocalDir(join(home, name), errors);
+      }
+    }
+
+    const resultBase = {
+      targetKey,
+      protectedSkipCount: protectedSkips.count,
+      protectedSkipBytes: protectedSkips.bytes,
+      ...(protectedSkips.truncated ? { protectedSkipBytesTruncated: true } : {}),
+    };
+
+    if (errors.length > 0) {
+      opts.logger?.warn?.(`[disk-headroom-cleanup] local partial failures`, {
+        module: 'disk-headroom',
+        targetKey,
+        errors,
+      });
+      logLocalCleanupDone({
+        logger: opts.logger,
+        mode,
+        home,
+        targetKey,
+        ok: false,
+        reason: 'cleanup-error',
+        protectedSkips,
+      });
+      return {
+        ...resultBase,
+        ok: false,
+        reason: 'cleanup-error',
+        detail: errors.slice(0, 5).join('; '),
+      };
+    }
+
+    if (protectedSkips.count > 0) {
+      opts.logger?.warn?.(`[disk-headroom-cleanup] local skipped in-use paths`, {
+        module: 'disk-headroom',
+        targetKey,
+        protectedSkips: protectedSkips.paths,
+        protectedSkipCount: protectedSkips.count,
+        protectedSkipBytes: protectedSkips.bytes,
+        protectedSkipBytesTruncated: protectedSkips.truncated,
+      });
+      logLocalCleanupDone({
+        logger: opts.logger,
+        mode,
+        home,
+        targetKey,
+        ok: true,
+        reason: mode === 'stale-only' ? 'warn-paced' : 'protected-path-in-use',
+        protectedSkips,
+      });
+      return {
+        ...resultBase,
+        ok: true,
+        reason: mode === 'stale-only' ? 'warn-paced' : 'protected-path-in-use',
+        detail: protectedSkips.paths.slice(0, 5).join('; '),
+      };
+    }
+
+    logLocalCleanupDone({
+      logger: opts.logger,
+      mode,
+      home,
+      targetKey,
+      ok: true,
+      reason: mode === 'stale-only' ? 'warn-paced' : 'critical-cleanup',
       protectedSkips,
     });
     return {
-      targetKey,
+      ...resultBase,
       ok: true,
-      reason: mode === 'stale-only' ? 'warn-paced' : 'protected-path-in-use',
-      detail: protectedSkips.slice(0, 5).join('; '),
+      reason: mode === 'stale-only' ? 'warn-paced' : 'critical-cleanup',
     };
+  } finally {
+    if (hadNoAsar) {
+      processWithNoAsar.noAsar = previousNoAsar;
+    } else {
+      delete processWithNoAsar.noAsar;
+    }
   }
-
-  opts.logger?.info?.(`[disk-headroom-cleanup] local ${mode === 'stale-only' ? 'stale-only ' : ''}done home=${home}`, {
-    module: 'disk-headroom',
-    targetKey,
-  });
-  return { targetKey, ok: true, reason: mode === 'stale-only' ? 'warn-paced' : 'critical-cleanup' };
 }
 
 export async function cleanupRemoteInvokerHome(opts: {
@@ -512,6 +662,8 @@ export async function cleanupRemoteInvokerHome(opts: {
       ok: false,
       reason: 'path-guard',
       detail: opts.target.remotePath,
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
     };
   }
 
@@ -528,14 +680,28 @@ export async function cleanupRemoteInvokerHome(opts: {
       targetKey,
       outputTail: output.slice(-400),
     });
-    return { targetKey, ok: true, reason: 'critical-cleanup', detail: output.slice(-400) };
+    return {
+      targetKey,
+      ok: true,
+      reason: 'critical-cleanup',
+      detail: output.slice(-400),
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     opts.logger?.error?.(`[disk-headroom-cleanup] remote failed ${targetKey}: ${detail}`, {
       module: 'disk-headroom',
       targetKey,
     });
-    return { targetKey, ok: false, reason: 'cleanup-error', detail };
+    return {
+      targetKey,
+      ok: false,
+      reason: 'cleanup-error',
+      detail,
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    };
   }
 }
 
