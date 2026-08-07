@@ -193,8 +193,8 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        async_repair.submit_async_repair_plan(plan)
         self.ledger.record("repair-check", pr.number, start_head, check_name, now)
+        async_repair.submit_async_repair_plan(plan)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
     def repair_conflict(self, pr: PrSnapshot, reason: str, now: int | None = None) -> RepairOutcome:
@@ -213,8 +213,8 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        async_repair.submit_async_repair_plan(plan)
         self.ledger.record("conflict-repair", pr.number, start_head, f"conflict:{pr.number}", now)
+        async_repair.submit_async_repair_plan(plan)
         return self.blocked_outcome("submitted", check_name, start_head, start_head)
 
     def repair_bot_thread(self, pr: PrSnapshot, thread_id: str, now: int | None = None) -> RepairOutcome:
@@ -230,6 +230,6 @@ class AdminBypassRepairer:
             head_sha=start_head,
             plan_name=plan.plan_name,
         )
-        async_repair.submit_async_repair_plan(plan)
         self.ledger.record("repair-bot-thread", pr.number, start_head, thread_id, now)
+        async_repair.submit_async_repair_plan(plan)
         return self.blocked_outcome("submitted", thread_id, start_head, start_head)
