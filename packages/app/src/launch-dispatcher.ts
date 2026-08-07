@@ -117,7 +117,7 @@ export interface LaunchDispatcherOptions {
  * only proceeds if the durable outbox actually leased a row.
  */
 export function dispatchThroughOutboxOnly(
-  leased: TaskLaunchDispatch | null,
+  leased: TaskLaunchDispatch | null | undefined,
 ): leased is TaskLaunchDispatch {
   return leased != null;
 }
