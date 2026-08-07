@@ -177,6 +177,7 @@ describe('MergeGateExecutor', () => {
         error: 'Merge gate execution was stopped before completion',
       },
     });
+    expect((executor as any).entries.has(handle.executionId)).toBe(false);
 
     blockedSummary.resolve('summary after destroy');
     await new Promise<void>((resolve) => setImmediate(resolve));
