@@ -98,8 +98,8 @@ class AsyncRepairPlanTests(unittest.TestCase):
     def test_repair_check_plan_runs_normalize_with_bytecode_disabled(self):
         plan = async_repair.build_repair_check_plan(
             pr(), "PR Body", repo="owner/repo", details_url="https://example.invalid/job",
-            log_path="/tmp/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
-            start_head=HEAD, state_file=Path("/tmp/ledger.jsonl"),
+            log_path="/does/not/exist/pr-body.log", queue_only=False, queue_pr_number=0, latest=None,
+            start_head=HEAD, state_file=Path("ledger.jsonl"),
         )
         self.assertIn("python3 -B scripts/mergify_admin_requeue_repair_normalize.py", plan.yaml_text)
 
