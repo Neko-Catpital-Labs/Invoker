@@ -1766,7 +1766,7 @@ export class Orchestrator {
 
     if (task.config.isMergeNode) {
       this.autoStartExternallyUnblockedReadyTasks();
-      this.checkWorkflowCompletion();
+      this.checkWorkflowCompletion(task.config.workflowId);
     }
   }
 
@@ -1953,7 +1953,7 @@ export class Orchestrator {
     started.push(...this.autoStartUnblockedTasks());
     started.push(...this.autoStartExternallyUnblockedReadyTasks());
     mergeTrace('APPROVE_STARTED', { taskId: task.id, startedIds: started.map(t => t.id), startedStatuses: started.map(t => t.status) });
-    this.checkWorkflowCompletion();
+    this.checkWorkflowCompletion(task.config.workflowId);
     return started;
   }
 
@@ -2004,7 +2004,7 @@ export class Orchestrator {
     this.persistence.logEvent?.(taskId, 'task.failed', changes);
     this.messageBus.publish(TASK_DELTA_CHANNEL, delta);
 
-    this.checkWorkflowCompletion();
+    this.checkWorkflowCompletion(task.config.workflowId);
   }
 
   selectExperiment(taskId: string, experimentId: string): TaskState[] {
@@ -2077,7 +2077,7 @@ export class Orchestrator {
       readyTaskIds,
     });
     const started = this.autoStartReadyTasks(readyTaskIds);
-    this.checkWorkflowCompletion();
+    this.checkWorkflowCompletion(task.config.workflowId);
     return started;
   }
 
@@ -2165,7 +2165,7 @@ export class Orchestrator {
       readyTaskIds,
     });
     const started = this.autoStartReadyTasks(readyTaskIds);
-    this.checkWorkflowCompletion();
+    this.checkWorkflowCompletion(task.config.workflowId);
     return started;
   }
 
@@ -2393,7 +2393,7 @@ export class Orchestrator {
 
     // Re-evaluate and auto-start anything newly unblocked by this policy change.
     const started = this.autoStartExternallyUnblockedReadyTasks();
-    this.checkWorkflowCompletion();
+    this.checkWorkflowCompletion(workflowId);
     return started;
   }
 
@@ -3521,8 +3521,23 @@ export class Orchestrator {
     checkExperimentCompletionImpl(this as unknown as TransitionHost, taskId);
   }
 
-  private checkWorkflowCompletion(): void {
-    checkWorkflowCompletionImpl(this as unknown as TransitionHost);
+  private getWorkflowIdsToTouchAfterWorkflowTransition(workflowId: string): string[] {
+    const touched = new Set<string>();
+    if (this.activeWorkflowIds.has(workflowId)) {
+      touched.add(workflowId);
+    }
+    for (const workflow of this.persistence.listWorkflows()) {
+      if (!this.activeWorkflowIds.has(workflow.id)) continue;
+      if (workflow.id === workflowId) continue;
+      if ((workflow.externalDependencies ?? []).some((dep) => dep.workflowId === workflowId)) {
+        touched.add(workflow.id);
+      }
+    }
+    return [...touched];
+  }
+
+  private checkWorkflowCompletion(transitionedWorkflowId?: string): void {
+    checkWorkflowCompletionImpl(this as unknown as TransitionHost, transitionedWorkflowId);
   }
 
   private autoStartReadyTasks(taskIds: string[], priority: number = 0, opts?: LaunchReadinessOptions): TaskState[] {
