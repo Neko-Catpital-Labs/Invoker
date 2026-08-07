@@ -8,7 +8,34 @@ The SSH executor (`runnerKind: ssh`) runs task commands on remote hosts over SSH
 
 Each remote target is defined in the Invoker config with a host, user, and path to an SSH private key. Tasks reference targets by ID.
 
-## Configuration
+## Guided Setup: the Machines Wizard
+
+The easiest way to add a remote target is the setup wizard, rather than hand-editing config JSON:
+
+```bash
+invoker-cli setup machines
+```
+
+It asks for, in order: machine name, host, user, SSH key path, SSH port (default `22`), max
+concurrent tasks (default `1`), and an optional provision command. Before saving anything, it
+runs a real SSH connectivity probe (`ssh ... 'exit 0'` with `BatchMode=yes` and a 10s connect
+timeout) against the machine and reports "Connectivity check passed" or "Connectivity check
+failed" — a machine is only written to `~/.invoker/config.json` if that probe succeeds. It also
+rejects a name or host that duplicates an existing target. After each machine, it asks whether
+to add another, so you can add several in one run.
+
+For scripting, `invoker-cli setup machines --json` reads a JSON array of machine objects from
+stdin and writes a JSON array of per-machine results (including the connectivity outcome) to
+stdout, instead of prompting interactively.
+
+The desktop app has a matching step: the System Setup panel's "Add remote machines" section asks
+for the same fields and performs the same reachability check (via the same CLI) before adding
+the machine to your list, with its button reading "Checking machine…" while the probe runs.
+
+If you'd rather manage `~/.invoker/config.json` yourself, see **Manual Configuration (Fallback)**
+below.
+
+## Manual Configuration (Fallback)
 
 Add remote targets to `~/.invoker/config.json`.
 
