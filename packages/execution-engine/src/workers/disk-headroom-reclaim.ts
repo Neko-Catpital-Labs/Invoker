@@ -5,9 +5,13 @@
  * Never touches invoker.db / config.json / the home root / paths outside the home.
  */
 
-import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
+import { rm as rmAsync } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
 
 import type { Logger } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
@@ -215,6 +219,7 @@ exit 0
 
 const LOCAL_RM_MAX_RETRIES = 5;
 const LOCAL_RM_RETRY_DELAY_MS = 100;
+const execFileAsync = promisify(execFile);
 
 /**
  * Read-only accessor for Invoker's own workflow/task state, used to derive
@@ -283,15 +288,37 @@ async function removeLocalDir(
     });
     return;
   }
-  try {
-    rmSync(path, {
+
+  const removeWithNode = async (deletePath: string) => {
+    await rmAsync(deletePath, {
       recursive: true,
       force: true,
       maxRetries: LOCAL_RM_MAX_RETRIES,
       retryDelay: LOCAL_RM_RETRY_DELAY_MS,
     });
-  } catch (err) {
-    errors.push(`${path}: ${err instanceof Error ? err.message : String(err)}`);
+  };
+
+  let deletePath = `${path}.deleting.${randomUUID().slice(0, 8)}`;
+  try {
+    renameSync(path, deletePath);
+  } catch {
+    deletePath = path;
+    try {
+      await removeWithNode(deletePath);
+    } catch (fallbackErr) {
+      errors.push(`${path}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+    }
+    return;
+  }
+
+  try {
+    await execFileAsync('rm', ['-rf', deletePath]);
+  } catch {
+    try {
+      await removeWithNode(deletePath);
+    } catch (fallbackErr) {
+      errors.push(`${path}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+    }
   }
 }
 
