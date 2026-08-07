@@ -79,6 +79,8 @@ function collectRemoteTargetIds(collector: DiagnosticCollector, config: UnknownR
     return ids;
   }
 
+  const endpointOwners = new Map<string, string[]>();
+
   for (const [id, target] of Object.entries(remoteTargets)) {
     ids.add(id);
     const base = `remoteTargets.${id}`;
@@ -95,6 +97,20 @@ function collectRemoteTargetIds(collector: DiagnosticCollector, config: UnknownR
 
     if (target.port !== undefined && (!isPositiveInteger(target.port) || (target.port as number) > 65535)) {
       collector.error(`${base}.port`, `${base}.port must be an integer between 1 and 65535`);
+    }
+
+    if (isNonEmptyString(target.host) && isNonEmptyString(target.user)) {
+      const endpoint = `${target.user}@${target.host}:${String(target.port ?? 22)}`;
+      endpointOwners.set(endpoint, [...(endpointOwners.get(endpoint) ?? []), id]);
+    }
+  }
+
+  for (const [endpoint, owners] of endpointOwners) {
+    if (owners.length > 1) {
+      collector.warning(
+        'remoteTargets',
+        `targets ${owners.join(', ')} point at the same SSH endpoint ${endpoint}; they share one SSH lease pool, so the duplicate ids add no capacity and stack every selection on a single host`,
+      );
     }
   }
 

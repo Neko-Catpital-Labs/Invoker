@@ -179,6 +179,17 @@ describe('checkConfigContents', () => {
     });
     expect(check.status).toBe('warn');
   });
+
+  it('warns without failing when remote target ids point at the same SSH endpoint', () => {
+    const check = checkConfigContents({
+      remoteTargets: {
+        remote_digital_ocean_1: { host: '157.245.231.246', user: 'ci', sshKeyPath: '/k' },
+        remote_digital_ocean_2: { host: '157.245.231.246', user: 'ci', sshKeyPath: '/k' },
+      },
+    });
+    expect(check.status).toBe('warn');
+    expect(check.detail).toContain('same SSH endpoint ci@157.245.231.246:22');
+  });
 });
 
 describe('assembleReadinessChecks config contents wiring', () => {

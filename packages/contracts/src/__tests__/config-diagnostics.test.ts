@@ -66,6 +66,51 @@ describe('collectInvokerConfigDiagnostics', () => {
     it('accepts a fully specified target', () => {
       expect(collectInvokerConfigDiagnostics({ remoteTargets: { box: { ...sshTarget, port: 22 } } })).toEqual([]);
     });
+
+    it('warns when two target ids point at the same SSH endpoint using the default port', () => {
+      const shared = warnings({
+        remoteTargets: {
+          remote_digital_ocean_1: { ...sshTarget, host: '157.245.231.246' },
+          remote_digital_ocean_2: { ...sshTarget, host: '157.245.231.246' },
+        },
+      });
+      expect(shared).toHaveLength(1);
+      expect(shared[0]).toMatchObject({
+        path: 'remoteTargets',
+        message: 'targets remote_digital_ocean_1, remote_digital_ocean_2 point at the same SSH endpoint ci@157.245.231.246:22; they share one SSH lease pool, so the duplicate ids add no capacity and stack every selection on a single host',
+      });
+    });
+
+    it('warns when an explicit port matches another target defaulting to the same SSH endpoint', () => {
+      const shared = warnings({
+        remoteTargets: {
+          first: sshTarget,
+          second: { ...sshTarget, port: 22 },
+        },
+      });
+      expect(shared).toHaveLength(1);
+      expect(shared[0].message).toContain('ci@build-1:22');
+    });
+
+    it('does not warn when matching host and user use different SSH ports', () => {
+      expect(warnings({
+        remoteTargets: {
+          first: { ...sshTarget, port: 22 },
+          second: { ...sshTarget, port: 2222 },
+        },
+      })).toEqual([]);
+    });
+
+    it('does not warn for a target whose endpoint cannot be resolved from valid host and user strings', () => {
+      const shared = warnings({
+        remoteTargets: {
+          first: sshTarget,
+          missingUser: { ...sshTarget, user: '' },
+          missingHost: { ...sshTarget, host: '' },
+        },
+      });
+      expect(shared).toEqual([]);
+    });
   });
 
   describe('worktreeTargets', () => {
