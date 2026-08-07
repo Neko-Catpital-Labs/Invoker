@@ -337,6 +337,9 @@ export async function runHeadless(args: string[], deps: HeadlessDeps): Promise<v
     case 'repair-review-gate-ci':
       await headlessRepairReviewGateCi(args[1], deps);
       break;
+    case 'check-pr-status':
+      await headlessCheckPrStatus(args[1], deps);
+      break;
     case 'fix':
       await headlessFix(args, deps);
       break;
@@ -440,6 +443,47 @@ export function resolveHeadlessInfraRepairConfig(
       ]),
     ),
   };
+}
+
+function getLiveOwnerTaskRunnerForPrStatus(
+  deps: Pick<HeadlessDeps, 'ownerTaskRunnerProvider'>,
+): Pick<TaskRunner, 'checkPrApprovalNow'> {
+  const taskRunner = deps.ownerTaskRunnerProvider?.() ?? null;
+  if (!taskRunner) {
+    throw new Error('check-pr-status requires a live owner TaskRunner.');
+  }
+  return taskRunner;
+}
+
+function isCheckPrStatusCandidate(task: TaskState): boolean {
+  return task.config.isMergeNode && (task.status === 'review_ready' || task.status === 'awaiting_approval');
+}
+
+export async function headlessCheckPrStatus(
+  taskId: string | undefined,
+  deps: Pick<HeadlessDeps, 'commandService' | 'orchestrator' | 'ownerTaskRunnerProvider'>,
+): Promise<void> {
+  const taskRunner = getLiveOwnerTaskRunnerForPrStatus(deps);
+
+  if (taskId) {
+    const task = deps.orchestrator.getTask(taskId);
+    if (!task) throw new Error(`Task not found: ${taskId}`);
+    const result = await deps.commandService.runSerializedForTask(task.id, async () => {
+      await taskRunner.checkPrApprovalNow(task.id);
+    });
+    if (!result.ok) throw new Error(result.error.message);
+    process.stdout.write(`Checked PR status for task: ${task.id}\n`);
+    return;
+  }
+
+  const tasks = deps.orchestrator.getAllTasks().filter(isCheckPrStatusCandidate);
+  const result = await deps.commandService.runSerializedForWorkflow(undefined, async () => {
+    await Promise.all(tasks.map((task) => taskRunner.checkPrApprovalNow(task.id)));
+  });
+  if (!result.ok) throw new Error(result.error.message);
+  for (const task of tasks) {
+    process.stdout.write(`Checked PR status for task: ${task.id}\n`);
+  }
 }
 
 async function headlessWorker(args: string[], deps: HeadlessDeps): Promise<void> {
