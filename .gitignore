@@ -44,3 +44,4 @@ local-builds/
 
 # Local pipeline secrets/config
 config/nightly-usage.env
+__pycache__/
