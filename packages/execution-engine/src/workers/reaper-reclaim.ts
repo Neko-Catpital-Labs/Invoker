@@ -79,10 +79,24 @@ export function reapLocalDeletingOrphans(opts: {
   const userHome = opts.userHome ?? homedir();
   const home = expandTildeHome(opts.invokerHome, userHome);
   if (!isSafeInvokerHome(home, userHome)) {
-    return { targetKey, ok: false, reason: 'path-guard', detail: home };
+    return {
+      targetKey,
+      ok: false,
+      reason: 'path-guard',
+      detail: home,
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    };
   }
   if (!existsSync(home)) {
-    return { targetKey, ok: true, reason: 'reap-orphans', detail: 'removed 0' };
+    return {
+      targetKey,
+      ok: true,
+      reason: 'reap-orphans',
+      detail: 'removed 0',
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    };
   }
 
   const nowMs = opts.nowMs ?? Date.now();
@@ -111,9 +125,23 @@ export function reapLocalDeletingOrphans(opts: {
   }
 
   if (errors.length > 0) {
-    return { targetKey, ok: false, reason: 'cleanup-error', detail: errors.slice(0, 5).join('; ') };
+    return {
+      targetKey,
+      ok: false,
+      reason: 'cleanup-error',
+      detail: errors.slice(0, 5).join('; '),
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    };
   }
-  return { targetKey, ok: true, reason: 'reap-orphans', detail: `removed ${removed}` };
+  return {
+    targetKey,
+    ok: true,
+    reason: 'reap-orphans',
+    detail: `removed ${removed}`,
+    protectedSkipCount: 0,
+    protectedSkipBytes: 0,
+  };
 }
 
 export async function reapRemoteDeletingOrphans(opts: {
@@ -123,21 +151,42 @@ export async function reapRemoteDeletingOrphans(opts: {
 }): Promise<DiskCleanupResult> {
   const targetKey = `ssh:${opts.target.name} ${opts.target.remotePath}`;
   if (!isSafeRemoteInvokerHomePath(opts.target.remotePath)) {
-    return { targetKey, ok: false, reason: 'path-guard', detail: opts.target.remotePath };
+    return {
+      targetKey,
+      ok: false,
+      reason: 'path-guard',
+      detail: opts.target.remotePath,
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    };
   }
 
   const script = buildDeletingOrphanReapScript(opts.target.remotePath);
   const run = opts.runRemoteScript ?? defaultRunRemoteReap;
   try {
     const output = await run(opts.target, script);
-    return { targetKey, ok: true, reason: 'reap-orphans', detail: output.slice(-400) };
+    return {
+      targetKey,
+      ok: true,
+      reason: 'reap-orphans',
+      detail: output.slice(-400),
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    };
   } catch (err) {
     const detail = errorDetail(err);
     opts.logger?.error?.(`[reaper] remote orphan reap failed ${targetKey}: ${detail}`, {
       module: 'reaper',
       targetKey,
     });
-    return { targetKey, ok: false, reason: 'cleanup-error', detail };
+    return {
+      targetKey,
+      ok: false,
+      reason: 'cleanup-error',
+      detail,
+      protectedSkipCount: 0,
+      protectedSkipBytes: 0,
+    };
   }
 }
 
