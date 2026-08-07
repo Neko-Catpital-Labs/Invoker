@@ -168,7 +168,7 @@ import {
 } from './headless.js';
 import { printHeadlessUsage } from './headless-usage.js';
 import { buildHeadlessApiServerDeps } from './headless-shared.js';
-import { writeStdoutAndFlush } from './headless-stdout-flush.js';
+import { writeStdoutFlushAndExit } from './headless-stdout-flush.js';
 import { parseReviewGatePrNumber, repairReviewGateCiByPr } from './review-gate-ci-repair-command.js';
 import { resolveRefreshTaskGraphSnapshot } from './refresh-task-graph.js';
 import {
@@ -1005,9 +1005,9 @@ function startHeadlessMode(): void {
         const delegated = await tryDelegateQuery(delegationBus, { kind: 'cli-query', args: cliArgs }, 5_000);
         delegationBus.disconnect();
         if (delegated && typeof delegated.output === 'string') {
-          await writeStdoutAndFlush(delegated.output);
           process.exitCode = 0;
-          return;
+          await writeStdoutFlushAndExit(delegated.output);
+          return; // Guard: process.exit() may not halt in Electron async context
         }
       } catch (err) {
         delegationBus.disconnect();
