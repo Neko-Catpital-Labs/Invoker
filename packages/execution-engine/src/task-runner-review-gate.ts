@@ -169,6 +169,31 @@ export function reviewPollStillMatches(
   );
 }
 
+function describeReviewPollMismatch(
+  before: TaskState,
+  current: TaskState | undefined,
+  providerId: string,
+): string[] {
+  if (!current) return ['current undefined'];
+
+  const fields: string[] = [];
+  if (current.status !== before.status) fields.push('status');
+  if (current.execution.selectedAttemptId !== before.execution.selectedAttemptId) {
+    fields.push('selectedAttemptId');
+  }
+  if ((current.execution.generation ?? 0) !== (before.execution.generation ?? 0)) {
+    fields.push('generation');
+  }
+  if (
+    current.execution.reviewGate?.activeGeneration
+    !== before.execution.reviewGate?.activeGeneration
+  ) {
+    fields.push('reviewGate.activeGeneration');
+  }
+  if (fields.length === 0) fields.push(`providerId ${providerId} no longer current`);
+  return fields;
+}
+
 export function updateReviewGateArtifact(
   gate: ReviewGateState,
   providerId: string,
@@ -245,6 +270,10 @@ export async function pollMergeGateTask(
 
     const current = host.orchestrator.getTask(task.id);
     if (!reviewPollStillMatches(task, current, providerId)) {
+      const mismatchedFields = describeReviewPollMismatch(task, current, providerId).join(',');
+      host.logger.warn(
+        `[merge-gate] Discarding stale PR status update for task=${task.id} providerId=${providerId}; mismatchedFields=${mismatchedFields}`,
+      );
       continue;
     }
 
