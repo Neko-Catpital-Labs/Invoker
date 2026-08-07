@@ -49,6 +49,7 @@ import {
 } from './live-owner-bus.js';
 import { runMcpServer } from './mcp-server.js';
 import { runDoctor, runSetup } from './onboarding.js';
+import { runSubmitChain } from './submit-chain.js';
 
 const VERSION = '0.0.9';
 
@@ -164,6 +165,7 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli submit-chain [--gate-policy completed|review_ready] <plan1.yaml> <plan2.template.yaml> ...',
     '  invoker-cli query workflows [--status <status>] [--output text|json]',
     '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
     '  invoker-cli retry-task <taskId>',
@@ -181,6 +183,7 @@ function usage(): string {
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
+    '  submit-chain    Submit stacked workflow plans through a live owner, rendering each template from the previous workflow.',
     '  query workflows|tasks  Read workflows or tasks from a live owner, or a read-only database view.',
     '  retry-task <taskId>  Ask a live Invoker owner to retry one task.',
     '  retry <workflowId>  Ask a live Invoker owner to retry a workflow.',
@@ -1088,6 +1091,11 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
     }
     if (argv[0] === 'query') {
       return await runQuery(parseQueryArgs(argv.slice(1)), deps);
+    }
+    if (argv[0] === 'submit-chain') {
+      return await runSubmitChain(argv.slice(1), {
+        createMessageBus: deps.createMessageBus,
+      });
     }
     if (argv[0] === 'retry-task' || argv[0] === 'retry' || argv[0] === 'resume') {
       if (argv.length > 2) {
