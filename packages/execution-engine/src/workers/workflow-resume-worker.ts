@@ -69,9 +69,9 @@ export function createWorkflowResumeCooldownLedger(): WorkflowResumeCooldownLedg
   };
 }
 
-function hasLocallyReadyPendingTask(store: WorkflowResumeWorkerStore, workflowId: string): boolean {
+function findLocallyReadyPendingTaskId(store: WorkflowResumeWorkerStore, workflowId: string): string | null {
   const tasks = store.loadTasks(workflowId);
-  if (tasks.length === 0) return false;
+  if (tasks.length === 0) return null;
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   for (const task of tasks) {
     if (task.status !== 'pending') continue;
@@ -80,9 +80,9 @@ function hasLocallyReadyPendingTask(store: WorkflowResumeWorkerStore, workflowId
       const dependency = tasksById.get(dependencyId);
       return dependency !== undefined && dependency.status === 'completed';
     });
-    if (localDependenciesSatisfied) return true;
+    if (localDependenciesSatisfied) return task.id;
   }
-  return false;
+  return null;
 }
 
 function collectWakeupWorkflowIds(hints: RecoveryWorkerWakeupHint[]): string[] {
@@ -94,11 +94,14 @@ function collectWakeupWorkflowIds(hints: RecoveryWorkerWakeupHint[]): string[] {
   return Array.from(seen);
 }
 
-function listAllWorkflowsWithReadyPendingTasks(store: WorkflowResumeWorkerStore): string[] {
-  const targets: string[] = [];
+function listAllWorkflowsWithReadyPendingTasks(
+  store: WorkflowResumeWorkerStore,
+): Array<{ workflowId: string; readyTaskId: string }> {
+  const targets: Array<{ workflowId: string; readyTaskId: string }> = [];
   for (const workflow of store.listWorkflows()) {
-    if (hasLocallyReadyPendingTask(store, workflow.id)) {
-      targets.push(workflow.id);
+    const readyTaskId = findLocallyReadyPendingTaskId(store, workflow.id);
+    if (readyTaskId !== null) {
+      targets.push({ workflowId: workflow.id, readyTaskId });
     }
   }
   return targets;
@@ -112,12 +115,19 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
     const wakeups = options.drainWakeupHints?.() ?? [];
     const wakeupWorkflowIds = collectWakeupWorkflowIds(wakeups);
 
-    const candidateIds = wakeupWorkflowIds.length > 0 && ctx.reason === 'wake'
-      ? wakeupWorkflowIds.filter((id) => hasLocallyReadyPendingTask(options.store, id))
+    const candidates = wakeupWorkflowIds.length > 0 && ctx.reason === 'wake'
+      ? wakeupWorkflowIds
+        .map((id) => ({
+          workflowId: id,
+          readyTaskId: findLocallyReadyPendingTaskId(options.store, id),
+        }))
+        .filter((candidate): candidate is { workflowId: string; readyTaskId: string } =>
+          candidate.readyTaskId !== null)
       : listAllWorkflowsWithReadyPendingTasks(options.store);
 
     const submitted = new Set<string>();
-    for (const workflowId of candidateIds) {
+    for (const candidate of candidates) {
+      const { workflowId } = candidate;
       if (submitted.has(workflowId)) continue;
       if (!options.ledger.shouldSubmit(workflowId, nowMs)) {
         options.logger.debug?.(`[worker:${WORKFLOW_RESUME_WORKER_KIND}] cooldown-skip`, {
@@ -136,7 +146,7 @@ export function createWorkflowResumeTick(options: WorkflowResumeWorkerPolicyOpti
         [{}],
       );
       options.ledger.markSubmitted(workflowId, nowMs + cooldownMs);
-      options.store.logEvent?.(workflowId, 'recovery.worker.submit', {
+      options.store.logEvent?.(candidate.readyTaskId, 'recovery.worker.submit', {
         worker: WORKFLOW_RESUME_WORKER_KIND,
         phase: 'start-ready',
         workflowId,
