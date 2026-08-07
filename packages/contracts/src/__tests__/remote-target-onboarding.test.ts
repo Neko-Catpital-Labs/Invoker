@@ -1,11 +1,26 @@
-import { describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:child_process', () => ({
+  spawn: vi.fn(),
+}));
+
+import { spawn } from 'node:child_process';
 
 import {
   addRemoteTarget,
   buildConnectivityProbeArgs,
   checkRemoteTargetConnectivity,
+  REMOTE_TARGET_CONNECTIVITY_STUB_ENV_VAR,
   type RemoteTargetInput,
 } from '../remote-target-onboarding.js';
+
+function createMockChildProcess() {
+  const proc = new EventEmitter() as EventEmitter & { stderr: EventEmitter };
+  proc.stderr = new EventEmitter();
+  return proc;
+}
 
 const baseInput: RemoteTargetInput = {
   name: 'build-server-c',
@@ -137,6 +152,45 @@ describe('checkRemoteTargetConnectivity', () => {
     sshKeyPath: '/home/user/.ssh/id_build_c',
     port: 2222,
   };
+
+  afterEach(() => {
+    delete process.env[REMOTE_TARGET_CONNECTIVITY_STUB_ENV_VAR];
+    vi.mocked(spawn).mockReset();
+  });
+
+  it('runs the real ssh probe when the stub env var is unset', async () => {
+    const proc = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(proc as never);
+
+    const resultPromise = checkRemoteTargetConnectivity(target);
+    proc.emit('close', 0);
+    const result = await resultPromise;
+
+    expect(spawn).toHaveBeenCalledWith('ssh', buildConnectivityProbeArgs(target), expect.any(Object));
+    expect(result).toEqual({ reachable: true, message: `ssh probe to ${target.user}@${target.host} succeeded` });
+  });
+
+  it('returns the scripted outcome for the host when the stub env var is set', async () => {
+    process.env[REMOTE_TARGET_CONNECTIVITY_STUB_ENV_VAR] = JSON.stringify({
+      [target.host]: { reachable: true, message: 'scripted ok' },
+    });
+
+    const result = await checkRemoteTargetConnectivity(target);
+
+    expect(result).toEqual({ reachable: true, message: 'scripted ok' });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('returns a scripted failure instead of falling back to the real probe when the host has no entry', async () => {
+    process.env[REMOTE_TARGET_CONNECTIVITY_STUB_ENV_VAR] = JSON.stringify({
+      'some-other-host': { reachable: true, message: 'scripted ok' },
+    });
+
+    const result = await checkRemoteTargetConnectivity(target);
+
+    expect(result.reachable).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
+  });
 
   it('uses the injected impl instead of running a real SSH probe', async () => {
     const impl = vi.fn().mockResolvedValue({ reachable: true, message: 'stubbed ok' });
