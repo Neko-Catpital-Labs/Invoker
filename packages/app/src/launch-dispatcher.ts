@@ -112,6 +112,15 @@ export interface LaunchDispatcherOptions {
   maxLaunchAgeMs?: number;
 }
 
+/**
+ * The single gate between a poll iteration and a launch: a dispatch
+ * only proceeds if the durable outbox actually leased a row.
+ */
+export function dispatchThroughOutboxOnly(
+  leased: TaskLaunchDispatch | null | undefined,
+): leased is TaskLaunchDispatch {
+  return leased != null;
+}
 
 export class LaunchDispatcher {
   private readonly persistence: LaunchDispatcherPersistence;
@@ -329,7 +338,7 @@ export class LaunchDispatcher {
         ownerId: this.ownerId,
         ...(this.leaseMs !== undefined ? { leaseMs: this.leaseMs } : {}),
       });
-      if (!leased) break;
+      if (!dispatchThroughOutboxOnly(leased)) break;
       dispatched += 1;
       let task = this.resolveTaskForDispatch(leased);
       if (!task) {
