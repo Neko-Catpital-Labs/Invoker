@@ -103,6 +103,31 @@ export interface CheckRemoteTargetConnectivityOptions {
 
 const DEFAULT_PROBE_CONNECT_TIMEOUT_SECONDS = 10;
 
+export const REMOTE_TARGET_CONNECTIVITY_STUB_ENV_VAR = 'INVOKER_TEST_REMOTE_TARGET_STUB';
+
+function readScriptedConnectivityOutcome(host: string): RemoteTargetConnectivityResult | undefined {
+  const raw = process.env[REMOTE_TARGET_CONNECTIVITY_STUB_ENV_VAR];
+  if (raw === undefined) {
+    return undefined;
+  }
+
+  let scripted: unknown;
+  try {
+    scripted = JSON.parse(raw);
+  } catch (error) {
+    return {
+      reachable: false,
+      message: `failed to parse ${REMOTE_TARGET_CONNECTIVITY_STUB_ENV_VAR}: ${(error as Error).message}`,
+    };
+  }
+
+  if (!isRecord(scripted) || !Object.prototype.hasOwnProperty.call(scripted, host)) {
+    return { reachable: false, message: `no scripted connectivity outcome for host "${host}"` };
+  }
+
+  return scripted[host] as RemoteTargetConnectivityResult;
+}
+
 export function buildConnectivityProbeArgs(
   target: RemoteTargetConnection,
   connectTimeoutSeconds: number = DEFAULT_PROBE_CONNECT_TIMEOUT_SECONDS,
@@ -124,6 +149,11 @@ export async function checkRemoteTargetConnectivity(
 ): Promise<RemoteTargetConnectivityResult> {
   if (typeof opts.impl === 'function') {
     return opts.impl(target);
+  }
+
+  const scripted = readScriptedConnectivityOutcome(target.host);
+  if (scripted !== undefined) {
+    return scripted;
   }
 
   return new Promise((resolve) => {
