@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, statSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { SQLiteAdapter } from '../sqlite-adapter.js';
+import { SQLiteAdapter, isLaunchDispatchCandidateStale } from '../sqlite-adapter.js';
 import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
 import { createAttempt } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
@@ -1693,6 +1693,57 @@ describe('SQLiteAdapter', () => {
         const staleAfter = adapter.loadLaunchDispatchById(stale.id);
         expect(staleAfter?.state).toBe('abandoned');
         expect(staleAfter?.lastError).toMatch(/not the selected attempt/);
+      });
+
+      describe('isLaunchDispatchCandidateStale', () => {
+        const baseCandidate = {
+          id: 1,
+          task_id: 'wf-launch/t1',
+          attempt_id: 'attempt-current',
+          generation: 0,
+          current_task_id: 'wf-launch/t1',
+          current_task_status: 'pending',
+          current_selected_attempt_id: 'attempt-current',
+          current_execution_generation: 0,
+        };
+
+        it('flags a missing task', () => {
+          const reason = isLaunchDispatchCandidateStale({
+            ...baseCandidate,
+            current_task_id: null,
+          });
+          expect(reason).toMatch(/no longer exists/);
+        });
+
+        it('flags a non-claimable task status', () => {
+          const reason = isLaunchDispatchCandidateStale({
+            ...baseCandidate,
+            current_task_status: 'failed',
+          });
+          expect(reason).toMatch(/status is failed/);
+        });
+
+        it('flags a mismatched selected attempt', () => {
+          const reason = isLaunchDispatchCandidateStale({
+            ...baseCandidate,
+            current_selected_attempt_id: 'attempt-other',
+          });
+          expect(reason).toMatch(/not the selected attempt/);
+        });
+
+        it('flags a mismatched execution generation', () => {
+          const reason = isLaunchDispatchCandidateStale({
+            ...baseCandidate,
+            generation: 1,
+            current_execution_generation: 2,
+          });
+          expect(reason).toMatch(/does not match task generation/);
+        });
+
+        it('returns undefined for a fully-matching candidate', () => {
+          const reason = isLaunchDispatchCandidateStale(baseCandidate);
+          expect(reason).toBeUndefined();
+        });
       });
 
       it('abandons stale generation candidates', () => {
