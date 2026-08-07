@@ -99,6 +99,8 @@ async function runE2eAutoFixEntrypoint(options: E2eAutoFixTickOptions): Promise<
   try {
     const childEnv = { ...process.env, ...options.env };
     delete childEnv.INVOKER_HEADLESS_STANDALONE;
+    // Let scripts/cron-e2e-regression-watch.sh distinguish worker-driven sweeps from crontab-driven sweeps.
+    childEnv.INVOKER_E2E_WATCH_DRIVER = 'worker';
     child = spawnProcess(shell, [scriptPath], {
       cwd: repoRoot,
       env: childEnv,

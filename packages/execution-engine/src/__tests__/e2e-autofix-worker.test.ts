@@ -175,6 +175,34 @@ describe('e2e auto-fix worker', () => {
     }
   });
 
+  it('stamps the worker driver marker into the spawned watcher env', async () => {
+    const repoRoot = makeRepoRoot();
+    const logger = makeLogger();
+    const harness = makeSpawnHarness();
+    const originalDriver = process.env.INVOKER_E2E_WATCH_DRIVER;
+
+    try {
+      process.env.INVOKER_E2E_WATCH_DRIVER = 'cron-imposter';
+
+      const tick = createE2eAutoFixTick({
+        logger,
+        repoRoot,
+        spawnProcess: harness.spawnProcess,
+      });
+
+      await tick(makeCtx());
+
+      expect(harness.calls).toHaveLength(1);
+      expect(harness.calls[0].options.env).toHaveProperty('INVOKER_E2E_WATCH_DRIVER', 'worker');
+    } finally {
+      if (originalDriver === undefined) {
+        delete process.env.INVOKER_E2E_WATCH_DRIVER;
+      } else {
+        process.env.INVOKER_E2E_WATCH_DRIVER = originalDriver;
+      }
+    }
+  });
+
   it('resolves when the script exits with code 0', async () => {
     const repoRoot = makeRepoRoot();
     const tick = createE2eAutoFixTick({
