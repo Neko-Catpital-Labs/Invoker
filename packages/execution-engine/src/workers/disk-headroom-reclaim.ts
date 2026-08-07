@@ -7,7 +7,7 @@
 
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
 import { rm as rmAsync } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
@@ -67,6 +67,18 @@ export interface DiskCleanupResult {
   ok: boolean;
   reason: string;
   detail?: string;
+}
+
+export type LocalDiskCleanupMode = 'critical' | 'stale-only';
+
+export interface CleanupLocalInvokerHomeOptions {
+  invokerHome: string;
+  targetKey?: string;
+  logger?: Logger;
+  userHome?: string;
+  store?: DiskHeadroomWorkerStore;
+  mode?: LocalDiskCleanupMode;
+  minAgeMinutes?: number;
 }
 
 /**
@@ -377,21 +389,49 @@ async function sweepReclaimableChildren(
   }
 }
 
-export async function cleanupLocalInvokerHome(opts: {
-  invokerHome: string;
-  targetKey?: string;
-  logger?: Logger;
-  userHome?: string;
-  store?: DiskHeadroomWorkerStore;
-}): Promise<DiskCleanupResult> {
+async function sweepStaleReclaimableChildren(
+  dirPath: string,
+  minAgeMinutes: number,
+  errors: string[],
+  protectedSkips: string[],
+  protectedPaths: ReadonlySet<string>,
+  logger?: Logger,
+  targetKey?: string,
+): Promise<void> {
+  if (!existsSync(dirPath)) return;
+  let entries: string[];
+  try {
+    entries = readdirSync(dirPath);
+  } catch (err) {
+    errors.push(`readdir ${dirPath}: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  const cutoffMs = Date.now() - minAgeMinutes * 60 * 1000;
+  for (const name of entries) {
+    const childPath = join(dirPath, name);
+    try {
+      if (lstatSync(childPath).mtimeMs > cutoffMs) continue;
+    } catch (err) {
+      errors.push(`lstat ${childPath}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    await removeLocalDir(childPath, errors, protectedSkips, protectedPaths, logger, targetKey);
+  }
+}
+
+export async function cleanupLocalInvokerHome(
+  opts: CleanupLocalInvokerHomeOptions,
+): Promise<DiskCleanupResult> {
   const targetKey = opts.targetKey ?? `local ${opts.invokerHome}`;
   const userHome = opts.userHome ?? homedir();
   const home = expandTildeHome(opts.invokerHome, userHome);
+  const mode = opts.mode ?? 'critical';
   if (!isSafeInvokerHome(home, userHome)) {
     return { targetKey, ok: false, reason: 'path-guard', detail: home };
   }
 
-  opts.logger?.info?.(`[disk-headroom-cleanup] local begin home=${home}`, {
+  opts.logger?.info?.(`[disk-headroom-cleanup] local ${mode === 'stale-only' ? 'stale-only ' : ''}begin home=${home}`, {
     module: 'disk-headroom',
     targetKey,
   });
@@ -399,12 +439,30 @@ export async function cleanupLocalInvokerHome(opts: {
   const protectedPaths = opts.store ? computeProtectedLocalPaths(opts.store) : new Set<string>();
   const errors: string[] = [];
   const protectedSkips: string[] = [];
-  await sweepLocalDeletingOrphans(home, errors, protectedSkips, protectedPaths, opts.logger, targetKey);
-  for (const name of DISK_RECLAIMABLE_DIRS) {
-    await sweepReclaimableChildren(join(home, name), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
-  }
-  for (const name of DISK_RECLAIMABLE_DIRS) {
-    ensureLocalDir(join(home, name), errors);
+  if (mode === 'stale-only') {
+    const minAgeMinutes = Math.max(
+      opts.minAgeMinutes ?? TMP_SCRATCH_MIN_AGE_MINUTES,
+      TMP_SCRATCH_MIN_AGE_MINUTES,
+    );
+    for (const name of DISK_RECLAIMABLE_DIRS) {
+      await sweepStaleReclaimableChildren(
+        join(home, name),
+        minAgeMinutes,
+        errors,
+        protectedSkips,
+        protectedPaths,
+        opts.logger,
+        targetKey,
+      );
+    }
+  } else {
+    await sweepLocalDeletingOrphans(home, errors, protectedSkips, protectedPaths, opts.logger, targetKey);
+    for (const name of DISK_RECLAIMABLE_DIRS) {
+      await sweepReclaimableChildren(join(home, name), errors, protectedSkips, protectedPaths, opts.logger, targetKey);
+    }
+    for (const name of DISK_RECLAIMABLE_DIRS) {
+      ensureLocalDir(join(home, name), errors);
+    }
   }
 
   if (errors.length > 0) {
@@ -430,16 +488,16 @@ export async function cleanupLocalInvokerHome(opts: {
     return {
       targetKey,
       ok: true,
-      reason: 'protected-path-in-use',
+      reason: mode === 'stale-only' ? 'warn-paced' : 'protected-path-in-use',
       detail: protectedSkips.slice(0, 5).join('; '),
     };
   }
 
-  opts.logger?.info?.(`[disk-headroom-cleanup] local done home=${home}`, {
+  opts.logger?.info?.(`[disk-headroom-cleanup] local ${mode === 'stale-only' ? 'stale-only ' : ''}done home=${home}`, {
     module: 'disk-headroom',
     targetKey,
   });
-  return { targetKey, ok: true, reason: 'critical-cleanup' };
+  return { targetKey, ok: true, reason: mode === 'stale-only' ? 'warn-paced' : 'critical-cleanup' };
 }
 
 export async function cleanupRemoteInvokerHome(opts: {
