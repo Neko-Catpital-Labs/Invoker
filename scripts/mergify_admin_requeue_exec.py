@@ -107,6 +107,10 @@ def run_cycle(args: argparse.Namespace) -> bool:
     )
     should_poll = False
     any_progress = False
+    repair_dispatch_attempted = 0
+    repair_dispatch_failed = 0
+    repair_dispatch_succeeded = 0
+    repair_dispatch_last_error: str | None = None
     open_pr_numbers = set(pr_by_number)
     for stack in stacks:
         plan = plan_stack_execution(
@@ -162,6 +166,9 @@ def run_cycle(args: argparse.Namespace) -> bool:
                             outcome = repairer.repair_check(pr, check_name, now)
                             progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                 except Exception as exc:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_failed += 1
+                    repair_dispatch_last_error = str(exc)
                     logger.trace(
                         "admin-bypass-repair-attempt-failed",
                         repo=args.repo,
@@ -173,6 +180,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     should_poll = True
                     continue
                 if progressed:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_succeeded += 1
                     any_progress = True
                 else:
                     should_poll = True
@@ -191,6 +200,9 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         outcome = repairer.repair_conflict(pr, action.detail, now)
                         progressed = outcome.status in {"pushed", "prereq_created", "submitted"}
                 except Exception as exc:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_failed += 1
+                    repair_dispatch_last_error = str(exc)
                     logger.trace(
                         "admin-bypass-repair-attempt-failed",
                         repo=args.repo,
@@ -202,6 +214,8 @@ def run_cycle(args: argparse.Namespace) -> bool:
                     should_poll = True
                     continue
                 if progressed:
+                    repair_dispatch_attempted += 1
+                    repair_dispatch_succeeded += 1
                     any_progress = True
                 else:
                     should_poll = True
@@ -234,6 +248,14 @@ def run_cycle(args: argparse.Namespace) -> bool:
                         )
                 if action.kind not in {"comment_blocked", "comment_admin_bypass_nudge"}:
                     any_progress = True
+    if repair_dispatch_attempted >= 1 and repair_dispatch_succeeded == 0:
+        logger.error(
+            "admin-bypass-dispatch-degraded",
+            repo=args.repo,
+            attempted=repair_dispatch_attempted,
+            failed=repair_dispatch_failed,
+            last_error=repair_dispatch_last_error,
+        )
     if not stacks:
         logger.trace("admin-bypass-scan-empty")
     return any_progress or should_poll
