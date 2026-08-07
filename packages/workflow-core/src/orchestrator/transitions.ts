@@ -59,6 +59,7 @@ export interface TransitionHost {
   buildUpdateDelta(before: TaskState, after: TaskState, changes: TaskStateChanges): TaskDelta;
   ensureCurrentPendingAttempt(task: TaskState): string;
   touchWorkflow(workflowId: string): void;
+  getWorkflowIdsToTouchAfterWorkflowTransition(workflowId: string): string[];
   setTaskApprovalStatus(
     taskId: string,
     status: 'awaiting_approval' | 'review_ready',
@@ -180,7 +181,7 @@ export function handleCompletedImpl(
     started.push(...host.autoStartReadyTasks(deferredTaskIds));
   }
 
-  checkWorkflowCompletionImpl(host);
+  checkWorkflowCompletionImpl(host, task?.config.workflowId);
   return started;
 }
 
@@ -267,7 +268,7 @@ export function finalizeFailedTaskImpl(
     started.push(...host.autoStartReadyTasks(deferredTaskIds));
   }
 
-  checkWorkflowCompletionImpl(host);
+  checkWorkflowCompletionImpl(host, existing.config.workflowId);
   return started;
 }
 
@@ -276,6 +277,7 @@ export function handleReviewReadyImpl(
   taskId: string,
   parsed: Extract<ParsedResponse, { type: 'review_ready' }>,
 ): TaskState[] {
+  const task = host.stateGetTask(taskId);
   const changes: TaskStateChanges = {
     config: { summary: parsed.summary },
     execution: {
@@ -292,7 +294,7 @@ export function handleReviewReadyImpl(
 
   const started = host.autoStartUnblockedTasks();
   started.push(...host.autoStartExternallyUnblockedReadyTasks());
-  checkWorkflowCompletionImpl(host);
+  checkWorkflowCompletionImpl(host, task?.config.workflowId);
   return started;
 }
 
@@ -452,8 +454,9 @@ export function checkExperimentCompletionImpl(host: TransitionHost, taskId: stri
   }
 }
 
-export function checkWorkflowCompletionImpl(host: TransitionHost): void {
-  for (const wfId of host.activeWorkflowIds) {
+export function checkWorkflowCompletionImpl(host: TransitionHost, transitionedWorkflowId?: string): void {
+  if (!transitionedWorkflowId) return;
+  for (const wfId of host.getWorkflowIdsToTouchAfterWorkflowTransition(transitionedWorkflowId)) {
     host.touchWorkflow(wfId);
   }
 }
