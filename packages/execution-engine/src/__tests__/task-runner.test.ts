@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { TaskRunner } from '../task-runner.js';
+import { TaskRunner, collectManagedWorkflowBranchesFromDb } from '../task-runner.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
 import { WorktreeExecutor } from '../worktree-executor.js';
@@ -3430,6 +3430,34 @@ describe('TaskRunner', () => {
       expect(loadAttempts).toHaveBeenCalledTimes(2);
       expect(loadAttempts).toHaveBeenCalledWith('t1');
       expect(loadAttempts).toHaveBeenCalledWith('t2');
+    });
+
+    it('collectManagedWorkflowBranchesFromDb dedupes managed branches from tasks and their attempts', () => {
+      const tasks = [
+        makeTask({ id: 't1', execution: { branch: 'experiment/t1-current' } }),
+        makeTask({ id: 't2', execution: { branch: 'feature/t2' } }),
+      ];
+      const loadAttempts = vi.fn((taskId: string) => {
+        if (taskId === 't1') {
+          return [
+            { id: 't1-old', nodeId: 't1', branch: 'experiment/t1-old' },
+            { id: 't1-dup', nodeId: 't1', branch: 'experiment/t1-current' },
+          ];
+        }
+        return [{ id: 't2-old', nodeId: 't2', branch: 'invoker/t2-old' }];
+      });
+
+      const branches = collectManagedWorkflowBranchesFromDb(tasks as any, loadAttempts as any);
+
+      expect(branches).toEqual(['experiment/t1-current', 'experiment/t1-old', 'invoker/t2-old']);
+    });
+
+    it('collectManagedWorkflowBranchesFromDb tolerates a missing loadAttempts callback', () => {
+      const tasks = [makeTask({ id: 't1', execution: { branch: 'experiment/t1' } })];
+
+      const branches = collectManagedWorkflowBranchesFromDb(tasks as any, undefined);
+
+      expect(branches).toEqual(['experiment/t1']);
     });
   });
 

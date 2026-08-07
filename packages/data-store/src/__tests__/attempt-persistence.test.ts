@@ -185,6 +185,22 @@ describe('Attempt persistence', () => {
     }, new Date('2026-05-12T00:06:00Z'))).toBe(true);
   });
 
+  it('claimAttemptForLaunch rejects a same-tick double claim of the same pending attempt', () => {
+    const pending = createAttempt('taskA', { status: 'pending' });
+    adapter.saveAttempt(pending);
+
+    const now = new Date('2026-05-12T00:00:00Z');
+    const claim = () => adapter.claimAttemptForLaunch(pending.id, {
+      status: 'claimed',
+      claimedAt: now,
+      lastHeartbeatAt: now,
+      leaseExpiresAt: new Date('2026-05-12T00:05:00Z'),
+    }, now);
+
+    expect(claim()).toBe(true);
+    expect(claim()).toBe(false);
+  });
+
   it('does not hydrate a task with a superseded selected attempt as runnable', () => {
     const attempt = createAttempt('taskA', { status: 'superseded' });
     adapter.saveAttempt(attempt);

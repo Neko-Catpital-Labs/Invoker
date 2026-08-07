@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { evaluateExecutingStall, taskNeedsExecutingStallCheck } from '../executing-stall.js';
-import type { TaskState } from '@invoker/workflow-core';
+import { isCrashPreservedExecution, type TaskState } from '@invoker/workflow-core';
 
 describe('evaluateExecutingStall', () => {
   const now = new Date('2026-05-13T08:00:00.000Z');
@@ -81,6 +81,24 @@ describe('evaluateExecutingStall', () => {
 
     expect(result.executingStalled).toBe(true);
     expect(result.staleReason).toBe('attempt lease expired');
+  });
+});
+
+describe('isCrashPreservedExecution', () => {
+  it('is false for undefined execution', () => {
+    expect(isCrashPreservedExecution(undefined)).toBe(false);
+  });
+
+  it('is false for null execution', () => {
+    expect(isCrashPreservedExecution(null)).toBe(false);
+  });
+
+  it('is false for an execution without crashPreservedAt', () => {
+    expect(isCrashPreservedExecution({ generation: 0 })).toBe(false);
+  });
+
+  it('is true for an execution with crashPreservedAt set', () => {
+    expect(isCrashPreservedExecution({ generation: 0, crashPreservedAt: new Date('2026-05-13T08:00:00.000Z') })).toBe(true);
   });
 });
 
