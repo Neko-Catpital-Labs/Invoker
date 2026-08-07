@@ -867,6 +867,19 @@ describe('TaskRunner', () => {
       const ids = collectDirectNonMergeTaskIds(rootMerge, (id) => tasks.get(id));
       expect([...ids].sort()).toEqual(['b']);
     });
+
+    it('excludes a two-hop-removed ancestor reached through an intermediate direct dependency', () => {
+      const tasks = new Map<string, TaskState>();
+      tasks.set('leaf', makeTask({ id: 'leaf', dependencies: [] }));
+      tasks.set('mid', makeTask({ id: 'mid', dependencies: ['leaf'] }));
+      const merge = makeTask({
+        id: '__merge__wf-2',
+        dependencies: ['mid'],
+        config: { isMergeNode: true },
+      });
+      const ids = collectDirectNonMergeTaskIds(merge, (id) => tasks.get(id));
+      expect([...ids].sort()).toEqual(['mid']);
+    });
   });
 
   describe('collectUpstreamBranches', () => {
