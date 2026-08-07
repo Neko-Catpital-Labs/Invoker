@@ -4,16 +4,22 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import {
+  addRemoteTarget,
   assembleReadinessChecks,
   buildReport,
+  checkRemoteTargetConnectivity,
   DEFAULT_DRAFTER_MCP_PACKAGE_SPEC,
   DEFAULT_TOOL_REQUIREMENTS,
   EXTERNAL_DEPENDENCIES,
   formatReport,
+  readInvokerConfigFile,
+  type RemoteTargetConnectivityImpl,
+  type RemoteTargetInput,
   type IsInstalled,
   type PlanningPresetSpec,
   type PrerequisiteCheck,
   updateInvokerConfigFile,
+  writeInvokerConfigFile,
 } from '@invoker/contracts';
 import { parsePlanFile } from '@invoker/workflow-core';
 import { formatCaughtException, logCaughtException } from './logging.js';
@@ -411,6 +417,7 @@ export interface SetupDeps {
   commandRunner?: CommandRunner;
   githubAuthCheck?: (runner: CommandRunner) => PrerequisiteCheck | Promise<PrerequisiteCheck>;
   smokePlanValidation?: () => Promise<PrerequisiteCheck>;
+  remoteTargetConnectivity?: RemoteTargetConnectivityImpl;
 }
 
 // ── Slack manifest ───────────────────────────────────────────
@@ -585,6 +592,7 @@ export function writeSlackEnv(creds: Required<Pick<SlackCredentials, 'botToken' 
 export interface SetupIO {
   print: (line: string) => void;
   prompt: (question: string) => Promise<string>;
+  readStdin?: () => Promise<string>;
   interactive?: boolean;
 }
 
@@ -593,7 +601,8 @@ export class NonInteractiveSetupError extends Error {
     super(
       `Cannot ask "${question.trim()}" because stdin is not a TTY.\n`
       + 'Re-run with --yes to accept the guided defaults, or use a non-interactive path: '
-      + '`invoker-cli setup planner`, or `invoker-cli setup slack --from-env` with SLACK_* set.',
+      + '`invoker-cli setup planner`, `invoker-cli setup machines --json`, or '
+      + '`invoker-cli setup slack --from-env` with SLACK_* set.',
     );
     this.name = 'NonInteractiveSetupError';
   }
@@ -612,6 +621,15 @@ function defaultIO(): SetupIO & { rl: ReturnType<typeof createInterface> } {
 function askLine(io: SetupIO, question: string): Promise<string> {
   if (io.interactive === false) throw new NonInteractiveSetupError(question);
   return io.prompt(question);
+}
+
+async function readAllStdin(io: SetupIO): Promise<string> {
+  if (io.readStdin) return io.readStdin();
+  let input = '';
+  for await (const chunk of process.stdin) {
+    input += String(chunk);
+  }
+  return input;
 }
 
 function manifestSteps(manifestPath: string): string {
@@ -667,7 +685,7 @@ export function loadInvokerEnv(): void {
   loadEnvFile(join(process.cwd(), '.env'));
 }
 
-type SetupSubcommand = 'slack' | 'planner';
+type SetupSubcommand = 'slack' | 'planner' | 'machines';
 
 interface ParsedSetupArgs {
   subcommand?: SetupSubcommand;
@@ -686,7 +704,7 @@ function parseSetupArgs(argv: string[]): ParsedSetupArgs {
   const parsed: ParsedSetupArgs = { checkOnly: false, json: false, uninstall: false, fromEnv: false, assumeYes: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === 'slack' || arg === 'planner') {
+    if (arg === 'slack' || arg === 'planner' || arg === 'machines') {
       if (parsed.subcommand) throw new Error(`Unexpected setup argument: ${arg}`);
       parsed.subcommand = arg;
     } else if (arg === '--check') {
@@ -768,6 +786,246 @@ async function promptYes(io: SetupIO, question: string, assumeYes = false): Prom
   return answer === 'y' || answer === 'yes';
 }
 
+interface MachineSetupSuccessResult {
+  name: string;
+  reachable: boolean;
+  written: boolean;
+  message: string;
+}
+
+interface MachineSetupErrorResult {
+  name?: string;
+  reachable?: boolean;
+  written: false;
+  message: string;
+  error: {
+    code: string;
+    message: string;
+    conflictingTargetId?: string;
+  };
+}
+
+type MachineSetupResult = MachineSetupSuccessResult | MachineSetupErrorResult;
+
+function parseOptionalPositiveInteger(value: string, fieldName: string, max?: number): number | undefined {
+  const trimmed = value.trim();
+  if (trimmed === '') return undefined;
+  if (!/^\d+$/.test(trimmed)) throw new Error(`${fieldName} must be a positive integer`);
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || (max !== undefined && parsed > max)) {
+    throw new Error(`${fieldName} must be ${max === undefined ? 'a positive integer' : `between 1 and ${max}`}`);
+  }
+  return parsed;
+}
+
+function normalizeRemoteTargetInput(value: unknown): RemoteTargetInput {
+  if (!isJsonRecord(value)) throw new Error('machine must be an object');
+
+  const stringField = (field: keyof RemoteTargetInput): string => {
+    const raw = value[field];
+    if (typeof raw !== 'string' || raw.trim() === '') throw new Error(`${field} is required`);
+    return raw.trim();
+  };
+
+  const input: RemoteTargetInput = {
+    name: stringField('name'),
+    host: stringField('host'),
+    user: stringField('user'),
+    sshKeyPath: stringField('sshKeyPath'),
+  };
+
+  if (value.port !== undefined) {
+    if (typeof value.port !== 'number' || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535) {
+      throw new Error('port must be an integer between 1 and 65535');
+    }
+    input.port = value.port;
+  }
+  if (value.maxConcurrentTasks !== undefined) {
+    if (typeof value.maxConcurrentTasks !== 'number' || !Number.isSafeInteger(value.maxConcurrentTasks) || value.maxConcurrentTasks < 1) {
+      throw new Error('maxConcurrentTasks must be a positive integer');
+    }
+    input.maxConcurrentTasks = value.maxConcurrentTasks;
+  }
+  if (value.provisionCommand !== undefined) {
+    if (typeof value.provisionCommand !== 'string') throw new Error('provisionCommand must be a string');
+    const trimmed = value.provisionCommand.trim();
+    if (trimmed !== '') input.provisionCommand = trimmed;
+  }
+
+  return input;
+}
+
+async function askRemoteTargetInput(io: SetupIO): Promise<RemoteTargetInput> {
+  const name = await askLine(io, 'Machine name: ');
+  const host = await askLine(io, 'Host: ');
+  const user = await askLine(io, 'User: ');
+  const sshKeyPath = await askLine(io, 'SSH key path: ');
+  const port = parseOptionalPositiveInteger(await askLine(io, 'SSH port [22]: '), 'port', 65535);
+  const maxConcurrentTasks = parseOptionalPositiveInteger(
+    await askLine(io, 'Max concurrent tasks [1]: '),
+    'maxConcurrentTasks',
+  );
+  const provisionCommand = (await askLine(io, 'Provision command (optional): ')).trim();
+
+  return normalizeRemoteTargetInput({
+    name,
+    host,
+    user,
+    sshKeyPath,
+    ...(port !== undefined ? { port } : {}),
+    ...(maxConcurrentTasks !== undefined ? { maxConcurrentTasks } : {}),
+    ...(provisionCommand !== '' ? { provisionCommand } : {}),
+  });
+}
+
+async function checkAndMaybeWriteRemoteTarget(
+  input: RemoteTargetInput,
+  write: boolean,
+  options: SetupDeps,
+): Promise<MachineSetupResult> {
+  const connectivity = await checkRemoteTargetConnectivity(
+    {
+      host: input.host,
+      user: input.user,
+      sshKeyPath: input.sshKeyPath,
+      port: input.port,
+    },
+    { impl: options.remoteTargetConnectivity },
+  );
+
+  if (!connectivity.reachable) {
+    return {
+      name: input.name,
+      reachable: false,
+      written: false,
+      message: connectivity.message,
+      error: { code: 'connectivity-failed', message: connectivity.message },
+    };
+  }
+
+  if (!write) {
+    return {
+      name: input.name,
+      reachable: true,
+      written: false,
+      message: connectivity.message,
+    };
+  }
+
+  return writeRemoteTarget(input);
+}
+
+function writeRemoteTarget(input: RemoteTargetInput): MachineSetupResult {
+  const configPath = defaultConfigPath();
+  const addResult = addRemoteTarget(readInvokerConfigFile(configPath), input);
+  if (!addResult.ok) {
+    return {
+      name: input.name,
+      reachable: true,
+      written: false,
+      message: addResult.error.message,
+      error: addResult.error,
+    };
+  }
+
+  writeInvokerConfigFile(configPath, addResult.config);
+  return {
+    name: input.name,
+    reachable: true,
+    written: true,
+    message: `Wrote machine "${input.name}" to ${configPath}`,
+  };
+}
+
+function formatMachineConnectivity(result: MachineSetupResult): string {
+  if (result.reachable) return `Connectivity check passed: ${result.message}`;
+  return `Connectivity check failed: ${result.message}`;
+}
+
+async function runMachinesSetupInteractive(io: SetupIO, options: SetupDeps): Promise<void> {
+  let addAnother = true;
+  while (addAnother) {
+    let repeatThisMachine = true;
+    while (repeatThisMachine) {
+      let input: RemoteTargetInput;
+      try {
+        input = await askRemoteTargetInput(io);
+      } catch (error) {
+        io.print(`Invalid machine input: ${formatCaughtException(error)}`);
+        repeatThisMachine = await promptYes(io, 'Try this machine again? [y/N] ');
+        continue;
+      }
+
+      const checked = await checkAndMaybeWriteRemoteTarget(input, false, options);
+      io.print(formatMachineConnectivity(checked));
+
+      if (!checked.reachable) {
+        repeatThisMachine = await promptYes(io, 'Try this machine again? [y/N] ');
+        continue;
+      }
+
+      const keep = await promptYes(io, 'Keep this machine? [y/N] ');
+      if (!keep) {
+        io.print('Nothing written.');
+        repeatThisMachine = await promptYes(io, 'Try this machine again? [y/N] ');
+        continue;
+      }
+
+      const written = writeRemoteTarget(input);
+      if (written.written) {
+        io.print(written.message);
+      } else {
+        io.print(`Nothing written: ${written.message}`);
+      }
+      repeatThisMachine = false;
+    }
+
+    addAnother = await promptYes(io, 'Add another machine? [y/N] ');
+  }
+}
+
+async function runMachinesSetupJson(io: SetupIO, options: SetupDeps): Promise<number> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readAllStdin(io));
+  } catch (error) {
+    io.print(JSON.stringify([{
+      written: false,
+      message: `Invalid JSON input: ${formatCaughtException(error)}`,
+      error: { code: 'invalid-json', message: formatCaughtException(error) },
+    } satisfies MachineSetupErrorResult]));
+    return 1;
+  }
+
+  if (!Array.isArray(parsed)) {
+    io.print(JSON.stringify([{
+      written: false,
+      message: 'Invalid JSON input: expected an array',
+      error: { code: 'invalid-json', message: 'expected an array' },
+    } satisfies MachineSetupErrorResult]));
+    return 1;
+  }
+
+  const results: MachineSetupResult[] = [];
+  for (const item of parsed) {
+    let input: RemoteTargetInput;
+    try {
+      input = normalizeRemoteTargetInput(item);
+    } catch (error) {
+      results.push({
+        written: false,
+        message: `Invalid machine input: ${formatCaughtException(error)}`,
+        error: { code: 'invalid-input', message: formatCaughtException(error) },
+      });
+      continue;
+    }
+    results.push(await checkAndMaybeWriteRemoteTarget(input, true, options));
+  }
+
+  io.print(JSON.stringify(results));
+  return results.every((result) => result.written) ? 0 : 1;
+}
+
 function plannerMcpCheck(state: ExperimentalPlannerSetupState): PrerequisiteCheck {
   return {
     id: 'planner-mcp',
@@ -806,12 +1064,21 @@ export async function runSetup(
 ): Promise<number> {
   const parsed = parseSetupArgs(argv);
   const wantSlack = parsed.subcommand === 'slack';
+  const wantMachines = parsed.subcommand === 'machines';
   const fromEnv = parsed.fromEnv;
   const rl = (io as { rl?: { close: () => void } }).rl;
   const isInstalled = options.isInstalled ?? commandExists;
   try {
     if (parsed.subcommand === 'planner') {
       return await maybeInstallPlanner(parsed, io);
+    }
+
+    if (wantMachines && parsed.json) {
+      return await runMachinesSetupJson(io, options);
+    }
+
+    if (wantMachines && parsed.checkOnly) {
+      throw new Error('setup machines does not support --check');
     }
 
     if (parsed.checkOnly) {
@@ -837,14 +1104,14 @@ export async function runSetup(
     io.print('');
     checks.push(plannerMcpCheck(plannerState));
 
-    if (!wantSlack && !fromEnv && await promptYes(io, 'Enable the experimental planner now? [y/N] ', parsed.assumeYes)) {
+    if (!wantSlack && !wantMachines && !fromEnv && await promptYes(io, 'Enable the experimental planner now? [y/N] ', parsed.assumeYes)) {
       await maybeInstallPlanner(parsed, io);
       io.print('');
       checks.push(plannerMcpCheck(readExperimentalPlannerSetup({ targetPath: parsed.targetPath })));
     }
 
     let doSlack = wantSlack || fromEnv;
-    if (!wantSlack && !fromEnv) {
+    if (!wantSlack && !wantMachines && !fromEnv) {
       doSlack = parsed.assumeYes ? false : await promptYes(io, 'Set up the Slack integration now? [y/N] ');
     }
 
@@ -894,6 +1161,14 @@ export async function runSetup(
 
       const envPath = writeSlackEnv({ botToken, appToken, signingSecret, channelId });
       io.print(`\nWrote Slack credentials to ${envPath}. Restart Invoker (or it picks them up on next launch).`);
+    }
+
+    let doMachines = wantMachines;
+    if (!wantSlack && !wantMachines && !fromEnv) {
+      doMachines = parsed.assumeYes ? false : await promptYes(io, 'Set up remote machines now? [y/N] ');
+    }
+    if (doMachines) {
+      await runMachinesSetupInteractive(io, options);
     }
 
     const extras = await collectGithubAndSmokeChecks(options);
