@@ -647,6 +647,36 @@ function parseInAppPlanningPlanSummary(value: unknown): InAppPlanningPlanSummary
   };
 }
 
+export function isLaunchDispatchCandidateStale(
+  candidate: Record<string, unknown>,
+): string | undefined {
+  const candidateId = Number(candidate.id);
+  const taskStatus = String(candidate.current_task_status ?? '');
+  const launchClaimable = taskStatus === 'pending' || taskStatus === 'queued';
+  if (!candidate.current_task_id) {
+    return `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
+  }
+  if (!launchClaimable) {
+    return (
+      `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
+      `status is ${taskStatus}`
+    );
+  }
+  if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
+    return (
+      `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
+      `is not the selected attempt ${String(candidate.current_selected_attempt_id ?? 'none')}`
+    );
+  }
+  if (Number(candidate.current_execution_generation ?? 0) !== Number(candidate.generation ?? 0)) {
+    return (
+      `Launch dispatch ${candidateId} is stale: generation ${String(candidate.generation)} ` +
+      `does not match task generation ${String(candidate.current_execution_generation ?? 0)}`
+    );
+  }
+  return undefined;
+}
+
 export class SQLiteAdapter implements PersistenceAdapter {
   private db: NativeDatabaseCompat;
   private nativeDb: DatabaseSync;
@@ -3710,24 +3740,7 @@ export class SQLiteAdapter implements PersistenceAdapter {
         if (!candidate || candidate.id == null) return undefined;
         const candidateId = Number(candidate.id);
 
-        let staleReason: string | undefined;
-        const taskStatus = String(candidate.current_task_status ?? '');
-        const launchClaimable = taskStatus === 'pending' || taskStatus === 'queued';
-        if (!candidate.current_task_id) {
-          staleReason = `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} no longer exists`;
-        } else if (!launchClaimable) {
-          staleReason =
-            `Launch dispatch ${candidateId} is stale: task ${String(candidate.task_id)} ` +
-            `status is ${taskStatus}`;
-        } else if (String(candidate.current_selected_attempt_id ?? '') !== String(candidate.attempt_id)) {
-          staleReason =
-            `Launch dispatch ${candidateId} is stale: attempt ${String(candidate.attempt_id)} ` +
-            `is not the selected attempt ${String(candidate.current_selected_attempt_id ?? 'none')}`;
-        } else if (Number(candidate.current_execution_generation ?? 0) !== Number(candidate.generation ?? 0)) {
-          staleReason =
-            `Launch dispatch ${candidateId} is stale: generation ${String(candidate.generation)} ` +
-            `does not match task generation ${String(candidate.current_execution_generation ?? 0)}`;
-        }
+        const staleReason = isLaunchDispatchCandidateStale(candidate);
 
         if (staleReason) {
           this.execRun(
