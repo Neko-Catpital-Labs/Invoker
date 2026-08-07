@@ -6,6 +6,7 @@ import {
 import {
   isHeadlessMutatingCommand,
   isHeadlessReadOnlyCommand,
+  isHeadlessServicelessCommand,
   resolveHeadlessTarget,
   resolveHeadlessTargetWorkflowId,
   type HeadlessTargetLookup,
@@ -61,6 +62,16 @@ describe('headless-command-classification', () => {
     expect(isHeadlessMutatingCommand(['worker'])).toBe(false);
     expect(isHeadlessMutatingCommand(['worker', 'status'])).toBe(false);
     expect(isHeadlessMutatingCommand(['worker', 'disk-headroom'])).toBe(true);
+  });
+
+  it('classifies serviceless commands', () => {
+    expect(isHeadlessServicelessCommand(['install-skills'])).toBe(true);
+    expect(isHeadlessServicelessCommand(['install-skills', 'reinstall'])).toBe(true);
+
+    expect(isHeadlessServicelessCommand([])).toBe(false);
+    expect(isHeadlessServicelessCommand(['query'])).toBe(false);
+    expect(isHeadlessServicelessCommand(['run'])).toBe(false);
+    expect(isHeadlessServicelessCommand(['owner-serve'])).toBe(false);
   });
 
   it('classifies every registered set subcommand as mutating', () => {

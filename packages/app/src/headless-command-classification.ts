@@ -106,6 +106,12 @@ export function isHeadlessReadOnlyCommand(args: string[]): boolean {
   return findHeadlessCommandDefinition(command)?.kind === 'read';
 }
 
+export function isHeadlessServicelessCommand(args: string[]): boolean {
+  // Serviceless commands copy files into agent homes and must run before
+  // service initialization: no DB, no writer lock.
+  return args[0] === 'install-skills';
+}
+
 export function isHeadlessMutatingCommand(args: string[]): boolean {
   const command = args[0];
   if (!command || command === '--help' || command === '-h') return false;

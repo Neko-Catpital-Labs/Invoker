@@ -143,6 +143,7 @@ import { openMainProcessDatabase } from './viewer-db-boundary.js';
 import {
   isHeadlessMutatingCommand,
   isHeadlessReadOnlyCommand,
+  isHeadlessServicelessCommand,
   resolveHeadlessTargetWorkflowId,
 } from './headless-command-classification.js';
 import {
@@ -943,6 +944,20 @@ function startHeadlessMode(): void {
       process.stderr.write(`${RED}Error:${RESET} Unknown command: ${command}. Run with --help for usage.\n`);
       process.exit(1);
       return;
+    }
+
+    if (isHeadlessServicelessCommand(cliArgs)) {
+      try {
+        await runHeadless(cliArgs, {
+          installBundledSkills: installPackagedSkills,
+        } as unknown as HeadlessDeps);
+        process.exit(process.exitCode ?? 0);
+        return;
+      } catch (err) {
+        process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+        process.exit(1);
+        return;
+      }
     }
 
     // Try delegation for mutating commands first (owner mode).
