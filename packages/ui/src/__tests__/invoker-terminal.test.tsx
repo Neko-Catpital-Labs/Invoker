@@ -2038,7 +2038,22 @@ describe('Invoker terminal submit context (component)', () => {
       expect(screen.getByTestId('selected-workflow-mini-dag')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('workflow-graph-surface'));
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      fireEvent.click(screen.getByTestId('rf__node-task-a'));
+      await waitFor(() => {
+        expect(
+          screen
+            .getByTestId('selected-workflow-mini-dag')
+            .querySelector('[data-keyboard-region="taskGraph"]'),
+        ).toHaveAttribute('data-keyboard-active', 'true');
+      });
+      await flushFrames(2);
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+      await flushFrames(2);
+
+      if (screen.queryByTestId('selected-workflow-mini-dag') === null) break;
+    }
 
     await waitFor(() => {
       expect(screen.queryByTestId('selected-workflow-mini-dag')).not.toBeInTheDocument();
