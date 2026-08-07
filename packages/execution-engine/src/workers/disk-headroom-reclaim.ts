@@ -5,9 +5,13 @@
  * Never touches invoker.db / config.json / the home root / paths outside the home.
  */
 
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, renameSync } from 'node:fs';
+import { rm as rmAsync } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { promisify } from 'node:util';
 
 import type { Logger } from '@invoker/contracts';
 import type { TaskState } from '@invoker/workflow-core';
@@ -216,6 +220,7 @@ exit 0
 
 const LOCAL_RM_MAX_RETRIES = 5;
 const LOCAL_RM_RETRY_DELAY_MS = 100;
+const execFileAsync = promisify(execFile);
 
 /**
  * Read-only accessor for Invoker's own workflow/task state, used to derive
@@ -292,28 +297,43 @@ function pathIsProtected(candidate: string, protectedPaths: ReadonlySet<string>)
 /**
  * Renames `path` aside before erasing the renamed copy, mirroring
  * remove_path() in buildInvokerHomeCleanupScript above. A partial failure
- * mid-erase then leaves a `.deleting.<pid>` orphan (swept up by
+ * mid-erase then leaves a `.deleting.<random>` orphan (swept up by
  * sweepLocalDeletingOrphans next pass) instead of a half-gone directory
- * still sitting under the name other code looks up.
+ * still sitting under the name other code looks up. Erases out of process
+ * (`rm -rf` via execFile) so a large tree does not block the event loop;
+ * falls back to the async fs.rm if the rename or the subprocess fails.
  */
 async function eraseLocalPath(path: string, errors: string[]): Promise<void> {
-  const staged = `${path}.deleting.${process.pid}`;
-  let target = path;
-  try {
-    renameSync(path, staged);
-    target = staged;
-  } catch {
-    // Rename failed (e.g. cross-device); erase the original path directly below.
-  }
-  try {
-    rmSync(target, {
+  const removeWithNode = async (deletePath: string) => {
+    await rmAsync(deletePath, {
       recursive: true,
       force: true,
       maxRetries: LOCAL_RM_MAX_RETRIES,
       retryDelay: LOCAL_RM_RETRY_DELAY_MS,
     });
-  } catch (err) {
-    errors.push(`${target}: ${err instanceof Error ? err.message : String(err)}`);
+  };
+
+  let deletePath = `${path}.deleting.${randomUUID().slice(0, 8)}`;
+  try {
+    renameSync(path, deletePath);
+  } catch {
+    deletePath = path;
+    try {
+      await removeWithNode(deletePath);
+    } catch (fallbackErr) {
+      errors.push(`${path}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+    }
+    return;
+  }
+
+  try {
+    await execFileAsync('rm', ['-rf', deletePath]);
+  } catch {
+    try {
+      await removeWithNode(deletePath);
+    } catch (fallbackErr) {
+      errors.push(`${path}: ${fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)}`);
+    }
   }
 }
 
