@@ -233,6 +233,199 @@ describe('runSetup', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  function setupMachineTestEnv() {
+    const home = mkdtempSync(join(tmpdir(), 'invoker-setup-machines-'));
+    const saved = {
+      config: process.env.INVOKER_REPO_CONFIG_PATH,
+      mcp: process.env.INVOKER_MCP_CONFIG_PATH,
+    };
+    process.env.INVOKER_REPO_CONFIG_PATH = join(home, 'config.json');
+    process.env.INVOKER_MCP_CONFIG_PATH = join(home, 'mcp.json');
+    return {
+      home,
+      configPath: process.env.INVOKER_REPO_CONFIG_PATH,
+      restore: () => {
+        restoreEnv('INVOKER_REPO_CONFIG_PATH', saved.config);
+        restoreEnv('INVOKER_MCP_CONFIG_PATH', saved.mcp);
+        rmSync(home, { recursive: true, force: true });
+      },
+    };
+  }
+
+  function machineSetupDeps(overrides: SetupDeps = {}): SetupDeps {
+    return readySetupDeps({
+      remoteTargetConnectivity: async (target) => ({
+        reachable: true,
+        message: `ssh probe to ${target.user}@${target.host} succeeded`,
+      }),
+      ...overrides,
+    });
+  }
+
+  it('adds one machine through the interactive setup path', async () => {
+    const env = setupMachineTestEnv();
+    const prompts: string[] = [];
+    const answers = [
+      'build-a',
+      'build-a.example.test',
+      'deploy',
+      '/home/deploy/.ssh/id_ed25519',
+      '2222',
+      '3',
+      'pnpm install --frozen-lockfile',
+      'y',
+      'n',
+    ];
+    try {
+      const code = await runSetup(['machines'], {
+        print: () => {},
+        prompt: async (question) => {
+          prompts.push(question);
+          return answers.shift() ?? '';
+        },
+      }, machineSetupDeps());
+
+      expect(code).toBe(0);
+      expect(prompts).toContain('Machine name: ');
+      expect(JSON.parse(readFileSync(env.configPath, 'utf8')).remoteTargets).toEqual({
+        'build-a': {
+          host: 'build-a.example.test',
+          user: 'deploy',
+          sshKeyPath: '/home/deploy/.ssh/id_ed25519',
+          port: 2222,
+          maxConcurrentTasks: 3,
+          provisionCommand: 'pnpm install --frozen-lockfile',
+        },
+      });
+    } finally {
+      env.restore();
+    }
+  });
+
+  it('leaves config unchanged when the user declines to keep a passing machine', async () => {
+    const env = setupMachineTestEnv();
+    const originalConfig = { maxConcurrency: 4 };
+    writeFileSync(env.configPath, JSON.stringify(originalConfig));
+    const answers = [
+      'build-a',
+      'build-a.example.test',
+      'deploy',
+      '/home/deploy/.ssh/id_ed25519',
+      '22',
+      '1',
+      '',
+      'n',
+      'n',
+      'n',
+    ];
+    try {
+      const code = await runSetup(['machines'], {
+        print: () => {},
+        prompt: async () => answers.shift() ?? '',
+      }, machineSetupDeps());
+
+      expect(code).toBe(0);
+      expect(JSON.parse(readFileSync(env.configPath, 'utf8'))).toEqual(originalConfig);
+    } finally {
+      env.restore();
+    }
+  });
+
+  it('loops to add another machine and writes both entries', async () => {
+    const env = setupMachineTestEnv();
+    const answers = [
+      'build-a',
+      'build-a.example.test',
+      'deploy',
+      '/home/deploy/.ssh/id_a',
+      '22',
+      '2',
+      '',
+      'y',
+      'y',
+      'build-b',
+      'build-b.example.test',
+      'deploy',
+      '/home/deploy/.ssh/id_b',
+      '2223',
+      '4',
+      'bash scripts/provision.sh',
+      'y',
+      'n',
+    ];
+    try {
+      const code = await runSetup(['machines'], {
+        print: () => {},
+        prompt: async () => answers.shift() ?? '',
+      }, machineSetupDeps());
+
+      expect(code).toBe(0);
+      expect(JSON.parse(readFileSync(env.configPath, 'utf8')).remoteTargets).toEqual({
+        'build-a': {
+          host: 'build-a.example.test',
+          user: 'deploy',
+          sshKeyPath: '/home/deploy/.ssh/id_a',
+          port: 22,
+          maxConcurrentTasks: 2,
+        },
+        'build-b': {
+          host: 'build-b.example.test',
+          user: 'deploy',
+          sshKeyPath: '/home/deploy/.ssh/id_b',
+          port: 2223,
+          maxConcurrentTasks: 4,
+          provisionCommand: 'bash scripts/provision.sh',
+        },
+      });
+    } finally {
+      env.restore();
+    }
+  });
+
+  it('reads machines from stdin and prints one JSON result per input machine under --json', async () => {
+    const env = setupMachineTestEnv();
+    const lines: string[] = [];
+    const input = [
+      {
+        name: 'build-a',
+        host: 'build-a.example.test',
+        user: 'deploy',
+        sshKeyPath: '/home/deploy/.ssh/id_a',
+        port: 22,
+        maxConcurrentTasks: 2,
+      },
+      {
+        name: 'build-b',
+        host: 'build-b.example.test',
+        user: 'ci',
+        sshKeyPath: '/home/ci/.ssh/id_b',
+        port: 2222,
+        maxConcurrentTasks: 1,
+        provisionCommand: 'pnpm install --frozen-lockfile',
+      },
+    ];
+    try {
+      const code = await runSetup(['machines', '--json'], {
+        print: (line) => lines.push(line),
+        prompt: async () => { throw new Error('should not prompt in json mode'); },
+        readStdin: async () => JSON.stringify(input),
+        interactive: false,
+      }, machineSetupDeps());
+
+      expect(code).toBe(0);
+      expect(lines).toHaveLength(1);
+      const results = JSON.parse(lines[0]);
+      expect(results).toHaveLength(input.length);
+      expect(results.map((result: { name: string; written: boolean }) => [result.name, result.written])).toEqual([
+        ['build-a', true],
+        ['build-b', true],
+      ]);
+      expect(Object.keys(JSON.parse(readFileSync(env.configPath, 'utf8')).remoteTargets)).toEqual(['build-a', 'build-b']);
+    } finally {
+      env.restore();
+    }
+  });
 });
 
 
