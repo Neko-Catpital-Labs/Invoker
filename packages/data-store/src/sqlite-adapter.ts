@@ -1548,47 +1548,52 @@ export class SQLiteAdapter implements PersistenceAdapter {
     this.removeOutputFiles([taskId]);
   }
 
+  // FK-safety invariant: must run before DELETE FROM tasks, in this order.
+  private deleteDurableTaskCoordinatorRowsBeforeTasks(workflowId: string): void {
+    this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
+    this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
+    this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
+    this.db.run(`
+      DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId, workflowId]);
+    this.db.run(`
+      DELETE FROM execution_resource_leases WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM events WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM task_output WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM attempts WHERE node_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM output_spool WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+    this.db.run(`
+      DELETE FROM terminal_sessions WHERE task_id IN (
+        SELECT id FROM tasks WHERE workflow_id = ?
+      )
+    `, [workflowId]);
+  }
+
   deleteAllTasks(workflowId: string): void {
     const taskIds = this.getTaskIdsForWorkflow(workflowId);
     this.runTransaction(() => {
-      this.db.run('DELETE FROM workflow_mutation_leases WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM workflow_mutation_intents WHERE workflow_id = ?', [workflowId]);
-      this.db.run('DELETE FROM task_launch_dispatch WHERE workflow_id = ?', [workflowId]);
-      this.db.run(`
-        DELETE FROM worker_actions WHERE workflow_id = ? OR task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId, workflowId]);
-      this.db.run(`
-        DELETE FROM execution_resource_leases WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM events WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM task_output WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM attempts WHERE node_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM output_spool WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
-      this.db.run(`
-        DELETE FROM terminal_sessions WHERE task_id IN (
-          SELECT id FROM tasks WHERE workflow_id = ?
-        )
-      `, [workflowId]);
+      this.deleteDurableTaskCoordinatorRowsBeforeTasks(workflowId);
       this.db.run('DELETE FROM tasks WHERE workflow_id = ?', [workflowId]);
     });
     this.removeOutputFiles(taskIds);
