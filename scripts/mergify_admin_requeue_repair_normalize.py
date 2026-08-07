@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+# The normalize process must not dirty the checkout it is about to dirty-check.
+sys.dont_write_bytecode = True
+
 try:
     from .mergify_admin_requeue_logger import AdminBypassLogger
     from .mergify_admin_requeue_model import Ledger
@@ -78,9 +81,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _record_settle_marker(state_file, args.pr, start_head, args.check)
 
-    if git_lines(cwd, "status", "--porcelain"):
+    dirty = git_lines(cwd, "status", "--porcelain")
+    if dirty:
         hard_reset_work_root(cwd, start_head)
-        print("blocked_dirty: repair left the working tree dirty", file=sys.stderr)
+        print("blocked_dirty: repair left the working tree dirty: " + "; ".join(dirty), file=sys.stderr)
         return 1
 
     end_head = git_output(cwd, "rev-parse", "HEAD").strip()
