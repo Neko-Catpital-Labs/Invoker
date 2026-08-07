@@ -200,7 +200,7 @@ def build_repair_check_plan(
     yaml_text += _repair_task_yaml(description=f"Repair PR #{pr.number} (failed check {check_name})", prompt=prompt)
     normalize_command = (
         "set -euo pipefail\n"
-        "python3 scripts/mergify_admin_requeue_repair_normalize.py \\\n"
+        "python3 -B scripts/mergify_admin_requeue_repair_normalize.py \\\n"
         f"  --repo {_shlex(repo)} --pr {pr.number} --check {_shlex(check_name)} \\\n"
         f"  --start-head {_shlex(start_head)} --base {_shlex(pr.base_ref_name)} --trunk master\n"
     )

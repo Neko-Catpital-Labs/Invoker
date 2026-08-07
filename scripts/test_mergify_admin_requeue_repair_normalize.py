@@ -10,6 +10,7 @@ Run:  python3 scripts/test_mergify_admin_requeue_repair_normalize.py
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 import tempfile
@@ -82,6 +83,9 @@ class RepairNormalizeTests(unittest.TestCase):
             return []
         return [line for line in self.state_file.read_text(encoding="utf-8").splitlines() if '"repair-check-settled"' in line]
 
+    def test_import_disables_bytecode_writes(self):
+        self.assertIs(normalize.sys.dont_write_bytecode, True)
+
     def test_records_settle_marker_first_regardless_of_outcome(self):
         with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=("M file.py",)):
             with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root"):
@@ -95,6 +99,16 @@ class RepairNormalizeTests(unittest.TestCase):
                 code = normalize.main(self.argv())
         self.assertEqual(code, 1)
         reset.assert_called_once_with(Path.cwd(), HEAD)
+
+    def test_dirty_working_tree_error_names_dirty_paths(self):
+        stderr = io.StringIO()
+        with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=["?? stray.txt"]):
+            with mock.patch("scripts.mergify_admin_requeue_repair_normalize.hard_reset_work_root"):
+                with mock.patch("sys.stderr", stderr):
+                    code = normalize.main(self.argv())
+        self.assertEqual(code, 1)
+        self.assertIn("blocked_dirty", stderr.getvalue())
+        self.assertIn("?? stray.txt", stderr.getvalue())
 
     def test_no_commit_returns_zero_without_further_work(self):
         with mock.patch("scripts.mergify_admin_requeue_repair_normalize.git_lines", return_value=()):
