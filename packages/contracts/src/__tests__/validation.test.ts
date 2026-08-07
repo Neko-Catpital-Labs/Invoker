@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateWorkRequest, validateWorkResponse } from '../validation.js';
+import { validateWorkRequest, validateWorkResponse, isValidWorkResponseOutputs } from '../validation.js';
 import { createWorkRequest } from '../types.js';
 import type { WorkResponse } from '../types.js';
 
@@ -316,6 +316,13 @@ describe('validateWorkResponse', () => {
       const result = validateWorkResponse({ requestId: 'r', actionId: 'a', executionGeneration: 0, status: 'completed', outputs: [] });
       expect(result.valid).toBe(false);
       expect(result.error).toBe('outputs is required and must be an object');
+    });
+
+    it('isValidWorkResponseOutputs rejects arrays and non-objects, accepts plain objects', () => {
+      expect(isValidWorkResponseOutputs({})).toBe(true);
+      expect(isValidWorkResponseOutputs([])).toBe(false);
+      expect(isValidWorkResponseOutputs(null)).toBe(false);
+      expect(isValidWorkResponseOutputs('not-an-object')).toBe(false);
     });
 
     it('rejects spawn_experiments with missing dagMutation', () => {
