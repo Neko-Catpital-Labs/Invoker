@@ -3037,7 +3037,27 @@ describe('SQLiteAdapter', () => {
         generation: 1,
       });
 
+      const runSpy = vi.spyOn((adapter as any).db, 'run');
+
       expect(() => adapter.deleteAllTasks('wf-1')).not.toThrow();
+
+      const deletedTables = runSpy.mock.calls
+        .map(([sql]) => /DELETE FROM (\w+)/.exec(sql as string)?.[1])
+        .filter((table): table is string => table !== undefined);
+
+      expect(deletedTables).toEqual([
+        'workflow_mutation_leases',
+        'workflow_mutation_intents',
+        'task_launch_dispatch',
+        'worker_actions',
+        'execution_resource_leases',
+        'events',
+        'task_output',
+        'attempts',
+        'output_spool',
+        'terminal_sessions',
+        'tasks',
+      ]);
 
       expect(adapter.loadWorkflow('wf-1')).toBeDefined();
       expect(adapter.loadTasks('wf-1')).toEqual([]);
