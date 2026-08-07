@@ -7,7 +7,7 @@ export async function writeStdoutAndFlush(text: string): Promise<void> {
 
 export async function writeStdoutFlushAndExit(
   text: string,
-  exit: (code: number) => void = (code) => process.exit(code),
+  exit: (code: number | string) => void = (code) => process.exit(code),
 ): Promise<void> {
   await writeStdoutAndFlush(text);
   // Electron's main process never exits on event-loop drain, so after the
