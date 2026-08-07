@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import subprocess
 import sys
@@ -133,6 +134,17 @@ class MergifyAdminRequeueTests(unittest.TestCase):
         executor = AdminBypassGhExecutor(gh, ledger, logger, repo)
         return AdminBypassRepairer(gh, executor, logger, ledger, repo)
 
+    def log_rows(self, text):
+        rows = []
+        for line in text.splitlines():
+            if " " not in line:
+                continue
+            level, payload = line.split(" ", 1)
+            row = json.loads(payload)
+            row["_level"] = level
+            rows.append(row)
+        return rows
+
     def test_loads_admin_bypass_rule_from_mergify_yml(self):
         trunk, labels, required = load_mergify_rules(Path(".mergify.yml"))
         self.assertEqual(trunk, "master")
@@ -143,6 +155,10 @@ class MergifyAdminRequeueTests(unittest.TestCase):
             "PR Body",
             "quality / TypeScript Types",
             "required-fast / Guardrails",
+            "required-fast / Merge Gate Concurrency Repro",
+            "required-fast / Launch Dispatch Queue Repro",
+            "required-fast / Start Running MECE Repros",
+            "required-fast / Branch Carry Forward",
             "required-fast / Submit Workflow Chain",
             "UI Vitest",
         }))
@@ -578,6 +594,73 @@ Failing checks
         self.assertIn('"kind": "repair_check"', log)
         self.assertIn('"failed_check"', log)
         self.assertIn('"pr_number": 2606', log)
+
+    def test_run_cycle_logs_degraded_once_when_all_repair_dispatches_fail(self):
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stacks = (
+            StackGroup("s1", (pr(7101, checks=checks, latest=mergify()),)),
+            StackGroup("s2", (pr(7102, checks=checks, latest=mergify()),)),
+        )
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=stacks, open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr", return_value=None):
+                        with mock.patch.object(AdminBypassRepairer, "repair_check", side_effect=[TimeoutError("timed out after 30s"), RuntimeError("second failure")]):
+                            with redirect_stdout(stdout), redirect_stderr(stderr):
+                                should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        log = stderr.getvalue()
+        self.assertEqual(log.count('"event": "admin-bypass-repair-attempt-failed"'), 2)
+        degraded = [row for row in self.log_rows(log) if row.get("event") == "admin-bypass-dispatch-degraded"]
+        self.assertEqual(len(degraded), 1)
+        self.assertEqual(degraded[0]["_level"], "ERROR")
+        self.assertEqual(degraded[0]["repo"], "owner/repo")
+        self.assertEqual(degraded[0]["attempted"], 2)
+        self.assertEqual(degraded[0]["failed"], 2)
+        self.assertEqual(degraded[0]["last_error"], "second failure")
+
+    def test_run_cycle_does_not_log_degraded_when_any_repair_dispatch_succeeds(self):
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        checks = {"PR Body": check("PR Body", "failure"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stacks = (
+            StackGroup("s1", (pr(7201, checks=checks, latest=mergify()),)),
+            StackGroup("s2", (pr(7202, checks=checks, latest=mergify()),)),
+        )
+        outcome = RepairOutcome(status="submitted", check_name="PR Body", start_head=HEAD, end_head=HEAD)
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=stacks, open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr", return_value=None):
+                        with mock.patch.object(AdminBypassRepairer, "repair_check", side_effect=[RuntimeError("first failure"), outcome]):
+                            with redirect_stdout(stdout), redirect_stderr(stderr):
+                                should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        log = stderr.getvalue()
+        self.assertEqual(log.count('"event": "admin-bypass-repair-attempt-failed"'), 1)
+        self.assertNotIn('"event": "admin-bypass-dispatch-degraded"', log)
+
+    def test_run_cycle_does_not_log_degraded_when_no_repair_actions_are_planned(self):
+        args = requeue.parse_args(["--once", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
+        checks = {"PR Body": check("PR Body", "pending"), "quality / TypeScript Types": check("quality / TypeScript Types")}
+        stack = StackGroup("s", (pr(7301, checks=checks, latest=mergify()),))
+        stderr = io.StringIO()
+        stdout = io.StringIO()
+        with mock.patch.object(exec_impl, "load_mergify_rules", return_value=("master", frozenset({"admin-bypass"}), REQUIRED)):
+            with mock.patch.object(exec_impl, "GhClient", return_value=object()):
+                with mock.patch.object(AdminBypassStackLoader, "load", return_value=LoadedStacks(stacks=(stack,), open_pr_numbers_by_head={})):
+                    with mock.patch.object(exec_impl, "resolve_workflow_for_pr") as resolve:
+                        with mock.patch.object(AdminBypassRepairer, "repair_check") as repair_check:
+                            with redirect_stdout(stdout), redirect_stderr(stderr):
+                                should_poll = exec_impl.run_cycle(args)
+        self.assertTrue(should_poll)
+        resolve.assert_not_called()
+        repair_check.assert_not_called()
+        self.assertNotIn('"event": "admin-bypass-dispatch-degraded"', stderr.getvalue())
 
     def test_run_cycle_blocks_once_for_unaccepted_upper_stack(self):
         args = requeue.parse_args(["--once", "--dry-run", "--repo", "owner/repo", "--state-file", str(self.ledger().path)])
