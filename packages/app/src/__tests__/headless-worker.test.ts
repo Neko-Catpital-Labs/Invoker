@@ -49,6 +49,31 @@ describe('headless worker registry', () => {
     }]);
   });
 
+  it('uses a target\'s remoteInvokerHome as the remotePath when set', () => {
+    const config = resolveHeadlessDiskHeadroomConfig({
+      remoteTargets: {
+        digitalOcean: {
+          host: '203.0.113.10',
+          user: 'invoker',
+          sshKeyPath: '/tmp/test-key',
+          port: 2222,
+          remoteInvokerHome: '~/.invoker-custom',
+        },
+      },
+    });
+
+    expect(config.remoteTargets).toEqual([{
+      name: 'digitalOcean',
+      connection: {
+        host: '203.0.113.10',
+        user: 'invoker',
+        sshKeyPath: '/tmp/test-key',
+        port: 2222,
+      },
+      remotePath: '~/.invoker-custom',
+    }]);
+  });
+
   it('maps configured SSH targets into infra-repair worker dependencies', () => {
     const config = resolveHeadlessInfraRepairConfig({
       remoteTargets: {
