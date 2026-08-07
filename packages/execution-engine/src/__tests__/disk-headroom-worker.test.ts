@@ -96,7 +96,7 @@ describe('disk-headroom worker', () => {
     });
   });
 
-  it('cleans critical targets and skips warn-only targets', async () => {
+  it('cleans critical targets and skips single warn-only targets', async () => {
     const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
     registerDiskHeadroomWorker(registry);
 
@@ -152,11 +152,86 @@ describe('disk-headroom worker', () => {
       invokerHome: '/tmp/invoker-home',
       targetKey: localLabel,
     });
+    expect(cleanupLocal.mock.calls[0]?.[0]).not.toHaveProperty('mode');
     expect(cleanupRemote).toHaveBeenCalledTimes(1);
     expect(cleanupRemote.mock.calls[0]?.[0]).toMatchObject({
       target: remoteTargets[0],
     });
     expect(upsertWorkerAction).toHaveBeenCalled();
+  });
+
+  it('runs local warn-paced stale-only cleanup after consecutive warn ticks with an independent cooldown', async () => {
+    const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
+    registerDiskHeadroomWorker(registry);
+
+    const localLabel = 'local /tmp/invoker-home';
+    const evaluations = [
+      warnEval(localLabel),
+      warnEval(localLabel),
+      warnEval(localLabel),
+      criticalEval(localLabel),
+    ];
+    let tick = 0;
+    const runCheck = vi.fn(async () => [evaluations[tick++] ?? evaluations[evaluations.length - 1]!]);
+    const cleanupLocal = vi.fn(async ({ targetKey, mode }: { targetKey: string; mode?: string }) => ({
+      targetKey,
+      ok: true,
+      reason: mode === 'stale-only' ? 'warn-paced' : 'critical-cleanup',
+    }));
+    const upsertWorkerAction = vi.fn((row: unknown) => row);
+    const logger = makeLogger();
+
+    const definition = registry.get(DISK_HEADROOM_WORKER_KIND)!;
+    const runtime = definition.factory({
+      store: { upsertWorkerAction } as any,
+      submitter: { submit: vi.fn() } as any,
+      logger,
+      diskHeadroom: {
+        localPath: '/tmp/invoker-home',
+        remoteTargets: [],
+        thresholds: { warnPercent: 85, criticalPercent: 95 },
+        intervalMs: 0,
+        tickOnStart: false,
+        cleanupCooldownMs: 60_000,
+        runCheck,
+        cleanupLocal,
+      },
+    });
+
+    await runtime.tick('manual');
+    expect(cleanupLocal).not.toHaveBeenCalled();
+
+    await runtime.tick('manual');
+    expect(cleanupLocal).toHaveBeenCalledTimes(1);
+    expect(cleanupLocal.mock.calls[0]?.[0]).toMatchObject({
+      invokerHome: '/tmp/invoker-home',
+      targetKey: localLabel,
+      mode: 'stale-only',
+    });
+
+    await runtime.tick('manual');
+    expect(cleanupLocal).toHaveBeenCalledTimes(1);
+
+    await runtime.tick('manual');
+    expect(cleanupLocal).toHaveBeenCalledTimes(2);
+    expect(cleanupLocal.mock.calls[1]?.[0]).toMatchObject({
+      invokerHome: '/tmp/invoker-home',
+      targetKey: localLabel,
+    });
+    expect(cleanupLocal.mock.calls[1]?.[0]).not.toHaveProperty('mode');
+    expect(upsertWorkerAction).toHaveBeenCalledWith(expect.objectContaining({
+      externalKey: `cleanup:${localLabel}:warn-paced`,
+      payload: { reason: 'warn-paced' },
+      status: 'completed',
+    }));
+    expect(logger.info).toHaveBeenCalledWith(
+      `[disk-headroom-cleanup] warn-paced begin ${localLabel}`,
+      expect.objectContaining({ targetKey: localLabel }),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      `[disk-headroom-cleanup] warn-paced done ${localLabel}`,
+      expect.objectContaining({ targetKey: localLabel }),
+    );
   });
 
   it('respects cleanup cooldown on a second critical tick', async () => {
