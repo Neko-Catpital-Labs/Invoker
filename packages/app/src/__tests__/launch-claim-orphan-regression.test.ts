@@ -17,15 +17,36 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { SQLiteAdapter } from '@invoker/data-store';
+import { SQLiteAdapter, type TaskLaunchDispatch } from '@invoker/data-store';
 import { Orchestrator, type PlanDefinition, type TaskState } from '@invoker/workflow-core';
 import { InMemoryBus } from '@invoker/test-kit';
-import { LaunchDispatcher } from '../launch-dispatcher.js';
+import { LaunchDispatcher, dispatchThroughOutboxOnly } from '../launch-dispatcher.js';
 import {
   LAUNCH_CLAIM_EVENT_TYPE,
   TERMINAL_LAUNCH_EVENT_TYPES,
   assertLaunchInvariant,
 } from './launch-invariant.js';
+
+describe('dispatchThroughOutboxOnly', () => {
+  it('returns false when no row was leased', () => {
+    expect(dispatchThroughOutboxOnly(null)).toBe(false);
+  });
+
+  it('returns true for a leased outbox row', () => {
+    const leased: TaskLaunchDispatch = {
+      id: 1,
+      taskId: 't-1',
+      attemptId: 'attempt-1',
+      workflowId: 'wf-1',
+      state: 'leased',
+      priority: 'normal',
+      enqueuedAt: new Date().toISOString(),
+      attemptsCount: 0,
+      generation: 1,
+    };
+    expect(dispatchThroughOutboxOnly(leased)).toBe(true);
+  });
+});
 
 const STORM_SIZE = 38;
 const TIGHT_MAX_GAP_MS = 60_000;
