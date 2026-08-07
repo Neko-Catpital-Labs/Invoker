@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { TaskState } from '@invoker/workflow-core';
 
+import { computeRepoCacheHash } from '../git-utils.js';
 import {
   buildInvokerHomeCleanupScript,
   cleanupLocalInvokerHome,
@@ -377,5 +378,55 @@ describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
     expect(result.ok).toBe(true);
     expect(result.reason).toBe('critical-cleanup');
     expect(existsSync(someDir)).toBe(false);
+  });
+
+  it('protects a retrying (failed-status) workflow\'s shared repo mirror and worktree, clears an unrelated repo mirror', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-repo-hash-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const userHome = root;
+
+    const repoUrl = 'https://github.com/example/protected-repo.git';
+    const repoHash = computeRepoCacheHash(repoUrl);
+
+    const protectedRepoDir = join(home, 'repos', repoHash);
+    mkdirSync(protectedRepoDir, { recursive: true });
+    writeFileSync(join(protectedRepoDir, 'file.txt'), 'x');
+
+    const protectedWorktreeDir = join(home, 'worktrees', 'active-task', 'some-experiment');
+    mkdirSync(protectedWorktreeDir, { recursive: true });
+    writeFileSync(join(protectedWorktreeDir, 'file.txt'), 'x');
+
+    const unrelatedRepoDir = join(home, 'repos', 'unrelated-hash');
+    mkdirSync(unrelatedRepoDir, { recursive: true });
+    writeFileSync(join(unrelatedRepoDir, 'file.txt'), 'x');
+
+    const store: DiskHeadroomWorkerStore = {
+      listWorkflows: () => [{ id: 'wf-1', repoUrl }],
+      loadTasks: (workflowId: string) =>
+        workflowId === 'wf-1'
+          ? [
+              makeTask({
+                id: 'wf-1/retrying',
+                status: 'failed',
+                execution: { workspacePath: protectedWorktreeDir },
+              }),
+            ]
+          : [],
+    };
+
+    const result = await cleanupLocalInvokerHome({
+      invokerHome: home,
+      userHome,
+      store,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(protectedRepoDir)).toBe(true);
+    expect(existsSync(join(protectedRepoDir, 'file.txt'))).toBe(true);
+    expect(existsSync(protectedWorktreeDir)).toBe(true);
+    expect(existsSync(join(protectedWorktreeDir, 'file.txt'))).toBe(true);
+    expect(existsSync(unrelatedRepoDir)).toBe(false);
   });
 });
