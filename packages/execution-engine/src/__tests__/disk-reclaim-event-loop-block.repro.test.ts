@@ -51,7 +51,7 @@ describe('cleanupLocalInvokerHome event-loop blocking repro', () => {
     expect(readdirSync(join(home, 'worktrees'))).toEqual([]);
   });
 
-  it.fails('keeps watchdog-sized event-loop lag below 250ms while sweeping local worktrees', async () => {
+  it('keeps watchdog-sized event-loop lag below 250ms while sweeping local worktrees', async () => {
     const home = buildInvokerHomeWithLargeWorktree();
     let lastTick = process.hrtime.bigint();
     let maxLagMs = 0;
