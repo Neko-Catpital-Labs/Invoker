@@ -44,6 +44,7 @@ ${BOLD}Execute:${RESET}
   rebase-retry <workflowId|mergeTaskId|taskId>        Refresh pool base, then retry incomplete work
   rebase-recreate <workflowId|mergeTaskId|taskId>     Refresh pool base, then recreate workflow
   repair-review-gate-ci <prNumber|prUrl>              Queue CI repair for one mapped review-gate PR
+  check-pr-status [taskId]                            Force an immediate merge-gate PR-status recheck
   fix <taskId> [claude|codex]                         Fix a failed task (default: claude)
 
 ${BOLD}Respond:${RESET}
