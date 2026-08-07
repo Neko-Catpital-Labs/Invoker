@@ -394,7 +394,12 @@ Failing checks
         self.assertEqual(result.end_head, HEAD)
         self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 1)
 
-    def test_repair_conflict_does_not_record_ledger_when_submission_fails(self):
+    def test_repair_conflict_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
+        # The ledger row is written before submission (not after) so a broken
+        # ledger write can never leave a real, running repair uncounted. The
+        # cost is the mirror case here: if submission itself fails, the
+        # attempt is still counted -- an acceptable trade since submission
+        # failures are rare and non-silent, unlike a lost ledger write.
         item = pr(2661, merge_state="DIRTY", latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
@@ -404,9 +409,9 @@ Failing checks
         ):
             with self.assertRaises(RuntimeError):
                 repairer.repair_conflict(item, "GitHub reports merge conflict", 1)
-        self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 0)
+        self.assertEqual(ledger.count("conflict-repair", item.number, item.head_ref_oid, f"conflict:{item.number}"), 1)
 
-    def test_repair_check_ledger_row_not_written_when_submission_fails(self):
+    def test_repair_check_records_ledger_before_submitting_so_a_failed_submission_is_still_counted(self):
         item = pr(2662, latest=mergify())
         ledger = self.ledger()
         repairer = self.repairer(object(), ledger)
@@ -417,7 +422,7 @@ Failing checks
             ):
                 with self.assertRaises(RuntimeError):
                     repairer.repair_check(item, "PR Body", 1)
-        self.assertEqual(ledger.count("repair-check", item.number, item.head_ref_oid, "PR Body"), 0)
+        self.assertEqual(ledger.count("repair-check", item.number, item.head_ref_oid, "PR Body"), 1)
 
     def test_candidate_stack_includes_unlabeled_upper_prs(self):
         def raw(number, base, head, labels):
