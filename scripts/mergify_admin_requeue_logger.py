@@ -15,6 +15,10 @@ class AdminBypassLogger:
         payload = {"event": event, **fields}
         print(f"TRACE {json.dumps(payload, sort_keys=True)}", file=sys.stderr)
 
+    def error(self, event: str, **fields: object) -> None:
+        payload = {"event": event, **fields}
+        print(f"ERROR {json.dumps(payload, sort_keys=True)}", file=sys.stderr)
+
     def action_payload(self, action: Action) -> dict[str, object]:
         return {
             "kind": action.kind,
