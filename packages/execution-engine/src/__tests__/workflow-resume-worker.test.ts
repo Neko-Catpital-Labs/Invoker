@@ -314,7 +314,7 @@ describe('workflow resume worker tick', () => {
     expect(h.submit).toHaveBeenCalledTimes(1);
   });
 
-  it('logs a recovery.worker.submit event with the workflow id and intent id', async () => {
+  it('logs a recovery.worker.submit event keyed by the ready task id', async () => {
     const h = harness({
       workflows: [
         {
@@ -325,7 +325,7 @@ describe('workflow resume worker tick', () => {
     });
     await h.tick(POLL_CTX);
     expect(h.logEvent).toHaveBeenCalledWith(
-      'wf-1',
+      'wf-1/task',
       'recovery.worker.submit',
       expect.objectContaining({
         worker: 'workflow-resume',
