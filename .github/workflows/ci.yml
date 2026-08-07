@@ -380,7 +380,7 @@ jobs:
         run: ${{ matrix.command }}
 
   required-fast-extra:
-    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'mergify/merge-queue/') }}
+    if: ${{ github.event_name != 'pull_request' || startsWith(github.head_ref, 'mergify/merge-queue/') }}
     needs: build-artifacts
     runs-on:
       labels: ${{ matrix.runner_label }}
