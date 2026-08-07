@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 import { isInvokerRepoUrl, parseMakePrStackPublishResult } from '../pr-authoring.js';
 import { TaskRunner, type TaskRunnerConfig } from '../task-runner.js';
@@ -152,6 +152,62 @@ describe('repro #1865: reviewPollStillMatches blocks writes after the task left 
       execution: { selectedAttemptId: 'att1', generation: 0, reviewGate: undefined, reviewId: 'pr#1' },
     };
     expect(p.reviewPollStillMatches(before, reviewReady, 'pr#1')).toBe(true);
+  });
+
+  it('logs the stale poll discard reason without persisting the resolved PR status', async () => {
+    const task = {
+      id: '__merge__wf-1',
+      description: 'merge gate',
+      status: 'review_ready',
+      dependencies: [],
+      createdAt: new Date(),
+      config: { isMergeNode: true, workflowId: 'wf-1' },
+      execution: {
+        selectedAttemptId: 'att1',
+        generation: 0,
+        reviewGate: {
+          activeGeneration: 0,
+          completion: { required: 'all', status: 'approved' },
+          artifacts: [{ id: 'pr#1', providerId: 'pr#1', required: true, status: 'open', generation: 0 }],
+        },
+      },
+    } as unknown as TaskState;
+    const failed = { ...task, status: 'failed' } as TaskState;
+    const tasks = new Map<string, TaskState>([[task.id, task]]);
+
+    const warn = vi.fn();
+    const updateTask = vi.fn();
+    const orchestrator = {
+      getTask: (id: string) => tasks.get(id),
+    };
+    const persistence = { updateTask };
+    const mergeGateProvider = {
+      checkApproval: async () => {
+        tasks.set(task.id, failed);
+        return { lifecycle: 'open', rejected: false, statusText: 'Open' };
+      },
+    };
+
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn,
+      error: () => {},
+      child: () => logger,
+    };
+    const runner = makeRunner({
+      orchestrator: orchestrator as unknown as TaskRunnerConfig['orchestrator'],
+      persistence: persistence as unknown as TaskRunnerConfig['persistence'],
+      mergeGateProvider: mergeGateProvider as unknown as TaskRunnerConfig['mergeGateProvider'],
+      logger: logger as unknown as TaskRunnerConfig['logger'],
+    });
+
+    await runner.checkPrApprovalNow(task.id);
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`task=${task.id}`));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('providerId=pr#1'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('mismatchedFields=status'));
+    expect(updateTask).not.toHaveBeenCalled();
   });
 });
 
