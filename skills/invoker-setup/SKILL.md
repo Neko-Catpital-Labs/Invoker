@@ -42,6 +42,12 @@ invoker-cli doctor --fix
 Ask plainly: "Do you want to set up the Slack integration now?" If no, stop — report that they are
 good to go for CLI and UI workflows and that `invoker-cli setup slack` can add Slack later.
 
+## 2b. Ask about remote machines
+
+Ask plainly: "Do you want to add any remote SSH machines now?" If no, skip to the next step — a
+user with no remote machines is still "good to go" for local CLI and UI workflows, and
+`invoker-cli setup machines` can add machines later.
+
 ## 3. Guided Slack setup (only if they said yes)
 
 Run the wizard, which writes a ready-to-paste app manifest to `~/.invoker/slack-app-manifest.json`
@@ -68,6 +74,23 @@ If you are doing it on the user's behalf (you cannot click api.slack.com), drive
 Adding scopes after install does **not** update the existing token. The user MUST click
 **Reinstall to Workspace** or the bot keeps the old (insufficient) scopes. If the scope check fails,
 tell them to add the scope **and reinstall**.
+
+## 3b. Guided machines setup (only if they said yes)
+
+Run the wizard:
+
+```bash
+invoker-cli setup machines
+```
+
+It prompts for each machine's name, host, user, SSH key path, port (default `22`), max concurrent
+tasks (default `1`), and an optional provision command, then probes SSH connectivity before
+saving — only a machine that answers the probe is written to `~/.invoker/config.json`. It asks
+after each one whether to add another. The desktop System Setup panel's "Add remote machines"
+section offers the same fields and the same reachability check for users who prefer the GUI.
+
+If a probe fails, report the connectivity error and let the user retry or skip that machine —
+never write an unreachable machine to config.
 
 ## 4. Validate credentials
 
