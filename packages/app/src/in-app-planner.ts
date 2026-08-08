@@ -1006,11 +1006,11 @@ export async function submitPlanningChatDraft(
   if (session.status === 'submitted') {
     return { ok: false, error: 'This planning session was already submitted.' };
   }
-  if (session.pendingSubmit) {
-    return session.pendingSubmit;
-  }
   if (session.status !== 'draft_ready' || !session.draftPlanText?.trim()) {
     return { ok: false, error: NO_COMPLETE_PLAN_DRAFTED_ERROR };
+  }
+  if (session.pendingSubmit) {
+    return session.pendingSubmit;
   }
 
   const submitAttempt = (async (): Promise<InAppPlanningSubmitResponse> => {
