@@ -102,6 +102,24 @@ function machinesErrorResult(machines: RemoteTargetInput[], message: string): Ma
   }));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isMachineSetupError(value: unknown): value is MachineSetupResult['error'] {
+  if (!isRecord(value)) return false;
+  if (typeof value.code !== 'string' || typeof value.message !== 'string') return false;
+  return value.conflictingTargetId === undefined || typeof value.conflictingTargetId === 'string';
+}
+
+function isMachineSetupResult(value: unknown): value is MachineSetupResult {
+  if (!isRecord(value)) return false;
+  if (typeof value.written !== 'boolean' || typeof value.message !== 'string') return false;
+  if (value.name !== undefined && typeof value.name !== 'string') return false;
+  if (value.reachable !== undefined && typeof value.reachable !== 'boolean') return false;
+  return value.error === undefined || isMachineSetupError(value.error);
+}
+
 export async function runMachinesSetup(
   machines: RemoteTargetInput[],
   deps: Pick<InvokerCliSetupDeps, 'cliPath'>,
@@ -121,6 +139,10 @@ export async function runMachinesSetup(
 
   if (!Array.isArray(parsed)) {
     return machinesErrorResult(machines, 'invoker-cli returned unexpected output');
+  }
+
+  if (parsed.length !== machines.length || !parsed.every(isMachineSetupResult)) {
+    return machinesErrorResult(machines, 'invoker-cli returned invalid machine setup output');
   }
 
   return parsed as MachineSetupResult[];
