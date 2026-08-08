@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateWorkRequest, validateWorkResponse } from '../validation.js';
+import { validateWorkRequest, validateWorkResponse, isValidWorkResponseOutputs } from '../validation.js';
 import { createWorkRequest } from '../types.js';
 import type { WorkResponse } from '../types.js';
 
@@ -39,6 +39,25 @@ describe('validateWorkRequest', () => {
     const result = validateWorkRequest({ requestId: 'r', actionId: 'a', executionGeneration: 0, actionType: 'invalid', inputs: {}, callbackUrl: 'http://x' });
     expect(result.valid).toBe(false);
     expect(result.error).toContain('actionType');
+  });
+});
+
+describe('isValidWorkResponseOutputs', () => {
+  it('accepts a plain object', () => {
+    expect(isValidWorkResponseOutputs({})).toBe(true);
+    expect(isValidWorkResponseOutputs({ exitCode: 0 })).toBe(true);
+  });
+
+  it('rejects null, undefined, and non-object values', () => {
+    expect(isValidWorkResponseOutputs(null)).toBe(false);
+    expect(isValidWorkResponseOutputs(undefined)).toBe(false);
+    expect(isValidWorkResponseOutputs('not-an-object')).toBe(false);
+    expect(isValidWorkResponseOutputs(42)).toBe(false);
+  });
+
+  it('rejects arrays', () => {
+    expect(isValidWorkResponseOutputs([])).toBe(false);
+    expect(isValidWorkResponseOutputs([1, 2, 3])).toBe(false);
   });
 });
 
