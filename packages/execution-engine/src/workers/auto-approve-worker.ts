@@ -198,7 +198,7 @@ function loadLatestTask(
   return options.store.loadTasks(candidate.workflowId).find((task) => task.id === candidate.taskId);
 }
 
-function compareCandidateSnapshot(
+export function compareCandidateSnapshot(
   candidate: AutoApproveCandidate,
   latest: TaskState,
 ): AutoApproveSnapshotComparison {
