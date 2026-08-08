@@ -383,6 +383,49 @@ describe('WorktreeExecutor', () => {
 
     taskProcess.emit('close', 0, null);
   });
+  it('BUG: fails the whole task when the provision command fails only because the repo has no package.json', async () => {
+    // Repro for a production incident: a pool's provisionCommand (e.g. this
+    // repo's own local-mac/local-fallback `pnpm install --frozen-lockfile`)
+    // is configured per pool, not per repoUrl. When a workflow targets a
+    // repoUrl that isn't a Node/pnpm project, pnpm reports
+    // ERR_PNPM_NO_PKG_MANIFEST and today that hard-fails the task even
+    // though there was never anything for this command to install here.
+    // This test currently documents that buggy behavior (task.start()
+    // rejects); a follow-up slice flips this assertion once the executor
+    // treats a missing package.json as "this command doesn't apply" instead
+    // of a fatal provisioning error.
+    setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const provisionProcess = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile') {
+        return provisionProcess;
+      }
+      return baseImpl!(cmd, args, options);
+    });
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+    });
+    mockPool(provisionedExecutor);
+
+    const startPromise = provisionedExecutor.start(makeRequest());
+    await vi.waitFor(() => {
+      expect(mockedSpawn.mock.calls.find(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+      )).toBeDefined();
+    });
+
+    (provisionProcess.stdout as EventEmitter).emit(
+      'data',
+      'ERR_PNPM_NO_PKG_MANIFEST  No package.json found in /fake/worktrees/checkout\n',
+    );
+    provisionProcess.emit('close', 1, null);
+
+    await expect(startPromise).rejects.toThrow('ERR_PNPM_NO_PKG_MANIFEST');
+  });
   it('times out hung provision commands and terminates their process group', async () => {
     vi.useFakeTimers();
     const previousTimeout = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;
