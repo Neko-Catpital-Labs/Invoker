@@ -37,12 +37,26 @@ invoker-cli doctor --fix
 `--fix` covers git, pnpm, gh, docker, ssh, codex, claude. `cursor` and `omp` are installed manually
 (report their `remediation`).
 
-## 2. Ask about Slack
+## 2. Ask about remote machines
+
+Ask plainly: "Do you want to add any remote SSH machines now?" If no, stop this step — remote
+targets are optional and can be added later. If yes, run the machines wizard:
+
+```bash
+invoker-cli setup machines
+```
+
+The wizard asks for the same fields as a manual `remoteTargets` entry — host, user, SSH key path,
+and optional port — and checks that the machine is reachable over SSH before saving it to
+`~/.invoker/config.json`. See `docs/remote-ssh-targets.md` for the field reference and the
+hand-edit fallback if the user prefers to edit the config file directly.
+
+## 3. Ask about Slack
 
 Ask plainly: "Do you want to set up the Slack integration now?" If no, stop — report that they are
 good to go for CLI and UI workflows and that `invoker-cli setup slack` can add Slack later.
 
-## 3. Guided Slack setup (only if they said yes)
+## 4. Guided Slack setup (only if they said yes)
 
 Run the wizard, which writes a ready-to-paste app manifest to `~/.invoker/slack-app-manifest.json`
 and prompts for the tokens:
@@ -69,7 +83,7 @@ Adding scopes after install does **not** update the existing token. The user MUS
 **Reinstall to Workspace** or the bot keeps the old (insufficient) scopes. If the scope check fails,
 tell them to add the scope **and reinstall**.
 
-## 4. Validate credentials
+## 5. Validate credentials
 
 After the user provides the four values, write them to `~/.invoker/.env` (the wizard does this) and
 confirm against the live Slack API:
@@ -82,7 +96,7 @@ This runs `auth.test` (bot token + scopes via the `x-oauth-scopes` header),
 `apps.connections.open` (app token / Socket Mode), and `conversations.info` (the lobby channel).
 Surface each failing check's `remediation`.
 
-## 5. Done
+## 6. Done
 
 Tell the user to restart Invoker (or that the next launch picks up `~/.invoker/.env`). On launch the
 app logs a one-line prerequisites summary, and the desktop System Setup panel reports the same

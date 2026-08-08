@@ -8,9 +8,13 @@ The SSH executor (`runnerKind: ssh`) runs task commands on remote hosts over SSH
 
 Each remote target is defined in the Invoker config with a host, user, and path to an SSH private key. Tasks reference targets by ID.
 
-## Configuration
+## Guided Setup (recommended)
 
-Add remote targets to `~/.invoker/config.json`.
+The easiest way to add a remote target is the machines wizard, available from the CLI (`invoker-cli setup machines`) and from the desktop app's setup flow. The wizard walks through the same fields as the config file — host, user, SSH key path, and optional port — and checks that the machine is reachable over SSH before it writes anything to `~/.invoker/config.json`. If the connection check fails, the wizard reports the failure and lets you fix the details and retry instead of saving a broken target.
+
+## Manual Configuration (fallback)
+
+If you prefer to edit the config file directly instead of using the wizard, add remote targets to `~/.invoker/config.json`.
 
 If you want to use a repo-specific config file, launch Invoker with `INVOKER_REPO_CONFIG_PATH=/path/to/config.json`.
 
