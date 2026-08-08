@@ -96,7 +96,7 @@ async function main(): Promise<void> {
     const bystanderWorkflows = workflows.filter((workflow) => workflow.name.startsWith('old-failure-'));
     assert(bystanderWorkflows.length === 92, `expected 92 bystander workflows, saw ${bystanderWorkflows.length}`);
 
-    adapter.updateWorkflow(driverWorkflow.id, { updatedAt: '2024-01-01T00:00:00.000Z' });
+    adapter.updateWorkflow(driverWorkflow.id, { updatedAt: '2023-12-31T23:59:59.000Z' });
     for (let index = 0; index < bystanderWorkflows.length; index += 1) {
       const workflow = bystanderWorkflows[index]!;
       const task = onlyNonMergeTask(adapter.loadTasks(workflow.id));
