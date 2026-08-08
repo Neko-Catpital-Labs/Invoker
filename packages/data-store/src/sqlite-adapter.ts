@@ -349,7 +349,7 @@ async function fileQuickCheckOk(dbPath: string): Promise<boolean> {
  * ISO-derived timestamp (`YYYYMMDD-HHMMSS-mmmZ`), so lexicographic descending
  * order is chronologically newest-first.
  */
-async function findLatestCleanHourlySnapshot(
+export async function findLatestCleanHourlySnapshot(
   backupDir: string,
   dbBasename: string,
 ): Promise<string | null> {
