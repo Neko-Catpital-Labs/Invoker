@@ -5,6 +5,7 @@ import {
   appendJournalEntry,
   getSyncCursor,
   setSyncCursor,
+  LOCAL_SYNC_ORIGIN,
   type SyncEntityType,
   type SyncJournalEntry,
 } from './sync-journal.js';
@@ -13,6 +14,18 @@ export interface ApplyDeltaResult {
   appliedEntries: number;
   skippedEntries: number;
   lastReceivedSeq: number;
+}
+
+interface ApplyEntryResult {
+  changed: boolean;
+  // True only when the persisted row now equals the incoming payload byte
+  // for byte (whether because it was just applied, or because it already
+  // matched). False when the local row instead won a real conflict against
+  // genuinely different incoming content — that local row is not yet known
+  // to the sender and must be kept exportable. Do not set this to `changed`
+  // — a losing incoming entry leaves `changed` false too, but its local row
+  // must still be retained, not purged.
+  incomingAuthoritative: boolean;
 }
 
 type RowPayload = Record<string, unknown>;
@@ -443,6 +456,18 @@ function chooseByStatusThenCanonical(
     : { ...local, [statusColumn]: localStatus };
 }
 
+function canonicalEquals(a: RowPayload, b: RowPayload): boolean {
+  return canonical(a) === canonical(b);
+}
+
+function purgeLocalOriginJournal(db: SqliteExecutor, entityType: SyncEntityType, entityId: string): void {
+  db.execRun('DELETE FROM sync_journal WHERE entity_type = ? AND entity_id = ? AND origin = ?', [
+    entityType,
+    entityId,
+    LOCAL_SYNC_ORIGIN,
+  ]);
+}
+
 function hasSamePersistedPayload(
   db: SqliteExecutor,
   table: string,
@@ -467,43 +492,51 @@ function hasSamePersistedPayload(
   });
 }
 
-function applyWorkflowUpsert(db: SqliteExecutor, entry: SyncJournalEntry, tombstone: boolean): boolean {
+function applyWorkflowUpsert(db: SqliteExecutor, entry: SyncJournalEntry, tombstone: boolean): ApplyEntryResult {
   const payload = asPayload(entry.payload, entry.entityType, entry.entityId);
   const id = requiredText(payload.id ?? entry.entityId, 'workflow id');
   const existing = db.queryOne('SELECT * FROM workflows WHERE id = ?', [id]);
   const incomingDeletedAt = integer(payload.deleted_at);
   const existingDeletedAt = integer(existing?.deleted_at);
   if (existingDeletedAt !== undefined && !tombstone && incomingDeletedAt === undefined) {
-    return false;
+    return { changed: false, incomingAuthoritative: false };
   }
   const deletedAt = tombstone
     ? incomingDeletedAt !== undefined && existingDeletedAt !== undefined
       ? Math.max(incomingDeletedAt, existingDeletedAt)
       : incomingDeletedAt ?? existingDeletedAt ?? Date.now()
     : existingDeletedAt ?? incomingDeletedAt;
+  const incomingCandidate = withDefaults(payload, defaultWorkflow(id, deletedAt));
+  const incomingNormalized = {
+    ...incomingCandidate,
+    status: normalizeWorkflowStatus(incomingCandidate.status),
+  };
   const statusWinner = chooseByStatusThenCanonical(
     existing,
-    withDefaults(payload, defaultWorkflow(id, deletedAt)),
+    incomingNormalized,
     'status',
     WORKFLOW_STATUS_RANK,
     (value) => normalizeWorkflowStatus(value),
   );
+  const incomingAuthoritative = canonicalEquals(statusWinner, incomingNormalized);
   const merged = {
     ...statusWinner,
     id,
     deleted_at: deletedAt ?? null,
     updated_at: text(statusWinner.updated_at) ?? (deletedAt ? new Date(deletedAt).toISOString() : nowIso()),
   };
-  if (hasSamePersistedPayload(db, 'workflows', 'id', id, merged, WORKFLOW_COLUMNS)) return false;
+  if (hasSamePersistedPayload(db, 'workflows', 'id', id, merged, WORKFLOW_COLUMNS)) {
+    return { changed: false, incomingAuthoritative };
+  }
   upsertPayloadRow(db, 'workflows', 'id', WORKFLOW_COLUMNS, merged);
-  return true;
+  return { changed: true, incomingAuthoritative };
 }
 
-function applyWorkflowTombstone(db: SqliteExecutor, entry: SyncJournalEntry): boolean {
+function applyWorkflowTombstone(db: SqliteExecutor, entry: SyncJournalEntry): ApplyEntryResult {
   return applyWorkflowUpsert(db, entry, true);
 }
 
-function applyTaskUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean {
+function applyTaskUpsert(db: SqliteExecutor, entry: SyncJournalEntry): ApplyEntryResult {
   const payload = asPayload(entry.payload, entry.entityType, entry.entityId);
   const id = requiredText(payload.id ?? entry.entityId, 'task id');
   const workflowId = requiredText(payload.workflow_id, `task ${id} workflow_id`);
@@ -519,13 +552,15 @@ function applyTaskUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean {
     execution_generation: 0,
     task_state_version: 1,
   });
+  const incomingNormalized = { ...incoming, status: normalizeTaskStatus(incoming.status) };
   const winner = chooseByStatusThenCanonical(
     existing,
-    { ...incoming, status: normalizeTaskStatus(incoming.status) },
+    incomingNormalized,
     'status',
     TASK_STATUS_RANK,
     (value) => normalizeTaskStatus(value),
   );
+  const incomingAuthoritative = canonicalEquals(winner, incomingNormalized);
   const mergedWorkflowId = text(winner.workflow_id) ?? workflowId;
   ensureWorkflow(db, mergedWorkflowId, workflowDeletedAt(db, mergedWorkflowId));
   const merged = {
@@ -533,12 +568,14 @@ function applyTaskUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean {
     id,
     workflow_id: mergedWorkflowId,
   };
-  if (hasSamePersistedPayload(db, 'tasks', 'id', id, merged, TASK_COLUMNS)) return false;
+  if (hasSamePersistedPayload(db, 'tasks', 'id', id, merged, TASK_COLUMNS)) {
+    return { changed: false, incomingAuthoritative };
+  }
   upsertPayloadRow(db, 'tasks', 'id', TASK_COLUMNS, merged);
-  return true;
+  return { changed: true, incomingAuthoritative };
 }
 
-function applyAttemptUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean {
+function applyAttemptUpsert(db: SqliteExecutor, entry: SyncJournalEntry): ApplyEntryResult {
   const payload = asPayload(entry.payload, entry.entityType, entry.entityId);
   const id = requiredText(payload.id ?? entry.entityId, 'attempt id');
   const nodeId = requiredText(payload.node_id, `attempt ${id} node_id`);
@@ -556,25 +593,29 @@ function applyAttemptUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolea
     upstream_attempt_ids: '[]',
     created_at: nowIso(),
   });
+  const incomingNormalized = { ...incoming, status: normalizeAttemptStatus(incoming.status) };
   const winner = chooseByStatusThenCanonical(
     existing,
-    { ...incoming, status: normalizeAttemptStatus(incoming.status) },
+    incomingNormalized,
     'status',
     ATTEMPT_STATUS_RANK,
     (value) => normalizeAttemptStatus(value),
   );
+  const incomingAuthoritative = canonicalEquals(winner, incomingNormalized);
   const mergedNodeId = text(winner.node_id) ?? nodeId;
   const merged = {
     ...winner,
     id,
     node_id: mergedNodeId,
   };
-  if (hasSamePersistedPayload(db, 'attempts', 'id', id, merged, ATTEMPT_COLUMNS)) return false;
+  if (hasSamePersistedPayload(db, 'attempts', 'id', id, merged, ATTEMPT_COLUMNS)) {
+    return { changed: false, incomingAuthoritative };
+  }
   upsertPayloadRow(db, 'attempts', 'id', ATTEMPT_COLUMNS, merged);
-  return true;
+  return { changed: true, incomingAuthoritative };
 }
 
-function applyEventUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean {
+function applyEventUpsert(db: SqliteExecutor, entry: SyncJournalEntry): ApplyEntryResult {
   const payload = asPayload(entry.payload, entry.entityType, entry.entityId);
   const id = integer(payload.id ?? entry.entityId);
   if (id === undefined) throw new Error(`event ${entry.entityId} id must be an integer`);
@@ -589,10 +630,11 @@ function applyEventUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean 
     event_type: 'sync.event',
     created_at: nowIso(),
   });
-  return insertAppendOnlyRow(db, 'events', 'id', EVENT_COLUMNS, row);
+  const changed = insertAppendOnlyRow(db, 'events', 'id', EVENT_COLUMNS, row);
+  return { changed, incomingAuthoritative: true };
 }
 
-function applyOutputUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean {
+function applyOutputUpsert(db: SqliteExecutor, entry: SyncJournalEntry): ApplyEntryResult {
   const payload = asPayload(entry.payload, entry.entityType, entry.entityId);
   const id = integer(payload.id ?? entry.entityId);
   const taskId = requiredText(payload.task_id, `output ${entry.entityId} task_id`);
@@ -609,7 +651,8 @@ function applyOutputUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean
       data: '',
       created_at: nowIso(),
     });
-    return insertAppendOnlyRow(db, 'output_spool', 'id', OUTPUT_COLUMNS, row);
+    const changed = insertAppendOnlyRow(db, 'output_spool', 'id', OUTPUT_COLUMNS, row);
+    return { changed, incomingAuthoritative: true };
   }
 
   const offset = integer(payload.offset);
@@ -620,7 +663,7 @@ function applyOutputUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean
     'SELECT id FROM output_spool WHERE task_id = ? AND offset = ?',
     [taskId, offset],
   );
-  if (existing) return false;
+  if (existing) return { changed: false, incomingAuthoritative: true };
   const row = withDefaults(payload, {
     task_id: taskId,
     offset,
@@ -635,26 +678,26 @@ function applyOutputUpsert(db: SqliteExecutor, entry: SyncJournalEntry): boolean
      VALUES (${selected.columns.map(() => '?').join(', ')})`,
     selected.values,
   );
-  return true;
+  return { changed: true, incomingAuthoritative: true };
 }
 
-function applyEntry(db: SqliteExecutor, entry: SyncJournalEntry): boolean {
+function applyEntry(db: SqliteExecutor, entry: SyncJournalEntry): ApplyEntryResult {
   switch (entry.entityType) {
     case 'workflow':
       return entry.op === 'tombstone'
         ? applyWorkflowTombstone(db, entry)
         : applyWorkflowUpsert(db, entry, false);
     case 'task':
-      if (entry.op === 'tombstone') return false;
+      if (entry.op === 'tombstone') return { changed: false, incomingAuthoritative: false };
       return applyTaskUpsert(db, entry);
     case 'attempt':
-      if (entry.op === 'tombstone') return false;
+      if (entry.op === 'tombstone') return { changed: false, incomingAuthoritative: false };
       return applyAttemptUpsert(db, entry);
     case 'event':
-      if (entry.op === 'tombstone') return false;
+      if (entry.op === 'tombstone') return { changed: false, incomingAuthoritative: false };
       return applyEventUpsert(db, entry);
     case 'output':
-      if (entry.op === 'tombstone') return false;
+      if (entry.op === 'tombstone') return { changed: false, incomingAuthoritative: false };
       return applyOutputUpsert(db, entry);
     default:
       throw new Error(`Unsupported sync entity type ${(entry as { entityType?: unknown }).entityType}`);
@@ -675,8 +718,11 @@ export function applyDelta(db: SqliteExecutor, batch: DeltaBatch, peerId: string
     let skippedEntries = batch.entries.length - entries.length;
 
     for (const entry of entries) {
-      const changed = applyEntry(db, entry);
-      if (!changed) {
+      const result = applyEntry(db, entry);
+      if (result.incomingAuthoritative) {
+        purgeLocalOriginJournal(db, entry.entityType, entry.entityId);
+      }
+      if (!result.changed) {
         skippedEntries += 1;
         continue;
       }
