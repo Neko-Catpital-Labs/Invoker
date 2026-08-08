@@ -17,6 +17,15 @@ import { RESTART_TO_BRANCH_TRACE, traceExecution } from './exec-trace.js';
 import { formatLifecycleTag, extractAttemptSuffix } from './branch-utils.js';
 import type { TaskRunnerPhaseHost } from './task-runner-phase-host.js';
 
+export function assertCompletedDependencyHasBranch(taskId: string, depLabel: string, dep: TaskState): void {
+  if (dep.status === 'completed' && !dep.execution.branch) {
+    throw new Error(
+      `Task "${taskId}": ${depLabel} completed without branch metadata` +
+      ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
+    );
+  }
+}
+
 export async function buildWorkRequest(
   host: TaskRunnerPhaseHost,
   args: {
@@ -56,19 +65,17 @@ export async function buildWorkRequest(
   if (!task.config.isMergeNode) {
     for (const depId of task.dependencies) {
       const dep = host.orchestrator.getTask(depId);
-      if (dep && dep.status === 'completed' && !dep.execution.branch) {
-        throw new Error(
-          `Task "${task.id}": dependency "${depId}" completed without branch metadata` +
-          ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
-        );
+      if (dep) {
+        assertCompletedDependencyHasBranch(task.id, `dependency "${depId}"`, dep);
       }
     }
     for (const depRef of task.config.externalDependencies ?? []) {
       const dep = host.resolveExternalDependencyTask(depRef.workflowId, depRef.taskId);
-      if (dep && dep.status === 'completed' && !dep.execution.branch) {
-        throw new Error(
-          `Task "${task.id}": external dependency "${depRef.workflowId}/${depRef.taskId}" completed without branch metadata` +
-          ` — upstream changes would be silently dropped. The plan may need to be restarted.`,
+      if (dep) {
+        assertCompletedDependencyHasBranch(
+          task.id,
+          `external dependency "${depRef.workflowId}/${depRef.taskId}"`,
+          dep,
         );
       }
     }
