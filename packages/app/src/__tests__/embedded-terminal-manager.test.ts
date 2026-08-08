@@ -266,6 +266,62 @@ describe('EmbeddedTerminalManager', () => {
     expect(reused.outputSnapshot).toBe(firstFrame);
   });
 
+  it('seeds display bridge text before synchronous backend output', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'pty',
+      spawn: vi.fn((opts) => {
+        opts.emitOutput('backend-output\n');
+        return spawned;
+      }),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const session = mgr.openOrReuse({
+      taskId: 'task-bridge',
+      spec: {
+        cwd: '/tmp/wt',
+        displayOnlyBridgeText: 'Context: resume task-bridge',
+      },
+      cwd: '/tmp/wt',
+    });
+
+    expect(session.outputSnapshot).toBe('Context: resume task-bridge\nbackend-output\n');
+    expect(mgr.getPersistenceRecord(session.sessionId)?.outputSnapshot)
+      .toBe('Context: resume task-bridge\nbackend-output\n');
+  });
+
+  it('keeps display bridge text out of terminal target identity', () => {
+    const spawned = {
+      write: vi.fn(),
+      resize: vi.fn(),
+      close: vi.fn(),
+    };
+    const backend: EmbeddedTerminalBackend = {
+      name: 'bash',
+      spawn: vi.fn(() => spawned),
+    };
+    const mgr = new EmbeddedTerminalManager({ backend });
+
+    const first = mgr.openOrReuse({
+      taskId: 'task-same-target',
+      spec: { cwd: '/tmp/wt', displayOnlyBridgeText: 'First bridge' },
+      cwd: '/tmp/wt',
+    });
+    const second = mgr.openOrReuse({
+      taskId: 'task-same-target',
+      spec: { cwd: '/tmp/wt', displayOnlyBridgeText: 'Updated bridge' },
+      cwd: '/tmp/wt',
+    });
+
+    expect(second.sessionId).toBe(first.sessionId);
+    expect(backend.spawn).toHaveBeenCalledTimes(1);
+  });
+
   it('opens a distinct session when the same task resolves to a different terminal target', () => {
     const child1 = createFakeChild();
     const child2 = createFakeChild();
