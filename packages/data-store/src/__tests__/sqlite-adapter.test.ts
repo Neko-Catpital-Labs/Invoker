@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SQLiteAdapter, isLaunchDispatchCandidateStale } from '../sqlite-adapter.js';
 import type { Workflow, Conversation, WorkerActionWrite, TerminalSessionRecord, InAppPlanningSessionRecord } from '../adapter.js';
-import { createAttempt } from '@invoker/workflow-core';
+import { createAttempt, assertWorkflowConsistent, assertWorkflowPatchConsistent } from '@invoker/workflow-core';
 import type { Attempt, TaskState, TaskStateChanges } from '@invoker/workflow-core';
 
 describe('SQLiteAdapter', () => {
@@ -4483,6 +4483,13 @@ describe('SQLiteAdapter', () => {
 
       expect(() => adapter.updateWorkflow('wf-1', { generation: -1 })).toThrow(/generation/);
       expect(adapter.loadWorkflow('wf-1')!.generation).toBe(0);
+    });
+
+    it('assertWorkflowConsistent and assertWorkflowPatchConsistent reject the same invalid generation value', () => {
+      expect(() => assertWorkflowConsistent({ ...testWorkflow, generation: -1 })).toThrow(/generation/);
+      expect(() =>
+        assertWorkflowPatchConsistent(testWorkflow, { ...testWorkflow, generation: -1 }),
+      ).toThrow(/generation/);
     });
 
     it('rejects invalid saved external dependency shapes before writing', () => {
