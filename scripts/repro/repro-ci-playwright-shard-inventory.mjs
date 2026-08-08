@@ -6,11 +6,10 @@
 // no spec assigned to more than one shard, and every manual-only allowlist
 // entry still exists.
 //
-// The playwright / 8-of-9 shard first went red at
-// d19a0f4af741226c3edb9509e2768529bf97fef9 because two specs
-// (e2e/planning-terminal-live-model.proof.spec.ts and e2e/ui-delta-timeline.spec.ts)
-// were listed in a second shard while already owned by 6-of-9 and 3-of-9.
-// Duplicate assignment makes a shard run the same spec twice and fail.
+// The playwright shards first went red at
+// d19a0f4af741226c3edb9509e2768529bf97fef9 because specs were listed in
+// more than one matrix entry. Duplicate assignment fails this guard before
+// Playwright runs, so every CI-owned spec must have one shard owner.
 //
 // The manual real-Claude repro intentionally stays out of CI because it
 // requires a real local `claude` binary and auth state. Keep it explicit here
