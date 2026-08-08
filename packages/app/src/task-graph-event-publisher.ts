@@ -10,14 +10,19 @@ type SnapshotTaskStates = Extract<TaskGraphEvent, { type: 'snapshot' }>['tasks']
 
 export interface TaskGraphEventPublisher {
   publishDelta(delta: TaskDelta, workflowRollups: readonly WorkflowRollupPatch[]): void;
-  publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[], forced?: boolean): void;
+  publishSnapshot(
+    reason: string,
+    tasks: TaskState[],
+    workflows: WorkflowMeta[],
+    streamSequence: number,
+    forced?: boolean,
+  ): void;
 }
 
 export interface CreateTaskGraphEventPublisherOptions {
   getMainWindow: () => BrowserWindow | null;
   isUiInteractive: () => boolean;
   stampDelta: (delta: TaskDelta) => TaskDelta;
-  getStreamSequence: () => number;
   onLargeBatch?: (stats: { batchSize: number; remaining: number }) => void;
   onEvent?: (event: TaskGraphEvent) => void;
 }
@@ -77,13 +82,19 @@ export function createTaskGraphEventPublisher(
         workflowRollups: [...workflowRollups],
       });
     },
-    publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[], forced?: boolean): void {
+    publishSnapshot(
+      reason: string,
+      tasks: TaskState[],
+      workflows: WorkflowMeta[],
+      streamSequence: number,
+      forced?: boolean,
+    ): void {
       publishEvent({
         type: 'snapshot',
         tasks: tasks as SnapshotTaskStates,
         workflows,
         reason,
-        streamSequence: options.getStreamSequence(),
+        streamSequence,
         ...(forced ? { forced: true } : {}),
       });
     },
