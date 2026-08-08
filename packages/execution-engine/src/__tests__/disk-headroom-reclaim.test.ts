@@ -226,6 +226,53 @@ describe('cleanupLocalInvokerHome', () => {
     expect(existsSync(join(userHome, '.cache', 'electron', 'keep.bin'))).toBe(true);
   });
 
+  it('leaves protected reclaimable paths untouched', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-protected-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const userHome = root;
+    const activeDir = join(home, 'worktrees', 'active-task');
+    mkdirSync(activeDir, { recursive: true });
+    writeFileSync(join(activeDir, 'file.txt'), 'x');
+
+    const store = makeStore([
+      {
+        id: 'wf-1',
+        tasks: [
+          makeTask({ id: 'wf-1/active', status: 'running', execution: { workspacePath: activeDir } }),
+        ],
+      },
+    ]);
+
+    const result = await cleanupLocalInvokerHome({
+      invokerHome: home,
+      userHome,
+      store,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('protected-path-in-use');
+    expect(existsSync(activeDir)).toBe(true);
+    expect(existsSync(join(activeDir, 'file.txt'))).toBe(true);
+    expect(readdirSync(join(home, 'worktrees'))).toEqual(['active-task']);
+  });
+
+  it('clears pre-existing deleting orphans from the invoker home', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-orphan-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+    const userHome = root;
+    const orphan = join(home, 'foo.deleting.abc');
+    mkdirSync(orphan, { recursive: true });
+    writeFileSync(join(orphan, 'file.txt'), 'x');
+
+    const result = await cleanupLocalInvokerHome({ invokerHome: home, userHome });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(orphan)).toBe(false);
+  });
+
   it('refuses to clean the user home itself', async () => {
     const result = await cleanupLocalInvokerHome({
       invokerHome: '/Users/me',
