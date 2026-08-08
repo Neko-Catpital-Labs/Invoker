@@ -213,6 +213,7 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
             result = await cleanupRemote({
               target,
               logger: options.logger,
+              store: options.workflowStore,
             });
           }
         } else {
