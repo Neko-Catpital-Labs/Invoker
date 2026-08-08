@@ -34,6 +34,7 @@ function dfAt(pct: number): string {
 
 function makeRuntime(usedPercents: number[]): {
   cleanupLocal: ReturnType<typeof vi.fn>;
+  logger: ReturnType<typeof makeLogger>;
   runtime: WorkerRuntime;
 } {
   const registry = createWorkerRegistry<WorkerRuntimeDependencies>();
@@ -56,10 +57,11 @@ function makeRuntime(usedPercents: number[]): {
   }));
 
   const definition = registry.get(DISK_HEADROOM_WORKER_KIND)!;
+  const logger = makeLogger();
   const runtime = definition.factory({
     store: {} as any,
     submitter: { submit: vi.fn() } as any,
-    logger: makeLogger(),
+    logger,
     diskHeadroom: {
       localPath: '/tmp/invoker-home',
       remoteTargets: [],
@@ -72,15 +74,25 @@ function makeRuntime(usedPercents: number[]): {
     },
   });
 
-  return { cleanupLocal, runtime };
+  return { cleanupLocal, logger, runtime };
 }
 
 describe('disk reclaim warn-threshold repro', () => {
   it('does not reclaim at 94% warn pressure, then reclaims at 95% critical pressure', async () => {
-    const { cleanupLocal, runtime } = makeRuntime([94, 95]);
+    const { cleanupLocal, logger, runtime } = makeRuntime([94, 95]);
 
     await runtime.tick('manual');
     expect(cleanupLocal).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[disk-headroom] warn: local /tmp/invoker-home (94% used)',
+      expect.objectContaining({
+        module: 'disk-headroom',
+        label: 'local /tmp/invoker-home',
+        usedPercent: 94,
+        warnPercent: 85,
+        criticalPercent: 95,
+      }),
+    );
 
     await runtime.tick('manual');
     expect(cleanupLocal).toHaveBeenCalledTimes(1);
