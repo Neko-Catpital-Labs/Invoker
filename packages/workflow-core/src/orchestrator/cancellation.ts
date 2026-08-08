@@ -94,7 +94,7 @@ export interface CancellationHost {
   ): string;
   clearQueuedSchedulerEntries(taskId: string, attemptId?: string): void;
   invalidateLaunchArtifactsForTasks(taskIds: readonly string[], reason: string, now?: Date): void;
-  checkWorkflowCompletion(): void;
+  checkWorkflowCompletion(transitionedWorkflowId?: string): void;
   drainScheduler(): TaskState[];
 }
 
@@ -297,7 +297,7 @@ export function cancelTaskImpl(
     cancelled.push(id);
   }
 
-  host.checkWorkflowCompletion();
+  host.checkWorkflowCompletion(task.config.workflowId);
   return { cancelled, runningCancelled, toCancelIds };
 }
 
@@ -369,7 +369,7 @@ export function cancelWorkflowImpl(
     cancelled.push(id);
   }
 
-  host.checkWorkflowCompletion();
+  host.checkWorkflowCompletion(workflowId);
   return { cancelled, runningCancelled, toCancelIds };
 }
 
