@@ -273,6 +273,24 @@ export interface IpcBusOptions {
   onSubscriberError?: SubscriberErrorObserver;
 }
 
+/** Snapshot of the state {@link isServeRecoveryEligible} needs to decide whether an
+ *  IpcBus should schedule another attempt at reconnecting/becoming the server. */
+export interface ServeRecoveryState {
+  disconnected: boolean;
+  hasServer: boolean;
+  hasPeers: boolean;
+  recoveryAlreadyScheduled: boolean;
+}
+
+/** Whether an IpcBus in the given state should schedule another recovery attempt.
+ *  Recovery is unnecessary once the bus is disconnected, already has a server, already
+ *  has a peer, or already has a recovery attempt in flight. */
+export function isServeRecoveryEligible(state: ServeRecoveryState): boolean {
+  return (
+    !state.disconnected && !state.hasServer && !state.hasPeers && !state.recoveryAlreadyScheduled
+  );
+}
+
 // ---------------------------------------------------------------------------
 // IpcBus
 // ---------------------------------------------------------------------------
@@ -444,13 +462,27 @@ export class IpcBus implements MessageBus {
   // only *becoming* the server (tryServe) is exclusively gated on
   // allowServe, and that gate lives in tryConnect()'s error handler above.
   private scheduleRecovery(): void {
-    if (this.disconnected || this.server || this.peers.size > 0 || this.serveRetryScheduled) {
+    if (
+      !isServeRecoveryEligible({
+        disconnected: this.disconnected,
+        hasServer: this.server !== null,
+        hasPeers: this.peers.size > 0,
+        recoveryAlreadyScheduled: this.serveRetryScheduled,
+      })
+    ) {
       return;
     }
     this.serveRetryScheduled = true;
     setTimeout(() => {
       this.serveRetryScheduled = false;
-      if (this.disconnected || this.server || this.peers.size > 0) {
+      if (
+        !isServeRecoveryEligible({
+          disconnected: this.disconnected,
+          hasServer: this.server !== null,
+          hasPeers: this.peers.size > 0,
+          recoveryAlreadyScheduled: false,
+        })
+      ) {
         return;
       }
       this.tryConnect();

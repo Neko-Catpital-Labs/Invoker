@@ -10,6 +10,7 @@ import {
   DEFAULT_REQUEST_DEADLINE_MS,
   MALFORMED_FRAME_RATE_LIMIT_MS,
   resolveDefaultSocketPath,
+  isServeRecoveryEligible,
   type MalformedFrameEvent,
 } from '../ipc-bus.js';
 import { TransportError, TransportErrorCode } from '../transport-error.js';
@@ -646,6 +647,48 @@ describe('IpcBus', () => {
     await client.ready();
     const result = await client.request<string, string>('echo', 'ok');
     expect(result).toBe('owner:ok');
+  });
+
+  describe('isServeRecoveryEligible', () => {
+    const eligibleState = {
+      disconnected: false,
+      hasServer: false,
+      hasPeers: false,
+      recoveryAlreadyScheduled: false,
+    };
+
+    it('is eligible when disconnected, server, peers, and scheduled are all false', () => {
+      expect(isServeRecoveryEligible(eligibleState)).toBe(true);
+    });
+
+    it('is ineligible once disconnected', () => {
+      expect(isServeRecoveryEligible({ ...eligibleState, disconnected: true })).toBe(false);
+    });
+
+    it('is ineligible once it already has a server', () => {
+      expect(isServeRecoveryEligible({ ...eligibleState, hasServer: true })).toBe(false);
+    });
+
+    it('is ineligible once it already has a peer', () => {
+      expect(isServeRecoveryEligible({ ...eligibleState, hasPeers: true })).toBe(false);
+    });
+
+    it('is ineligible once a recovery attempt is already scheduled', () => {
+      expect(isServeRecoveryEligible({ ...eligibleState, recoveryAlreadyScheduled: true })).toBe(
+        false,
+      );
+    });
+
+    it('is ineligible when every condition is true', () => {
+      expect(
+        isServeRecoveryEligible({
+          disconnected: true,
+          hasServer: true,
+          hasPeers: true,
+          recoveryAlreadyScheduled: true,
+        }),
+      ).toBe(false);
+    });
   });
 
   it('surviving client reclaims the socket after the original server disappears', async () => {
