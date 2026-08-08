@@ -13,6 +13,7 @@ import { EventEmitter } from 'events';
 import { buildCanonicalPrBody, validateCanonicalPrBody } from '../pr-authoring.js';
 import type { PrAuthoringContext } from '../pr-authoring.js';
 import { registerBuiltinAgents } from '../agents/index.js';
+import { assertCompletedDependencyHasBranch } from '../task-runner-prepare.js';
 
 /**
  * Creates a mock executor that auto-completes on start().
@@ -1916,6 +1917,41 @@ describe('TaskRunner', () => {
           }),
         }),
       );
+    });
+
+    it('assertCompletedDependencyHasBranch throws when a completed dep has no branch', () => {
+      const dep = makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        config: { runnerKind: 'worktree' },
+      });
+
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep),
+      ).toThrow('Task "child-task": dependency "dep-a" completed without branch metadata');
+    });
+
+    it('assertCompletedDependencyHasBranch does not throw when the dep has a branch', () => {
+      const dep = makeTask({
+        id: 'dep-a',
+        status: 'completed',
+        execution: { branch: 'exp/dep-a' },
+      });
+
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep),
+      ).not.toThrow();
+    });
+
+    it('assertCompletedDependencyHasBranch does not throw when the dep is missing or not completed', () => {
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', undefined),
+      ).not.toThrow();
+
+      const runningDep = makeTask({ id: 'dep-a', status: 'running' });
+      expect(() =>
+        assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', runningDep),
+      ).not.toThrow();
     });
 
     it('fails task when a completed external dependency has no branch metadata', async () => {
