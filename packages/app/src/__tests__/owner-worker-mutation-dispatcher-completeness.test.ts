@@ -2,25 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
+import { AUTO_FIX_BARE_RETRY_CHANNEL, AUTO_FIX_COMMAND_CHANNEL } from '@invoker/execution-engine';
+
 const MAIN = path.resolve(__dirname, '..', 'main.ts');
 
 // Incident 2026-08-06: the recovery worker's tick calls
 // submitRegisteredOwnerWorkerMutation(...) directly (not through any IPC/GUI
 // translation layer), so every channel it submits through needs a real
 // `workflowMutationDispatcher.set(...)` entry in the standalone owner
-// startup block. The bare-retry channel never got one — every recovery
+// startup block. AUTO_FIX_BARE_RETRY_CHANNEL never got one — every recovery
 // tick threw "No workflow mutation dispatcher registered for
 // invoker:retry-task" and no failed task was ever auto-fixed. A prior PR
 // (#6808) claimed to add this registration plus a regression test, but
 // merged as a no-op (identical tree to its parent commit).
-const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:retry-task';
-const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
-
 describe('standalone owner worker mutation dispatcher completeness', () => {
-  // REPRO: reproduces the missing invoker:retry-task dispatcher registration.
-  // Currently fails (as expected) because AUTO_FIX_BARE_RETRY_CHANNEL has no
-  // workflowMutationDispatcher.set(...) entry. The fix slice removes `.fails`.
-  it.fails('registers a dispatcher for every channel the auto-fix recovery worker submits through', () => {
+  it('registers a dispatcher for every channel the auto-fix recovery worker submits through', () => {
     const source = readFileSync(MAIN, 'utf8');
 
     const guardIdx = source.indexOf('if (standaloneMode && messageBus) {');
