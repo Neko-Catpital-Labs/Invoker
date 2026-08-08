@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskRunner, collectManagedWorkflowBranchesFromDb } from '../task-runner.js';
+import { assertCompletedDependencyHasBranch } from '../task-runner-prepare.js';
 import { collectDirectNonMergeTaskIds } from '../merge-runner.js';
 import { SshExecutor } from '../ssh-executor.js';
 import { WorktreeExecutor } from '../worktree-executor.js';
@@ -1916,6 +1917,26 @@ describe('TaskRunner', () => {
           }),
         }),
       );
+    });
+
+    it('assertCompletedDependencyHasBranch throws when a completed dep has no branch', () => {
+      const dep = makeTask({ id: 'dep-a', status: 'completed' });
+
+      expect(() => assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep)).toThrow(
+        'Task "child-task": dependency "dep-a" completed without branch metadata',
+      );
+    });
+
+    it('assertCompletedDependencyHasBranch does not throw when a completed dep has a branch', () => {
+      const dep = makeTask({ id: 'dep-a', status: 'completed', execution: { branch: 'exp/dep-a' } });
+
+      expect(() => assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep)).not.toThrow();
+    });
+
+    it('assertCompletedDependencyHasBranch does not throw when the dep is not completed', () => {
+      const dep = makeTask({ id: 'dep-a', status: 'running' });
+
+      expect(() => assertCompletedDependencyHasBranch('child-task', 'dependency "dep-a"', dep)).not.toThrow();
     });
 
     it('fails task when a completed external dependency has no branch metadata', async () => {
