@@ -6,14 +6,14 @@ import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 interface DelegatedRefreshTaskGraphSnapshot {
   tasks: TaskState[];
   workflows: WorkflowMeta[];
-  streamSequence?: number;
+  streamSequence: number;
   invokerHomeRoot?: string;
 }
 
 export interface RefreshTaskGraphSnapshot {
   tasks: TaskState[];
   workflows: WorkflowMeta[];
-  streamSequence?: number;
+  streamSequence: number;
 }
 
 export interface ResolveRefreshTaskGraphSnapshotDeps {
@@ -23,14 +23,14 @@ export interface ResolveRefreshTaskGraphSnapshotDeps {
   orchestrator: Pick<Orchestrator, 'syncAllFromDb' | 'getAllTasks'>;
   persistence: Pick<SQLiteAdapter, 'listWorkflows'>;
   logger: Logger;
-  getStreamSequence?: () => number;
+  getStreamSequence: () => number;
 }
 export interface RefreshTaskGraphSnapshotPublisher {
   publishSnapshot(
     reason: string,
     tasks: TaskState[],
     workflows: WorkflowMeta[],
-    streamSequence?: number,
+    streamSequence: number,
     forced?: boolean,
   ): void;
 }
@@ -53,7 +53,7 @@ function parseDelegatedRefreshTaskGraphSnapshot(
   if (
     !Array.isArray(snapshot.tasks) ||
     !Array.isArray(snapshot.workflows) ||
-    (snapshot.streamSequence !== undefined && typeof snapshot.streamSequence !== 'number')
+    typeof snapshot.streamSequence !== 'number'
   ) {
     throw new Error('refresh-task-graph owner delegation returned an invalid snapshot');
   }
@@ -74,7 +74,7 @@ export async function resolveRefreshTaskGraphSnapshot(
     return {
       tasks: deps.orchestrator.getAllTasks(),
       workflows: deps.persistence.listWorkflows() as WorkflowMeta[],
-      streamSequence: deps.getStreamSequence?.(),
+      streamSequence: deps.getStreamSequence(),
     };
   };
 

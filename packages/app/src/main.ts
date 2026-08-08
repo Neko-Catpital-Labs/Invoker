@@ -2287,7 +2287,6 @@ startMainProcessBootstrap({
     getMainWindow: () => mainWindow,
     isUiInteractive: () => uiInteractive,
     stampDelta: (delta) => taskDeltaStream.stamp(delta),
-    getStreamSequence: getTaskDeltaStreamSequence,
     onLargeBatch: ({ batchSize, remaining }) => {
       uiPerfStats.largeTaskDeltaBatches += 1;
       uiPerfStats.maxTaskDeltaBatchSize = Math.max(uiPerfStats.maxTaskDeltaBatchSize, batchSize);

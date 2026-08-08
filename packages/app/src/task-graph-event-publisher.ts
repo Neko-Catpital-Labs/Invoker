@@ -14,7 +14,7 @@ export interface TaskGraphEventPublisher {
     reason: string,
     tasks: TaskState[],
     workflows: WorkflowMeta[],
-    streamSequence?: number,
+    streamSequence: number,
     forced?: boolean,
   ): void;
 }
@@ -23,7 +23,6 @@ export interface CreateTaskGraphEventPublisherOptions {
   getMainWindow: () => BrowserWindow | null;
   isUiInteractive: () => boolean;
   stampDelta: (delta: TaskDelta) => TaskDelta;
-  getStreamSequence: () => number;
   onLargeBatch?: (stats: { batchSize: number; remaining: number }) => void;
   onEvent?: (event: TaskGraphEvent) => void;
 }
@@ -87,7 +86,7 @@ export function createTaskGraphEventPublisher(
       reason: string,
       tasks: TaskState[],
       workflows: WorkflowMeta[],
-      streamSequence?: number,
+      streamSequence: number,
       forced?: boolean,
     ): void {
       publishEvent({
@@ -95,7 +94,7 @@ export function createTaskGraphEventPublisher(
         tasks: tasks as SnapshotTaskStates,
         workflows,
         reason,
-        streamSequence: streamSequence ?? options.getStreamSequence(),
+        streamSequence,
         ...(forced ? { forced: true } : {}),
       });
     },
