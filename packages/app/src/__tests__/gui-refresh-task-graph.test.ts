@@ -216,7 +216,7 @@ describe('registerGuiMutationIpcHandlers refresh-task-graph', () => {
       'refresh-task-graph',
       [makeTask('wf-1/task-1')],
       [{ id: 'wf-1', name: 'Workflow 1', status: 'running' }],
-      undefined,
+      17,
       true,
     );
     expect(recordStartupDuration).toHaveBeenCalledWith('refresh-task-graph.return', expect.any(Number), {
@@ -244,7 +244,7 @@ describe('registerGuiMutationIpcHandlers refresh-task-graph', () => {
       'refresh-task-graph-delegated',
       [localTask],
       [localWorkflow],
-      undefined,
+      17,
       true,
     );
   });
