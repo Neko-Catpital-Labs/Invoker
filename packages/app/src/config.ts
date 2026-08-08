@@ -302,6 +302,14 @@ export interface InvokerConfig {
     maxConcurrentTasks?: number;
   }>;
   /**
+   * Per-repo override for local worktree targets' `provisionCommand`, keyed
+   * by `repoUrl` (any `git@`/`https://`/`.git` form — normalized before
+   * matching). A workflow whose `repoUrl` has an entry here uses that
+   * command instead of its worktree target's default, including `''` to run
+   * no install step at all for a repo that isn't a Node project.
+   */
+  repoProvisionCommands?: Record<string, string>;
+  /**
    * Named execution pools used by routing rules.
    * Pools provide shared queue + drain semantics with per-member capacity limits.
    */
