@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,8 @@ import { MAX_EVENTS_PAGE, normalizeGetEventsOptions } from '@invoker/contracts';
 import { SQLiteAdapter } from '@invoker/data-store';
 
 import { getEventsPage } from '../get-events-page.js';
+import { registerReadOnlyIpcHandlers } from '../ipc-read-handlers.js';
+import { buildOwnerReadQueryHandlers } from '../owner-read-query.js';
 import { seedMainProcessHitchFixture } from '../main-process-hitch-fixture.js';
 
 describe('dag-click getEvents pagination cost', () => {
@@ -56,6 +58,46 @@ describe('dag-click getEvents pagination cost', () => {
       sortBy: 'desc',
       limit: 50,
     });
+  });
+
+  it('rejects an oversized limit at the IPC handler and owner-read-query getEvents call sites', async () => {
+    const getEvents = vi.fn();
+    const oversized = { limit: MAX_EVENTS_PAGE + 1, sortBy: 'desc' as const };
+
+    const ipcHandlers = new Map<string, (...args: unknown[]) => unknown>();
+    registerReadOnlyIpcHandlers({
+      ipcMain: {
+        handle: (channel: string, handler: (...args: unknown[]) => unknown) => {
+          ipcHandlers.set(channel, handler);
+        },
+      } as never,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
+      persistence: { getEvents } as never,
+      getOrchestrator: () => ({}) as never,
+      agentRegistry: {} as never,
+      loadTaskByIdFromPersistence: () => undefined,
+      resolveAgentSession: vi.fn(async () => null),
+      recordStartupDuration: vi.fn(),
+      getTaskDeltaStreamSequence: () => 0,
+    });
+    await expect(ipcHandlers.get('invoker:get-events')?.({}, 't-1', oversized)).rejects.toThrow(/between 1 and/);
+    expect(getEvents).not.toHaveBeenCalled();
+
+    const ownerReadHandlers = buildOwnerReadQueryHandlers({
+      ownerModeLabel: 'gui',
+      getUiPerfStats: () => ({}),
+      resetUiPerfStats: () => {},
+      getStreamSequence: () => 0,
+      getWorkerStatus: () => ({ generatedAt: 'now', workers: [] }),
+      getWorkers: () => ({ generatedAt: 'now', workers: [] }),
+      resolveInvokerHomeRoot: () => '/home',
+      orchestrator: {} as never,
+      persistence: { getEvents } as never,
+      getActionGraphSnapshot: () => ({}),
+      getPlanningChatSession: () => null,
+    });
+    expect(() => ownerReadHandlers.getEvents('t-1', oversized)).toThrow(/between 1 and/);
+    expect(getEvents).not.toHaveBeenCalled();
   });
 
   it('supports beforeId cursor pages without loading full history', async () => {
