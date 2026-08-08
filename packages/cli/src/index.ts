@@ -11,7 +11,7 @@ import {
   type HeadlessOwnerLaunchSpec,
   type Logger,
 } from '@invoker/contracts';
-import { SQLiteAdapter, SqliteTaskRepository } from '@invoker/data-store';
+import { SQLiteAdapter, SqliteTaskRepository, type Workflow } from '@invoker/data-store';
 import {
   AUTO_FIX_WORKER_KIND,
   ExecutorRegistry,
@@ -126,6 +126,17 @@ type CliRuntimeConfig = {
   externalWorkers?: ExternalWorkerConfig[];
 };
 
+type QueryResource = 'workflows' | 'tasks';
+type QueryOutput = 'text' | 'json';
+
+type QueryOptions = {
+  resource: QueryResource;
+  workflowId?: string;
+  status?: string;
+  output: QueryOutput;
+  forwardedFlags: string[];
+};
+
 const silentLogger: Logger = {
   debug() {},
   info() {},
@@ -142,6 +153,8 @@ function usage(): string {
   return [
     'Usage:',
     '  invoker-cli run <plan.yaml> [--live|--standalone] [--db-dir <path>] [--config <path>] [--json]',
+    '  invoker-cli query workflows [--status <status>] [--output text|json]',
+    '  invoker-cli query tasks [--workflow <id>] [--status <status>] [--output text|json]',
     '  invoker-cli owner serve',
     '  invoker-cli doctor [--fix] [--json]',
     '  invoker-cli setup [planner|slack] [--check|--from-env] [--yes] [--json]',
@@ -152,6 +165,7 @@ function usage(): string {
     '',
     'Commands:',
     '  run <plan.yaml>  Submit to a live Invoker owner when available, otherwise run standalone.',
+    '  query workflows|tasks  Read workflows or tasks from a live owner, or a read-only database view.',
     '  owner serve     Start a headless Invoker owner process.',
     '  doctor          Validate tools, config, and your default planning preset.',
     '  setup [planner|slack]  Run the setup wizard, or directly configure planner MCP or Slack.',
@@ -169,6 +183,9 @@ function usage(): string {
     '  --db-dir <path>  Runtime database directory. Defaults to ~/.invoker-cli',
     '  --config <path>  Optional config path reserved for CLI runtime configuration.',
     '  --json           Emit only a machine-readable result summary on stdout.',
+    '  --workflow <id>  Restrict `query tasks` to one workflow.',
+    '  --status <status>  Restrict `query workflows` or `query tasks` to one status.',
+    '  --output <fmt>   Query output format. Supported values: text, json. Defaults to text.',
     '  --from-env       Run Slack setup from SLACK_* environment values without prompts.',
     '  --fix            Best-effort install of missing doctor tools.',
     '  --help           Show this help text.',
@@ -214,6 +231,222 @@ function parseArgs(argv: string[]): { command?: string; planPath?: string; optio
     planPath: positional[1],
     options,
   };
+}
+
+function parseQueryArgs(argv: string[]): QueryOptions {
+  const resource = argv[0];
+  if (resource !== 'workflows' && resource !== 'tasks') {
+    throw new Error('Missing or unknown query subcommand. Usage: invoker-cli query <workflows|tasks>');
+  }
+
+  const options: QueryOptions = {
+    resource,
+    output: 'text',
+    forwardedFlags: [],
+  };
+
+  for (let i = 1; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--workflow') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --workflow');
+      if (resource !== 'tasks') throw new Error('--workflow is only supported for `query tasks`');
+      options.workflowId = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--status') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --status');
+      options.status = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--output') {
+      const value = argv[++i];
+      if (!value) throw new Error('Missing value for --output');
+      if (value !== 'text' && value !== 'json') {
+        throw new Error('Invalid --output value. Supported values: text, json');
+      }
+      options.output = value;
+      options.forwardedFlags.push(arg, value);
+    } else if (arg === '--help' || arg === '-h') {
+      throw new Error('Usage: invoker-cli query <workflows|tasks> [--workflow <id>] [--status <status>] [--output text|json]');
+    } else if (arg.startsWith('--')) {
+      throw new Error(`Unknown query option: ${arg}`);
+    } else {
+      throw new Error(`Unexpected query argument: ${arg}`);
+    }
+  }
+
+  return options;
+}
+
+function validateLiveQueryResponse(raw: unknown): string {
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`Live owner returned invalid headless.query response: expected object, got ${raw === null ? 'null' : typeof raw}`);
+  }
+  const output = (raw as Record<string, unknown>).output;
+  if (typeof output !== 'string') {
+    throw new Error('Live owner returned invalid headless.query response: missing output string');
+  }
+  return output;
+}
+
+async function queryLiveOwner(
+  options: QueryOptions,
+  bus: MessageBus,
+): Promise<string> {
+  const raw = await withTimeout(
+    bus.request('headless.query', {
+      kind: 'cli-query',
+      args: ['query', options.resource, ...options.forwardedFlags],
+    }),
+    15_000,
+  );
+  return validateLiveQueryResponse(raw);
+}
+
+function resolveQueryDbDir(): string {
+  return resolve(process.env.INVOKER_DB_DIR ?? join(homedir(), '.invoker'));
+}
+
+function serializeWorkflowForQuery(workflow: Workflow): Record<string, unknown> {
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    status: workflow.status,
+    createdAt: workflow.createdAt,
+    updatedAt: workflow.updatedAt,
+    ...(workflow.description != null ? { description: workflow.description } : {}),
+    ...(workflow.visualProof != null ? { visualProof: workflow.visualProof } : {}),
+    ...(workflow.planFile != null ? { planFile: workflow.planFile } : {}),
+    ...(workflow.repoUrl != null ? { repoUrl: workflow.repoUrl } : {}),
+    ...(workflow.intermediateRepoUrl != null ? { intermediateRepoUrl: workflow.intermediateRepoUrl } : {}),
+    ...(workflow.branch != null ? { branch: workflow.branch } : {}),
+    ...(workflow.onFinish != null ? { onFinish: workflow.onFinish } : {}),
+    ...(workflow.baseBranch != null ? { baseBranch: workflow.baseBranch } : {}),
+    ...(workflow.featureBranch != null ? { featureBranch: workflow.featureBranch } : {}),
+    ...(workflow.mergeMode != null ? { mergeMode: workflow.mergeMode } : {}),
+    ...(workflow.reviewProvider != null ? { reviewProvider: workflow.reviewProvider } : {}),
+    ...(workflow.externalDependencies != null ? { externalDependencies: workflow.externalDependencies } : {}),
+    ...(workflow.externalDependencyChanges != null ? { externalDependencyChanges: workflow.externalDependencyChanges } : {}),
+    ...(workflow.detachedExternalDependencies != null ? { detachedExternalDependencies: workflow.detachedExternalDependencies } : {}),
+    ...(workflow.generation != null ? { generation: workflow.generation } : {}),
+  };
+}
+
+function serializeTaskForQuery(task: TaskState): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  if (task.config.workflowId != null) config.workflowId = task.config.workflowId;
+  if (task.config.command != null) config.command = task.config.command;
+  if (task.config.prompt != null) config.prompt = task.config.prompt;
+  if (task.config.runnerKind != null) config.runnerKind = task.config.runnerKind;
+  if (task.config.poolId != null) config.poolId = task.config.poolId;
+  if (task.config.poolMemberId != null) config.poolMemberId = task.config.poolMemberId;
+  if (task.config.isMergeNode != null) config.isMergeNode = task.config.isMergeNode;
+  if (task.config.executionAgent != null) config.executionAgent = task.config.executionAgent;
+  if (task.config.executionModel != null) config.executionModel = task.config.executionModel;
+  if (task.config.featureBranch != null) config.featureBranch = task.config.featureBranch;
+
+  const execution: Record<string, unknown> = {};
+  if (task.execution.branch != null) execution.branch = task.execution.branch;
+  if (task.execution.commit != null) execution.commit = task.execution.commit;
+  if (task.execution.error != null) execution.error = task.execution.error;
+  if (task.execution.exitCode != null) execution.exitCode = task.execution.exitCode;
+  if (task.execution.reviewUrl != null) execution.reviewUrl = task.execution.reviewUrl;
+  if (task.execution.reviewId != null) execution.reviewId = task.execution.reviewId;
+  if (task.execution.reviewStatus != null) execution.reviewStatus = task.execution.reviewStatus;
+  if (task.execution.reviewProviderId != null) execution.reviewProviderId = task.execution.reviewProviderId;
+  if (task.execution.agentSessionId != null) execution.agentSessionId = task.execution.agentSessionId;
+  if (task.execution.lastAgentSessionId != null) execution.lastAgentSessionId = task.execution.lastAgentSessionId;
+  if (task.execution.agentName != null) execution.agentName = task.execution.agentName;
+  if (task.execution.lastAgentName != null) execution.lastAgentName = task.execution.lastAgentName;
+  if (task.execution.phase != null) execution.phase = task.execution.phase;
+  if (task.execution.startedAt != null) execution.startedAt = task.execution.startedAt.toISOString();
+  if (task.execution.completedAt != null) execution.completedAt = task.execution.completedAt.toISOString();
+  if (task.execution.launchStartedAt != null) execution.launchStartedAt = task.execution.launchStartedAt.toISOString();
+  if (task.execution.launchCompletedAt != null) execution.launchCompletedAt = task.execution.launchCompletedAt.toISOString();
+  if (task.execution.lastHeartbeatAt != null) execution.lastHeartbeatAt = task.execution.lastHeartbeatAt.toISOString();
+  if (task.execution.pendingFixError != null) execution.pendingFixError = task.execution.pendingFixError;
+
+  return {
+    id: task.id,
+    description: task.description,
+    status: task.status,
+    dependencies: [...task.dependencies],
+    createdAt: task.createdAt.toISOString(),
+    config,
+    execution,
+  };
+}
+
+function renderWorkflowText(workflows: Workflow[]): string {
+  if (workflows.length === 0) return 'No workflows found.\n';
+  return `${workflows.map((workflow) => (
+    `${workflow.id}\t${workflow.status}\t${workflow.name}\t${workflow.createdAt}`
+  )).join('\n')}\n`;
+}
+
+function renderTaskText(tasks: TaskState[]): string {
+  if (tasks.length === 0) return 'No tasks found.\n';
+  return `${tasks.map((task) => (
+    `${task.id}\t${task.config.workflowId ?? ''}\t${task.status}\t${task.description}`
+  )).join('\n')}\n`;
+}
+
+async function queryStandaloneDatabase(options: QueryOptions): Promise<string> {
+  const dbDir = resolveQueryDbDir();
+  const dbPath = join(dbDir, 'invoker.db');
+  if (!existsSync(dbPath)) {
+    return `${options.output === 'json' ? '[]' : (options.resource === 'workflows' ? 'No workflows found.' : 'No tasks found.')}\n`;
+  }
+
+  const persistence = await SQLiteAdapter.create(dbPath, {
+    readOnly: true,
+    outputDir: join(dbDir, 'outputs'),
+    slowQueryThresholdMs: 0,
+  });
+  try {
+    const snapshot = persistence.loadWorkflowTaskSnapshot();
+    const workflows = snapshot.workflows.filter((workflow) => (
+      !options.status || workflow.status === options.status
+    ));
+    if (options.resource === 'workflows') {
+      return options.output === 'json'
+        ? `${JSON.stringify(workflows.map(serializeWorkflowForQuery))}\n`
+        : renderWorkflowText(workflows);
+    }
+
+    let tasks = snapshot.tasks;
+    if (options.workflowId) {
+      tasks = tasks.filter((task) => task.config.workflowId === options.workflowId);
+    }
+    if (options.status) {
+      tasks = tasks.filter((task) => task.status === options.status);
+    }
+    return options.output === 'json'
+      ? `${JSON.stringify(tasks.map(serializeTaskForQuery))}\n`
+      : renderTaskText(tasks);
+  } finally {
+    persistence.close();
+  }
+}
+
+async function runQuery(options: QueryOptions, deps: CliDeps): Promise<number> {
+  let bus: MessageBus | undefined;
+  try {
+    bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
+    const owner = await discoverLiveOwner(bus);
+    if (owner) {
+      process.stdout.write(await queryLiveOwner(options, bus));
+      return 0;
+    }
+  } finally {
+    const disconnect = (bus as { disconnect?: () => void } | undefined)?.disconnect;
+    if (disconnect) {
+      disconnect.call(bus);
+    }
+  }
+
+  process.stdout.write(await queryStandaloneDatabase(options));
+  return 0;
 }
 
 function validateLiveSubmissionResponse(raw: unknown): LiveSubmissionResult {
@@ -599,6 +832,9 @@ export async function main(argv: string[] = process.argv.slice(2), deps: CliDeps
       }
       bus = await (deps.createMessageBus?.() ?? createDefaultMessageBus());
       return await runWorker(definition, bus);
+    }
+    if (argv[0] === 'query') {
+      return await runQuery(parseQueryArgs(argv.slice(1)), deps);
     }
     const parsed = parseArgs(argv);
     if (!parsed.command || parsed.command === '--help') {
