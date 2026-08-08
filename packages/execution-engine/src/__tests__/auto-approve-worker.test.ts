@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   collectValidatedAutoApproveCandidates,
+  compareCandidateSnapshot,
   createAutoApproveTick,
   isApproveIntentForTask,
   listAutoApproveScanCandidates,
@@ -194,6 +195,24 @@ describe('autoapprove worker', () => {
       expect(result).toEqual([]);
       expect(writes[0]).toMatchObject({ status: 'skipped', summary: `Skipped AI fix approval: ${reason}` });
     }
+  });
+
+  it('compareCandidateSnapshot detects each staleness reason directly', () => {
+    const cases: Array<[string, TaskState, AutoApproveCandidate]> = [
+      ['stale-workflow', task({ config: { workflowId: 'wf-2' } }), candidate()],
+      ['stale-generation', task({ execution: { generation: 2 } }), candidate()],
+      ['stale-task-state-version', task({ taskStateVersion: 5 }), candidate()],
+      ['stale-attempt', task({ execution: { selectedAttemptId: 'attempt-2' } }), candidate()],
+    ];
+
+    for (const [reason, latest, snapshot] of cases) {
+      expect(compareCandidateSnapshot(snapshot, latest)).toMatchObject({ ok: false, reason });
+    }
+
+    expect(compareCandidateSnapshot(candidate(), task())).toMatchObject({
+      ok: true,
+      ref: { taskId: 'wf-1/task-1', workflowId: 'wf-1', generation: 1, taskStateVersion: 4, attemptId: 'attempt-1' },
+    });
   });
 
   it('dedupes duplicate wakeups for the same snapshot', async () => {
