@@ -92,6 +92,7 @@ import {
   INFRA_REPAIR_RECREATE_TASK_CHANNEL,
   INFRA_REPAIR_RETRY_TASK_CHANNEL,
   initializeShellEnvironment,
+  AUTO_FIX_BARE_RETRY_CHANNEL,
   createAutoFixAttemptLedger,
   createWorkerRegistry,
   GitHubMergeGateProvider,
@@ -1744,6 +1745,19 @@ function startHeadlessMode(): void {
         if (!workflowMutationDispatcher.has('invoker:requeue')) {
           workflowMutationDispatcher.set('invoker:requeue', async (...requeueArgs: unknown[]) => {
             const { taskId } = parseRequeueMutationArgs(requeueArgs);
+            await runHeadless(['retry-task', taskId], {
+              ...headlessDeps,
+              waitForApproval: false,
+              noTrack: true,
+              signal: activeMutationContext?.signal,
+              mutationTiming: activeMutationContext?.mutationTiming,
+            });
+            return { ok: true };
+          });
+        }
+        if (!workflowMutationDispatcher.has(AUTO_FIX_BARE_RETRY_CHANNEL)) {
+          workflowMutationDispatcher.set(AUTO_FIX_BARE_RETRY_CHANNEL, async (...retryArgs: unknown[]) => {
+            const taskId = String(retryArgs[0]);
             await runHeadless(['retry-task', taskId], {
               ...headlessDeps,
               waitForApproval: false,
