@@ -26,6 +26,11 @@ describe('sync journal', () => {
     return (adapter as any).executor as SqliteExecutor;
   }
 
+  function lastJournalSeq(): number {
+    const entries = readJournalSince(executor(), 0, 1000);
+    return entries.length > 0 ? entries[entries.length - 1]!.seq : 0;
+  }
+
   function makeWorkflow(id = 'wf-1', name = 'Workflow'): WorkflowSaveInput {
     return {
       id,
@@ -51,6 +56,7 @@ describe('sync journal', () => {
   it('rolls back a journal append with the enclosing mutation transaction', () => {
     adapter.saveWorkflow(makeWorkflow());
     adapter.saveTask('wf-1', makeTask());
+    const baseSeq = lastJournalSeq();
 
     expect(() =>
       adapter.runInTransaction(() => {
@@ -60,12 +66,13 @@ describe('sync journal', () => {
     ).toThrow(/rollback sentinel/);
 
     expect(adapter.loadTask('task-1')?.status).toBe('pending');
-    expect(readJournalSince(executor(), 0, 10)).toEqual([]);
+    expect(readJournalSince(executor(), baseSeq, 10)).toEqual([]);
   });
 
   it('fails loudly and rolls back the mutation when the journal write fails', () => {
     adapter.saveWorkflow(makeWorkflow());
     adapter.saveTask('wf-1', makeTask());
+    const baseSeq = lastJournalSeq();
 
     const db = (adapter as any).db;
     const originalRun = db.run.bind(db) as (sql: string, params?: unknown[]) => unknown;
@@ -83,7 +90,7 @@ describe('sync journal', () => {
     }
 
     expect(adapter.loadTask('task-1')?.status).toBe('pending');
-    expect(readJournalSince(executor(), 0, 10)).toEqual([]);
+    expect(readJournalSince(executor(), baseSeq, 10)).toEqual([]);
   });
 
   it('allocates strictly monotonic journal seq values', () => {
@@ -178,25 +185,82 @@ describe('sync journal', () => {
     adapter.deleteWorkflow('wf-delete');
 
     const entries = readJournalSince(executor(), 0, 10);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({
+    expect(entries.map((entry) => [entry.entityType, entry.entityId, entry.op])).toEqual([
+      ['workflow', 'wf-delete', 'upsert'],
+      ['workflow', 'wf-delete', 'tombstone'],
+    ]);
+    expect(entries[1]).toMatchObject({
       entityType: 'workflow',
       entityId: 'wf-delete',
       op: 'tombstone',
       origin: 'home',
     });
-    expect(entries[0]?.payload).toMatchObject({
+    expect(entries[1]?.payload).toMatchObject({
       id: 'wf-delete',
       deleted_at: expect.any(Number),
     });
   });
 
-  it('journals attempt creation and completion snapshots', () => {
+  it('journals workflow creation and metadata update snapshots', () => {
+    adapter.saveWorkflow(makeWorkflow('wf-sync', 'Original'));
+    adapter.updateWorkflow('wf-sync', {
+      name: 'Updated',
+      description: 'metadata changed',
+      updatedAt: '2026-07-28T00:00:01.000Z',
+    });
+
+    const entries = readJournalSince(executor(), 0, 10);
+    expect(entries.map((entry) => [entry.entityType, entry.entityId, entry.op])).toEqual([
+      ['workflow', 'wf-sync', 'upsert'],
+      ['workflow', 'wf-sync', 'upsert'],
+    ]);
+    expect(entries[0]?.payload).toMatchObject({
+      id: 'wf-sync',
+      name: 'Original',
+    });
+    expect(entries[1]?.payload).toMatchObject({
+      id: 'wf-sync',
+      name: 'Updated',
+      description: 'metadata changed',
+    });
+  });
+
+  it('journals task creation and metadata update snapshots', () => {
+    adapter.saveWorkflow(makeWorkflow());
+    const baseSeq = lastJournalSeq();
+
+    adapter.saveTask('wf-1', makeTask());
+    adapter.updateTask('task-1', {
+      description: 'Task metadata changed',
+      config: { summary: 'updated summary' },
+    });
+
+    const entries = readJournalSince(executor(), baseSeq, 10);
+    expect(entries.map((entry) => [entry.entityType, entry.entityId, entry.op])).toEqual([
+      ['task', 'task-1', 'upsert'],
+      ['task', 'task-1', 'upsert'],
+    ]);
+    expect(entries[0]?.payload).toMatchObject({
+      id: 'task-1',
+      description: 'Task task-1',
+    });
+    expect(entries[1]?.payload).toMatchObject({
+      id: 'task-1',
+      description: 'Task metadata changed',
+      summary: 'updated summary',
+    });
+  });
+
+  it('journals attempt creation, non-terminal updates, and completion snapshots', () => {
     adapter.saveWorkflow(makeWorkflow());
     adapter.saveTask('wf-1', makeTask());
     const attempt = createAttempt('task-1', { status: 'running' });
 
     adapter.saveAttempt(attempt);
+    adapter.updateAttempt(attempt.id, {
+      lastHeartbeatAt: new Date('2026-07-28T00:00:01.000Z'),
+      leaseExpiresAt: new Date('2026-07-28T00:00:30.000Z'),
+    });
     adapter.updateAttempt(attempt.id, {
       status: 'completed',
       completedAt: new Date('2026-07-28T00:00:02.000Z'),
@@ -205,10 +269,19 @@ describe('sync journal', () => {
 
     const entries = readJournalSince(executor(), 0, 10);
     expect(entries.map((entry) => [entry.entityType, entry.entityId, entry.op])).toEqual([
+      ['workflow', 'wf-1', 'upsert'],
+      ['task', 'task-1', 'upsert'],
+      ['attempt', attempt.id, 'upsert'],
       ['attempt', attempt.id, 'upsert'],
       ['attempt', attempt.id, 'upsert'],
     ]);
-    expect(entries[1]?.payload).toMatchObject({
+    expect(entries[3]?.payload).toMatchObject({
+      id: attempt.id,
+      status: 'running',
+      last_heartbeat_at: '2026-07-28T00:00:01.000Z',
+      lease_expires_at: '2026-07-28T00:00:30.000Z',
+    });
+    expect(entries[4]?.payload).toMatchObject({
       id: attempt.id,
       status: 'completed',
       exit_code: 0,

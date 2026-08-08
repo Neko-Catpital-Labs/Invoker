@@ -33,6 +33,7 @@ import type {
 } from './adapter.js';
 import { mapRowToWorkflow, mapRowToTask } from './sqlite-row-mappers.js';
 import type { SqliteExecutor } from './sqlite-executor.js';
+import { appendJournalEntry } from './sync-journal.js';
 
 export type WorkflowMetadataChanges = Partial<
   Pick<
@@ -89,28 +90,44 @@ export class SqliteWorkflowRepository {
     private readonly reconcileTaskFromSelectedAttempt: (task: TaskState) => TaskState,
   ) {}
 
+  private loadWorkflowJournalPayload(workflowId: string): Record<string, unknown> | undefined {
+    return this.exec.queryOne('SELECT * FROM workflows WHERE id = ?', [workflowId]);
+  }
+
   // ── Workflows ─────────────────────────────────────────
 
   saveWorkflow(workflow: WorkflowSaveInput): void {
     assertWorkflowConsistent(workflow);
-    this.exec.execRun(`
-      INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, deleted_at, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      workflow.id, workflow.name,
-      workflow.description ?? null,
-      workflow.visualProof ? 1 : 0,
-      workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.intermediateRepoUrl ?? null, workflow.branch ?? null,
-      workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
-      workflow.mergeMode ?? null,
-      workflow.reviewProvider ?? null,
-      workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
-      workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
-      workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
-      workflow.generation ?? 0,
-      workflow.deletedAt ?? null,
-      workflow.createdAt, workflow.updatedAt,
-    ]);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`
+        INSERT OR REPLACE INTO workflows (id, name, description, visual_proof, plan_file, repo_url, intermediate_repo_url, branch, on_finish, base_branch, parent_remote, feature_branch, merge_mode, review_provider, external_dependencies, external_dependency_changes, detached_external_dependencies, generation, deleted_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        workflow.id, workflow.name,
+        workflow.description ?? null,
+        workflow.visualProof ? 1 : 0,
+        workflow.planFile ?? null, workflow.repoUrl ?? null, workflow.intermediateRepoUrl ?? null, workflow.branch ?? null,
+        workflow.onFinish ?? null, workflow.baseBranch ?? null, null, workflow.featureBranch ?? null,
+        workflow.mergeMode ?? null,
+        workflow.reviewProvider ?? null,
+        workflow.externalDependencies ? JSON.stringify(workflow.externalDependencies) : null,
+        workflow.externalDependencyChanges ? JSON.stringify(workflow.externalDependencyChanges) : null,
+        workflow.detachedExternalDependencies ? JSON.stringify(workflow.detachedExternalDependencies) : null,
+        workflow.generation ?? 0,
+        workflow.deletedAt ?? null,
+        workflow.createdAt, workflow.updatedAt,
+      ]);
+      const payload = this.loadWorkflowJournalPayload(workflow.id);
+      if (!payload) {
+        throw new Error(`Failed to load workflow ${workflow.id} after insert for sync journal`);
+      }
+      appendJournalEntry(this.exec, {
+        entityType: 'workflow',
+        entityId: workflow.id,
+        op: 'upsert',
+        payload,
+      });
+    });
   }
 
   updateWorkflow(workflowId: string, changes: WorkflowMetadataChanges): void {
@@ -177,7 +194,19 @@ export class SqliteWorkflowRepository {
     assertWorkflowPatchConsistent(before, after, changes);
 
     values.push(workflowId);
-    this.exec.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
+    this.exec.runTransaction(() => {
+      this.exec.execRun(`UPDATE workflows SET ${setClauses.join(', ')} WHERE id = ?`, values);
+      const payload = this.loadWorkflowJournalPayload(workflowId);
+      if (!payload) {
+        throw new Error(`Failed to load workflow ${workflowId} after update for sync journal`);
+      }
+      appendJournalEntry(this.exec, {
+        entityType: 'workflow',
+        entityId: workflowId,
+        op: 'upsert',
+        payload,
+      });
+    });
   }
 
   loadWorkflow(workflowId: string, options?: WorkflowReadOptions): Workflow | undefined {
