@@ -160,6 +160,12 @@ function gitQuiet(cwd, ...args) {
   return execFileSync('git', ['-C', cwd, ...args], { stdio: 'ignore' });
 }
 
+function gitTextRefExists(cwd, ref) {
+  return spawnSync('git', ['-C', cwd, 'rev-parse', '--verify', ref], {
+    encoding: 'utf-8',
+  }).status === 0;
+}
+
 function writeExecutable(path, content) {
   writeFileSync(path, content, { mode: 0o755 });
 }
@@ -888,6 +894,117 @@ function testUnpublishedStackCommitsBlockUpdate() {
   }
 }
 
+function testNestedMergifyPublishedBranchRecognizedBySha() {
+  const harness = createHarness();
+  try {
+    const { work } = createRepo(harness);
+    const branch = 'stack/EdbertChan/owner-shutdown-signals/catch-sigterm-sigint-in-owner-serve';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'catch sigterm and sigint\n\nChange-Id: Ishutdown0001');
+    setManagedBranchConfig(work, branch);
+
+    const nestedRemoteBranch =
+      'stack/EdbertChan/stack/EdbertChan/owner-shutdown-signals/catch-sigterm-sigint-in-owner-serve/catch-sigterm-sigint-owner-serve-process-instead--72172374';
+    gitQuiet(work, 'push', 'origin', `HEAD:refs/heads/${nestedRemoteBranch}`);
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing'], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 77,
+          html_url: 'https://example.com/pull/77',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/77' }),
+    });
+
+    assert(
+      result.status === 0,
+      `nested mergify-published branch should be recognized by SHA match\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      !result.stderr.includes('unpublished local commits'),
+      `nested mergify-published branch should not report unpublished commits\nstderr:\n${result.stderr}`,
+    );
+    expectNoPush(harness, 'nested mergify-published branch update');
+
+    commitFile(work, 'stack.txt', 'stack\nmore\n', 'truly unpublished follow-up\n\nChange-Id: Ishutdown0002');
+    const secondResult = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing']);
+    assert(secondResult.status === 1, 'a genuinely unpublished follow-up commit should still be rejected');
+    assert(
+      secondResult.stderr.includes('unpublished local commits'),
+      `genuinely unpublished commit should still be reported\nstderr:\n${secondResult.stderr}`,
+    );
+    assert(
+      secondResult.stderr.includes('Run `mergify stack push` first'),
+      'genuinely unpublished commit should still require mergify stack push',
+    );
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
+function testDeletedMergifyPublishedBranchPrunesStaleTrackingRef() {
+  const harness = createHarness();
+  try {
+    const { originBare, work } = createRepo(harness);
+    const branch = 'stack/EdbertChan/deleted-stack-ref/local-branch';
+    createTrackedBranch(work, branch);
+    commitFile(work, 'stack.txt', 'stack\n', 'deleted stack ref\n\nChange-Id: Ideletedref0001');
+    setManagedBranchConfig(work, branch);
+
+    const deletedRemoteBranch =
+      'stack/EdbertChan/stack/EdbertChan/deleted-stack-ref/local-branch/deleted-stack-ref--12345678';
+    gitQuiet(work, 'push', 'origin', `HEAD:refs/heads/${deletedRemoteBranch}`);
+    gitQuiet(
+      work,
+      'fetch',
+      'origin',
+      '+refs/heads/stack/EdbertChan/*:refs/remotes/origin/stack/EdbertChan/*',
+    );
+    gitQuiet(originBare, 'update-ref', '-d', `refs/heads/${deletedRemoteBranch}`);
+
+    const staleTrackingRef = `refs/remotes/origin/${deletedRemoteBranch}`;
+    assert(
+      git(work, 'rev-parse', '--verify', staleTrackingRef).trim(),
+      'test setup should leave a stale remote-tracking stack ref before create-pr runs',
+    );
+
+    const result = runCreatePr(work, harness, [...stackTitleArgs(), '--update-existing'], {
+      GH_API_PULLS_JSON: JSON.stringify([
+        {
+          number: 78,
+          html_url: 'https://example.com/pull/78',
+          head: { ref: branch, repo: { full_name: 'owner/repo' } },
+        },
+      ]),
+      GH_PATCH_RESPONSE: JSON.stringify({ html_url: 'https://example.com/pull/78' }),
+    });
+
+    assert(
+      result.status === 1,
+      `deleted remote stack branch should not be accepted through a stale remote-tracking ref\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stderr.includes(`Current branch "${branch}" has unpublished local commits ahead of origin/master.`)
+        || result.stderr.includes(`Current branch "${branch}" has no published remote branch.`),
+      `deleted remote stack branch should be rejected as unpublished\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      result.stderr.includes('Run `mergify stack push` first'),
+      `deleted remote stack branch should require republishing\nstderr:\n${result.stderr}`,
+    );
+    assert(
+      !gitTextRefExists(work, staleTrackingRef),
+      'create-pr should prune the stale remote-tracking stack ref before matching',
+    );
+    expectNoPush(harness, 'deleted stack ref update');
+    assert(readGhCalls(harness.ghLog).length === 0, 'deleted stack ref should fail before GitHub calls');
+  } finally {
+    rmSync(harness.root, { recursive: true, force: true });
+  }
+}
+
 function testCurrentBranchPrLookupFailure() {
   const harness = createHarness();
   try {
@@ -1316,6 +1433,8 @@ const tests = [
   testNonRefactorLaneTitleWithTagRejected,
   testNonRefactorLanePlainTitleStillAccepted,
   testUnpublishedStackCommitsBlockUpdate,
+  testNestedMergifyPublishedBranchRecognizedBySha,
+  testDeletedMergifyPublishedBranchPrunesStaleTrackingRef,
   testCurrentBranchPrLookupFailure,
   testNonStackedUnrelatedAreasStayWarnings,
   testStackedDiffTitleRequiredForNonTrunkBase,
