@@ -3323,6 +3323,80 @@ describe('TaskRunner', () => {
         }),
       }));
     });
+
+    it('renews selected attempt heartbeat while publishAfterFix is still running', async () => {
+      vi.useFakeTimers();
+      try {
+        const mergeTask = makeTask({
+          id: '__merge__wf-pub',
+          status: 'running',
+          config: { isMergeNode: true, workflowId: 'wf-pub' },
+          execution: {
+            selectedAttemptId: 'pub-attempt-1',
+            generation: 3,
+          },
+        });
+        const setTaskReviewReady = vi.fn();
+        const autoStartExternallyUnblockedReadyTasksMock = vi.fn(() => []);
+        const orchestrator = {
+          getTask: (id: string) => (id === mergeTask.id ? mergeTask : undefined),
+          getAllTasks: () => [mergeTask],
+          setTaskReviewReady,
+          autoStartExternallyUnblockedReadyTasks: autoStartExternallyUnblockedReadyTasksMock,
+        };
+        const updateAttempt = vi.fn();
+        const onHeartbeat = vi.fn();
+        const executor = new TaskRunner({
+          orchestrator: orchestrator as any,
+          persistence: {
+            loadWorkflow: () => ({
+              id: 'wf-pub',
+              onFinish: 'none',
+              mergeMode: 'manual',
+              baseBranch: 'master',
+              featureBranch: undefined,
+              name: 'Workflow',
+            }),
+            updateAttempt,
+            updateTask: vi.fn(),
+          } as any,
+          executorRegistry: { getDefault: () => ({ type: 'worktree' }), get: () => null, getAll: () => [] } as any,
+          cwd: '/tmp',
+          callbacks: { onHeartbeat },
+        });
+
+        (executor as any).buildMergeSummary = () => new Promise<string>((resolve) => {
+          setTimeout(() => resolve('summary'), 60_000);
+        });
+
+        const pending = executor.publishAfterFix(mergeTask);
+        await vi.advanceTimersByTimeAsync(30_000);
+
+        expect(updateAttempt).toHaveBeenCalledWith(
+          'pub-attempt-1',
+          expect.objectContaining({
+            lastHeartbeatAt: expect.any(Date),
+            leaseExpiresAt: expect.any(Date),
+          }),
+        );
+        expect(onHeartbeat).toHaveBeenCalled();
+        expect(setTaskReviewReady).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(30_000);
+        await pending;
+
+        expect(setTaskReviewReady).toHaveBeenCalledWith(
+          '__merge__wf-pub',
+          expect.objectContaining({
+            execution: expect.objectContaining({ workspacePath: undefined }),
+          }),
+          expect.objectContaining({ selectedAttemptId: 'pub-attempt-1', generation: 3 }),
+        );
+        expect(autoStartExternallyUnblockedReadyTasksMock).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('SSH Executor Caching', () => {
