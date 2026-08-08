@@ -229,6 +229,22 @@ export const SUBSCRIBER_ERROR_RATE_LIMIT_MS = 1_000;
 // Default socket path
 // ---------------------------------------------------------------------------
 
+/**
+ * Decides whether a relayed error response should be forwarded to the
+ * original requester (and its relay bookkeeping cleared), given that the
+ * responding peer has already been removed from the awaiting set.
+ *
+ * Forward once the error isn't NO_HANDLER (some other, more specific error
+ * should reach the requester immediately) or once no peers remain awaited
+ * (NO_HANDLER from everyone means the request truly has no handler).
+ */
+export function shouldForwardRelayedErrorResponse(
+  isNoHandlerError: boolean,
+  remainingAwaitingCount: number,
+): boolean {
+  return !isNoHandlerError || remainingAwaitingCount === 0;
+}
+
 export function resolveDefaultSocketPath(): string {
   return resolveInvokerIpcSocketPath();
 }
@@ -583,7 +599,7 @@ export class IpcBus implements MessageBus {
 
     relay.awaiting.delete(source);
     const noHandlerError = env.code === TransportErrorCode.NO_HANDLER;
-    if (!noHandlerError || relay.awaiting.size === 0) {
+    if (shouldForwardRelayedErrorResponse(noHandlerError, relay.awaiting.size)) {
       this.relayedRequests.delete(env.reqId);
       this.sendToSocket(relay.source, env);
     }
