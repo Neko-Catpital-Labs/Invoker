@@ -42,6 +42,6 @@ export function spawnBundledCli(
   return spawn(runtime, cliArgs, {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
 }
