@@ -41,8 +41,10 @@ export const AUTO_FIX_WORKER_KIND = 'autofix';
 export const RECOVERY_WORKER_KIND = 'recovery';
 
 const DEFAULT_RECOVERY_POLL_INTERVAL_MS = 60_000;
-const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
-const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:retry-task';
+/** Owner-worker mutation channel the recovery worker submits AI fix attempts through. Must have a registered `workflowMutationDispatcher` handler in `packages/app/src/main.ts`. */
+export const AUTO_FIX_COMMAND_CHANNEL = 'invoker:fix-with-agent';
+/** Owner-worker mutation channel the recovery worker submits its free bare retry through. Must have a registered `workflowMutationDispatcher` handler in `packages/app/src/main.ts`. */
+export const AUTO_FIX_BARE_RETRY_CHANNEL = 'invoker:retry-task';
 const AUTO_FIX_ACTION_TYPE = 'auto-fix';
 const AUTO_FIX_BARE_RETRY_ACTION_TYPE = 'auto-retry';
 
