@@ -3,9 +3,7 @@ import { parseWorkflowStatusQuery } from '../slack/slack-surface.js';
 
 describe('parseWorkflowStatusQuery false positive repro', () => {
   // Real message that triggered this in Slack: a /loop babysit-loop instruction.
-  // Marked as an expected failure until the follow-up fix lands — this pins
-  // down the current (wrong) behavior instead of leaving it undocumented.
-  it.fails('does not treat a long babysit/loop instruction as a status query', () => {
+  it('does not treat a long babysit/loop instruction as a status query', () => {
     const babysitLoopMessage = `/loop keep babysitting the DO1 admin-bypass repair worker. For each task and workflow that fails, please prove root
 cause with a repro scirpt, how it happened, why we missed it, and fix the root issue and how we can avoid this kind of
 issue again. Make a pr natively through /pr-skill and not thorugh invoker.
