@@ -63,9 +63,12 @@ describe('cleanupLocalInvokerHome event-loop blocking repro', () => {
       lastTick = now;
     }, WATCHDOG_PERIOD_MS);
 
-    await cleanupLargeWorktree(home);
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    clearInterval(interval);
+    try {
+      await cleanupLargeWorktree(home);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    } finally {
+      clearInterval(interval);
+    }
 
     expect(maxLagMs).toBeLessThan(250);
   });
