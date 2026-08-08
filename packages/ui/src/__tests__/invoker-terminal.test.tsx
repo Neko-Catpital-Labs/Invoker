@@ -444,6 +444,28 @@ describe('Invoker terminal (component)', () => {
     }
   });
 
+  it('skips planning tmux fit and resize when proposed dimensions are not finite', async () => {
+    const rectSpy = mockElementRect(640, 400);
+    xtermMock.setNextProposedDimensions({ cols: Number.NaN, rows: 24 });
+
+    try {
+      render(<InvokerTerminal
+        {...terminalProps({
+          mode: 'tmux',
+          terminalSession: makePlanningTerminalSession(),
+        })}
+      />);
+
+      await flushPlanningTerminalFit();
+
+      expect(xtermMock.fitInstances[0]?.proposeDimensions).toHaveBeenCalled();
+      expect(xtermMock.fitInstances[0]?.fit).not.toHaveBeenCalled();
+      expect(mock.api.planningTerminalResize).not.toHaveBeenCalled();
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
   it('sends planning tmux resize when proposed dimensions are sane', async () => {
     const rectSpy = mockElementRect(640, 400);
     xtermMock.setNextProposedDimensions({ cols: 100, rows: 30 });
