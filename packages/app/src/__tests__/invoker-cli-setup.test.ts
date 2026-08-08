@@ -128,6 +128,33 @@ process.stdin.on('end', () => {
     }
   });
 
+  it.each([
+    ['empty array', '[]'],
+    ['malformed result', '[{}]'],
+  ])('returns an error result for every machine when the child process returns %s', async (_label, output) => {
+    const cliPath = makeCli(`
+process.stdin.on('data', () => {});
+process.stdin.on('end', () => {
+  process.stdout.write(${JSON.stringify(output)});
+});
+`);
+
+    const results = await runMachinesSetup([
+      { name: 'box1', host: 'example.com', user: 'deploy', sshKeyPath: '/home/deploy/.ssh/id_ed25519' },
+    ], { cliPath });
+
+    expect(results).toEqual([
+      {
+        written: false,
+        message: 'invoker-cli returned invalid machine setup output',
+        error: {
+          code: 'invoker-cli-failed',
+          message: 'invoker-cli returned invalid machine setup output',
+        },
+      },
+    ]);
+  });
+
   it('never writes machine field values to console output', async () => {
     const secretKeyPath = '/home/deploy/.ssh/super-secret-token-abc123';
     const cliPath = makeCli(`
