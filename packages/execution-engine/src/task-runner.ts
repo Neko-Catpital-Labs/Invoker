@@ -199,6 +199,7 @@ export interface TaskRunnerConfig {
     provisionCommand?: string;
     maxConcurrentTasks?: number;
   }>;
+  repoProvisionCommandsProvider?: () => Record<string, string>;
   executionPoolsProvider?: () => Record<string, {
     members: Array<
       | { type: 'ssh'; id: string; maxConcurrentTasks?: number }
@@ -268,6 +269,7 @@ export class TaskRunner {
 
   /** @internal */ getRemoteTargets: () => Record<string, RemoteTargetDisplay>;
   /** @internal */ getWorktreeTargets: () => Record<string, WorktreeTargetDisplay>;
+  /** @internal */ getRepoProvisionCommands: () => Record<string, string>;
   /** @internal */ getExecutionPools: () => Record<string, ExecutionPoolConfig>;
   private getExecutionDefaults: () => { executionAgent?: string; executionModel?: string };
   /** @internal */ dockerConfig: { imageName?: string; secretsFile?: string };
@@ -373,6 +375,7 @@ export class TaskRunner {
     this.reviewGateMergeConflictPublisher = config.reviewGateMergeConflictPublisher;
     this.getRemoteTargets = config.remoteTargetsProvider ?? (() => ({}));
     this.getWorktreeTargets = config.worktreeTargetsProvider ?? (() => ({}));
+    this.getRepoProvisionCommands = config.repoProvisionCommandsProvider ?? (() => ({}));
     this.getExecutionPools = config.executionPoolsProvider ?? (() => ({}));
     this.getExecutionDefaults = config.executionDefaultsProvider ?? (() => ({}));
     this.dockerConfig = config.dockerConfig ?? {};

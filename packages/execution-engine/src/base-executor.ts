@@ -22,6 +22,33 @@ const DEFAULT_GIT_NETWORK_TIMEOUT_MS = 15 * 60 * 1000;
 const PROVISION_OUTPUT_TAIL_LINE_LIMIT = 50;
 const PROVISION_OUTPUT_TAIL_CHAR_LIMIT = 32_000;
 
+/**
+ * Canonicalizes a repoUrl for `repoProvisionCommands` lookups so
+ * `git@github.com:org/repo.git`, `https://github.com/org/repo.git`, and
+ * `https://github.com/org/repo` (any trailing slash, any case) all resolve to
+ * the same config entry.
+ */
+export function normalizeRepoUrlForProvisionLookup(repoUrl: string): string {
+  let normalized = repoUrl.trim().toLowerCase();
+  const schemeSeparatorIndex = normalized.indexOf('://');
+  if (schemeSeparatorIndex >= 0) {
+    normalized = normalized.slice(schemeSeparatorIndex + '://'.length);
+  }
+  if (normalized.startsWith('git@')) {
+    const withoutGitUser = normalized.slice('git@'.length);
+    const scpPathSeparatorIndex = withoutGitUser.indexOf(':');
+    normalized = scpPathSeparatorIndex >= 0
+      ? `${withoutGitUser.slice(0, scpPathSeparatorIndex)}/${withoutGitUser.slice(scpPathSeparatorIndex + 1)}`
+      : withoutGitUser;
+  }
+  let endIndex = normalized.length;
+  while (endIndex > 0 && normalized[endIndex - 1] === '/') {
+    endIndex -= 1;
+  }
+  normalized = normalized.slice(0, endIndex);
+  return normalized.endsWith('.git') ? normalized.slice(0, -4) : normalized;
+}
+
 export interface BaseEntry {
   request: WorkRequest;
   outputListeners: Set<(data: string) => void>;
@@ -125,6 +152,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected maxBufferChunks: number;
   protected maxBufferBytes: number;
   protected provisionCommand = '';
+  private repoProvisionCommands: Record<string, string> = {};
   private readonly localProvisioningTimeoutsMs = new Map<string, number>();
 
   constructor(
@@ -141,6 +169,32 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
   protected setProvisionCommand(command: string | undefined, fallback: string): void {
     const trimmed = command?.trim();
     this.provisionCommand = trimmed ? trimmed : fallback;
+  }
+
+  /**
+   * `repoUrl` keys are normalized with {@link normalizeRepoUrlForProvisionLookup}
+   * so config authors don't need to match the exact string form a workflow's
+   * `repoUrl` happens to use.
+   */
+  protected setRepoProvisionCommands(commands: Record<string, string> | undefined): void {
+    this.repoProvisionCommands = {};
+    for (const [repoUrl, command] of Object.entries(commands ?? {})) {
+      this.repoProvisionCommands[normalizeRepoUrlForProvisionLookup(repoUrl)] = command;
+    }
+  }
+
+  /**
+   * A pool's `provisionCommand` (e.g. `pnpm install --frozen-lockfile`) is
+   * tuned for the repo the pool was set up for, not for whatever `repoUrl` a
+   * given task happens to check out. `repoProvisionCommands` lets config map
+   * a specific repo to its own command (including an explicit empty string
+   * for repos that need no install step at all), taking priority over the
+   * pool's default when the task's `repoUrl` has an entry.
+   */
+  protected resolveProvisionCommand(repoUrl: string | undefined): string {
+    if (!repoUrl) return this.provisionCommand;
+    const override = this.repoProvisionCommands[normalizeRepoUrlForProvisionLookup(repoUrl)];
+    return override !== undefined ? override : this.provisionCommand;
   }
 
   protected setLocalProvisioningTimeout(executionId: string, timeoutMs: number): void {
