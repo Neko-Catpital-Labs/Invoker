@@ -1184,6 +1184,36 @@ describe('SQLiteAdapter', () => {
       expect(leases[0]?.resourceKey).toBe('ssh:live-b');
     });
 
+    it('globally sweeps expired leases across keys the way a dispatcher poll invokes it', () => {
+      // LaunchDispatcher.poll() (launch-dispatcher.ts) falls back to calling
+      // releaseExpiredExecutionResourceLeases() with no arguments on every
+      // tick when the liveness-aware sweep isn't wired; mirror that call
+      // signature here.
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:poll-expired-a',
+        resourceType: 'ssh',
+        holderId: 'holder-a',
+        leaseMs: -1,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'worktree:poll-expired-b',
+        resourceType: 'worktree',
+        holderId: 'holder-b',
+        leaseMs: -1,
+      })).toBe(true);
+      expect(adapter.claimExecutionResourceLease({
+        resourceKey: 'ssh:poll-live-c',
+        resourceType: 'ssh',
+        holderId: 'holder-c',
+        leaseMs: 60_000,
+      })).toBe(true);
+
+      expect(adapter.releaseExpiredExecutionResourceLeases()).toBe(2);
+      const leases = adapter.listExecutionResourceLeases();
+      expect(leases).toHaveLength(1);
+      expect(leases[0]?.resourceKey).toBe('ssh:poll-live-c');
+    });
+
     it('allows up to maxHolders live holders on one resource key', () => {
       expect(adapter.claimExecutionResourceLease({
         resourceKey: 'ssh:invoker@counted.example.com:22',
