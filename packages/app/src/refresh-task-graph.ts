@@ -6,12 +6,14 @@ import type { Orchestrator, TaskState } from '@invoker/workflow-core';
 interface DelegatedRefreshTaskGraphSnapshot {
   tasks: TaskState[];
   workflows: WorkflowMeta[];
+  streamSequence?: number;
   invokerHomeRoot?: string;
 }
 
 export interface RefreshTaskGraphSnapshot {
   tasks: TaskState[];
   workflows: WorkflowMeta[];
+  streamSequence?: number;
 }
 
 export interface ResolveRefreshTaskGraphSnapshotDeps {
@@ -21,9 +23,16 @@ export interface ResolveRefreshTaskGraphSnapshotDeps {
   orchestrator: Pick<Orchestrator, 'syncAllFromDb' | 'getAllTasks'>;
   persistence: Pick<SQLiteAdapter, 'listWorkflows'>;
   logger: Logger;
+  getStreamSequence?: () => number;
 }
 export interface RefreshTaskGraphSnapshotPublisher {
-  publishSnapshot(reason: string, tasks: TaskState[], workflows: WorkflowMeta[], forced?: boolean): void;
+  publishSnapshot(
+    reason: string,
+    tasks: TaskState[],
+    workflows: WorkflowMeta[],
+    streamSequence?: number,
+    forced?: boolean,
+  ): void;
 }
 
 
@@ -38,9 +47,14 @@ function parseDelegatedRefreshTaskGraphSnapshot(
   const snapshot = value as {
     tasks?: unknown[];
     workflows?: unknown[];
+    streamSequence?: unknown;
     invokerHomeRoot?: string;
   };
-  if (!Array.isArray(snapshot.tasks) || !Array.isArray(snapshot.workflows)) {
+  if (
+    !Array.isArray(snapshot.tasks) ||
+    !Array.isArray(snapshot.workflows) ||
+    (snapshot.streamSequence !== undefined && typeof snapshot.streamSequence !== 'number')
+  ) {
     throw new Error('refresh-task-graph owner delegation returned an invalid snapshot');
   }
   if (snapshot.invokerHomeRoot && snapshot.invokerHomeRoot !== localInvokerHomeRoot) {
@@ -60,6 +74,7 @@ export async function resolveRefreshTaskGraphSnapshot(
     return {
       tasks: deps.orchestrator.getAllTasks(),
       workflows: deps.persistence.listWorkflows() as WorkflowMeta[],
+      streamSequence: deps.getStreamSequence?.(),
     };
   };
 
@@ -75,6 +90,7 @@ export async function resolveRefreshTaskGraphSnapshot(
     return {
       tasks: delegated.tasks,
       workflows: delegated.workflows,
+      streamSequence: delegated.streamSequence,
     };
   } catch (err) {
     deps.logger.warn(
@@ -91,5 +107,5 @@ export function publishForcedRefreshTaskGraphSnapshot(
   reason: string,
   snapshot: RefreshTaskGraphSnapshot,
 ): void {
-  publisher.publishSnapshot(reason, snapshot.tasks, snapshot.workflows, true);
+  publisher.publishSnapshot(reason, snapshot.tasks, snapshot.workflows, snapshot.streamSequence, true);
 }

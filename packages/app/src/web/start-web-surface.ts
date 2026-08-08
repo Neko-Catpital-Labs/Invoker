@@ -182,10 +182,12 @@ export function startHeadlessWebSurface(deps: StartHeadlessWebSurfaceDeps): WebB
     deps.orchestrator.syncAllFromDb();
     const tasks = deps.orchestrator.getAllTasks();
     const workflows = deps.persistence.listWorkflows();
+    const streamSequence = streamSeq.current();
     projection.replaceAll(tasks);
     publishForcedRefreshTaskGraphSnapshot(publisher, 'refresh-task-graph', {
       tasks,
       workflows,
+      streamSequence,
     });
   };
 

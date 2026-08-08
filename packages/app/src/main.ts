@@ -2621,8 +2621,14 @@ startMainProcessBootstrap({
               orchestrator,
               persistence,
               logger,
+              getStreamSequence: getTaskDeltaStreamSequence,
             });
-            taskGraphEventPublisher.publishSnapshot('refresh-task-graph', snapshot.tasks, snapshot.workflows);
+            taskGraphEventPublisher.publishSnapshot(
+              'refresh-task-graph',
+              snapshot.tasks,
+              snapshot.workflows,
+              snapshot.streamSequence,
+            );
           },
           deleteWorkflow: (workflowId) => requireGuiMutationTaskActions().performDeleteWorkflow(workflowId),
           detachWorkflow: (workflowId, upstreamWorkflowId) =>
