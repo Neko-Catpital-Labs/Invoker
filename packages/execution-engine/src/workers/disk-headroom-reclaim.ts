@@ -120,15 +120,44 @@ export function isDeletingOrphanName(name: string): boolean {
 }
 
 /**
+ * Direct children (relative to `$INVOKER_HOME`) swept one at a time instead of
+ * as a whole unit, so an in-flight task's dir under one of these only
+ * protects itself, not its siblings. Mirrors sweepReclaimableChildren /
+ * sweepRepoChildren in the local reaper below.
+ */
+const PER_CHILD_SWEEP_DIRS = ['repos', 'worktrees', 'merge-clones', 'merge-launches'] as const;
+
+/**
  * Remote bash that frees Invoker-managed disk under `$INVOKER_HOME`.
  * Kills only provision grinders (pnpm install / electron unzip), not every
  * process whose argv mentions the home (that can kill the SSH session).
  * Deletes synchronously so SSH timeout cannot leave fire-and-forget orphans.
+ *
+ * `preservedRelativePaths` are paths relative to `$INVOKER_HOME` (e.g.
+ * `repos/<hash>`, `worktrees/<hash>/<branch>`) for in-flight work on this
+ * target; a direct child under one of PER_CHILD_SWEEP_DIRS is skipped when it
+ * equals or is an ancestor of one of these paths.
  */
-export function buildInvokerHomeCleanupScript(invokerHome: string): string {
+export function buildInvokerHomeCleanupScript(
+  invokerHome: string,
+  preservedRelativePaths: readonly string[] = [],
+): string {
   const homeQ = shellPosixSingleQuote(invokerHome);
-  const removeCalls = DISK_RECLAIMABLE_DIRS
-    .map((name) => `remove_path "$INVOKER_HOME/${name}"`)
+  const preserveArrayLiteral = preservedRelativePaths
+    .map((path) => shellPosixSingleQuote(path))
+    .join(' ');
+  const wholeUnitDirs = DISK_RECLAIMABLE_DIRS.filter(
+    (name) => !(PER_CHILD_SWEEP_DIRS as readonly string[]).includes(name),
+  );
+  const wholeUnitRemoveCalls = wholeUnitDirs
+    .map((name) =>
+      name === 'pr-cron-work'
+        ? `# pr-cron-work: PR #6632 retired its only producer; nothing to preserve here.\nremove_path "$INVOKER_HOME/${name}"`
+        : `remove_path "$INVOKER_HOME/${name}"`,
+    )
+    .join('\n');
+  const perChildSweepCalls = PER_CHILD_SWEEP_DIRS
+    .map((name) => `sweep_reclaimable_dir "${name}"`)
     .join('\n');
   const mkdirArgs = DISK_RECLAIMABLE_DIRS
     .map((name) => `"$INVOKER_HOME/${name}"`)
@@ -164,7 +193,35 @@ remove_path() {
     rm -rf "$path" 2>/dev/null || true
   fi
 }
-${removeCalls}
+PRESERVE_LIST=(${preserveArrayLiteral})
+is_preserved() {
+  local rel="$1"
+  local p
+  for p in "\${PRESERVE_LIST[@]}"; do
+    case "$p" in
+      "$rel") return 0 ;;
+      "$rel"/*) return 0 ;;
+    esac
+  done
+  return 1
+}
+sweep_reclaimable_dir() {
+  local name="$1"
+  local dir="$INVOKER_HOME/$name"
+  [ -d "$dir" ] || return 0
+  find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null | while IFS= read -r -d '' child; do
+    local childName rel
+    childName="$(basename "$child")"
+    rel="$name/$childName"
+    if is_preserved "$rel"; then
+      echo "[disk-headroom-cleanup] preserve $rel (in-flight)"
+      continue
+    fi
+    remove_path "$child"
+  done
+}
+${wholeUnitRemoveCalls}
+${perChildSweepCalls}
 rm -rf "$INVOKER_HOME"/*.deleting.* >/dev/null 2>&1
 mkdir -p ${mkdirArgs}
 chmod 700 ${mkdirArgs}
@@ -276,6 +333,72 @@ export function computeProtectedRepoHashes(store: DiskHeadroomWorkerStore): Set<
   } catch {
     return new Set();
   }
+}
+
+/**
+ * A store view narrowed to only the tasks dispatched to one remote pool
+ * member, joined on `task.config.poolMemberId`, the same field key task
+ * dispatch relies on (see task-runner-pool.ts). Only an in-flight task on
+ * THAT target's own pool can protect a path on that target's own host.
+ */
+function narrowStoreToPoolMember(
+  store: DiskHeadroomWorkerStore,
+  poolMemberId: string,
+): DiskHeadroomWorkerStore {
+  return {
+    listWorkflows: () => store.listWorkflows(),
+    loadTasks: (workflowId: string) =>
+      store.loadTasks(workflowId).filter(
+        (task) => (task.config as { poolMemberId?: string }).poolMemberId === poolMemberId,
+      ),
+  };
+}
+
+/**
+ * `workspacePath` for an SSH task is a tilde-relative string already scoped
+ * to the remote host (e.g. `~/.invoker/worktrees/<hash>/<branch>`), not a
+ * real local filesystem path — unlike the local reaper's workspacePath, it
+ * must not be run through Node's `resolve()`, which would treat it as
+ * relative to this process's cwd. Strips the target's own home prefix to get
+ * the path relative to `$INVOKER_HOME` that the remote script understands.
+ */
+function toRemoteRelativePath(workspacePath: string, remoteHome: string): string | undefined {
+  const home = remoteHome.trim().replace(/\/+$/, '');
+  if (!home) return undefined;
+  const prefix = `${home}/`;
+  if (!workspacePath.startsWith(prefix)) return undefined;
+  const rel = workspacePath.slice(prefix.length);
+  return rel.length > 0 ? rel : undefined;
+}
+
+/**
+ * This target's own relative preservation set: paths (relative to
+ * `$INVOKER_HOME` on this target) that an in-flight task on this target's
+ * own pool still needs. Does not fail safe to an empty set — any store error
+ * propagates so the caller aborts the remote run entirely rather than
+ * cleaning with an under-populated preservation set on a host it cannot
+ * easily recover by hand.
+ */
+export function computeRemotePreservedRelativePaths(
+  store: DiskHeadroomWorkerStore,
+  poolMemberId: string,
+  remoteHome: string,
+): string[] {
+  const narrowed = narrowStoreToPoolMember(store, poolMemberId);
+  const relative = new Set<string>();
+  for (const workflow of narrowed.listWorkflows()) {
+    for (const task of narrowed.loadTasks(workflow.id)) {
+      if (TERMINAL_TASK_STATUS_SET.has(task.status)) continue;
+      const workspacePath = task.execution?.workspacePath;
+      if (!workspacePath) continue;
+      const rel = toRemoteRelativePath(workspacePath, remoteHome);
+      if (rel) relative.add(rel);
+    }
+  }
+  for (const hash of computeProtectedRepoHashes(narrowed)) {
+    relative.add(`repos/${hash}`);
+  }
+  return [...relative];
 }
 
 function pathIsProtected(candidate: string, protectedPaths: ReadonlySet<string>): boolean {
@@ -511,6 +634,7 @@ export async function cleanupLocalInvokerHome(opts: {
 export async function cleanupRemoteInvokerHome(opts: {
   target: RemoteDiskTarget;
   logger?: Logger;
+  store?: DiskHeadroomWorkerStore;
   runRemoteScript?: (target: RemoteDiskTarget, script: string) => Promise<string>;
 }): Promise<DiskCleanupResult> {
   const targetKey = `ssh:${opts.target.name} ${opts.target.remotePath}`;
@@ -523,7 +647,25 @@ export async function cleanupRemoteInvokerHome(opts: {
     };
   }
 
-  const script = buildInvokerHomeCleanupScript(opts.target.remotePath);
+  let preservedRelativePaths: string[] = [];
+  if (opts.store) {
+    try {
+      preservedRelativePaths = computeRemotePreservedRelativePaths(
+        opts.store,
+        opts.target.name,
+        opts.target.remotePath,
+      );
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      opts.logger?.error?.(
+        `[disk-headroom-cleanup] remote preservation-set failed ${targetKey}: ${detail}`,
+        { module: 'disk-headroom', targetKey },
+      );
+      return { targetKey, ok: false, reason: 'cleanup-error', detail };
+    }
+  }
+
+  const script = buildInvokerHomeCleanupScript(opts.target.remotePath, preservedRelativePaths);
   const run = opts.runRemoteScript ?? defaultRunRemoteCleanup;
   try {
     opts.logger?.info?.(`[disk-headroom-cleanup] remote begin ${targetKey}`, {

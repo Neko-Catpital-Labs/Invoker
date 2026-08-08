@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,10 +7,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TaskState } from '@invoker/workflow-core';
 
 import { computeRepoCacheHash } from '../git-utils.js';
+import type { RemoteDiskTarget } from '../workers/disk-headroom-monitor.js';
 import {
   buildInvokerHomeCleanupScript,
   cleanupLocalInvokerHome,
+  cleanupRemoteInvokerHome,
   computeProtectedLocalPaths,
+  computeRemotePreservedRelativePaths,
   DISK_RECLAIMABLE_DIRS,
   DiskCleanupCooldownTracker,
   type DiskHeadroomWorkerStore,
@@ -99,6 +103,24 @@ describe('disk-headroom cleanup guards', () => {
     expect(DISK_RECLAIMABLE_DIRS).toContain('pr-cron-work');
     const script = buildInvokerHomeCleanupScript('~/.invoker');
     expect(script).toContain('$INVOKER_HOME/pr-cron-work');
+  });
+
+  it('checks repos/worktrees/merge-clones/merge-launches children against a preservation list instead of clearing each as one whole unit', () => {
+    const script = buildInvokerHomeCleanupScript('~/.invoker', ['repos/preserved-hash']);
+    expect(script).toContain("'repos/preserved-hash'");
+    expect(script).toContain('is_preserved');
+    expect(script).toContain('sweep_reclaimable_dir "repos"');
+    expect(script).toContain('sweep_reclaimable_dir "worktrees"');
+    expect(script).toContain('sweep_reclaimable_dir "merge-clones"');
+    expect(script).toContain('sweep_reclaimable_dir "merge-launches"');
+    expect(script).not.toContain('remove_path "$INVOKER_HOME/repos"');
+    expect(script).not.toContain('remove_path "$INVOKER_HOME/worktrees"');
+    expect(script).not.toContain('remove_path "$INVOKER_HOME/merge-clones"');
+    expect(script).not.toContain('remove_path "$INVOKER_HOME/merge-launches"');
+    // runtime and pr-cron-work are unchanged: whole-directory remove_path calls.
+    expect(script).toContain('remove_path "$INVOKER_HOME/runtime"');
+    expect(script).toContain('remove_path "$INVOKER_HOME/pr-cron-work"');
+    expect(script).toContain('PR #6632');
   });
 
   it('sweeps only Invoker/test scratch from the shared temp dir, never a blanket /tmp wipe', () => {
@@ -428,5 +450,142 @@ describe('cleanupLocalInvokerHome DB-state liveness guard', () => {
     expect(existsSync(protectedWorktreeDir)).toBe(true);
     expect(existsSync(join(protectedWorktreeDir, 'file.txt'))).toBe(true);
     expect(existsSync(unrelatedRepoDir)).toBe(false);
+  });
+});
+
+describe('buildInvokerHomeCleanupScript preservation set (real execution)', () => {
+  it('preserves paths on the preservation list, including a nested worktree path, while clearing unrelated siblings', () => {
+    const root = mkdtempSync(join(tmpdir(), 'invoker-disk-cleanup-remote-preserve-'));
+    tempDirs.push(root);
+    const home = join(root, '.invoker');
+
+    const preservedRepoDir = join(home, 'repos', 'preserved-hash');
+    mkdirSync(preservedRepoDir, { recursive: true });
+    writeFileSync(join(preservedRepoDir, 'file.txt'), 'keep');
+
+    const siblingRepoDir = join(home, 'repos', 'sibling-hash');
+    mkdirSync(siblingRepoDir, { recursive: true });
+    writeFileSync(join(siblingRepoDir, 'file.txt'), 'drop');
+
+    const preservedWorktreeBranchDir = join(home, 'worktrees', 'wt-hash', 'some-branch');
+    mkdirSync(preservedWorktreeBranchDir, { recursive: true });
+    writeFileSync(join(preservedWorktreeBranchDir, 'file.txt'), 'keep');
+
+    const siblingWorktreeDir = join(home, 'worktrees', 'other-wt-hash');
+    mkdirSync(siblingWorktreeDir, { recursive: true });
+    writeFileSync(join(siblingWorktreeDir, 'file.txt'), 'drop');
+
+    const script = buildInvokerHomeCleanupScript(home, [
+      'repos/preserved-hash',
+      'worktrees/wt-hash/some-branch',
+    ]);
+    const scriptPath = join(root, 'cleanup.sh');
+    writeFileSync(scriptPath, script);
+
+    execFileSync('bash', [scriptPath], { stdio: 'pipe' });
+
+    expect(existsSync(preservedRepoDir)).toBe(true);
+    expect(existsSync(join(preservedRepoDir, 'file.txt'))).toBe(true);
+    expect(existsSync(siblingRepoDir)).toBe(false);
+
+    expect(existsSync(preservedWorktreeBranchDir)).toBe(true);
+    expect(existsSync(join(preservedWorktreeBranchDir, 'file.txt'))).toBe(true);
+    expect(existsSync(siblingWorktreeDir)).toBe(false);
+  });
+});
+
+describe('cleanupRemoteInvokerHome preservation-set guard', () => {
+  const target: RemoteDiskTarget = {
+    name: 'pool-member-1',
+    connection: { sshKeyPath: '/tmp/key', user: 'invoker', host: 'example.test' },
+    remotePath: '~/.invoker',
+  };
+
+  it('never calls the execution callback when the accessor throws', async () => {
+    const throwingStore: DiskHeadroomWorkerStore = {
+      listWorkflows: () => {
+        throw new Error('db unavailable');
+      },
+      loadTasks: () => [],
+    };
+    const runRemoteScript = vi.fn().mockResolvedValue('ok');
+
+    const result = await cleanupRemoteInvokerHome({
+      target,
+      store: throwingStore,
+      runRemoteScript,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+    });
+
+    expect(runRemoteScript).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe('cleanup-error');
+  });
+
+  it("narrows preservation to this target's own pool member and embeds it in the shell text", async () => {
+    const repoUrl = 'https://github.com/example/protected-repo.git';
+    const repoHash = computeRepoCacheHash(repoUrl);
+    const store: DiskHeadroomWorkerStore = {
+      listWorkflows: () => [{ id: 'wf-1', repoUrl }],
+      loadTasks: (workflowId: string) =>
+        workflowId === 'wf-1'
+          ? [
+              makeTask({
+                id: 'wf-1/mine',
+                status: 'running',
+                config: { workflowId: 'wf-1', command: 'x', poolMemberId: 'pool-member-1' },
+                execution: { workspacePath: '~/.invoker/worktrees/abc/some-branch' },
+              }),
+              makeTask({
+                id: 'wf-1/other-target',
+                status: 'running',
+                config: { workflowId: 'wf-1', command: 'x', poolMemberId: 'other-pool-member' },
+                execution: { workspacePath: '~/.invoker/worktrees/should-not-appear/some-branch' },
+              }),
+            ]
+          : [],
+    };
+    let capturedScript = '';
+    const runRemoteScript = vi.fn().mockImplementation((_t: RemoteDiskTarget, script: string) => {
+      capturedScript = script;
+      return Promise.resolve('done');
+    });
+
+    const result = await cleanupRemoteInvokerHome({ target, store, runRemoteScript });
+
+    expect(result.ok).toBe(true);
+    expect(runRemoteScript).toHaveBeenCalledTimes(1);
+    expect(capturedScript).toContain('worktrees/abc/some-branch');
+    expect(capturedScript).toContain(`repos/${repoHash}`);
+    expect(capturedScript).not.toContain('should-not-appear');
+  });
+
+  it('computeRemotePreservedRelativePaths joins on poolMemberId and strips the target home prefix', () => {
+    const store: DiskHeadroomWorkerStore = {
+      listWorkflows: () => [{ id: 'wf-1' }],
+      loadTasks: () => [
+        makeTask({
+          id: 'wf-1/mine',
+          status: 'running',
+          config: { workflowId: 'wf-1', command: 'x', poolMemberId: 'pool-member-1' },
+          execution: { workspacePath: '~/.invoker/worktrees/abc/some-branch' },
+        }),
+        makeTask({
+          id: 'wf-1/mine-terminal',
+          status: 'completed',
+          config: { workflowId: 'wf-1', command: 'x', poolMemberId: 'pool-member-1' },
+          execution: { workspacePath: '~/.invoker/worktrees/done-hash/done-branch' },
+        }),
+        makeTask({
+          id: 'wf-1/other',
+          status: 'running',
+          config: { workflowId: 'wf-1', command: 'x', poolMemberId: 'other-pool-member' },
+          execution: { workspacePath: '~/.invoker/worktrees/not-mine/some-branch' },
+        }),
+      ],
+    };
+
+    const relative = computeRemotePreservedRelativePaths(store, 'pool-member-1', '~/.invoker');
+    expect(relative).toEqual(['worktrees/abc/some-branch']);
   });
 });
