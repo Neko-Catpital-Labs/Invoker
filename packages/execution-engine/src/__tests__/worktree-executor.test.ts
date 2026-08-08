@@ -22,7 +22,7 @@ vi.mock('node:fs', async (importOriginal) => {
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
 import { WorktreeExecutor, computeContentHash } from '../worktree-executor.js';
-import { BaseExecutor } from '../base-executor.js';
+import { BaseExecutor, isHeartbeatAliveDuringFinalize } from '../base-executor.js';
 import { registerBuiltinAgents } from '../agents/index.js';
 import { SIGKILL_TIMEOUT_MS } from '../process-utils.js';
 
@@ -1799,6 +1799,18 @@ describe('WorktreeExecutor', () => {
 
       finalizeDeferred.resolve('abc123');
       await waitForCondition(() => completed);
+    });
+
+    it('isHeartbeatAliveDuringFinalize reflects finalizingAfterClose regardless of process exit state', () => {
+      const exitedChild = createMockProcess();
+      (exitedChild as any).exitCode = 0;
+      const runningChild = createMockProcess();
+
+      expect(isHeartbeatAliveDuringFinalize({ finalizingAfterClose: true }, exitedChild)).toBe(true);
+      expect(isHeartbeatAliveDuringFinalize({ finalizingAfterClose: true }, runningChild)).toBe(true);
+      expect(isHeartbeatAliveDuringFinalize({ finalizingAfterClose: false }, exitedChild)).toBe(false);
+      expect(isHeartbeatAliveDuringFinalize({ finalizingAfterClose: false }, runningChild)).toBe(false);
+      expect(isHeartbeatAliveDuringFinalize({}, exitedChild)).toBe(false);
     });
 
     it('heartbeat stops after completion to prevent duplicate events', async () => {
