@@ -42,7 +42,21 @@ invoker-cli doctor --fix
 Ask plainly: "Do you want to set up the Slack integration now?" If no, stop — report that they are
 good to go for CLI and UI workflows and that `invoker-cli setup slack` can add Slack later.
 
-## 3. Guided Slack setup (only if they said yes)
+## 3. Offer the machines wizard
+
+Alongside the Slack offer, ask if they want to add a remote machine now. If yes, run:
+
+```bash
+invoker-cli setup machines
+```
+
+The wizard asks for host, user, SSH key path, and port, and checks reachability before saving the
+target to `~/.invoker/config.json`. The desktop app's System Setup panel offers the same wizard as a
+guided step for users who prefer the UI. See `docs/remote-ssh-targets.md` for the full field
+reference and the manual config fallback. Machines are optional, same as Slack — a user who declines
+is still "good to go".
+
+## 4. Guided Slack setup (only if they said yes)
 
 Run the wizard, which writes a ready-to-paste app manifest to `~/.invoker/slack-app-manifest.json`
 and prompts for the tokens:
@@ -69,7 +83,7 @@ Adding scopes after install does **not** update the existing token. The user MUS
 **Reinstall to Workspace** or the bot keeps the old (insufficient) scopes. If the scope check fails,
 tell them to add the scope **and reinstall**.
 
-## 4. Validate credentials
+## 5. Validate credentials
 
 After the user provides the four values, write them to `~/.invoker/.env` (the wizard does this) and
 confirm against the live Slack API:
@@ -82,7 +96,7 @@ This runs `auth.test` (bot token + scopes via the `x-oauth-scopes` header),
 `apps.connections.open` (app token / Socket Mode), and `conversations.info` (the lobby channel).
 Surface each failing check's `remediation`.
 
-## 5. Done
+## 6. Done
 
 Tell the user to restart Invoker (or that the next launch picks up `~/.invoker/.env`). On launch the
 app logs a one-line prerequisites summary, and the desktop System Setup panel reports the same
