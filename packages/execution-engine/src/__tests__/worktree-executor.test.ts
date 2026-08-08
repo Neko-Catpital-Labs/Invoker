@@ -426,6 +426,69 @@ describe('WorktreeExecutor', () => {
 
     await expect(startPromise).rejects.toThrow('ERR_PNPM_NO_PKG_MANIFEST');
   });
+  it('uses the repo-specific provision command instead of the pool default when repoUrl has an override', async () => {
+    const { taskProcess } = setupSpawnMock();
+    const baseImpl = mockedSpawn.getMockImplementation();
+    const provisionProcess = createMockProcess();
+    mockedSpawn.mockImplementation((cmd: string, args?: readonly string[], options?: { signal?: AbortSignal }) => {
+      if (cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo repo-specific-install') {
+        return provisionProcess;
+      }
+      return baseImpl!(cmd, args, options);
+    });
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      repoProvisionCommands: {
+        // Deliberately not byte-identical to the request's repoUrl
+        // (https:// form vs. the request's git@ form, trailing .git) to
+        // prove lookup normalization, not just an exact string match.
+        'https://github.com/test/repo.git': 'echo repo-specific-install',
+      },
+    });
+    mockPool(provisionedExecutor);
+
+    const startPromise = provisionedExecutor.start(makeRequest());
+    await vi.waitFor(() => {
+      expect(mockedSpawn.mock.calls.find(
+        ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'echo repo-specific-install',
+      )).toBeDefined();
+    });
+
+    expect(mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+    )).toBeUndefined();
+
+    provisionProcess.emit('close', 0, null);
+    await startPromise;
+
+    taskProcess.emit('close', 0, null);
+  });
+  it('skips provisioning when repoProvisionCommands maps the repo to an empty command', async () => {
+    const { taskProcess } = setupSpawnMock();
+
+    const provisionedExecutor = new WorktreeExecutor({
+      cacheDir: '/fake/cache',
+      worktreeBaseDir: '/fake/worktrees',
+      provisionCommand: 'pnpm install --frozen-lockfile',
+      repoProvisionCommands: {
+        'git@github.com:test/repo.git': '',
+      },
+    });
+    mockPool(provisionedExecutor);
+
+    await provisionedExecutor.start(makeRequest());
+
+    expect(mockedSpawn.mock.calls.find(
+      ([cmd, args]) => cmd === '/bin/bash' && (args as string[] | undefined)?.[1] === 'pnpm install --frozen-lockfile',
+    )).toBeUndefined();
+    const taskCall = mockedSpawn.mock.calls.find(([cmd]) => cmd !== 'git');
+    expect(taskCall).toBeDefined();
+
+    taskProcess.emit('close', 0, null);
+  });
   it('times out hung provision commands and terminates their process group', async () => {
     vi.useFakeTimers();
     const previousTimeout = process.env.INVOKER_EXECUTOR_START_TIMEOUT_MS;

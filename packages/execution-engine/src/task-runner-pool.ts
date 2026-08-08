@@ -105,6 +105,7 @@ export type TaskRunnerPoolHost = Pick<
   | 'runnerInstanceId'
   | 'getRemoteTargets'
   | 'getWorktreeTargets'
+  | 'getRepoProvisionCommands'
   | 'getExecutionPools'
   | 'resolveExecutionAgent'
   | 'resolveExecutionModel'
@@ -697,9 +698,11 @@ export function selectExecutor(
           `entry exists in worktreeTargets config. Available: [${Object.keys(worktreeTargets).join(', ')}]`,
         );
       }
+      const repoProvisionCommands = host.getRepoProvisionCommands();
       const configFingerprint = JSON.stringify({
         ...(selectedWorktreeTarget ?? {}),
         provisionCommand: selectedWorktreeTarget?.provisionCommand?.trim() || '',
+        repoProvisionCommands,
         worktreeBaseDir: resolve(invokerHome, 'worktrees'),
         cacheDir: resolve(invokerHome, 'repos'),
       });
@@ -715,6 +718,7 @@ export function selectExecutor(
         maxWorktrees: host.maxWorktreesPerRepo,
         agentRegistry: host.executionAgentRegistry,
         provisionCommand: selectedWorktreeTarget?.provisionCommand,
+        repoProvisionCommands,
       });
       host.executorRegistry.register('worktree', worktree);
       host.worktreeExecutorCache.set(configFingerprint, worktree);

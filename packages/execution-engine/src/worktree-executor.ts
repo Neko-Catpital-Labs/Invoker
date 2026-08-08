@@ -40,6 +40,13 @@ export interface WorktreeExecutorConfig {
   agentRegistry?: import('./agent-registry.js').AgentRegistry;
   /** Optional dependency/bootstrap command run before the task command in local worktrees. */
   provisionCommand?: string;
+  /**
+   * Per-repo override for `provisionCommand`, keyed by `repoUrl` (normalized —
+   * see `normalizeRepoUrlForProvisionLookup`). A workflow whose `repoUrl` has
+   * an entry here uses that command (including `''` to run no install step)
+   * instead of the pool's default `provisionCommand`.
+   */
+  repoProvisionCommands?: Record<string, string>;
   /** Heartbeat interval in milliseconds. Default: 30000. */
   heartbeatIntervalMs?: number;
   /** Maximum task duration in milliseconds. Default: 4 hours. */
@@ -82,6 +89,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     this.claudeCommand = config.claudeCommand ?? 'claude';
     this.agentRegistry = config.agentRegistry;
     this.setProvisionCommand(config.provisionCommand, DEFAULT_WORKTREE_PROVISION_COMMAND);
+    this.setRepoProvisionCommands(config.repoProvisionCommands);
     this.worktreeBaseDir =
       config.worktreeBaseDir ?? resolve(homedir(), '.invoker', 'worktrees');
     this.pool = new RepoPool({
@@ -407,6 +415,7 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
     const provisioning = this.provisionWorktree(
       acquired.worktreePath,
       executionId,
+      this.resolveProvisionCommand(repoUrl),
     );
     entry.process = provisioning.child;
     try {
@@ -710,10 +719,11 @@ export class WorktreeExecutor extends BaseExecutor<WorktreeEntry> {
 
   private provisionWorktree(
     dir: string,
-    executionId?: string,
+    executionId: string | undefined,
+    command: string,
   ): { child: ChildProcess | null; completion: Promise<void> } {
     return this.spawnLocalProvisioningProcess({
-      command: this.provisionCommand,
+      command,
       cwd: dir,
       executionId,
       traceLabel: 'WorktreeExecutor.provisionWorktree',
