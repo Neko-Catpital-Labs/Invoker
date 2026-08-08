@@ -206,6 +206,10 @@ function validateReviewGate(reviewGate: unknown): ValidationResult {
   return { valid: true };
 }
 
+export function isValidWorkResponseOutputs(value: unknown): boolean {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function validateWorkResponse(res: unknown): ValidationResult {
   if (!res || typeof res !== 'object' || Array.isArray(res)) {
     return { valid: false, error: 'WorkResponse must be an object' };
@@ -234,7 +238,7 @@ export function validateWorkResponse(res: unknown): ValidationResult {
     return { valid: false, error: `status must be one of: ${validStatuses.join(', ')}` };
   }
 
-  if (!r.outputs || typeof r.outputs !== 'object' || Array.isArray(r.outputs)) {
+  if (!isValidWorkResponseOutputs(r.outputs)) {
     return { valid: false, error: 'outputs is required and must be an object' };
   }
 
