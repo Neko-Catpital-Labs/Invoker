@@ -102,12 +102,15 @@ describe('disk reclaim warn-threshold repro', () => {
     });
   });
 
-  it.fails('documents the gap: repeated 94% warn pressure should trigger paced reclaim', async () => {
+  it('reclaims after repeated 94% warn pressure with paced reclaim', async () => {
     const { cleanupLocal, runtime } = makeRuntime([94, 94]);
 
     await runtime.tick('manual');
     await runtime.tick('manual');
 
     expect(cleanupLocal).toHaveBeenCalledTimes(1);
+    expect(cleanupLocal.mock.calls[0]?.[0]).toMatchObject({
+      mode: 'stale-only',
+    });
   });
 });
