@@ -54,6 +54,18 @@ interface HeartbeatOptions {
   emitIntervalHeartbeat?: boolean;
 }
 
+/**
+ * True while the child has closed but completion is intentionally deferred
+ * (e.g. remote finalize/push), so the heartbeat should keep firing instead of
+ * declaring the process an orphan.
+ */
+export function isHeartbeatAliveDuringFinalize(
+  entry: Pick<BaseEntry, 'finalizingAfterClose'>,
+  child: ChildProcess,
+): boolean {
+  return Boolean(entry.finalizingAfterClose);
+}
+
 export interface ClaudeSessionParams {
   sessionId: string;
   cliArgs: string[];
@@ -335,7 +347,7 @@ export abstract class BaseExecutor<TEntry extends BaseEntry> implements Executor
       }
 
       if (childProcessHasExited(child) || child.killed) {
-        if (entry.finalizingAfterClose) {
+        if (isHeartbeatAliveDuringFinalize(entry, child)) {
           this.emitHeartbeat(executionId);
           return;
         }
