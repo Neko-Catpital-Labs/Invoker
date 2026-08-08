@@ -311,6 +311,8 @@ function PlanningTmuxPane({ session, busy, error, readOnly = false, terminalActi
         const proposedDimensions = fit.proposeDimensions();
         if (
           !proposedDimensions ||
+          !Number.isFinite(proposedDimensions.cols) ||
+          !Number.isFinite(proposedDimensions.rows) ||
           proposedDimensions.cols < MIN_PLANNING_TMUX_COLS ||
           proposedDimensions.rows < MIN_PLANNING_TMUX_ROWS
         ) {
