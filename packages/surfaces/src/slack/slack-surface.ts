@@ -392,6 +392,11 @@ function repositoryIdentity(repoUrl: string): string {
 
 export function parseWorkflowStatusQuery(text: string): { intent: 'command'; operation: 'status'; target: { all: true } } | null {
   const trimmed = text.trim();
+  // A quick status ask is a single short line. Longer or multi-line text is an
+  // instruction that happens to mention "workflow" and a progress-ish word in
+  // passing, not a request for a status report — fall through to conversation.
+  if (/\n/.test(trimmed)) return null;
+  if (trimmed.split(/\s+/).length > 12) return null;
   if (!/\bworkflows?\b/i.test(trimmed)) return null;
   if (!/\b(status|how many|count|running|active|in progress|progress)\b/i.test(trimmed)) return null;
   return { intent: 'command', operation: 'status', target: { all: true } };
