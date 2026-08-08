@@ -73,7 +73,10 @@ function toRecord(write: WorkerActionWrite): WorkerActionRecord {
   };
 }
 
-function makeHarness(tasksInput: TaskState[] = [makeTask()]) {
+function makeHarness(
+  tasksInput: TaskState[] = [makeTask()],
+  options: { defaultAutoFixRetries?: number } = {},
+) {
   const tasks = new Map(tasksInput.map((task) => [task.id, task]));
   const actions = new Map<string, WorkerActionRecord>();
   const submissions: Array<{ workflowId: string; priority: WorkflowMutationPriority; channel: string; args: unknown[] }> = [];
@@ -127,6 +130,7 @@ function makeHarness(tasksInput: TaskState[] = [makeTask()]) {
       },
     },
     repairCooldownMs: 30 * 60 * 1000,
+    defaultAutoFixRetries: options.defaultAutoFixRetries ?? Number.POSITIVE_INFINITY,
     runRemoteProvisionRepairFn,
     runRepoMirrorRepairFn,
     resolveRemoteBranchOwnerPathFn,
@@ -367,6 +371,31 @@ describe('infra-repair worker', () => {
     expect(h.submit).toHaveBeenCalledTimes(1);
     expect(h.submissions[0]?.channel).toBe(INFRA_REPAIR_RECREATE_TASK_CHANNEL);
     expect(parseInfraRepairRecreateTaskMutationArgs(h.submissions[0]?.args ?? [])).toEqual({ taskId: 'wf-1/task-1' });
+  });
+
+  it('stops recreating a task once the shared auto-fix retry budget is exhausted, instead of looping forever', async () => {
+    const h = makeHarness([
+      makeTask({
+        execution: {
+          error: 'cd ~/.invoker/worktrees/repo/task-1: No such file or directory',
+        },
+      }),
+    ], { defaultAutoFixRetries: 2 });
+    h.resolveRemoteBranchOwnerPathFn.mockResolvedValue(undefined);
+
+    for (let round = 0; round < 5; round += 1) {
+      await h.tick({ ...POLL_CTX, tickNumber: round + 1 });
+      h.tasks.set('wf-1/task-1', makeTask({
+        execution: {
+          error: 'cd ~/.invoker/worktrees/repo/task-1: No such file or directory',
+          generation: 2 + round + 1,
+        },
+        taskStateVersion: 7 + round + 1,
+      }));
+    }
+
+    const recreateSubmissions = h.submissions.filter((s) => s.channel === INFRA_REPAIR_RECREATE_TASK_CHANNEL);
+    expect(recreateSubmissions).toHaveLength(2);
   });
 
   it('recreates invalid branch-reference and no-saved-workspace failures', async () => {
