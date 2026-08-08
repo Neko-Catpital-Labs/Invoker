@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SQLiteAdapter } from '../sqlite-adapter.js';
 import { createAttempt, createTaskState } from '@invoker/workflow-core';
+import { assertSaveTaskPersistsSelectedAttemptId } from '../sqlite-task-attempt-repository.js';
 
 describe('saveTask selected_attempt_id persistence', () => {
   let adapter: SQLiteAdapter;
@@ -34,5 +35,41 @@ describe('saveTask selected_attempt_id persistence', () => {
 
     const [loaded] = adapter.loadTasks('wf-1');
     expect(loaded.execution.selectedAttemptId).toBe(attempt.id);
+  });
+
+  it('assertSaveTaskPersistsSelectedAttemptId passes when the bound value matches exec.selectedAttemptId', () => {
+    expect(() =>
+      assertSaveTaskPersistsSelectedAttemptId(
+        ['id', 'selected_attempt_id', 'status'],
+        ['taskA', 'attempt-1', 'running'],
+        { selectedAttemptId: 'attempt-1' },
+      ),
+    ).not.toThrow();
+
+    expect(() =>
+      assertSaveTaskPersistsSelectedAttemptId(
+        ['id', 'selected_attempt_id', 'status'],
+        ['taskA', null, 'running'],
+        { selectedAttemptId: undefined },
+      ),
+    ).not.toThrow();
+  });
+
+  it('assertSaveTaskPersistsSelectedAttemptId throws when selected_attempt_id is missing or mismatched', () => {
+    expect(() =>
+      assertSaveTaskPersistsSelectedAttemptId(
+        ['id', 'status'],
+        ['taskA', 'running'],
+        { selectedAttemptId: 'attempt-1' },
+      ),
+    ).toThrow();
+
+    expect(() =>
+      assertSaveTaskPersistsSelectedAttemptId(
+        ['id', 'selected_attempt_id', 'status'],
+        ['taskA', 'attempt-mismatched', 'running'],
+        { selectedAttemptId: 'attempt-1' },
+      ),
+    ).toThrow();
   });
 });

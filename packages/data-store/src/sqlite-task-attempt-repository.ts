@@ -24,6 +24,28 @@ export const CLAIMABLE_ATTEMPT_WHERE_CLAUSE =
   "status = 'pending' OR (status IN ('claimed', 'running') AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?)";
 
 /**
+ * Safety invariant: saveTask's INSERT OR REPLACE must bind selected_attempt_id
+ * to exec.selectedAttemptId. Throws if the columns/values lists are edited
+ * independently and that pairing breaks.
+ */
+export function assertSaveTaskPersistsSelectedAttemptId(
+  columns: string[],
+  values: unknown[],
+  exec: { selectedAttemptId?: string | null },
+): void {
+  const index = columns.indexOf('selected_attempt_id');
+  if (index === -1) {
+    throw new Error('saveTask INSERT is missing the selected_attempt_id column');
+  }
+  const expected = exec.selectedAttemptId ?? null;
+  if (values[index] !== expected) {
+    throw new Error(
+      `saveTask binds selected_attempt_id=${JSON.stringify(values[index])} but exec.selectedAttemptId=${JSON.stringify(expected)}`,
+    );
+  }
+}
+
+/**
  * Adapter-side task/attempt mutators that {@link SqliteTaskAttemptRepository.failTaskAndAttempt}
  * dispatches through inside its shared transaction. The adapter supplies its own
  * updateTask/updateAttempt so instance-level overrides of those methods remain
@@ -116,7 +138,32 @@ export class SqliteTaskAttemptRepository {
     assertTaskConsistent(task);
     const cfg = task.config;
     const exec = task.execution;
-    this.exec.execRun(`
+    const columns = [
+      'id', 'workflow_id', 'description', 'status', 'blocked_by', 'dependencies',
+      'command', 'prompt', 'experiment_prompt', 'exit_code', 'error', 'protocol_error_code', 'protocol_error_message', 'input_prompt', 'external_dependencies',
+      'summary', 'problem', 'approach', 'test_plan', 'repro_command', 'fix_prompt', 'fix_context',
+      'branch', 'commit_hash', 'fixed_integration_sha', 'fixed_integration_recorded_at', 'fixed_integration_source', 'parent_task',
+      'pivot', 'experiment_variants', 'is_reconciliation', 'selected_experiment',
+      'selected_experiments', 'experiment_results', 'requires_manual_approval',
+      'repo_url', 'feature_branch',
+      'is_merge_node', 'auto_fix', 'max_fix_attempts',
+      'runner_kind', 'pool_id', 'agent_session_id', 'workspace_path', 'container_id',
+      'last_agent_session_id', 'last_agent_name',
+      'action_request_id', 'experiments',
+      'created_at', 'launch_phase', 'launch_started_at', 'launch_completed_at', 'started_at', 'completed_at', 'last_heartbeat_at',
+      'utilization', 'pending_fix_error', 'fix_session_entry_status', 'failure_class',
+      'review_url', 'review_id', 'review_status', 'review_provider_id', 'review_gate',
+      'is_fixing_with_ai',
+      'execution_generation',
+      'selected_attempt_id',
+      'pool_member_id',
+      'docker_image',
+      'execution_agent',
+      'execution_model',
+      'agent_name',
+      'task_state_version',
+    ];
+    const sql = `
       INSERT OR REPLACE INTO tasks (
         id, workflow_id, description, status, blocked_by, dependencies,
         command, prompt, experiment_prompt, exit_code, error, protocol_error_code, protocol_error_message, input_prompt, external_dependencies,
@@ -166,7 +213,8 @@ export class SqliteTaskAttemptRepository {
         ?,
         ?
       )
-    `, [
+    `;
+    const values: unknown[] = [
       task.id, workflowId, task.description, task.status,
       exec.blockedBy ?? null,
       JSON.stringify(task.dependencies),
@@ -225,7 +273,9 @@ export class SqliteTaskAttemptRepository {
       cfg.executionModel ?? null,
       exec.agentName ?? null,
       task.taskStateVersion ?? 1,
-    ]);
+    ];
+    assertSaveTaskPersistsSelectedAttemptId(columns, values, exec);
+    this.exec.execRun(sql, values);
     this.syncCrashPreservationState(task.id, undefined, task.execution);
   }
 
