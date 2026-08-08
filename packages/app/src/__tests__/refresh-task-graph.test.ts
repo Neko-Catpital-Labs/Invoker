@@ -42,12 +42,35 @@ describe('publishForcedRefreshTaskGraphSnapshot', () => {
     publishForcedRefreshTaskGraphSnapshot(publisher, 'refresh-task-graph', {
       tasks: [task],
       workflows: [workflow],
+      streamSequence: 5,
     });
 
     expect(publisher.publishSnapshot).toHaveBeenCalledWith(
       'refresh-task-graph',
       [task],
       [workflow],
+      5,
+      true,
+    );
+  });
+
+  it('passes through an omitted streamSequence so the publisher falls back to its own counter', () => {
+    const publisher = {
+      publishSnapshot: vi.fn(),
+    };
+    const task = makeTask('wf-1/task-1');
+    const workflow = { id: 'wf-1', name: 'Workflow 1', status: 'running' };
+
+    publishForcedRefreshTaskGraphSnapshot(publisher, 'refresh-task-graph', {
+      tasks: [task],
+      workflows: [workflow],
+    });
+
+    expect(publisher.publishSnapshot).toHaveBeenCalledWith(
+      'refresh-task-graph',
+      [task],
+      [workflow],
+      undefined,
       true,
     );
   });
@@ -136,5 +159,32 @@ describe('resolveRefreshTaskGraphSnapshot fallback', () => {
       message: expect.stringContaining('owner home mismatch: owner=/tmp/invoker-remote local=/tmp/invoker-local'),
       meta: { module: 'ipc' },
     });
+  });
+
+  it('captures streamSequence via getStreamSequence at the same synchronous read as tasks/workflows', async () => {
+    const localTask = makeTask('wf-4/task-1');
+    const localWorkflow = { id: 'wf-4', name: 'Local', status: 'running' };
+    const { logger } = makeLogger();
+
+    const result = await resolveRefreshTaskGraphSnapshot({
+      ownerMode: true,
+      messageBus: { async request() { throw new Error('unused in owner mode'); } } as never,
+      resolveInvokerHomeRoot: () => '/tmp/invoker-owner',
+      logger: logger as never,
+      orchestrator: {
+        syncAllFromDb() {},
+        getAllTasks() {
+          return [localTask];
+        },
+      } as never,
+      persistence: {
+        listWorkflows() {
+          return [localWorkflow];
+        },
+      } as never,
+      getStreamSequence: () => 42,
+    });
+
+    expect(result).toEqual({ tasks: [localTask], workflows: [localWorkflow], streamSequence: 42 });
   });
 });
