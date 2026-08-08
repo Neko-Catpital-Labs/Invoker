@@ -524,7 +524,7 @@ function resolvePrMaintenanceRepoRoot(repoRoot: string | undefined): string {
   return repoRoot ? resolve(repoRoot) : resolveRepoRoot(process.cwd());
 }
 
-function buildPrMaintenanceEnv(repoRoot: string, overrides: EnvOverrides | undefined): NodeJS.ProcessEnv {
+export function buildPrMaintenanceEnv(repoRoot: string, overrides: EnvOverrides | undefined): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const [key, value] of Object.entries(overrides ?? {})) {
     if (value === undefined) {
