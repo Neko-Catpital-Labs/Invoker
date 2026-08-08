@@ -5,6 +5,7 @@ import type {
   InvokerSetupRequest,
   InvokerSetupResult,
   InvokerSetupStepResult,
+  RemoteTargetInput,
 } from '@invoker/contracts';
 
 import { spawnBundledCli } from './cli-helper.js';
@@ -24,13 +25,25 @@ interface CliCommandResult {
   error?: string;
 }
 
+export interface MachineSetupResult {
+  name?: string;
+  reachable?: boolean;
+  written: boolean;
+  message: string;
+  error?: {
+    code: string;
+    message: string;
+    conflictingTargetId?: string;
+  };
+}
+
 function appendOutput(current: string, chunk: Buffer | string): string {
   const next = current + chunk.toString();
   if (Buffer.byteLength(next, 'utf8') <= MAX_SETUP_OUTPUT_BYTES) return next;
   return `${next.slice(0, MAX_SETUP_OUTPUT_BYTES)}\n[output truncated]`;
 }
 
-function runCli(cliPath: string, args: string[], env?: NodeJS.ProcessEnv): Promise<CliCommandResult> {
+function runCli(cliPath: string, args: string[], env?: NodeJS.ProcessEnv, stdinInput?: string): Promise<CliCommandResult> {
   const { promise, resolve } = Promise.withResolvers<CliCommandResult>();
   let stdout = '';
   let stderr = '';
@@ -57,6 +70,10 @@ function runCli(cliPath: string, args: string[], env?: NodeJS.ProcessEnv): Promi
       const output = [stdout, stderr].filter(Boolean).join('\n');
       settle({ ok: exitCode === 0, exitCode, output, error: exitCode === 0 ? undefined : `invoker-cli exited with ${exitCode}` });
     });
+    if (stdinInput !== undefined) {
+      child.stdin?.write(stdinInput);
+    }
+    child.stdin?.end();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     settle({ ok: false, exitCode: null, output: '', error: message });
@@ -75,6 +92,60 @@ function summarizeHelpers(status: BundledSkillsStatus): string {
   const targets = [...status.targets, ...status.commandTargets, ...status.mcpTargets];
   const installed = targets.filter((target) => target.installed && target.upToDate).length;
   return `Installed ${status.bundledSkillNames.length} bundled helper set(s) across ${installed}/${targets.length} available target(s).`;
+}
+
+function machinesErrorResult(machines: RemoteTargetInput[], message: string): MachineSetupResult[] {
+  return machines.map(() => ({
+    written: false,
+    message,
+    error: { code: 'invoker-cli-failed', message },
+  }));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isMachineSetupError(value: unknown): value is MachineSetupResult['error'] {
+  if (!isRecord(value)) return false;
+  if (typeof value.code !== 'string' || typeof value.message !== 'string') return false;
+  return value.conflictingTargetId === undefined || typeof value.conflictingTargetId === 'string';
+}
+
+function isMachineSetupResult(value: unknown): value is MachineSetupResult {
+  if (!isRecord(value)) return false;
+  if (typeof value.written !== 'boolean' || typeof value.message !== 'string') return false;
+  if (value.name !== undefined && typeof value.name !== 'string') return false;
+  if (value.reachable !== undefined && typeof value.reachable !== 'boolean') return false;
+  return value.error === undefined || isMachineSetupError(value.error);
+}
+
+export async function runMachinesSetup(
+  machines: RemoteTargetInput[],
+  deps: Pick<InvokerCliSetupDeps, 'cliPath'>,
+): Promise<MachineSetupResult[]> {
+  const result = await runCli(deps.cliPath, ['setup', 'machines', '--json'], undefined, JSON.stringify(machines));
+
+  if (!result.ok) {
+    return machinesErrorResult(machines, result.error ?? 'invoker-cli exited with an error');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.output);
+  } catch {
+    return machinesErrorResult(machines, 'invoker-cli returned unparsable output');
+  }
+
+  if (!Array.isArray(parsed)) {
+    return machinesErrorResult(machines, 'invoker-cli returned unexpected output');
+  }
+
+  if (parsed.length !== machines.length || !parsed.every(isMachineSetupResult)) {
+    return machinesErrorResult(machines, 'invoker-cli returned invalid machine setup output');
+  }
+
+  return parsed as MachineSetupResult[];
 }
 
 export async function runInvokerCliSetup(request: InvokerSetupRequest, deps: InvokerCliSetupDeps): Promise<InvokerSetupResult> {
