@@ -106,6 +106,8 @@ function recordCleanupDecision(
   externalKey = `cleanup:${result.targetKey}:${result.reason}`,
 ): void {
   if (!store) return;
+  const protectedSkipCount = result.protectedSkipCount ?? 0;
+  const protectedSkipBytes = result.protectedSkipBytes ?? 0;
   recordWorkerDecisionRow(store, {
     workerKind: DISK_HEADROOM_WORKER_KIND,
     actionType: 'disk-cleanup',
@@ -119,7 +121,12 @@ function recordCleanupDecision(
       ? `Cleaned ${result.targetKey}`
       : `Cleanup ${result.reason} for ${result.targetKey}`,
     reason: result.reason,
-    payload: result.detail ? { detail: result.detail } : undefined,
+    payload: {
+      ...(result.detail ? { detail: result.detail } : {}),
+      protectedSkipCount,
+      protectedSkipBytes,
+      ...(result.protectedSkipBytesTruncated ? { protectedSkipBytesTruncated: true } : {}),
+    },
     incrementAttempt: result.ok,
   });
 }
@@ -215,6 +222,8 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
             targetKey,
             ok: false,
             reason: 'cooldown',
+            protectedSkipCount: 0,
+            protectedSkipBytes: 0,
           };
           options.logger.info?.(
             `[disk-headroom-cleanup] skip ${targetKey}: warn-paced cooldown`,
@@ -260,6 +269,8 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
             targetKey,
             ok: false,
             reason: 'cooldown',
+            protectedSkipCount: 0,
+            protectedSkipBytes: 0,
           };
           options.logger.info?.(
             `[disk-headroom-cleanup] skip ${targetKey}: cooldown`,
@@ -280,6 +291,8 @@ export function createDiskHeadroomWorker(options: DiskHeadroomWorkerOptions): Wo
               ok: false,
               reason: 'cleanup-error',
               detail: `remote target not found for ${targetKey}`,
+              protectedSkipCount: 0,
+              protectedSkipBytes: 0,
             };
           } else {
             result = await cleanupRemote({
